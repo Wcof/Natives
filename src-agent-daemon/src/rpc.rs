@@ -2704,12 +2704,18 @@ pub async fn handle_rpc(
                 }
             }
         }
-        // Harness control plane. Routed by prefix rather than by eighteen
-        // literals: the family shares one handler, and
+        // Harness control plane. The Harness family and its project identity
+        // support methods share one handler, and
         // `the_harness_prefix_and_the_advertised_harness_family_agree` in the
         // protocol crate pins the prefix to exactly the advertised set, so this
         // arm can never quietly serve something that was never advertised.
-        method if method.starts_with(names::HARNESS_PREFIX) => {
+        method
+            if method.starts_with(names::HARNESS_PREFIX)
+                || matches!(
+                    method,
+                    names::PROJECT_IDENTITY_REGISTER | names::PROJECT_IDENTITY_LIST
+                ) =>
+        {
             match harness::request(method, request.params.clone()).await {
                 Ok(value) => {
                     send_success(

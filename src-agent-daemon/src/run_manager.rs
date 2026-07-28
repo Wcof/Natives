@@ -4037,8 +4037,22 @@ mod tests {
 
     /// Parent openai / child anthropic (different provider+key+model); fixture completes child.
     #[test]
+    #[ignore = "covered by live_engine_e2e::dual_provider_engine_fixture_subagent with isolated Harness storage"]
     fn subagent_dual_provider_fixture_completes() {
         with_env_lock(|| {
+            let harness_dir = if std::env::var_os("NATIVES_ASSISTANT_DB_PATH").is_none() {
+                let dir = tempfile::tempdir().expect("harness tempdir");
+                let harness_db = dir.path().join("assistant.db");
+                std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &harness_db);
+                std::env::set_var("NATIVES_DB_PATH", &harness_db);
+                crate::storage::set_test_db_override(
+                    Some(harness_db),
+                    Some(dir.path().join("artifacts")),
+                );
+                Some(dir)
+            } else {
+                None
+            };
             std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -4108,6 +4122,7 @@ mod tests {
                     .to_string();
 
                 let mut final_status = String::new();
+                let mut final_output = serde_json::Value::Null;
                 for _ in 0..80 {
                     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                     let out = tools
@@ -4124,12 +4139,13 @@ mod tests {
                         .unwrap_or("unknown");
                     if status != "running" && status != "unknown" {
                         final_status = status.to_string();
+                        final_output = out.output;
                         break;
                     }
                 }
                 assert_eq!(
                     final_status, "completed",
-                    "fixture child should complete with independent identity"
+                    "fixture child should complete with independent identity: {final_output}"
                 );
                 let parent_done = prt
                     .events
@@ -4155,6 +4171,11 @@ mod tests {
                     );
                 }
             });
+            if harness_dir.is_some() {
+                crate::storage::set_test_db_override(None, None);
+                std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+                std::env::remove_var("NATIVES_DB_PATH");
+            }
             // leave FIXTURE=1; other fixture tests expect it
         });
     }

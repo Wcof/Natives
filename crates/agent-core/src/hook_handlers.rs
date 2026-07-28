@@ -5,7 +5,6 @@ use crate::hooks::{
     PermissionVerdict,
 };
 use serde_json::Value;
-use std::net::IpAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -307,46 +306,7 @@ fn parse_hook_stdout(stdout: &[u8]) -> HookOutcome {
 }
 
 /// SSRF checks: HTTPS preferred, block private IPs, require allowlist when set.
-pub fn validate_http_hook_url(url: &str, allow_hosts: &[String]) -> Result<(), String> {
-    let parsed = url::Url::parse(url).map_err(|e| format!("invalid url: {e}"))?;
-    let scheme = parsed.scheme();
-    if scheme != "https" && scheme != "http" {
-        return Err("only http/https hooks allowed".into());
-    }
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "missing host".to_string())?;
-    if !allow_hosts.is_empty()
-        && !allow_hosts.iter().any(|allowed| {
-            allowed.eq_ignore_ascii_case(host) || host.ends_with(&format!(".{allowed}"))
-        })
-    {
-        return Err(format!("host '{host}' not in allowlist"));
-    }
-    // Block literal private IPs.
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_private_or_loopback(ip) {
-            return Err("private/loopback IPs are not allowed for HTTP hooks".into());
-        }
-    }
-    let blocked = ["localhost", "metadata.google.internal", "169.254.169.254"];
-    if blocked.iter().any(|b| host.eq_ignore_ascii_case(b)) {
-        return Err("blocked host".into());
-    }
-    Ok(())
-}
-
-fn is_private_or_loopback(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.octets()[0] == 169 && v4.octets()[1] == 254
-        }
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
-    }
-}
+pub use harness_core::validation::validate_http_hook_url;
 
 #[cfg(test)]
 mod tests {

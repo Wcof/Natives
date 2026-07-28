@@ -29,11 +29,25 @@
 //! function's docs for the single remaining wiring step.
 
 pub mod control_plane;
+pub mod external_inspector;
 pub mod projection;
 pub mod repository;
 
 use assistant_protocol::error::ErrorCategory;
 use serde_json::Value;
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
+
+const NOTICE_BUS_CAPACITY: usize = 256;
+static NOTICE_BUS: OnceLock<broadcast::Sender<i64>> = OnceLock::new();
+
+fn notice_bus() -> &'static broadcast::Sender<i64> {
+    NOTICE_BUS.get_or_init(|| broadcast::channel(NOTICE_BUS_CAPACITY).0)
+}
+
+pub(crate) fn publish_notice(cursor: i64) {
+    let _ = notice_bus().send(cursor);
+}
 
 /// Structured failure, mapped to a protocol error by the RPC layer.
 ///
@@ -87,6 +101,10 @@ impl HarnessError {
             message,
         )
     }
+
+    pub fn scope_mismatch(message: impl Into<String>) -> Self {
+        Self::new("harness_scope_mismatch", ErrorCategory::Validation, message)
+    }
 }
 
 impl std::fmt::Display for HarnessError {
@@ -106,10 +124,71 @@ impl std::fmt::Display for HarnessError {
 /// minute. Doing that on a Tokio worker would stall every other connection the
 /// runtime is serving, which is a far worse failure than one slow RPC.
 pub async fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
+    if method == "harness.subscribe" {
+        return subscribe(params).await;
+    }
     let method = method.to_string();
     tokio::task::spawn_blocking(move || control_plane::request(&method, params))
         .await
         .unwrap_or_else(|e| Err(HarnessError::internal(format!("harness task failed: {e}"))))
+}
+
+/// Replay persisted notices, then wait on the bounded broadcaster when caught
+/// up. The broadcaster is only a wake-up path; SQLite cursors remain the truth.
+async fn subscribe(params: Value) -> Result<Value, HarnessError> {
+    let request: assistant_protocol::v2::HarnessSubscribeRequest = serde_json::from_value(params)
+        .map_err(|e| {
+        HarnessError::invalid(format!("invalid harness.subscribe request: {e}"))
+    })?;
+    let cursor = request.cursor.max(0);
+    let limit = request.limit.clamp(1, 200);
+    let wait_ms = request.wait_ms.clamp(0, 30_000);
+    let mut receiver = notice_bus().subscribe();
+
+    let replay = |after| {
+        tokio::task::spawn_blocking(move || {
+            repository::with_conn(|conn| repository::list_notices(conn, after, limit))
+        })
+    };
+    let mut page = replay(cursor)
+        .await
+        .map_err(|e| HarnessError::internal(format!("harness subscribe task failed: {e}")))??;
+
+    if page.notices.is_empty() && wait_ms > 0 {
+        match tokio::time::timeout(std::time::Duration::from_millis(wait_ms), receiver.recv()).await
+        {
+            Ok(Ok(_)) => {
+                page = replay(cursor).await.map_err(|e| {
+                    HarnessError::internal(format!("harness subscribe task failed: {e}"))
+                })??;
+            }
+            Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                page.reset_required = true;
+            }
+            Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => {}
+        }
+    }
+
+    if page.reset_required && page.notices.is_empty() {
+        page.notices.push(serde_json::json!({
+            "kind": "reset_required",
+            "cursor": page.next_cursor,
+        }));
+    }
+    let notices = page
+        .notices
+        .into_iter()
+        .map(|notice| {
+            serde_json::from_value::<assistant_protocol::v2::HarnessNotice>(notice)
+                .map_err(|e| HarnessError::internal(format!("invalid persisted notice: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    serde_json::to_value(assistant_protocol::v2::HarnessSubscribeResponse {
+        notices,
+        next_cursor: page.next_cursor,
+        reset_required: page.reset_required,
+    })
+    .map_err(|e| HarnessError::internal(format!("serialize harness notices: {e}")))
 }
 
 // ── shared parameter helpers ────────────────────────────────────────────────

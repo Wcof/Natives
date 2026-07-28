@@ -36,6 +36,8 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
     match method {
         "harness.overview" => overview(&params),
         "harness.topology" => topology(&params),
+        "harness.workspace.get" => workspace_get(&params),
+        "harness.template.list" => template_list(&params),
         "harness.hook.catalog" => hook_catalog(&params),
         "harness.profile.list" => profile_list(&params),
         "harness.profile.get" => profile_get(&params),
@@ -45,6 +47,8 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
         "harness.draft.save" => draft_save(&params),
         "harness.draft.validate" => draft_validate(&params),
         "harness.draft.diff" => draft_diff(&params),
+        "harness.draft.review" => draft_review(&params),
+        "harness.draft.simulate" => draft_simulate(&params),
         "harness.draft.publish" => draft_publish(&params),
         "harness.version.list" => version_list(&params),
         "harness.version.rollback" => version_rollback(&params),
@@ -55,9 +59,14 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
         "harness.prompt.preview" => prompt_preview(&params),
         "harness.source.list" => source_list(&params),
         "harness.source.acknowledgeDrift" => source_acknowledge_drift(&params),
-        "harness.subscribe" => subscribe(&params),
+        "harness.external.inspect" => external_inspect(&params),
+        // Async long-poll is handled by `harness::request` before this blocking
+        // dispatcher. Keeping it out of SQLite's blocking pool lets the Daemon
+        // continue serving cancel and other RPCs while a subscriber waits.
         "harness.trace.list" => trace_list(&params),
         "harness.audit.export" => audit_export(&params),
+        "project.identity.register" => project_identity_register(&params),
+        "project.identity.list" => project_identity_list(&params),
         other => Err(HarnessError::invalid(format!(
             "unsupported harness method: {other}"
         ))),
@@ -82,6 +91,29 @@ fn discovered_hooks(params: &Value) -> Vec<HookDefinition> {
 struct ResolvedContext {
     resolution: Resolution,
     layers: Vec<LayerRef>,
+}
+
+fn validate_project_scope(
+    conn: &Connection,
+    project_id: Option<&str>,
+    project_path: Option<&Path>,
+) -> Result<(), HarnessError> {
+    let (Some(project_id), Some(project_path)) = (project_id, project_path) else {
+        return Ok(());
+    };
+    let identity = crate::project_identity::store::verify_for_invocation(conn, project_id)
+        .map_err(HarnessError::scope_mismatch)?;
+    let requested = project_path
+        .canonicalize()
+        .map_err(|e| HarnessError::scope_mismatch(e.to_string()))?;
+    if requested != PathBuf::from(&identity.canonical_path) {
+        return Err(HarnessError::scope_mismatch(format!(
+            "project_id {project_id} resolves to {}, not {}",
+            identity.canonical_path,
+            requested.display()
+        )));
+    }
+    Ok(())
 }
 
 fn layer_refs(
@@ -109,6 +141,8 @@ fn layer_refs(
 fn resolved_context(conn: &Connection, params: &Value) -> Result<ResolvedContext, HarnessError> {
     let project_id = opt_str(params, &["project_id", "projectId"]);
     let conversation_id = opt_str(params, &["conversation_id", "conversationId"]);
+    let path = project_path(params);
+    validate_project_scope(conn, project_id.as_deref(), path.as_deref())?;
     let (documents, layers) = layer_refs(conn, project_id.as_deref(), conversation_id.as_deref())?;
     let discovered = discovered_hooks(params);
     Ok(ResolvedContext {
@@ -213,7 +247,7 @@ fn profile_get(params: &Value) -> Result<Value, HarnessError> {
 fn profile_create(params: &Value) -> Result<Value, HarnessError> {
     let name = req_str(params, &["name"])?;
     let kind = req_str(params, &["kind"])?;
-    if !["global_template", "project_overlay", "session_overlay"].contains(&kind.as_str()) {
+    if !["global_template", "project_overlay"].contains(&kind.as_str()) {
         return Err(HarnessError::invalid(format!(
             "unknown profile kind: {kind}"
         )));
@@ -228,6 +262,15 @@ fn profile_create(params: &Value) -> Result<Value, HarnessError> {
     let id = format!("hp-{}", uuid::Uuid::new_v4());
 
     repository::with_conn(|conn| {
+        if let Some(project_id) = project_id.as_deref() {
+            crate::project_identity::store::get(conn, project_id)
+                .map_err(HarnessError::invalid)?
+                .ok_or_else(|| {
+                    HarnessError::scope_mismatch(format!(
+                        "unknown stable project identity: {project_id}"
+                    ))
+                })?;
+        }
         let profile = repository::insert_profile(
             conn,
             &id,
@@ -384,8 +427,8 @@ fn draft_publish(params: &Value) -> Result<Value, HarnessError> {
             .unwrap_or_default();
         let changes = diff(&before, &document);
         let summary = serde_json::json!({ "findings": report.findings });
-        let version = repository::publish_version(conn, &profile_id, &document, &summary)?;
-        repository::clear_draft(conn, &profile_id)?;
+        let version =
+            repository::publish_draft_version(conn, &profile_id, &document, &summary, &draft)?;
         repository::append_audit(
             conn,
             "publish",
@@ -424,9 +467,21 @@ fn version_list(params: &Value) -> Result<Value, HarnessError> {
 /// old Run's evidence describe a document it never used.
 fn version_rollback(params: &Value) -> Result<Value, HarnessError> {
     let version_id = req_str(params, &["version_id", "versionId"])?;
+    let expected_current = req_str(
+        params,
+        &["expected_current_version_id", "expectedCurrentVersionId"],
+    )?;
     repository::with_conn(|conn| {
         let source = repository::get_version(conn, &version_id)?
             .ok_or_else(|| HarnessError::not_found(format!("version not found: {version_id}")))?;
+        let current = repository::current_version(conn, &source.profile_id)?
+            .ok_or_else(|| HarnessError::not_found("profile has no current published version"))?;
+        if current.id != expected_current {
+            return Err(HarnessError::draft_conflict(format!(
+                "published version changed from {expected_current} to {}; reload before rollback",
+                current.id
+            )));
+        }
         let document = source.document()?;
         let summary = serde_json::json!({
             "rolled_back_from": source.id,
@@ -558,9 +613,9 @@ fn prompt_preview(params: &Value) -> Result<Value, HarnessError> {
                 let doc = version.document()?;
                 for block in doc.prompt_blocks.iter().filter(|b| b.enabled) {
                     blocks.push(serde_json::json!({
-                        "id": block.id, "label": block.label, "order": block.order,
-                        "source_digest": harness_core::sha256_hex(&block.content),
-                        "token_estimate": block.content.chars().count().div_ceil(4),
+                        "id": block.id, "name": block.name, "order": block.order, "placement": block.placement,
+                        "source_digest": harness_core::sha256_hex(&block.markdown),
+                        "token_estimate": block.markdown.chars().count().div_ceil(4),
                     }));
                 }
             }
@@ -574,6 +629,7 @@ fn source_list(params: &Value) -> Result<Value, HarnessError> {
     let limit = opt_i64(params, &["limit"], 100, 500);
     let discovered = discovered_hooks(params);
     let sources = discovered.into_iter().map(|hook| serde_json::json!({
+        "source_id": hook.id.as_str(),
         "scope": hook.source.scope,
         "origin": hook.source.origin,
         "digest": harness_core::sha256_hex(&serde_json::to_string(&hook.kind).unwrap_or_default()),
@@ -582,8 +638,31 @@ fn source_list(params: &Value) -> Result<Value, HarnessError> {
     })).collect::<Vec<_>>();
     repository::with_conn(|conn| {
         let stored = repository::list_sources(conn, limit)?;
+        let mut merged = std::collections::BTreeMap::new();
+        for source in sources {
+            if let Some(id) = source.get("source_id").and_then(Value::as_str) {
+                merged.insert(id.to_string(), source);
+            }
+        }
+        for stored_source in stored {
+            let Some(id) = stored_source
+                .get("source_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if let (Some(current), Some(update)) = (
+                merged.get_mut(&id).and_then(Value::as_object_mut),
+                stored_source.as_object(),
+            ) {
+                current.extend(update.clone());
+            } else {
+                merged.insert(id, stored_source);
+            }
+        }
         Ok(
-            serde_json::json!({"sources": if stored.is_empty() { sources } else { stored }, "page_size": limit}),
+            serde_json::json!({"sources": merged.into_values().take(limit as usize).collect::<Vec<_>>(), "page_size": limit}),
         )
     })
 }
@@ -624,10 +703,6 @@ fn source_acknowledge_drift(params: &Value) -> Result<Value, HarnessError> {
             serde_json::json!({"source_id": source, "profile_id": profile_id, "revision": acknowledged.revision}),
         )
     })
-}
-
-fn subscribe(_params: &Value) -> Result<Value, HarnessError> {
-    Ok(serde_json::json!({"subscription": "harness", "transport": "daemon_events"}))
 }
 
 fn trace_list(params: &Value) -> Result<Value, HarnessError> {
@@ -679,6 +754,7 @@ pub fn resolve_run(
 ) -> Result<RunHarnessPlan, HarnessError> {
     let discovered = crate::production_hooks::discover_production_hooks(project);
     repository::with_conn(|conn| {
+        validate_project_scope(conn, project_id, project)?;
         let (documents, refs) = layer_refs(conn, project_id, conversation_id)?;
         let drift_profile = refs.first().map(|r| r.profile_id.clone());
         let base_version_id = refs.first().map(|r| r.version_id.clone());
@@ -703,6 +779,13 @@ pub fn resolve_run(
         if let (Some(profile_id), Some(base_version_id)) = (drift_profile, base_version_id) {
             let candidate = serde_json::Value::Array(mismatches);
             if candidate.as_array().is_some_and(|items| !items.is_empty()) {
+                let cursor = repository::append_notice(
+                    conn,
+                    "source_drift",
+                    Some(&profile_id),
+                    Some(run_id),
+                )?;
+                super::publish_notice(cursor);
                 let had_draft = repository::get_draft(conn, &profile_id)?.is_some();
                 let _ = repository::ensure_source_drift_candidate(conn, &profile_id, &candidate)?;
                 if !had_draft {
@@ -729,13 +812,15 @@ pub fn resolve_run(
         );
         let mut prompt_plan = harness_core::PromptPlanSummary::default();
         let mut prompt_blocks = Vec::new();
+        let mut native_hooks = Vec::new();
         for (_, document) in &documents {
+            native_hooks.extend(document.native_hooks.iter().cloned());
             for block in document.prompt_blocks.iter().filter(|b| b.enabled) {
                 prompt_blocks.push(block.clone());
                 prompt_plan
                     .source_digests
-                    .push(harness_core::sha256_hex(&block.content));
-                prompt_plan.token_estimate += block.content.chars().count().div_ceil(4);
+                    .push(harness_core::sha256_hex(&block.markdown));
+                prompt_plan.token_estimate += block.markdown.chars().count().div_ceil(4);
             }
         }
         snapshot.prompt_plan = prompt_plan;
@@ -744,6 +829,7 @@ pub fn resolve_run(
             snapshot,
             resolution,
             prompt_blocks,
+            native_hooks,
         })
     })
 }
@@ -761,6 +847,7 @@ pub struct RunHarnessPlan {
     /// Live values, never persisted, never sent to the Renderer.
     pub resolution: Resolution,
     pub prompt_blocks: Vec<harness_core::blueprint::PromptBlock>,
+    pub native_hooks: Vec<harness_core::blueprint::NativeHookSpecV3>,
 }
 
 impl RunHarnessPlan {
@@ -771,6 +858,293 @@ impl RunHarnessPlan {
     /// ends up doing something its own evidence does not describe.
     pub fn compile(&self, project: Option<&Path>) -> agent_core::HookRegistry {
         let definitions: Vec<HookDefinition> = self.resolution.enabled_definitions();
-        crate::production_hooks::compile_production_hooks(&definitions, project)
+        crate::production_hooks::compile_production_hooks_with_native(
+            &definitions,
+            &self.native_hooks,
+            project,
+        )
     }
+}
+
+fn workspace_get(params: &Value) -> Result<Value, HarnessError> {
+    repository::with_conn(|conn| {
+        let overview_val = overview(params)?;
+        let topology_val = topology(params)?;
+        let catalog_val = hook_catalog(params)?;
+
+        let profile_id = opt_str(params, &["profile_id", "profileId"]);
+        let draft_val = if let Some(pid) = &profile_id {
+            repository::get_draft(conn, pid).ok().flatten().map(|d| {
+                serde_json::json!({
+                    "profile_id": d.profile_id,
+                    "base_version_id": d.base_version_id,
+                    "revision": d.revision,
+                    "updated_at": d.updated_at,
+                    "document": serde_json::from_str::<Value>(&d.document_json)
+                        .unwrap_or(Value::Null),
+                    "source_candidate": d.source_candidate_json
+                        .as_deref()
+                        .and_then(|value| serde_json::from_str::<Value>(value).ok()),
+                })
+            })
+        } else {
+            None
+        };
+
+        Ok(serde_json::json!({
+            "overview": overview_val,
+            "topology": topology_val,
+            "catalog": catalog_val,
+            "draft": draft_val,
+        }))
+    })
+}
+
+fn template_list(_params: &Value) -> Result<Value, HarnessError> {
+    Ok(serde_json::json!({
+        "items": [
+            {
+                "id": "tpl-project-prompt",
+                "name": "项目提示词策略",
+                "description": "规范 AI 项目级全局架构约定与安全防守基线",
+                "category": "prompt",
+                "template": {
+                    "schema_version": 3,
+                    "prompt_blocks": [{
+                        "id": "11111111-1111-1111-1111-111111111111",
+                        "name": "项目架构准则",
+                        "markdown": "## 项目架构与规范\n- 必须使用 RTK 执行 Shell 命令\n- 严禁假数据与空 fallback",
+                        "enabled": true,
+                        "order": 1,
+                        "placement": "after_project_instructions"
+                    }]
+                }
+            },
+            {
+                "id": "tpl-cmd-quality-gate",
+                "name": "Command 质量门禁",
+                "description": "在提交代码与删除敏感目录前触发指令质量审计",
+                "category": "command",
+                "template": {
+                    "schema_version": 3,
+                    "native_hooks": [{
+                        "id": "22222222-2222-2222-2222-222222222222",
+                        "name": "Git Command Gate",
+                        "enabled": true,
+                        "event": "PreToolUse",
+                        "order": 10,
+                        "matcher": "run_command|Bash",
+                        "conditions": [{
+                            "field": "command",
+                            "operator": "regex_match",
+                            "pattern": "git\\s+(commit|push)"
+                        }],
+                        "timeout_ms": 10000,
+                        "failure_policy": "fail",
+                        "adapter": {
+                            "type": "command",
+                            "program": "cargo",
+                            "args": ["test", "--workspace"],
+                            "trusted": false
+                        }
+                    }]
+                }
+            },
+            {
+                "id": "tpl-http-audit-notice",
+                "name": "HTTP 审计通知",
+                "description": "工具调用后向审计 Webhook 发送结构化通知",
+                "category": "http",
+                "template": {
+                    "schema_version": 3,
+                    "native_hooks": [{
+                        "id": "33333333-3333-3333-3333-333333333333",
+                        "name": "HTTP Audit Webhook",
+                        "enabled": true,
+                        "event": "PostToolUse",
+                        "order": 20,
+                        "matcher": "*",
+                        "conditions": [],
+                        "timeout_ms": 5000,
+                        "failure_policy": "skip",
+                        "adapter": {
+                            "type": "http",
+                            "url": "http://127.0.0.1:8080/audit",
+                            "allow_hosts": ["127.0.0.1", "localhost"]
+                        }
+                    }]
+                }
+            },
+            {
+                "id": "tpl-mcp-security-scan",
+                "name": "MCP 安全扫描",
+                "description": "调用高危 MCP 工具前执行二次安全检查",
+                "category": "mcp",
+                "template": {
+                    "schema_version": 3,
+                    "native_hooks": [{
+                        "id": "44444444-4444-4444-4444-444444444444",
+                        "name": "MCP Tool Gate",
+                        "enabled": true,
+                        "event": "PreToolUse",
+                        "order": 5,
+                        "matcher": "mcp:*",
+                        "conditions": [],
+                        "timeout_ms": 10000,
+                        "failure_policy": "fail",
+                        "adapter": {
+                            "type": "mcp_tool",
+                            "server_id": "security_scanner",
+                            "tool_name": "scan_input",
+                            "input_template": "{\"input\": \"${input}\"}"
+                        }
+                    }]
+                }
+            },
+            {
+                "id": "tpl-prompt-risk-assessment",
+                "name": "Prompt 风险判断",
+                "description": "使用同 Provider 模型执行 Tool 使用前的风险判断",
+                "category": "prompt_eval",
+                "template": {
+                    "schema_version": 3,
+                    "native_hooks": [{
+                        "id": "55555555-5555-5555-5555-555555555555",
+                        "name": "Safety Risk Evaluation",
+                        "enabled": true,
+                        "event": "PreToolUse",
+                        "order": 2,
+                        "matcher": "run_command",
+                        "conditions": [],
+                        "timeout_ms": 8000,
+                        "failure_policy": "fail",
+                        "adapter": {
+                            "type": "prompt",
+                            "template": "Evaluate if the tool input executes irreversible systemic damage. Reply allow or deny."
+                        }
+                    }]
+                }
+            },
+            {
+                "id": "tpl-agent-completion-check",
+                "name": "Agent 完成度检查",
+                "description": "Run 结束前启动 Agent 检查任务完成质量",
+                "category": "agent",
+                "template": {
+                    "schema_version": 3,
+                    "native_hooks": [{
+                        "id": "66666666-6666-6666-6666-666666666666",
+                        "name": "Agent Quality Assancer",
+                        "enabled": true,
+                        "event": "Stop",
+                        "order": 1,
+                        "matcher": "*",
+                        "conditions": [],
+                        "timeout_ms": 30000,
+                        "failure_policy": "skip",
+                        "adapter": {
+                            "type": "agent",
+                            "prompt": "Verify if all user requirement criteria are met in project repository.",
+                            "max_steps": 3,
+                            "readonly_tools": ["view_file", "list_dir", "grep_search"]
+                        }
+                    }]
+                }
+            }
+        ]
+    }))
+}
+
+fn draft_review(params: &Value) -> Result<Value, HarnessError> {
+    repository::with_conn(|conn| {
+        let profile_id = req_str(params, &["profile_id", "profileId"])?;
+        let draft = repository::get_draft(conn, &profile_id)?
+            .ok_or_else(|| HarnessError::not_found(format!("no draft for profile {profile_id}")))?;
+
+        let doc = draft.document()?;
+        let discovered = discovered_hooks(params);
+        let val_report = validate(&doc, &discovered);
+
+        let current_published = repository::current_version(conn, &profile_id)?
+            .map(|v| v.document())
+            .transpose()?;
+        let empty_bp = HarnessBlueprint::default();
+        let before_doc = current_published.as_ref().unwrap_or(&empty_bp);
+        let blueprint_diff = diff(before_doc, &doc);
+        let preview = prompt_preview(params)?;
+
+        Ok(serde_json::json!({
+            "profile_id": profile_id,
+            "revision": draft.revision,
+            "validation": val_report,
+            "diff": blueprint_diff,
+            "prompt_preview": preview,
+        }))
+    })
+}
+
+fn draft_simulate(params: &Value) -> Result<Value, HarnessError> {
+    repository::with_conn(|conn| {
+        let event_str = req_str(params, &["event"])?;
+        let event = harness_core::hooks::HookEvent::parse(&event_str)
+            .ok_or_else(|| HarnessError::invalid(format!("unknown event: {event_str}")))?;
+
+        let tool_name = opt_str(params, &["tool_name", "toolName"]);
+        let input_val = params.get("input").cloned().unwrap_or(Value::Null);
+
+        let context = resolved_context(conn, params)?;
+        let mut steps = Vec::new();
+
+        for hook in context.resolution.enabled_definitions() {
+            if hook.event != event {
+                continue;
+            }
+            let matches_tool = harness_core::hooks::tool_pattern_matches(
+                hook.matcher.as_deref(),
+                tool_name.as_deref(),
+            );
+            let conditions_match = hook.conditions.iter().all(|c| c.matches(&input_val));
+
+            steps.push(serde_json::json!({
+                "hook_id": hook.id.as_str(),
+                "matcher": hook.matcher,
+                "matches_tool": matches_tool,
+                "conditions_count": hook.conditions.len(),
+                "conditions_match": conditions_match,
+                "would_execute": matches_tool && conditions_match,
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "event": event_str,
+            "tool_name": tool_name,
+            "steps": steps,
+        }))
+    })
+}
+
+fn external_inspect(params: &Value) -> Result<Value, HarnessError> {
+    let p_path = project_path(params);
+    let report = super::external_inspector::inspect_external_runtimes(p_path.as_deref());
+    serde_json::to_value(report).map_err(|e| HarnessError::internal(e.to_string()))
+}
+
+fn project_identity_register(params: &Value) -> Result<Value, HarnessError> {
+    repository::with_conn(|conn| {
+        let path = req_str(params, &["canonical_path", "canonicalPath", "path"])?;
+        let name = opt_str(params, &["name"]).unwrap_or_else(|| {
+            Path::new(&path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "project".into())
+        });
+        repository::register_project_identity(conn, &path, &name)
+    })
+}
+
+fn project_identity_list(_params: &Value) -> Result<Value, HarnessError> {
+    repository::with_conn(|conn| {
+        let items = repository::list_project_identities(conn)?;
+        Ok(serde_json::json!({ "items": items }))
+    })
 }

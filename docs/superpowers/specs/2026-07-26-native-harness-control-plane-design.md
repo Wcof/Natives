@@ -265,6 +265,46 @@ The Native Engine workspace may use a wider layout than ordinary Settings
 forms. Blueprint and Live Runs require a three-pane layout and must not be
 constrained to the current 920px content width.
 
+### 6.1 Unified Execution Engine experience
+
+`Engine Capabilities` and `Engine Engineering` are not separate Settings
+destinations. Settings exposes one `Execution Engine` entry and the Native
+workspace uses one fixed execution canvas in three contexts:
+
+1. **Understand current execution** — read-only effective projection for the
+   selected global/project/session scope.
+2. **Configure future Runs** — the same topology with Draft-only Prompt/Hook
+   attachment controls. Fixed stages, Provider routing, capability selection,
+   permission policy, and active Runs remain immutable.
+3. **Replay a Run** — the same topology overlaid with the selected Run's frozen
+   snapshot and persisted events. It never reads current Draft state as Run
+   evidence.
+
+The canvas is shared by Overview, Blueprint, and Live Runs so selecting a node
+preserves context across those workspaces. Hooks, Prompts, and Audit retain
+dedicated list/editor/search surfaces rather than forcing every task into the
+graph.
+
+Capability information is displayed as attachments to the stages that consume
+it:
+
+- Provider/model route: read-only Provider Authority projection;
+- model-visible Tools: grouped built-in/MCP/Skill/subagent counts and references;
+- MCP, Skills, Extensions, and Agent Profile contributions: read-only
+  Capability Hub references;
+- rate limit, permission, and other runtime protection: read-only or delegated
+  controls owned by their existing Native Runtime authority;
+- Hook and Natives Prompt Block attachments: editable only through Harness
+  Drafts.
+
+This is a composed read model, not a merged authority. Harness must not persist
+Provider or Capability Hub objects. Scheduler/Job administration remains outside
+Native Engine and moves to the independent Job module.
+
+The default landing state explains the effective execution first. Profile
+creation, project binding, version history, and rollback are secondary
+management actions; they must not precede the execution overview.
+
 ## 7. Module Architecture
 
 ### 7.1 Pure Harness module
@@ -888,6 +928,7 @@ New protocol methods use a `harness.*` namespace:
 
 - `harness.overview`
 - `harness.topology`
+- `harness.workspace.get`
 - `harness.profile.list`
 - `harness.profile.get`
 - `harness.profile.create`
@@ -918,6 +959,15 @@ landing page always loads, while the topology is a per-stage graph with Hook
 attachment counts that only the Blueprint workspace needs. Merging them would
 have made every Overview load pay for a graph nobody was looking at, against
 第 18 节's "only the selected Run builds a detailed topology projection".
+
+`harness.workspace.get` is the typed, read-only composition used by the unified
+Native workspace. For one validated scope it returns topology references plus
+small Harness, capability, Provider, and runtime-protection summaries. It may
+call the existing authorities during projection, but it does not store or
+mutate their objects. Detailed Hook catalogs, Prompt previews, capability
+objects, Provider configuration, and Run events remain behind their existing
+methods and are loaded only after the user selects the corresponding node or
+workspace.
 
 Existing `run.list`, `run.get`, and subscription methods are reused for Live
 Runs. Harness must not duplicate them.
@@ -957,6 +1007,7 @@ undocumented bag of JSON.
 | Method family | Required request fields | Required result/behavior |
 |---|---|---|
 | overview/topology/catalog/prompt preview | optional `project_id`, `project_path`, `conversation_id`; all three are validated as one scope | resolved layers plus schema/semantics versions and structured issues |
+| workspace get | the same validated scope, explicit `view`, and view-specific `profile_id` or `run_id` | fixed stage/edge references, Hook/Prompt attachment summaries, capability snapshot reference and grouped Tool counts, Provider/runtime-protection read-only summaries, and optional frozen Run node state; no credential, raw Prompt, capability object, or synthetic topology |
 | profile list/get/create/archive | cursor/limit where listing; create accepts only `global_template` or `project_overlay` | typed profile/version summaries; no archived profile may be newly bound |
 | draft get/save/validate/diff/publish | `profile_id`; save/publish require expected `revision` | conflict includes current revision and a reloadable server draft; publish is atomic |
 | version list/rollback | `profile_id`, cursor/limit; rollback requires `version_id` and expected current version | rollback publishes forward as a new version |
@@ -983,6 +1034,273 @@ Scope validation rules:
 - Inspection may omit project/session scope and show the global layer, but
   mutation methods never invent an identity as a side effect.
 
+### 14.2 Unified workspace projection contract
+
+The current implementation of `harness.workspace.get` builds an untyped JSON
+object by calling `overview`, `topology`, and `hook_catalog`. That is a
+compatibility shim, not the final interface. Before the unified UI replaces the
+old Settings panels, Rust wire authority must define and route this typed
+contract (field names are normative; concrete Rust collection types may follow
+workspace conventions):
+
+```text
+HarnessWorkspaceGetRequest {
+  view: effective | draft | frozen_run
+  project_id?: ProjectIdentityUuid
+  project_path?: AbsolutePath
+  conversation_id?: ConversationId
+  profile_id?: HarnessProfileId
+  run_id?: RunId
+}
+
+NativeExecutionWorkspace {
+  projection_id: Sha256
+  view: effective | draft | frozen_run
+  scope: {
+    project_id?
+    project_path?
+    conversation_id?
+  }
+  topology: {
+    topology_version
+    stages[]
+    edges[]
+    phase_groups[]
+  }
+  attachments: ExecutionAttachmentSummary[]
+  capability: CapabilityProjectionSummary
+  provider: ProviderProjectionSummary
+  protection: RuntimeProtectionSummary
+  harness: {
+    layers[]
+    hook_semantics_version
+    blueprint_schema_version
+    enabled_hook_count
+    total_hook_count
+  }
+  draft?: {
+    profile_id
+    revision
+    dirty_against_published
+    publishable
+  }
+  run?: {
+    run_id
+    status
+    harness_snapshot_hash
+    capability_snapshot_hash
+    tool_plan_hash
+    frozen_at
+    stage_states[]
+  }
+  authorities: AuthorityAvailability[]
+  issues: StructuredIssue[]
+}
+```
+
+Request invariants:
+
+- `effective` rejects `run_id`; `profile_id` is optional and used only for
+  management links.
+- `draft` requires `profile_id` and rejects `run_id`. The response returns the
+  server revision; this read-only projection never accepts a client document.
+- `frozen_run` requires `run_id`; scope comes from the persisted Run and any
+  caller-supplied scope must match it.
+- All scope fields pass the same ProjectIdentity/path validation as Run start.
+- `projection_id` hashes the redacted projection inputs so duplicate
+  invalidations can be ignored without comparing whole documents.
+
+The topology contains all eleven engine `StageId` values. The five user-facing
+phases are grouping metadata, not replacement stages:
+
+| Display phase | Engine stages |
+|---|---|
+| Run startup | `session` |
+| Context construction | `context` |
+| Agent reasoning loop | `provider` |
+| Tool gate and execution | `tool_gate`, `permission`, `tool_execute`, `subagent` |
+| Stop and audit | `compact`, `stop`, `terminal` |
+
+`cross_stage` is rendered as a global rail, never silently folded into one
+phase. `edges` must be owned by `harness-core::topology` and guarded by the same
+runtime-truth tests as stages and Hook trigger sites. The Renderer must not
+invent the Provider → Tool → Provider loop.
+
+Attachment placement is also Daemon-owned and follows the consuming runtime
+seam:
+
+| Attachment/evidence | Stage shown on the canvas |
+|---|---|
+| effective Profile/version, project/conversation binding | `session` |
+| built-in, Profile, project, Skill-catalog, team, child-directive, and Natives Prompt Plan layers | `context` |
+| Provider/model route and Provider rate limit | `provider` |
+| exact model-visible Tool Plan, including the built-in `skill` and `task` entry points and selected MCP schemas | `provider` |
+| requested Tool plus `PreToolUse` policy/Hook evaluation | `tool_gate` |
+| permission mode, request, decision, and permission Hooks | `permission` |
+| built-in/MCP Tool adapter execution and post-Tool Hooks | `tool_execute` |
+| team member/child Run creation and subagent Hooks | `subagent` |
+| compaction policy and pre/post-compaction Hooks | `compact` |
+| step/self-heal termination policy and stop Hooks | `stop` |
+| final Run result, session-end/error Hooks, and persisted Audit references | `terminal` |
+| doom-loop detection and notifications that observe more than one stage | `cross_stage` |
+
+A selected Skill contributes a Prompt-catalog layer at `context`; the model
+later chooses the generic model-visible `skill` Tool advertised at `provider`.
+The Skill is not labelled as a Hook. It appears at a Hook point only when the
+runtime resolved a real `HookDefinition` whose provenance references that
+Skill. The same rule applies to MCP and Agent sources: capability ownership
+never implies a fabricated Hook.
+
+`ExecutionAttachmentSummary` has a stable attachment ID, target `stage_id` and
+optional Hook event, `kind` (`hook`, `prompt`, `capability`, `provider`,
+`runtime_protection`), display label, owner authority, source reference,
+editability, status, and bounded counts/digests. It never contains an executable
+Hook body, credential, raw Provider configuration, raw effective Prompt, or
+Capability Hub object.
+
+The nested summaries use these minimum fields:
+
+```text
+ExecutionAttachmentSummary {
+  id
+  stage_id
+  hook_event?
+  kind
+  label
+  owner: harness | capability_hub | provider | native_runtime
+  source_ref?
+  editability: read_only | harness_draft | delegated_immediate
+  status: active | disabled | drifted | unavailable
+  order_index?
+  item_count?
+  digest?
+}
+
+CapabilityProjectionSummary {
+  status: current | stale | unavailable
+  capability_snapshot_hash?
+  selection_active
+  agent_profile_ref?
+  team_ref?
+  skill_refs[]
+  mcp_server_refs[]
+  prompt_contribution_digests[]
+  tool_counts { builtin, mcp, skill, subagent, total }
+  observed_at?
+}
+
+ProviderProjectionSummary {
+  status: current | unavailable
+  provider_id?
+  model_id?
+  resolution_basis: configured_default | frozen_run
+  route_summary?
+  detail_target: settings:providers
+}
+
+RuntimeProtectionSummary {
+  status: current | unavailable
+  permission_mode?
+  rate_limit?: { enabled, requests_per_minute }
+  self_heal?: { enabled, max_attempts }
+  doom_loop?: { enabled, repeated_call_limit }
+  mutation_method_refs[]
+  apply_mode: immediate
+}
+
+AuthorityAvailability {
+  authority
+  status: available | unavailable
+  error?: ClassifiedErrorSummary
+}
+
+RunStageStateSummary {
+  stage_id
+  status: not_started | active | completed | failed | cancelled
+  started_at?
+  completed_at?
+  event_count
+}
+```
+
+Reference arrays contain stable IDs and redacted display labels only. An
+effective preview must not include full Skill bodies, MCP configuration, Agent
+Profile prompts, Provider endpoints, keys, or policy implementation details.
+`order_index` is present only when order is execution-significant, including
+Hook and Prompt attachments. `stage_states` is a bounded aggregation of
+persisted Run events; repeated loop visits remain available through the lazy
+Run event/trace methods rather than expanding the workspace projection.
+
+Authority failures are explicit:
+
+- Harness/topology failure fails the whole workspace.
+- Capability, Provider, or runtime-protection inspection failure produces an
+  `AuthorityAvailability { status: unavailable, error }` and an unavailable
+  node; it must not become a zero count.
+- `frozen_run` without the required post-migration snapshot is an integrity
+  error, not a partial workspace.
+
+### 14.3 Frozen Tool Plan evidence
+
+The selected Run cannot be replayed honestly from capability IDs alone. At Run
+start, after capability and Harness resolution and before the first Provider
+call, the same Tool schemas passed to `AgentEngine` must also produce a bounded,
+redacted `ToolPlanSummary`:
+
+```text
+ToolPlanSummary {
+  canonical_hash: Sha256
+  items: ToolExposureSummary[] // maximum 200
+  counts: {
+    builtin
+    mcp
+    skill
+    subagent
+    total
+  }
+}
+
+ToolExposureSummary {
+  name
+  source_kind: builtin | mcp | skill | subagent
+  source_ref
+  schema_digest
+}
+
+CapabilityEvidenceSummary {
+  canonical_hash: Sha256
+  selection_active
+  agent_profile_ref?
+  team_ref?
+  skill_refs[]
+  mcp_server_refs[]
+  source_digests[]
+  prompt_contribution_digests[]
+  tool_plan_hash: Sha256
+}
+```
+
+Only names, ownership references, and schema digests are persisted. Tool
+descriptions, input schemas, connector configuration, environment, and secrets
+are not persisted in this summary. More than 200 model-visible Tools fails Run
+start before Provider work with `TOOL_PLAN_TOO_LARGE`; silently truncating would
+make execution differ from its evidence.
+
+`ResolvedHarnessSnapshot` records the capability snapshot hash and Tool Plan
+summary/hash as execution evidence; this does not transfer ownership of the
+referenced capability objects to Harness. Production runtime receives the
+already-built Tool Plan and must not call `list_tool_schemas` again. A replay
+uses the frozen summary, while effective/draft views use a side-effect-free
+preview and clearly label unavailable or stale MCP discovery rather than
+starting connectors merely to draw the canvas.
+
+The capability hash is not a hash of IDs alone. It is the canonical hash of the
+redacted `CapabilityEvidenceSummary`, including source and Prompt-contribution
+digests plus `tool_plan_hash`, so editing a Skill, Agent Profile, team roster, or
+MCP Tool schema changes the evidence even when its stable ID does not. The
+Harness snapshot also persists the Prompt Plan's effective hash and ordered
+layer summaries; the raw effective Prompt remains transient.
+
 ## 15. MVP Workspaces
 
 ### Overview
@@ -993,6 +1311,7 @@ Scope validation rules:
 - source drift and validation warnings;
 - recent Runs;
 - links to relevant topology nodes.
+- fixed execution canvas in read-only “understand current execution” mode.
 
 ### Blueprint
 
@@ -1001,6 +1320,8 @@ Scope validation rules:
 - stage inspector;
 - read-only policy slots in MVP;
 - Draft, Validate, Diff, Publish, and Rollback.
+- the shared execution canvas in “configure future Runs” mode; only typed
+  Harness attachment slots expose edit actions.
 
 ### Hooks
 
@@ -1027,6 +1348,8 @@ Scope validation rules:
 - Hook invocation details;
 - queue and permission state;
 - allowed live actions: cancel, interject, permission response.
+- the shared execution canvas in “replay a Run” mode, sourced only from the
+  frozen snapshot and persisted Run events.
 
 It does not allow live configuration mutation.
 
@@ -1038,6 +1361,124 @@ It does not allow live configuration mutation.
 - Hook trace search;
 - redacted export.
 
+### 15.1 Frontend state and interaction model
+
+The Native workspace has one state owner. React descendants receive typed
+projection data and callbacks; they do not independently fetch or reconstruct
+the execution graph.
+
+```text
+NativeEngineWorkspaceState {
+  runtime: native | claude_cli | codex_cli
+  workspace: overview | blueprint | hooks | prompts | runs | audit
+  canvas_mode: understand | configure | replay
+  scope: global | project | conversation
+  selected_node_id?
+  selected_run_id?
+  projection: loading | error | success(NativeExecutionWorkspace)
+  draft?: {
+    profile_id
+    revision
+    document
+    dirty
+    validation
+    diff
+  }
+}
+```
+
+`canvas_mode` is derived from the workspace (`overview → understand`,
+`blueprint → configure`, `runs → replay`) rather than becoming a second
+navigation authority. The segmented control in the prototype is a task switch:
+it navigates to those workspaces while preserving the selected node.
+
+Interaction rules:
+
+- changing project/scope clears node details and refetches one workspace
+  projection;
+- changing nodes lazy-loads only the required detail method;
+- switching away from a dirty Draft preserves it in memory and shows a dirty
+  badge; changing profile/scope requires the themed discard/reload dialog;
+- only attachments whose `editability = harness_draft` expose Draft controls;
+- Capability Hub and Provider attachments deep-link to their owning management
+  surfaces and remain read-only in the canvas;
+- runtime-protection controls explicitly say “applies immediately” and never
+  participate in Harness Save/Validate/Publish;
+- replay controls are always read-only except existing Run actions (cancel,
+  interject, permission response);
+- Claude CLI and Codex CLI use the same shell but show ownership, availability,
+  and external editing guidance; Native-only controls are absent, not disabled
+  decorations.
+
+Initial render calls only `harness.workspace.get(view=effective)`. Hook catalog,
+Prompt preview, version history, capability details, trace, and Audit are lazy.
+`harness.subscribe` invalidates projections; it never pushes replacement
+documents. Hidden workspaces cancel requests and subscriptions. No React
+component polls.
+
+### 15.2 Settings and legacy-panel migration
+
+The existing surfaces migrate as follows:
+
+| Existing surface | Unified destination | Mutation authority |
+|---|---|---|
+| `RuntimePanel` runtime selector/status | Execution Engine header and Runtime Overview | existing runtime settings |
+| Runtime capability matrix | Native/Claude/Codex ownership summary | read-only advertised capabilities |
+| Native tool toggles | model-visible Tool inspector | existing Native tool settings; not Harness |
+| permission mode | Permission stage inspector | existing permission authority |
+| context, compaction, self-heal, doom-loop | Context/Protection node inspectors | existing Native Runtime authority |
+| scheduled tasks/Jobs | removed from this page; link to Job module | Job authority |
+| `EngineCapabilitiesPanel` MCP and Skills | capability attachment summary plus link to Capability Hub | Capability Hub |
+| `EngineCapabilitiesPanel` Extensions | Tool/capability source summary; management remains in extension surface | Extension authority |
+| `EngineCapabilitiesPanel` rate limit | Runtime Protection inspector with immediate-save label | `engine.rateLimit.*` |
+| `NativeHarnessPanel` create/bind/version controls | secondary Harness management drawer | Harness control plane |
+| `NativeHarnessPanel` Hooks/Prompts/Runs/Audit | dedicated workspace tabs sharing canvas context | Harness/Run authorities |
+| `CreativeRuntimeSettings` | outside this refactor; move to the owning Creative settings surface | Creative App authority |
+
+Settings navigation keeps one canonical section ID, `runtime`. For one
+compatibility release, `settings:engineering` resolves to
+`runtime/blueprint` and `settings:engine` resolves to `runtime/overview`.
+Neither alias remains visible in the sidebar. Removing the aliases requires a
+separate cleanup after internal links and saved views have migrated.
+
+Production component ownership:
+
+```text
+src/components/settings/native-engine/
+├── NativeEngineWorkspace.tsx       # state owner and workspace routing
+├── ExecutionCanvas.tsx             # typed, presentational fixed graph
+├── ExecutionInspector.tsx          # authority-aware node detail shell
+├── useNativeEngineWorkspace.ts     # adapter calls + subscription cleanup
+└── workspaces/
+    ├── BlueprintWorkspace.tsx
+    ├── HooksWorkspace.tsx
+    ├── PromptsWorkspace.tsx
+    ├── RunsWorkspace.tsx
+    └── AuditWorkspace.tsx
+```
+
+This is one deep frontend module. `NativeEngineWorkspace` is its interface;
+callers provide only `locale` and optional initial navigation context. The
+module hides protocol orchestration and authority-specific detail loading.
+`ExecutionCanvas` receives no gateway/adapter and cannot mutate. Existing
+`NativeHarnessPanel`, `EngineCapabilitiesPanel`, and the Native-owned parts of
+`RuntimePanel` are deleted only after parity tests pass; they are not wrapped
+as three permanent layers.
+
+### 15.3 Responsive and accessible behavior
+
+- At ≥1180px the canvas and inspector use a two-pane layout.
+- At 760–1179px the inspector is a persistent bottom sheet; the graph remains
+  horizontally pannable and “fit” never scales labels below 11px equivalent.
+- Below 760px the default is a phase list with the same nodes and inspector;
+  the full canvas is an explicit landscape/full-screen action.
+- Every node is a semantic button with a visible label, type icon/pattern, and
+  `aria-describedby`; color is never the only distinction.
+- Arrow keys move between connected nodes, Enter opens the inspector, Escape
+  returns focus to the selected node, and zoom controls are keyboard reachable.
+- Reduced-motion disables graph transitions. Deep and light themes use only
+  existing semantic tokens.
+
 ## 16. Failure Handling
 
 | Failure | Required behavior |
@@ -1047,6 +1488,7 @@ It does not allow live configuration mutation.
 | Missing/invalid Harness binding | Native Run does not start |
 | Snapshot persistence failure | Native Run does not start |
 | Existing snapshot hash differs on retry | Native Run does not start; integrity conflict |
+| Model-visible Tool Plan exceeds 200 items | Native Run does not start before Provider work; never truncate execution or evidence |
 | Enabled Hook cannot compile | Publish or Run resolution fails according to stage |
 | Native Hook trust/adapter validation fails | Reject publish |
 | Prompt source/Prompt Block cannot compile | Reject publish or Run resolution |
@@ -1057,19 +1499,23 @@ It does not allow live configuration mutation.
 | Critical event persistence failure | Stop before new side effects; fail/interrupt Run |
 | Daemon restart | Restore profiles/bindings; never silently re-execute a Run |
 | UI IPC failure | Loading/error/success state; classified user-visible error |
+| Capability/Provider/protection projection unavailable | Keep the fixed canvas, mark that authority unavailable, and never display a fabricated zero |
 
-Error codes are structured and mapped through `classifyError`, including:
+Error codes are structured and mapped through `classifyError`. Uppercase names
+elsewhere in this design are logical labels; protocol wire values use the
+lowercase snake-case convention from `assistant_protocol`, including:
 
-- `HARNESS_DRAFT_CONFLICT`
-- `HARNESS_VALIDATION_FAILED`
-- `HARNESS_SNAPSHOT_PERSIST_FAILED`
-- `HARNESS_HOOK_COMPILE_FAILED`
-- `HARNESS_SOURCE_DRIFT`
-- `HARNESS_EVENT_PERSIST_FAILED`
-- `HARNESS_SNAPSHOT_CONFLICT`
-- `HARNESS_SCOPE_MISMATCH`
-- `HARNESS_PROMPT_COMPILE_FAILED`
-- `HARNESS_NATIVE_HOOK_INVALID`
+- `harness_draft_conflict`
+- `harness_validation_failed`
+- `harness_snapshot_persist_failed`
+- `harness_hook_compile_failed`
+- `harness_source_drift`
+- `harness_event_persist_failed`
+- `harness_snapshot_conflict`
+- `harness_scope_mismatch`
+- `harness_prompt_compile_failed`
+- `harness_native_hook_invalid`
+- `tool_plan_too_large`
 
 ## 17. Security and Privacy
 
@@ -1267,6 +1713,8 @@ existing seams.
 - Hook ordering, matching, sequential payload modification, and decisions;
 - Prompt Plan `legacy_v1` parity, Prompt Block ordering/limits, source digests,
   and deterministic effective-prompt hash;
+- topology stages, edges, phase grouping, and Provider → Tool → Provider loop
+  remain total and runtime-truth guarded;
 - security failure behavior;
 - Session Actor queue, interjection, cancel-and-send, terminal drain, and race
   tests.
@@ -1286,6 +1734,18 @@ existing seams.
 - missing profile/version/binding rejection;
 - RPC implemented/advertised parity;
 - typed request/response round trips and common cursor pagination;
+- `harness.workspace.get` rejects invalid view/parameter combinations and has
+  no `serde_json::Value` request or response at the protocol seam;
+- the ten phase stages appear exactly once across the five display groups while
+  `cross_stage` remains explicit outside those groups;
+- attachment placement follows the consuming-stage matrix, preserves
+  execution-significant order, and never turns a Skill/MCP/Agent reference
+  into a Hook without a resolved `HookDefinition`;
+- partial authority failure is `unavailable`, never a fabricated empty list or
+  zero count;
+- frozen Run stage states aggregate only persisted Run events and detailed
+  repeated loop visits remain available through the existing paginated event
+  projection;
 - redaction before event persistence.
 
 ### Engine integration
@@ -1293,6 +1753,14 @@ existing seams.
 - Run binds the exact resolved snapshot;
 - Engine compiles Hooks and Prompt Plan from the same resolution that produced
   that snapshot; no second discovery/assembly pass;
+- the Tool Plan summary is produced from the exact schemas passed to
+  `AgentEngine`, and its canonical hash changes when any exposed schema changes;
+- capability evidence hash changes when referenced Prompt/Skill/Profile content
+  changes without an ID change;
+- replayed Tool names/counts come from frozen evidence, not current MCP/Skill
+  discovery;
+- 201 model-visible Tools fail before Provider work with
+  `TOOL_PLAN_TOO_LARGE`;
 - active Run is unaffected by later publish;
 - all Hook points and safe points fire at the expected stage;
 - each matched handler produces one persisted-before-broadcast start/completion
@@ -1306,7 +1774,14 @@ existing seams.
 ### Renderer
 
 - Settings navigation and wide Native workspace;
+- exactly one visible Execution Engine navigation item; legacy
+  `settings:engineering` and `settings:engine` aliases route into it;
+- effective/configure/replay modes preserve selected-node context and use the
+  correct projection source;
 - loading/error/success states;
+- per-authority unavailable states do not collapse the fixed canvas;
+- node actions follow `editability`; Provider/Capability attachments cannot
+  enter Harness Drafts and runtime protection is labelled immediate;
 - Blueprint validation, diff, publish, rollback;
 - Hook provenance and overlay controls;
 - Native Hook creation/trust confirmation;
@@ -1315,6 +1790,10 @@ existing seams.
 - Live Runs projection and bounded rendering;
 - Audit search and redaction;
 - event subscription cleanup;
+- phase-list fallback below 760px, keyboard graph navigation, focus return,
+  reduced motion, and non-color-only attachment distinctions;
+- Scheduler/Job is absent from Execution Engine and Capability Hub management
+  remains reachable without importing its feature UI into the Settings module;
 - Chinese and English strings.
 
 ### End-to-end acceptance
@@ -1338,13 +1817,32 @@ existing seams.
     creates a Draft candidate while an active Run remains unchanged.
 13. Retry the same `run_id` with a different resolved hash and confirm execution
     is rejected before side effects.
+14. Select Skills and MCP servers, start a Run, and confirm every model-visible
+    Tool name/source/digest in the frozen Tool Plan matches the schemas sent to
+    the Provider.
+15. Change MCP discovery after the Run starts and confirm replay still shows the
+    frozen Tool Plan while effective view shows the new projection.
+16. Stop Capability/Provider inspection and confirm the canvas marks only that
+    authority unavailable without showing zero capabilities or hiding Harness
+    topology.
+17. Enter through both legacy Settings links and confirm they land in the
+    unified workspace; confirm only one sidebar item is visible.
+18. Confirm runtime-protection changes apply through their existing method and
+    never mark the Harness Draft dirty.
+19. Select a Skill and confirm the canvas shows its Prompt-catalog contribution
+    at Context plus the model-visible `skill` Tool at Provider, but no Skill
+    Hook unless a real resolved Hook definition names that provenance.
 
 Before handoff, run:
 
 - `npm run typecheck`
 - `npm run lint`
-- relevant frontend and Rust tests
+- `npm run protocol:check`
+- `npm test`
 - `npm run perf:check`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `git diff --check`
 
 ## 21. Approved Decisions
 
@@ -1354,6 +1852,12 @@ Before handoff, run:
 - Configuration hierarchy: global template → project overlay → session
   selection.
 - UI: Overview, Blueprint, Hooks, Prompts, Live Runs, Audit.
+- Canvas: one fixed typed topology reused by Overview, Blueprint, and Live
+  Runs; five display phases group but never replace the eleven engine stages.
+- Capabilities: shown as read-only authority references/Tool Plan evidence;
+  management remains in Capability Hub.
+- Runtime protection: visible at its consuming nodes and saved through its
+  existing authority, never through Harness Draft.
 - Hook files: read-only source plus Profile overlay; Natives-owned Hooks are
   complete typed definitions in Blueprint v2.
 - Prompt sources: imported/capability sources read-only; Natives Prompt Blocks
@@ -1364,6 +1868,9 @@ Before handoff, run:
 - MVP: Hook overlays, Natives-owned Hooks, and Natives Prompt Blocks editable;
   other engine policy slots read-only.
 - Jobs: separate module, excluded.
+- Tool evidence: every started Native Run freezes the exact model-visible Tool
+  Plan before Provider work; the approved maximum is 200 and Run start fails
+  rather than truncates above it.
 - Engineering approach: deep Harness control-plane module.
 - Compatibility: no Assistant wire-contract or Provider-module changes;
   Run-start internals consume one combined capability/Harness resolution.
@@ -1382,12 +1889,18 @@ Implement in these mergeable slices; do not start Renderer work before slices
 3. **Source and telemetry truth** — source manifests/drift, additive persisted
    events, trace/audit cursor projections, protocol types, and advertised-route
    parity.
-4. **Settings shell** — replace mixed `RuntimePanel`, preserve one Execution
-   Engine navigation entry, add lazy Native Engine routes and three-state data
-   loading.
-5. **Workspaces** — Overview, Blueprint, Hooks, Prompts, Live Runs, Audit;
+4. **Unified projection and Tool evidence** — replace the JSON
+   `harness.workspace.get` shim with the typed contract, move topology edges
+   into `harness-core`, freeze the exact bounded Tool Plan before Provider work,
+   and prove the schemas executed equal the schemas evidenced.
+5. **Settings shell** — replace mixed `RuntimePanel`, preserve one Execution
+   Engine navigation entry plus legacy aliases, add lazy Native Engine routes
+   and per-authority three-state data loading.
+6. **Workspaces** — Overview, Blueprint, Hooks, Prompts, Live Runs, Audit;
    virtualize/window large lists and clean all subscriptions.
-6. **Cleanup** — remove compatibility shims and old Settings sections only
+7. **Cleanup** — remove `NativeHarnessPanel`, `EngineCapabilitiesPanel`,
+   migrated Native sections of `RuntimePanel`, protocol compatibility shims,
+   and old Settings entries only
    after the new path passes end-to-end acceptance.
 
 Stop the implementation and update this design rather than guessing if any of
@@ -1395,6 +1908,10 @@ these invariants cannot be met:
 
 - one Run resolution cannot produce both the executable plan and its snapshot;
 - a UI control has no typed Blueprint field or callable protocol method;
+- `harness.workspace.get` would still need an untyped JSON bag or the Renderer
+  would need to invent topology edges/phase membership;
+- the schemas passed to `AgentEngine` cannot produce the same frozen Tool Plan
+  evidence before Provider work;
 - an imported/capability-owned object would need to be copied into Harness
   storage;
 - a started post-migration Native Run can execute without a persisted Harness

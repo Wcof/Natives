@@ -101,6 +101,16 @@ impl EventLog {
         .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;
         let global = conn.last_insert_rowid() as u64;
 
+        if matches!(
+            &stored.payload,
+            RunEventKind::HookInvocationStarted { .. }
+                | RunEventKind::HookInvocationCompleted { .. }
+        ) {
+            // Migration 026 persists the trace notice in the same INSERT
+            // transaction as the run event; the bus only wakes subscribers.
+            crate::rpc::harness::publish_notice(0);
+        }
+
         // Project usage totals so the dashboard can read Natives usage without
         // an external CLI (native-first design).
         if let RunEventKind::UsageUpdated {

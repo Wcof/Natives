@@ -675,6 +675,15 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
 /// Offline sanity: fixture path still works without live keys.
 #[tokio::test]
 async fn dual_provider_engine_fixture_subagent() {
+    let _harness_dir = if std::env::var_os("NATIVES_ASSISTANT_DB_PATH").is_none() {
+        let dir = tempfile::tempdir().expect("harness tempdir");
+        let harness_db = dir.path().join("assistant.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &harness_db);
+        std::env::set_var("NATIVES_DB_PATH", &harness_db);
+        Some(dir)
+    } else {
+        None
+    };
     // Offline fixture path: assignment uses default binding without live UI/route policy.
     // Honor task-level provider/key/model so dual-provider identity assertions still hold.
     std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");

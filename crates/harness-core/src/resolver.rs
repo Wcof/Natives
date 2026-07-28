@@ -189,12 +189,12 @@ pub fn resolve(
                     source,
                     order: native.order,
                     matcher: native.matcher.clone(),
-                    conditions: Vec::new(),
+                    conditions: native.conditions.clone(),
                     timeout_ms: native.timeout_ms,
                     failure_policy: native.failure_policy,
-                    kind: native.kind.clone(),
+                    kind: native.adapter.to_hook_kind(),
                 },
-                enabled: true,
+                enabled: native.enabled,
                 locked: false,
                 overrides: Vec::new(),
             });
@@ -331,6 +331,7 @@ mod tests {
         HarnessBlueprint {
             schema_version: BLUEPRINT_SCHEMA_VERSION,
             hook_semantics_version: HookSemanticsVersion::LegacyV1,
+            prompt_semantics_version: crate::blueprint::PromptSemanticsVersion::LegacyV1,
             hooks,
             hook_overlays: Vec::new(),
             native_hooks: Vec::new(),

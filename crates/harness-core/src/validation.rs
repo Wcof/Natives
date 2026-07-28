@@ -9,10 +9,11 @@
 //! interesting mistakes (overlaying a locked Hook, naming a Hook that is not
 //! there) are only visible against real discovery.
 
-use crate::blueprint::{HarnessBlueprint, HookOverlay};
+use crate::blueprint::{CommandMode, HarnessBlueprint, HookAdapterSpecV3, HookOverlay};
 use crate::hooks::{HookDefinition, HookId};
 use crate::resolver::is_locked;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 /// Smallest and largest Hook timeout a document may set, in milliseconds.
 ///
@@ -99,7 +100,224 @@ pub fn validate(draft: &HarnessBlueprint, discovered: &[HookDefinition]) -> Vali
         findings.extend(check_overlay_fields(overlay));
     }
 
+    for hook in &draft.native_hooks {
+        let hook_id = HookId::native(&hook.id, hook.event);
+        let mut error = |code: &str, message: String| {
+            findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: code.into(),
+                hook_id: Some(hook_id.clone()),
+                message,
+            });
+        };
+        if hook.name.trim().is_empty() {
+            error(
+                "harness.blank_native_hook_name",
+                "a Native Hook name must not be blank".into(),
+            );
+        }
+        if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&hook.timeout_ms) {
+            error(
+                "harness.timeout_out_of_range",
+                format!(
+                    "timeout {}ms is outside the supported range {MIN_TIMEOUT_MS}..={MAX_TIMEOUT_MS}",
+                    hook.timeout_ms
+                ),
+            );
+        }
+        if hook
+            .matcher
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            error(
+                "harness.blank_matcher",
+                "a blank matcher silently matches every tool; write \"*\" if that is the intent"
+                    .into(),
+            );
+        }
+        match &hook.adapter {
+            HookAdapterSpecV3::Command {
+                program,
+                secret_env_refs,
+                trusted,
+                mode,
+                ..
+            } => {
+                if program.trim().is_empty() {
+                    error(
+                        "harness.command_program_required",
+                        "a Native Command Hook requires a program".into(),
+                    );
+                }
+                if !secret_env_refs.is_empty() {
+                    error(
+                        "harness.command_secret_env_unsupported",
+                        "Native Command Hook secret environment references are not wired".into(),
+                    );
+                }
+                if *mode == CommandMode::Shell {
+                    error(
+                        "harness.shell_command_unsupported",
+                        "shell-mode Native Hooks are not supported by the production registry"
+                            .into(),
+                    );
+                } else if !*trusted || !hook.trust_confirmed {
+                    error(
+                        "harness.trust_required",
+                        "a Native Command Hook requires explicit trust confirmation before publish"
+                            .into(),
+                    );
+                }
+            }
+            HookAdapterSpecV3::Http {
+                url,
+                allow_hosts,
+                headers,
+                secret_header_refs,
+            } => {
+                if let Err(reason) = validate_http_hook_url(url, allow_hosts) {
+                    error("harness.invalid_http_url", reason);
+                }
+                if !headers.is_empty() || !secret_header_refs.is_empty() {
+                    error(
+                        "harness.http_headers_unsupported",
+                        "Native HTTP Hook headers are not wired and cannot be published".into(),
+                    );
+                }
+            }
+            HookAdapterSpecV3::McpTool {
+                server_id,
+                tool_name,
+                input_template,
+            } => {
+                if server_id.trim().is_empty() || tool_name.trim().is_empty() {
+                    error(
+                        "harness.mcp_target_required",
+                        "a Native MCP Hook requires both server_id and tool_name".into(),
+                    );
+                }
+                if let Some(template) = input_template {
+                    if serde_json::from_str::<serde_json::Value>(template).is_err() {
+                        error(
+                            "harness.invalid_mcp_input_template",
+                            "MCP input_template must be valid JSON".into(),
+                        );
+                    }
+                }
+            }
+            HookAdapterSpecV3::Prompt {
+                template,
+                model_override,
+            } => {
+                if template.trim().is_empty() {
+                    error(
+                        "harness.prompt_template_required",
+                        "a Native Prompt Hook requires a decision template".into(),
+                    );
+                }
+                if model_override
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                {
+                    error(
+                        "harness.blank_model_override",
+                        "model_override must be omitted rather than blank".into(),
+                    );
+                }
+            }
+            HookAdapterSpecV3::Agent {
+                prompt,
+                model_override,
+                max_steps,
+                readonly_tools,
+            } => {
+                if prompt.trim().is_empty() {
+                    error(
+                        "harness.agent_prompt_required",
+                        "a Native Agent Hook requires a task prompt".into(),
+                    );
+                }
+                if !(1..=32).contains(max_steps) {
+                    error(
+                        "harness.agent_max_steps_out_of_range",
+                        "Agent Hook max_steps must be between 1 and 32".into(),
+                    );
+                }
+                if model_override
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                    || readonly_tools.iter().any(|tool| tool.trim().is_empty())
+                {
+                    error(
+                        "harness.blank_agent_field",
+                        "Agent Hook optional fields must be omitted rather than blank".into(),
+                    );
+                }
+            }
+        }
+    }
+
+    for block in &draft.prompt_blocks {
+        if block.name.trim().is_empty() {
+            findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness.blank_prompt_block_name".into(),
+                hook_id: None,
+                message: format!("Prompt Block {} has a blank name", block.id),
+            });
+        }
+        if block.markdown.trim().is_empty() {
+            findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness.blank_prompt_block".into(),
+                hook_id: None,
+                message: format!("Prompt Block {} has no content", block.id),
+            });
+        }
+    }
+
     ValidationReport { findings }
+}
+
+/// Runtime and publish-time SSRF validation share this exact rule.
+pub fn validate_http_hook_url(url: &str, allow_hosts: &[String]) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|error| format!("invalid url: {error}"))?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err("only http/https hooks allowed".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "missing host".to_string())?;
+    if !allow_hosts.is_empty()
+        && !allow_hosts.iter().any(|allowed| {
+            allowed.eq_ignore_ascii_case(host) || host.ends_with(&format!(".{allowed}"))
+        })
+    {
+        return Err(format!("host '{host}' not in allowlist"));
+    }
+    if host
+        .parse::<IpAddr>()
+        .is_ok_and(|ip| is_private_or_loopback(ip))
+        || ["localhost", "metadata.google.internal", "169.254.169.254"]
+            .iter()
+            .any(|blocked| host.eq_ignore_ascii_case(blocked))
+    {
+        return Err("private/loopback and metadata hosts are not allowed".into());
+    }
+    Ok(())
+}
+
+fn is_private_or_loopback(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.octets()[0] == 169 && ip.octets()[1] == 254
+        }
+        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+    }
 }
 
 fn check_overlay_fields(overlay: &HookOverlay) -> Vec<ValidationFinding> {
@@ -165,6 +383,35 @@ pub fn diff(before: &HarnessBlueprint, after: &HarnessBlueprint) -> Vec<Blueprin
             to: serde_json::json!(after.hook_semantics_version.as_str()),
         });
     }
+    if before.prompt_semantics_version != after.prompt_semantics_version {
+        changes.push(BlueprintChange {
+            hook_id: None,
+            field: "prompt_semantics_version".into(),
+            from: serde_json::json!(before.prompt_semantics_version.as_str()),
+            to: serde_json::json!(after.prompt_semantics_version.as_str()),
+        });
+    }
+    for (field, from, to) in [
+        (
+            "native_hooks",
+            serde_json::json!(before.native_hooks),
+            serde_json::json!(after.native_hooks),
+        ),
+        (
+            "prompt_blocks",
+            serde_json::json!(before.prompt_blocks),
+            serde_json::json!(after.prompt_blocks),
+        ),
+    ] {
+        if from != to {
+            changes.push(BlueprintChange {
+                hook_id: None,
+                field: field.into(),
+                from,
+                to,
+            });
+        }
+    }
 
     let ids: std::collections::BTreeSet<&HookId> = before
         .overlays()
@@ -213,7 +460,10 @@ pub fn diff(before: &HarnessBlueprint, after: &HarnessBlueprint) -> Vec<Blueprin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blueprint::{HookSemanticsVersion, BLUEPRINT_SCHEMA_VERSION};
+    use crate::blueprint::{
+        HookAdapterSpecV3, HookSemanticsVersion, NativeHookSpecV3, PromptBlockPlacement,
+        PromptBlockSpecV3, BLUEPRINT_SCHEMA_VERSION,
+    };
     use crate::hooks::{HookEvent, HookFailurePolicy, HookKind, HookScope, HookSource};
 
     fn definition(source: HookSource, event: HookEvent) -> HookDefinition {
@@ -245,11 +495,34 @@ mod tests {
         HarnessBlueprint {
             schema_version: BLUEPRINT_SCHEMA_VERSION,
             hook_semantics_version: HookSemanticsVersion::LegacyV1,
+            prompt_semantics_version: crate::blueprint::PromptSemanticsVersion::LegacyV1,
             hooks,
             hook_overlays: Vec::new(),
             native_hooks: Vec::new(),
             prompt_blocks: Vec::new(),
         }
+    }
+
+    fn native(adapter: HookAdapterSpecV3) -> NativeHookSpecV3 {
+        NativeHookSpecV3 {
+            id: "11111111-1111-1111-1111-111111111111".into(),
+            name: "Gate".into(),
+            enabled: true,
+            event: HookEvent::PreToolUse,
+            order: 0,
+            matcher: Some("*".into()),
+            conditions: Vec::new(),
+            timeout_ms: 10_000,
+            failure_policy: HookFailurePolicy::Fail,
+            adapter,
+            trust_confirmed: true,
+        }
+    }
+
+    fn native_doc(adapter: HookAdapterSpecV3) -> HarnessBlueprint {
+        let mut document = HarnessBlueprint::default();
+        document.native_hooks.push(native(adapter));
+        document
     }
 
     #[test]
@@ -333,6 +606,98 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["harness.empty_overlay"]
         );
+    }
+
+    #[test]
+    fn native_adapters_reject_incomplete_configuration() {
+        let cases = [
+            native_doc(HookAdapterSpecV3::Command {
+                program: " ".into(),
+                args: Vec::new(),
+                working_dir_policy: Default::default(),
+                secret_env_refs: Default::default(),
+                trusted: true,
+                mode: Default::default(),
+            }),
+            native_doc(HookAdapterSpecV3::Http {
+                url: " ".into(),
+                allow_hosts: Vec::new(),
+                headers: Default::default(),
+                secret_header_refs: Default::default(),
+            }),
+            native_doc(HookAdapterSpecV3::McpTool {
+                server_id: " ".into(),
+                tool_name: " ".into(),
+                input_template: Some("{".into()),
+            }),
+            native_doc(HookAdapterSpecV3::Prompt {
+                template: " ".into(),
+                model_override: None,
+            }),
+            native_doc(HookAdapterSpecV3::Agent {
+                prompt: " ".into(),
+                model_override: None,
+                max_steps: 0,
+                readonly_tools: Vec::new(),
+            }),
+        ];
+        for document in cases {
+            assert!(!validate(&document, &[]).is_publishable());
+        }
+    }
+
+    #[test]
+    fn native_hook_common_fields_and_prompt_blocks_are_validated() {
+        let mut document = native_doc(HookAdapterSpecV3::Prompt {
+            template: "allow or deny".into(),
+            model_override: None,
+        });
+        document.native_hooks[0].name = " ".into();
+        document.native_hooks[0].matcher = Some(" ".into());
+        document.native_hooks[0].timeout_ms = 1;
+        document.prompt_blocks.push(PromptBlockSpecV3 {
+            id: "22222222-2222-2222-2222-222222222222".into(),
+            name: " ".into(),
+            markdown: " ".into(),
+            enabled: true,
+            order: 0,
+            placement: PromptBlockPlacement::Final,
+        });
+        let report = validate(&document, &[]);
+        let codes = report
+            .errors()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"harness.blank_native_hook_name"));
+        assert!(codes.contains(&"harness.blank_matcher"));
+        assert!(codes.contains(&"harness.timeout_out_of_range"));
+        assert!(codes.contains(&"harness.blank_prompt_block_name"));
+        assert!(codes.contains(&"harness.blank_prompt_block"));
+    }
+
+    #[test]
+    fn diff_includes_native_hooks_prompt_blocks_and_prompt_semantics() {
+        let before = HarnessBlueprint::default();
+        let mut after = native_doc(HookAdapterSpecV3::Prompt {
+            template: "allow or deny".into(),
+            model_override: None,
+        });
+        after.prompt_semantics_version = crate::blueprint::PromptSemanticsVersion::SequentialV2;
+        after.prompt_blocks.push(PromptBlockSpecV3 {
+            id: "22222222-2222-2222-2222-222222222222".into(),
+            name: "Rules".into(),
+            markdown: "Be safe.".into(),
+            enabled: true,
+            order: 0,
+            placement: PromptBlockPlacement::Final,
+        });
+        let fields = diff(&before, &after)
+            .into_iter()
+            .map(|change| change.field)
+            .collect::<Vec<_>>();
+        assert!(fields.contains(&"prompt_semantics_version".into()));
+        assert!(fields.contains(&"native_hooks".into()));
+        assert!(fields.contains(&"prompt_blocks".into()));
     }
 
     #[test]

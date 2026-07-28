@@ -99,6 +99,8 @@ pub const ALL_METHODS: &[&str] = &[
     // per-Run evidence lookup.
     "harness.overview",
     "harness.topology",
+    "harness.workspace.get",
+    "harness.template.list",
     "harness.hook.catalog",
     "harness.profile.list",
     "harness.profile.get",
@@ -108,6 +110,8 @@ pub const ALL_METHODS: &[&str] = &[
     "harness.draft.save",
     "harness.draft.validate",
     "harness.draft.diff",
+    "harness.draft.review",
+    "harness.draft.simulate",
     "harness.draft.publish",
     "harness.version.list",
     "harness.version.rollback",
@@ -118,9 +122,12 @@ pub const ALL_METHODS: &[&str] = &[
     "harness.prompt.preview",
     "harness.source.list",
     "harness.source.acknowledgeDrift",
+    "harness.external.inspect",
     "harness.subscribe",
     "harness.trace.list",
     "harness.audit.export",
+    "project.identity.register",
+    "project.identity.list",
     // Capability library (ADR-0016): configuration surface, distinct from the
     // mcp.* / skill.* runtime surfaces above.
     "capability.skill.list",
@@ -256,6 +263,8 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     // calling each through the live `handle_rpc`.
     "harness.overview",
     "harness.topology",
+    "harness.workspace.get",
+    "harness.template.list",
     "harness.hook.catalog",
     "harness.profile.list",
     "harness.profile.get",
@@ -265,6 +274,8 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "harness.draft.save",
     "harness.draft.validate",
     "harness.draft.diff",
+    "harness.draft.review",
+    "harness.draft.simulate",
     "harness.draft.publish",
     "harness.version.list",
     "harness.version.rollback",
@@ -275,9 +286,12 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "harness.prompt.preview",
     "harness.source.list",
     "harness.source.acknowledgeDrift",
+    "harness.external.inspect",
     "harness.subscribe",
     "harness.trace.list",
     "harness.audit.export",
+    "project.identity.register",
+    "project.identity.list",
     // Capability library (ADR-0016) — advertisement must never outrun
     // implementation. `rpc.rs` routes the whole family by the `capability.`
     // prefix, guarded by `is_implemented_method`, into `capability::request`,
@@ -452,6 +466,8 @@ pub mod names {
     pub const HARNESS_PREFIX: &str = "harness.";
     pub const HARNESS_OVERVIEW: &str = "harness.overview";
     pub const HARNESS_TOPOLOGY: &str = "harness.topology";
+    pub const HARNESS_WORKSPACE_GET: &str = "harness.workspace.get";
+    pub const HARNESS_TEMPLATE_LIST: &str = "harness.template.list";
     pub const HARNESS_HOOK_CATALOG: &str = "harness.hook.catalog";
     pub const HARNESS_PROFILE_LIST: &str = "harness.profile.list";
     pub const HARNESS_PROFILE_GET: &str = "harness.profile.get";
@@ -461,6 +477,8 @@ pub mod names {
     pub const HARNESS_DRAFT_SAVE: &str = "harness.draft.save";
     pub const HARNESS_DRAFT_VALIDATE: &str = "harness.draft.validate";
     pub const HARNESS_DRAFT_DIFF: &str = "harness.draft.diff";
+    pub const HARNESS_DRAFT_REVIEW: &str = "harness.draft.review";
+    pub const HARNESS_DRAFT_SIMULATE: &str = "harness.draft.simulate";
     pub const HARNESS_DRAFT_PUBLISH: &str = "harness.draft.publish";
     pub const HARNESS_VERSION_LIST: &str = "harness.version.list";
     pub const HARNESS_VERSION_ROLLBACK: &str = "harness.version.rollback";
@@ -471,9 +489,12 @@ pub mod names {
     pub const HARNESS_PROMPT_PREVIEW: &str = "harness.prompt.preview";
     pub const HARNESS_SOURCE_LIST: &str = "harness.source.list";
     pub const HARNESS_SOURCE_ACKNOWLEDGE_DRIFT: &str = "harness.source.acknowledgeDrift";
+    pub const HARNESS_EXTERNAL_INSPECT: &str = "harness.external.inspect";
     pub const HARNESS_SUBSCRIBE: &str = "harness.subscribe";
     pub const HARNESS_TRACE_LIST: &str = "harness.trace.list";
     pub const HARNESS_AUDIT_EXPORT: &str = "harness.audit.export";
+    pub const PROJECT_IDENTITY_REGISTER: &str = "project.identity.register";
+    pub const PROJECT_IDENTITY_LIST: &str = "project.identity.list";
 
     // Capability library (ADR-0016).
     pub const CAPABILITY_SKILL_LIST: &str = "capability.skill.list";
@@ -515,6 +536,8 @@ pub mod names {
 pub const HARNESS_METHODS: &[&str] = &[
     names::HARNESS_OVERVIEW,
     names::HARNESS_TOPOLOGY,
+    names::HARNESS_WORKSPACE_GET,
+    names::HARNESS_TEMPLATE_LIST,
     names::HARNESS_HOOK_CATALOG,
     names::HARNESS_PROFILE_LIST,
     names::HARNESS_PROFILE_GET,
@@ -524,6 +547,8 @@ pub const HARNESS_METHODS: &[&str] = &[
     names::HARNESS_DRAFT_SAVE,
     names::HARNESS_DRAFT_VALIDATE,
     names::HARNESS_DRAFT_DIFF,
+    names::HARNESS_DRAFT_REVIEW,
+    names::HARNESS_DRAFT_SIMULATE,
     names::HARNESS_DRAFT_PUBLISH,
     names::HARNESS_VERSION_LIST,
     names::HARNESS_VERSION_ROLLBACK,
@@ -534,6 +559,7 @@ pub const HARNESS_METHODS: &[&str] = &[
     names::HARNESS_PROMPT_PREVIEW,
     names::HARNESS_SOURCE_LIST,
     names::HARNESS_SOURCE_ACKNOWLEDGE_DRIFT,
+    names::HARNESS_EXTERNAL_INSPECT,
     names::HARNESS_SUBSCRIBE,
     names::HARNESS_TRACE_LIST,
     names::HARNESS_AUDIT_EXPORT,

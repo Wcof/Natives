@@ -2086,6 +2086,7 @@ impl PermissionGatedTools {
                         _ => None,
                     })
                     .collect::<String>();
+                let mut task_output = text.clone();
                 if status == "completed" {
                     // Best-effort token settle from usage events + text estimate.
                     let usage_tokens: u64 = events
@@ -2121,6 +2122,9 @@ impl PermissionGatedTools {
                     );
                 } else {
                     let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
+                    if task_output.is_empty() {
+                        task_output = err_msg.clone();
+                    }
                     let _ = subagents
                         .update_status(&mem_task_id_bg, SubAgentStatus::Failed(err_msg.clone()))
                         .await;
@@ -2165,7 +2169,11 @@ impl PermissionGatedTools {
                 let rec = TaskRecord {
                     run_id: child_run_id_bg.clone(),
                     status,
-                    output: if text.is_empty() { None } else { Some(text) },
+                    output: if task_output.is_empty() {
+                        None
+                    } else {
+                        Some(task_output)
+                    },
                 };
                 task_outputs.lock().await.insert(task_id_bg, rec);
                 // Terminal: drop any directive a non-native start path left behind.

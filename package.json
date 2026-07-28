@@ -7,7 +7,7 @@
     "web:dev": "NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
     "daemon:build": "cargo build -p natives-agent-daemon",
     "daemon:bundle": "bash scripts/daemon/prepare-sidecar.sh",
-    "dev": "npm run daemon:build && tauri dev",
+    "dev": "tauri dev",
     "build": "next build",
     "perf:bundle": "node scripts/perf/check-bundle.mjs",
     "perf:check": "npm run typecheck && npm run lint && npm run build && npm run perf:bundle",

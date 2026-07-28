@@ -678,6 +678,8 @@ export type AssistantMethod =
   // the per-Run evidence lookup.
   | 'harness.overview'
   | 'harness.topology'
+  | 'harness.workspace.get'
+  | 'harness.template.list'
   | 'harness.hook.catalog'
   | 'harness.profile.list'
   | 'harness.profile.get'
@@ -687,6 +689,8 @@ export type AssistantMethod =
   | 'harness.draft.save'
   | 'harness.draft.validate'
   | 'harness.draft.diff'
+  | 'harness.draft.review'
+  | 'harness.draft.simulate'
   | 'harness.draft.publish'
   | 'harness.version.list'
   | 'harness.version.rollback'
@@ -697,9 +701,12 @@ export type AssistantMethod =
   | 'harness.prompt.preview'
   | 'harness.source.list'
   | 'harness.source.acknowledgeDrift'
+  | 'harness.external.inspect'
   | 'harness.subscribe'
   | 'harness.trace.list'
-  | 'harness.audit.export';
+  | 'harness.audit.export'
+  | 'project.identity.register'
+  | 'project.identity.list';
 
 /**
  * Capability library selection carried on run.start / conversation rows

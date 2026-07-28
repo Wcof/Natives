@@ -3,20 +3,10 @@
 //! This crate owns what a Harness *is*, never how it is executed, persisted, or
 //! rendered. Execution adapters live in `agent-core`; persistence and RPC live
 //! in the Daemon.
-//!
-//! The modules split along the two questions the control plane must answer:
-//!
-//! - *what is the engine shaped like?* — [`topology`], a code-fixed constant.
-//! - *what is attached to it, and who said so?* — [`hooks`] for identity and
-//!   provenance, [`blueprint`] for the typed overlay a user may publish,
-//!   [`resolver`] for how layers combine, [`validation`] for what may be
-//!   published, [`snapshot`] for what a Run provably used, and [`redaction`]
-//!   for what must never be written down.
-//!
-//! Design: `docs/superpowers/specs/2026-07-26-native-harness-control-plane-design.md`
 
 pub mod blueprint;
 pub mod hooks;
+pub mod prompt_plan;
 pub mod redaction;
 pub mod resolver;
 pub mod session_actor;
@@ -35,9 +25,13 @@ pub use hooks::{
 };
 
 pub use blueprint::{
-    canonical_json, sha256_hex, HarnessBlueprint, HookOverlay, HookSemanticsVersion,
-    BLUEPRINT_SCHEMA_VERSION,
+    canonical_json, sha256_hex, CommandMode, CommandWorkingDirPolicy, HarnessBlueprint,
+    HookAdapterSpecV3, HookOverlay, HookSemanticsVersion, NativeHookSpecV3, PromptBlockPlacement,
+    PromptBlockSpecV3, PromptSemanticsVersion, BLUEPRINT_SCHEMA_VERSION,
 };
+
+pub use prompt_plan::{CompiledPromptPlan, PromptLayerKind, PromptLayerSummary, PromptPlanBuilder};
+
 pub use resolver::{
     is_locked, resolve, FieldOverride, ProfileLayer, Resolution, ResolutionIssue, ResolvedHook,
 };

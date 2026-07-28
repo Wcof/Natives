@@ -6,8 +6,8 @@
 //! optimistic draft, a foreign key that ties a snapshot to its Run. A mocked
 //! repository would assert nothing.
 
-use natives_agent_daemon::rpc::harness::control_plane;
 use natives_agent_daemon::rpc::harness::repository::{self, DEFAULT_GLOBAL_PROFILE_ID};
+use natives_agent_daemon::rpc::harness::{self, control_plane};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -140,12 +140,143 @@ fn migration_creates_every_harness_table() {
             "harness_binding",
             "harness_draft",
             "harness_hook_trace",
+            "harness_notice",
             "harness_profile",
+            "harness_project_identity",
             "harness_run_snapshot",
             "harness_source_manifest",
             "harness_version",
         ]
     );
+}
+
+#[tokio::test]
+async fn subscribe_replays_persisted_notices_with_a_cursor() {
+    let _serial = serial();
+    call(
+        "harness.profile.create",
+        json!({ "name": "Subscription profile", "kind": "global_template" }),
+    );
+
+    let first = harness::request("harness.subscribe", json!({ "cursor": 0, "wait_ms": 0 }))
+        .await
+        .expect("subscribe");
+    let notices = first["notices"].as_array().expect("notice array");
+    assert!(notices.iter().any(|notice| notice["kind"] == "published"));
+    let cursor = first["next_cursor"].as_i64().expect("cursor");
+
+    let caught_up = harness::request(
+        "harness.subscribe",
+        json!({ "cursor": cursor, "wait_ms": 0 }),
+    )
+    .await
+    .expect("caught-up subscribe");
+    assert_eq!(caught_up["notices"], json!([]));
+    assert_eq!(caught_up["next_cursor"], cursor);
+
+    let waiter = tokio::spawn(async move {
+        harness::request(
+            "harness.subscribe",
+            json!({ "cursor": cursor, "wait_ms": 2_000 }),
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    call(
+        "harness.profile.create",
+        json!({ "name": "Wake subscriber", "kind": "global_template" }),
+    );
+    let pushed = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("subscriber was not woken")
+        .expect("subscriber task")
+        .expect("subscribe result");
+    assert!(pushed["notices"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
+    assert!(pushed["next_cursor"].as_i64().unwrap_or_default() > cursor);
+}
+
+#[tokio::test]
+async fn hook_run_events_create_replayable_trace_notices() {
+    let _serial = serial();
+    let before = harness::request(
+        "harness.subscribe",
+        json!({ "cursor": 0, "wait_ms": 0, "limit": 200 }),
+    )
+    .await
+    .expect("initial cursor");
+    let cursor = before["next_cursor"].as_i64().unwrap_or_default();
+    let (_, run_id) = seed_run("trace-notice");
+    let store = repository::store().expect("store");
+    let conn = store.conn().expect("connection");
+    conn.execute(
+        "INSERT INTO run_event(run_id, sequence, event_type, payload, timestamp, event_id)
+         VALUES(?1, 1, 'hook_invocation_started', '{}', datetime('now'), ?2)",
+        rusqlite::params![run_id, format!("evt-{}", uuid::Uuid::new_v4())],
+    )
+    .expect("insert hook event");
+
+    let page = harness::request(
+        "harness.subscribe",
+        json!({ "cursor": cursor, "wait_ms": 0 }),
+    )
+    .await
+    .expect("trace notices");
+    assert!(page["notices"].as_array().is_some_and(|items| items
+        .iter()
+        .any(|notice| notice["kind"] == "trace_updated" && notice["run_id"] == run_id)));
+}
+
+#[test]
+fn harness_reuses_run_project_identity_and_rejects_path_mismatch() {
+    let _serial = serial();
+    let project = TempProject::with_hooks(PROBE_HOOK);
+    let other = TempProject::with_hooks("{}");
+    let registered = call(
+        "project.identity.register",
+        json!({ "path": project.path(), "name": "project" }),
+    );
+    let repeated = call(
+        "project.identity.register",
+        json!({ "path": project.path(), "name": "renamed" }),
+    );
+    assert_eq!(registered["project_id"], repeated["project_id"]);
+
+    let other_id = call(
+        "project.identity.register",
+        json!({ "path": other.path(), "name": "other" }),
+    )["project_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (conversation, run) = seed_run("scope-mismatch");
+    let error = match control_plane::resolve_run(
+        &run,
+        Some(&conversation),
+        Some(&other_id),
+        Some(Path::new(&project.path())),
+    ) {
+        Ok(_) => panic!("mismatched project id/path must fail closed"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "harness_scope_mismatch");
+}
+
+#[test]
+fn workspace_returns_a_structured_draft_document() {
+    let _serial = serial();
+    let draft = call(
+        "harness.draft.get",
+        serde_json::json!({ "profile_id": DEFAULT_GLOBAL_PROFILE_ID }),
+    );
+    let workspace = call(
+        "harness.workspace.get",
+        serde_json::json!({ "profile_id": DEFAULT_GLOBAL_PROFILE_ID }),
+    );
+    assert_eq!(workspace["draft"]["revision"], draft["revision"]);
+    assert!(workspace["draft"]["document"].is_object());
+    assert!(workspace["draft"].get("document_json").is_none());
 }
 
 #[test]
@@ -326,6 +457,114 @@ fn new_profile(name: &str) -> String {
         .to_string()
 }
 
+#[test]
+fn new_session_overlay_profiles_are_rejected() {
+    let _serial = serial();
+    assert_eq!(
+        call_err(
+            "harness.profile.create",
+            json!({ "name": "invalid session overlay", "kind": "session_overlay" }),
+        ),
+        "invalid_input"
+    );
+}
+
+#[test]
+fn acknowledging_tracked_drift_consumes_candidate_and_updates_manifest() {
+    let _serial = serial();
+    let profile = new_profile("drift-ack");
+    call(
+        "harness.draft.publish",
+        json!({ "profile_id": profile, "revision": 0 }),
+    );
+    let store = repository::store().expect("store");
+    let conn = store.conn().expect("connection");
+    repository::sync_source(&conn, "source-1", "old", "tracked").expect("seed manifest");
+    repository::ensure_source_drift_candidate(
+        &conn,
+        &profile,
+        &json!([{
+            "source_id": "source-1",
+            "published_digest": "old",
+            "observed_digest": "new"
+        }]),
+    )
+    .expect("candidate");
+
+    let result = call(
+        "harness.source.acknowledgeDrift",
+        json!({
+            "profile_id": profile,
+            "source_id": "source-1",
+            "observed_digest": "new",
+            "revision": 0
+        }),
+    );
+    assert_eq!(result["revision"], 1);
+
+    let draft = repository::get_draft(&conn, &profile)
+        .expect("draft")
+        .expect("draft row");
+    let candidate: Value =
+        serde_json::from_str(draft.source_candidate_json.as_deref().expect("candidate")).unwrap();
+    assert_eq!(candidate[0]["acknowledged"], true);
+    let before_publish = repository::source_digest(&conn, "source-1")
+        .expect("source")
+        .expect("manifest");
+    assert_eq!(before_publish.0, "old");
+
+    call(
+        "harness.draft.publish",
+        json!({ "profile_id": profile, "revision": 1 }),
+    );
+    let after_publish = repository::source_digest(&conn, "source-1")
+        .expect("source")
+        .expect("manifest");
+    assert_eq!(after_publish.0, "new");
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM harness_source_manifest WHERE source_id = 'source-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "current");
+}
+
+#[test]
+fn incomplete_native_adapter_cannot_be_published() {
+    let _serial = serial();
+    let profile = new_profile("invalid native adapter");
+    call(
+        "harness.draft.save",
+        json!({
+            "profile_id": profile,
+            "revision": 0,
+            "document": {
+                "schema_version": 3,
+                "native_hooks": [{
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "name": "Broken MCP",
+                    "event": "PreToolUse",
+                    "matcher": "*",
+                    "adapter": {
+                        "type": "mcp_tool",
+                        "server_id": "",
+                        "tool_name": "",
+                        "input_template": "{"
+                    }
+                }]
+            }
+        }),
+    );
+    let validation = call("harness.draft.validate", json!({ "profile_id": profile }));
+    assert_eq!(validation["publishable"], false);
+    assert_eq!(
+        call_err("harness.draft.publish", json!({ "profile_id": profile })),
+        "harness_validation_failed"
+    );
+}
+
 fn overlay_document(hook_id: &str, timeout_ms: u64) -> Value {
     json!({
         "schema_version": 1,
@@ -455,8 +694,12 @@ fn rollback_republishes_forward_instead_of_rewinding_a_pointer() {
     );
     let v2 = call("harness.draft.publish", json!({ "profile_id": profile }));
     assert_eq!(v2["version"]["version_number"], 2);
+    let v2_id = v2["version"]["id"].as_str().unwrap();
 
-    let v3 = call("harness.version.rollback", json!({ "version_id": v1_id }));
+    let v3 = call(
+        "harness.version.rollback",
+        json!({ "version_id": v1_id, "expected_current_version_id": v2_id }),
+    );
     assert_eq!(
         v3["version"]["version_number"], 3,
         "rollback must move forward, so an old snapshot's version_id still \
@@ -477,7 +720,13 @@ fn rollback_republishes_forward_instead_of_rewinding_a_pointer() {
 fn a_project_overlay_wins_over_the_global_template() {
     let _serial = serial();
     let project = TempProject::with_hooks(PROBE_HOOK);
-    let project_id = format!("proj-{}", uuid::Uuid::new_v4());
+    let project_id = call(
+        "project.identity.register",
+        json!({ "path": project.path(), "name": "hierarchy" }),
+    )["project_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Global says 5s.
     let global = new_profile("hierarchy-global");

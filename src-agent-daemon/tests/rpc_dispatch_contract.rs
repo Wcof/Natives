@@ -345,6 +345,21 @@ async fn harness_surface_is_advertised_and_really_routed() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn project_identity_surface_reaches_the_harness_control_plane() {
+    isolate_env();
+
+    for method in ["project.identity.register", "project.identity.list"] {
+        match probe(method).await {
+            Probe::Blocked => {}
+            Probe::Responded { code, body } => assert!(
+                !is_fail_closed_miss(code.as_deref(), &body),
+                "{method} is advertised but does not reach the harness control plane: {body}"
+            ),
+        }
+    }
+}
+
 /// `sampling/createMessage` and `elicitation/create` let an MCP **server** drive
 /// the client: spend local inference on the server's prompt, or put the server's
 /// question in front of the user. Both invert the trust direction the rest of the

@@ -522,6 +522,14 @@ export interface ProjectSummary {
   exists: boolean;
 }
 
+export interface HarnessNotice {
+  cursor: number;
+  kind: 'published' | 'binding_changed' | 'source_drift' | 'trace_updated' | 'reset_required';
+  profile_id?: string | null;
+  run_id?: string | null;
+  created_at?: string;
+}
+
 export interface NativesAPI {
   themeReady: () => void;
   app: { version: () => Promise<string> };
@@ -961,6 +969,10 @@ export interface NativesAPI {
   assistantV2: {
     request<T>(method: string, params?: unknown): Promise<T>;
     getStatus(): Promise<{ connected: boolean; error: string | null }>;
+    subscribeHarness(
+      listener: (notice: HarnessNotice) => void,
+      options?: { cursor?: number; onError?: (error: unknown) => void },
+    ): () => void;
   };
   /** Project directory management */
   project: {
@@ -1918,6 +1930,33 @@ const nativesAPI: NativesAPI = {
         .then(unwrapAssistantRpc),
     getStatus: (): Promise<{ connected: boolean; error: string | null }> =>
       cmd<{ connected: boolean; error: string | null }>('assistant_status'),
+    subscribeHarness: (
+      listener: (notice: HarnessNotice) => void,
+      options?: { cursor?: number; onError?: (error: unknown) => void },
+    ): (() => void) => {
+      let stopped = false;
+      let cursor = options?.cursor ?? 0;
+      const run = async () => {
+        while (!stopped) {
+          try {
+            const page = await nativesAPI.assistantV2.request<{
+              notices: HarnessNotice[];
+              next_cursor: number;
+              reset_required?: boolean;
+            }>('harness.subscribe', { cursor, wait_ms: 25_000, limit: 100 });
+            if (stopped) break;
+            for (const notice of page.notices) listener(notice);
+            cursor = page.next_cursor;
+          } catch (error) {
+            if (stopped) break;
+            options?.onError?.(error);
+            await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+          }
+        }
+      };
+      void run();
+      return () => { stopped = true; };
+    },
   },
 
   // Project directory management

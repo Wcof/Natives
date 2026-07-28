@@ -582,7 +582,7 @@ impl ProductionRuntime {
         let harness_prompt = prompt_blocks
             .iter()
             .filter(|b| b.enabled)
-            .map(|b| b.content.as_str())
+            .map(|b| b.markdown.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
         // Parent-authored directive for this child run (registered by the `task`
@@ -789,10 +789,11 @@ impl ProductionRuntime {
             if self.execution.is_registered(parent).await {
                 self.execution.register_child(run_id, parent).await?
             } else {
-                // Parent missing (legacy): still create child root but record parent link.
-                self.execution
-                    .register_with_token(run_id, Some(parent.to_string()), CancellationToken::new())
-                    .await?
+                // Legacy/test callers can name a parent that is not owned by
+                // this process. It cannot participate in this cancel tree, so
+                // the child must be a root here; the Run row still preserves
+                // the parent relationship.
+                self.execution.register_root(run_id).await?
             }
         } else {
             self.execution.register_root(run_id).await?

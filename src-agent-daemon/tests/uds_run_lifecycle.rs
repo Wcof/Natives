@@ -8,6 +8,7 @@ use natives_agent_daemon::client::{client_protocol_version, DaemonClient};
 use natives_agent_daemon::rpc::RpcServer;
 use serde_json::json;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 fn temp_socket() -> PathBuf {
@@ -16,6 +17,50 @@ fn temp_socket() -> PathBuf {
         "/tmp/nuds-{}.sock",
         &uuid::Uuid::new_v4().to_string()[..8]
     ))
+}
+
+#[tokio::test]
+async fn sidecar_binary_routes_engineering_project_identity() {
+    let root = std::env::temp_dir().join(format!("natives-sidecar-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).expect("create sidecar test directory");
+    let socket = temp_socket();
+    let bootstrap = format!("boot-{}", uuid::Uuid::new_v4());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_natives-agent-daemon"))
+        .env("NATIVES_DAEMON_SOCKET", &socket)
+        .env("NATIVES_DAEMON_BOOTSTRAP", &bootstrap)
+        .env("NATIVES_DB_PATH", root.join("natives.db"))
+        .env("NATIVES_ASSISTANT_DB_PATH", root.join("assistant.db"))
+        .env("NATIVES_RUNTIME_DIR", &root)
+        .env("NATIVES_DAEMON_FIXTURE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn compiled daemon binary");
+
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let result = async {
+        let mut client =
+            DaemonClient::connect(&socket, &bootstrap, client_protocol_version()).await?;
+        let capabilities = client.call("daemon.getCapabilities", json!({})).await?;
+        assert!(capabilities.to_string().contains("project.identity.list"));
+        client.call("project.identity.list", json!({})).await
+    }
+    .await;
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_dir_all(&root);
+
+    let listed = result.expect("compiled sidecar must route project.identity.list");
+    assert!(listed["items"].is_array());
 }
 
 #[tokio::test]

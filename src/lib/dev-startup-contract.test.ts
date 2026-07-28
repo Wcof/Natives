@@ -10,11 +10,10 @@ const bundle = JSON.parse(
 );
 
 describe('desktop development startup', () => {
-  it('uses one desktop entrypoint and a renderer-only Tauri hook', () => {
-    assert.match(pkg.scripts.dev, /daemon:build/);
-    assert.match(pkg.scripts.dev, /tauri dev/);
+  it('builds the Agent Daemon from every Tauri development entrypoint', () => {
+    assert.equal(pkg.scripts.dev, 'tauri dev');
     assert.match(pkg.scripts['web:dev'], /next dev/);
-    assert.equal(tauri.build.beforeDevCommand, 'npm run web:dev');
+    assert.match(tauri.build.beforeDevCommand, /daemon:build.*web:dev/);
   });
 
   it('bundles the Agent Daemon for production desktop builds', () => {

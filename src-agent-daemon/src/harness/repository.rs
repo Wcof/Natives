@@ -111,6 +111,17 @@ impl DraftRow {
             .map_err(|e| HarnessError::internal(format!("stored draft is not JSON: {e}")))?;
         HarnessBlueprint::parse(&value).map_err(HarnessError::validation_failed)
     }
+
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "profile_id": self.profile_id,
+            "base_version_id": self.base_version_id,
+            "document_json": self.document_json,
+            "revision": self.revision,
+            "updated_at": self.updated_at,
+            "source_candidate_json": self.source_candidate_json,
+        })
+    }
 }
 
 /// Which published profile a scope selects.
@@ -209,6 +220,7 @@ fn sql(e: rusqlite::Error) -> HarnessError {
 /// which is the only document that provably compiles to today's production
 /// behaviour (design 第 5.3 节).
 pub fn ensure_defaults(conn: &Connection) -> Result<(), HarnessError> {
+    reconcile_legacy_project_identities(conn)?;
     let exists: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM harness_profile WHERE id = ?1",
@@ -261,6 +273,59 @@ pub fn ensure_defaults(conn: &Connection) -> Result<(), HarnessError> {
         params![GLOBAL_SCOPE_ID, DEFAULT_GLOBAL_PROFILE_ID, stamp],
     )
     .map_err(sql)?;
+    Ok(())
+}
+
+/// Migration 025 briefly introduced a Harness-specific project identity table.
+/// Rebind any rows it created to the RunManager's existing ProjectIdentity
+/// authority; missing directories remain untouched and therefore fail closed.
+fn reconcile_legacy_project_identities(conn: &Connection) -> Result<(), HarnessError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT project_id, canonical_path FROM harness_project_identity
+              WHERE EXISTS (
+                SELECT 1 FROM harness_profile WHERE project_id = harness_project_identity.project_id
+              )",
+        )
+        .map_err(sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(sql)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sql)?;
+    drop(stmt);
+
+    for (legacy_id, path) in rows {
+        let Ok(identity) = crate::project_identity::store::register_or_get(conn, &path) else {
+            continue;
+        };
+        if identity.project_id == legacy_id {
+            continue;
+        }
+        conn.execute(
+            "UPDATE harness_profile SET project_id = ?2 WHERE project_id = ?1",
+            params![legacy_id, identity.project_id],
+        )
+        .map_err(sql)?;
+        conn.execute(
+            "DELETE FROM harness_binding
+              WHERE scope_type = 'project' AND scope_id = ?1
+                AND EXISTS (
+                    SELECT 1 FROM harness_binding
+                     WHERE scope_type = 'project' AND scope_id = ?2
+                )",
+            params![legacy_id, identity.project_id],
+        )
+        .map_err(sql)?;
+        conn.execute(
+            "UPDATE harness_binding SET scope_id = ?2
+              WHERE scope_type = 'project' AND scope_id = ?1",
+            params![legacy_id, identity.project_id],
+        )
+        .map_err(sql)?;
+    }
     Ok(())
 }
 
@@ -429,6 +494,26 @@ pub fn publish_version(
     result
 }
 
+pub fn publish_draft_version(
+    conn: &Connection,
+    profile_id: &str,
+    document: &HarnessBlueprint,
+    validation_summary: &Value,
+    draft: &DraftRow,
+) -> Result<VersionRow, HarnessError> {
+    let tx_started = conn.execute_batch("BEGIN IMMEDIATE").is_ok();
+    let result = (|| {
+        let version = publish_version_inner(conn, profile_id, document, validation_summary)?;
+        publish_source_drift_manifest(conn, draft)?;
+        clear_draft(conn, profile_id)?;
+        Ok(version)
+    })();
+    if tx_started {
+        let _ = conn.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" });
+    }
+    result
+}
+
 fn publish_version_inner(
     conn: &Connection,
     profile_id: &str,
@@ -584,7 +669,27 @@ pub fn ensure_source_drift_candidate(
     }
     let candidate_json = mismatches.to_string();
     if let Some(existing) = get_draft(conn, profile_id)? {
-        if existing.source_candidate_json.as_deref() == Some(candidate_json.as_str()) {
+        let same_candidate = existing
+            .source_candidate_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .and_then(|value| value.as_array().cloned())
+            .is_some_and(|items| {
+                let mut existing_keys = items
+                    .iter()
+                    .filter_map(source_candidate_key)
+                    .collect::<Vec<_>>();
+                let mut observed_keys = mismatches
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(source_candidate_key)
+                    .collect::<Vec<_>>();
+                existing_keys.sort();
+                observed_keys.sort();
+                existing_keys == observed_keys
+            });
+        if same_candidate {
             return Ok(Some(existing));
         }
         return Err(HarnessError::draft_conflict(
@@ -611,7 +716,35 @@ pub fn ensure_source_drift_candidate(
     })?))
 }
 
+fn source_candidate_key(value: &Value) -> Option<(String, String)> {
+    Some((
+        value.get("source_id")?.as_str()?.to_string(),
+        value.get("observed_digest")?.as_str()?.to_string(),
+    ))
+}
+
 pub fn acknowledge_source_drift(
+    conn: &Connection,
+    profile_id: &str,
+    source_id: &str,
+    observed_digest: &str,
+    expected_revision: i64,
+) -> Result<DraftRow, HarnessError> {
+    let tx_started = conn.execute_batch("BEGIN IMMEDIATE").is_ok();
+    let result = acknowledge_source_drift_inner(
+        conn,
+        profile_id,
+        source_id,
+        observed_digest,
+        expected_revision,
+    );
+    if tx_started {
+        let _ = conn.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" });
+    }
+    result
+}
+
+fn acknowledge_source_drift_inner(
     conn: &Connection,
     profile_id: &str,
     source_id: &str,
@@ -630,23 +763,92 @@ pub fn acknowledge_source_drift(
         .as_deref()
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .ok_or_else(|| HarnessError::invalid("draft has no source drift candidate"))?;
-    let found = candidate
+    let items = candidate
         .as_array()
-        .into_iter()
-        .flatten()
-        .find(|item| item.get("source_id").and_then(Value::as_str) == Some(source_id))
-        .and_then(|item| item.get("observed_digest").and_then(Value::as_str));
-    if found != Some(observed_digest) {
+        .ok_or_else(|| HarnessError::invalid("source drift candidate is not an array"))?;
+    if !items.iter().any(|item| {
+        item.get("source_id").and_then(Value::as_str) == Some(source_id)
+            && item.get("observed_digest").and_then(Value::as_str) == Some(observed_digest)
+            && item.get("acknowledged").and_then(Value::as_bool) != Some(true)
+    }) {
         return Err(HarnessError::invalid(
             "observed digest does not match drift candidate",
         ));
     }
-    conn.execute(
-        "UPDATE harness_draft SET revision = revision + 1, updated_at = ?2 WHERE profile_id = ?1 AND revision = ?3",
-        params![profile_id, now(), expected_revision],
-    ).map_err(sql)?;
+    let acknowledged = items
+        .iter()
+        .cloned()
+        .map(|mut item| {
+            if item.get("source_id").and_then(Value::as_str) == Some(source_id) {
+                if let Some(object) = item.as_object_mut() {
+                    object.insert("acknowledged".into(), Value::Bool(true));
+                }
+            }
+            item
+        })
+        .collect::<Vec<_>>();
+    let candidate_json = Value::Array(acknowledged).to_string();
+    let changed = conn
+        .execute(
+            "UPDATE harness_draft
+            SET revision = revision + 1, updated_at = ?2, source_candidate_json = ?4
+          WHERE profile_id = ?1 AND revision = ?3",
+            params![profile_id, now(), expected_revision, candidate_json],
+        )
+        .map_err(sql)?;
+    if changed == 0 {
+        return Err(HarnessError::draft_conflict(
+            "draft changed while acknowledging source drift",
+        ));
+    }
     get_draft(conn, profile_id)?
         .ok_or_else(|| HarnessError::internal("draft vanished after acknowledgement"))
+}
+
+pub fn publish_source_drift_manifest(
+    conn: &Connection,
+    draft: &DraftRow,
+) -> Result<(), HarnessError> {
+    let Some(items) = draft
+        .source_candidate_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| value.as_array().cloned())
+    else {
+        return Ok(());
+    };
+    if items
+        .iter()
+        .any(|item| item.get("acknowledged").and_then(Value::as_bool) != Some(true))
+    {
+        return Err(HarnessError::validation_failed(
+            "tracked source drift must be acknowledged before publishing",
+        ));
+    }
+    for item in items {
+        let source_id = item
+            .get("source_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HarnessError::invalid("drift candidate source_id is missing"))?;
+        let digest = item
+            .get("observed_digest")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HarnessError::invalid("drift candidate digest is missing"))?;
+        let changed = conn
+            .execute(
+                "UPDATE harness_source_manifest
+                    SET digest = ?2, status = 'current', updated_at = ?3
+                  WHERE source_id = ?1",
+                params![source_id, digest, now()],
+            )
+            .map_err(sql)?;
+        if changed == 0 {
+            return Err(HarnessError::not_found(format!(
+                "source manifest not found: {source_id}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Drop a draft once it has been published. The published version is the record.
@@ -709,6 +911,25 @@ pub fn set_binding(
         return Err(HarnessError::invalid(format!(
             "profile {profile_id} has no published version; publish before binding"
         )));
+    }
+    match scope_type {
+        "global" if profile.kind != "global_template" => {
+            return Err(HarnessError::scope_mismatch(
+                "the global scope accepts only global_template profiles",
+            ));
+        }
+        "project" if profile.kind != "project_overlay" => {
+            return Err(HarnessError::scope_mismatch(
+                "a project scope accepts only project_overlay profiles",
+            ));
+        }
+        "project" if profile.project_id.as_deref() != Some(scope_id) => {
+            return Err(HarnessError::scope_mismatch(format!(
+                "profile {profile_id} belongs to project {}, not {scope_id}",
+                profile.project_id.as_deref().unwrap_or("none")
+            )));
+        }
+        _ => {}
     }
     if mode == "pinned" {
         let Some(version_id) = version_id else {
@@ -785,17 +1006,30 @@ pub fn resolve_layers(
             continue;
         };
         let Some(binding) = get_binding(conn, scope_type, scope_id)? else {
+            if layer == ProfileLayer::Global {
+                return Err(HarnessError::not_found(
+                    "required global Harness binding is missing",
+                ));
+            }
             continue;
         };
-        let Some(profile) = get_profile(conn, &binding.profile_id)? else {
-            continue;
-        };
+        let profile = get_profile(conn, &binding.profile_id)?.ok_or_else(|| {
+            HarnessError::not_found(format!(
+                "Harness binding {scope_type}:{scope_id} points to missing profile {}",
+                binding.profile_id
+            ))
+        })?;
         if profile.archived_at.is_some() {
-            continue;
+            return Err(HarnessError::invalid(format!(
+                "Harness binding {scope_type}:{scope_id} points to archived profile {}",
+                binding.profile_id
+            )));
         }
-        let Some(version) = version_for_binding(conn, &binding)? else {
-            continue;
-        };
+        let version = version_for_binding(conn, &binding)?.ok_or_else(|| {
+            HarnessError::not_found(format!(
+                "Harness binding {scope_type}:{scope_id} has no resolvable published version"
+            ))
+        })?;
         layers.push((layer, profile, version));
     }
     Ok(layers)
@@ -902,7 +1136,85 @@ pub fn append_audit(
         ],
     )
     .map_err(sql)?;
+    // Migration 026 inserts the notice in this statement's transaction.
+    super::publish_notice(0);
     Ok(())
+}
+
+pub struct NoticePage {
+    pub notices: Vec<Value>,
+    pub next_cursor: i64,
+    pub reset_required: bool,
+}
+
+/// Persist a bounded invalidation notice. Documents, payloads, and secrets are
+/// deliberately absent; the receiver refetches an authoritative projection.
+pub fn append_notice(
+    conn: &Connection,
+    kind: &str,
+    profile_id: Option<&str>,
+    run_id: Option<&str>,
+) -> Result<i64, HarnessError> {
+    conn.execute(
+        "INSERT INTO harness_notice(kind, profile_id, run_id) VALUES(?1, ?2, ?3)",
+        params![kind, profile_id, run_id],
+    )
+    .map_err(sql)?;
+    let cursor = conn.last_insert_rowid();
+    Ok(cursor)
+}
+
+pub fn list_notices(
+    conn: &Connection,
+    after_cursor: i64,
+    limit: i64,
+) -> Result<NoticePage, HarnessError> {
+    let bounds: (i64, i64) = conn
+        .query_row(
+            "SELECT COALESCE(MIN(cursor), 0), COALESCE(MAX(cursor), 0) FROM harness_notice",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql)?;
+    let reset_required = after_cursor > 0 && bounds.0 > 0 && after_cursor < bounds.0 - 1;
+    let start = if reset_required {
+        bounds.1
+    } else {
+        after_cursor
+    };
+    let mut stmt = conn
+        .prepare(
+            "SELECT cursor, kind, profile_id, run_id, created_at
+               FROM harness_notice WHERE cursor > ?1
+              ORDER BY cursor ASC LIMIT ?2",
+        )
+        .map_err(sql)?;
+    let rows = stmt
+        .query_map(params![start, limit.clamp(1, 200)], |row| {
+            Ok(serde_json::json!({
+                "cursor": row.get::<_, i64>(0)?,
+                "kind": row.get::<_, String>(1)?,
+                "profile_id": row.get::<_, Option<String>>(2)?,
+                "run_id": row.get::<_, Option<String>>(3)?,
+                "created_at": row.get::<_, String>(4)?,
+            }))
+        })
+        .map_err(sql)?;
+    let notices = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(sql)?;
+    let next_cursor = notices
+        .last()
+        .and_then(|notice| notice.get("cursor"))
+        .and_then(Value::as_i64)
+        .unwrap_or(if reset_required {
+            bounds.1
+        } else {
+            after_cursor
+        });
+    Ok(NoticePage {
+        notices,
+        next_cursor,
+        reset_required,
+    })
 }
 
 pub fn list_audit(conn: &Connection, limit: i64) -> Result<Vec<Value>, HarnessError> {
@@ -949,6 +1261,8 @@ pub fn sync_source(
     let drifted = old.as_ref().is_some_and(|(previous, _)| previous != digest);
     if let Some((_, previous_mode)) = old {
         if drifted && previous_mode == "pinned" {
+            let cursor = append_notice(conn, "source_drift", None, None)?;
+            super::publish_notice(cursor);
             return Err(HarnessError::invalid(format!(
                 "pinned Harness source drifted: {source_id}"
             )));
@@ -1046,5 +1360,51 @@ pub fn list_run_hook_trace(
             Ok(value)
         })
         .map_err(sql)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+}
+
+pub fn register_project_identity(
+    conn: &Connection,
+    canonical_path: &str,
+    name: &str,
+) -> Result<Value, HarnessError> {
+    if canonical_path.trim().is_empty() {
+        return Err(HarnessError::invalid("canonical_path cannot be empty"));
+    }
+    let identity = crate::project_identity::store::register_or_get(conn, canonical_path)
+        .map_err(HarnessError::invalid)?;
+    Ok(serde_json::json!({
+        "project_id": identity.project_id,
+        "canonical_path": identity.canonical_path,
+        "identity_version": identity.identity_version,
+        "name": name,
+    }))
+}
+
+pub fn list_project_identities(conn: &Connection) -> Result<Vec<Value>, HarnessError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT project_id, canonical_path, identity_version, created_at
+               FROM project_identity WHERE orphaned = 0 ORDER BY canonical_path ASC",
+        )
+        .map_err(sql)?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            let path = row.get::<_, String>(1)?;
+            let name = PathBuf::from(&path)
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            Ok(serde_json::json!({
+                "project_id": row.get::<_, String>(0)?,
+                "canonical_path": path,
+                "name": name,
+                "identity_version": row.get::<_, i64>(2)?,
+                "created_at": row.get::<_, String>(3)?,
+            }))
+        })
+        .map_err(sql)?;
+
     rows.collect::<Result<Vec<_>, _>>().map_err(sql)
 }

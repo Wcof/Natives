@@ -16,7 +16,13 @@
 //! fail-closed security), plus optional trusted command/HTTP hooks from env and
 //! project `.claude|grok|natives/hooks.json` command hooks.
 
-use agent_core::{AllowAllHook, CommandHook, HookRegistry, HttpHook};
+use agent_core::{
+    AllowAllHook, CommandHook, EngineMessage, EngineProvider, EngineProviderEvent, HookDecision,
+    HookHandler, HookOutcome, HookRegistry, HookRequest, HookResponse, HttpHook,
+};
+use assistant_protocol::v2::RunEventKind;
+use futures_util::StreamExt;
+use harness_core::blueprint::{CommandWorkingDirPolicy, HookAdapterSpecV3, NativeHookSpecV3};
 use harness_core::hooks::{
     HookDefinition, HookEvent, HookFailurePolicy, HookId, HookKind, HookScope, HookSource,
 };
@@ -164,37 +170,493 @@ pub fn compile_production_hooks(
     definitions: &[HookDefinition],
     project: Option<&Path>,
 ) -> HookRegistry {
+    compile_production_hooks_with_native(definitions, &[], project)
+}
+
+/// Compile the resolved definitions and preserve the complete v3 adapter for
+/// Natives-owned Hooks. Imported definitions continue through the legacy
+/// Command/HTTP path.
+pub fn compile_production_hooks_with_native(
+    definitions: &[HookDefinition],
+    native_hooks: &[NativeHookSpecV3],
+    project: Option<&Path>,
+) -> HookRegistry {
     let mut hooks = HookRegistry::new();
     for definition in definitions {
-        let handler: Box<dyn agent_core::HookHandler> = match &definition.kind {
-            HookKind::Builtin { name } if name == BUILTIN_ALLOW_ALL => Box::new(AllowAllHook),
-            // Unknown builtins are inert rather than fatal: an older Daemon
-            // must not crash on a definition a newer one wrote.
-            HookKind::Builtin { .. } => continue,
-            HookKind::Command {
-                program,
-                args,
-                trusted,
-            } => Box::new(CommandHook {
-                program: program.clone(),
-                args: args.clone(),
-                timeout: definition.timeout(),
-                trusted: *trusted,
-                cwd: project.map(Path::to_path_buf),
-                tool_pattern: definition.matcher.clone(),
-            }),
-            HookKind::Http { url, allow_hosts } => Box::new(HttpHook {
-                url: url.clone(),
-                timeout: definition.timeout(),
-                allow_hosts: allow_hosts.clone(),
-                tool_pattern: definition.matcher.clone(),
-            }),
+        let native = native_hooks
+            .iter()
+            .find(|hook| HookId::native(&hook.id, hook.event) == definition.id);
+        let handler: Box<dyn HookHandler> = if let Some(native) = native {
+            match &native.adapter {
+                HookAdapterSpecV3::Command {
+                    program,
+                    args,
+                    working_dir_policy,
+                    secret_env_refs,
+                    trusted,
+                    mode,
+                    ..
+                } if secret_env_refs.is_empty()
+                    && *mode == harness_core::blueprint::CommandMode::Exec =>
+                {
+                    Box::new(CommandHook {
+                        program: program.clone(),
+                        args: args.clone(),
+                        timeout: definition.timeout(),
+                        trusted: *trusted,
+                        cwd: match working_dir_policy {
+                            CommandWorkingDirPolicy::ProjectRoot => project.map(Path::to_path_buf),
+                            CommandWorkingDirPolicy::None => None,
+                        },
+                        tool_pattern: definition.matcher.clone(),
+                    })
+                }
+                HookAdapterSpecV3::Http {
+                    url,
+                    allow_hosts,
+                    headers,
+                    secret_header_refs,
+                } if headers.is_empty() && secret_header_refs.is_empty() => Box::new(HttpHook {
+                    url: url.clone(),
+                    timeout: definition.timeout(),
+                    allow_hosts: allow_hosts.clone(),
+                    tool_pattern: definition.matcher.clone(),
+                }),
+                HookAdapterSpecV3::McpTool {
+                    server_id,
+                    tool_name,
+                    input_template,
+                } => Box::new(NativeMcpHook {
+                    server_id: server_id.clone(),
+                    tool_name: tool_name.clone(),
+                    input_template: input_template.clone(),
+                }),
+                HookAdapterSpecV3::Prompt {
+                    template,
+                    model_override,
+                } => Box::new(NativePromptHook {
+                    template: template.clone(),
+                    model_override: model_override.clone(),
+                    timeout_ms: native.timeout_ms,
+                }),
+                HookAdapterSpecV3::Agent {
+                    prompt,
+                    model_override,
+                    max_steps,
+                    readonly_tools,
+                } => Box::new(NativeAgentHook {
+                    prompt: prompt.clone(),
+                    model_override: model_override.clone(),
+                    max_steps: *max_steps,
+                    readonly_tools: readonly_tools.clone(),
+                    timeout_ms: native.timeout_ms,
+                }),
+                HookAdapterSpecV3::Command { .. } | HookAdapterSpecV3::Http { .. } => {
+                    Box::new(UnsupportedNativeHook)
+                }
+            }
+        } else {
+            compile_standard_hook(definition, project)
         };
         hooks.register_defined(definition.clone(), handler);
     }
-    // Enable fail-closed last so removing all handlers cannot open tools.
     hooks.enable_security_fail_closed();
     hooks
+}
+
+fn compile_standard_hook(
+    definition: &HookDefinition,
+    project: Option<&Path>,
+) -> Box<dyn HookHandler> {
+    match &definition.kind {
+        HookKind::Builtin { name } if name == BUILTIN_ALLOW_ALL => Box::new(AllowAllHook),
+        // Unknown builtins are inert rather than fatal: an older Daemon
+        // must not crash on a definition a newer one wrote.
+        HookKind::Builtin { .. } => Box::new(UnsupportedNativeHook),
+        HookKind::Command {
+            program,
+            args,
+            trusted,
+        } => Box::new(CommandHook {
+            program: program.clone(),
+            args: args.clone(),
+            timeout: definition.timeout(),
+            trusted: *trusted,
+            cwd: project.map(Path::to_path_buf),
+            tool_pattern: definition.matcher.clone(),
+        }),
+        HookKind::Http { url, allow_hosts } => Box::new(HttpHook {
+            url: url.clone(),
+            timeout: definition.timeout(),
+            allow_hosts: allow_hosts.clone(),
+            tool_pattern: definition.matcher.clone(),
+        }),
+    }
+}
+
+struct UnsupportedNativeHook;
+
+#[async_trait::async_trait]
+impl HookHandler for UnsupportedNativeHook {
+    async fn handle(&self, _request: HookRequest) -> HookResponse {
+        HookResponse {
+            decision: HookDecision::Deny {
+                reason: "unsupported Native Hook adapter".into(),
+            },
+        }
+    }
+}
+
+struct NativeMcpHook {
+    server_id: String,
+    tool_name: String,
+    input_template: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl HookHandler for NativeMcpHook {
+    async fn handle(&self, request: HookRequest) -> HookResponse {
+        self.handle_outcome(request).await.into_response()
+    }
+
+    async fn handle_outcome(&self, request: HookRequest) -> HookOutcome {
+        let Some(run) = crate::global_run_manager().get_run(&request.run_id) else {
+            return HookOutcome::Failed {
+                reason: "parent Run not found".into(),
+            };
+        };
+        let selected = run
+            .capability_snapshot
+            .as_ref()
+            .and_then(|value| value.get("mcpServers"))
+            .and_then(Value::as_array)
+            .is_some_and(|servers| {
+                servers
+                    .iter()
+                    .any(|id| id.as_str() == Some(&self.server_id))
+            });
+        if !selected {
+            return HookOutcome::Failed {
+                reason: format!(
+                    "MCP server {} is not selected by the parent Run",
+                    self.server_id
+                ),
+            };
+        }
+        let arguments = match self.input_template.as_deref() {
+            Some(template) => match serde_json::from_str::<Value>(template) {
+                Ok(mut value) => {
+                    substitute_hook_input(&mut value, &request.input);
+                    value
+                }
+                Err(error) => {
+                    return HookOutcome::Failed {
+                        reason: format!("invalid MCP input template: {error}"),
+                    }
+                }
+            },
+            None => request.input,
+        };
+        let cancel = match crate::global_run_manager()
+            .runtime
+            .ensure_execution_token(&request.run_id, run.parent_run_id.as_deref())
+            .await
+        {
+            Ok(token) => token,
+            Err(reason) => return HookOutcome::Failed { reason },
+        };
+        match crate::runtime::mcp_invocation::invoke_mcp_tool(
+            &self.server_id,
+            &self.tool_name,
+            arguments,
+            &cancel,
+            Some(&request.run_id),
+        )
+        .await
+        {
+            Ok(_) => HookOutcome::Decided(HookResponse {
+                decision: HookDecision::Allow,
+            }),
+            Err(reason) => HookOutcome::Failed { reason },
+        }
+    }
+}
+
+fn substitute_hook_input(value: &mut Value, input: &Value) {
+    match value {
+        Value::String(text) if text == "${input}" => *value = input.clone(),
+        Value::Array(items) => {
+            for item in items {
+                substitute_hook_input(item, input);
+            }
+        }
+        Value::Object(object) => {
+            for item in object.values_mut() {
+                substitute_hook_input(item, input);
+            }
+        }
+        _ => {}
+    }
+}
+
+struct NativePromptHook {
+    template: String,
+    model_override: Option<String>,
+    timeout_ms: u64,
+}
+
+#[async_trait::async_trait]
+impl HookHandler for NativePromptHook {
+    async fn handle(&self, request: HookRequest) -> HookResponse {
+        self.handle_outcome(request).await.into_response()
+    }
+
+    async fn handle_outcome(&self, request: HookRequest) -> HookOutcome {
+        let Some(run) = crate::global_run_manager().get_run(&request.run_id) else {
+            return HookOutcome::Failed {
+                reason: "parent Run not found".into(),
+            };
+        };
+        let provider = crate::production::RealProvider {
+            provider_id: run.provider_id,
+            key_id: run.key_id,
+        };
+        let model = self.model_override.as_deref().unwrap_or(&run.model_id);
+        let input = assistant_protocol::v2::redact_secrets(&request.input.to_string());
+        let cancel = match crate::global_run_manager()
+            .runtime
+            .ensure_execution_token(&request.run_id, run.parent_run_id.as_deref())
+            .await
+        {
+            Ok(token) => token,
+            Err(reason) => return HookOutcome::Failed { reason },
+        };
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(self.timeout_ms);
+        let stream = provider.stream(
+            model,
+            vec![EngineMessage::text("user", input)],
+            &[],
+            Some(&self.template),
+            cancel,
+        );
+        let Ok(Ok(mut events)) = tokio::time::timeout_at(deadline, stream).await else {
+            return HookOutcome::Failed {
+                reason: "Prompt Hook provider request failed or timed out".into(),
+            };
+        };
+        let mut text = String::new();
+        loop {
+            let event = tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => {
+                    return HookOutcome::Failed { reason: "Prompt Hook provider stream timed out".into() };
+                }
+                event = events.next() => event,
+            };
+            let Some(event) = event else { break };
+            match event {
+                EngineProviderEvent::TextDelta(delta) => text.push_str(&delta),
+                EngineProviderEvent::Error { message, .. } => {
+                    return HookOutcome::Failed { reason: message }
+                }
+                EngineProviderEvent::Completed => break,
+                _ => {}
+            }
+        }
+        prompt_decision(&text)
+    }
+}
+
+fn prompt_decision(text: &str) -> HookOutcome {
+    let parsed = serde_json::from_str::<Value>(text.trim()).ok();
+    let decision = parsed
+        .as_ref()
+        .and_then(|value| value.get("decision"))
+        .and_then(Value::as_str)
+        .unwrap_or(text)
+        .trim()
+        .to_ascii_lowercase();
+    let reason = parsed
+        .as_ref()
+        .and_then(|value| value.get("reason"))
+        .and_then(Value::as_str)
+        .unwrap_or("Prompt Hook decision")
+        .to_string();
+    match decision.as_str() {
+        "allow" => HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Allow,
+        }),
+        "deny" => HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Deny { reason },
+        }),
+        _ => HookOutcome::Failed {
+            reason: "Prompt Hook must return structured allow/deny decision".into(),
+        },
+    }
+}
+
+struct NativeAgentHook {
+    prompt: String,
+    model_override: Option<String>,
+    max_steps: u32,
+    readonly_tools: Vec<String>,
+    timeout_ms: u64,
+}
+
+#[async_trait::async_trait]
+impl HookHandler for NativeAgentHook {
+    async fn handle(&self, request: HookRequest) -> HookResponse {
+        self.handle_outcome(request).await.into_response()
+    }
+
+    async fn handle_outcome(&self, request: HookRequest) -> HookOutcome {
+        let Some(parent) = crate::global_run_manager().get_run(&request.run_id) else {
+            return HookOutcome::Failed {
+                reason: "parent Run not found".into(),
+            };
+        };
+        if parent.parent_run_id.is_some() {
+            return HookOutcome::Failed {
+                reason: "Agent Hook recursion depth limit exceeded".into(),
+            };
+        }
+        let Some(key_id) = parent.key_id.clone() else {
+            return HookOutcome::Failed {
+                reason: "parent Run has no credential lease reference".into(),
+            };
+        };
+        let model_id = self
+            .model_override
+            .clone()
+            .unwrap_or(parent.model_id.clone());
+        let binding = crate::subagent_store::RouteBinding {
+            provider_id: parent.provider_id.clone(),
+            key_id: key_id.clone(),
+            model_id: model_id.clone(),
+        };
+        let input = assistant_protocol::v2::redact_secrets(&request.input.to_string());
+        let task = format!("Harness hook event:\n{input}");
+        let (session_id, conversation_id) = match crate::subagent_store::create_hidden_child_session(
+            &parent.conversation_id,
+            Some(&parent.id),
+            None,
+            "Harness Agent Hook",
+            &task,
+            &binding,
+            Some("readonly"),
+            parent.project_id.as_deref(),
+        ) {
+            Ok(value) => value,
+            Err(reason) => return HookOutcome::Failed { reason },
+        };
+        let created =
+            match crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
+                capability_selection: None,
+                conversation_id,
+                provider_id: parent.provider_id,
+                model_id,
+                key_id: Some(key_id),
+                agent_profile_id: None,
+                permission_profile: Some("readonly".into()),
+                content: Some(task),
+                attachments: None,
+                max_steps: Some(self.max_steps.clamp(1, 32)),
+                parent_run_id: Some(parent.id.clone()),
+                project_path: parent.project_path.clone(),
+                idempotency_key: None,
+                effort: parent.effort,
+                runtime_id: Some("native".into()),
+            }) {
+                Ok(run) => run,
+                Err(reason) => {
+                    let _ = crate::subagent_store::close_subagent_session(
+                        &session_id,
+                        "failed",
+                        Some(&reason),
+                    );
+                    return HookOutcome::Failed { reason };
+                }
+            };
+        crate::global_run_manager()
+            .runtime
+            .set_run_tool_allowlist(&created.id, self.readonly_tools.clone())
+            .await;
+        crate::global_run_manager()
+            .runtime
+            .set_run_agent_directive(&created.id, self.prompt.clone())
+            .await;
+        crate::global_run_manager().runtime.events.append(
+            &parent.id,
+            RunEventKind::SubagentCreated {
+                sub_run_id: created.id.clone(),
+                agent_profile_id: None,
+                task: "Harness Agent Hook".into(),
+            },
+        );
+        if let Err(reason) = crate::run_manager::RunManager::start_detached_global(
+            assistant_protocol::v2::StartRunRequest {
+                run_id: Some(created.id.clone()),
+                conversation_id: Some(created.conversation_id.clone()),
+                provider_id: Some(created.provider_id.clone()),
+                model_id: Some(created.model_id.clone()),
+                key_id: created.key_id.clone(),
+                content: None,
+                attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some("readonly".into()),
+                max_steps: Some(created.max_steps),
+                project_path: created.project_path.clone(),
+                idempotency_key: None,
+                effort: created.effort.clone(),
+                runtime_id: Some("native".into()),
+                agent_profile_id: None,
+                capability_selection: None,
+            },
+        ) {
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&reason));
+            return HookOutcome::Failed { reason };
+        }
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(self.timeout_ms);
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                let _ = crate::global_run_manager()
+                    .cancel(assistant_protocol::v2::CancelRunRequest {
+                        run_id: created.id.clone(),
+                    })
+                    .await;
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some("Agent Hook child Run timed out"),
+                );
+                return HookOutcome::Failed {
+                    reason: "Agent Hook child Run timed out".into(),
+                };
+            }
+            if let Some(run) = crate::global_run_manager().get_run(&created.id) {
+                if run.status.is_terminal() {
+                    let status = run.status.as_str();
+                    let _ = crate::subagent_store::close_subagent_session(
+                        &session_id,
+                        status,
+                        run.error_code.as_deref(),
+                    );
+                    return if status == "completed" {
+                        HookOutcome::Decided(HookResponse {
+                            decision: HookDecision::Allow,
+                        })
+                    } else {
+                        HookOutcome::Failed {
+                            reason: format!("Agent Hook child Run ended with {status}"),
+                        }
+                    };
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
 }
 
 fn next_ordinal(ordinals: &mut HashMap<HookEvent, i32>, event: HookEvent) -> i32 {
@@ -1010,5 +1472,33 @@ mod tests {
         assert_eq!(matched.len(), 2);
         assert_eq!(permission.len(), 2);
         assert!(HookRegistry::aggregate_allow(&matched).is_ok());
+    }
+
+    #[test]
+    fn mcp_template_substitutes_structured_event_input() {
+        let mut value = serde_json::json!({"payload": "${input}", "literal": "keep"});
+        substitute_hook_input(&mut value, &serde_json::json!({"command": "cargo test"}));
+        assert_eq!(value["payload"]["command"], "cargo test");
+        assert_eq!(value["literal"], "keep");
+    }
+
+    #[test]
+    fn prompt_hook_requires_a_structured_allow_or_deny() {
+        assert!(matches!(
+            prompt_decision(r#"{"decision":"allow","reason":"safe"}"#),
+            HookOutcome::Decided(HookResponse {
+                decision: HookDecision::Allow
+            })
+        ));
+        assert!(matches!(
+            prompt_decision(r#"{"decision":"deny","reason":"unsafe"}"#),
+            HookOutcome::Decided(HookResponse {
+                decision: HookDecision::Deny { .. }
+            })
+        ));
+        assert!(matches!(
+            prompt_decision("maybe"),
+            HookOutcome::Failed { .. }
+        ));
     }
 }

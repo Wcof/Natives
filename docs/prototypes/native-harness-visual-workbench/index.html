@@ -1,0 +1,777 @@
+<!doctype html>
+<!--
+  THROWAWAY PROTOTYPE — do not ship.
+  Question: how should Execution Engine unify capability inspection and Harness
+  engineering without mixing their authorities? Variant A is the selected direction.
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Native Harness 可视化工程台原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090b10;
+      --panel: #11141b;
+      --panel-2: #171b24;
+      --panel-3: #1e2430;
+      --line: #2a3140;
+      --line-soft: #202632;
+      --text: #f3f5f7;
+      --muted: #929baa;
+      --subtle: #657083;
+      --blue: #7c9cff;
+      --blue-soft: rgba(124, 156, 255, .13);
+      --violet: #b08cff;
+      --violet-soft: rgba(176, 140, 255, .13);
+      --green: #54d3a2;
+      --green-soft: rgba(84, 211, 162, .12);
+      --orange: #f4b564;
+      --orange-soft: rgba(244, 181, 100, .12);
+      --red: #ff7b89;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .35);
+      --radius: 14px;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 1120px; min-height: 100vh; color: var(--text); background: var(--bg); }
+    button, select, input, textarea { font: inherit; }
+    button { color: inherit; }
+    .prototype-warning {
+      position: fixed; top: 12px; right: 16px; z-index: 100;
+      padding: 6px 9px; border: 1px solid rgba(244, 181, 100, .35);
+      border-radius: 999px; color: var(--orange); background: rgba(9, 11, 16, .82);
+      font-size: 10px; letter-spacing: .08em; backdrop-filter: blur(12px);
+    }
+    .variant { display: none; min-height: 100vh; padding-bottom: 92px; }
+    body[data-variant="A"] #variant-a,
+    body[data-variant="B"] #variant-b,
+    body[data-variant="C"] #variant-c { display: block; }
+    .topbar {
+      height: 64px; display: flex; align-items: center; gap: 18px; padding: 0 26px;
+      border-bottom: 1px solid var(--line-soft); background: rgba(12, 15, 21, .92);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 206px; font-weight: 700; }
+    .brand-mark {
+      width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px;
+      color: #0a0d12; background: linear-gradient(135deg, var(--blue), var(--violet));
+    }
+    .crumb { color: var(--muted); font-size: 12px; }
+    .context-select {
+      min-width: 170px; padding: 8px 11px; border: 1px solid var(--line);
+      border-radius: 9px; color: var(--text); background: var(--panel-2);
+    }
+    .spacer { flex: 1; }
+    .status { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: 11px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px currentColor/15%; }
+    .btn {
+      border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px;
+      color: var(--text); background: var(--panel-2); cursor: pointer;
+    }
+    .btn:hover { border-color: #46516a; background: var(--panel-3); }
+    .btn.primary { border-color: rgba(124, 156, 255, .45); background: var(--blue-soft); color: #dce4ff; }
+    .btn.compact { padding: 6px 9px; font-size: 11px; }
+    .eyebrow { color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .muted { color: var(--muted); }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px;
+      border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 10px;
+    }
+    .pill.blue { border-color: rgba(124,156,255,.25); color: var(--blue); background: var(--blue-soft); }
+    .pill.green { border-color: rgba(84,211,162,.25); color: var(--green); background: var(--green-soft); }
+    .pill.orange { border-color: rgba(244,181,100,.25); color: var(--orange); background: var(--orange-soft); }
+    .section-title { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+    .section-title h1, .section-title h2, .section-title p { margin: 0; }
+    .section-title h1 { margin-top: 5px; font-size: 24px; letter-spacing: -.035em; }
+    .section-title p { max-width: 650px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+
+    /* Variant A: execution canvas */
+    .a-shell { padding: 26px; }
+    .engine-nav { display: flex; align-items: center; gap: 3px; margin-top: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line-soft); }
+    .engine-nav .nav-item { padding: 8px 11px; border-radius: 8px; color: var(--muted); font-size: 11px; }
+    .engine-nav .nav-item.active { color: var(--text); background: var(--panel-3); }
+    .a-modebar { display: flex; align-items: center; gap: 6px; margin-top: 22px; }
+    .segmented { display: inline-flex; gap: 3px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+    .segmented button { border: 0; padding: 7px 11px; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; }
+    .segmented button.active { color: var(--text); background: var(--panel-3); box-shadow: 0 1px 8px rgba(0,0,0,.25); }
+    .capability-rail { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+    .capability-card {
+      min-width: 0; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 9px; align-items: center;
+      padding: 10px 11px; border: 1px solid var(--line-soft); border-radius: 10px;
+      color: var(--text); text-align: left; background: var(--panel); cursor: pointer;
+    }
+    .capability-card:hover, .capability-card.selected { border-color: #566176; background: var(--panel-2); }
+    .capability-icon { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--panel-2); font-size: 13px; }
+    .capability-card strong, .capability-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .capability-card strong { font-size: 10px; }
+    .capability-card small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+    .a-grid { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 14px; margin-top: 14px; }
+    .map-panel { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); box-shadow: var(--shadow); }
+    .map-head { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); }
+    .map-head strong { font-size: 12px; }
+    .map-head .legend { display: flex; gap: 12px; margin-left: auto; color: var(--muted); font-size: 10px; }
+    .map-head .legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .canvas-toolbar { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); background: #0d1016; }
+    .canvas-toolbar span { color: var(--muted); font-size: 9px; }
+    .canvas-toolbar .spacer { flex: 1; }
+    .canvas-tool {
+      width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 8px;
+      color: var(--muted); background: var(--panel-2); cursor: pointer;
+    }
+    .canvas-tool:hover { color: var(--text); border-color: #46516a; }
+    .canvas-viewport {
+      height: 510px; position: relative; overflow: auto;
+      background-color: #0b0e14;
+      background-image: radial-gradient(circle, rgba(101,112,131,.28) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    .canvas-scale { position: relative; margin: 18px auto; }
+    .canvas-content {
+      width: 1120px; height: 610px; position: relative; transform-origin: 0 0;
+      transition: transform .16s ease;
+    }
+    .phase-zone {
+      position: absolute; top: 12px; bottom: 12px; border: 1px solid rgba(42,49,64,.7);
+      border-radius: 16px; background: rgba(17,20,27,.46);
+    }
+    .phase-zone.agent { border-color: rgba(124,156,255,.18); background: rgba(124,156,255,.025); }
+    .phase-zone.security { border-color: rgba(244,181,100,.2); background: rgba(244,181,100,.025); }
+    .phase-label { position: absolute; top: 14px; left: 14px; color: var(--subtle); font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .phase-label b { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; letter-spacing: 0; text-transform: none; }
+    .canvas-wires { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: visible; }
+    .wire { fill: none; stroke: #59657a; stroke-width: 1.5; marker-end: url(#arrow-default); }
+    .wire.prompt { stroke: var(--violet); marker-end: url(#arrow-prompt); }
+    .wire.tool { stroke: var(--green); marker-end: url(#arrow-tool); }
+    .wire.hook { stroke: var(--orange); marker-end: url(#arrow-hook); }
+    .wire.loop { stroke: var(--green); stroke-dasharray: 6 5; }
+    .wire-label { fill: var(--muted); font-size: 9px; paint-order: stroke; stroke: #0b0e14; stroke-width: 4px; }
+    .canvas-node {
+      position: absolute; z-index: 2; display: flex; flex-direction: column; justify-content: center;
+      padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px;
+      color: var(--text); text-align: left; background: linear-gradient(180deg, #1a1f29, #12161e);
+      box-shadow: 0 8px 22px rgba(0,0,0,.24); cursor: pointer; transition: .15s ease;
+    }
+    .canvas-node:hover, .canvas-node.selected { border-color: rgba(124,156,255,.68); box-shadow: 0 0 0 2px rgba(124,156,255,.10), 0 12px 28px rgba(0,0,0,.35); transform: translateY(-2px); }
+    .canvas-node .node-kicker { margin-bottom: 4px; color: var(--subtle); font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .canvas-node strong { font-size: 11px; line-height: 1.25; }
+    .canvas-node small { margin-top: 4px; color: var(--muted); font-size: 8px; line-height: 1.45; }
+    .canvas-node.prompt { border-color: rgba(176,140,255,.34); background: linear-gradient(180deg, rgba(176,140,255,.13), #15151f); }
+    .canvas-node.tool { border-color: rgba(84,211,162,.34); background: linear-gradient(180deg, rgba(84,211,162,.11), #121b19); }
+    .canvas-node.hook { border-color: rgba(244,181,100,.38); background: linear-gradient(180deg, rgba(244,181,100,.12), #1a1713); }
+    .canvas-node.decision { border-radius: 999px; text-align: center; }
+    .canvas-node.finish { border-color: rgba(84,211,162,.35); }
+    .canvas-node .node-count { position: absolute; top: 7px; right: 8px; color: var(--subtle); font: 8px "SFMono-Regular", monospace; }
+    .canvas-stack { position: absolute; z-index: 2; display: grid; gap: 5px; padding: 9px; border: 1px solid rgba(176,140,255,.26); border-radius: 11px; background: rgba(20,17,28,.92); cursor: pointer; }
+    .canvas-stack:hover, .canvas-stack.selected { border-color: rgba(176,140,255,.68); box-shadow: 0 0 0 2px rgba(176,140,255,.10); }
+    .canvas-stack > strong { color: #ddd1ff; font-size: 9px; }
+    .stack-item { display: flex; justify-content: space-between; gap: 8px; padding: 4px 6px; border-radius: 5px; color: var(--muted); background: rgba(255,255,255,.035); font-size: 7px; }
+    .canvas-note {
+      position: absolute; z-index: 2; padding: 7px 9px; border: 1px dashed var(--line);
+      border-radius: 8px; color: var(--muted); background: rgba(13,16,22,.9); font-size: 8px; cursor: pointer;
+    }
+    .canvas-note:hover, .canvas-note.selected { border-color: rgba(124,156,255,.68); color: var(--text); }
+    .canvas-note.skill { border-color: rgba(84,211,162,.3); color: var(--green); }
+    .hook-add {
+      position: absolute; z-index: 3; width: 22px; height: 22px; display: grid; place-items: center;
+      border: 1px solid rgba(244,181,100,.45); border-radius: 50%; color: var(--orange);
+      background: #17140f; cursor: pointer; font-size: 14px;
+    }
+    .canvas-footer { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 9px; }
+    .canvas-footer span { display: inline-flex; align-items: center; gap: 5px; }
+    .inspector { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+    .inspector-head { padding: 15px; border-bottom: 1px solid var(--line-soft); }
+    .inspector-head h2 { margin: 5px 0 4px; font-size: 16px; }
+    .inspector-head p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .inspector-body { padding: 14px; }
+    .fact { padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+    .fact:last-child { border: 0; }
+    .fact > span { display: block; margin-bottom: 5px; color: var(--subtle); font-size: 9px; text-transform: uppercase; }
+    .fact strong { font-size: 11px; }
+    .fact p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+    .inspector-actions { display: grid; gap: 7px; padding: 14px; border-top: 1px solid var(--line-soft); }
+    .inspector-note { margin: 0; color: var(--subtle); font-size: 9px; line-height: 1.5; }
+
+    /* Variant B: guided storyboard */
+    .b-shell { display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: calc(100vh - 64px); }
+    .b-nav { padding: 25px 18px; border-right: 1px solid var(--line-soft); background: #0d1016; }
+    .b-nav h2 { margin: 8px 8px 4px; font-size: 17px; }
+    .b-nav > p { margin: 0 8px 20px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+    .chapter { display: grid; grid-template-columns: 26px 1fr; gap: 9px; width: 100%; padding: 10px 8px; border: 0; border-radius: 10px; text-align: left; background: transparent; cursor: pointer; }
+    .chapter:hover, .chapter.active { background: var(--panel-2); }
+    .chapter-number { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-size: 9px; }
+    .chapter.active .chapter-number { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
+    .chapter strong { display: block; font-size: 11px; }
+    .chapter small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+    .b-main { padding: 32px 40px 100px; }
+    .lesson-head { display: flex; justify-content: space-between; gap: 24px; max-width: 1000px; }
+    .lesson-head h1 { margin: 7px 0 8px; font-size: 28px; letter-spacing: -.04em; }
+    .lesson-head p { max-width: 650px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+    .lesson-progress { width: 170px; padding-top: 8px; }
+    .progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: var(--panel-3); }
+    .progress-track i { display: block; width: 58%; height: 100%; background: linear-gradient(90deg, var(--blue), var(--violet)); }
+    .lesson-progress span { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; text-align: right; }
+    .story { max-width: 1000px; margin-top: 28px; }
+    .story-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 270px; gap: 16px; position: relative; padding-bottom: 18px; }
+    .story-row::before { position: absolute; left: 21px; top: 44px; bottom: -2px; width: 1px; background: var(--line); content: ""; }
+    .story-row:last-child::before { display: none; }
+    .story-marker { width: 44px; height: 44px; display: grid; place-items: center; z-index: 1; border: 1px solid var(--line); border-radius: 13px; color: var(--blue); background: var(--panel); }
+    .story-card { padding: 17px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); }
+    .story-card h3 { margin: 0 0 5px; font-size: 13px; }
+    .story-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+    .story-assets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .asset { padding: 6px 8px; border-radius: 7px; font-size: 9px; background: var(--panel-3); }
+    .asset.prompt { color: var(--violet); }
+    .asset.hook { color: var(--orange); }
+    .asset.tool { color: var(--green); }
+    .story-explain { padding: 14px; border: 1px solid var(--line-soft); border-radius: 12px; background: rgba(17,20,27,.7); }
+    .story-explain strong { display: block; margin-bottom: 6px; font-size: 10px; }
+    .story-explain p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+    .story-explain .btn { width: 100%; margin-top: 10px; }
+    .b-callout {
+      max-width: 1000px; display: flex; align-items: center; gap: 12px; margin-top: 6px; padding: 14px 16px;
+      border: 1px solid rgba(84,211,162,.28); border-radius: 12px; background: var(--green-soft);
+    }
+    .b-callout strong { font-size: 11px; }
+    .b-callout span { color: var(--muted); font-size: 10px; }
+
+    /* Variant C: engineering IDE */
+    .c-shell { display: grid; grid-template-columns: 235px minmax(0, 1fr) 330px; height: calc(100vh - 64px); min-height: 650px; }
+    .resource-tree { padding: 14px 10px; border-right: 1px solid var(--line-soft); overflow: auto; background: #0d1016; }
+    .tree-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 7px 12px; }
+    .tree-head strong { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .tree-section { margin-bottom: 14px; }
+    .tree-label { padding: 6px 7px; color: var(--subtle); font-size: 9px; text-transform: uppercase; }
+    .tree-item {
+      width: 100%; display: flex; align-items: center; gap: 7px; padding: 7px;
+      border: 0; border-radius: 7px; color: var(--muted); text-align: left; background: transparent; cursor: pointer; font-size: 10px;
+    }
+    .tree-item:hover, .tree-item.active { color: var(--text); background: var(--panel-2); }
+    .tree-item .count { margin-left: auto; color: var(--subtle); font-size: 9px; }
+    .c-center { min-width: 0; display: grid; grid-template-rows: 42px minmax(0, 1fr) 68px; background: var(--bg); }
+    .file-tabs { display: flex; align-items: end; gap: 2px; padding: 0 9px; border-bottom: 1px solid var(--line-soft); background: #0d1016; }
+    .file-tab { height: 33px; padding: 9px 12px; border: 0; border-radius: 7px 7px 0 0; color: var(--muted); background: transparent; font-size: 10px; }
+    .file-tab.active { color: var(--text); background: var(--panel); }
+    .c-canvas { padding: 18px; overflow: auto; }
+    .c-canvas-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .c-canvas-head h2 { margin: 0; font-size: 15px; }
+    .ide-flow { min-width: 620px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .ide-stage {
+      min-height: 135px; position: relative; padding: 12px; border: 1px solid var(--line);
+      border-radius: 9px; background: var(--panel); cursor: pointer;
+    }
+    .ide-stage.active { border-color: var(--blue); box-shadow: inset 0 0 0 1px rgba(124,156,255,.15); }
+    .ide-stage::after { position: absolute; top: 50%; right: -9px; width: 9px; height: 1px; background: var(--line); content: ""; }
+    .ide-stage:nth-child(3n)::after, .ide-stage:last-child::after { display: none; }
+    .ide-stage small { color: var(--subtle); font: 8px "SFMono-Regular", monospace; }
+    .ide-stage h3 { margin: 8px 0 4px; font-size: 11px; }
+    .ide-stage p { margin: 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+    .ide-slots { display: grid; gap: 4px; margin-top: 10px; }
+    .ide-slot { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: 5px; background: var(--panel-3); font-size: 8px; }
+    .ide-slot i { width: 5px; height: 5px; border-radius: 50%; background: var(--orange); }
+    .ide-slot.add { color: var(--blue); border: 1px dashed rgba(124,156,255,.35); background: transparent; }
+    .publishbar { display: flex; align-items: center; gap: 12px; padding: 0 16px; border-top: 1px solid var(--line-soft); background: #0d1016; }
+    .publish-state { display: flex; flex-direction: column; gap: 2px; }
+    .publish-state strong { font-size: 10px; }
+    .publish-state span { color: var(--muted); font-size: 9px; }
+    .c-inspector { display: grid; grid-template-rows: 43px minmax(0, 1fr); border-left: 1px solid var(--line-soft); background: var(--panel); }
+    .inspector-tabs { display: flex; border-bottom: 1px solid var(--line-soft); }
+    .inspector-tabs button { flex: 1; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
+    .inspector-tabs button.active { color: var(--text); border-bottom: 2px solid var(--blue); }
+    .form { padding: 16px; overflow: auto; }
+    .form h2 { margin: 0 0 4px; font-size: 15px; }
+    .form > p { margin: 0 0 18px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .field { display: grid; gap: 6px; margin-bottom: 13px; }
+    .field label { color: var(--muted); font-size: 9px; }
+    .field input, .field select, .field textarea {
+      width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px;
+      color: var(--text); background: #0d1016; font-size: 10px;
+    }
+    .field textarea { min-height: 76px; resize: vertical; }
+    .risk-box { padding: 10px; border: 1px solid rgba(244,181,100,.3); border-radius: 8px; color: var(--orange); background: var(--orange-soft); font-size: 9px; line-height: 1.55; }
+
+    /* prototype switcher */
+    .switcher {
+      position: fixed; left: 50%; bottom: 20px; z-index: 200; transform: translateX(-50%);
+      display: grid; grid-template-columns: 38px minmax(230px, auto) 38px; align-items: center;
+      padding: 5px; border: 1px solid #3a4355; border-radius: 15px;
+      background: rgba(17, 20, 27, .94); box-shadow: 0 15px 45px rgba(0,0,0,.55); backdrop-filter: blur(18px);
+    }
+    .switcher button { height: 34px; border: 0; border-radius: 10px; color: var(--text); background: transparent; cursor: pointer; font-size: 18px; }
+    .switcher button:hover { background: var(--panel-3); }
+    .switcher-label { padding: 0 14px; text-align: center; }
+    .switcher-label strong { display: block; font-size: 11px; }
+    .switcher-label span { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+  </style>
+</head>
+<body data-variant="A">
+  <div class="prototype-warning">仅用于讨论 · THROWAWAY PROTOTYPE</div>
+
+  <section class="variant" id="variant-a">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">N</span> Natives</div>
+      <span class="crumb">设置 / 执行引擎</span>
+      <select class="context-select"><option>Native Engine</option><option>Claude CLI（只读）</option><option>Codex CLI（只读）</option></select>
+      <select class="context-select"><option>项目：Natives</option><option>全局默认</option></select>
+      <div class="spacer"></div>
+      <span class="status"><i class="dot"></i> 当前计划可运行</span>
+      <button class="btn" data-inspector="version">v4 · 已发布</button>
+    </header>
+    <main class="a-shell">
+      <div class="section-title">
+        <div>
+          <span class="eyebrow">Native Engine workspace</span>
+          <h1>执行引擎</h1>
+        </div>
+        <p>能力决定模型可以使用什么，Harness 决定它们在执行链路中如何被提示、门禁和审计。两者共用一张真实执行画布，但保持各自权威。</p>
+      </div>
+      <nav class="engine-nav" aria-label="Native Engine 工作区">
+        <span class="nav-item active">执行总览</span>
+        <span class="nav-item">Blueprint</span>
+        <span class="nav-item">Hooks</span>
+        <span class="nav-item">Prompts</span>
+        <span class="nav-item">Live Runs</span>
+        <span class="nav-item">Audit</span>
+        <div class="spacer"></div>
+        <span class="pill">Native 可配置</span>
+        <span class="pill">Claude / Codex 只读</span>
+      </nav>
+      <div class="a-modebar">
+        <div class="segmented" id="canvas-modes">
+          <button class="active" data-mode="understand">理解当前执行</button>
+          <button data-mode="configure">配置未来 Run</button>
+          <button data-mode="replay">回放实际 Run</button>
+        </div>
+        <span class="pill blue" id="mode-pill">当前有效计划</span>
+        <span class="pill">Global v2 → Natives 项目 v4</span>
+        <div class="spacer"></div>
+        <button class="btn compact" data-inspector="sources">查看全部来源</button>
+      </div>
+      <section class="capability-rail" aria-label="当前引擎能力投影">
+        <button class="capability-card" data-inspector="provider">
+          <span class="capability-icon">P</span><span><strong>Provider 路由</strong><small>GPT-5.6 · 只读引用</small></span>
+        </button>
+        <button class="capability-card" data-inspector="tools">
+          <span class="capability-icon">T</span><span><strong>模型可见 Tool · 11</strong><small>内置 6 · MCP 4 · Skill 1</small></span>
+        </button>
+        <button class="capability-card" data-inspector="capabilities">
+          <span class="capability-icon">◇</span><span><strong>能力来源</strong><small>2 MCP · 3 Skills · 2 Extensions</small></span>
+        </button>
+        <button class="capability-card" data-inspector="protection">
+          <span class="capability-icon">⛨</span><span><strong>运行保护</strong><small>权限门禁 · 10 RPM · fail-closed</small></span>
+        </button>
+      </section>
+      <div class="a-grid">
+        <section class="map-panel">
+          <div class="map-head">
+            <strong>Native Agent Loop</strong>
+            <span class="pill green">11 个模型可见 Tool</span>
+            <div class="legend"><span style="color:var(--violet)">● Prompt</span><span style="color:var(--orange)">● Hook</span><span style="color:var(--green)">● Skill / Tool</span></div>
+          </div>
+          <div class="canvas-toolbar">
+            <span class="pill blue">固定拓扑 · 节点不可移动</span>
+            <span id="canvas-hint">先看懂一次请求经过什么；点击节点查看真实挂载</span>
+            <div class="spacer"></div>
+            <button class="canvas-tool" id="canvas-zoom-out" aria-label="缩小画布">−</button>
+            <span class="mono" id="canvas-zoom-label">73%</span>
+            <button class="canvas-tool" id="canvas-zoom-in" aria-label="放大画布">＋</button>
+            <button class="btn compact" id="canvas-center">适应窗口</button>
+          </div>
+          <div class="canvas-viewport" id="canvas-viewport">
+            <div class="canvas-scale" id="canvas-scale">
+              <div class="canvas-content" id="engine-canvas-content">
+                <div class="phase-zone" style="left:10px;width:145px"><span class="phase-label">阶段 01<b>Run 启动</b></span></div>
+                <div class="phase-zone" style="left:165px;width:220px"><span class="phase-label">阶段 02<b>上下文构建</b></span></div>
+                <div class="phase-zone agent" style="left:395px;width:220px"><span class="phase-label">阶段 03<b>Agent 推理循环</b></span></div>
+                <div class="phase-zone security" style="left:625px;width:335px"><span class="phase-label">阶段 04<b>Tool 门禁与执行</b></span></div>
+                <div class="phase-zone" style="left:970px;width:140px"><span class="phase-label">阶段 05<b>停止与审计</b></span></div>
+
+                <svg class="canvas-wires" viewBox="0 0 1120 610" aria-hidden="true">
+                  <defs>
+                    <marker id="arrow-default" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#59657a"/></marker>
+                    <marker id="arrow-prompt" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#b08cff"/></marker>
+                    <marker id="arrow-tool" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#54d3a2"/></marker>
+                    <marker id="arrow-hook" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#f4b564"/></marker>
+                  </defs>
+                  <path class="wire" d="M140 287 H205"/>
+                  <text class="wire-label" x="158" y="278">冻结计划</text>
+                  <path class="wire prompt" d="M275 205 V250"/>
+                  <text class="wire-label" x="283" y="230">注入</text>
+                  <path class="wire tool" d="M285 465 V328"/>
+                  <path class="wire" d="M345 289 H425"/>
+                  <text class="wire-label" x="363" y="280">发送请求</text>
+                  <path class="wire tool" d="M505 195 V235"/>
+                  <text class="wire-label" x="514" y="219">暴露 Tool</text>
+                  <path class="wire" d="M505 321 V365"/>
+                  <text class="wire-label" x="514" y="348">模型决定</text>
+                  <path class="wire tool" d="M565 395 C610 395 610 153 650 153"/>
+                  <text class="wire-label" x="580" y="375">选择 Tool</text>
+                  <path class="wire hook" d="M780 153 H800"/>
+                  <path class="wire hook" d="M865 186 V220"/>
+                  <path class="wire" d="M865 292 C865 320 825 370 795 370"/>
+                  <path class="wire hook" d="M795 370 C820 370 820 428 815 428"/>
+                  <path class="wire loop tool" d="M882 474 V535 H505 V321"/>
+                  <text class="wire-label" x="650" y="527">Tool 结果回到模型，进入下一轮推理</text>
+                  <path class="wire" d="M565 395 C680 575 930 575 985 324"/>
+                  <text class="wire-label" x="835" y="569">无需 Tool / 模型停止</text>
+                </svg>
+
+                <button class="canvas-node selected" style="left:35px;top:250px;width:105px;height:74px" data-inspector="input">
+                  <span class="node-kicker">Session</span><strong>接收用户输入</strong><small>建立 Run · 冻结项目与能力</small><span class="node-count">01</span>
+                </button>
+
+                <button class="canvas-stack" style="left:180px;top:82px;width:190px;height:123px" data-inspector="prompt">
+                  <strong>Prompt Plan · 7 层</strong>
+                  <span class="stack-item"><b>Native 内置指令</b><i>可替换</i></span>
+                  <span class="stack-item"><b>Agent Profile</b><i>能力库</i></span>
+                  <span class="stack-item"><b>AGENTS.md</b><i>项目只读</i></span>
+                  <span class="stack-item"><b>Harness Prompt</b><i>项目 v4</i></span>
+                </button>
+                <button class="canvas-node prompt" style="left:205px;top:250px;width:140px;height:78px" data-inspector="context">
+                  <span class="node-kicker">Context</span><strong>装配上下文</strong><small>按真实顺序合并 Prompt 与消息</small><span class="node-count">02</span>
+                </button>
+                <button class="canvas-note skill" style="left:210px;top:465px;width:150px" data-inspector="skills">◆ 3 个 Skill 摘要 + skill Tool</button>
+
+                <button class="canvas-node tool" style="left:425px;top:82px;width:160px;height:113px" data-inspector="tools">
+                  <span class="node-kicker">Model-visible tools</span><strong>11 个模型可选 Tool</strong><small>read_file · exec · skill · task<br>mcp__github__* · 其他 6 个</small>
+                </button>
+                <button class="canvas-node" style="left:425px;top:235px;width:160px;height:86px" data-inspector="model">
+                  <span class="node-kicker">Provider · GPT-5.6</span><strong>模型推理</strong><small>读取 Prompt、消息与 Tool Schema</small><span class="node-count">03</span>
+                </button>
+                <button class="canvas-node decision" style="left:445px;top:365px;width:120px;height:60px" data-inspector="choice">
+                  <span class="node-kicker">Decision</span><strong>调用 Tool？</strong>
+                </button>
+
+                <button class="canvas-node hook" style="left:650px;top:120px;width:130px;height:66px" data-inspector="gate">
+                  <span class="node-kicker">Hook point · 3</span><strong>PreToolUse</strong><small>允许 · 修改 · 拒绝</small>
+                </button>
+                <button class="hook-add" style="left:766px;top:108px" data-add-hook aria-label="在 PreToolUse 添加 Hook">＋</button>
+                <button class="canvas-node hook" style="left:800px;top:120px;width:130px;height:66px" data-inspector="permission">
+                  <span class="node-kicker">Security gate · 1</span><strong>权限判断</strong><small>路径 · 副作用 · 用户批准</small>
+                </button>
+                <button class="canvas-node tool" style="left:655px;top:335px;width:140px;height:70px" data-inspector="execute">
+                  <span class="node-kicker">Runtime</span><strong>执行 Tool</strong><small>内置 · MCP · 子 Agent</small>
+                </button>
+                <button class="canvas-node hook" style="left:815px;top:395px;width:135px;height:79px" data-inspector="post">
+                  <span class="node-kicker">Hook point · 2</span><strong>PostToolUse</strong><small>检查结果 · 记录 · 注入反馈</small>
+                </button>
+                <button class="hook-add" style="left:936px;top:383px" data-add-hook aria-label="在 PostToolUse 添加 Hook">＋</button>
+
+                <button class="canvas-node finish" style="left:985px;top:250px;width:110px;height:74px" data-inspector="finish">
+                  <span class="node-kicker">Stop</span><strong>完成与审计</strong><small>冻结证据 · 输出结果</small><span class="node-count">05</span>
+                </button>
+                <button class="canvas-note" style="left:982px;top:395px;width:116px" data-inspector="finish">Stop · Compact<br>SessionEnd Hooks</button>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-footer">
+            <span><i class="dot" style="color:var(--violet)"></i>Prompt 注入</span>
+            <span><i class="dot" style="color:var(--green)"></i>模型可选能力与 Tool</span>
+            <span><i class="dot" style="color:var(--orange)"></i>确定性 Hook / 安全门禁</span>
+            <div class="spacer"></div>
+            <span>画布展示固定执行事实；配置只改变挂载内容</span>
+          </div>
+        </section>
+        <aside class="inspector">
+          <div class="inspector-head">
+            <span class="eyebrow" id="a-inspector-type">阶段 01</span>
+            <h2 id="a-inspector-title">接收用户输入</h2>
+            <p id="a-inspector-desc">创建 Run，并在第一次 Provider 或 Tool 副作用之前冻结本次 Harness 计划。</p>
+          </div>
+          <div class="inspector-body">
+            <div class="fact"><span>这一阶段做什么</span><strong id="a-what">确定项目、能力与 Harness 版本</strong><p>后续发布不会改变已经启动的 Run。</p></div>
+            <div class="fact"><span>经过的 Hook</span><strong id="a-hooks">SessionStart · UserPromptSubmit</strong><p>点击 Hook 可查看 handler、来源与最近执行结果。</p></div>
+            <div class="fact"><span>当前来源</span><strong>Global v2 + Natives Project v4</strong><p class="mono">snapshot 7f9c8a12…</p></div>
+            <div class="fact"><span>最近一次 Run</span><strong class="status"><i class="dot"></i> 通过 · 18 ms</strong></div>
+          </div>
+          <div class="inspector-actions">
+            <button class="btn primary" id="inspector-primary">查看当前挂载</button>
+            <button class="btn" id="inspector-secondary">查看真实 Run 证据</button>
+            <p class="inspector-note" id="inspector-note">能力对象由 Capability Hub 管理；Harness 只配置挂载、Prompt 和 Hook。</p>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </section>
+
+  <section class="variant" id="variant-b">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">N</span> Natives</div>
+      <span class="crumb">设置 / 引擎工程 / 认识 Native</span>
+      <div class="spacer"></div>
+      <button class="btn">切换到工程模式</button>
+    </header>
+    <div class="b-shell">
+      <nav class="b-nav">
+        <span class="eyebrow">Guided tour</span>
+        <h2>认识 Native 引擎</h2>
+        <p>从一句话开始，逐步理解 Prompt、Skill、Tool 和 Hook 各自在什么时候发挥作用。</p>
+        <button class="chapter"><span class="chapter-number">1</span><span><strong>用户说了什么</strong><small>输入与项目上下文</small></span></button>
+        <button class="chapter active"><span class="chapter-number">2</span><span><strong>模型知道什么</strong><small>Prompt 与 Skill</small></span></button>
+        <button class="chapter"><span class="chapter-number">3</span><span><strong>模型能做什么</strong><small>可选择的 Tool</small></span></button>
+        <button class="chapter"><span class="chapter-number">4</span><span><strong>执行前如何把关</strong><small>Hook 与权限</small></span></button>
+        <button class="chapter"><span class="chapter-number">5</span><span><strong>如何证明执行过</strong><small>Run 快照与审计</small></span></button>
+        <div style="margin:20px 8px 0;padding-top:16px;border-top:1px solid var(--line-soft)">
+          <span class="pill green">项目 Natives · 正常</span>
+          <p style="color:var(--muted);font-size:9px;line-height:1.55">当前页面展示已发布 v4 的真实有效计划，不是示例配置。</p>
+        </div>
+      </nav>
+      <main class="b-main">
+        <header class="lesson-head">
+          <div>
+            <span class="eyebrow">第 2 章 · 模型知道什么</span>
+            <h1>Prompt 不是一段文字，而是一组有顺序的来源</h1>
+            <p>Native 会在调用模型前，把内置指令、Agent Profile、项目规则、Skill 目录和 Harness Prompt Block 依次装配。每一层都有自己的拥有者和编辑方式。</p>
+          </div>
+          <div class="lesson-progress"><div class="progress-track"><i></i></div><span>2 / 5 · 大约 3 分钟</span></div>
+        </header>
+        <div class="story">
+          <div class="story-row">
+            <div class="story-marker">01</div>
+            <article class="story-card">
+              <h3>Native 放入基础行为指令</h3>
+              <p>告诉 Agent 如何工作、如何使用工具，以及必须遵守的系统边界。这是 Native 自己拥有的 Prompt。</p>
+              <div class="story-assets"><span class="asset prompt">Native 内置指令 · 1,280 tokens</span><span class="pill blue">可版本化替换</span></div>
+            </article>
+            <aside class="story-explain"><strong>为什么需要它？</strong><p>没有基础指令，模型只知道用户问题，不知道 Natives 的运行方式。</p><button class="btn compact">查看并替换</button></aside>
+          </div>
+          <div class="story-row">
+            <div class="story-marker">02</div>
+            <article class="story-card">
+              <h3>加入当前 Agent 的角色</h3>
+              <p>如果会话选择了专家或专家团，这一层描述它的职责、工作风格和团队协作方式。</p>
+              <div class="story-assets"><span class="asset prompt">全栈工程师 · 能力库</span><span class="asset prompt">Team roster · 自动生成</span></div>
+            </article>
+            <aside class="story-explain"><strong>谁可以修改？</strong><p>它由能力库拥有；在这里可以查看，但需要回到能力库编辑。</p><button class="btn compact">前往能力库</button></aside>
+          </div>
+          <div class="story-row">
+            <div class="story-marker">03</div>
+            <article class="story-card">
+              <h3>读取项目规则和 Skill 目录</h3>
+              <p>AGENTS.md 约束当前项目；Skill 目录只告诉模型有哪些专业流程可按需加载，并不会把所有 Skill 正文塞进 Prompt。</p>
+              <div class="story-assets"><span class="asset prompt">AGENTS.md · 项目文件</span><span class="asset prompt">3 个 Skill 摘要</span><span class="asset tool">skill Tool · 模型可调用</span></div>
+            </article>
+            <aside class="story-explain"><strong>Skill 装在哪里？</strong><p>摘要进入 Prompt；正文通过 skill Tool 按需读取。只有 Skill 真声明了 Hook，才会挂到 Hook 点。</p><button class="btn compact">查看 3 个 Skill</button></aside>
+          </div>
+          <div class="story-row">
+            <div class="story-marker">04</div>
+            <article class="story-card">
+              <h3>插入这个项目的 Harness Prompt</h3>
+              <p>这是你在引擎工程中自己管理的规则，只影响未来 Run，并经过保存、校验、Diff 和发布。</p>
+              <div class="story-assets"><span class="asset prompt">安全修改守则 · 126 tokens</span><span class="pill green">项目 v4 已发布</span></div>
+            </article>
+            <aside class="story-explain"><strong>想新增一条规则？</strong><p>从这里添加 Prompt Block，Native 会自动放到你选择的位置。</p><button class="btn primary compact">＋ 添加 Prompt</button></aside>
+          </div>
+        </div>
+        <div class="b-callout"><span style="font-size:20px">✓</span><div><strong>最终结果：7 层 Prompt，约 3,420 tokens</strong><br><span>原始合并 Prompt 不会持久化；Run 保存来源顺序、摘要、digest 和有效 hash。</span></div><div class="spacer"></div><button class="btn compact">查看最终 Prompt 计划</button></div>
+      </main>
+    </div>
+  </section>
+
+  <section class="variant" id="variant-c">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">N</span> Harness Studio</div>
+      <select class="context-select"><option>Native Engine</option><option>Claude CLI · read only</option><option>Codex CLI · read only</option></select>
+      <select class="context-select"><option>Natives / Project Overlay</option><option>Global Template</option></select>
+      <span class="pill blue">Draft r12 · 2 changes</span>
+      <div class="spacer"></div>
+      <button class="btn compact">Run 模拟</button>
+      <button class="btn primary compact">校验与 Diff</button>
+    </header>
+    <div class="c-shell">
+      <aside class="resource-tree">
+        <div class="tree-head"><strong>Harness resources</strong><button class="btn compact">＋</button></div>
+        <section class="tree-section">
+          <div class="tree-label">Execution</div>
+          <button class="tree-item active">⌁ execution-map.native <span class="count">v1</span></button>
+          <button class="tree-item">◈ effective-plan <span class="count">v4</span></button>
+        </section>
+        <section class="tree-section">
+          <div class="tree-label">Hook points</div>
+          <button class="tree-item">○ SessionStart <span class="count">1</span></button>
+          <button class="tree-item active">● PreToolUse <span class="count">3</span></button>
+          <button class="tree-item">○ PermissionRequest <span class="count">1</span></button>
+          <button class="tree-item">○ PostToolUse <span class="count">2</span></button>
+          <button class="tree-item">○ Stop <span class="count">1</span></button>
+        </section>
+        <section class="tree-section">
+          <div class="tree-label">Prompt plan</div>
+          <button class="tree-item">✦ Native Base <span class="count">locked</span></button>
+          <button class="tree-item">✦ Agent Profile <span class="count">ref</span></button>
+          <button class="tree-item">✦ AGENTS.md <span class="count">tracked</span></button>
+          <button class="tree-item">✦ Safety Rules <span class="count">edit</span></button>
+        </section>
+        <section class="tree-section">
+          <div class="tree-label">Capabilities</div>
+          <button class="tree-item">◇ Skills <span class="count">3</span></button>
+          <button class="tree-item">◇ MCP Servers <span class="count">1</span></button>
+          <button class="tree-item">◇ Model Tools <span class="count">11</span></button>
+        </section>
+        <section class="tree-section">
+          <div class="tree-label">History</div>
+          <button class="tree-item">↻ Live Runs</button>
+          <button class="tree-item">↻ Versions <span class="count">4</span></button>
+          <button class="tree-item">↻ Audit</button>
+        </section>
+      </aside>
+      <main class="c-center">
+        <div class="file-tabs"><button class="file-tab active">execution-map.native</button><button class="file-tab">PreToolUse / block-destructive</button><button class="file-tab">Prompt Plan</button></div>
+        <div class="c-canvas">
+          <div class="c-canvas-head"><div><span class="eyebrow">Fixed topology</span><h2>Native Engine · Natives project</h2></div><div><span class="pill green">16 / 16 Hook points dispatched</span> <span class="pill">11 model tools</span></div></div>
+          <div class="ide-flow">
+            <article class="ide-stage"><small>STAGE 01</small><h3>Session</h3><p>Run 初始化与用户输入。</p><div class="ide-slots"><span class="ide-slot"><i></i> SessionStart · 1</span><span class="ide-slot"><i></i> UserPromptSubmit · 1</span></div></article>
+            <article class="ide-stage"><small>STAGE 02</small><h3>Context Assembly</h3><p>7 层 Prompt · 3 Skills。</p><div class="ide-slots"><span class="ide-slot" style="color:var(--violet)"><i style="background:var(--violet)"></i> Prompt Plan</span></div></article>
+            <article class="ide-stage"><small>STAGE 03</small><h3>Provider</h3><p>GPT-5.6 · native routing。</p><div class="ide-slots"><span class="ide-slot" style="color:var(--green)"><i style="background:var(--green)"></i> 11 Tool schemas</span></div></article>
+            <article class="ide-stage active"><small>STAGE 04</small><h3>Tool Gate</h3><p>匹配 PreToolUse 与安全策略。</p><div class="ide-slots"><span class="ide-slot"><i></i> PreToolUse · 3</span><span class="ide-slot add">＋ Add Hook</span></div></article>
+            <article class="ide-stage"><small>STAGE 05</small><h3>Permission</h3><p>根据 Tool 副作用决定批准。</p><div class="ide-slots"><span class="ide-slot"><i></i> PermissionRequest · 1</span></div></article>
+            <article class="ide-stage"><small>STAGE 06</small><h3>Tool Execute</h3><p>Builtin / MCP / Agent。</p><div class="ide-slots"><span class="ide-slot"><i></i> PostToolUse · 2</span></div></article>
+            <article class="ide-stage"><small>STAGE 07</small><h3>Subagent / Compact</h3><p>父子 Run 与上下文压缩。</p><div class="ide-slots"><span class="ide-slot"><i></i> 4 Hook points</span></div></article>
+            <article class="ide-stage"><small>STAGE 08</small><h3>Stop / Terminal</h3><p>冻结快照与审计。</p><div class="ide-slots"><span class="ide-slot"><i></i> 4 Hook points</span></div></article>
+          </div>
+        </div>
+        <footer class="publishbar">
+          <span style="color:var(--orange)">●</span>
+          <div class="publish-state"><strong>Draft r12 · 本地有 2 项未保存修改</strong><span>block-destructive timeout 5s → 8s · 新增 matcher Bash(*)</span></div>
+          <div class="spacer"></div>
+          <button class="btn compact">放弃</button>
+          <button class="btn compact">保存草稿</button>
+          <button class="btn primary compact">校验与发布</button>
+        </footer>
+      </main>
+      <aside class="c-inspector">
+        <div class="inspector-tabs"><button class="active">配置</button><button>运行证据</button><button>源码</button></div>
+        <div class="form">
+          <span class="eyebrow">PreToolUse · Command Hook</span>
+          <h2>阻止危险命令</h2>
+          <p>模型调用 Tool 后、实际执行之前运行。可以修改或拒绝本次 Tool 调用。</p>
+          <div class="field"><label>Hook 名称</label><input value="阻止危险命令"></div>
+          <div class="field"><label>匹配哪些 Tool</label><input value="Bash(*)"></div>
+          <div class="field"><label>Handler</label><select><option>Command · 本地脚本</option><option>HTTP</option><option>MCP Tool</option><option>Prompt 判断</option><option>Agent 检查</option></select></div>
+          <div class="field"><label>程序</label><input class="mono" value="./scripts/guard-command.sh"></div>
+          <div class="field"><label>超时</label><input value="8000 ms"></div>
+          <div class="field"><label>失败时</label><select><option>阻止 Tool（安全事件默认）</option></select></div>
+          <div class="risk-box">该 Hook 能阻止模型调用 Tool。发布时需要再次确认脚本路径、digest 和本地命令信任。</div>
+          <div style="display:flex;gap:7px;margin-top:13px"><button class="btn compact">用样例模拟</button><button class="btn primary compact">应用到 Draft</button></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <script>
+    const inspectorContent = {
+      version: ["发布状态", "Harness v4", "当前项目绑定的是已发布版本 v4；编辑发生在独立 Draft 中。", "管理版本、项目绑定和回滚", "发布审计 · 绑定审计"],
+      sources: ["来源投影", "当前有效来源", "统一列出 Prompt、Hook 与能力引用的所有者、digest、漂移状态和可编辑边界。", "解释这张画布上的数据来自哪里", "Source Drift · Draft candidate"],
+      provider: ["只读能力", "Provider 路由", "Provider 路由和凭证继续由 Provider Authority 管理；画布只显示本次解析结果。", "显示 GPT-5.6、路由状态与只读证据", "无 Harness Hook"],
+      capabilities: ["Capability Hub", "能力来源", "MCP、Skills 与 Extensions 由 Capability Hub 管理；Harness 只消费解析后的引用和 Prompt contribution。", "2 个 MCP、3 个 Skills、2 个 Extensions", "Capability resolution"],
+      protection: ["Native Runtime", "运行保护", "限流、权限、安全门禁和 fail-closed 状态在执行路径对应节点展示，不成为 Harness 对象。", "10 RPM · 权限门禁 · 安全失败关闭", "PermissionRequest · PermissionDenied"],
+      input: ["阶段 01", "接收用户输入", "创建 Run，并在第一次 Provider 或 Tool 副作用之前冻结本次 Harness 计划。", "确定项目、能力与 Harness 版本", "SessionStart · UserPromptSubmit"],
+      prompt: ["Prompt Plan", "模型收到哪些指令", "按确定顺序组合全部真实 Prompt 来源；每层都保留来源、digest 与覆盖关系。", "组合 Native 指令、Agent Profile、项目规则与 Harness Prompt", "UserPromptSubmit"],
+      context: ["阶段 02", "装配上下文", "按确定顺序组合模型真正收到的 Prompt，并保留每层来源与 digest。", "组合 7 层 Prompt 与 3 个 Skill 摘要", "UserPromptSubmit"],
+      skills: ["能力注入", "Skill 如何进入上下文", "Skill 摘要帮助模型发现能力；模型需要完整说明时再调用 skill Tool。", "注入 3 个摘要，并暴露 skill Tool", "无直接 Hook 点"],
+      tools: ["模型可见能力", "11 个模型可选 Tool", "这里只展示模型被允许自主选择的 Tool Schema，不代表 Tool 已经执行。", "向 Provider 暴露内置 Tool、MCP 与子 Agent 入口", "无直接 Hook 点"],
+      model: ["阶段 03", "模型推理", "Provider 收到消息、有效系统 Prompt 和当前模型可见的 Tool Schema。", "让模型理解任务并自主决定是否调用 Tool", "无直接 Hook 点"],
+      choice: ["模型决策", "调用 Tool？", "模型根据任务和 Tool Schema 决定继续文本推理、发起 Tool 调用或停止。", "形成 Tool call，或直接进入完成阶段", "无直接 Hook 点"],
+      gate: ["阶段 04", "Tool 安全门禁", "每次模型选择 Tool 后，先经过 matcher、PreToolUse Hook 与权限判断。", "阻止、修改或批准本次 Tool 调用", "PreToolUse · PermissionRequest"],
+      permission: ["安全门禁", "权限判断", "核对路径、操作副作用和授权状态；需要时向用户请求批准。", "允许、拒绝或等待用户批准", "PermissionRequest"],
+      execute: ["阶段 05", "执行 Tool", "在权限范围内调用内置 Tool、MCP 或子 Agent，并把结果返回模型。", "执行真实副作用并记录结果", "PostToolUse · PostToolUseFailure"],
+      post: ["结果处理", "PostToolUse", "Tool 返回后运行结果 Hook；处理后的结果再回到模型，开始下一轮推理。", "检查、记录或为模型注入 Tool 反馈", "PostToolUse · PostToolUseFailure"],
+      finish: ["阶段 06", "完成与审计", "模型停止、上下文压缩或 Run 结束时记录最终状态和冻结证据。", "证明本次 Run 使用了什么计划", "Stop · StopFailure · SessionEnd"]
+    };
+    const inspectorActions = {
+      version: ["版本与绑定管理", "查看发布审计"],
+      sources: ["查看来源清单", "处理来源漂移"],
+      provider: ["查看 Provider 配置", "查看路由证据"],
+      capabilities: ["打开能力清单", "前往 Capability Hub"],
+      protection: ["调整运行保护", "查看门禁证据"],
+      prompt: ["编辑 Harness Prompt", "对比有效 Prompt"],
+      context: ["查看 Prompt Plan", "查看快照差异"],
+      skills: ["查看 Skill 注入", "前往 Capability Hub"],
+      tools: ["查看 Tool 清单", "查看能力解析"],
+      gate: ["＋ 在 PreToolUse 添加 Hook", "查看匹配记录"],
+      permission: ["查看权限策略", "查看拒绝记录"],
+      execute: ["查看 Tool Runtime", "查看执行证据"],
+      post: ["＋ 在 PostToolUse 添加 Hook", "查看执行轨迹"],
+      finish: ["＋ 在停止阶段添加 Hook", "查看 Run 审计"]
+    };
+    let selectedInspector = "input";
+    let canvasMode = "understand";
+    const primaryAction = document.getElementById("inspector-primary");
+    const secondaryAction = document.getElementById("inspector-secondary");
+    const inspectorNote = document.getElementById("inspector-note");
+    function renderInspectorActions() {
+      const actions = inspectorActions[selectedInspector] ?? ["查看当前挂载", "查看真实 Run 证据"];
+      primaryAction.textContent = actions[0];
+      secondaryAction.textContent = actions[1];
+      inspectorNote.textContent = canvasMode === "configure"
+        ? "只修改 Draft，并仅影响发布后的新 Run；运行中的 Run 保持冻结。"
+        : canvasMode === "replay"
+          ? "回放读取冻结快照和真实事件，不允许修改运行中的配置。"
+          : "能力对象由 Capability Hub 管理；Harness 只配置挂载、Prompt 和 Hook。";
+    }
+    const canvasItems = document.querySelectorAll("#variant-a [data-inspector]");
+    canvasItems.forEach((node) => {
+      node.addEventListener("click", () => {
+        canvasItems.forEach((item) => item.classList.remove("selected"));
+        node.classList.add("selected");
+        const content = inspectorContent[node.dataset.inspector];
+        if (!content) return;
+        selectedInspector = node.dataset.inspector;
+        ["a-inspector-type", "a-inspector-title", "a-inspector-desc", "a-what", "a-hooks"].forEach((id, index) => {
+          document.getElementById(id).textContent = content[index];
+        });
+        renderInspectorActions();
+      });
+    });
+    const modeCopy = {
+      understand: ["当前有效计划", "先看懂一次请求经过什么；点击节点查看真实挂载"],
+      configure: ["Draft r12 · 未发布", "选择 Hook Point、Prompt 或保护节点，配置未来 Run"],
+      replay: ["Run 7f9c · 冻结 v4", "节点状态来自冻结快照与真实事件；此模式只读"]
+    };
+    document.querySelectorAll("#canvas-modes [data-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("#canvas-modes [data-mode]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        canvasMode = button.dataset.mode;
+        document.getElementById("mode-pill").textContent = modeCopy[canvasMode][0];
+        document.getElementById("canvas-hint").textContent = modeCopy[canvasMode][1];
+        renderInspectorActions();
+      });
+    });
+    [primaryAction, secondaryAction].forEach((button) => {
+      button.addEventListener("click", () => {
+        inspectorNote.textContent = `原型状态：已选择“${button.textContent}”。正式实现将打开对应工作区并保留当前节点上下文。`;
+      });
+    });
+    const canvasContent = document.getElementById("engine-canvas-content");
+    const canvasScale = document.getElementById("canvas-scale");
+    const canvasViewport = document.getElementById("canvas-viewport");
+    const canvasZoomLabel = document.getElementById("canvas-zoom-label");
+    let canvasZoom = .73;
+    function setCanvasZoom(next) {
+      canvasZoom = Math.min(1.15, Math.max(.55, next));
+      canvasContent.style.transform = `scale(${canvasZoom})`;
+      canvasScale.style.width = `${1120 * canvasZoom}px`;
+      canvasScale.style.height = `${610 * canvasZoom}px`;
+      canvasZoomLabel.textContent = `${Math.round(canvasZoom * 100)}%`;
+    }
+    document.getElementById("canvas-zoom-out").addEventListener("click", () => setCanvasZoom(canvasZoom - .1));
+    document.getElementById("canvas-zoom-in").addEventListener("click", () => setCanvasZoom(canvasZoom + .1));
+    document.getElementById("canvas-center").addEventListener("click", () => {
+      setCanvasZoom(Math.min((canvasViewport.clientWidth - 36) / 1120, (canvasViewport.clientHeight - 36) / 610));
+      canvasViewport.scrollTo(0, 0);
+    });
+    document.querySelectorAll("[data-add-hook]").forEach((button) => {
+      button.addEventListener("click", () => {
+        canvasMode = "configure";
+        document.querySelectorAll("#canvas-modes [data-mode]").forEach((item) => item.classList.toggle("active", item.dataset.mode === "configure"));
+        document.getElementById("mode-pill").textContent = modeCopy.configure[0];
+        document.getElementById("canvas-hint").textContent = "已定位 Hook Point；新 Hook 将写入 Draft，不影响当前 Run";
+        inspectorNote.textContent = "原型状态：已打开新增 Hook 流程，并自动带入当前生命周期事件。";
+      });
+    });
+    setCanvasZoom(canvasZoom);
+    renderInspectorActions();
+  </script>
+</body>
+</html>

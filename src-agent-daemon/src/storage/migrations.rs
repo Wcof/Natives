@@ -40,6 +40,9 @@ pub const ALL: &[(i64, &str)] = &[
     (22, MIGRATION_022),
     (23, MIGRATION_023),
     (24, MIGRATION_024),
+    (25, MIGRATION_025),
+    (26, MIGRATION_026),
+    (27, MIGRATION_027),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -941,6 +944,71 @@ CREATE INDEX IF NOT EXISTS idx_harness_hook_trace_run
 /// Migration 024: bounded metadata for an automatically discovered source drift.
 const MIGRATION_024: &str = "
 ALTER TABLE harness_draft ADD COLUMN source_candidate_json TEXT;
+";
+
+/// Migration 025: stable ProjectIdentity registration table.
+const MIGRATION_025: &str = "
+CREATE TABLE IF NOT EXISTS harness_project_identity (
+    project_id TEXT PRIMARY KEY,
+    canonical_path TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_project_identity_path
+    ON harness_project_identity(canonical_path);
+";
+
+/// Migration 026: bounded, replayable Harness invalidation notices.
+///
+/// Configuration documents and Hook payloads never enter this table. Durable
+/// audit/run events remain authoritative; notices only tell clients which
+/// projection to refetch after a change.
+const MIGRATION_026: &str = "
+CREATE TABLE IF NOT EXISTS harness_notice (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK(kind IN (
+        'published', 'binding_changed', 'source_drift',
+        'trace_updated', 'reset_required'
+    )),
+    profile_id TEXT,
+    run_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_notice_created
+    ON harness_notice(created_at DESC, cursor DESC);
+";
+
+/// Migration 027: make notices atomic with their audit/run-event authority.
+///
+/// Kept separate from 026 so databases that observed the initial notice-table
+/// migration while this feature was under development still receive triggers.
+const MIGRATION_027: &str = "
+CREATE TRIGGER IF NOT EXISTS trg_harness_audit_notice
+AFTER INSERT ON harness_audit
+BEGIN
+    INSERT INTO harness_notice(kind, profile_id)
+    VALUES(
+        CASE NEW.action
+            WHEN 'binding_change' THEN 'binding_changed'
+            WHEN 'source_drift_ack' THEN 'source_drift'
+            ELSE 'published'
+        END,
+        NEW.profile_id
+    );
+END;
+CREATE TRIGGER IF NOT EXISTS trg_harness_trace_notice
+AFTER INSERT ON run_event
+WHEN NEW.event_type IN ('hook_invocation_started', 'hook_invocation_completed')
+BEGIN
+    INSERT INTO harness_notice(kind, run_id)
+    VALUES('trace_updated', NEW.run_id);
+END;
+CREATE TRIGGER IF NOT EXISTS trg_harness_notice_bound
+AFTER INSERT ON harness_notice
+BEGIN
+    DELETE FROM harness_notice
+     WHERE cursor <= (SELECT COALESCE(MAX(cursor), 0) - 1000 FROM harness_notice);
+END;
 ";
 
 #[cfg(test)]

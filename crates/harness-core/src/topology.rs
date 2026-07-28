@@ -141,6 +141,7 @@ const fn tool_path(event: HookEvent) -> HookPoint {
     }
 }
 
+#[allow(dead_code)]
 const fn inert(event: HookEvent) -> HookPoint {
     HookPoint {
         event,

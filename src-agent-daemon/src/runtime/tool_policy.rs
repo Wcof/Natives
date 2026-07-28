@@ -769,12 +769,18 @@ mod tests {
     async fn this_run_does_not_cross_run() {
         let pol = ToolPolicyState::new();
         let mut inv = inv_terminal("cargo test", ".", "/p");
+        let suffix = uuid::Uuid::new_v4().to_string();
+        inv.run_id = format!("r1-{suffix}");
+        inv.conversation_id = format!("c-{suffix}");
+        inv.session_id = Some(format!("s-{suffix}"));
+        inv.project_id = Some(format!("p-{suffix}"));
+        inv.project_fingerprint = Some(format!("fp-{suffix}"));
         pol.remember(&inv, "this_run", None).await.unwrap();
         assert!(matches!(
             pol.check(&inv).await,
             GrantDecision::Allowed { .. }
         ));
-        inv.run_id = "r2".into();
+        inv.run_id = format!("r2-{}", uuid::Uuid::new_v4());
         assert_eq!(pol.check(&inv).await, GrantDecision::NeedsApproval);
     }
 
