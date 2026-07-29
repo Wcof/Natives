@@ -737,6 +737,9 @@ export const zh = {
     engineCanvasEditPrompts: '编辑提示词',
     engineCanvasViewPrompt: '查看提示词',
     engineCanvasToolNoDescription: '当前工具快照未提供作用说明。',
+    engineCanvasToolSnapshotRequired: '工具清单由 Native 引擎在 Run 开始时按项目、Provider、权限和能力选择冻结；请先试运行或选择一次真实 Run，再查看本节点的模型可见工具。',
+    engineCanvasOpenRuns: '查看运行证据',
+    engineCanvasOpenCapabilities: '查看能力面',
     engineCanvasDynamicSubagentPrompt: '未绑定预制专家或团队时，master 会通过 task 工具按本次任务动态写入子 Agent 的角色提示词，并且权限与工具不会超过主 Agent 当前能力面。',
     engineCanvasSubagentKind: {
       expert: '预制专家',

@@ -388,8 +388,9 @@ function CurrentNodeDetail({
   const tools = detail?.tools ?? [];
   const subagents = detail?.subagents ?? [];
   const runResults = detail?.runResults ?? [];
+  const isToolStage = stageId === 'provider' || stageId === 'tool_gate' || stageId === 'tool_execute';
 
-  if (!hooks.length && !prompts.length && !tools.length && !subagents.length && !runResults.length) {
+  if (!hooks.length && !prompts.length && !tools.length && !subagents.length && !runResults.length && !isToolStage) {
     return <EvidenceEmpty locale={locale}>{t(locale, 'settings.engineCanvasNodeNoDetails')}</EvidenceEmpty>;
   }
 
@@ -509,6 +510,21 @@ function CurrentNodeDetail({
               {tool.schema_digest ? <code className="mt-1 block truncate text-[var(--text-disabled)]">{tool.schema_digest}</code> : null}
             </div>
           ))}
+        </div>
+      ) : isToolStage ? (
+        <div className="space-y-2">
+          <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeTools')}</h5>
+          <div className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+            <p className="m-0 leading-5 text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasToolSnapshotRequired')}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('runs', stageId)}>
+                {t(locale, 'settings.engineCanvasOpenRuns')}
+              </button>
+              <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('capabilities', stageId)}>
+                {t(locale, 'settings.engineCanvasOpenCapabilities')}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 

@@ -745,6 +745,9 @@ export const en = {
     engineCanvasEditPrompts: 'Edit prompts',
     engineCanvasViewPrompt: 'View prompt',
     engineCanvasToolNoDescription: 'The current tool snapshot does not include a purpose description.',
+    engineCanvasToolSnapshotRequired: 'The Native engine freezes the tool list when a Run starts, using the project, provider, permissions, and capability selection. Start or select a real Run to inspect this node’s model-visible tools.',
+    engineCanvasOpenRuns: 'Open run evidence',
+    engineCanvasOpenCapabilities: 'Open capabilities',
     engineCanvasDynamicSubagentPrompt: 'When no preset expert or team is bound, the master uses the task tool to write the child Agent persona for this task. Its permissions and tools cannot exceed the master Agent surface.',
     engineCanvasSubagentKind: {
       expert: 'Preset expert',
