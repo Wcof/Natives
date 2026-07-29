@@ -185,8 +185,9 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /nodeDetails=\{nodeDetails\}/);
   assert.match(canvas, /nodeDetails=\{nodeDetails\}/);
   assert.match(graph, /type CanvasNodeDetail/);
-  assert.match(graph, /detailSummary/);
+  assert.match(graph, /detailBadges/);
   assert.match(graph, /engineCanvasNodeResultCount/);
+  assert.match(graph, /engineCanvasNodeHookCount/);
   assert.match(graph, /engineCanvasNodeToolCount/);
   assert.match(graph, /engineCanvasNodeSubagentCount/);
   assert.match(graph, /run-arrow/);

@@ -730,6 +730,7 @@ export const zh = {
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: '本次运行结果',
     engineCanvasNodeResultCount: '{count} 个结果',
+    engineCanvasNodeHookCount: '{count} 个 Hook',
     engineCanvasNodeToolCount: '{count} 个工具',
     engineCanvasNodeSubagentCount: '{count} 个 Subagent',
     engineCanvasRunPromptAssembly: '提示词装配',

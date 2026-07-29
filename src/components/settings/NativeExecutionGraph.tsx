@@ -180,15 +180,13 @@ function StageNode({
   });
   const hooks = enabledHookCount(stage);
   const promptCount = stage.id === 'context' ? promptBlockCount : 0;
-  const detailSummary = detail?.runResults?.length
-    ? t(locale, 'settings.engineCanvasNodeResultCount', { count: detail.runResults.length })
-    : detail?.tools?.length
-      ? t(locale, 'settings.engineCanvasNodeToolCount', { count: detail.tools.length })
-      : detail?.subagents?.length
-        ? t(locale, 'settings.engineCanvasNodeSubagentCount', { count: detail.subagents.length })
-        : detail?.prompts?.length
-          ? t(locale, 'settings.engineCanvasPromptCount', { count: detail.prompts.length })
-          : null;
+  const detailBadges = [
+    detail?.runResults?.length ? t(locale, 'settings.engineCanvasNodeResultCount', { count: detail.runResults.length }) : null,
+    detail?.hooks?.length ? t(locale, 'settings.engineCanvasNodeHookCount', { count: detail.hooks.length }) : null,
+    detail?.prompts?.length ? t(locale, 'settings.engineCanvasPromptCount', { count: detail.prompts.length }) : null,
+    detail?.tools?.length ? t(locale, 'settings.engineCanvasNodeToolCount', { count: detail.tools.length }) : null,
+    detail?.subagents?.length ? t(locale, 'settings.engineCanvasNodeSubagentCount', { count: detail.subagents.length }) : null,
+  ].filter((badge): badge is string => Boolean(badge));
 
   return (
     <button
@@ -220,14 +218,25 @@ function StageNode({
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${EVIDENCE_CLASSES[evidence]}`}>
           {t(locale, EVIDENCE_KEYS[evidence])}
         </span>
-        <span className="truncate text-[10px] text-[var(--text-disabled)]">
-          {detailSummary ?? (hooks > 0
-            ? t(locale, 'settings.engineCanvasEnabledHooks', { count: hooks })
-            : promptCount > 0
-              ? t(locale, 'settings.engineCanvasPromptCount', { count: promptCount })
-              : presentation.technicalName)}
-        </span>
+        {detailBadges.length === 0 ? (
+          <span className="truncate text-[10px] text-[var(--text-disabled)]">
+            {hooks > 0
+              ? t(locale, 'settings.engineCanvasEnabledHooks', { count: hooks })
+              : promptCount > 0
+                ? t(locale, 'settings.engineCanvasPromptCount', { count: promptCount })
+                : presentation.technicalName}
+          </span>
+        ) : null}
       </span>
+      {detailBadges.length > 0 ? (
+        <span className="flex flex-wrap gap-1">
+          {detailBadges.map((badge) => (
+            <span key={badge} className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
+              {badge}
+            </span>
+          ))}
+        </span>
+      ) : null}
     </button>
   );
 }
