@@ -730,7 +730,7 @@ export const en = {
     engineCanvasNotDispatched: 'There is no live dispatch point; configuring this will not execute it.',
     engineCanvasDispatchAvailable: 'Connected to the real execution path',
     engineCanvasNoHookPoints: 'This node currently has no Hook points.',
-    engineCanvasNodeDetails: 'Current node configuration',
+    engineCanvasNodeDetails: 'Current node configuration: {stage}',
     engineCanvasNodeNoDetails: 'This node has no Hook, prompt, tool, or Subagent configuration to display.',
     engineCanvasNodeNoConfiguredHooks: 'This node has Hook points, but no Hooks are configured yet.',
     engineCanvasNodeNoConfiguredPrompts: 'This node supports prompt settings, but no prompts are configured yet.',

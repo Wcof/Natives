@@ -213,6 +213,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /if \(imported\) updateOverlay\(imported, \{ enabled: false \}\)/);
   assert.match(canvas, /detail=\{nodeDetails\[selectedStage\.id\]\}/);
   assert.match(inspector, /CurrentNodeDetail/);
+  assert.match(inspector, /stageName=\{presentation\.title\}/);
+  assert.match(inspector, /engineCanvasNodeDetails'.*stage: stageName/);
   assert.match(inspector, /canConfigureHooks/);
   assert.match(inspector, /canConfigurePrompts/);
   assert.match(inspector, /engineCanvasNodeNoConfiguredHooks/);

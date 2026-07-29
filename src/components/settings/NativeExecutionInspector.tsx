@@ -232,6 +232,7 @@ export function NativeExecutionInspector({
               </dl>
               <CurrentNodeDetail
                 locale={locale}
+                stageName={presentation.title}
                 stageId={stage.id}
                 canConfigureHooks={(stage.hook_points ?? []).length > 0}
                 canConfigurePrompts={['context', 'compact', 'stop'].includes(stage.id)}
@@ -367,6 +368,7 @@ export function NativeExecutionInspector({
 
 function CurrentNodeDetail({
   locale,
+  stageName,
   stageId,
   canConfigureHooks,
   canConfigurePrompts,
@@ -379,6 +381,7 @@ function CurrentNodeDetail({
   onRemovePrompt,
 }: {
   locale: Locale;
+  stageName: string;
   stageId: string;
   canConfigureHooks: boolean;
   canConfigurePrompts: boolean;
@@ -404,7 +407,7 @@ function CurrentNodeDetail({
 
   return (
     <section className="space-y-4">
-      <h4 className="text-sm font-semibold text-[var(--text)]">{t(locale, 'settings.engineCanvasNodeDetails')}</h4>
+      <h4 className="text-sm font-semibold text-[var(--text)]">{t(locale, 'settings.engineCanvasNodeDetails', { stage: stageName })}</h4>
 
       {runResults.length ? (
         <div className="space-y-2">
