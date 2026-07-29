@@ -68,6 +68,8 @@ type Run = {
   agent_profile_id?: string | null;
   capability_snapshot?: EngineCapabilitySnapshot | null;
   started_at?: string | null;
+  finished_at?: string | null;
+  error_code?: string | null;
   project_id?: string | null;
 };
 type TraceEntry = CanvasTraceEntry;
@@ -609,10 +611,11 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           id: `${selectedRun.id}:terminal`,
           action: t(locale, 'settings.engineCanvasRunTerminalResult'),
           status: selectedRun.status,
-          timestamp: selectedRun.started_at ?? undefined,
-          output: t(locale, 'settings.engineCanvasRunTerminalDetail', {
+          timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
+          output: t(locale, selectedRun.error_code ? 'settings.engineCanvasRunTerminalErrorDetail' : 'settings.engineCanvasRunTerminalDetail', {
             provider: selectedRun.provider_id,
             model: selectedRun.model_id,
+            code: selectedRun.error_code ?? '',
           }),
         }] : []),
         ...stageTraces.map((entry) => ({

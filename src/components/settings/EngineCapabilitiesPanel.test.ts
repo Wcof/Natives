@@ -222,6 +222,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /traceEntriesForStage/);
   assert.match(panel, /engineCanvasRunPromptAssembly/);
   assert.match(panel, /engineCanvasRunTerminalResult/);
+  assert.match(panel, /selectedRun\.finished_at \?\? selectedRun\.started_at/);
+  assert.match(panel, /engineCanvasRunTerminalErrorDetail/);
   assert.match(model, /runResults\?: CanvasNodeRunResult\[\]/);
   assert.match(model, /stage\.id === 'tool_gate' \|\| stage\.id === 'tool_execute'/);
   assert.match(panel, /engineCanvasDynamicSubagentPrompt/);

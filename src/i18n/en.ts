@@ -744,6 +744,7 @@ export const en = {
     engineCanvasRunToolPlan: 'Frozen tool plan',
     engineCanvasRunTerminalResult: 'Run terminal state',
     engineCanvasRunTerminalDetail: 'Provider: {provider} · Model: {model}',
+    engineCanvasRunTerminalErrorDetail: 'Provider: {provider} · Model: {model} · Error: {code}',
     engineCanvasRunHookInvocation: 'Hook invocation',
     engineCanvasAuthorized: 'Authorized',
     engineCanvasUnauthorized: 'Unauthorized',

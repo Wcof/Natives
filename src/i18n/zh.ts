@@ -736,6 +736,7 @@ export const zh = {
     engineCanvasRunToolPlan: '冻结工具清单',
     engineCanvasRunTerminalResult: 'Run 终态',
     engineCanvasRunTerminalDetail: 'Provider：{provider} · Model：{model}',
+    engineCanvasRunTerminalErrorDetail: 'Provider：{provider} · Model：{model} · 错误：{code}',
     engineCanvasRunHookInvocation: 'Hook 调用',
     engineCanvasAuthorized: '已授权',
     engineCanvasUnauthorized: '未授权',
