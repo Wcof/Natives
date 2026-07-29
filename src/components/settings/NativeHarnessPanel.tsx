@@ -514,7 +514,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               id: hook.id,
               name: hook.id,
               event: hook.event,
-              source: hook.source.origin,
+              source: `${hook.source.scope} · ${hook.source.origin}`,
               enabled,
               authorized: true,
               canRemove: true,
