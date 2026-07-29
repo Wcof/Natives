@@ -426,6 +426,7 @@ export const en = {
   settings: {
     title: 'Settings',
     backHome: 'Back to Home',
+    tabPersonalOverview: 'Personal Overview',
     tabGeneral: 'General',
     tabAppearance: 'Appearance',
     generalDesc: 'Configure the basic preferences for Natives.',

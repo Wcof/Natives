@@ -10,6 +10,7 @@ import {
 
 test('settings exposes one execution-engine entry and redirects legacy links', () => {
   assert.deepEqual(SETTINGS_SECTIONS, [
+    'personal',
     'general',
     'appearance',
     'providers',
@@ -27,6 +28,10 @@ test('settings entry points normalize to general', () => {
 });
 
 test('valid settings targets are preserved', () => {
+  assert.equal(
+    normalizeSettingsTarget('settings:personal'),
+    'settings:personal',
+  );
   assert.equal(
     normalizeSettingsTarget('settings:providers'),
     'settings:providers',

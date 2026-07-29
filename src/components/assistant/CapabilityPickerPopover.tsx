@@ -20,6 +20,7 @@ interface CapabilityPickerPopoverProps {
   selection: CapabilitySelection | null;
   onChange: (selection: CapabilitySelection | null) => void;
   onClose: () => void;
+  showSkills?: boolean;
 }
 
 interface Option {
@@ -43,7 +44,7 @@ function normalize(selection: CapabilitySelection): CapabilitySelection | null {
  * Rendered lazily from AssistantWorkbench — keep this module out of the
  * initial bundle.
  */
-export default function CapabilityPickerPopover({ locale, gateway, selection, onChange, onClose }: CapabilityPickerPopoverProps) {
+export default function CapabilityPickerPopover({ locale, gateway, selection, onChange, onClose, showSkills = true }: CapabilityPickerPopoverProps) {
   const [skills, setSkills] = useState<Option[]>([]);
   const [connectors, setConnectors] = useState<Option[]>([]);
   const [experts, setExperts] = useState<Option[]>([]);
@@ -59,7 +60,7 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
     void (async () => {
       try {
         const [skillList, mcpList, expertList, teamList] = await Promise.all([
-          listCapabilitySkills(gateway, { enabledOnly: true }),
+          showSkills ? listCapabilitySkills(gateway, { enabledOnly: true }) : Promise.resolve([]),
           listCapabilityMcpServers(gateway),
           listCapabilityExperts(gateway, { enabledOnly: true }),
           listCapabilityTeams(gateway),
@@ -82,7 +83,7 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
     return () => {
       cancelled = true;
     };
-  }, [gateway, reloadKey]);
+  }, [gateway, reloadKey, showSkills]);
 
   // Click outside → close. The trigger button (data-capability-trigger) is
   // excluded: its own onClick owns the toggle — closing here too would make the
@@ -118,7 +119,7 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
   const selectedSkills = current.skills ?? [];
   const selectedConnectors = current.mcp_servers ?? [];
   const count =
-    selectedSkills.length + selectedConnectors.length + (current.expert_id ? 1 : 0) + (current.team_id ? 1 : 0);
+    (showSkills ? selectedSkills.length : 0) + selectedConnectors.length + (current.expert_id ? 1 : 0) + (current.team_id ? 1 : 0);
 
   const toggleSkill = (id: string) => {
     const next = selectedSkills.includes(id)
@@ -213,18 +214,20 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
         </div>
       ) : (
         <div className="max-h-[320px] space-y-3 overflow-y-auto">
-          <section>
-            <h3 className="mb-1.5 text-xs font-semibold uppercase" style={{ color: 'var(--text-secondary)' }}>
-              {t(locale, 'capabilities.picker.skillsSection')}
-            </h3>
-            {skills.length === 0 ? (
-              <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>{t(locale, 'capabilities.picker.noSkills')}</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {skills.map((s) => chip(selectedSkills.includes(s.id), s.name, () => toggleSkill(s.id), `skill-${s.id}`))}
-              </div>
-            )}
-          </section>
+          {showSkills ? (
+            <section>
+              <h3 className="mb-1.5 text-xs font-semibold uppercase" style={{ color: 'var(--text-secondary)' }}>
+                {t(locale, 'capabilities.picker.skillsSection')}
+              </h3>
+              {skills.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>{t(locale, 'capabilities.picker.noSkills')}</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {skills.map((s) => chip(selectedSkills.includes(s.id), s.name, () => toggleSkill(s.id), `skill-${s.id}`))}
+                </div>
+              )}
+            </section>
+          ) : null}
 
           <section>
             <h3 className="mb-1.5 text-xs font-semibold uppercase" style={{ color: 'var(--text-secondary)' }}>

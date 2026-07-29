@@ -86,6 +86,21 @@ pub struct SubagentSession {
     pub updated_at: String,
 }
 
+fn derive_subagent_name(name: &str, task: &str) -> String {
+    let explicit = name.trim();
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+    task.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(48)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 fn parse_bindings(raw: &str) -> Vec<RouteBinding> {
     serde_json::from_str(raw).unwrap_or_default()
 }
@@ -236,10 +251,11 @@ pub fn create_hidden_child_session(
     let permission = permission_profile
         .filter(|p| matches!(*p, "readonly" | "ask" | "full_access"))
         .unwrap_or("ask");
-    let title = if name.trim().is_empty() {
-        format!("Subagent: {}", task.chars().take(48).collect::<String>())
+    let session_name = derive_subagent_name(name, task);
+    let title = if session_name.is_empty() {
+        "Subagent".to_string()
     } else {
-        name.trim().to_string()
+        session_name.clone()
     };
     let attempted_json = serde_json::to_string(&vec![binding.clone()])
         .map_err(|e| format!("attempted serialize: {e}"))?;
@@ -290,7 +306,7 @@ pub fn create_hidden_child_session(
             child_id,
             parent_run_id,
             task_call_id,
-            name,
+            session_name,
             task,
             binding.provider_id,
             binding.key_id,
@@ -919,11 +935,36 @@ mod tests {
             let listed = list_subagent_sessions(Some("parent-1"), true).unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].child_conversation_id, child);
+            assert_eq!(listed[0].name, "worker");
             assert_eq!(listed[0].task, "do the thing");
             touch_subagent_session(&sid).unwrap();
             close_subagent_session(&sid, "closed", None).unwrap();
             let open = list_subagent_sessions(Some("parent-1"), false).unwrap();
             assert!(open.is_empty());
+        });
+    }
+
+    #[test]
+    fn child_session_name_falls_back_to_prompt() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                Some("run-1"),
+                None,
+                "",
+                "  investigate   renderer sidebar leak  ",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            let sess = get_subagent_session(&sid).unwrap().unwrap();
+            assert_eq!(sess.name, "investigate renderer sidebar leak");
         });
     }
 

@@ -106,6 +106,7 @@ const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
 ];
 
 const SETTINGS_NAV_ITEMS = [
+  { id: 'personal', labelKey: 'settings.tabPersonalOverview', icon: LayoutDashboard },
   { id: 'general', labelKey: 'settings.tabGeneral', icon: Settings },
   { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
   { id: 'providers', labelKey: 'settings.tabProviders', icon: Cpu },

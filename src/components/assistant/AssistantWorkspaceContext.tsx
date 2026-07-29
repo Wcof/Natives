@@ -428,6 +428,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
                 mode: (String(r.mode ?? 'agent') as 'chat' | 'agent' | 'goal'),
                 projectId: (r.projectId as string | null | undefined) ?? null,
                 updatedAt: String(r.updatedAt ?? r.updated_at ?? ''),
+                parentConversationId: (r.parentConversationId as string | null | undefined) ?? null,
               };
             }
             return {
@@ -439,6 +440,10 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
                 (r.projectId as string | null | undefined) ??
                 null,
               updatedAt: String(r.updated_at ?? r.updatedAt ?? ''),
+              parentConversationId:
+                (r.parent_conversation_id as string | null | undefined) ??
+                (r.parentConversationId as string | null | undefined) ??
+                null,
             };
           }).filter((c) => c.id.length > 0);
         } catch (e) {

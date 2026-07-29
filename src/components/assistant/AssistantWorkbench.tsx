@@ -750,6 +750,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         mode: c.mode,
         projectId: c.projectId ?? null,
         updatedAt: c.updatedAt,
+        parentConversationId: c.parentConversationId ?? null,
         pinned: pinnedConversationIds.has(c.id),
       })),
       registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label, exists: p.exists })),
@@ -771,6 +772,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               mode: c.mode,
               projectId: c.projectId ?? null,
               updatedAt: c.updatedAt,
+              parentConversationId: c.parentConversationId ?? null,
             })),
             seedPaths,
             zh ? '未关联项目' : 'Unassigned',
@@ -1859,8 +1861,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     ? state.capabilitySelectionByConversation[activeId] ?? null
     : null;
   const capabilityCount = activeCapabilitySelection
-    ? (activeCapabilitySelection.skills?.length ?? 0) +
-      (activeCapabilitySelection.mcp_servers?.length ?? 0) +
+    ? (activeCapabilitySelection.mcp_servers?.length ?? 0) +
       (activeCapabilitySelection.expert_id ? 1 : 0) +
       (activeCapabilitySelection.team_id ? 1 : 0)
     : 0;
@@ -2373,6 +2374,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                     selection={activeCapabilitySelection}
                     onChange={(selection) => void handleCapabilitySelectionChange(selection)}
                     onClose={() => setCapabilityPickerOpen(false)}
+                    showSkills={false}
                   />
                 </Suspense>
               ) : null

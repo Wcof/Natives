@@ -418,6 +418,7 @@ export const zh = {
   settings: {
     title: '设置',
     backHome: '返回主页',
+    tabPersonalOverview: '个人概览',
     tabGeneral: '通用',
     tabAppearance: '外观',
     generalDesc: '配置 Natives 的基础偏好。',

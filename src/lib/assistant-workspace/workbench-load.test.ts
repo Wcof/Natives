@@ -60,6 +60,11 @@ test('workbench source is composition-only (no v2call / streamChat / invent back
   assert.equal(workbenchSrc.includes('reduceAssistantStreamEvent'), false);
 });
 
+test('composer capability picker does not expose skills; skills are slash-only', () => {
+  assert.match(workbenchSrc, /showSkills=\{false\}/);
+  assert.equal(workbenchSrc.includes('activeCapabilitySelection.skills?.length'), false);
+});
+
 test('controller+gateway fixture path: connect → list → send → subscribe → timeline non-empty', async () => {
   const adapter = new FixtureAssistantAdapter(goldenTextStream);
   const actions: import('./state').WorkspaceAction[] = [];
