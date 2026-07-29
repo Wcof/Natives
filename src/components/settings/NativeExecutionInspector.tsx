@@ -449,6 +449,11 @@ function CurrentNodeDetail({
                   {hook.authorized ? t(locale, 'settings.engineCanvasAuthorized') : t(locale, 'settings.engineCanvasUnauthorized')}
                 </span>
               </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className={`rounded px-1.5 py-0.5 ${hook.enabled ? 'bg-[var(--success-soft)] text-[var(--success)]' : 'bg-[var(--surface-hover)] text-[var(--text-disabled)]'}`}>
+                  {hook.enabled ? t(locale, 'settings.engineCanvasEnabled') : t(locale, 'settings.engineCanvasDisabled')}
+                </span>
+              </div>
               {!readOnly ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" className="btn btn-ghost text-xs" onClick={() => onSetHookEnabled?.(hook.id, !hook.enabled)}>

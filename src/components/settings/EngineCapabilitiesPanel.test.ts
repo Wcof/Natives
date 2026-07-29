@@ -198,6 +198,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
   assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
+  assert.match(panel, /authorized: hook\.adapter\.type === 'command' \? hook\.trust_confirmed : true/);
+  assert.match(panel, /authorized: true/);
   assert.match(panel, /builtin_prompt_replacements: document\.builtin_prompt_replacements\.filter/);
   assert.match(panel, /if \(imported\) updateOverlay\(imported, \{ enabled: false \}\)/);
   assert.match(canvas, /detail=\{nodeDetails\[selectedStage\.id\]\}/);
@@ -207,6 +209,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /engineCanvasNodeNoConfiguredHooks/);
   assert.match(inspector, /engineCanvasNodeNoConfiguredPrompts/);
   assert.match(inspector, /engineCanvasNodeHooks/);
+  assert.match(inspector, /engineCanvasEnabled/);
   assert.match(inspector, /engineCanvasNodePrompts/);
   assert.match(inspector, /engineCanvasNodeTools/);
   assert.match(inspector, /engineCanvasNodeSubagents/);

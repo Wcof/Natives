@@ -501,7 +501,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             event: hook.event,
             source: 'Harness Draft',
             enabled: hook.enabled,
-            authorized: hook.adapter.type === 'command' ? hook.trust_confirmed : hook.enabled,
+            authorized: hook.adapter.type === 'command' ? hook.trust_confirmed : true,
             canAuthorize: hook.adapter.type === 'command',
             canRemove: true,
           })),
@@ -516,7 +516,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               event: hook.event,
               source: hook.source.origin,
               enabled,
-              authorized: enabled,
+              authorized: true,
               canRemove: true,
             };
           }),

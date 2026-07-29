@@ -771,6 +771,7 @@ export const en = {
     engineCanvasRevoke: 'Revoke',
     engineCanvasEnable: 'Enable',
     engineCanvasDisable: 'Disable',
+    engineCanvasEnabled: 'Enabled',
     engineCanvasDisabled: 'Disabled',
     engineCanvasEditHooks: 'Edit Hooks',
     engineCanvasEditPrompts: 'Edit prompts',

@@ -763,6 +763,7 @@ export const zh = {
     engineCanvasRevoke: '取消授权',
     engineCanvasEnable: '启用',
     engineCanvasDisable: '停用',
+    engineCanvasEnabled: '已启用',
     engineCanvasDisabled: '已停用',
     engineCanvasEditHooks: '编辑 Hooks',
     engineCanvasEditPrompts: '编辑提示词',
