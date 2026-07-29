@@ -728,6 +728,7 @@ export const zh = {
     engineCanvasNodePrompts: '提示词',
     engineCanvasHarnessPromptBlock: 'Harness 自定义提示词',
     engineCanvasNodeTools: '工具',
+    engineCanvasToolSchemaDigest: '入参契约',
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: '本次运行结果',
     engineCanvasNodeResultCount: '{count} 个结果',

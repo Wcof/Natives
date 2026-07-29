@@ -538,7 +538,11 @@ function CurrentNodeDetail({
               <strong className="block text-sm text-[var(--text)]">{tool.name}</strong>
               <span className="mt-1 block truncate text-[var(--text-secondary)]">{tool.source}</span>
               <span className="mt-1 block text-[var(--text-disabled)]">{tool.description || t(locale, 'settings.engineCanvasToolNoDescription')}</span>
-              {tool.schema_digest ? <code className="mt-1 block truncate text-[var(--text-disabled)]">{tool.schema_digest}</code> : null}
+              {tool.schema_digest ? (
+                <code className="mt-1 block truncate text-[var(--text-disabled)]">
+                  {t(locale, 'settings.engineCanvasToolSchemaDigest')}：{tool.schema_digest}
+                </code>
+              ) : null}
             </div>
           ))}
         </div>

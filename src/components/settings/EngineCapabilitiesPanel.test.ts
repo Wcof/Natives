@@ -223,6 +223,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /engineCanvasRunOutput/);
   assert.match(inspector, /engineCanvasOpenTimeline/);
   assert.match(inspector, /engineCanvasToolNoDescription/);
+  assert.match(inspector, /engineCanvasToolSchemaDigest/);
   assert.match(inspector, /engineCanvasToolSnapshotRequired/);
   assert.match(inspector, /onOpenWorkspace\('runs', stageId\)/);
   assert.match(inspector, /onOpenWorkspace\('capabilities', stageId\)/);

@@ -736,6 +736,7 @@ export const en = {
     engineCanvasNodePrompts: 'Prompts',
     engineCanvasHarnessPromptBlock: 'Harness custom prompt',
     engineCanvasNodeTools: 'Tools',
+    engineCanvasToolSchemaDigest: 'Input contract',
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: 'Run results',
     engineCanvasNodeResultCount: '{count} results',
