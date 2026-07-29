@@ -38,6 +38,9 @@ test('EngineCapabilitiesPanel is a run evidence projection, not a scheduler inve
   assert.match(src, /effective_prompt_hash/);
   assert.match(src, /prompt_plan\.layers/);
   assert.match(src, /tool_plan\.canonical_hash/);
+  assert.match(src, /expert\.systemPrompt/);
+  assert.match(src, /settings\.engineCapabilities\.systemPrompt/);
+  assert.match(src, /settings\.engineCapabilities\.teamDetail/);
   assert.match(src, /discovered_not_executable/);
   assert.match(src, /href="\/jobs"/);
   assert.match(src, /Loadable/);

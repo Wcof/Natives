@@ -487,6 +487,8 @@ export const en = {
       expertsEmpty: 'No configured Experts.',
       teamsTitle: 'Expert Teams',
       teamsEmpty: 'No configured Expert Teams.',
+      systemPrompt: 'System prompt',
+      teamDetail: '{id} · {count} members · coordinator {coordinator}',
       toolsTitle: 'Model-visible Tools',
       toolsEmpty: 'The frozen Tool Plan contains no model-visible tools.',
       promptTitle: 'Effective Prompt evidence',

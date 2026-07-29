@@ -504,12 +504,18 @@ export default function EngineCapabilitiesPanel({
                   <InventoryRow
                     key={expert.id}
                     title={expert.name}
-                    detail={expert.id}
+                    detail={[expert.id, expert.modelId, expert.source].filter(Boolean).join(' · ')}
                     locale={locale}
                     selected={selected}
                     loaded={selected && snapshotLoaded}
                     enabled={expert.enabled}
-                  />
+                  >
+                    {expert.description ? <p className="m-0 text-xs text-[var(--text-muted)]">{expert.description}</p> : null}
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-[var(--text-secondary)]">{t(locale, 'settings.engineCapabilities.systemPrompt')}</summary>
+                      <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-[var(--background)] p-2 font-mono text-[11px] text-[var(--text-secondary)]">{expert.systemPrompt || t(locale, 'settings.engineCapabilities.promptEmpty')}</pre>
+                    </details>
+                  </InventoryRow>
                 );
               })}
             </InventoryList>
@@ -534,12 +540,27 @@ export default function EngineCapabilitiesPanel({
                   <InventoryRow
                     key={team.id}
                     title={team.name}
-                    detail={team.id}
+                    detail={t(locale, 'settings.engineCapabilities.teamDetail', {
+                      id: team.id,
+                      count: team.members.length,
+                      coordinator: team.coordinatorExpertId ?? '—',
+                    })}
                     locale={locale}
                     selected={selected}
                     loaded={selected && snapshotLoaded}
                     enabled={team.enabled}
-                  />
+                  >
+                    {team.description ? <p className="m-0 text-xs text-[var(--text-muted)]">{team.description}</p> : null}
+                    {team.members.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {team.members.map((member) => (
+                          <code key={`${team.id}:${member.expertId}`} className="rounded bg-[var(--background)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
+                            {member.expertId}
+                          </code>
+                        ))}
+                      </div>
+                    ) : null}
+                  </InventoryRow>
                 );
               })}
             </InventoryList>
@@ -964,6 +985,7 @@ function InventoryRow({
   loaded,
   enabled,
   trusted,
+  children,
 }: {
   title: string;
   detail: string;
@@ -972,12 +994,14 @@ function InventoryRow({
   loaded: boolean;
   enabled: boolean;
   trusted?: boolean;
+  children?: ReactNode;
 }) {
   return (
     <li className="settings-plugin-row">
-      <div>
+      <div className="min-w-0 space-y-2">
         <strong>{title}</strong>
         <div className="mt-1 text-xs text-[var(--text-muted)]">{detail}</div>
+        {children}
       </div>
       <div className="flex flex-wrap justify-end gap-1">
         <StatusPill

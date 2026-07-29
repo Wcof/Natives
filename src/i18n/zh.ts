@@ -479,6 +479,8 @@ export const zh = {
       expertsEmpty: '暂无已配置 Experts。',
       teamsTitle: '专家团队',
       teamsEmpty: '暂无已配置专家团队。',
+      systemPrompt: '系统提示词',
+      teamDetail: '{id} · {count} 个成员 · 协调专家 {coordinator}',
       toolsTitle: '模型可见 Tools',
       toolsEmpty: '冻结 Tool Plan 中没有模型可见工具。',
       promptTitle: '有效 Prompt 证据',
