@@ -151,6 +151,15 @@ const builtinToolDescription = (name: string, locale: Locale): string | undefine
   }
 };
 
+const promptSurfaceStage = (surfaceId: string): string => {
+  const normalized = surfaceId.toLowerCase();
+  if (normalized.includes('compact')) return 'compact';
+  if (normalized.includes('stop')) return 'stop';
+  return 'context';
+};
+
+const promptBlockStage = (_placement: string): string => 'context';
+
 export interface NativeHarnessPanelProps { locale: Locale }
 
 export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
@@ -527,7 +536,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       ];
       const prompts = ['context', 'compact', 'stop'].includes(stage.id)
         ? [
-          ...(promptPreview?.builtin_surfaces ?? []).map((surface) => {
+          ...(promptPreview?.builtin_surfaces ?? []).filter((surface) => promptSurfaceStage(surface.surface_id) === stage.id).map((surface) => {
             const replacement = document?.builtin_prompt_replacements?.find((item) => item.surface_id === surface.surface_id);
             return {
               id: surface.surface_id,
@@ -541,7 +550,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               removeLabel: t(locale, 'settings.engineCanvasRestoreDefaultPrompt'),
             };
           }),
-          ...(document?.prompt_blocks ?? []).map((block) => ({
+          ...(document?.prompt_blocks ?? []).filter((block) => promptBlockStage(block.placement) === stage.id).map((block) => ({
             id: block.id,
             name: block.name,
             source: t(locale, 'settings.engineCanvasHarnessPromptBlock'),
