@@ -10,6 +10,7 @@ import {
   stageLabel,
   type CanvasEdge,
   type CanvasMode,
+  type CanvasNodeDetail,
   type CanvasRunSnapshot,
   type CanvasStage,
   type CanvasTraceEntry,
@@ -451,11 +452,109 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     .filter(({ hook }) => !hookStage || stageEvents.has(hook.event)) ?? [];
   const importedHooks = (workspace?.catalog?.hooks ?? []).filter((hook) => !hook.source.origin.startsWith('native:'));
   const overlays = document?.hook_overlays ?? document?.hooks ?? [];
+  const selectedRun = liveRuns.find((run) => run.id === selectedRunId) ?? null;
+  const nodeDetails = useMemo<Record<string, CanvasNodeDetail>>(() => {
+    const details: Record<string, CanvasNodeDetail> = {};
+    for (const stage of stages) {
+      const events = new Set((stage.hook_points ?? []).map((point) => point.event));
+      const hooks = [
+        ...(document?.native_hooks ?? [])
+          .filter((hook) => events.has(hook.event))
+          .map((hook) => ({
+            id: hook.id,
+            name: hook.name,
+            event: hook.event,
+            source: 'Harness Draft',
+            enabled: hook.enabled,
+            authorized: hook.adapter.type === 'command' ? hook.trust_confirmed : hook.enabled,
+            canAuthorize: hook.adapter.type === 'command',
+            canRemove: true,
+          })),
+        ...importedHooks
+          .filter((hook) => events.has(hook.event))
+          .map((hook) => {
+            const overlay = overlays.find((item) => item.hook_id === hook.id);
+            const enabled = overlay?.enabled ?? hook.enabled;
+            return {
+              id: hook.id,
+              name: hook.id,
+              event: hook.event,
+              source: hook.source.origin,
+              enabled,
+              authorized: enabled,
+            };
+          }),
+      ];
+      const prompts = ['context', 'compact', 'stop'].includes(stage.id)
+        ? [
+          ...(promptPreview?.builtin_surfaces ?? []).map((surface) => {
+            const replacement = document?.builtin_prompt_replacements?.find((item) => item.surface_id === surface.surface_id);
+            return {
+              id: surface.surface_id,
+              name: surface.surface_id,
+              placement: t(locale, 'settings.engineEngineeringBuiltinPrompt'),
+              enabled: true,
+              markdown: replacement?.markdown ?? surface.default_markdown,
+              canEdit: true,
+            };
+          }),
+          ...(document?.prompt_blocks ?? []).map((block) => ({
+            id: block.id,
+            name: block.name,
+            placement: block.placement,
+            enabled: block.enabled,
+            markdown: block.markdown,
+            canEdit: true,
+            canRemove: true,
+          })),
+        ]
+        : [];
+      const tools = ['provider', 'tool_gate', 'tool_execute'].includes(stage.id)
+        ? (runSnapshot?.snapshot?.tool_plan?.tools ?? []).map((tool) => ({
+          name: tool.name,
+          source: tool.source,
+          schema_digest: tool.schema_digest,
+        }))
+        : [];
+      const snapshot = selectedRun?.capability_snapshot;
+      const subagents = stage.id === 'subagent'
+        ? [
+          ...(snapshot?.agentProfileId ? [{ id: snapshot.agentProfileId, kind: 'expert' as const }] : []),
+          ...(snapshot?.teamId ? [{ id: snapshot.teamId, kind: 'team' as const }] : []),
+          ...((snapshot?.teamMembers ?? []).map((id) => ({ id, kind: 'member' as const }))),
+        ]
+        : [];
+      details[stage.id] = { hooks, prompts, tools, subagents };
+    }
+    return details;
+  }, [document, importedHooks, locale, overlays, promptPreview, runSnapshot, selectedRun, stages]);
   const updateOverlay = (hook: CatalogHook, patch: Partial<HookOverlay>) => {
     if (!document) return;
     const existing = overlays.find((item) => item.hook_id === hook.id);
     const next = existing ? { ...existing, ...patch } : { hook_id: hook.id, ...patch };
     replaceDocument({ ...document, hook_overlays: [...overlays.filter((item) => item.hook_id !== hook.id), next] });
+  };
+  const setNodeHookEnabled = (hookId: string, enabled: boolean) => {
+    const nativeIndex = document?.native_hooks.findIndex((hook) => hook.id === hookId) ?? -1;
+    if (nativeIndex >= 0) {
+      updateHook(nativeIndex, { enabled });
+      return;
+    }
+    const imported = importedHooks.find((hook) => hook.id === hookId);
+    if (imported) updateOverlay(imported, { enabled });
+  };
+  const authorizeNodeHook = (hookId: string, authorized: boolean) => {
+    const nativeIndex = document?.native_hooks.findIndex((hook) => hook.id === hookId) ?? -1;
+    const hook = nativeIndex >= 0 ? document?.native_hooks[nativeIndex] : null;
+    if (hook) updateHook(nativeIndex, { adapter: { ...hook.adapter, trusted: authorized }, trust_confirmed: authorized });
+  };
+  const removeNodeHook = (hookId: string) => {
+    if (!document) return;
+    replaceDocument({ ...document, native_hooks: document.native_hooks.filter((hook) => hook.id !== hookId) });
+  };
+  const removeNodePrompt = (promptId: string) => {
+    if (!document) return;
+    replaceDocument({ ...document, prompt_blocks: document.prompt_blocks.filter((block) => block.id !== promptId) });
   };
   const openCanvasWorkspace = (target: CanvasWorkspaceTarget, stageId: string) => {
     setWorkspaceTarget(target);
@@ -558,7 +657,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
         {workspaceTarget === 'capabilities' ? (
           <EngineCapabilitiesPanel
             locale={locale}
-            selectedRun={liveRuns.find((run) => run.id === selectedRunId) ?? null}
+            selectedRun={selectedRun}
             runSnapshot={runSnapshot}
           />
         ) : null}
@@ -612,6 +711,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             runSnapshot={runSnapshot}
             auditLoading={auxLoading}
             readOnly={readOnly}
+            nodeDetails={nodeDetails}
             onModeChange={setCanvasMode}
             onRequestAudit={() => void loadRuns()}
             onSelectRun={(runId) => {
@@ -621,6 +721,10 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             }}
             onRefreshAudit={() => void loadRuns(selectedRunId)}
             onOpenWorkspace={openCanvasWorkspace}
+            onSetHookEnabled={setNodeHookEnabled}
+            onAuthorizeHook={authorizeNodeHook}
+            onRemoveHook={removeNodeHook}
+            onRemovePrompt={removeNodePrompt}
             runPanel={runPanel}
             workspacePanel={workspacePanel}
           />

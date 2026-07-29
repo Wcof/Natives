@@ -9,6 +9,7 @@ import {
   ListChecks,
   Settings2,
   ShieldCheck,
+  Trash2,
   Wrench,
   X,
 } from 'lucide-react';
@@ -20,6 +21,7 @@ import {
   stagePresentation,
   traceEntriesForStage,
   type CanvasMode,
+  type CanvasNodeDetail,
   type CanvasRun,
   type CanvasRunSnapshot,
   type CanvasStage,
@@ -97,9 +99,14 @@ export function NativeExecutionInspector({
   selectedRun,
   traceEntries,
   runSnapshot,
+  detail,
   readOnly = false,
   onClose,
   onOpenWorkspace,
+  onSetHookEnabled,
+  onAuthorizeHook,
+  onRemoveHook,
+  onRemovePrompt,
 }: {
   locale: Locale;
   stage: CanvasStage;
@@ -108,9 +115,14 @@ export function NativeExecutionInspector({
   selectedRun?: CanvasRun;
   traceEntries: CanvasTraceEntry[];
   runSnapshot?: CanvasRunSnapshot | null;
+  detail?: CanvasNodeDetail;
   readOnly?: boolean;
   onClose: () => void;
   onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  onSetHookEnabled?: (hookId: string, enabled: boolean) => void;
+  onAuthorizeHook?: (hookId: string, authorized: boolean) => void;
+  onRemoveHook?: (hookId: string) => void;
+  onRemovePrompt?: (promptId: string) => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>('understand');
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -217,6 +229,17 @@ export function NativeExecutionInspector({
                 <div className="flex items-center justify-between gap-4 py-3"><dt className="text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasEnabledHookCount')}</dt><dd>{hooks}</dd></div>
                 <div className="flex items-center justify-between gap-4 py-3"><dt className="text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasSafePoints')}</dt><dd>{stage.safe_points?.length ?? 0}</dd></div>
               </dl>
+              <CurrentNodeDetail
+                locale={locale}
+                stageId={stage.id}
+                detail={detail}
+                readOnly={readOnly}
+                onOpenWorkspace={onOpenWorkspace}
+                onSetHookEnabled={onSetHookEnabled}
+                onAuthorizeHook={onAuthorizeHook}
+                onRemoveHook={onRemoveHook}
+                onRemovePrompt={onRemovePrompt}
+              />
             </div>
           ) : null}
 
@@ -336,5 +359,138 @@ export function NativeExecutionInspector({
         </div>
       </aside>
     </>
+  );
+}
+
+function CurrentNodeDetail({
+  locale,
+  stageId,
+  detail,
+  readOnly,
+  onOpenWorkspace,
+  onSetHookEnabled,
+  onAuthorizeHook,
+  onRemoveHook,
+  onRemovePrompt,
+}: {
+  locale: Locale;
+  stageId: string;
+  detail?: CanvasNodeDetail;
+  readOnly: boolean;
+  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  onSetHookEnabled?: (hookId: string, enabled: boolean) => void;
+  onAuthorizeHook?: (hookId: string, authorized: boolean) => void;
+  onRemoveHook?: (hookId: string) => void;
+  onRemovePrompt?: (promptId: string) => void;
+}) {
+  const hooks = detail?.hooks ?? [];
+  const prompts = detail?.prompts ?? [];
+  const tools = detail?.tools ?? [];
+  const subagents = detail?.subagents ?? [];
+
+  if (!hooks.length && !prompts.length && !tools.length && !subagents.length) {
+    return <EvidenceEmpty locale={locale}>{t(locale, 'settings.engineCanvasNodeNoDetails')}</EvidenceEmpty>;
+  }
+
+  return (
+    <section className="space-y-4">
+      <h4 className="text-sm font-semibold text-[var(--text)]">{t(locale, 'settings.engineCanvasNodeDetails')}</h4>
+
+      {hooks.length ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeHooks')}</h5>
+            {!readOnly ? <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('hooks', stageId)}>{t(locale, 'settings.engineCanvasEditHooks')}</button> : null}
+          </div>
+          {hooks.map((hook) => (
+            <article key={hook.id} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm text-[var(--text)]">{hook.name}</strong>
+                  <span className="mt-1 block truncate text-[var(--text-secondary)]">{hook.event} · {hook.source}</span>
+                </div>
+                <span className={hook.authorized ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>
+                  {hook.authorized ? t(locale, 'settings.engineCanvasAuthorized') : t(locale, 'settings.engineCanvasUnauthorized')}
+                </span>
+              </div>
+              {!readOnly ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" className="btn btn-ghost text-xs" onClick={() => onSetHookEnabled?.(hook.id, !hook.enabled)}>
+                    {hook.enabled ? t(locale, 'settings.engineCanvasDisable') : t(locale, 'settings.engineCanvasEnable')}
+                  </button>
+                  {hook.canAuthorize ? (
+                    <button type="button" className="btn btn-ghost text-xs" onClick={() => onAuthorizeHook?.(hook.id, !hook.authorized)}>
+                      {hook.authorized ? t(locale, 'settings.engineCanvasRevoke') : t(locale, 'settings.engineCanvasAuthorize')}
+                    </button>
+                  ) : null}
+                  {hook.canRemove ? (
+                    <button type="button" className="btn btn-ghost text-xs text-[var(--danger)]" onClick={() => onRemoveHook?.(hook.id)}>
+                      <Trash2 size={12} />{t(locale, 'common.delete')}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      {prompts.length ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodePrompts')}</h5>
+            {!readOnly ? <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('prompts', stageId)}>{t(locale, 'settings.engineCanvasEditPrompts')}</button> : null}
+          </div>
+          {prompts.map((prompt) => (
+            <article key={prompt.id} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm text-[var(--text)]">{prompt.name}</strong>
+                  <span className="mt-1 block truncate text-[var(--text-secondary)]">{prompt.placement ?? prompt.id}</span>
+                </div>
+                {prompt.enabled === false ? <span className="text-[var(--text-disabled)]">{t(locale, 'settings.engineCanvasDisabled')}</span> : null}
+              </div>
+              {prompt.markdown ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasViewPrompt')}</summary>
+                  <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-[var(--background)] p-2 font-mono text-[11px] text-[var(--text-secondary)]">{prompt.markdown}</pre>
+                </details>
+              ) : null}
+              {!readOnly && prompt.canRemove ? (
+                <button type="button" className="btn btn-ghost mt-3 text-xs text-[var(--danger)]" onClick={() => onRemovePrompt?.(prompt.id)}>
+                  <Trash2 size={12} />{t(locale, 'common.delete')}
+                </button>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      {tools.length ? (
+        <div className="space-y-2">
+          <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeTools')}</h5>
+          {tools.map((tool) => (
+            <div key={`${tool.source}:${tool.name}`} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+              <strong className="block text-sm text-[var(--text)]">{tool.name}</strong>
+              <span className="mt-1 block truncate text-[var(--text-secondary)]">{tool.source}</span>
+              <span className="mt-1 block text-[var(--text-disabled)]">{tool.description || t(locale, 'settings.engineCanvasToolNoDescription')}</span>
+              {tool.schema_digest ? <code className="mt-1 block truncate text-[var(--text-disabled)]">{tool.schema_digest}</code> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {subagents.length ? (
+        <div className="space-y-2">
+          <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeSubagents')}</h5>
+          {subagents.map((subagent) => (
+            <div key={`${subagent.kind}:${subagent.id}`} className="flex items-center justify-between gap-2 rounded border border-[var(--border-subtle)] p-3 text-xs">
+              <strong className="truncate text-sm text-[var(--text)]">{subagent.id}</strong>
+              <span className="text-[var(--text-secondary)]">{t(locale, `settings.engineCanvasSubagentKind.${subagent.kind}`)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }

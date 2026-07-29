@@ -20,6 +20,7 @@ import {
   sortStages,
   type CanvasEdge,
   type CanvasMode,
+  type CanvasNodeDetail,
   type CanvasRun,
   type CanvasRunSnapshot,
   type CanvasStage,
@@ -31,6 +32,7 @@ import {
 export type {
   CanvasEdge,
   CanvasMode,
+  CanvasNodeDetail,
   CanvasRun,
   CanvasRunSnapshot,
   CanvasStage,
@@ -53,11 +55,16 @@ export function NativeExecutionCanvas({
   runSnapshot,
   auditLoading = false,
   readOnly = false,
+  nodeDetails = {},
   onRequestAudit,
   onModeChange,
   onSelectRun,
   onRefreshAudit,
   onOpenWorkspace,
+  onSetHookEnabled,
+  onAuthorizeHook,
+  onRemoveHook,
+  onRemovePrompt,
   runPanel,
   workspacePanel,
 }: {
@@ -73,11 +80,16 @@ export function NativeExecutionCanvas({
   runSnapshot?: CanvasRunSnapshot | null;
   auditLoading?: boolean;
   readOnly?: boolean;
+  nodeDetails?: Record<string, CanvasNodeDetail>;
   onRequestAudit?: () => void;
   onModeChange?: (mode: CanvasMode) => void;
   onSelectRun?: (runId: string) => void;
   onRefreshAudit?: () => void;
   onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  onSetHookEnabled?: (hookId: string, enabled: boolean) => void;
+  onAuthorizeHook?: (hookId: string, authorized: boolean) => void;
+  onRemoveHook?: (hookId: string) => void;
+  onRemovePrompt?: (promptId: string) => void;
   runPanel?: ReactNode;
   workspacePanel?: ReactNode;
 }) {
@@ -247,9 +259,14 @@ export function NativeExecutionCanvas({
           selectedRun={selectedRun}
           traceEntries={traceEntries}
           runSnapshot={runSnapshot}
+          detail={nodeDetails[selectedStage.id]}
           readOnly={readOnly}
           onClose={() => setSelectedStageId(null)}
           onOpenWorkspace={onOpenWorkspace}
+          onSetHookEnabled={onSetHookEnabled}
+          onAuthorizeHook={onAuthorizeHook}
+          onRemoveHook={onRemoveHook}
+          onRemovePrompt={onRemovePrompt}
         />
       ) : null}
     </section>

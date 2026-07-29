@@ -151,3 +151,36 @@ test('Harness list opens create as a separate view and preview stays read-only',
   assert.match(panel, /const readOnly = detailMode === 'preview'/);
   assert.match(panel, /<fieldset disabled=\{readOnly\}/);
 });
+
+test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () => {
+  const panel = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
+    'utf8',
+  );
+  const canvas = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeExecutionCanvas.tsx'),
+    'utf8',
+  );
+  const inspector = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeExecutionInspector.tsx'),
+    'utf8',
+  );
+  const model = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/nativeExecutionCanvasModel.ts'),
+    'utf8',
+  );
+
+  assert.match(model, /export type CanvasNodeDetail/);
+  assert.match(panel, /const nodeDetails = useMemo<Record<string, CanvasNodeDetail>>/);
+  assert.match(panel, /nodeDetails=\{nodeDetails\}/);
+  assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
+  assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
+  assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
+  assert.match(canvas, /detail=\{nodeDetails\[selectedStage\.id\]\}/);
+  assert.match(inspector, /CurrentNodeDetail/);
+  assert.match(inspector, /engineCanvasNodeHooks/);
+  assert.match(inspector, /engineCanvasNodePrompts/);
+  assert.match(inspector, /engineCanvasNodeTools/);
+  assert.match(inspector, /engineCanvasNodeSubagents/);
+  assert.match(inspector, /engineCanvasToolNoDescription/);
+});

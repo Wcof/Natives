@@ -27,6 +27,46 @@ export type CanvasEdge = {
 
 export type PromptBlock = { id: string; name: string };
 
+export type CanvasNodeHook = {
+  id: string;
+  name: string;
+  event: string;
+  source: string;
+  enabled: boolean;
+  authorized: boolean;
+  canAuthorize?: boolean;
+  canRemove?: boolean;
+};
+
+export type CanvasNodePrompt = {
+  id: string;
+  name: string;
+  placement?: string;
+  enabled?: boolean;
+  markdown?: string;
+  canEdit?: boolean;
+  canRemove?: boolean;
+};
+
+export type CanvasNodeTool = {
+  name: string;
+  source: string;
+  schema_digest?: string;
+  description?: string;
+};
+
+export type CanvasNodeSubagent = {
+  id: string;
+  kind: 'expert' | 'team' | 'member';
+};
+
+export type CanvasNodeDetail = {
+  hooks?: CanvasNodeHook[];
+  prompts?: CanvasNodePrompt[];
+  tools?: CanvasNodeTool[];
+  subagents?: CanvasNodeSubagent[];
+};
+
 export type CanvasRun = {
   id: string;
   status: string;
