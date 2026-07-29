@@ -206,6 +206,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /engineCanvasHookAuthorizationImported/);
   assert.match(panel, /authorized: true/);
   assert.match(panel, /engineCanvasRemoveHookBinding/);
+  assert.match(panel, /overlay\?\.enabled \?\? hook\.enabled/);
   assert.match(panel, /hook\.source\.scope.*hook\.source\.origin/);
   assert.match(inspector, /hook\.authorization/);
   assert.match(inspector, /hook\.removeLabel/);

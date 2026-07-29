@@ -517,7 +517,10 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             canRemove: true,
           })),
         ...importedHooks
-          .filter((hook) => events.has(hook.event))
+          .filter((hook) => {
+            const overlay = overlays.find((item) => item.hook_id === hook.id);
+            return events.has(hook.event) && (overlay?.enabled ?? hook.enabled);
+          })
           .map((hook) => {
             const overlay = overlays.find((item) => item.hook_id === hook.id);
             const enabled = overlay?.enabled ?? hook.enabled;
