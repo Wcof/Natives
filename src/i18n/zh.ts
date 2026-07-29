@@ -746,6 +746,8 @@ export const zh = {
     engineCanvasRunStopDecision: '停止判定',
     engineCanvasRunStopDetail: '最终状态：{status}',
     engineCanvasRunStopErrorDetail: '最终状态：{status} · 错误：{code}',
+    engineCanvasRunAuditSummary: '跨阶段审计',
+    engineCanvasRunAuditDetail: '审计事件：{count} · 失败：{failed}',
     engineCanvasRunTerminalResult: 'Run 终态',
     engineCanvasRunTerminalDetail: 'Provider：{provider} · Model：{model}',
     engineCanvasRunTerminalErrorDetail: 'Provider：{provider} · Model：{model} · 错误：{code}',

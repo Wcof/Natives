@@ -754,6 +754,8 @@ export const en = {
     engineCanvasRunStopDecision: 'Stop decision',
     engineCanvasRunStopDetail: 'Final status: {status}',
     engineCanvasRunStopErrorDetail: 'Final status: {status} · Error: {code}',
+    engineCanvasRunAuditSummary: 'Cross-stage audit',
+    engineCanvasRunAuditDetail: 'Audit events: {count} · Failed: {failed}',
     engineCanvasRunTerminalResult: 'Run terminal state',
     engineCanvasRunTerminalDetail: 'Provider: {provider} · Model: {model}',
     engineCanvasRunTerminalErrorDetail: 'Provider: {provider} · Model: {model} · Error: {code}',

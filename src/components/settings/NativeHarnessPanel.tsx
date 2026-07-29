@@ -662,6 +662,16 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             code: selectedRun.error_code ?? '',
           }),
         }] : []),
+        ...(stage.id === 'cross_stage' && selectedRun ? [{
+          id: `${selectedRun.id}:cross-stage`,
+          action: t(locale, 'settings.engineCanvasRunAuditSummary'),
+          status: selectedRun.status,
+          timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
+          output: t(locale, 'settings.engineCanvasRunAuditDetail', {
+            count: traceEntries.length,
+            failed: traceEntries.filter((entry) => entry.status === 'failed' || Boolean(entry.error_category)).length,
+          }),
+        }] : []),
         ...(stage.id === 'terminal' && selectedRun ? [{
           id: `${selectedRun.id}:terminal`,
           action: t(locale, 'settings.engineCanvasRunTerminalResult'),
