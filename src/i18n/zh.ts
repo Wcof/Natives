@@ -738,6 +738,7 @@ export const zh = {
     engineCanvasRunTerminalDetail: 'Provider：{provider} · Model：{model}',
     engineCanvasRunTerminalErrorDetail: 'Provider：{provider} · Model：{model} · 错误：{code}',
     engineCanvasRunHookInvocation: 'Hook 调用',
+    engineCanvasOpenTimeline: '查看时间线',
     engineCanvasAuthorized: '已授权',
     engineCanvasUnauthorized: '未授权',
     engineCanvasAuthorize: '授权',

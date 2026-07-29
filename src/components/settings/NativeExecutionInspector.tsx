@@ -407,7 +407,12 @@ function CurrentNodeDetail({
 
       {runResults.length ? (
         <div className="space-y-2">
-          <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeRunResults')}</h5>
+          <div className="flex items-center justify-between gap-2">
+            <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeRunResults')}</h5>
+            <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('runs', stageId)}>
+              {t(locale, 'settings.engineCanvasOpenTimeline')}
+            </button>
+          </div>
           {runResults.map((result) => (
             <article key={result.id} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
               <div className="flex items-start justify-between gap-2">
