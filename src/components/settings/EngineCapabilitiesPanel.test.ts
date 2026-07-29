@@ -205,6 +205,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /subagent\.prompt/);
   assert.match(inspector, /prompt\.canEdit/);
   assert.match(inspector, /onOpenWorkspace\('prompts', stageId, prompt\.id\)/);
+  assert.match(panel, /BUILTIN_TOOL_NAMES/);
+  assert.match(panel, /source: 'native:builtin'/);
   assert.match(panel, /builtinToolDescription/);
   assert.match(panel, /focusPromptId/);
   assert.match(panel, /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/);

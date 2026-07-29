@@ -22,6 +22,7 @@ import EngineCapabilitiesPanel, { type EngineCapabilitySnapshot } from './Engine
 const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Notification', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'StopFailure', 'Error'];
 const ADAPTERS = ['command', 'http', 'mcp_tool', 'prompt', 'agent'] as const;
 const ACTIVE_RUN_STATUSES = new Set(['created', 'queued', 'preparing', 'running', 'waiting_permission', 'waiting_subagent', 'cancelling']);
+const BUILTIN_TOOL_NAMES = ['read_file', 'search_files', 'write_file', 'list_dir', 'grep', 'edit_file', 'run_terminal', 'apply_patch', 'memory_search', 'memory_get', 'task', 'task_output', 'kill_task', 'skill', 'web_search', 'enter_plan_mode', 'exit_plan_mode', 'write_draft_module', 'read_draft_module', 'rollback_draft_revision', 'lint_draft_module'];
 
 type AdapterType = typeof ADAPTERS[number];
 type DetailMode = 'preview' | 'edit' | 'create';
@@ -541,7 +542,11 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
         ]
         : [];
       const tools = ['provider', 'tool_gate', 'tool_execute'].includes(stage.id)
-        ? (runSnapshot?.snapshot?.tool_plan?.tools ?? []).map((tool) => ({
+        ? (runSnapshot?.snapshot?.tool_plan?.tools ?? BUILTIN_TOOL_NAMES.map((name) => ({
+          name,
+          source: 'native:builtin',
+          schema_digest: undefined,
+        }))).map((tool) => ({
           name: tool.name,
           source: tool.source,
           schema_digest: tool.schema_digest,
