@@ -529,7 +529,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               id: surface.surface_id,
               name: surface.surface_id,
               source: t(locale, 'settings.engineEngineeringBuiltinPrompt'),
-              placement: t(locale, 'settings.engineEngineeringBuiltinPrompt'),
+              placement: surface.surface_id,
               enabled: true,
               markdown: replacement?.markdown ?? surface.default_markdown,
               canEdit: true,
