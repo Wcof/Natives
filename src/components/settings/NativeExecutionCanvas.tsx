@@ -233,6 +233,7 @@ export function NativeExecutionCanvas({
           selectedRunId={selectedRunId}
           traceEntries={traceEntries}
           runSnapshot={runSnapshot}
+          nodeDetails={nodeDetails}
           onSelectStage={setSelectedStageId}
         />
       ) : (

@@ -32,6 +32,7 @@ import {
   visibleEdges,
   type CanvasEdge,
   type CanvasMode,
+  type CanvasNodeDetail,
   type CanvasRunSnapshot,
   type CanvasStage,
   type CanvasTraceEntry,
@@ -138,6 +139,7 @@ type GraphProps = {
   selectedRunId?: string;
   traceEntries?: CanvasTraceEntry[];
   runSnapshot?: CanvasRunSnapshot | null;
+  nodeDetails?: Record<string, CanvasNodeDetail>;
   onSelectStage: (stageId: string) => void;
 };
 
@@ -150,6 +152,7 @@ function StageNode({
   selectedRunId,
   traceEntries,
   runSnapshot,
+  detail,
   onSelect,
   className = '',
 }: {
@@ -161,6 +164,7 @@ function StageNode({
   selectedRunId?: string;
   traceEntries?: CanvasTraceEntry[];
   runSnapshot?: CanvasRunSnapshot | null;
+  detail?: CanvasNodeDetail;
   onSelect: () => void;
   className?: string;
 }) {
@@ -175,6 +179,15 @@ function StageNode({
   });
   const hooks = enabledHookCount(stage);
   const promptCount = stage.id === 'context' ? promptBlockCount : 0;
+  const detailSummary = detail?.runResults?.length
+    ? t(locale, 'settings.engineCanvasNodeResultCount', { count: detail.runResults.length })
+    : detail?.tools?.length
+      ? t(locale, 'settings.engineCanvasNodeToolCount', { count: detail.tools.length })
+      : detail?.subagents?.length
+        ? t(locale, 'settings.engineCanvasNodeSubagentCount', { count: detail.subagents.length })
+        : detail?.prompts?.length
+          ? t(locale, 'settings.engineCanvasPromptCount', { count: detail.prompts.length })
+          : null;
 
   return (
     <button
@@ -207,11 +220,11 @@ function StageNode({
           {t(locale, EVIDENCE_KEYS[evidence])}
         </span>
         <span className="truncate text-[10px] text-[var(--text-disabled)]">
-          {hooks > 0
+          {detailSummary ?? (hooks > 0
             ? t(locale, 'settings.engineCanvasEnabledHooks', { count: hooks })
             : promptCount > 0
               ? t(locale, 'settings.engineCanvasPromptCount', { count: promptCount })
-              : presentation.technicalName}
+              : presentation.technicalName)}
         </span>
       </span>
     </button>
@@ -229,6 +242,7 @@ export function NativeExecutionGraph(props: GraphProps) {
     selectedRunId,
     traceEntries,
     runSnapshot,
+    nodeDetails,
     onSelectStage,
   } = props;
   const ordered = useMemo(() => sortStages(stages), [stages]);
@@ -386,6 +400,7 @@ export function NativeExecutionGraph(props: GraphProps) {
                   selectedRunId={selectedRunId}
                   traceEntries={traceEntries}
                   runSnapshot={runSnapshot}
+                  detail={nodeDetails?.[stage.id]}
                   onSelect={() => onSelectStage(stage.id)}
                 />
               </div>
@@ -414,6 +429,7 @@ export function NativeExecutionGraph(props: GraphProps) {
                   {...props}
                   stage={stage}
                   selected={selectedStageId === stage.id}
+                  detail={nodeDetails?.[stage.id]}
                   onSelect={() => onSelectStage(stage.id)}
                   className="w-full"
                 />

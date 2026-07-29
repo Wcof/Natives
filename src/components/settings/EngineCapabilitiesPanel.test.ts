@@ -170,6 +170,10 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
     path.join(process.cwd(), 'src/components/settings/NativeExecutionInspector.tsx'),
     'utf8',
   );
+  const graph = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeExecutionGraph.tsx'),
+    'utf8',
+  );
   const model = fs.readFileSync(
     path.join(process.cwd(), 'src/components/settings/nativeExecutionCanvasModel.ts'),
     'utf8',
@@ -178,6 +182,12 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(model, /export type CanvasNodeDetail/);
   assert.match(panel, /const nodeDetails = useMemo<Record<string, CanvasNodeDetail>>/);
   assert.match(panel, /nodeDetails=\{nodeDetails\}/);
+  assert.match(canvas, /nodeDetails=\{nodeDetails\}/);
+  assert.match(graph, /type CanvasNodeDetail/);
+  assert.match(graph, /detailSummary/);
+  assert.match(graph, /engineCanvasNodeResultCount/);
+  assert.match(graph, /engineCanvasNodeToolCount/);
+  assert.match(graph, /engineCanvasNodeSubagentCount/);
   assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
   assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
