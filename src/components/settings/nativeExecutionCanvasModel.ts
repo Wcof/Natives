@@ -37,6 +37,7 @@ export type CanvasNodeHook = {
   authorization?: string;
   canAuthorize?: boolean;
   canRemove?: boolean;
+  removeLabel?: string;
 };
 
 export type CanvasNodePrompt = {

@@ -786,6 +786,7 @@ export const en = {
     engineCanvasHookAuthorizationHarness: 'Authorization is explicitly confirmed by this Harness; command Hooks are not trusted until confirmed.',
     engineCanvasHookAuthorizationImplicit: 'This Hook type does not require extra command authorization.',
     engineCanvasHookAuthorizationImported: 'Authorization is inherited from the source configuration; this Harness can disable or remove the binding.',
+    engineCanvasRemoveHookBinding: 'Remove binding',
     engineCanvasAuthorize: 'Authorize',
     engineCanvasRevoke: 'Revoke',
     engineCanvasEnable: 'Enable',

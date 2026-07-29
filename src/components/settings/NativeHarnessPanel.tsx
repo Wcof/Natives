@@ -521,6 +521,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               authorized: true,
               authorization: t(locale, 'settings.engineCanvasHookAuthorizationImported'),
               canRemove: true,
+              removeLabel: t(locale, 'settings.engineCanvasRemoveHookBinding'),
             };
           }),
       ];

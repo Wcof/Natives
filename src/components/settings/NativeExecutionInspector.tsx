@@ -468,7 +468,7 @@ function CurrentNodeDetail({
                   ) : null}
                   {hook.canRemove ? (
                     <button type="button" className="btn btn-ghost text-xs text-[var(--danger)]" onClick={() => onRemoveHook?.(hook.id)}>
-                      <Trash2 size={12} />{t(locale, 'common.delete')}
+                      <Trash2 size={12} />{hook.removeLabel ?? t(locale, 'common.delete')}
                     </button>
                   ) : null}
                 </div>
