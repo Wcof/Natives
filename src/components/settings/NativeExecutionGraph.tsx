@@ -351,6 +351,9 @@ export function NativeExecutionGraph(props: GraphProps) {
               <marker id={`${markerId}-active-arrow`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
                 <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--text)" />
               </marker>
+              <marker id={`${markerId}-run-arrow`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--success)" />
+              </marker>
             </defs>
             {renderedEdges.map((edge) => {
               const path = edgePath(edge, layout.positions);
@@ -369,7 +372,7 @@ export function NativeExecutionGraph(props: GraphProps) {
                     stroke={active ? 'var(--text)' : runCount > 0 ? 'var(--success)' : edge.kind === 'signal' ? 'var(--info)' : 'var(--text-disabled)'}
                     strokeWidth={active || runCount > 0 ? 2 : 1.25}
                     strokeDasharray={edge.kind === 'signal' ? '5 5' : undefined}
-                    markerEnd={`url(#${active ? `${markerId}-active-arrow` : `${markerId}-arrow`})`}
+                    markerEnd={`url(#${active ? `${markerId}-active-arrow` : runCount > 0 ? `${markerId}-run-arrow` : `${markerId}-arrow`})`}
                   />
                   {label ? (
                     <text

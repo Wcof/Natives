@@ -638,6 +638,7 @@ export const en = {
     engineCanvasRunPlaceholder: 'Select a real run',
     engineCanvasLegendNode: 'Real execution node',
     engineCanvasLegendConfigured: 'Has current configuration or evidence',
+    engineCanvasLegendRunPath: 'Current run path',
     engineCanvasLegendHint: 'Color describes available data; it does not prove that an entire node is correct.',
     engineCanvasGraphLabel: 'Complete Native engine execution topology',
     engineCanvasMobileLabel: 'Native engine vertical execution path',

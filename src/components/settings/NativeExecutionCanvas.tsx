@@ -249,6 +249,7 @@ export function NativeExecutionCanvas({
       <footer className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-[var(--border-subtle)] px-5 py-3 text-[11px] text-[var(--text-secondary)]">
         <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[var(--text-secondary)]" />{t(locale, 'settings.engineCanvasLegendNode')}</span>
         <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-[var(--info)]" />{t(locale, 'settings.engineCanvasLegendConfigured')}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-5 rounded-full bg-[var(--success)]" />{t(locale, 'settings.engineCanvasLegendRunPath')}</span>
         <span>{t(locale, 'settings.engineCanvasLegendHint')}</span>
       </footer>
 

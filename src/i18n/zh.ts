@@ -630,6 +630,7 @@ export const zh = {
     engineCanvasRunPlaceholder: '选择一次真实执行',
     engineCanvasLegendNode: '真实执行节点',
     engineCanvasLegendConfigured: '包含当前配置或证据',
+    engineCanvasLegendRunPath: '本次运行路径',
     engineCanvasLegendHint: '颜色只表达数据状态，不代表整个节点已经验证正确。',
     engineCanvasGraphLabel: 'Native 引擎完整执行拓扑',
     engineCanvasMobileLabel: 'Native 引擎纵向执行路径',

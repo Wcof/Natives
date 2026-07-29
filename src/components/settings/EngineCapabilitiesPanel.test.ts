@@ -188,6 +188,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(graph, /engineCanvasNodeResultCount/);
   assert.match(graph, /engineCanvasNodeToolCount/);
   assert.match(graph, /engineCanvasNodeSubagentCount/);
+  assert.match(graph, /run-arrow/);
+  assert.match(canvas, /engineCanvasLegendRunPath/);
   assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
   assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
