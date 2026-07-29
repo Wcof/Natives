@@ -502,6 +502,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             source: `Harness Draft · ${hook.adapter.type}`,
             enabled: hook.enabled,
             authorized: hook.adapter.type === 'command' ? hook.trust_confirmed : true,
+            authorization: hook.adapter.type === 'command' ? t(locale, 'settings.engineCanvasHookAuthorizationHarness') : t(locale, 'settings.engineCanvasHookAuthorizationImplicit'),
             canAuthorize: hook.adapter.type === 'command',
             canRemove: true,
           })),
@@ -517,6 +518,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               source: `${hook.source.scope} · ${hook.source.origin}`,
               enabled,
               authorized: true,
+              authorization: t(locale, 'settings.engineCanvasHookAuthorizationImported'),
               canRemove: true,
             };
           }),

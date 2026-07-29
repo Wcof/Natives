@@ -202,8 +202,11 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
   assert.match(panel, /Harness Draft.*hook\.adapter\.type/);
   assert.match(panel, /authorized: hook\.adapter\.type === 'command' \? hook\.trust_confirmed : true/);
+  assert.match(panel, /engineCanvasHookAuthorizationHarness/);
+  assert.match(panel, /engineCanvasHookAuthorizationImported/);
   assert.match(panel, /authorized: true/);
   assert.match(panel, /hook\.source\.scope.*hook\.source\.origin/);
+  assert.match(inspector, /hook\.authorization/);
   assert.match(panel, /builtin_prompt_replacements: document\.builtin_prompt_replacements\.filter/);
   assert.match(panel, /if \(imported\) updateOverlay\(imported, \{ enabled: false \}\)/);
   assert.match(canvas, /detail=\{nodeDetails\[selectedStage\.id\]\}/);

@@ -34,6 +34,7 @@ export type CanvasNodeHook = {
   source: string;
   enabled: boolean;
   authorized: boolean;
+  authorization?: string;
   canAuthorize?: boolean;
   canRemove?: boolean;
 };
