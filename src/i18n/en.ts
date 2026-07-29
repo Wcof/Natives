@@ -746,6 +746,7 @@ export const en = {
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: 'Run results',
     engineCanvasNodeResultCount: '{count} results',
+    engineCanvasNodeFailedResultCount: '{count} failed',
     engineCanvasRunInput: 'Node input',
     engineCanvasRunOutput: 'Node output',
     engineCanvasRunError: 'Node error',

@@ -180,7 +180,9 @@ function StageNode({
   });
   const hooks = enabledHookCount(stage);
   const promptCount = stage.id === 'context' ? promptBlockCount : 0;
+  const failedRunResults = detail?.runResults?.filter((result) => result.status === 'failed' || result.error).length ?? 0;
   const detailBadges = [
+    failedRunResults ? t(locale, 'settings.engineCanvasNodeFailedResultCount', { count: failedRunResults }) : null,
     detail?.runResults?.length ? t(locale, 'settings.engineCanvasNodeResultCount', { count: detail.runResults.length }) : null,
     detail?.hooks?.length ? t(locale, 'settings.engineCanvasNodeHookCount', { count: detail.hooks.length }) : null,
     detail?.prompts?.length ? t(locale, 'settings.engineCanvasPromptCount', { count: detail.prompts.length }) : null,
@@ -230,8 +232,8 @@ function StageNode({
       </span>
       {detailBadges.length > 0 ? (
         <span className="flex flex-wrap gap-1">
-          {detailBadges.map((badge) => (
-            <span key={badge} className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
+          {detailBadges.map((badge, index) => (
+            <span key={badge} className={`rounded px-1.5 py-0.5 text-[10px] ${index === 0 && failedRunResults ? 'bg-[var(--danger-soft)] text-[var(--danger)]' : 'bg-[var(--surface-hover)] text-[var(--text-secondary)]'}`}>
               {badge}
             </span>
           ))}

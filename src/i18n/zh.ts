@@ -738,6 +738,7 @@ export const zh = {
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: '本次运行结果',
     engineCanvasNodeResultCount: '{count} 个结果',
+    engineCanvasNodeFailedResultCount: '{count} 个失败',
     engineCanvasRunInput: '节点输入',
     engineCanvasRunOutput: '节点输出',
     engineCanvasRunError: '节点错误',
