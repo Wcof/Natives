@@ -229,6 +229,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /engineCanvasRunPermissionGate/);
   assert.match(panel, /engineCanvasRunPermissionDetail/);
   assert.match(panel, /engineCanvasRunPromptAssembly/);
+  assert.match(panel, /engineCanvasRunSubagentStrategy/);
+  assert.match(panel, /engineCanvasRunSubagentDetail/);
   assert.match(panel, /engineCanvasRunStopDecision/);
   assert.match(panel, /engineCanvasRunStopErrorDetail/);
   assert.match(panel, /engineCanvasRunTerminalResult/);

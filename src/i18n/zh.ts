@@ -741,6 +741,8 @@ export const zh = {
     engineCanvasRunPermissionDetail: '权限策略：{permission}',
     engineCanvasRunPromptAssembly: '提示词装配',
     engineCanvasRunToolPlan: '冻结工具清单',
+    engineCanvasRunSubagentStrategy: 'Subagent 策略',
+    engineCanvasRunSubagentDetail: '模式：{mode} · 目标：{target} · 成员：{count}',
     engineCanvasRunStopDecision: '停止判定',
     engineCanvasRunStopDetail: '最终状态：{status}',
     engineCanvasRunStopErrorDetail: '最终状态：{status} · 错误：{code}',

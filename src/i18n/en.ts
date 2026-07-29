@@ -749,6 +749,8 @@ export const en = {
     engineCanvasRunPermissionDetail: 'Permission profile: {permission}',
     engineCanvasRunPromptAssembly: 'Prompt assembly',
     engineCanvasRunToolPlan: 'Frozen tool plan',
+    engineCanvasRunSubagentStrategy: 'Subagent strategy',
+    engineCanvasRunSubagentDetail: 'Mode: {mode} · Target: {target} · Members: {count}',
     engineCanvasRunStopDecision: 'Stop decision',
     engineCanvasRunStopDetail: 'Final status: {status}',
     engineCanvasRunStopErrorDetail: 'Final status: {status} · Error: {code}',

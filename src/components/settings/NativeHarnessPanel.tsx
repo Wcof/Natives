@@ -637,6 +637,21 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             count: runSnapshot.snapshot.tool_plan.tools?.length ?? 0,
           }),
         }] : []),
+        ...(stage.id === 'subagent' && selectedRun ? [{
+          id: `${selectedRun.id}:subagent`,
+          action: t(locale, 'settings.engineCanvasRunSubagentStrategy'),
+          status: selectedRun.status,
+          timestamp: selectedRun.started_at ?? undefined,
+          output: t(locale, 'settings.engineCanvasRunSubagentDetail', {
+            mode: snapshot?.agentProfileId
+              ? t(locale, 'settings.engineCanvasSubagentKind.expert')
+              : snapshot?.teamId
+                ? t(locale, 'settings.engineCanvasSubagentKind.team')
+                : t(locale, 'settings.engineCanvasSubagentKind.dynamic'),
+            target: snapshot?.agentProfileId ?? snapshot?.teamId ?? 'task',
+            count: snapshot?.teamMembers?.length ?? 0,
+          }),
+        }] : []),
         ...(stage.id === 'stop' && selectedRun ? [{
           id: `${selectedRun.id}:stop`,
           action: t(locale, 'settings.engineCanvasRunStopDecision'),
