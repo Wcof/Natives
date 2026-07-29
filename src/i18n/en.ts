@@ -760,6 +760,7 @@ export const en = {
     engineCanvasRunTerminalDetail: 'Provider: {provider} · Model: {model}',
     engineCanvasRunTerminalErrorDetail: 'Provider: {provider} · Model: {model} · Error: {code}',
     engineCanvasRunHookInvocation: 'Hook invocation',
+    engineCanvasRunPathSummary: 'This Run passed {count} nodes',
     engineCanvasOpenTimeline: 'Open timeline',
     engineCanvasAuthorized: 'Authorized',
     engineCanvasUnauthorized: 'Unauthorized',

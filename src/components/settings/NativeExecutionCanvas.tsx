@@ -18,6 +18,7 @@ import { NativeExecutionInspector } from './NativeExecutionInspector';
 import {
   enabledHookCount,
   sortStages,
+  stageLabel,
   type CanvasEdge,
   type CanvasMode,
   type CanvasNodeDetail,
@@ -98,6 +99,9 @@ export function NativeExecutionCanvas({
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const selectedStage = ordered.find((stage) => stage.id === selectedStageId) ?? null;
   const selectedRun = runs.find((run) => run.id === selectedRunId);
+  const runPathStages = mode === 'audit' && selectedRunId
+    ? ordered.filter((stage) => (nodeDetails[stage.id]?.runResults?.length ?? 0) > 0)
+    : [];
   const enabledHooks = ordered.reduce((total, stage) => total + enabledHookCount(stage), 0);
   const undispatchedPoints = ordered.reduce(
     (total, stage) => total + (stage.hook_points ?? []).filter((point) => point.dispatched === false).length,
@@ -220,6 +224,22 @@ export function NativeExecutionCanvas({
         </div>
 
         {runPanel}
+
+        {runPathStages.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md bg-[var(--background)] px-3 py-2 text-xs">
+            <span className="font-medium text-[var(--text)]">{t(locale, 'settings.engineCanvasRunPathSummary', { count: runPathStages.length })}</span>
+            {runPathStages.map((stage) => (
+              <button
+                key={stage.id}
+                type="button"
+                className="rounded-full border border-[var(--border-subtle)] px-2 py-1 text-[var(--text-secondary)] hover:border-[var(--text-secondary)] hover:text-[var(--text)]"
+                onClick={() => setSelectedStageId(stage.id)}
+              >
+                {stageLabel(stage.id, locale)}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </header>
 
       {ordered.length > 0 ? (

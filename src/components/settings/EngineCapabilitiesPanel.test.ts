@@ -184,6 +184,9 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /const nodeDetails = useMemo<Record<string, CanvasNodeDetail>>/);
   assert.match(panel, /nodeDetails=\{nodeDetails\}/);
   assert.match(canvas, /nodeDetails=\{nodeDetails\}/);
+  assert.match(canvas, /runPathStages/);
+  assert.match(canvas, /engineCanvasRunPathSummary/);
+  assert.match(canvas, /setSelectedStageId\(stage\.id\)/);
   assert.match(graph, /type CanvasNodeDetail/);
   assert.match(graph, /detailBadges/);
   assert.match(graph, /engineCanvasNodeResultCount/);
