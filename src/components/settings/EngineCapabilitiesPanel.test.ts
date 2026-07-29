@@ -182,9 +182,14 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /engineCanvasNodePrompts/);
   assert.match(inspector, /engineCanvasNodeTools/);
   assert.match(inspector, /engineCanvasNodeSubagents/);
+  assert.match(inspector, /engineCanvasNodeRunResults/);
   assert.match(inspector, /engineCanvasToolNoDescription/);
   assert.match(inspector, /subagent\.prompt/);
   assert.match(panel, /builtinToolDescription/);
+  assert.match(panel, /traceEntriesForStage/);
+  assert.match(panel, /engineCanvasRunPromptAssembly/);
+  assert.match(model, /runResults\?: CanvasNodeRunResult\[\]/);
+  assert.match(model, /stage\.id === 'tool_gate' \|\| stage\.id === 'tool_execute'/);
   assert.match(panel, /engineCanvasDynamicSubagentPrompt/);
   assert.match(panel, /kind: 'dynamic'/);
 });

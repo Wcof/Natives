@@ -387,14 +387,37 @@ function CurrentNodeDetail({
   const prompts = detail?.prompts ?? [];
   const tools = detail?.tools ?? [];
   const subagents = detail?.subagents ?? [];
+  const runResults = detail?.runResults ?? [];
 
-  if (!hooks.length && !prompts.length && !tools.length && !subagents.length) {
+  if (!hooks.length && !prompts.length && !tools.length && !subagents.length && !runResults.length) {
     return <EvidenceEmpty locale={locale}>{t(locale, 'settings.engineCanvasNodeNoDetails')}</EvidenceEmpty>;
   }
 
   return (
     <section className="space-y-4">
       <h4 className="text-sm font-semibold text-[var(--text)]">{t(locale, 'settings.engineCanvasNodeDetails')}</h4>
+
+      {runResults.length ? (
+        <div className="space-y-2">
+          <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeRunResults')}</h5>
+          {runResults.map((result) => (
+            <article key={result.id} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <strong className="min-w-0 truncate text-sm text-[var(--text)]">{result.action}</strong>
+                {result.status ? <span className={result.status === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--text-secondary)]'}>{result.status}</span> : null}
+              </div>
+              {result.input ? <p className="mt-2 break-words text-[var(--text-secondary)]">{result.input}</p> : null}
+              {result.output ? <p className="mt-2 break-words text-[var(--text)]">{result.output}</p> : null}
+              {(result.timestamp || result.duration_ms != null) ? (
+                <div className="mt-2 flex items-center justify-between gap-2 text-[var(--text-disabled)]">
+                  {result.timestamp ? <time>{result.timestamp}</time> : <span />}
+                  {result.duration_ms != null ? <span>{result.duration_ms} ms</span> : null}
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
 
       {hooks.length ? (
         <div className="space-y-2">

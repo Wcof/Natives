@@ -61,11 +61,22 @@ export type CanvasNodeSubagent = {
   prompt?: string;
 };
 
+export type CanvasNodeRunResult = {
+  id: string;
+  action: string;
+  status?: string;
+  timestamp?: string;
+  duration_ms?: number;
+  input?: string;
+  output?: string;
+};
+
 export type CanvasNodeDetail = {
   hooks?: CanvasNodeHook[];
   prompts?: CanvasNodePrompt[];
   tools?: CanvasNodeTool[];
   subagents?: CanvasNodeSubagent[];
+  runResults?: CanvasNodeRunResult[];
 };
 
 export type CanvasRun = {
@@ -446,6 +457,7 @@ export function stageEvidenceCode(input: {
   if (hasOpenInvocation) return 'running';
   if (completed.length > 0) return 'hook_evidence';
   if (stage.id === 'context' && runSnapshot?.snapshot?.prompt_plan) return 'snapshot_recorded';
+  if ((stage.id === 'tool_gate' || stage.id === 'tool_execute') && runSnapshot?.snapshot?.tool_plan) return 'snapshot_recorded';
   return 'no_evidence';
 }
 

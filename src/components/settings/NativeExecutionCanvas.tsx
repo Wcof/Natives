@@ -41,6 +41,7 @@ export type {
   PromptBlock,
 } from './nativeExecutionCanvasModel';
 export { stageLabel } from './nativeExecutionCanvasModel';
+export { traceEntriesForStage } from './nativeExecutionCanvasModel';
 
 export function NativeExecutionCanvas({
   locale,

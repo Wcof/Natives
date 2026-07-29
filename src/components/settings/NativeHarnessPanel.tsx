@@ -8,6 +8,7 @@ import { t, type Locale } from '@/i18n';
 import {
   NativeExecutionCanvas,
   stageLabel,
+  traceEntriesForStage,
   type CanvasEdge,
   type CanvasMode,
   type CanvasNodeDetail,
@@ -557,10 +558,39 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           }] : []),
         ]
         : [];
-      details[stage.id] = { hooks, prompts, tools, subagents };
+      const stageTraces = traceEntriesForStage(stage, traceEntries);
+      const runResults = [
+        ...(stage.id === 'context' && runSnapshot?.snapshot?.prompt_plan ? [{
+          id: `${selectedRun?.id ?? 'run'}:prompt-plan`,
+          action: t(locale, 'settings.engineCanvasRunPromptAssembly'),
+          status: selectedRun?.status,
+          output: t(locale, 'settings.engineCanvasPromptSnapshotDetail', {
+            count: runSnapshot.snapshot.prompt_plan.source_digests?.length ?? 0,
+            tokens: runSnapshot.snapshot.prompt_plan.token_estimate ?? 0,
+          }),
+        }] : []),
+        ...((stage.id === 'tool_gate' || stage.id === 'tool_execute') && runSnapshot?.snapshot?.tool_plan ? [{
+          id: `${selectedRun?.id ?? 'run'}:tool-plan`,
+          action: t(locale, 'settings.engineCanvasRunToolPlan'),
+          status: selectedRun?.status,
+          output: t(locale, 'settings.engineCanvasToolSnapshotDetail', {
+            count: runSnapshot.snapshot.tool_plan.tools?.length ?? 0,
+          }),
+        }] : []),
+        ...stageTraces.map((entry) => ({
+          id: `${entry.run_id}:${entry.sequence}`,
+          action: entry.hook_event ?? entry.type ?? t(locale, 'settings.engineCanvasRunHookInvocation'),
+          status: entry.status ?? entry.type,
+          timestamp: entry.timestamp,
+          duration_ms: entry.duration_ms,
+          input: entry.input_summary ? `${entry.input_summary}${entry.input_truncated ? '…' : ''}` : undefined,
+          output: entry.output_summary ? `${entry.output_summary}${entry.output_truncated ? '…' : ''}` : undefined,
+        })),
+      ];
+      details[stage.id] = { hooks, prompts, tools, subagents, runResults };
     }
     return details;
-  }, [document, importedHooks, locale, overlays, promptPreview, runSnapshot, selectedRun, stages]);
+  }, [document, importedHooks, locale, overlays, promptPreview, runSnapshot, selectedRun, stages, traceEntries]);
   const updateOverlay = (hook: CatalogHook, patch: Partial<HookOverlay>) => {
     if (!document) return;
     const existing = overlays.find((item) => item.hook_id === hook.id);
