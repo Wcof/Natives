@@ -647,6 +647,7 @@ export const zh = {
     engineCanvasEdgeContinue: '继续思考',
     engineCanvasEdgeFinish: '完成或失败',
     engineCanvasEdgeNotify: '事件通知',
+    engineCanvasEdgeRunEvidence: '运行证据 {count}',
     engineCanvasEvidenceLoaded: '结构已加载',
     engineCanvasEvidenceConfigured: '包含配置',
     engineCanvasEvidenceAttention: '需要注意',

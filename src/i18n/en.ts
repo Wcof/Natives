@@ -655,6 +655,7 @@ export const en = {
     engineCanvasEdgeContinue: 'Continue reasoning',
     engineCanvasEdgeFinish: 'Finish or fail',
     engineCanvasEdgeNotify: 'Event notification',
+    engineCanvasEdgeRunEvidence: 'Run evidence {count}',
     engineCanvasEvidenceLoaded: 'Structure loaded',
     engineCanvasEvidenceConfigured: 'Has configuration',
     engineCanvasEvidenceAttention: 'Needs attention',

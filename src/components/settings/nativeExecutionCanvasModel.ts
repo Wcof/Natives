@@ -403,6 +403,13 @@ export function visibleEdges(stages: CanvasStage[], edges: CanvasEdge[]): Canvas
   return edges.filter((edge) => stageIds.has(edge.from) && stageIds.has(edge.to));
 }
 
+export function edgeRunResultCount(edge: CanvasEdge, nodeDetails: Record<string, CanvasNodeDetail>): number {
+  return Math.max(
+    nodeDetails[edge.from]?.runResults?.length ?? 0,
+    nodeDetails[edge.to]?.runResults?.length ?? 0,
+  );
+}
+
 export type StageEvidenceCode =
   | 'loaded'
   | 'configured'

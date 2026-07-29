@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CANONICAL_STAGE_IDS,
+  edgeRunResultCount,
   layoutStages,
   stageEvidenceCode,
   stageLabel,
   stagePresentation,
   visibleEdges,
   type CanvasStage,
+  type CanvasNodeDetail,
   type CanvasTraceEntry,
 } from './nativeExecutionCanvasModel';
 
@@ -49,6 +51,21 @@ test('canvas only renders authoritative edges whose endpoints exist', () => {
     { from: 'missing', to: 'session', kind: 'flow' as const },
   ];
   assert.deepEqual(visibleEdges(canonicalStages, edges), [edges[0]]);
+});
+
+test('run evidence marks edges adjacent to nodes with results', () => {
+  const details: Record<string, CanvasNodeDetail> = {
+    context: { runResults: [{ id: 'prompt', action: 'Prompt assembly' }] },
+    provider: {},
+    tool_gate: { runResults: [
+      { id: 'tool-plan', action: 'Tool plan' },
+      { id: 'hook', action: 'PreToolUse' },
+    ] },
+  };
+
+  assert.equal(edgeRunResultCount({ from: 'context', to: 'provider' }, details), 1);
+  assert.equal(edgeRunResultCount({ from: 'provider', to: 'tool_gate' }, details), 2);
+  assert.equal(edgeRunResultCount({ from: 'session', to: 'provider' }, details), 0);
 });
 
 test('every current stage exposes at least one proven configuration destination', () => {

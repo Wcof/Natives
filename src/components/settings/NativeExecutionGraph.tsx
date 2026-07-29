@@ -24,6 +24,7 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   edgeLabelKey,
+  edgeRunResultCount,
   enabledHookCount,
   layoutStages,
   sortStages,
@@ -354,27 +355,31 @@ export function NativeExecutionGraph(props: GraphProps) {
             {renderedEdges.map((edge) => {
               const path = edgePath(edge, layout.positions);
               if (!path) return null;
+              const runCount = mode === 'audit' && selectedRunId ? edgeRunResultCount(edge, nodeDetails ?? {}) : 0;
               const active = selectedStageId === edge.from || selectedStageId === edge.to;
               const labelKey = edgeLabelKey(edge);
+              const label = runCount > 0
+                ? t(locale, 'settings.engineCanvasEdgeRunEvidence', { count: runCount })
+                : labelKey ? t(locale, labelKey) : null;
               return (
                 <g key={`${edge.from}:${edge.to}:${edge.kind ?? 'flow'}`}>
                   <path
                     d={path.d}
                     fill="none"
-                    stroke={active ? 'var(--text)' : edge.kind === 'signal' ? 'var(--info)' : 'var(--text-disabled)'}
-                    strokeWidth={active ? 2 : 1.25}
+                    stroke={active ? 'var(--text)' : runCount > 0 ? 'var(--success)' : edge.kind === 'signal' ? 'var(--info)' : 'var(--text-disabled)'}
+                    strokeWidth={active || runCount > 0 ? 2 : 1.25}
                     strokeDasharray={edge.kind === 'signal' ? '5 5' : undefined}
                     markerEnd={`url(#${active ? `${markerId}-active-arrow` : `${markerId}-arrow`})`}
                   />
-                  {labelKey ? (
+                  {label ? (
                     <text
                       x={path.labelX}
                       y={path.labelY}
                       textAnchor="middle"
-                      fill="var(--text-secondary)"
+                      fill={runCount > 0 ? 'var(--success)' : 'var(--text-secondary)'}
                       fontSize="10"
                     >
-                      {t(locale, labelKey)}
+                      {label}
                     </text>
                   ) : null}
                 </g>
