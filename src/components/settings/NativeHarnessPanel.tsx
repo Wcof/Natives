@@ -514,6 +514,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               source: hook.source.origin,
               enabled,
               authorized: enabled,
+              canRemove: true,
             };
           }),
       ];
@@ -645,7 +646,12 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   };
   const removeNodeHook = (hookId: string) => {
     if (!document) return;
-    replaceDocument({ ...document, native_hooks: document.native_hooks.filter((hook) => hook.id !== hookId) });
+    if (document.native_hooks.some((hook) => hook.id === hookId)) {
+      replaceDocument({ ...document, native_hooks: document.native_hooks.filter((hook) => hook.id !== hookId) });
+      return;
+    }
+    const imported = importedHooks.find((hook) => hook.id === hookId);
+    if (imported) updateOverlay(imported, { enabled: false });
   };
   const removeNodePrompt = (promptId: string) => {
     if (!document) return;

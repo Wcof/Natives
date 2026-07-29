@@ -193,6 +193,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
   assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
+  assert.match(panel, /if \(imported\) updateOverlay\(imported, \{ enabled: false \}\)/);
   assert.match(canvas, /detail=\{nodeDetails\[selectedStage\.id\]\}/);
   assert.match(inspector, /CurrentNodeDetail/);
   assert.match(inspector, /canConfigureHooks/);
