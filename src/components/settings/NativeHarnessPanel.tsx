@@ -21,6 +21,7 @@ import EngineCapabilitiesPanel, { type EngineCapabilitySnapshot } from './Engine
 
 const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Notification', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'StopFailure', 'Error'];
 const ADAPTERS = ['command', 'http', 'mcp_tool', 'prompt', 'agent'] as const;
+const ACTIVE_RUN_STATUSES = new Set(['created', 'queued', 'preparing', 'running', 'waiting_permission', 'waiting_subagent', 'cancelling']);
 
 type AdapterType = typeof ADAPTERS[number];
 type DetailMode = 'preview' | 'edit' | 'create';
@@ -481,6 +482,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   const importedHooks = (workspace?.catalog?.hooks ?? []).filter((hook) => !hook.source.origin.startsWith('native:'));
   const overlays = document?.hook_overlays ?? document?.hooks ?? [];
   const selectedRun = liveRuns.find((run) => run.id === selectedRunId) ?? null;
+  const selectedRunStatus = selectedRun?.status ?? '';
   const nodeDetails = useMemo<Record<string, CanvasNodeDetail>>(() => {
     const details: Record<string, CanvasNodeDetail> = {};
     for (const stage of stages) {
@@ -591,6 +593,13 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     }
     return details;
   }, [document, importedHooks, locale, overlays, promptPreview, runSnapshot, selectedRun, stages, traceEntries]);
+
+  useEffect(() => {
+    if (!detailMode || canvasMode !== 'audit' || !selectedRunId || !ACTIVE_RUN_STATUSES.has(selectedRunStatus)) return;
+    const interval = window.setInterval(() => void loadRuns(selectedRunId), 2_000);
+    return () => window.clearInterval(interval);
+  }, [canvasMode, detailMode, loadRuns, selectedRunId, selectedRunStatus]);
+
   const updateOverlay = (hook: CatalogHook, patch: Partial<HookOverlay>) => {
     if (!document) return;
     const existing = overlays.find((item) => item.hook_id === hook.id);
