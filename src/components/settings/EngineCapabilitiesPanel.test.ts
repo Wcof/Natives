@@ -198,6 +198,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
   assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
+  assert.match(panel, /Harness Draft.*hook\.adapter\.type/);
   assert.match(panel, /authorized: hook\.adapter\.type === 'command' \? hook\.trust_confirmed : true/);
   assert.match(panel, /authorized: true/);
   assert.match(panel, /hook\.source\.scope.*hook\.source\.origin/);

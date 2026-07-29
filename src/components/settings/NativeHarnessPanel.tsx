@@ -499,7 +499,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             id: hook.id,
             name: hook.name,
             event: hook.event,
-            source: 'Harness Draft',
+            source: `Harness Draft · ${hook.adapter.type}`,
             enabled: hook.enabled,
             authorized: hook.adapter.type === 'command' ? hook.trust_confirmed : true,
             canAuthorize: hook.adapter.type === 'command',
