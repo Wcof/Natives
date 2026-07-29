@@ -426,6 +426,7 @@ function CurrentNodeDetail({
               </div>
               {result.input ? <p className="mt-2 break-words text-[var(--text-secondary)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunInput')}：</span>{result.input}</p> : null}
               {result.output ? <p className="mt-2 break-words text-[var(--text)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunOutput')}：</span>{result.output}</p> : null}
+              {result.error ? <p className="mt-2 break-words text-[var(--danger)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunError')}：</span>{result.error}</p> : null}
               {(result.timestamp || result.duration_ms != null) ? (
                 <div className="mt-2 flex items-center justify-between gap-2 text-[var(--text-disabled)]">
                   {result.timestamp ? <time>{result.timestamp}</time> : <span />}

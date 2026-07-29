@@ -234,6 +234,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /engineCanvasNodeRunResults/);
   assert.match(inspector, /engineCanvasRunInput/);
   assert.match(inspector, /engineCanvasRunOutput/);
+  assert.match(inspector, /engineCanvasRunError/);
+  assert.match(panel, /error: entry\.error_category/);
   assert.match(inspector, /runStatusLabel/);
   assert.match(canvas, /runStatusLabel\(locale, run\.status\)/);
   assert.match(panel, /runStatusLabel\(locale, run\.status\)/);

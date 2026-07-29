@@ -725,6 +725,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           duration_ms: entry.duration_ms,
           input: entry.input_summary ? `${entry.input_summary}${entry.input_truncated ? '…' : ''}` : undefined,
           output: entry.output_summary ? `${entry.output_summary}${entry.output_truncated ? '…' : ''}` : undefined,
+          error: entry.error_category ?? undefined,
         })),
       ];
       details[stage.id] = { hooks, prompts, tools, subagents, runResults };

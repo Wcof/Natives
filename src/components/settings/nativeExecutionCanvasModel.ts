@@ -74,6 +74,7 @@ export type CanvasNodeRunResult = {
   duration_ms?: number;
   input?: string;
   output?: string;
+  error?: string;
 };
 
 export type CanvasNodeDetail = {
