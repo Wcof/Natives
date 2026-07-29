@@ -469,6 +469,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       });
       setRunPrompt('');
       setCanvasMode('audit');
+      setWorkspaceTarget('runs');
       setSelectedRunId(result.id);
       await loadRuns(result.id);
     } catch (cause) { fail(cause); } finally { setBusy(false); }
