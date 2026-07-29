@@ -222,6 +222,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /focusPromptId/);
   assert.match(panel, /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/);
   assert.match(panel, /traceEntriesForStage/);
+  assert.match(panel, /engineCanvasRunProviderSelection/);
+  assert.match(panel, /engineCanvasRunProviderDetail/);
   assert.match(panel, /engineCanvasRunPromptAssembly/);
   assert.match(panel, /engineCanvasRunTerminalResult/);
   assert.match(panel, /selectedRun\.finished_at \?\? selectedRun\.started_at/);

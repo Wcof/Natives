@@ -590,6 +590,16 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
         : [];
       const stageTraces = traceEntriesForStage(stage, traceEntries);
       const runResults = [
+        ...(stage.id === 'provider' && selectedRun ? [{
+          id: `${selectedRun.id}:provider`,
+          action: t(locale, 'settings.engineCanvasRunProviderSelection'),
+          status: selectedRun.status,
+          timestamp: selectedRun.started_at ?? undefined,
+          output: t(locale, 'settings.engineCanvasRunProviderDetail', {
+            provider: selectedRun.provider_id,
+            model: selectedRun.model_id,
+          }),
+        }] : []),
         ...(stage.id === 'context' && runSnapshot?.snapshot?.prompt_plan ? [{
           id: `${selectedRun?.id ?? 'run'}:prompt-plan`,
           action: t(locale, 'settings.engineCanvasRunPromptAssembly'),
