@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { t, type Locale } from '@/i18n';
+import { copyToClipboard } from '@/lib/clipboard';
 import {
   enabledHookCount,
   runStatusLabel,
@@ -507,6 +508,9 @@ function CurrentNodeDetail({
               {prompt.markdown ? (
                 <details className="mt-2">
                   <summary className="cursor-pointer text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasViewPrompt')}</summary>
+                  <button type="button" className="btn btn-ghost mt-2 text-xs" onClick={() => void copyToClipboard(prompt.markdown ?? '')}>
+                    {t(locale, 'common.copy')}
+                  </button>
                   <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-[var(--background)] p-2 font-mono text-[11px] text-[var(--text-secondary)]">{prompt.markdown}</pre>
                 </details>
               ) : null}
