@@ -138,6 +138,9 @@ test('Harness run start requires explicit project/provider/model instead of copy
   assert.match(panel, /engineEngineeringRunConfigRequired/);
   assert.match(panel, /engineEngineeringRunTrialTitle/);
   assert.match(panel, /engineEngineeringRunTrialDesc/);
+  assert.match(panel, /const runReady = Boolean/);
+  assert.match(panel, /engineEngineeringRunMissing/);
+  assert.match(panel, /engineEngineeringRunReady/);
   assert.match(panel, /provider_id: runProviderId/);
   assert.match(panel, /model_id: runModelId/);
   assert.match(panel, /project_path: runProjectPath/);

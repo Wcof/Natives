@@ -610,6 +610,8 @@ export const en = {
     engineEngineeringRunModel: 'Run model',
     engineEngineeringRunConfigRequired: 'Select a run project, provider, and model.',
     engineEngineeringRunPromptPlaceholder: 'Enter a question to start a real run on the canvas and inspect its timeline…',
+    engineEngineeringRunMissing: 'Select a project, provider, model, and question before starting a trial run.',
+    engineEngineeringRunReady: 'Ready: starting the trial run will switch to audit mode and highlight this run path.',
     engineEngineeringStageHooks: '{stage} Hooks',
     engineEngineeringBuiltinPrompt: 'Native builtin prompt',
     engineEngineeringRestorePrompt: 'Restore code default',

@@ -840,6 +840,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
 
   if ((detailMode === 'preview' || detailMode === 'edit') && selectedProfile) {
     const readOnly = detailMode === 'preview';
+    const runReady = Boolean(runPrompt.trim() && runProviderId && runModelId && runProjectPath);
     const runPanel = (
       <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-3">
         <div className="mb-3">
@@ -860,8 +861,11 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             {runModels.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.id}</option>)}
           </select>
           <textarea className="input min-h-10" value={runPrompt} onChange={(event) => setRunPrompt(event.target.value)} placeholder={t(locale, 'settings.engineEngineeringRunPromptPlaceholder')} />
-          <button type="button" className="btn btn-primary lg:w-28" disabled={busy || !runPrompt.trim() || !runProviderId || !runModelId || !runProjectPath} onClick={() => void runFromCanvas()}><Rocket size={14} />{t(locale, 'settings.engineEngineeringRun')}</button>
+          <button type="button" className="btn btn-primary lg:w-28" disabled={busy || !runReady} onClick={() => void runFromCanvas()}><Rocket size={14} />{t(locale, 'settings.engineEngineeringRun')}</button>
         </div>
+        <p className={`mt-2 text-xs ${runReady ? 'text-[var(--success)]' : 'text-[var(--text-secondary)]'}`}>
+          {runReady ? t(locale, 'settings.engineEngineeringRunReady') : t(locale, 'settings.engineEngineeringRunMissing')}
+        </p>
       </div>
     );
     const workspacePanel = (

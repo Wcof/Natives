@@ -602,6 +602,8 @@ export const zh = {
     engineEngineeringRunModel: '运行模型',
     engineEngineeringRunConfigRequired: '请选择运行项目、Provider 和模型。',
     engineEngineeringRunPromptPlaceholder: '输入问题，在画布中启动一次真实执行并查看时间线…',
+    engineEngineeringRunMissing: '请选择项目、Provider、模型并输入问题后再试运行。',
+    engineEngineeringRunReady: '已就绪：点击试运行后会自动切到执行审计并高亮本次路径。',
     engineEngineeringStageHooks: '{stage} Hooks',
     engineEngineeringBuiltinPrompt: 'Native 内置 Prompt',
     engineEngineeringRestorePrompt: '恢复代码默认值',
