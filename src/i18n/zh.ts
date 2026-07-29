@@ -733,6 +733,8 @@ export const zh = {
     engineCanvasNodeHookCount: '{count} 个 Hook',
     engineCanvasNodeToolCount: '{count} 个工具',
     engineCanvasNodeSubagentCount: '{count} 个 Subagent',
+    engineCanvasRunSessionStart: 'Run 入口',
+    engineCanvasRunSessionDetail: 'Conversation：{conversation} · 权限：{permission} · Runtime：{runtime}',
     engineCanvasRunProviderSelection: '供应商选择',
     engineCanvasRunProviderDetail: 'Provider：{provider} · Model：{model}',
     engineCanvasRunPromptAssembly: '提示词装配',

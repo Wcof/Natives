@@ -590,6 +590,17 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
         : [];
       const stageTraces = traceEntriesForStage(stage, traceEntries);
       const runResults = [
+        ...(stage.id === 'session' && selectedRun ? [{
+          id: `${selectedRun.id}:session`,
+          action: t(locale, 'settings.engineCanvasRunSessionStart'),
+          status: selectedRun.status,
+          timestamp: selectedRun.started_at ?? undefined,
+          output: t(locale, 'settings.engineCanvasRunSessionDetail', {
+            conversation: selectedRun.conversation_id,
+            permission: selectedRun.permission_profile,
+            runtime: selectedRun.runtime_id ?? 'native',
+          }),
+        }] : []),
         ...(stage.id === 'provider' && selectedRun ? [{
           id: `${selectedRun.id}:provider`,
           action: t(locale, 'settings.engineCanvasRunProviderSelection'),

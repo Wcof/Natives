@@ -741,6 +741,8 @@ export const en = {
     engineCanvasNodeHookCount: '{count} Hooks',
     engineCanvasNodeToolCount: '{count} tools',
     engineCanvasNodeSubagentCount: '{count} Subagents',
+    engineCanvasRunSessionStart: 'Run entry',
+    engineCanvasRunSessionDetail: 'Conversation: {conversation} · Permission: {permission} · Runtime: {runtime}',
     engineCanvasRunProviderSelection: 'Provider selection',
     engineCanvasRunProviderDetail: 'Provider: {provider} · Model: {model}',
     engineCanvasRunPromptAssembly: 'Prompt assembly',
