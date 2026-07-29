@@ -97,6 +97,7 @@ export function NativeExecutionInspector({
   selectedRun,
   traceEntries,
   runSnapshot,
+  readOnly = false,
   onClose,
   onOpenWorkspace,
 }: {
@@ -107,6 +108,7 @@ export function NativeExecutionInspector({
   selectedRun?: CanvasRun;
   traceEntries: CanvasTraceEntry[];
   runSnapshot?: CanvasRunSnapshot | null;
+  readOnly?: boolean;
   onClose: () => void;
   onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
 }) {
@@ -127,6 +129,10 @@ export function NativeExecutionInspector({
   useEffect(() => {
     setTab('understand');
   }, [stage.id]);
+
+  useEffect(() => {
+    if (readOnly && tab === 'configure') setTab('understand');
+  }, [readOnly, tab]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -181,7 +187,7 @@ export function NativeExecutionInspector({
         </header>
 
         <div className="flex gap-1 border-b border-[var(--border-subtle)] px-5 py-2" role="tablist" aria-label={t(locale, 'settings.engineCanvasInspectorTabs')}>
-          {(Object.keys(TAB_KEYS) as InspectorTab[]).map((item) => (
+          {(Object.keys(TAB_KEYS) as InspectorTab[]).filter((item) => item !== 'configure' || !readOnly).map((item) => (
             <button
               key={item}
               type="button"
@@ -309,7 +315,7 @@ export function NativeExecutionInspector({
           {tab === 'configure' ? (
             <div className="space-y-3">
               <p className="text-sm leading-6 text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasConfigureHint')}</p>
-              {presentation.targets.length > 0 ? presentation.targets.map((target) => {
+              {!readOnly && presentation.targets.length > 0 ? presentation.targets.map((target) => {
                 const meta = TARGET_META[target];
                 const Icon = meta.icon;
                 return (

@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -41,6 +42,7 @@ export { stageLabel } from './nativeExecutionCanvasModel';
 
 export function NativeExecutionCanvas({
   locale,
+  mode,
   stages,
   edges,
   promptBlocks,
@@ -50,13 +52,17 @@ export function NativeExecutionCanvas({
   traceEntries = [],
   runSnapshot,
   auditLoading = false,
+  readOnly = false,
   onRequestAudit,
   onModeChange,
   onSelectRun,
   onRefreshAudit,
   onOpenWorkspace,
+  runPanel,
+  workspacePanel,
 }: {
   locale: Locale;
+  mode: CanvasMode;
   stages: CanvasStage[];
   edges: CanvasEdge[];
   promptBlocks: PromptBlock[];
@@ -66,14 +72,16 @@ export function NativeExecutionCanvas({
   traceEntries?: CanvasTraceEntry[];
   runSnapshot?: CanvasRunSnapshot | null;
   auditLoading?: boolean;
+  readOnly?: boolean;
   onRequestAudit?: () => void;
   onModeChange?: (mode: CanvasMode) => void;
   onSelectRun?: (runId: string) => void;
   onRefreshAudit?: () => void;
   onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  runPanel?: ReactNode;
+  workspacePanel?: ReactNode;
 }) {
   const ordered = useMemo(() => sortStages(stages), [stages]);
-  const [mode, setMode] = useState<CanvasMode>('understand');
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const selectedStage = ordered.find((stage) => stage.id === selectedStageId) ?? null;
   const selectedRun = runs.find((run) => run.id === selectedRunId);
@@ -87,7 +95,6 @@ export function NativeExecutionCanvas({
   ).length;
 
   const setCanvasMode = (next: CanvasMode) => {
-    setMode(next);
     onModeChange?.(next);
     if (next === 'audit') onRequestAudit?.();
   };
@@ -198,6 +205,8 @@ export function NativeExecutionCanvas({
             </div>
           )}
         </div>
+
+        {runPanel}
       </header>
 
       {ordered.length > 0 ? (
@@ -221,6 +230,8 @@ export function NativeExecutionCanvas({
         </div>
       )}
 
+      {workspacePanel ? <div className="border-t border-[var(--border-subtle)] p-5">{workspacePanel}</div> : null}
+
       <footer className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-[var(--border-subtle)] px-5 py-3 text-[11px] text-[var(--text-secondary)]">
         <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[var(--text-secondary)]" />{t(locale, 'settings.engineCanvasLegendNode')}</span>
         <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-[var(--info)]" />{t(locale, 'settings.engineCanvasLegendConfigured')}</span>
@@ -236,6 +247,7 @@ export function NativeExecutionCanvas({
           selectedRun={selectedRun}
           traceEntries={traceEntries}
           runSnapshot={runSnapshot}
+          readOnly={readOnly}
           onClose={() => setSelectedStageId(null)}
           onOpenWorkspace={onOpenWorkspace}
         />

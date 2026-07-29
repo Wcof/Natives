@@ -94,5 +94,60 @@ test('Settings exposes one execution-engine entry containing capabilities and Ha
   assert.match(workspace, /EngineCapabilitiesPanel/);
   assert.match(workspace, /selectedRun=/);
   assert.match(workspace, /runSnapshot=/);
-  assert.match(workspace, /tab === 'runs' \|\| tab === 'capabilities'/);
+  assert.match(workspace, /workspaceTarget === 'runs'/);
+  assert.match(workspace, /workspaceTarget === 'capabilities'/);
+  assert.match(workspace, /loadRuns/);
+});
+
+test('Harness detail keeps run and editors inside the controlled canvas', () => {
+  const panel = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
+    'utf8',
+  );
+  const canvas = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeExecutionCanvas.tsx'),
+    'utf8',
+  );
+  const inspector = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeExecutionInspector.tsx'),
+    'utf8',
+  );
+
+  assert.match(panel, /const \[canvasMode, setCanvasMode\] = useState<CanvasMode>\('understand'\)/);
+  assert.match(panel, /mode=\{canvasMode\}/);
+  assert.match(panel, /runPanel=\{runPanel\}/);
+  assert.match(panel, /workspacePanel=\{workspacePanel\}/);
+  assert.match(panel, /readOnly=\{readOnly\}/);
+  assert.match(canvas, /mode:\s*CanvasMode/);
+  assert.doesNotMatch(canvas, /useState<CanvasMode>/);
+  assert.match(canvas, /\{runPanel\}/);
+  assert.match(canvas, /\{workspacePanel \? <div/);
+  assert.match(inspector, /item !== 'configure' \|\| !readOnly/);
+});
+
+test('Harness run start requires explicit project/provider/model instead of copying a global run', () => {
+  const panel = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
+    'utf8',
+  );
+
+  assert.match(panel, /nativesAPI\.provider\.list\(\)/);
+  assert.match(panel, /engineEngineeringRunConfigRequired/);
+  assert.match(panel, /provider_id: runProviderId/);
+  assert.match(panel, /model_id: runModelId/);
+  assert.match(panel, /project_path: runProjectPath/);
+  assert.doesNotMatch(panel, /const last = liveRuns\[0\]/);
+});
+
+test('Harness list opens create as a separate view and preview stays read-only', () => {
+  const panel = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
+    'utf8',
+  );
+
+  assert.match(panel, /type DetailMode = 'preview' \| 'edit' \| 'create'/);
+  assert.match(panel, /if \(detailMode === 'create'\)/);
+  assert.match(panel, /onClick=\{openCreateProfile\}/);
+  assert.match(panel, /const readOnly = detailMode === 'preview'/);
+  assert.match(panel, /<fieldset disabled=\{readOnly\}/);
 });
