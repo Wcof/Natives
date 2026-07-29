@@ -734,6 +734,8 @@ export const zh = {
     engineCanvasNodeSubagentCount: '{count} 个 Subagent',
     engineCanvasRunPromptAssembly: '提示词装配',
     engineCanvasRunToolPlan: '冻结工具清单',
+    engineCanvasRunTerminalResult: 'Run 终态',
+    engineCanvasRunTerminalDetail: 'Provider：{provider} · Model：{model}',
     engineCanvasRunHookInvocation: 'Hook 调用',
     engineCanvasAuthorized: '已授权',
     engineCanvasUnauthorized: '未授权',

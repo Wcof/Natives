@@ -742,6 +742,8 @@ export const en = {
     engineCanvasNodeSubagentCount: '{count} Subagents',
     engineCanvasRunPromptAssembly: 'Prompt assembly',
     engineCanvasRunToolPlan: 'Frozen tool plan',
+    engineCanvasRunTerminalResult: 'Run terminal state',
+    engineCanvasRunTerminalDetail: 'Provider: {provider} · Model: {model}',
     engineCanvasRunHookInvocation: 'Hook invocation',
     engineCanvasAuthorized: 'Authorized',
     engineCanvasUnauthorized: 'Unauthorized',

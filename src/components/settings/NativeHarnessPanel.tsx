@@ -605,6 +605,16 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             count: runSnapshot.snapshot.tool_plan.tools?.length ?? 0,
           }),
         }] : []),
+        ...(stage.id === 'terminal' && selectedRun ? [{
+          id: `${selectedRun.id}:terminal`,
+          action: t(locale, 'settings.engineCanvasRunTerminalResult'),
+          status: selectedRun.status,
+          timestamp: selectedRun.started_at ?? undefined,
+          output: t(locale, 'settings.engineCanvasRunTerminalDetail', {
+            provider: selectedRun.provider_id,
+            model: selectedRun.model_id,
+          }),
+        }] : []),
         ...stageTraces.map((entry) => ({
           id: `${entry.run_id}:${entry.sequence}`,
           action: entry.hook_event ?? entry.type ?? t(locale, 'settings.engineCanvasRunHookInvocation'),
