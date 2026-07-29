@@ -740,12 +740,17 @@ export const zh = {
     engineCanvasToolSnapshotRequired: '工具清单由 Native 引擎在 Run 开始时按项目、Provider、权限和能力选择冻结；请先试运行或选择一次真实 Run，再查看本节点的模型可见工具。',
     engineCanvasOpenRuns: '查看运行证据',
     engineCanvasOpenCapabilities: '查看能力面',
+    engineCanvasSubagentSnapshotRequired: '请选择一次真实 Run，或在画布顶部发起试运行；Subagent 预设/动态创建方式由 Run 开始时冻结的能力选择决定。',
+    engineCanvasPresetExpertPrompt: '本次 Run 使用预设专家 {id} 的系统提示词；原文由能力专家库维护，可在能力面查看和编辑。',
+    engineCanvasPresetTeamPrompt: '本次 Run 使用预设团队编排，包含 {count} 个团队成员；团队提示词和成员角色由能力面维护。',
+    engineCanvasTeamMemberPrompt: '团队成员的角色提示词来自对应预设专家；实际可用工具和权限不会超过本次 Run 的能力选择。',
     engineCanvasDynamicSubagentPrompt: '未绑定预制专家或团队时，master 会通过 task 工具按本次任务动态写入子 Agent 的角色提示词，并且权限与工具不会超过主 Agent 当前能力面。',
     engineCanvasSubagentKind: {
       expert: '预制专家',
       team: '预制团队',
       member: '团队成员',
       dynamic: 'master 动态创建',
+      unresolved: '等待 Run 快照',
     },
     engineCanvasToolDescriptions: {
       readFile: '读取项目内文本文件，支持分页；二进制文件只返回元数据。',

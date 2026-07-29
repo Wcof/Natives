@@ -551,10 +551,27 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       const snapshot = selectedRun?.capability_snapshot;
       const subagents = stage.id === 'subagent'
         ? [
-          ...(snapshot?.agentProfileId ? [{ id: snapshot.agentProfileId, kind: 'expert' as const }] : []),
-          ...(snapshot?.teamId ? [{ id: snapshot.teamId, kind: 'team' as const }] : []),
-          ...((snapshot?.teamMembers ?? []).map((id) => ({ id, kind: 'member' as const }))),
-          ...(!snapshot?.agentProfileId && !snapshot?.teamId ? [{
+          ...(!selectedRun ? [{
+            id: 'run_snapshot',
+            kind: 'unresolved' as const,
+            prompt: t(locale, 'settings.engineCanvasSubagentSnapshotRequired'),
+          }] : []),
+          ...(selectedRun && snapshot?.agentProfileId ? [{
+            id: snapshot.agentProfileId,
+            kind: 'expert' as const,
+            prompt: t(locale, 'settings.engineCanvasPresetExpertPrompt', { id: snapshot.agentProfileId }),
+          }] : []),
+          ...(selectedRun && snapshot?.teamId ? [{
+            id: snapshot.teamId,
+            kind: 'team' as const,
+            prompt: t(locale, 'settings.engineCanvasPresetTeamPrompt', { count: snapshot.teamMembers?.length ?? 0 }),
+          }] : []),
+          ...(selectedRun ? (snapshot?.teamMembers ?? []).map((id) => ({
+            id,
+            kind: 'member' as const,
+            prompt: t(locale, 'settings.engineCanvasTeamMemberPrompt'),
+          })) : []),
+          ...(selectedRun && !snapshot?.agentProfileId && !snapshot?.teamId ? [{
             id: 'task',
             kind: 'dynamic' as const,
             prompt: t(locale, 'settings.engineCanvasDynamicSubagentPrompt'),

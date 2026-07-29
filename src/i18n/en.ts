@@ -748,12 +748,17 @@ export const en = {
     engineCanvasToolSnapshotRequired: 'The Native engine freezes the tool list when a Run starts, using the project, provider, permissions, and capability selection. Start or select a real Run to inspect this node’s model-visible tools.',
     engineCanvasOpenRuns: 'Open run evidence',
     engineCanvasOpenCapabilities: 'Open capabilities',
+    engineCanvasSubagentSnapshotRequired: 'Select a real Run or start one from the canvas. Subagent preset vs. dynamic creation is decided by the capability selection frozen when the Run starts.',
+    engineCanvasPresetExpertPrompt: 'This Run uses the preset expert {id} system prompt. The original prompt is owned by the capability expert library and can be viewed or edited in capabilities.',
+    engineCanvasPresetTeamPrompt: 'This Run uses a preset team orchestration with {count} team members. Team prompts and member roles are owned by capabilities.',
+    engineCanvasTeamMemberPrompt: 'This member role prompt comes from its preset expert. Actual tools and permissions cannot exceed this Run’s capability selection.',
     engineCanvasDynamicSubagentPrompt: 'When no preset expert or team is bound, the master uses the task tool to write the child Agent persona for this task. Its permissions and tools cannot exceed the master Agent surface.',
     engineCanvasSubagentKind: {
       expert: 'Preset expert',
       team: 'Preset team',
       member: 'Team member',
       dynamic: 'Master-created',
+      unresolved: 'Waiting for Run snapshot',
     },
     engineCanvasToolDescriptions: {
       readFile: 'Read text files in the project with pagination; binary files return metadata only.',

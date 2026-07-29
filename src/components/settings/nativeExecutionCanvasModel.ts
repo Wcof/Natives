@@ -57,7 +57,7 @@ export type CanvasNodeTool = {
 
 export type CanvasNodeSubagent = {
   id: string;
-  kind: 'expert' | 'team' | 'member' | 'dynamic';
+  kind: 'expert' | 'team' | 'member' | 'dynamic' | 'unresolved';
   prompt?: string;
 };
 

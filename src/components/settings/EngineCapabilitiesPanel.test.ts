@@ -201,4 +201,10 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(model, /stage\.id === 'tool_gate' \|\| stage\.id === 'tool_execute'/);
   assert.match(panel, /engineCanvasDynamicSubagentPrompt/);
   assert.match(panel, /kind: 'dynamic'/);
+  assert.match(panel, /engineCanvasSubagentSnapshotRequired/);
+  assert.match(panel, /engineCanvasPresetExpertPrompt/);
+  assert.match(panel, /engineCanvasPresetTeamPrompt/);
+  assert.match(panel, /engineCanvasTeamMemberPrompt/);
+  assert.match(panel, /kind: 'unresolved'/);
+  assert.match(model, /'expert' \| 'team' \| 'member' \| 'dynamic' \| 'unresolved'/);
 });
