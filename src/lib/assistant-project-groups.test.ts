@@ -41,6 +41,17 @@ test('registered projects with conversations merge correctly', () => {
   assert.equal(beta.conversations.length, 0);
 });
 
+test('hidden subagent child conversations stay out of the sidebar groups', () => {
+  const result = groupAssistantConversations(
+    [
+      { id: 'root-a', projectId: '/work/app', updatedAt: '2026-07-12T10:00:00Z', title: 'Root A' },
+      { id: 'child-a', projectId: '/work/app', updatedAt: '2026-07-12T11:00:00Z', title: 'Child A', parentConversationId: 'root-a' },
+    ],
+    ['/work/app'],
+  );
+  assert.deepEqual(result[0]?.conversations.map((c) => c.id), ['root-a']);
+});
+
 test('sorts conversations inside a project by latest activity', () => {
   const [group] = groupAssistantConversations([
     { id: 'older', projectId: '/work/app', updatedAt: '2026-07-12T10:00:00Z', title: 'Older' },

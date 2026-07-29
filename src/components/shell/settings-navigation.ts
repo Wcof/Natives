@@ -1,4 +1,5 @@
 export const SETTINGS_SECTIONS = [
+  'personal',
   'general',
   'appearance',
   'providers',

@@ -4,6 +4,7 @@ export interface AssistantProjectConversation {
   title: string;
   updatedAt: string;
   mode?: 'chat' | 'agent' | 'goal';
+  parentConversationId?: string | null;
   /** Whether this conversation is pinned within its project (UI preference). */
   pinned?: boolean;
 }
@@ -106,6 +107,7 @@ export function groupAssistantConversations(
   }
 
   for (const conversation of conversations) {
+    if (conversation.parentConversationId?.trim()) continue;
     const path = conversation.projectId?.trim() ?? '';
     if (!path || missingProjectPaths.has(path)) {
       unassigned.push(conversation);
