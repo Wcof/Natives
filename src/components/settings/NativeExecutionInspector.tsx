@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { t, type Locale } from '@/i18n';
 import {
   enabledHookCount,
+  runStatusLabel,
   stageEvidenceCode,
   stagePresentation,
   traceEntriesForStage,
@@ -50,19 +51,6 @@ const EVIDENCE_KEYS: Record<StageEvidenceCode, string> = {
   hook_evidence: 'settings.engineCanvasEvidenceHook',
   snapshot_recorded: 'settings.engineCanvasEvidenceSnapshot',
   failed: 'settings.engineCanvasEvidenceFailed',
-};
-
-const RUN_STATUS_KEYS: Record<string, string> = {
-  created: 'settings.engineCanvasRunStatusCreated',
-  queued: 'settings.engineCanvasRunStatusQueued',
-  preparing: 'settings.engineCanvasRunStatusPreparing',
-  running: 'settings.engineCanvasRunStatusRunning',
-  waiting_permission: 'settings.engineCanvasRunStatusWaitingPermission',
-  waiting_subagent: 'settings.engineCanvasRunStatusWaitingSubagent',
-  cancelling: 'settings.engineCanvasRunStatusCancelling',
-  completed: 'settings.engineCanvasRunStatusCompleted',
-  failed: 'settings.engineCanvasRunStatusFailed',
-  cancelled: 'settings.engineCanvasRunStatusCancelled',
 };
 
 const TARGET_META: Record<CanvasWorkspaceTarget, { labelKey: string; descKey: string; icon: typeof Settings2 }> = {
@@ -102,10 +90,6 @@ function EvidenceEmpty({ locale, children }: { locale: Locale; children?: React.
       </p>
     </div>
   );
-}
-
-function runStatusLabel(locale: Locale, status: string) {
-  return t(locale, RUN_STATUS_KEYS[status] ?? status);
 }
 
 export function NativeExecutionInspector({

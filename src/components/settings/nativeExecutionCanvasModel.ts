@@ -91,6 +91,23 @@ export type CanvasRun = {
   started_at?: string | null;
 };
 
+const RUN_STATUS_KEYS: Record<string, string> = {
+  created: 'settings.engineCanvasRunStatusCreated',
+  queued: 'settings.engineCanvasRunStatusQueued',
+  preparing: 'settings.engineCanvasRunStatusPreparing',
+  running: 'settings.engineCanvasRunStatusRunning',
+  waiting_permission: 'settings.engineCanvasRunStatusWaitingPermission',
+  waiting_subagent: 'settings.engineCanvasRunStatusWaitingSubagent',
+  cancelling: 'settings.engineCanvasRunStatusCancelling',
+  completed: 'settings.engineCanvasRunStatusCompleted',
+  failed: 'settings.engineCanvasRunStatusFailed',
+  cancelled: 'settings.engineCanvasRunStatusCancelled',
+};
+
+export function runStatusLabel(locale: Locale, status: string) {
+  return t(locale, RUN_STATUS_KEYS[status] ?? status);
+}
+
 export type CanvasTraceEntry = {
   run_id: string;
   sequence: number;

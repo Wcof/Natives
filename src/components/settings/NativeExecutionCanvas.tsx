@@ -17,6 +17,7 @@ import { NativeExecutionGraph } from './NativeExecutionGraph';
 import { NativeExecutionInspector } from './NativeExecutionInspector';
 import {
   enabledHookCount,
+  runStatusLabel,
   sortStages,
   stageLabel,
   type CanvasEdge,
@@ -42,6 +43,7 @@ export type {
   PromptBlock,
 } from './nativeExecutionCanvasModel';
 export { stageLabel } from './nativeExecutionCanvasModel';
+export { runStatusLabel } from './nativeExecutionCanvasModel';
 export { traceEntriesForStage } from './nativeExecutionCanvasModel';
 
 export function NativeExecutionCanvas({
@@ -209,7 +211,7 @@ export function NativeExecutionCanvas({
                 onChange={(event) => onSelectRun?.(event.target.value)}
               >
                 <option value="">{t(locale, 'settings.engineCanvasRunPlaceholder')}</option>
-                {runs.map((run) => <option key={run.id} value={run.id}>{run.status} · {run.id.slice(0, 10)}</option>)}
+                {runs.map((run) => <option key={run.id} value={run.id}>{runStatusLabel(locale, run.status)} · {run.id.slice(0, 10)}</option>)}
               </select>
               <button type="button" className="btn h-10 w-10 shrink-0 p-0" aria-label={t(locale, 'common.refresh')} disabled={auditLoading} onClick={onRefreshAudit}>
                 <RefreshCw size={14} className={auditLoading ? 'animate-spin' : ''} />

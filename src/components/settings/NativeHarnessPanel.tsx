@@ -7,6 +7,7 @@ import { classifyError } from '@/lib/error-classifier';
 import { t, type Locale } from '@/i18n';
 import {
   NativeExecutionCanvas,
+  runStatusLabel,
   stageLabel,
   traceEntriesForStage,
   type CanvasEdge,
@@ -1229,7 +1230,7 @@ function RunsTimeline({ locale, loading, runs, selectedRunId, traceEntries, runS
       <div className="settings-section-card space-y-2">
         <div className="flex items-center justify-between"><h4>{t(locale, 'settings.engineEngineeringTabRuns')}</h4><button type="button" className="btn" onClick={onRefresh}><RefreshCw size={13} /></button></div>
         {loading ? <Loader size={16} className="animate-spin" /> : runs.map((run) => <button type="button" key={run.id} className={`w-full rounded border p-3 text-left ${selectedRunId === run.id ? 'border-[var(--accent)]' : 'border-[var(--border)]'}`} onClick={() => onSelect(run.id)}>
-          <strong>{run.status}</strong><div className="text-xs text-[var(--text-muted)]">{run.id}</div><div className="text-xs">{run.provider_id} · {run.model_id}</div>
+          <strong>{runStatusLabel(locale, run.status)}</strong><div className="text-xs text-[var(--text-muted)]">{run.id}</div><div className="text-xs">{run.provider_id} · {run.model_id}</div>
         </button>)}
         {!loading && runs.length === 0 ? <div className="engine-empty">{t(locale, 'settings.engineEngineeringEmpty')}</div> : null}
       </div>
