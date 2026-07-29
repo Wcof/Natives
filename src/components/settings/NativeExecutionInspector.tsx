@@ -419,8 +419,8 @@ function CurrentNodeDetail({
                 <strong className="min-w-0 truncate text-sm text-[var(--text)]">{result.action}</strong>
                 {result.status ? <span className={result.status === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--text-secondary)]'}>{result.status}</span> : null}
               </div>
-              {result.input ? <p className="mt-2 break-words text-[var(--text-secondary)]">{result.input}</p> : null}
-              {result.output ? <p className="mt-2 break-words text-[var(--text)]">{result.output}</p> : null}
+              {result.input ? <p className="mt-2 break-words text-[var(--text-secondary)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunInput')}：</span>{result.input}</p> : null}
+              {result.output ? <p className="mt-2 break-words text-[var(--text)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunOutput')}：</span>{result.output}</p> : null}
               {(result.timestamp || result.duration_ms != null) ? (
                 <div className="mt-2 flex items-center justify-between gap-2 text-[var(--text-disabled)]">
                   {result.timestamp ? <time>{result.timestamp}</time> : <span />}
