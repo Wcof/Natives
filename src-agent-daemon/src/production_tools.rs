@@ -55,6 +55,67 @@ pub const PLAN_APPROVAL_TIMEOUT_SECS: u64 = 300;
 /// gear change for a single run and is never a reusable grant.
 pub const PLAN_APPROVAL_SCOPE: &str = "once";
 
+/// Maximum allowed model-visible tools for a single Run.
+/// If count exceeds 200, the Run fails closed before Provider invocation with tool_plan_too_large.
+pub const MAX_MODEL_VISIBLE_TOOLS: usize = 200;
+
+pub fn validate_tool_limit(count: usize) -> Result<(), String> {
+    if count > MAX_MODEL_VISIBLE_TOOLS {
+        Err(format!(
+            "tool_plan_too_large: Model-visible tools count ({count}) exceeds maximum limit of {MAX_MODEL_VISIBLE_TOOLS}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub fn model_visible_tool_schemas(
+    gateway: &CapabilityGateway,
+    tool_allowlist: Option<&[String]>,
+    mcp_tool_schemas: &[ToolSchema],
+    selected_mcp_servers: Option<&std::collections::HashSet<String>>,
+    planning: bool,
+) -> Vec<ToolSchema> {
+    let allowed = |name: &str| {
+        if let (Some(selected), Some(server)) = (selected_mcp_servers, mcp_server_of_tool(name)) {
+            if !selected.contains(server) {
+                return false;
+            }
+        }
+        tool_allowlist.is_none_or(|list| agent_core::tool_list_allows(list, name))
+    };
+    let visible = |tool: &capability_gateway::Tool| match plan_mode::decision(
+        tool.name,
+        tool.side_effect,
+        tool.permission_class,
+    ) {
+        PlanDecision::Control if tool.name == plan_mode::EXIT_PLAN_MODE_TOOL => planning,
+        PlanDecision::Control => !planning,
+        PlanDecision::Deny => !planning,
+        PlanDecision::Allow => true,
+    };
+    let mut schemas: Vec<ToolSchema> = gateway
+        .list_tools()
+        .into_iter()
+        .filter(|tool| allowed(tool.name) && visible(tool))
+        .map(|tool| ToolSchema {
+            name: tool.name.to_string(),
+            description: tool.description.to_string(),
+            input_schema: tool.schema.clone(),
+        })
+        .collect();
+    for schema in mcp_tool_schemas {
+        if planning
+            || !allowed(&schema.name)
+            || schemas.iter().any(|existing| existing.name == schema.name)
+        {
+            continue;
+        }
+        schemas.push(schema.clone());
+    }
+    schemas
+}
+
 /// What the permission gate should do after consulting the hooks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookPermissionGate {
@@ -202,28 +263,6 @@ impl PermissionGatedTools {
         plan_mode::effective_profile(&self.parent_run_id, &self.permission_profile)
     }
 
-    /// Whether a tool should appear in the schema list right now.
-    ///
-    /// Hiding the blocked tools during planning is not decoration: a model that
-    /// can still see `write_file` will try it, spend a turn on the refusal, and
-    /// sometimes narrate the refusal as progress. Removing them makes the gear
-    /// legible from the tool list alone. The two control tools are mutually
-    /// exclusive for the same reason — `exit_plan_mode` is meaningless outside
-    /// Plan Mode and `enter_plan_mode` is meaningless inside it.
-    fn plan_mode_visible(&self, planning: bool, tool: &capability_gateway::Tool) -> bool {
-        match plan_mode::decision(tool.name, tool.side_effect, tool.permission_class) {
-            PlanDecision::Control => {
-                if tool.name == plan_mode::EXIT_PLAN_MODE_TOOL {
-                    planning
-                } else {
-                    !planning
-                }
-            }
-            PlanDecision::Deny => !planning,
-            PlanDecision::Allow => true,
-        }
-    }
-
     /// Plan Mode verdict for a tool call, fail-closed for anything the gateway
     /// does not know about (raw `mcp__*` names, orchestration stubs).
     fn plan_decision_for(&self, name: &str) -> PlanDecision {
@@ -249,32 +288,13 @@ impl EngineToolRuntime for PermissionGatedTools {
     async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
         self.ensure_plan_latch();
         let planning = plan_mode::is_active(&self.parent_run_id);
-        let mut schemas: Vec<ToolSchema> = self
-            .gateway
-            .list_tools()
-            .into_iter()
-            .filter(|t| self.tool_allowed(t.name))
-            .filter(|t| self.plan_mode_visible(planning, t))
-            .map(|t| ToolSchema {
-                name: t.name.to_string(),
-                description: t.description.to_string(),
-                input_schema: t.schema.clone(),
-            })
-            .collect();
-        // Selected MCP servers surface their namespaced tools to the model
-        // (ADR-0016) — previously mcp__ tools were callable but never visible.
-        // While planning they stay hidden: `plan_decision_for` classifies an
-        // unknown `mcp__*` name fail-closed, so listing them would advertise a
-        // surface `execute_tool` is going to refuse.
-        for schema in &self.mcp_tool_schemas {
-            if planning && !matches!(self.plan_decision_for(&schema.name), PlanDecision::Allow) {
-                continue;
-            }
-            if self.tool_allowed(&schema.name) && !schemas.iter().any(|s| s.name == schema.name) {
-                schemas.push(schema.clone());
-            }
-        }
-        schemas
+        model_visible_tool_schemas(
+            &self.gateway,
+            self.tool_allowlist.as_deref(),
+            &self.mcp_tool_schemas,
+            self.selected_mcp_servers.as_ref(),
+            planning,
+        )
     }
 
     async fn execute_tool(
@@ -2632,6 +2652,13 @@ fn use_fixture_flag(input: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_visible_tool_limit_fails_closed_without_truncation() {
+        assert!(validate_tool_limit(MAX_MODEL_VISIBLE_TOOLS).is_ok());
+        let error = validate_tool_limit(MAX_MODEL_VISIBLE_TOOLS + 1).unwrap_err();
+        assert!(error.contains("tool_plan_too_large"));
+    }
     use agent_core::{HookDecision, HookHandler, HookOutcome, HookResponse, PermissionVerdict};
 
     /// A hook that returns one fixed outcome, so the permission gate can be

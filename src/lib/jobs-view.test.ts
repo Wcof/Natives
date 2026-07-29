@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isAbsolutePath,
+  hasAmbiguousLegacyCapabilities,
   parseJobLastStatus,
   runStatusTone,
   scheduleSummarySpec,
@@ -100,6 +101,8 @@ describe('validateJobForm（必填校验）', () => {
       name: '',
       prompt: ' ',
       project_path: '',
+      provider_id: '',
+      model_id: '',
       schedule_type: 'interval',
       schedule_value: '',
     });
@@ -107,6 +110,8 @@ describe('validateJobForm（必填校验）', () => {
       name: 'errRequired',
       prompt: 'errRequired',
       project_path: 'errRequired',
+      provider_id: 'errRequired',
+      model_id: 'errRequired',
       schedule_value: 'errRequired',
     });
   });
@@ -119,10 +124,26 @@ describe('validateJobForm（必填校验）', () => {
       name: 'x',
       prompt: 'y',
       project_path: 'relative/path',
+      provider_id: 'provider-a',
+      model_id: 'model-a',
       schedule_type: 'interval',
       schedule_value: '60',
     });
     assert.equal(errors.project_path, 'errNotAbsolute');
+  });
+});
+
+describe('hasAmbiguousLegacyCapabilities（旧能力绑定修复提示）', () => {
+  it('只把非空且尚未类型化的 capability_refs 标为待修复', () => {
+    assert.equal(hasAmbiguousLegacyCapabilities(null, ['skill-or-mcp']), true);
+    assert.equal(hasAmbiguousLegacyCapabilities(undefined, []), false);
+    assert.equal(
+      hasAmbiguousLegacyCapabilities(
+        { skills: ['skill-a'], mcp_servers: [] },
+        ['legacy-id'],
+      ),
+      false,
+    );
   });
 });
 
@@ -200,6 +221,19 @@ describe('extractJobErrorCode（错误码子串提取，契约第 5 节）', () 
       extractJobErrorCode('Invalid input: JOB_INVALID_SCHEDULE: bad cron'),
       'JOB_INVALID_SCHEDULE',
     );
+    assert.equal(
+      extractJobErrorCode('JOB_INVALID_PROVIDER: provider_id is required'),
+      'JOB_INVALID_PROVIDER',
+    );
+    assert.equal(
+      extractJobErrorCode('JOB_INVALID_MODEL: model_id is required'),
+      'JOB_INVALID_MODEL',
+    );
+    assert.equal(
+      extractJobErrorCode('JOB_INVALID_MAX_STEPS: max_steps must be positive'),
+      'JOB_INVALID_MAX_STEPS',
+    );
+    assert.equal(extractJobErrorCode('JOB_ENGINE_ERROR'), 'JOB_ENGINE_ERROR');
     assert.equal(extractJobErrorCode(new Error('something else')), null);
     assert.equal(extractJobErrorCode(undefined), null);
   });

@@ -146,8 +146,6 @@ async fn main() {
     );
     let _ = natives_agent_daemon::GLOBAL_GOVERNOR.set(governor);
 
-    // Interval/one-shot scheduler runner (persisted jobs under NATIVES_RUNTIME_DIR).
-    let _ = natives_agent_daemon::ensure_scheduler_runner();
     // Capability library: trusted configuration source for MCP + skill catalogue (ADR-0016).
     natives_agent_daemon::capability::bootstrap();
     // Idle reaper: stop stdio MCP servers with zero run references for >10min.

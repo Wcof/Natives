@@ -31,7 +31,6 @@ pub mod routing;
 pub mod rpc;
 pub mod run_manager;
 pub mod runtime;
-pub mod scheduler_store;
 pub mod session_harness;
 pub mod side_effect_ledger;
 pub mod skill_store;
@@ -63,7 +62,3 @@ pub use natives_db_broker::{
 };
 pub use production::*;
 pub use run_manager::*;
-pub use scheduler_store::{
-    ensure_scheduler_runner, global_scheduler, CreateSchedulerJob, ScheduleKind, SchedulerJob,
-    SchedulerRunner,
-};

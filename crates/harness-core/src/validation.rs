@@ -277,6 +277,58 @@ pub fn validate(draft: &HarnessBlueprint, discovered: &[HookDefinition]) -> Vali
         }
     }
 
+    let mut total_prompt_bytes = 0usize;
+    for block in &draft.prompt_blocks {
+        total_prompt_bytes += block.markdown.len();
+    }
+
+    for rep in &draft.builtin_prompt_replacements {
+        if rep.surface_id.trim().is_empty() {
+            findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness.blank_builtin_prompt_replacement_surface".into(),
+                hook_id: None,
+                message: "Builtin prompt replacement has a blank surface_id".into(),
+            });
+        }
+        if rep.markdown.trim().is_empty() {
+            findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness.blank_builtin_prompt_replacement".into(),
+                hook_id: None,
+                message: format!(
+                    "Builtin prompt replacement for {} has no content",
+                    rep.surface_id
+                ),
+            });
+        }
+        if rep.markdown.len() > 65_536 {
+            findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness.prompt_replacement_too_large".into(),
+                hook_id: None,
+                message: format!(
+                    "Builtin prompt replacement for {} exceeds 64 KiB limit ({} bytes)",
+                    rep.surface_id,
+                    rep.markdown.len()
+                ),
+            });
+        }
+        total_prompt_bytes += rep.markdown.len();
+    }
+
+    if total_prompt_bytes > 262_144 {
+        findings.push(ValidationFinding {
+            severity: Severity::Error,
+            code: "harness.total_prompt_size_too_large".into(),
+            hook_id: None,
+            message: format!(
+                "Total Harness prompt content exceeds 256 KiB limit ({} bytes)",
+                total_prompt_bytes
+            ),
+        });
+    }
+
     ValidationReport { findings }
 }
 
@@ -500,6 +552,7 @@ mod tests {
             hook_overlays: Vec::new(),
             native_hooks: Vec::new(),
             prompt_blocks: Vec::new(),
+            builtin_prompt_replacements: Vec::new(),
         }
     }
 

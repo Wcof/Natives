@@ -5,8 +5,20 @@ import { Activity, AlertTriangle, Download, Loader, Plus, RefreshCw, Save, Shiel
 import nativesAPI, { type ProjectSummary } from '@/lib/tauri-adapter';
 import { classifyError } from '@/lib/error-classifier';
 import { t, type Locale } from '@/i18n';
+import {
+  NativeExecutionCanvas,
+  type CanvasEdge,
+  type CanvasMode,
+  type CanvasRunSnapshot,
+  type CanvasStage,
+  type CanvasTraceEntry,
+  type CanvasWorkspaceTarget,
+} from './NativeExecutionCanvas';
+import EngineCapabilitiesPanel, {
+  type EngineCapabilitySnapshot,
+} from './EngineCapabilitiesPanel';
 
-const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'StopFailure', 'Error'];
+const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Notification', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'Stop', 'StopFailure', 'Error'];
 const ADAPTERS = ['command', 'http', 'mcp_tool', 'prompt', 'agent'] as const;
 type AdapterType = typeof ADAPTERS[number];
 type Profile = { id: string; name: string; kind: string; project_id?: string | null };
@@ -21,6 +33,7 @@ type Blueprint = {
   schema_version: number; hook_semantics_version: string; prompt_semantics_version: string;
   hooks: HookOverlay[]; hook_overlays?: HookOverlay[]; native_hooks: NativeHook[];
   prompt_blocks: Array<{ id: string; name: string; markdown: string; enabled: boolean; order: number; placement: string }>;
+  builtin_prompt_replacements?: Array<{ surface_id: string; markdown: string; base_default_digest: string }>;
 };
 type PromptBlock = Blueprint['prompt_blocks'][number];
 type HookOverlay = { hook_id: string; enabled?: boolean; order?: number; matcher?: string; timeout_ms?: number; failure_policy?: string };
@@ -29,31 +42,52 @@ type CatalogHook = {
   timeout_ms: number; failure_policy: string; source: { scope: string; origin: string };
 };
 type Workspace = {
-  overview?: { topology_version?: number; blueprint_schema_version?: number; hook_counts?: { enabled?: number; total?: number } };
-  topology?: { stages?: Array<{ id: string; order?: number; hook_points?: Array<{ event: string; enabled_hook_count?: number; security_sensitive?: boolean }> }> };
+  overview?: { topology_version?: number; blueprint_schema_version?: number; hook_counts?: { enabled?: number; total?: number }; issues?: unknown[] };
+  topology?: { stages?: CanvasStage[]; edges?: CanvasEdge[] };
   catalog?: { hooks?: CatalogHook[] };
+  prompt_plan?: { blocks?: Array<{ id: string; name: string }> };
 };
 type Review = {
   validation?: { findings?: Array<{ severity?: string; code?: string; message?: string }> };
   diff?: Array<{ field?: string; from?: unknown; to?: unknown }>;
 };
-type Run = { id: string; conversation_id: string; status: string; provider_id: string; model_id: string; started_at?: string | null; project_id?: string | null };
+type Run = {
+  id: string;
+  conversation_id: string;
+  status: string;
+  provider_id: string;
+  model_id: string;
+  permission_profile: string;
+  runtime_id?: string | null;
+  agent_profile_id?: string | null;
+  capability_snapshot?: EngineCapabilitySnapshot | null;
+  started_at?: string | null;
+  project_id?: string | null;
+};
 type AuditEntry = { id: string; action: string; profile_id?: string | null; version_id?: string | null; scope_type?: string | null; scope_id?: string | null; actor: string; created_at: string };
-type TraceEntry = { run_id: string; sequence: number; timestamp: string; type?: string; hook_id?: string; status?: string; duration_ms?: number };
-type PromptPreview = { blocks?: Array<{ id: string; name: string; order: number; placement: string; source_digest: string; token_estimate: number }>; raw_persisted?: boolean };
-type RunSnapshot = { resolved: boolean; canonical_hash?: string; snapshot?: { layers?: unknown[]; enabled_hook_ids?: string[]; prompt_plan?: { token_estimate?: number; source_digests?: string[] } } };
+type TraceEntry = CanvasTraceEntry;
+type PromptPreview = {
+  blocks?: Array<{ id: string; name: string; order: number; placement: string; source_digest: string; token_estimate: number }>;
+  builtin_surfaces?: Array<{ surface_id: string; default_markdown: string; default_digest: string; effective_digest: string; replaced: boolean }>;
+  raw_persisted?: boolean;
+};
+type RunSnapshot = CanvasRunSnapshot;
 type HarnessSource = { source_id: string; scope?: string; origin?: string; digest: string; mode?: string; status?: string; tracked?: boolean; pinned?: boolean };
 type VersionSummary = { id: string; version_number: number; canonical_hash: string; created_at: string };
 type DriftCandidate = { source_id: string; observed_digest: string; published_digest?: string; acknowledged?: boolean };
-type Tab = 'overview' | 'blueprint' | 'hooks' | 'prompts' | 'runs' | 'audit';
-const TABS: Tab[] = ['overview', 'blueprint', 'hooks', 'prompts', 'runs', 'audit'];
+type ExternalSource = { runtime: string; source: string; absolute_path: string; status: string; supported_events_mapped: string[]; unsupported_events: string[] };
+type ExternalInspection = { external_runtimes?: Array<{ id: string; ownership: string; editable: boolean }>; discovered?: ExternalSource[] };
+type Tab = 'overview' | 'capabilities' | 'blueprint' | 'hooks' | 'prompts' | 'runs' | 'audit' | 'external';
+const TABS: Tab[] = ['overview', 'capabilities', 'blueprint', 'hooks', 'prompts', 'runs', 'audit', 'external'];
 const TAB_KEYS = {
   overview: 'settings.engineEngineeringTabOverview',
+  capabilities: 'settings.tabEngineCaps',
   blueprint: 'settings.engineEngineeringTabBlueprint',
   hooks: 'settings.engineEngineeringTabHooks',
   prompts: 'settings.engineEngineeringTabPrompts',
   runs: 'settings.engineEngineeringTabRuns',
   audit: 'settings.engineEngineeringTabAudit',
+  external: 'settings.engineEngineeringExternal',
 } as const;
 
 const adapterDefaults = (type: AdapterType): Adapter => {
@@ -109,7 +143,9 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   const [sources, setSources] = useState<HarnessSource[]>([]);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [sourceCandidate, setSourceCandidate] = useState<DriftCandidate[]>([]);
+  const [externalInspection, setExternalInspection] = useState<ExternalInspection | null>(null);
   const [auxLoading, setAuxLoading] = useState(false);
+  const [canvasMode, setCanvasMode] = useState<CanvasMode>('understand');
 
   const fail = useCallback((cause: unknown) => {
     setError(classifyError(cause, { locale }).userMessage);
@@ -149,7 +185,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   }, [fail]);
 
   const loadAuxiliary = useCallback(async (tab: Tab, runId?: string) => {
-    if (tab !== 'runs' && tab !== 'audit' && tab !== 'prompts' && tab !== 'hooks' && tab !== 'blueprint') return;
+    if (tab !== 'runs' && tab !== 'capabilities' && tab !== 'audit' && tab !== 'prompts' && tab !== 'hooks' && tab !== 'blueprint' && tab !== 'external') return;
     setAuxLoading(true);
     try {
       const profile = profiles.find((item) => item.id === profileId);
@@ -167,7 +203,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           project_id: identity.project_id, project_path: identity.canonical_path,
         } : {});
         setPromptPreview(result);
-      } else if (tab === 'runs') {
+      } else if (tab === 'runs' || tab === 'capabilities') {
         const result = await nativesAPI.assistantV2.request<{ runs?: Run[] }>('run.list', {});
         setLiveRuns(result.runs ?? []);
         const selected = runId || selectedRunId || result.runs?.[0]?.id || '';
@@ -180,9 +216,15 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           setTraceEntries(trace.entries ?? []);
           setRunSnapshot(snapshot);
         } else { setTraceEntries([]); setRunSnapshot(null); }
-      } else {
+      } else if (tab === 'audit') {
         const result = await nativesAPI.assistantV2.request<{ entries?: AuditEntry[] }>('harness.audit.list', { limit: 200 });
         setAuditEntries(result.entries ?? []);
+      } else {
+        const result = await nativesAPI.assistantV2.request<ExternalInspection>('harness.external.inspect', identity ? {
+          project_id: identity.project_id,
+          project_path: identity.canonical_path,
+        } : {});
+        setExternalInspection(result);
       }
     } catch (cause) { fail(cause); } finally { setAuxLoading(false); }
   }, [fail, profileId, profiles, projectIdentities, selectedRunId]);
@@ -190,7 +232,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   useEffect(() => { void loadAuxiliary(activeTab); }, [activeTab, loadAuxiliary]);
   useEffect(() => {
     const unsubscribe = nativesAPI.assistantV2.subscribeHarness((event) => {
-      if (event.kind === 'trace_updated' && activeTab === 'runs') {
+      if (event.kind === 'trace_updated' && (activeTab === 'runs' || (activeTab === 'overview' && canvasMode === 'audit'))) {
         if (noticeRefreshRef.current != null) return;
         noticeRefreshRef.current = window.setTimeout(() => {
           noticeRefreshRef.current = null;
@@ -204,7 +246,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       if (noticeRefreshRef.current != null) window.clearTimeout(noticeRefreshRef.current);
       noticeRefreshRef.current = null;
     };
-  }, [activeTab, dirty, fail, load, loadAuxiliary, locale]);
+  }, [activeTab, canvasMode, dirty, fail, load, loadAuxiliary, locale]);
 
   const replaceDocument = (next: Blueprint) => {
     setDocument(next); setDirty(true); setReview(null); setNotice(null);
@@ -354,6 +396,9 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     const next = existing ? { ...existing, ...patch } : { hook_id: hook.id, ...patch };
     replaceDocument({ ...document, hook_overlays: [...overlays.filter((item) => item.hook_id !== hook.id), next] });
   };
+  const openCanvasWorkspace = (target: CanvasWorkspaceTarget) => {
+    setActiveTab(target);
+  };
 
   return (
     <section className="space-y-5" data-testid="native-harness-panel">
@@ -414,12 +459,40 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       </div> : null}
 
       {!loading && workspace && activeTab === 'overview' ? <>
+        <NativeExecutionCanvas
+          locale={locale}
+          stages={workspace.topology?.stages ?? []}
+          edges={workspace.topology?.edges ?? []}
+          promptBlocks={workspace.prompt_plan?.blocks ?? []}
+          issueCount={workspace.overview?.issues?.length ?? 0}
+          runs={liveRuns}
+          selectedRunId={selectedRunId}
+          traceEntries={traceEntries}
+          runSnapshot={runSnapshot}
+          auditLoading={auxLoading}
+          onModeChange={setCanvasMode}
+          onRequestAudit={() => void loadAuxiliary('runs')}
+          onSelectRun={(runId) => {
+            setSelectedRunId(runId);
+            if (runId) void loadAuxiliary('runs', runId);
+            else { setTraceEntries([]); setRunSnapshot(null); }
+          }}
+          onRefreshAudit={() => void loadAuxiliary('runs', selectedRunId)}
+          onOpenWorkspace={openCanvasWorkspace}
+        />
         <div className="grid gap-3 md:grid-cols-3">
           <article className="settings-section-card"><Workflow size={18} /><strong>{workspace.overview?.topology_version ?? '—'}</strong><span>{t(locale, 'settings.engineEngineeringTopologyVersion')}</span></article>
           <article className="settings-section-card"><Zap size={18} /><strong>{workspace.overview?.hook_counts?.enabled ?? 0}/{workspace.overview?.hook_counts?.total ?? 0}</strong><span>{t(locale, 'settings.engineEngineeringActiveHooks')}</span></article>
           <article className="settings-section-card"><Activity size={18} /><strong>v{workspace.overview?.blueprint_schema_version ?? '—'}</strong><span>{t(locale, 'settings.engineEngineeringSchema')}</span></article>
         </div>
       </> : null}
+      {!loading && activeTab === 'capabilities' ? (
+        <EngineCapabilitiesPanel
+          locale={locale}
+          selectedRun={liveRuns.find((run) => run.id === selectedRunId) ?? null}
+          runSnapshot={runSnapshot}
+        />
+      ) : null}
       {!loading && workspace && activeTab === 'blueprint' ? <>
         <div className="settings-section-card space-y-3">
           <h4 className="inline-flex items-center gap-2"><Workflow size={16} />{t(locale, 'settings.engineEngineeringTopology')}</h4>
@@ -506,6 +579,48 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           <h4>{t(locale, 'settings.engineEngineeringTabPrompts')}</h4>
           <button type="button" className="btn" onClick={() => replaceDocument({ ...document, prompt_blocks: [...document.prompt_blocks, newPromptBlock()] })}><Plus size={13} />{t(locale, 'settings.engineEngineeringAddPromptBlock')}</button>
         </div>
+        {(promptPreview?.builtin_surfaces ?? []).map((surface) => {
+          const replacements = document.builtin_prompt_replacements ?? [];
+          const replacement = replacements.find((item) => item.surface_id === surface.surface_id);
+          const updateReplacement = (markdown: string) => {
+            replaceDocument({
+              ...document,
+              schema_version: 4,
+              builtin_prompt_replacements: [
+                ...replacements.filter((item) => item.surface_id !== surface.surface_id),
+                {
+                  surface_id: surface.surface_id,
+                  markdown,
+                  base_default_digest: surface.default_digest,
+                },
+              ],
+            });
+          };
+          return <article className="rounded-lg border border-[var(--border)] p-4" key={surface.surface_id}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <strong>{locale === 'en' ? 'Native builtin prompt' : 'Native 内置 Prompt'}</strong>
+                <div className="mt-1 font-mono text-xs text-[var(--text-muted)]">{surface.surface_id}</div>
+              </div>
+              {replacement ? <button type="button" className="btn" onClick={() => replaceDocument({
+                ...document,
+                builtin_prompt_replacements: replacements.filter((item) => item.surface_id !== surface.surface_id),
+              })}>{locale === 'en' ? 'Restore code default' : '恢复代码默认值'}</button> : <button type="button" className="btn" onClick={() => updateReplacement(surface.default_markdown)}>{locale === 'en' ? 'Create replacement' : '创建完整替换'}</button>}
+            </div>
+            <textarea
+              className="input mt-3 min-h-48 w-full font-mono text-xs"
+              readOnly={!replacement}
+              aria-label={locale === 'en' ? 'Native builtin prompt content' : 'Native 内置 Prompt 内容'}
+              value={replacement?.markdown ?? surface.default_markdown}
+              onChange={(event) => updateReplacement(event.target.value)}
+            />
+            <div className="mt-2 text-xs text-[var(--text-muted)]">
+              {replacement
+                ? (locale === 'en' ? 'Draft fully replaces this code-owned prompt.' : 'Draft 将完整替换此代码拥有的 Prompt。')
+                : (locale === 'en' ? 'Read-only code default; create a replacement to edit.' : '当前为只读代码默认值；创建替换后可编辑。')}
+            </div>
+          </article>;
+        })}
         {document.prompt_blocks.length === 0 ? <div className="engine-empty">{t(locale, 'settings.engineEngineeringEmpty')}</div> : document.prompt_blocks.map((block, index) => {
           const update = (patch: Partial<PromptBlock>) => {
             const prompt_blocks = [...document.prompt_blocks];
@@ -561,6 +676,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             <strong>{runSnapshot.resolved ? t(locale, 'settings.engineEngineeringSnapshotFrozen') : t(locale, 'settings.engineEngineeringSnapshotMissing')}</strong>
             {runSnapshot.canonical_hash ? <div className="mt-1 font-mono text-[var(--text-muted)]">{runSnapshot.canonical_hash}</div> : null}
             {runSnapshot.snapshot?.prompt_plan ? <div className="mt-1">{runSnapshot.snapshot.prompt_plan.token_estimate ?? 0} tokens · {runSnapshot.snapshot.prompt_plan.source_digests?.length ?? 0} prompt sources</div> : null}
+            {runSnapshot.snapshot?.tool_plan ? <div className="mt-1">{runSnapshot.snapshot.tool_plan.tools?.length ?? 0} model-visible tools · {runSnapshot.snapshot.tool_plan.canonical_hash?.slice(0, 16) ?? '—'}</div> : null}
           </div> : null}
           {traceEntries.map((entry, index) => <div className="rounded border border-[var(--border)] p-3 text-xs" key={`${entry.run_id}-${entry.sequence}-${index}`}>
             <strong>#{entry.sequence} · {entry.type ?? entry.status ?? 'hook'}</strong><div>{entry.hook_id ?? '—'}{entry.duration_ms != null ? ` · ${entry.duration_ms}ms` : ''}</div><div className="text-[var(--text-muted)]">{entry.timestamp}</div>
@@ -575,6 +691,20 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           <strong>{entry.action}</strong><span>{entry.profile_id ?? '—'}</span><span>{entry.scope_type ? `${entry.scope_type}:${entry.scope_id}` : '—'}</span><time>{entry.created_at}</time>
         </div>)}
         {!auxLoading && auditEntries.length === 0 ? <div className="engine-empty">{t(locale, 'settings.engineEngineeringEmpty')}</div> : null}
+      </div> : null}
+
+      {!loading && activeTab === 'external' ? <div className="settings-section-card space-y-3">
+        <div>
+          <h4>{locale === 'en' ? 'External runtimes' : '第三方执行引擎'}</h4>
+          <p className="text-xs text-[var(--text-muted)]">{locale === 'en' ? 'Claude CLI and Codex CLI are inspected from their local configuration and remain read-only.' : 'Claude CLI 与 Codex CLI 仅从本地配置读取并以只读方式展示。'}</p>
+        </div>
+        {(externalInspection?.discovered ?? []).map((source) => <article className="rounded border border-[var(--border)] p-3 text-xs" key={`${source.runtime}:${source.absolute_path}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2"><strong>{source.runtime}</strong><span>{source.status}</span></div>
+          <div className="mt-1 font-mono text-[var(--text-muted)]">{source.source}</div>
+          <div className="mt-3">{locale === 'en' ? 'Mapped Hook events' : '已映射 Hook 事件'}: {source.supported_events_mapped.join(', ') || '—'}</div>
+          <div className="mt-1 text-[var(--warning)]">{locale === 'en' ? 'Unsupported' : '不支持'}: {source.unsupported_events.join(', ') || '—'}</div>
+        </article>)}
+        {(externalInspection?.discovered ?? []).length === 0 ? <div className="engine-empty">{locale === 'en' ? 'No external runtime configuration was found for this project.' : '当前项目未发现第三方执行引擎配置。'}</div> : null}
       </div> : null}
     </section>
   );

@@ -453,8 +453,24 @@ impl AgentEngine {
         provider: &dyn EngineProvider,
         tools: &dyn EngineToolRuntime,
     ) -> Result<crate::EngineOutcome, EngineError> {
+        let tool_schemas = tools.list_tool_schemas().await;
+        self.run_with_tool_schemas(config, provider, tools, tool_schemas)
+            .await
+    }
+
+    /// Execute with the exact Tool Plan frozen by Run-start authority.
+    ///
+    /// Production callers use this path so schema discovery happens once and
+    /// the provider sees the same bounded schemas recorded as Run evidence.
+    pub async fn run_with_tool_schemas(
+        &self,
+        config: EngineRunConfig,
+        provider: &dyn EngineProvider,
+        tools: &dyn EngineToolRuntime,
+        tool_schemas: Vec<ToolSchema>,
+    ) -> Result<crate::EngineOutcome, EngineError> {
         let run_id = config.run_id.clone();
-        let result = self.run_inner(config, provider, tools).await;
+        let result = self.run_inner(config, provider, tools, tool_schemas).await;
         if let Err(error) = &result {
             let _ = self
                 .hooks
@@ -488,6 +504,7 @@ impl AgentEngine {
         mut config: EngineRunConfig,
         provider: &dyn EngineProvider,
         tools: &dyn EngineToolRuntime,
+        tool_schemas: Vec<ToolSchema>,
     ) -> Result<crate::EngineOutcome, EngineError> {
         use crate::EngineOutcome;
         let run_id_owned = config.run_id.clone();
@@ -515,7 +532,6 @@ impl AgentEngine {
             .await;
         apply_prompt_hook_responses(&mut config, prompt_submit)?;
 
-        let tool_schemas = tools.list_tool_schemas().await;
         // History is prior turns; always ensure the current user prompt appears
         // exactly once (append when history is empty or does not already end
         // with the same user content).
@@ -1610,7 +1626,7 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     struct FakeProvider {
@@ -1663,6 +1679,52 @@ mod tests {
                 duration_ms: 1,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn frozen_tool_plan_is_not_discovered_a_second_time() {
+        struct CountingTools(AtomicUsize);
+        #[async_trait::async_trait]
+        impl EngineToolRuntime for CountingTools {
+            async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
+            }
+            async fn execute_tool(
+                &self,
+                _name: &str,
+                _input: Value,
+                _cancel: &CancellationToken,
+            ) -> ToolExecutionResult {
+                unreachable!()
+            }
+        }
+
+        let tools = CountingTools(AtomicUsize::new(0));
+        AgentEngine::new(EventSequencer::new())
+            .run_with_tool_schemas(
+                EngineRunConfig {
+                    run_id: "frozen-tools".into(),
+                    conversation_id: "conversation".into(),
+                    model: "model".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "hello".into(),
+                    max_steps: 1,
+                },
+                &FakeProvider {
+                    rounds: Mutex::new(Vec::new()),
+                },
+                &tools,
+                vec![ToolSchema {
+                    name: "frozen".into(),
+                    description: "frozen".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(tools.0.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

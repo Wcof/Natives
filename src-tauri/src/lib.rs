@@ -242,6 +242,28 @@ pub fn run() {
             db::init_assistant_db()
                 .map_err(|e| format!("failed to init assistant database: {e}"))?;
 
+            // Scheduler 双权威收敛：Host Job runner 启动前，一次性把旧 Daemon
+            // scheduler/jobs.json 事务性导入 scheduled_tasks。源文件保留，成功后
+            // 另存只读备份与完成 marker；冲突 fail-closed，禁止两份定义并跑。
+            {
+                let mut assistant_conn = db::get_assistant_db_conn()
+                    .map_err(|e| format!("failed to open assistant database for jobs: {e}"))?;
+                let legacy_jobs = runtime_dir.join("scheduler").join("jobs.json");
+                let report = jobs::migration::migrate_legacy_scheduler_jobs(
+                    &mut assistant_conn,
+                    &legacy_jobs,
+                    chrono::Utc::now(),
+                )
+                .map_err(|e| format!("legacy scheduler migration failed: {e}"))?;
+                if report.source_found && !report.already_migrated {
+                    eprintln!(
+                        "[jobs] migrated {} legacy scheduler job(s); marker={}",
+                        report.imported,
+                        report.marker_path.display()
+                    );
+                }
+            }
+
             // Job 任务模块：常驻 30s tick 循环（Once 幂等；列迁移已在
             // init_assistant_db 内经 jobs::store::ensure_schema 补齐）
             jobs::runner::start();

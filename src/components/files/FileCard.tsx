@@ -113,6 +113,10 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
           onSelect(entry, mods);
           return;
         }
+        if (entry.isDir) {
+          onSelect(entry, mods);
+          return;
+        }
         clickTimerRef.current = setTimeout(() => {
           onSelect(entry, mods);
           clickTimerRef.current = null;

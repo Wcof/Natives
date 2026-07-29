@@ -26,7 +26,7 @@ use harness_core::blueprint::HarnessBlueprint;
 use harness_core::hooks::HookDefinition;
 use harness_core::resolver::{resolve, ProfileLayer, Resolution};
 use harness_core::snapshot::{LayerRef, ResolvedHarnessSnapshot};
-use harness_core::validation::{diff, validate};
+use harness_core::validation::{diff, validate, Severity, ValidationFinding, ValidationReport};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,15 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
     match method {
         "harness.overview" => overview(&params),
         "harness.topology" => topology(&params),
-        "harness.workspace.get" => workspace_get(&params),
+        "harness.workspace.get" => {
+            let request = serde_json::from_value::<
+                assistant_protocol::v2::HarnessWorkspaceGetRequest,
+            >(params)
+            .map_err(|error| {
+                HarnessError::invalid(format!("invalid workspace request: {error}"))
+            })?;
+            workspace_get(&request)
+        }
         "harness.template.list" => template_list(&params),
         "harness.hook.catalog" => hook_catalog(&params),
         "harness.profile.list" => profile_list(&params),
@@ -363,7 +371,8 @@ fn draft_validate(params: &Value) -> Result<Value, HarnessError> {
             Some(_) => draft_document(params)?,
             None => repository::get_or_create_draft(conn, &profile_id)?.document()?,
         };
-        let report = validate(&document, &discovered);
+        let mut report = validate(&document, &discovered);
+        validate_builtin_prompt_replacements(&document, &mut report);
         Ok(serde_json::json!({
             "profile_id": profile_id,
             "publishable": report.is_publishable(),
@@ -409,7 +418,8 @@ fn draft_publish(params: &Value) -> Result<Value, HarnessError> {
             }
         }
         let document = draft.document()?;
-        let report = validate(&document, &discovered);
+        let mut report = validate(&document, &discovered);
+        validate_builtin_prompt_replacements(&document, &mut report);
         if !report.is_publishable() {
             return Err(HarnessError::validation_failed(format!(
                 "draft has {} blocking finding(s): {}",
@@ -444,6 +454,39 @@ fn draft_publish(params: &Value) -> Result<Value, HarnessError> {
             "findings": report.findings,
         }))
     })
+}
+
+fn validate_builtin_prompt_replacements(
+    document: &HarnessBlueprint,
+    report: &mut ValidationReport,
+) {
+    for replacement in &document.builtin_prompt_replacements {
+        let Some(default) =
+            crate::production::builtin_prompt_surface_default(&replacement.surface_id)
+        else {
+            report.findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness_unknown_builtin_prompt_surface".into(),
+                hook_id: None,
+                message: format!(
+                    "Unknown Native builtin prompt surface: {}",
+                    replacement.surface_id
+                ),
+            });
+            continue;
+        };
+        if replacement.base_default_digest != harness_core::sha256_hex(default) {
+            report.findings.push(ValidationFinding {
+                severity: Severity::Error,
+                code: "harness_prompt_source_changed".into(),
+                hook_id: None,
+                message: format!(
+                    "Native builtin prompt source changed: {}",
+                    replacement.surface_id
+                ),
+            });
+        }
+    }
 }
 
 // ── versions ────────────────────────────────────────────────────────────────
@@ -607,21 +650,67 @@ fn audit_list(params: &Value) -> Result<Value, HarnessError> {
 fn prompt_preview(params: &Value) -> Result<Value, HarnessError> {
     repository::with_conn(|conn| {
         let context = resolved_context(conn, params)?;
-        let mut blocks = Vec::new();
+        let mut prompt_blocks = Vec::new();
+        let mut replacements = std::collections::BTreeMap::new();
         for layer in context.layers.iter() {
             if let Some(version) = repository::get_version(conn, &layer.version_id)? {
                 let doc = version.document()?;
+                for replacement in doc.builtin_prompt_replacements {
+                    replacements.insert(replacement.surface_id.clone(), replacement);
+                }
                 for block in doc.prompt_blocks.iter().filter(|b| b.enabled) {
-                    blocks.push(serde_json::json!({
-                        "id": block.id, "name": block.name, "order": block.order, "placement": block.placement,
-                        "source_digest": harness_core::sha256_hex(&block.markdown),
-                        "token_estimate": block.markdown.chars().count().div_ceil(4),
-                    }));
+                    prompt_blocks.push(block.clone());
                 }
             }
         }
+        let mut blocks = prompt_blocks
+            .iter()
+            .map(|block| {
+                serde_json::json!({
+                    "id": block.id, "name": block.name, "order": block.order, "placement": block.placement,
+                    "source_digest": harness_core::sha256_hex(&block.markdown),
+                    "token_estimate": block.markdown.chars().count().div_ceil(4),
+                })
+            })
+            .collect::<Vec<_>>();
         blocks.sort_by_key(|b| b.get("order").and_then(Value::as_i64).unwrap_or_default());
-        Ok(serde_json::json!({"blocks": blocks, "raw_persisted": false}))
+        let surface_id = crate::production::CREATIVE_DRAFT_PROMPT_SURFACE_ID;
+        let default = crate::production::builtin_prompt_surface_default(surface_id)
+            .expect("registered Native prompt surface");
+        let replaced = replacements.contains_key(surface_id);
+        let effective_digest = harness_core::sha256_hex(
+            replacements
+                .get(surface_id)
+                .map(|item| item.markdown.as_str())
+                .unwrap_or(default),
+        );
+        let replacements = replacements.into_values().collect::<Vec<_>>();
+        let project_path = opt_str(params, &["project_path", "projectPath"]).map(PathBuf::from);
+        let compiled = crate::production::compile_effective_prompt(
+            Some("creative_draft"),
+            None,
+            None,
+            project_path.as_deref(),
+            None,
+            &prompt_blocks,
+            &replacements,
+            None,
+        );
+        let prompt_summary = harness_core::PromptPlanSummary::from(&compiled);
+        Ok(serde_json::json!({
+            "blocks": blocks,
+            "layers": prompt_summary.layers,
+            "effective_prompt_hash": prompt_summary.effective_prompt_hash,
+            "token_estimate": prompt_summary.token_estimate,
+            "builtin_surfaces": [{
+                "surface_id": surface_id,
+                "default_markdown": default,
+                "default_digest": harness_core::sha256_hex(default),
+                "effective_digest": effective_digest,
+                "replaced": replaced,
+            }],
+            "raw_persisted": false
+        }))
     })
 }
 
@@ -752,6 +841,32 @@ pub fn resolve_run(
     project_id: Option<&str>,
     project: Option<&Path>,
 ) -> Result<RunHarnessPlan, HarnessError> {
+    resolve_run_with_tool_plan(run_id, conversation_id, project_id, project, &[])
+}
+
+pub fn resolve_run_with_tool_plan(
+    run_id: &str,
+    conversation_id: Option<&str>,
+    project_id: Option<&str>,
+    project: Option<&Path>,
+    tool_schemas: &[agent_core::ToolSchema],
+) -> Result<RunHarnessPlan, HarnessError> {
+    let mut plan =
+        prepare_run_with_tool_plan(run_id, conversation_id, project_id, project, tool_schemas)?;
+    persist_prepared_run_plan(&mut plan, None)?;
+    Ok(plan)
+}
+
+/// Resolve live Harness inputs and freeze Tool evidence without writing a
+/// partial Run snapshot. Production uses this seam so the exact effective
+/// prompt can be compiled before the immutable evidence row is inserted.
+pub fn prepare_run_with_tool_plan(
+    run_id: &str,
+    conversation_id: Option<&str>,
+    project_id: Option<&str>,
+    project: Option<&Path>,
+    tool_schemas: &[agent_core::ToolSchema],
+) -> Result<RunHarnessPlan, HarnessError> {
     let discovered = crate::production_hooks::discover_production_hooks(project);
     repository::with_conn(|conn| {
         validate_project_scope(conn, project_id, project)?;
@@ -813,8 +928,32 @@ pub fn resolve_run(
         let mut prompt_plan = harness_core::PromptPlanSummary::default();
         let mut prompt_blocks = Vec::new();
         let mut native_hooks = Vec::new();
+        let mut builtin_prompt_replacements = std::collections::BTreeMap::new();
         for (_, document) in &documents {
             native_hooks.extend(document.native_hooks.iter().cloned());
+            for replacement in &document.builtin_prompt_replacements {
+                let Some(default) =
+                    crate::production::builtin_prompt_surface_default(&replacement.surface_id)
+                else {
+                    return Err(HarnessError::validation_failed(format!(
+                        "unknown Native builtin prompt surface: {}",
+                        replacement.surface_id
+                    )));
+                };
+                let current_digest = harness_core::sha256_hex(default);
+                if replacement.base_default_digest != current_digest {
+                    return Err(HarnessError::validation_failed(format!(
+                        "harness_prompt_source_changed: {}",
+                        replacement.surface_id
+                    )));
+                }
+                builtin_prompt_replacements
+                    .insert(replacement.surface_id.clone(), replacement.clone());
+                prompt_plan
+                    .source_digests
+                    .push(harness_core::sha256_hex(&replacement.markdown));
+                prompt_plan.token_estimate += replacement.markdown.chars().count().div_ceil(4);
+            }
             for block in document.prompt_blocks.iter().filter(|b| b.enabled) {
                 prompt_blocks.push(block.clone());
                 prompt_plan
@@ -824,14 +963,54 @@ pub fn resolve_run(
             }
         }
         snapshot.prompt_plan = prompt_plan;
-        repository::insert_run_snapshot(conn, &snapshot)?;
+        let tools = tool_schemas
+            .iter()
+            .map(|schema| harness_core::ToolPlanEntry {
+                name: schema.name.clone(),
+                source: schema
+                    .name
+                    .strip_prefix("mcp__")
+                    .and_then(|rest| rest.split_once("__").map(|(server, _)| server))
+                    .map(|server| format!("mcp:{server}"))
+                    .unwrap_or_else(|| "builtin".into()),
+                schema_digest: harness_core::sha256_hex(&harness_core::canonical_json(
+                    &schema.input_schema,
+                )),
+            })
+            .collect::<Vec<_>>();
+        snapshot.tool_plan = harness_core::ToolPlanSummary {
+            canonical_hash: harness_core::sha256_hex(
+                &serde_json::to_string(&tools).unwrap_or_default(),
+            ),
+            tools,
+        };
         Ok(RunHarnessPlan {
             snapshot,
             resolution,
             prompt_blocks,
             native_hooks,
+            builtin_prompt_replacements: builtin_prompt_replacements.into_values().collect(),
         })
     })
+}
+
+/// Bind the compiled Provider prompt to a prepared Run and atomically persist
+/// the immutable Harness evidence. Raw prompt text is intentionally discarded.
+pub fn persist_run_plan(
+    plan: &mut RunHarnessPlan,
+    compiled_prompt: &harness_core::CompiledPromptPlan,
+) -> Result<(), HarnessError> {
+    persist_prepared_run_plan(plan, Some(compiled_prompt))
+}
+
+fn persist_prepared_run_plan(
+    plan: &mut RunHarnessPlan,
+    compiled_prompt: Option<&harness_core::CompiledPromptPlan>,
+) -> Result<(), HarnessError> {
+    if let Some(compiled_prompt) = compiled_prompt {
+        plan.snapshot.prompt_plan = compiled_prompt.into();
+    }
+    repository::with_conn(|conn| repository::insert_run_snapshot(conn, &plan.snapshot))
 }
 
 /// What one Run start produced: the evidence, and the thing to execute.
@@ -848,6 +1027,7 @@ pub struct RunHarnessPlan {
     pub resolution: Resolution,
     pub prompt_blocks: Vec<harness_core::blueprint::PromptBlock>,
     pub native_hooks: Vec<harness_core::blueprint::NativeHookSpecV3>,
+    pub builtin_prompt_replacements: Vec<harness_core::blueprint::BuiltinPromptReplacementSpecV4>,
 }
 
 impl RunHarnessPlan {
@@ -866,13 +1046,18 @@ impl RunHarnessPlan {
     }
 }
 
-fn workspace_get(params: &Value) -> Result<Value, HarnessError> {
+fn workspace_get(
+    request: &assistant_protocol::v2::HarnessWorkspaceGetRequest,
+) -> Result<Value, HarnessError> {
+    let params = serde_json::to_value(request)
+        .map_err(|error| HarnessError::internal(format!("serialize workspace request: {error}")))?;
+    let prompt_plan = prompt_preview(&params)?;
     repository::with_conn(|conn| {
-        let overview_val = overview(params)?;
-        let topology_val = topology(params)?;
-        let catalog_val = hook_catalog(params)?;
+        let overview_val = overview(&params)?;
+        let topology_val = topology(&params)?;
+        let catalog_val = hook_catalog(&params)?;
 
-        let profile_id = opt_str(params, &["profile_id", "profileId"]);
+        let profile_id = request.profile_id.clone();
         let draft_val = if let Some(pid) = &profile_id {
             repository::get_draft(conn, pid).ok().flatten().map(|d| {
                 serde_json::json!({
@@ -895,6 +1080,7 @@ fn workspace_get(params: &Value) -> Result<Value, HarnessError> {
             "overview": overview_val,
             "topology": topology_val,
             "catalog": catalog_val,
+            "prompt_plan": prompt_plan,
             "draft": draft_val,
         }))
     })

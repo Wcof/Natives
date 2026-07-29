@@ -8,7 +8,7 @@
  *   job_delete / job_set_enabled / job_run_now / job_runs_list
  * - JSON 字段 snake_case，与后端一致
  * - 错误码字符串：JOB_NOT_FOUND / JOB_INVALID_SCHEDULE /
- *   JOB_INVALID_PROJECT_PATH / JOB_DISPATCHER_NOT_WIRED
+ *   JOB_INVALID_PROJECT_PATH / JOB_INVALID_CAPABILITY_SELECTION
  *
  * 规则（与 files-api 相同的收敛姿态）：任务域组件必须 import 本模块，
  * 禁止直接触碰 `window.nativesAPI`。非 Tauri 环境（浏览器 dev）取用会抛
@@ -16,6 +16,7 @@
  */
 
 import type { NativesAPI } from '@/lib/tauri-adapter';
+import type { CapabilitySelection } from '@/lib/assistant-protocol';
 
 // ── 契约类型（第 1 节 数据模型） ──
 
@@ -74,8 +75,10 @@ export interface JobDetail extends JobSummary {
   model_id?: string | null;
   key_id?: string | null;
   agent_profile_id?: string | null;
-  /** JSON 数组（后端存 TEXT，返回可能已解析或仍为字符串） */
-  capability_refs?: string[] | string | null;
+  /** Typed binding stored in the existing capability_refs JSON TEXT column. */
+  capability_selection?: CapabilitySelection | null;
+  /** One-release read compatibility for legacy untyped arrays. Never write this field. */
+  capability_refs?: string[] | null;
   permission_profile?: JobPermissionProfile | string | null;
   max_steps?: number | null;
   effort?: string | null;
@@ -96,7 +99,7 @@ export interface JobPayload {
   model_id?: string;
   key_id?: string;
   agent_profile_id?: string;
-  capability_refs?: string[];
+  capability_selection?: CapabilitySelection;
   permission_profile?: JobPermissionProfile;
   max_steps?: number;
   effort?: string;
@@ -127,6 +130,11 @@ export const JOB_ERROR_CODES = [
   'JOB_NOT_FOUND',
   'JOB_INVALID_SCHEDULE',
   'JOB_INVALID_PROJECT_PATH',
+  'JOB_INVALID_CAPABILITY_SELECTION',
+  'JOB_INVALID_PROVIDER',
+  'JOB_INVALID_MODEL',
+  'JOB_INVALID_MAX_STEPS',
+  'JOB_ENGINE_ERROR',
   'JOB_DISPATCHER_NOT_WIRED',
 ] as const;
 export type JobErrorCode = (typeof JOB_ERROR_CODES)[number];

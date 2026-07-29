@@ -1,4 +1,4 @@
-/* Scoped assistant markdown — do not leak into global editor styles. */
+/* Scoped safe markdown — do not leak into global editor styles. */
 
 .root {
   font-size: 15px;
@@ -99,8 +99,8 @@
 .root :global(blockquote) {
   margin: 0.6em 0;
   padding: 0.25em 0.9em;
-  border-left: 3px solid var(--border, #d0d7de);
-  color: var(--text-secondary, #656d76);
+  border-left: 3px solid var(--border);
+  color: var(--text-secondary);
 }
 
 /* Override @uiw/react-markdown-preview's thick GitHub-style hr (height:0.25em + bg).
@@ -115,11 +115,11 @@
   background: transparent;
   background-color: transparent;
   border: 0;
-  border-top: 1px solid var(--border-subtle, var(--border, #d0d7de));
+  border-top: 1px solid var(--border-subtle, var(--border));
 }
 
 .root :global(a) {
-  color: var(--primary, #0969da);
+  color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;
   word-break: break-all;
@@ -128,7 +128,7 @@
 .root :global(img) {
   max-width: 100%;
   height: auto;
-  border-radius: 8px;
+  border-radius: var(--radius-xs);
   display: block;
   margin: 0.5em 0;
 }
@@ -138,16 +138,16 @@
     'Courier New', monospace;
   font-size: 0.9em;
   padding: 0.12em 0.35em;
-  border-radius: 4px;
-  background: var(--surface-hover, rgba(127, 127, 127, 0.12));
+  border-radius: var(--radius-xs);
+  background: var(--surface-hover);
   color: var(--text-secondary, inherit);
 }
 
 .root :global(pre) {
   margin: 0.6em 0;
   padding: 0.75em 0.9em;
-  border-radius: 8px;
-  background: var(--surface-hover, rgba(127, 127, 127, 0.12));
+  border-radius: var(--radius-xs);
+  background: var(--surface-hover);
   overflow-x: auto;
   max-width: 100%;
 }
@@ -175,14 +175,14 @@
 
 .root :global(th),
 .root :global(td) {
-  border: 1px solid var(--border-subtle, var(--border, #d0d7de));
+  border: 1px solid var(--border-subtle, var(--border));
   padding: 0.4em 0.7em;
   text-align: left;
   vertical-align: top;
 }
 
 .root :global(th) {
-  background: var(--surface-hover, rgba(127, 127, 127, 0.08));
+  background: var(--surface-hover);
   font-weight: 600;
 }
 

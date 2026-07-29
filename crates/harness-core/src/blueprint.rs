@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Bumped when the Blueprint schema itself changes shape.
-pub const BLUEPRINT_SCHEMA_VERSION: u32 = 3;
+pub const BLUEPRINT_SCHEMA_VERSION: u32 = 4;
 
 /// Which Hook dispatch semantics a published version commits to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -267,6 +267,15 @@ pub struct PromptBlockSpecV3 {
 
 pub type PromptBlock = PromptBlockSpecV3;
 
+/// Replacement spec for a Native code-owned Builtin Surface Prompt in Schema v4.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuiltinPromptReplacementSpecV4 {
+    pub surface_id: String,
+    pub markdown: String,
+    pub base_default_digest: String,
+}
+
 /// One layer of Harness configuration document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -284,6 +293,8 @@ pub struct HarnessBlueprint {
     pub native_hooks: Vec<NativeHookSpecV3>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prompt_blocks: Vec<PromptBlockSpecV3>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub builtin_prompt_replacements: Vec<BuiltinPromptReplacementSpecV4>,
 }
 
 impl Default for HarnessBlueprint {
@@ -296,12 +307,13 @@ impl Default for HarnessBlueprint {
             hook_overlays: Vec::new(),
             native_hooks: Vec::new(),
             prompt_blocks: Vec::new(),
+            builtin_prompt_replacements: Vec::new(),
         }
     }
 }
 
 impl HarnessBlueprint {
-    /// Parse strictly, validating schema versions 1..=3.
+    /// Parse strictly, validating schema versions 1..=4.
     pub fn parse(value: &Value) -> Result<Self, String> {
         let parsed: Self = serde_json::from_value(value.clone())
             .map_err(|e| format!("blueprint is not a valid document: {e}"))?;
@@ -339,6 +351,32 @@ impl HarnessBlueprint {
                 .map_err(|_| format!("prompt block id must be a UUID: {}", block.id))?;
             if !block_ids.insert(parsed) {
                 return Err(format!("duplicate prompt block id: {}", block.id));
+            }
+        }
+        let mut replacement_surfaces = BTreeSet::new();
+        if self.schema_version < 4 && !self.builtin_prompt_replacements.is_empty() {
+            return Err("builtin_prompt_replacements require schema_version 4".into());
+        }
+        for rep in &self.builtin_prompt_replacements {
+            if rep.surface_id.trim().is_empty() {
+                return Err("builtin prompt replacement surface_id cannot be empty".into());
+            }
+            if !replacement_surfaces.insert(&rep.surface_id) {
+                return Err(format!(
+                    "duplicate builtin prompt replacement for surface_id: {}",
+                    rep.surface_id
+                ));
+            }
+            if rep.base_default_digest.len() != 64
+                || !rep
+                    .base_default_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(format!(
+                    "builtin prompt replacement {} has an invalid base_default_digest",
+                    rep.surface_id
+                ));
             }
         }
         Ok(())
@@ -411,6 +449,20 @@ mod tests {
         }))
         .unwrap_err();
         assert!(err.contains("concurrency"), "got: {err}");
+    }
+
+    #[test]
+    fn builtin_prompt_replacements_require_schema_v4() {
+        let err = HarnessBlueprint::parse(&json!({
+            "schema_version": 3,
+            "builtin_prompt_replacements": [{
+                "surface_id": "builtin:surface:creative_draft",
+                "markdown": "replacement",
+                "base_default_digest": "0".repeat(64)
+            }]
+        }))
+        .unwrap_err();
+        assert!(err.contains("schema_version 4"), "got: {err}");
     }
 
     #[test]

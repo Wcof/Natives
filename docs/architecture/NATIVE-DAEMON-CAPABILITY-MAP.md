@@ -81,9 +81,9 @@ Daemon 是**本地 sidecar 微服务**：会话 / Run / 工具 / 供应商流式
 | **提示词队列** | `prompt_queue_store` + harness | `promptQueue.*` | — | 插话仅安全点生效 |
 | **检查点 / 回放** | `checkpoint` + `event_log` | `run.rewind*` / `run.replay` / `subscribe` | sequence | persist-first |
 | **MCP** | `mcp_runtime`（配置来自能力库 `capability_mcp_server`） | `mcp.*`（运行时面）；配置 CRUD 走 `capability.mcp.*` | MCP 相关 | OAuth 浏览器流 host 侧（`mcp_oauth_start`）；按选可用 + 引用计数/闲置回收 |
-| **调度** | `scheduler_store` | `scheduler.*` | 到期 tick → 再走 Run 主链 | 不旁路 Engine |
+| **调度（Hub，不是 Daemon 能力）** | Host `src-tauri/src/jobs/` | `job_*` Tauri 命令；执行经 `daemon_authority` | Host 30 秒 tick → UDS `run.*` | ADR-0015；Daemon 不广告 `scheduler.*` |
 | **技能** | `skill_store`（发现器）+ 能力库 `capability_skill`（元数据/开关权威） | `skill.list`（运行时面）；`capability.skill.*`（配置面）；注入 system prompt | — | 仅 trusted+enabled 注入；会话选用时按 id 集合注入（fail-closed） |
-| **扩展** | `extension_store` | `extension.list/enable` | — | 最小表面；完整隔离后续 |
+| **扩展** | `extension_store` | `extension.list` 发现诊断 | — | `discovered_not_executable`；未接隔离运行时前不广告 enable/executable |
 | **记忆** | `memory_store` | `memory.search/add` | — | 关键词扫描（无 embedding） |
 | **产物** | `artifact_store` | `artifact.list/open` | — | 路径隔离在 run 目录内 |
 | **任务** | `task_store` | `task.list/cancel/wait` | — | 终端任务 + 子 Agent 任务 |
@@ -157,8 +157,7 @@ RunManager.start_run
 |------|----------|
 | `mcp_runtime` | 注册表、stdio 会话、HTTP/SSE、tools/call；未信任 stdio 不自动起；SSRF 门 |
 | `skill_store` | 发现 `.claude/.grok/.natives/skills`；仅 trusted+enabled 注入提示 |
-| `extension_store` | 列表/启用/信任声明（最小真实表面） |
-| `scheduler_store` | 作业 JSON + due tick；**触发仍走 Run 主链** |
+| `extension_store` | 只读发现诊断；未接执行隔离与 enable 路径 |
 | `memory_store` | JSONL 关键词检索 / 追加 |
 | `artifact_store` | `artifacts/{run_id}/` 下列出/打开，防路径逃逸 |
 | `subagent_store` | 路由策略与会话登记（只存 provider/key/model **ID**） |
@@ -182,7 +181,7 @@ RunManager.start_run
 ```text
 natives.db          → 密钥 SoT（Host / 可选 broker 短解密）
 assistant.db        → Run / 会话 / 事件 / 队列 / 交互（Daemon 执行库）
-NATIVES_RUNTIME_DIR → socket、scheduler jobs、memory、artifacts
+NATIVES_RUNTIME_DIR → socket、memory、artifacts；旧 `scheduler/jobs.json` 仅作 Host 一次性迁移输入
 ```
 
 ---
@@ -204,8 +203,7 @@ NATIVES_RUNTIME_DIR → socket、scheduler jobs、memory、artifacts
 | 工具 | `tool.list` |
 | 子 Agent | `subagent.list/touch/switchRoute` |
 | MCP | `mcp.list/start/stop/liveness/reconnect` + `mcp.auth.set/status/clear`。`mcp.call` **故意不进广告面**（`rpc.rs:1430` 返回 `direct_mcp_call_disabled`，task-06 关闭直连旁路）；`mcp.auth.oauthStart/oauthCallback` 明确 unsupported |
-| 调度 | `scheduler.list/create/update/delete/history/tick` |
-| 扩展/技能/记忆 | `extension.list/enable` `skill.list` `memory.search/add` |
+| 扩展/技能/记忆 | `extension.list`（发现诊断） `skill.list` `memory.search/add` |
 | 产物/任务 | `artifact.list/open` `task.list/cancel/wait` |
 
 **Host 仍可参与的缝**（`HOST_IMPLEMENTED_METHODS`）：Run 预检/投影、`permission/interaction` UI、`artifact.open/reveal` 等 OS 动作——**不**取代 Daemon 的 Run 权威。
@@ -267,11 +265,11 @@ AgentEngine 收到 tool_calls
 ## 7. 设计约束（Daemon 内）
 
 1. **单权威**：跨进程不共享 `global_run_manager()`；生产 Host 只做 UDS 客户端。  
-2. **单执行接口**：UI / scheduler / 子编排不得绕过 `ExecutionAuthority` / `run.*`。  
+2. **单执行接口**：UI / Host Job / 子编排不得绕过 `ExecutionAuthority` / `run.*`。
 3. **无密钥事件**：Credential 只内存租约；错误脱敏。  
 4. **persist-first**：事件先写库再广播。  
 5. **诚实能力**：`DaemonCapabilities.methods` = `IMPLEMENTED_METHODS`；Codex 不可用不得标 executable。  
-6. **扩展不旁路**：MCP/Skill/Scheduler 最终仍汇入 Engine 或受控工具面。
+6. **扩展不旁路**：MCP/Skill 最终仍汇入 Engine 或受控工具面；Job 只经 Host `daemon_authority` 进入 UDS Run 主链。
 
 ---
 
@@ -284,7 +282,7 @@ src-agent-daemon/src/
   session_harness.rs prompt_queue_store.rs
   conversation_store.rs event_log.rs checkpoint.rs
   interaction_store.rs task_store.rs subagent_store.rs
-  mcp_runtime.rs scheduler_store.rs skill_store.rs
+  mcp_runtime.rs skill_store.rs
   extension_store.rs memory_store.rs artifact_store.rs
   cli_runtime_bridge.rs codex_runtime_bridge.rs
   natives_db_broker.rs storage/

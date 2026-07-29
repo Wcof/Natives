@@ -146,6 +146,77 @@ pub fn merge_agent_directive(
     }
 }
 
+/// Compile the exact system prompt that will be sent to the Provider.
+///
+/// This is the sole ordering authority for Native prompt layers. Callers may
+/// project the returned summaries into a Run snapshot, but only
+/// `effective_full_text` is passed to the engine and it is never persisted.
+pub(crate) fn compile_effective_prompt(
+    agent_kind: Option<&str>,
+    profile: Option<&agent_core::AgentProfile>,
+    child_directive: Option<&str>,
+    project_root: Option<&std::path::Path>,
+    skill_prompt: Option<&str>,
+    prompt_blocks: &[harness_core::blueprint::PromptBlock],
+    builtin_prompt_replacements: &[harness_core::blueprint::BuiltinPromptReplacementSpecV4],
+    team_roster: Option<&str>,
+) -> harness_core::CompiledPromptPlan {
+    let mut builder = harness_core::PromptPlanBuilder::new();
+
+    if let Some(agent_kind) = agent_kind {
+        if let Some(default) = builtin_surface_system_prompt(agent_kind) {
+            let surface_id = match agent_kind {
+                CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => CREATIVE_DRAFT_PROMPT_SURFACE_ID,
+                _ => agent_kind,
+            };
+            builder.add_builtin_surface_with_replacements(
+                surface_id,
+                default,
+                builtin_prompt_replacements,
+            );
+        }
+    }
+
+    if let Some(skill_prompt) = skill_prompt.filter(|prompt| !prompt.trim().is_empty()) {
+        builder.add_skill_catalog("selected_skill_catalog", skill_prompt);
+    }
+
+    if let Some(profile) = profile {
+        if let Some(prompt) = profile
+            .system_prompt
+            .as_deref()
+            .filter(|prompt| !prompt.trim().is_empty())
+        {
+            builder.add_capability_expert(profile.id.clone(), prompt);
+        }
+    }
+
+    if let Some(child_directive) = child_directive.filter(|prompt| !prompt.trim().is_empty()) {
+        builder.add_child_directive(child_directive);
+    }
+
+    if let Some(project_root) = project_root {
+        let instructions = assemble_context(None, Some(project_root), None);
+        if !instructions.system_prompt.trim().is_empty() {
+            builder.add_instruction_file("project_instructions", instructions.system_prompt);
+        }
+    }
+
+    for placement in [
+        harness_core::blueprint::PromptBlockPlacement::BeforeProfile,
+        harness_core::blueprint::PromptBlockPlacement::AfterProfile,
+        harness_core::blueprint::PromptBlockPlacement::Final,
+    ] {
+        builder.add_prompt_blocks(prompt_blocks, placement);
+    }
+
+    if let Some(team_roster) = team_roster.filter(|prompt| !prompt.trim().is_empty()) {
+        builder.add_team_roster(team_roster);
+    }
+
+    builder.build()
+}
+
 /// Bundled inputs for a production engine turn (replaces the former 10
 /// positional parameters). `capability` carries the resolved ADR-0016
 /// snapshot; None = legacy behaviour (global skills, file profiles).
@@ -162,7 +233,8 @@ pub struct RunStartContext {
     pub project_path: Option<std::path::PathBuf>,
     pub capability: Option<crate::capability_resolution::ResolvedCapabilitySnapshot>,
     pub hooks: Option<agent_core::HookRegistry>,
-    pub prompt_blocks: Vec<harness_core::blueprint::PromptBlock>,
+    pub effective_prompt: harness_core::CompiledPromptPlan,
+    pub frozen_tool_schemas: Vec<ToolSchema>,
 }
 
 impl ProductionRuntime {
@@ -214,6 +286,10 @@ impl ProductionRuntime {
 
     pub async fn take_run_tool_allowlist(&self, run_id: &str) -> Option<Vec<String>> {
         self.run_tool_allowlists.lock().await.remove(run_id)
+    }
+
+    pub async fn peek_run_tool_allowlist(&self, run_id: &str) -> Option<Vec<String>> {
+        self.run_tool_allowlists.lock().await.get(run_id).cloned()
     }
 
     /// Register the parent-authored system prompt for a child run that will be
@@ -441,7 +517,8 @@ impl ProductionRuntime {
             project_path,
             capability,
             hooks,
-            prompt_blocks,
+            effective_prompt,
+            frozen_tool_schemas,
         } = ctx;
         let project_root = project_path.ok_or_else(|| {
             "project_path is required for daemon runs; process cwd fallback is disabled".to_string()
@@ -567,66 +644,6 @@ impl ProductionRuntime {
                 .map(|c| c.mcp_servers.iter().cloned().collect()),
         };
 
-        // Skills (ADR-0016): a resolved snapshot carries a selection-scoped
-        // prompt (Some("") = explicitly none); without a snapshot the legacy
-        // global trusted+enabled injection applies unchanged.
-        //
-        // Either way the text is progressive disclosure: name + one-line summary
-        // only. Bodies never enter the system prompt — the model pulls one through
-        // the `skill` tool when it needs it, so the per-request prompt cost is
-        // proportional to the skill *count*, not to their total bytes.
-        let skill_prompt = capability
-            .as_ref()
-            .and_then(|c| c.skill_prompt.clone())
-            .unwrap_or_else(|| crate::skill_store::prompt_for_project(&project_root));
-        let harness_prompt = prompt_blocks
-            .iter()
-            .filter(|b| b.enabled)
-            .map(|b| b.markdown.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        // Parent-authored directive for this child run (registered by the `task`
-        // tool before RunManager started us). Layered on top of the profile
-        // prompt — prompt text only, so it cannot widen permissions or tools,
-        // both of which were already resolved and capped above.
-        let directive = self.take_run_agent_directive(&run_id).await;
-        let effective_profile = merge_agent_directive(profile.clone(), directive.as_deref());
-        let mut assembled = assemble_context(
-            effective_profile.as_ref(),
-            Some(&project_root),
-            (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
-        );
-        if !harness_prompt.trim().is_empty() {
-            assembled.system_prompt = if assembled.system_prompt.is_empty() {
-                harness_prompt
-            } else {
-                format!("{}\n\n{}", assembled.system_prompt, harness_prompt)
-            };
-        }
-        // Built-in surfaces have no profile on disk, so their working
-        // instructions are prepended here. Project/skill context still applies.
-        if let Some(surface_prompt) = agent_profile_id
-            .as_deref()
-            .and_then(builtin_surface_system_prompt)
-        {
-            assembled.system_prompt = if assembled.system_prompt.is_empty() {
-                surface_prompt.to_string()
-            } else {
-                format!("{surface_prompt}\n\n{}", assembled.system_prompt)
-            };
-        }
-        // Team roster / delegation instructions from the resolved snapshot.
-        if let Some(extra) = capability
-            .as_ref()
-            .and_then(|c| c.extra_system_prompt.as_deref())
-            .filter(|s| !s.is_empty())
-        {
-            assembled.system_prompt = if assembled.system_prompt.is_empty() {
-                extra.to_string()
-            } else {
-                format!("{}\n\n{extra}", assembled.system_prompt)
-            };
-        }
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let raw_history =
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
@@ -654,17 +671,21 @@ impl ProductionRuntime {
             run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
             model: model_id,
-            system_prompt: if assembled.system_prompt.is_empty() {
+            system_prompt: if effective_prompt.effective_full_text.is_empty() {
                 None
             } else {
-                Some(assembled.system_prompt)
+                Some(effective_prompt.effective_full_text)
             },
             messages,
             user_content,
             max_steps,
         };
 
-        let outcome = match engine.run(config, &provider, &tools).await {
+        crate::production_tools::validate_tool_limit(frozen_tool_schemas.len())?;
+        let outcome = match engine
+            .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
+            .await
+        {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
@@ -1503,12 +1524,115 @@ Hard constraints (the save is rejected if you break them):
 
 If a save is rejected, the error text says exactly what failed — fix it and save again. Keep replies short: the app itself is the deliverable, not a description of it."#;
 
+pub(crate) const CREATIVE_DRAFT_PROMPT_SURFACE_ID: &str = "builtin:surface:creative_draft";
+
+pub(crate) fn builtin_prompt_surface_default(surface_id: &str) -> Option<&'static str> {
+    match surface_id {
+        CREATIVE_DRAFT_PROMPT_SURFACE_ID => Some(CREATIVE_DRAFT_SYSTEM_PROMPT),
+        _ => None,
+    }
+}
+
 /// Working instructions for a built-in surface, or `None` for agent kinds that
 /// carry a profile on disk (whose prompt comes from that profile instead).
 pub(crate) fn builtin_surface_system_prompt(agent_kind: &str) -> Option<&'static str> {
     match agent_kind {
         CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => Some(CREATIVE_DRAFT_SYSTEM_PROMPT),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+fn effective_builtin_surface_prompt(
+    agent_kind: &str,
+    replacements: &[harness_core::blueprint::BuiltinPromptReplacementSpecV4],
+) -> Option<String> {
+    let default = builtin_surface_system_prompt(agent_kind)?;
+    let surface_id = match agent_kind {
+        CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => CREATIVE_DRAFT_PROMPT_SURFACE_ID,
+        _ => return Some(default.to_string()),
+    };
+    Some(
+        replacements
+            .iter()
+            .find(|replacement| replacement.surface_id == surface_id)
+            .map(|replacement| replacement.markdown.clone())
+            .unwrap_or_else(|| default.to_string()),
+    )
+}
+
+#[cfg(test)]
+mod builtin_prompt_replacement_tests {
+    use super::*;
+
+    #[test]
+    fn harness_replacement_changes_the_native_surface_prompt() {
+        let replacements = vec![harness_core::blueprint::BuiltinPromptReplacementSpecV4 {
+            surface_id: CREATIVE_DRAFT_PROMPT_SURFACE_ID.into(),
+            markdown: "replacement prompt".into(),
+            base_default_digest: harness_core::sha256_hex(CREATIVE_DRAFT_SYSTEM_PROMPT),
+        }];
+        assert_eq!(
+            effective_builtin_surface_prompt("creative_draft", &replacements).as_deref(),
+            Some("replacement prompt")
+        );
+        assert_eq!(
+            effective_builtin_surface_prompt("creative_draft", &[]).as_deref(),
+            Some(CREATIVE_DRAFT_SYSTEM_PROMPT)
+        );
+    }
+
+    #[test]
+    fn effective_prompt_compiles_once_in_the_required_layer_order() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".git")).unwrap();
+        std::fs::write(project.path().join("AGENTS.md"), "project instruction").unwrap();
+        let profile = agent_core::AgentProfile {
+            id: "expert".into(),
+            name: "Expert".into(),
+            system_prompt: Some("expert prompt".into()),
+            ..Default::default()
+        };
+        let blocks = vec![harness_core::blueprint::PromptBlockSpecV3 {
+            id: "harness".into(),
+            name: "Harness".into(),
+            markdown: "harness prompt".into(),
+            enabled: true,
+            order: 0,
+            placement: harness_core::blueprint::PromptBlockPlacement::Final,
+        }];
+
+        let compiled = compile_effective_prompt(
+            Some("creative_draft"),
+            Some(&profile),
+            Some("child directive"),
+            Some(project.path()),
+            Some("skill catalog"),
+            &blocks,
+            &[],
+            Some("team roster"),
+        );
+        let kinds = compiled
+            .layers
+            .iter()
+            .map(|layer| layer.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                harness_core::PromptLayerKind::BuiltinSurface,
+                harness_core::PromptLayerKind::SkillCatalog,
+                harness_core::PromptLayerKind::CapabilityExpert,
+                harness_core::PromptLayerKind::ChildDirective,
+                harness_core::PromptLayerKind::InstructionFiles,
+                harness_core::PromptLayerKind::NativesPromptBlock,
+                harness_core::PromptLayerKind::TeamRoster,
+            ]
+        );
+        assert_eq!(
+            harness_core::sha256_hex(&compiled.effective_full_text),
+            compiled.effective_prompt_hash
+        );
     }
 }
 

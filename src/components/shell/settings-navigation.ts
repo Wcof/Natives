@@ -3,8 +3,6 @@ export const SETTINGS_SECTIONS = [
   'appearance',
   'providers',
   'runtime',
-  'engineering',
-  'engine',
   'plugins',
 ] as const;
 
@@ -22,6 +20,9 @@ export function getSettingsSection(view?: string): SettingsSection {
   if (!view?.startsWith('settings:')) return 'general';
 
   const section = view.slice('settings:'.length);
+  if (section === 'engineering' || section === 'engine') {
+    return 'runtime';
+  }
   return SETTINGS_SECTION_SET.has(section)
     ? (section as SettingsSection)
     : 'general';

@@ -336,6 +336,7 @@ mod tests {
             hook_overlays: Vec::new(),
             native_hooks: Vec::new(),
             prompt_blocks: Vec::new(),
+            builtin_prompt_replacements: Vec::new(),
         }
     }
 

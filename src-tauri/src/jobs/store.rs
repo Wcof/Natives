@@ -22,7 +22,8 @@ pub struct JobDefinition {
     pub key_id: Option<String>,
     /// 接缝 B：只存不校验。
     pub agent_profile_id: Option<String>,
-    /// JSON 数组字符串，默认 `[]`；只存不校验。
+    /// 复用列：新行存 CapabilitySelection JSON object；兼容旧 JSON array。
+    /// 类型/可用性在派发期校验。
     pub capability_refs: String,
     /// readonly | ask | full_access，默认 readonly。
     pub permission_profile: String,
@@ -484,6 +485,23 @@ pub fn update_run_result(
     )
     .map_err(Error::Database)?;
     Ok(())
+}
+
+/// Run rows whose lifecycle is still owned by the Daemon and can be reconciled.
+pub fn list_reconcilable_runs(conn: &Connection) -> Result<Vec<JobRunRecord>> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {RUN_COLUMNS} FROM task_runs \
+             WHERE run_id IS NOT NULL AND status IN ('pending', 'dispatched', 'running') \
+             ORDER BY datetime(started_at) ASC, id ASC"
+        ))
+        .map_err(Error::Database)?;
+    let rows = stmt
+        .query_map([], run_from_row)
+        .map_err(Error::Database)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Error::Database)?;
+    Ok(rows)
 }
 
 /// 运行历史分页。job_id=None 时跨任务列出。返回 (rows, total)。

@@ -2274,64 +2274,31 @@ pub async fn handle_rpc(
             }
         }
         names::EXTENSION_LIST => {
-            let items = crate::extension_store::global_extensions().list();
+            let items = crate::extension_store::global_extensions()
+                .list()
+                .into_iter()
+                .map(|item| {
+                    let mut value = serde_json::to_value(item).unwrap_or_default();
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert(
+                            "execution_status".into(),
+                            serde_json::Value::String("discovered_not_executable".into()),
+                        );
+                    }
+                    value
+                })
+                .collect::<Vec<_>>();
             send_success(
                 writer,
                 &request.request_id,
                 &request.client_id,
                 &request.session_token,
-                serde_json::json!({ "extensions": items }),
+                serde_json::json!({
+                    "extensions": items,
+                    "execution_status": "discovered_not_executable"
+                }),
             )
             .await;
-        }
-        names::EXTENSION_ENABLE => {
-            let id = request
-                .params
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let enabled = request
-                .params
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            if id.is_empty() {
-                send_error(
-                    writer,
-                    &DaemonError::new(
-                        error_codes::INVALID_INPUT,
-                        ErrorCategory::Validation,
-                        false,
-                        "id required",
-                    ),
-                )
-                .await;
-            } else {
-                match crate::extension_store::global_extensions().set_enabled(id, enabled) {
-                    Ok(item) => {
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::to_value(item).unwrap_or_default(),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                error_codes::PERMISSION_DENIED,
-                                ErrorCategory::PermissionDenied,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await;
-                    }
-                }
-            }
         }
         // Conversation-level capability selection (ADR-0016).
         names::CONVERSATION_UPDATE_CAPABILITIES | names::CONVERSATION_GET_CAPABILITIES => {
@@ -2486,192 +2453,6 @@ pub async fn handle_rpc(
                         ),
                     )
                     .await;
-                }
-            }
-        }
-        names::SCHEDULER_LIST => {
-            let jobs = crate::scheduler_store::global_scheduler().list();
-            send_success(
-                writer,
-                &request.request_id,
-                &request.client_id,
-                &request.session_token,
-                serde_json::json!({ "jobs": jobs }),
-            )
-            .await;
-        }
-        names::SCHEDULER_HISTORY => {
-            let limit = request
-                .params
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(50) as usize;
-            let history = crate::scheduler_store::global_scheduler().history(limit);
-            send_success(
-                writer,
-                &request.request_id,
-                &request.client_id,
-                &request.session_token,
-                serde_json::json!({ "history": history }),
-            )
-            .await;
-        }
-        names::SCHEDULER_TICK => {
-            // Dev/ops: force one due-tick (also used by tests).
-            let runner = crate::scheduler_store::ensure_scheduler_runner();
-            match runner.tick_once() {
-                Ok(fired) => {
-                    send_success(
-                        writer,
-                        &request.request_id,
-                        &request.client_id,
-                        &request.session_token,
-                        serde_json::json!({ "fired_run_ids": fired }),
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    send_error(
-                        writer,
-                        &DaemonError::new(
-                            error_codes::INTERNAL_ERROR,
-                            ErrorCategory::Internal,
-                            true,
-                            e,
-                        ),
-                    )
-                    .await;
-                }
-            }
-        }
-        names::SCHEDULER_CREATE => {
-            match serde_json::from_value::<crate::scheduler_store::CreateSchedulerJob>(
-                request.params.clone(),
-            ) {
-                Ok(req) => match crate::scheduler_store::global_scheduler().create(req) {
-                    Ok(job) => {
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::to_value(job).unwrap_or_default(),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                error_codes::INVALID_INPUT,
-                                ErrorCategory::Validation,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await;
-                    }
-                },
-                Err(e) => {
-                    send_error(
-                        writer,
-                        &DaemonError::new(
-                            error_codes::INVALID_INPUT,
-                            ErrorCategory::Validation,
-                            false,
-                            e.to_string(),
-                        ),
-                    )
-                    .await;
-                }
-            }
-        }
-        names::SCHEDULER_UPDATE => {
-            let id = request
-                .params
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if id.is_empty() {
-                send_error(
-                    writer,
-                    &DaemonError::new(
-                        error_codes::INVALID_INPUT,
-                        ErrorCategory::Validation,
-                        false,
-                        "id required",
-                    ),
-                )
-                .await;
-            } else {
-                match crate::scheduler_store::global_scheduler().update(id, request.params.clone())
-                {
-                    Ok(job) => {
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::to_value(job).unwrap_or_default(),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                error_codes::NOT_FOUND,
-                                ErrorCategory::NotFound,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-        names::SCHEDULER_DELETE => {
-            let id = request
-                .params
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if id.is_empty() {
-                send_error(
-                    writer,
-                    &DaemonError::new(
-                        error_codes::INVALID_INPUT,
-                        ErrorCategory::Validation,
-                        false,
-                        "id required",
-                    ),
-                )
-                .await;
-            } else {
-                match crate::scheduler_store::global_scheduler().delete(id) {
-                    Ok(()) => {
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::json!({ "ok": true, "id": id }),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                error_codes::NOT_FOUND,
-                                ErrorCategory::NotFound,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await;
-                    }
                 }
             }
         }
@@ -3323,18 +3104,13 @@ mod tests {
         let caps = crate::run_manager::RunManager::capabilities();
         assert_eq!(caps.protocol_version, "2.0.0");
         assert!(caps.methods.iter().any(|m| m == "run.start"));
-        assert!(
-            caps.methods.iter().any(|m| m == "scheduler.delete"),
-            "scheduler CRUD methods must be advertised when implemented"
-        );
+        assert!(!caps.methods.iter().any(|m| m.starts_with("scheduler.")));
         assert!(caps.methods.iter().any(|m| m == "mcp.list"));
         assert!(caps.mcp);
-        assert!(caps.scheduler);
-        assert!(
-            caps.methods.iter().any(|m| m == "extension.enable"),
-            "extension.enable must be advertised when implemented"
-        );
-        assert!(caps.extensions);
+        assert!(!caps.scheduler);
+        assert!(caps.methods.iter().any(|m| m == "extension.list"));
+        assert!(!caps.methods.iter().any(|m| m == "extension.enable"));
+        assert!(!caps.extensions);
     }
 
     struct StaticStreamAdapter {

@@ -43,6 +43,15 @@ export function isCsvFile(path: string): boolean {
   return ['csv', 'tsv'].includes(getExt(path));
 }
 
+export function shouldPreviewAsCode(kind: string, path: string, editMode: boolean): boolean {
+  const ext = getExt(path);
+  const isHtml = ext === 'html' || ext === 'htm';
+  return kind === 'text'
+    && !isMarkdownFile(path)
+    && !isCsvFile(path)
+    && (!isHtml || editMode);
+}
+
 const ARCHIVE_EXTS = new Set(['zip', 'tar', 'tgz', 'gz', 'bz2', 'xz', '7z', 'rar']);
 export function isArchiveFile(path: string): boolean {
   return ARCHIVE_EXTS.has(getExt(path)) || path.endsWith('.tar.gz');

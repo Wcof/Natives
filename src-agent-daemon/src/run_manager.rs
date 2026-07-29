@@ -1495,9 +1495,66 @@ impl RunManager {
                 self.persist_run_row(r)?;
             }
         }
-        // Harness is resolved exactly once after capability validation and before
-        // any provider lease, MCP warm-up, or engine construction.
-        let harness_plan = match crate::rpc::harness::control_plane::resolve_run(
+        let frozen_tool_schemas = if runtime_id == "native" {
+            let project_root = request_project_path
+                .as_deref()
+                .or(run.project_path.as_deref())
+                .map(std::path::Path::new)
+                .ok_or_else(|| {
+                    "project_path is required for daemon runs; process cwd fallback is disabled"
+                        .to_string()
+                })?;
+            let mut allowlist = self
+                .runtime
+                .peek_run_tool_allowlist(&run.id)
+                .await
+                .or_else(|| {
+                    capability_snapshot
+                        .agent_profile_id
+                        .as_deref()
+                        .or(run.agent_profile_id.as_deref())
+                        .and_then(crate::production::builtin_surface_allowlist)
+                })
+                .or_else(|| {
+                    capability_snapshot
+                        .profile
+                        .as_ref()
+                        .and_then(|profile| profile.tools.clone())
+                });
+            if let (Some(list), Some(disallowed)) = (
+                allowlist.as_mut(),
+                capability_snapshot
+                    .profile
+                    .as_ref()
+                    .and_then(|profile| profile.disallowed_tools.as_ref()),
+            ) {
+                list.retain(|tool| !disallowed.iter().any(|denied| denied == tool));
+            }
+            let mut gateway = capability_gateway::CapabilityGateway::new();
+            gateway.set_project_root(project_root.to_string_lossy().to_string());
+            crate::production::register_tools_for_surface(&mut gateway, allowlist.as_deref());
+            let selected_mcp_servers = capability_snapshot
+                .selection_active
+                .then(|| capability_snapshot.mcp_servers.iter().cloned().collect());
+            let schemas = crate::production_tools::model_visible_tool_schemas(
+                &gateway,
+                allowlist.as_deref(),
+                &capability_snapshot.mcp_tool_schemas,
+                selected_mcp_servers.as_ref(),
+                permission_profile.eq_ignore_ascii_case("plan"),
+            );
+            if let Err(error) = crate::production_tools::validate_tool_limit(schemas.len()) {
+                self.fail_run_if_active(&run.id, error.clone(), "tool_plan_too_large");
+                return Err(error);
+            }
+            schemas
+        } else {
+            Vec::new()
+        };
+        // Harness is prepared exactly once after capability validation. It is
+        // not persisted yet: the immutable evidence must also contain the exact
+        // Provider prompt compiled from these same live inputs.
+        let mut harness_plan = match crate::rpc::harness::control_plane::prepare_run_with_tool_plan(
             &run.id,
             Some(&run.conversation_id),
             run.project_id.as_deref(),
@@ -1505,6 +1562,7 @@ impl RunManager {
                 .as_deref()
                 .or(run.project_path.as_deref())
                 .map(std::path::Path::new),
+            &frozen_tool_schemas,
         ) {
             Ok(plan) => plan,
             Err(error) => {
@@ -1512,6 +1570,48 @@ impl RunManager {
                 return Err(error.to_string());
             }
         };
+        let effective_project_path = request_project_path
+            .as_deref()
+            .or(run.project_path.as_deref())
+            .map(std::path::PathBuf::from);
+        let effective_prompt = if runtime_id == "native" {
+            let project_root = effective_project_path.as_deref().ok_or_else(|| {
+                "project_path is required for daemon runs; process cwd fallback is disabled"
+                    .to_string()
+            })?;
+            // Skills are selection-scoped when Capability Hub supplied an
+            // explicit selection; otherwise retain the existing trusted project
+            // catalog. Bodies remain progressive-disclosure only.
+            let skill_prompt = capability_snapshot
+                .skill_prompt
+                .clone()
+                .unwrap_or_else(|| crate::skill_store::prompt_for_project(project_root));
+            let child_directive = self.runtime.take_run_agent_directive(&run.id).await;
+            crate::production::compile_effective_prompt(
+                capability_snapshot
+                    .agent_profile_id
+                    .as_deref()
+                    .or(run.agent_profile_id.as_deref()),
+                capability_snapshot.profile.as_ref(),
+                child_directive.as_deref(),
+                Some(project_root),
+                (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
+                &harness_plan.prompt_blocks,
+                &harness_plan.builtin_prompt_replacements,
+                capability_snapshot.extra_system_prompt.as_deref(),
+            )
+        } else {
+            // Non-Native backends have their own prompt authority (for example
+            // Claude CLI flags). Do not project a Native prompt they did not use.
+            harness_core::PromptPlanBuilder::new().build()
+        };
+        if let Err(error) = crate::rpc::harness::control_plane::persist_run_plan(
+            &mut harness_plan,
+            &effective_prompt,
+        ) {
+            self.fail_run_if_active(&run.id, error.to_string(), error.code);
+            return Err(error.to_string());
+        }
         // Keep selected MCP servers warm for the run's lifetime (refcounted;
         // released on every exit path below via this guard).
         for server_id in &capability_snapshot.mcp_servers {
@@ -1719,13 +1819,23 @@ impl RunManager {
                 run_id: run.id.clone(),
                 conversation_id: run.conversation_id.clone(),
                 model: model_id.clone(),
-                system_prompt: None,
+                system_prompt: (!effective_prompt.effective_full_text.is_empty())
+                    .then(|| effective_prompt.effective_full_text.clone()),
                 messages: crate::conversation_store::engine_history(&run.conversation_id)
                     .unwrap_or_default(),
                 user_content: content,
                 max_steps,
             };
-            let outcome = match engine.run(config, &provider, &tools).await {
+            if let Err(error) =
+                crate::production_tools::validate_tool_limit(frozen_tool_schemas.len())
+            {
+                self.fail_run_if_active(&run.id, error.clone(), "tool_plan_too_large");
+                return Err(error);
+            }
+            let outcome = match engine
+                .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
+                .await
+            {
                 Ok(o) => o,
                 Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
             };
@@ -1766,7 +1876,8 @@ impl RunManager {
                 project_path: project_path.clone(),
                 capability: Some(capability_snapshot),
                 hooks: Some(harness_plan.compile(project_path.as_deref())),
-                prompt_blocks: harness_plan.prompt_blocks.clone(),
+                effective_prompt,
+                frozen_tool_schemas,
             })
             .await?;
         // Sole terminal commit from EngineOutcome — never scan events or default Completed.
@@ -1834,7 +1945,12 @@ impl RunManager {
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
-        let outcome = match engine.run(config, provider, tools).await {
+        let tool_schemas = tools.list_tool_schemas().await;
+        crate::production_tools::validate_tool_limit(tool_schemas.len())?;
+        let outcome = match engine
+            .run_with_tool_schemas(config, provider, tools, tool_schemas)
+            .await
+        {
             Ok(o) => o,
             Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };

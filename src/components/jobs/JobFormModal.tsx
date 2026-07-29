@@ -8,10 +8,15 @@
  * JOB_INVALID_SCHEDULE / JOB_INVALID_PROJECT_PATH 映射为对应字段错误。
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
 import { fmtDateTime } from '@/lib/format';
+import CapabilityPickerPopover from '@/components/assistant/CapabilityPickerPopover';
+import { createDefaultGateway } from '@/lib/assistant-gateway';
+import type { CapabilitySelection } from '@/lib/assistant-protocol';
+import { classifyError } from '@/lib/error-classifier';
+import type { ProviderSummary } from '@/lib/tauri-adapter';
 import {
   jobCreate,
   jobUpdate,
@@ -22,6 +27,7 @@ import {
   type JobScheduleType,
 } from '@/lib/jobs-api';
 import {
+  hasAmbiguousLegacyCapabilities,
   validateJobForm,
   validateCronExpression,
   nextCronRuns,
@@ -37,6 +43,8 @@ const ERROR_FIELD_OF: Partial<Record<keyof FormState, JobFormField>> = {
   name: 'name',
   prompt: 'prompt',
   project_path: 'project_path',
+  provider_id: 'provider_id',
+  model_id: 'model_id',
   once_value: 'schedule_value',
   interval_value: 'schedule_value',
   cron_value: 'schedule_value',
@@ -59,6 +67,10 @@ interface FormState {
   description: string;
   project_path: string;
   prompt: string;
+  provider_id: string;
+  model_id: string;
+  key_id: string;
+  capability_selection: CapabilitySelection | null;
   schedule_type: JobScheduleType;
   /** once 型存 datetime-local 本地值，提交时转 ISO8601 */
   once_value: string;
@@ -74,6 +86,10 @@ function initialFormState(initial: JobDetail | null): FormState {
     description: initial?.description ?? '',
     project_path: initial?.project_path ?? '',
     prompt: initial?.prompt ?? '',
+    provider_id: initial?.provider_id ?? '',
+    model_id: initial?.model_id ?? '',
+    key_id: initial?.key_id ?? '',
+    capability_selection: initial?.capability_selection ?? null,
     schedule_type: SCHEDULE_TYPES.includes(type) ? type : 'interval',
     once_value: type === 'once' && initial ? isoToLocalInput(initial.schedule_value) : '',
     interval_value: type === 'interval' && initial ? initial.schedule_value : '',
@@ -115,6 +131,23 @@ function FieldError({ msg }: { msg?: string }) {
   );
 }
 
+function classifiedErrorText(error: unknown, locale: string): {
+  category: ReturnType<typeof classifyError>['category'];
+  message: string;
+  retryable: boolean;
+} {
+  const classified = classifyError(error, { locale });
+  const message =
+    classified.actionHint && classified.actionHint !== classified.userMessage
+      ? `${classified.userMessage} ${classified.actionHint}`
+      : classified.userMessage;
+  return {
+    category: classified.category,
+    message,
+    retryable: classified.retryable,
+  };
+}
+
 /** 编辑中切走视图会整体卸载 JobsPage；草稿落 sessionStorage 以便返回后恢复。 */
 function draftStorageKey(initial: JobDetail | null): string {
   return `natives:jobform-draft:${initial?.id ?? '__new__'}`;
@@ -134,12 +167,53 @@ function readDraft(initial: JobDetail | null): FormState | null {
 
 export default function JobFormModal({ open, initial, onClose, onSaved }: JobFormModalProps) {
   const locale = useLocale();
+  const gateway = useMemo(() => createDefaultGateway(), []);
   // 表单重置依赖父级 key 重挂载（open/编辑对象变化时换 key），不在 effect 里同步 setState。
   // 挂载时优先恢复视图切换前遗留的草稿（显式取消/保存成功才清除）。
   const [form, setForm] = useState<FormState>(() => (open ? readDraft(initial) : null) ?? initialFormState(initial));
   const [errors, setErrors] = useState<JobFormErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(true);
+  const [providerError, setProviderError] = useState<{
+    message: string;
+    retryable: boolean;
+  } | null>(null);
+  const [providerReloadKey, setProviderReloadKey] = useState(0);
+  const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false);
+  const [capabilitiesTouched, setCapabilitiesTouched] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const providerApi = window.nativesAPI?.provider;
+        if (!providerApi) {
+          throw new Error('IPC handler missing: provider.list');
+        }
+        const list = await providerApi.list();
+        if (cancelled) return;
+        setProviders(Array.isArray(list) ? list : []);
+        setProviderError(null);
+      } catch (error) {
+        if (cancelled) return;
+        setProviderError(classifiedErrorText(error, locale));
+      } finally {
+        if (!cancelled) setProvidersLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [locale, providerReloadKey]);
+
+  useEffect(
+    () => () => {
+      void gateway.disconnect();
+    },
+    [gateway],
+  );
 
   const clearDraft = () => {
     try { window.sessionStorage.removeItem(draftStorageKey(initial)); } catch { /* ignore */ }
@@ -161,6 +235,59 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
         return next;
       });
     }
+  };
+
+  const selectedProvider = providers.find((provider) => provider.id === form.provider_id) ?? null;
+  const providerModels = selectedProvider?.models ?? [];
+  const providerKeys = (selectedProvider?.keys ?? []).filter((key) => key.isActive);
+  const capabilityCount =
+    (form.capability_selection?.skills?.length ?? 0) +
+    (form.capability_selection?.mcp_servers?.length ?? 0) +
+    (form.capability_selection?.expert_id ? 1 : 0) +
+    (form.capability_selection?.team_id ? 1 : 0);
+  const hasLegacyCapabilityBinding =
+    !capabilitiesTouched &&
+    hasAmbiguousLegacyCapabilities(
+      initial?.capability_selection,
+      initial?.capability_refs,
+    );
+
+  const selectProvider = (providerId: string) => {
+    const provider = providers.find((item) => item.id === providerId);
+    const models = provider?.models ?? [];
+    const modelId =
+      provider?.defaultModel && models.some((model) => model.id === provider.defaultModel)
+        ? provider.defaultModel
+        : (models[0]?.id ?? '');
+    const keys = (provider?.keys ?? []).filter((key) => key.isActive);
+    const keyId =
+      keys.find((key) => key.id === provider?.primaryKeyId)?.id ?? keys[0]?.id ?? '';
+    setForm((previous) => {
+      const next = {
+        ...previous,
+        provider_id: providerId,
+        model_id: modelId,
+        key_id: keyId,
+      };
+      try {
+        window.sessionStorage.setItem(draftStorageKey(initial), JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+    setErrors((previous) => {
+      if (!previous.provider_id && !previous.model_id) return previous;
+      const next = { ...previous };
+      delete next.provider_id;
+      delete next.model_id;
+      return next;
+    });
+  };
+
+  const selectCapabilities = (selection: CapabilitySelection | null) => {
+    set('capability_selection', selection);
+    setCapabilitiesTouched(true);
   };
 
   // 渲染期禁止取当前时间（react-hooks 纯函数约束），预览与过期提示均在输入事件里计算
@@ -191,6 +318,8 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
       name: form.name,
       prompt: form.prompt,
       project_path: form.project_path,
+      provider_id: form.provider_id,
+      model_id: form.model_id,
       schedule_type: form.schedule_type,
       schedule_value: scheduleValue,
     });
@@ -209,10 +338,21 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
       schedule_value: submittedValue,
       project_path: form.project_path.trim(),
       prompt: form.prompt,
+      provider_id: form.provider_id.trim(),
+      model_id: form.model_id.trim(),
       permission_profile: form.permission_profile,
+      runtime_id: initial?.runtime_id ?? 'native',
     };
+    const keyId = form.key_id.trim();
+    if (initial || keyId) payload.key_id = keyId;
+    if (!initial || capabilitiesTouched || initial.capability_selection) {
+      payload.capability_selection = form.capability_selection ?? {
+        skills: [],
+        mcp_servers: [],
+      };
+    }
     const description = form.description.trim();
-    if (description) payload.description = description;
+    if (initial || description) payload.description = description;
 
     setSubmitting(true);
     try {
@@ -224,18 +364,19 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
       onClose();
     } catch (err) {
       const code = extractJobErrorCode(err);
+      const classified = classifiedErrorText(err, locale);
       if (code === 'JOB_INVALID_SCHEDULE') {
         setErrors({ schedule_value: 'errInvalidBackendSchedule' });
       } else if (code === 'JOB_INVALID_PROJECT_PATH') {
         setErrors({ project_path: 'errInvalidBackendProjectPath' });
       } else if (code) {
-        setFormError(t(locale, `jobs.errors.${code}`));
-      } else {
         setFormError(
-          t(locale, 'jobs.errors.unknown', {
-            message: err instanceof Error ? err.message : String(err),
-          }),
+          classified.category === 'UNKNOWN'
+            ? t(locale, `jobs.errors.${code}`)
+            : `${t(locale, `jobs.errors.${code}`)} ${classified.message}`,
         );
+      } else {
+        setFormError(classified.message);
       }
     } finally {
       setSubmitting(false);
@@ -247,7 +388,7 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
       isOpen={open}
       onClose={() => { clearDraft(); onClose(); }}
       title={t(locale, initial ? 'jobs.form.editTitle' : 'jobs.form.createTitle')}
-      width={560}
+      width={640}
       closeOnEscape={!submitting}
       closeOnBackdropClick={!submitting}
       showCloseButton={!submitting}
@@ -314,6 +455,150 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
             placeholder={t(locale, 'jobs.form.promptPlaceholder')}
           />
           <FieldError msg={errText(errors.prompt)} />
+        </div>
+
+        {/* 执行路由：必须显式选择真实 Provider / Model，后端不做默认猜测。 */}
+        <div>
+          <label style={FIELD_LABEL_STYLE} htmlFor="job-form-provider">
+            {t(locale, 'jobs.form.provider')}
+          </label>
+          <select
+            id="job-form-provider"
+            className="input"
+            value={form.provider_id}
+            onChange={(event) => selectProvider(event.target.value)}
+            disabled={providersLoading}
+          >
+            <option value="">
+              {t(locale, providersLoading ? 'jobs.form.providerLoading' : 'jobs.form.providerPlaceholder')}
+            </option>
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.displayName || provider.id}
+              </option>
+            ))}
+          </select>
+          {providerError ? (
+            <div role="alert" style={{ color: 'var(--danger)', fontSize: '0.75rem', marginTop: 4 }}>
+              {t(locale, 'jobs.form.providerLoadFailed', { message: providerError.message })}
+              {providerError.retryable ? (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => {
+                    setProvidersLoading(true);
+                    setProviderError(null);
+                    setProviderReloadKey((value) => value + 1);
+                  }}
+                  style={{ marginLeft: 8, fontSize: '0.75rem' }}
+                >
+                  {t(locale, 'common.retry')}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {!providersLoading && !providerError && providers.length === 0 ? (
+            <div style={{ color: 'var(--text-disabled)', fontSize: '0.75rem', marginTop: 4 }}>
+              {t(locale, 'jobs.form.providerEmpty')}
+            </div>
+          ) : null}
+          <FieldError msg={errText(errors.provider_id)} />
+        </div>
+
+        <div>
+          <label style={FIELD_LABEL_STYLE} htmlFor="job-form-model">
+            {t(locale, 'jobs.form.model')}
+          </label>
+          {providerModels.length > 0 ? (
+            <select
+              id="job-form-model"
+              className="input"
+              value={form.model_id}
+              onChange={(event) => set('model_id', event.target.value)}
+              disabled={!form.provider_id}
+            >
+              <option value="">{t(locale, 'jobs.form.modelPlaceholder')}</option>
+              {providerModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.displayName || model.id}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="job-form-model"
+              className="input"
+              value={form.model_id}
+              onChange={(event) => set('model_id', event.target.value)}
+              placeholder={t(locale, 'jobs.form.modelPlaceholder')}
+              disabled={!form.provider_id}
+              spellCheck={false}
+            />
+          )}
+          <FieldError msg={errText(errors.model_id)} />
+        </div>
+
+        {selectedProvider ? (
+          <div>
+            <label style={FIELD_LABEL_STYLE} htmlFor="job-form-key">
+              {t(locale, 'jobs.form.providerKey')}
+            </label>
+            <select
+              id="job-form-key"
+              className="input"
+              value={form.key_id}
+              onChange={(event) => set('key_id', event.target.value)}
+            >
+              <option value="">{t(locale, 'jobs.form.defaultProviderKey')}</option>
+              {providerKeys.map((key) => (
+                <option key={key.id} value={key.id}>
+                  {key.label || key.maskedKey || key.id}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
+        <div style={{ position: 'relative' }}>
+          <span style={FIELD_LABEL_STYLE}>{t(locale, 'jobs.form.capabilities')}</span>
+          <button
+            type="button"
+            className="btn"
+            data-capability-trigger
+            aria-expanded={capabilityPickerOpen}
+            onClick={() => setCapabilityPickerOpen((value) => !value)}
+          >
+            {capabilityCount > 0
+              ? t(locale, 'jobs.form.capabilityCount', { count: capabilityCount })
+              : t(locale, 'jobs.form.capabilityNone')}
+          </button>
+          {capabilityPickerOpen ? (
+            <CapabilityPickerPopover
+              locale={locale}
+              gateway={gateway}
+              selection={form.capability_selection}
+              onChange={selectCapabilities}
+              onClose={() => setCapabilityPickerOpen(false)}
+            />
+          ) : null}
+          {hasLegacyCapabilityBinding ? (
+            <div
+              role="alert"
+              style={{ color: 'var(--warning)', fontSize: '0.75rem', marginTop: 6 }}
+            >
+              {t(locale, 'jobs.form.legacyCapabilitiesWarning', {
+                count: initial?.capability_refs?.length ?? 0,
+              })}
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => selectCapabilities(null)}
+                style={{ marginLeft: 8, fontSize: '0.75rem' }}
+              >
+                {t(locale, 'jobs.form.legacyCapabilitiesClear')}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {/* 调度类型（三态切换） */}

@@ -417,10 +417,13 @@ impl HookHandler for NativePromptHook {
                 reason: "parent Run not found".into(),
             };
         };
-        let provider = crate::production::RealProvider {
-            provider_id: run.provider_id,
-            key_id: run.key_id,
-        };
+        let controls = crate::production::run_request_controls(run.effort.as_deref());
+        let provider = crate::routing::RoutedProvider::new(crate::routing::load_plan(
+            run.provider_id,
+            run.key_id,
+            run.model_id.clone(),
+        ))
+        .with_controls(controls);
         let model = self.model_override.as_deref().unwrap_or(&run.model_id);
         let input = assistant_protocol::v2::redact_secrets(&request.input.to_string());
         let cancel = match crate::global_run_manager()

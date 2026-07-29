@@ -107,8 +107,8 @@ impl DaemonCapabilities {
             hooks: true,
             subagents: true,
             mcp: true,
-            extensions: true,
-            scheduler: true,
+            extensions: false,
+            scheduler: false,
             event_replay: true,
             credential_broker: true,
             runtimes,
@@ -126,7 +126,15 @@ mod tests {
         assert_eq!(caps.protocol_version, "2.0.0");
         assert!(caps.event_replay);
         assert!(caps.tools);
+        assert!(caps.hooks);
+        assert!(caps.subagents);
+        assert!(caps.mcp);
+        assert!(!caps.scheduler);
+        assert!(!caps.extensions);
         assert!(caps.methods.iter().any(|m| m == "run.start"));
+        assert!(caps.methods.iter().any(|m| m == "extension.list"));
+        assert!(!caps.methods.iter().any(|m| m.starts_with("scheduler.")));
+        assert!(!caps.methods.iter().any(|m| m == "extension.enable"));
         assert!(caps.runtimes.iter().any(|r| r.id == "native"));
         assert!(!caps.methods.iter().any(|m| m == "mcp.auth.oauthStart"));
     }

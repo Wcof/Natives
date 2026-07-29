@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Persisted into every `ResolvedHarnessSnapshot` so an old Run's evidence
 /// stays interpretable after the topology evolves.
-pub const TOPOLOGY_VERSION: u32 = 1;
+pub const TOPOLOGY_VERSION: u32 = 2;
 
 /// A fixed Engine execution phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -122,6 +122,26 @@ pub struct Stage {
     pub order: u8,
     pub hook_points: &'static [HookPoint],
     pub safe_points: &'static [SafePoint],
+}
+
+/// One fixed relationship between execution stages.
+///
+/// Edges live beside stages so every Renderer observes the same path instead
+/// of rebuilding a second, eventually stale graph from stage IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TopologyEdge {
+    pub from: StageId,
+    pub to: StageId,
+    pub kind: TopologyEdgeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopologyEdgeKind {
+    Flow,
+    Branch,
+    Loop,
+    Signal,
 }
 
 const ENGINE: &str = "agent-core::engine";
@@ -239,6 +259,72 @@ pub const STAGES: &[Stage] = &[
     },
 ];
 
+/// The fixed Native execution path. Labels remain a Renderer concern because
+/// they are localized, while the relationship and its semantics are engine
+/// facts.
+pub const EDGES: &[TopologyEdge] = &[
+    TopologyEdge {
+        from: StageId::Session,
+        to: StageId::Context,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::Context,
+        to: StageId::Provider,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::Provider,
+        to: StageId::ToolGate,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::ToolGate,
+        to: StageId::Permission,
+        kind: TopologyEdgeKind::Branch,
+    },
+    TopologyEdge {
+        from: StageId::Permission,
+        to: StageId::ToolExecute,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::ToolGate,
+        to: StageId::Subagent,
+        kind: TopologyEdgeKind::Branch,
+    },
+    TopologyEdge {
+        from: StageId::ToolExecute,
+        to: StageId::Compact,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::Subagent,
+        to: StageId::Compact,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::Compact,
+        to: StageId::Stop,
+        kind: TopologyEdgeKind::Flow,
+    },
+    TopologyEdge {
+        from: StageId::Stop,
+        to: StageId::Terminal,
+        kind: TopologyEdgeKind::Branch,
+    },
+    TopologyEdge {
+        from: StageId::Stop,
+        to: StageId::Provider,
+        kind: TopologyEdgeKind::Loop,
+    },
+    TopologyEdge {
+        from: StageId::CrossStage,
+        to: StageId::ToolGate,
+        kind: TopologyEdgeKind::Signal,
+    },
+];
+
 /// The stage that owns `event`. Total by construction — see the tests.
 pub fn stage_of(event: HookEvent) -> StageId {
     hook_point_of(event).0
@@ -305,6 +391,28 @@ mod tests {
     fn stage_order_is_dense_and_ascending() {
         for (index, stage) in STAGES.iter().enumerate() {
             assert_eq!(stage.order as usize, index, "stage order must be its index");
+        }
+    }
+
+    #[test]
+    fn every_topology_edge_references_a_real_stage() {
+        let stage_ids: Vec<StageId> = STAGES.iter().map(|stage| stage.id).collect();
+        assert!(!EDGES.is_empty());
+        for edge in EDGES {
+            assert!(
+                stage_ids.contains(&edge.from),
+                "missing edge source: {}",
+                edge.from
+            );
+            assert!(
+                stage_ids.contains(&edge.to),
+                "missing edge target: {}",
+                edge.to
+            );
+            assert_ne!(
+                edge.from, edge.to,
+                "self edges are not part of the Native topology"
+            );
         }
     }
 

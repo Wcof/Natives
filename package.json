@@ -4,7 +4,7 @@
   "description": "AI Steam Base — Tauri Desktop Application Container",
   "private": true,
   "scripts": {
-    "web:dev": "NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
+    "web:dev": "node scripts/ensure-port.mjs && NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
     "daemon:build": "cargo build -p natives-agent-daemon",
     "daemon:bundle": "bash scripts/daemon/prepare-sidecar.sh",
     "dev": "tauri dev",

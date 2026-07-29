@@ -112,15 +112,6 @@ fn inspect_claude_config(project_path: &Path) -> Option<DiscoveredExternalSource
         }
     }
 
-    if mapped.is_empty() && unsupported.is_empty() && status == "active" {
-        mapped.extend([
-            "PreToolUse".to_string(),
-            "PostToolUse".to_string(),
-            "SessionStart".to_string(),
-        ]);
-        unsupported.push("ClaudePluginHook".to_string());
-    }
-
     Some(DiscoveredExternalSource {
         runtime: "claude".into(),
         source: rel_source,
@@ -205,11 +196,6 @@ fn inspect_codex_config(project_path: &Path) -> Option<DiscoveredExternalSource>
         }
     }
 
-    if mapped.is_empty() && unsupported.is_empty() && status == "active" {
-        mapped.push("PreToolUse".to_string());
-        unsupported.push("CodexCustomAction".to_string());
-    }
-
     Some(DiscoveredExternalSource {
         runtime: "codex".into(),
         source: rel_source,
@@ -249,5 +235,28 @@ fn parse_codex_toml_lines(content: &str, mapped: &mut Vec<String>, unsupported: 
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_external_directories_do_not_fabricate_hooks() {
+        let root =
+            std::env::temp_dir().join(format!("external-inspector-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join(".claude")).unwrap();
+        fs::create_dir_all(root.join(".codex")).unwrap();
+
+        let report = inspect_external_runtimes(Some(&root));
+        assert_eq!(report.discovered.len(), 2);
+        assert!(report
+            .discovered
+            .iter()
+            .all(|source| source.supported_events_mapped.is_empty()
+                && source.unsupported_events.is_empty()));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

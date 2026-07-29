@@ -5,7 +5,7 @@ import { Eye, Edit2, Pencil } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
-import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
+import { getExt, isMarkdownFile, isCsvFile, isArchiveFile, shouldPreviewAsCode } from '@/lib/follow-mode';
 import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
 import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { parseUnifiedDiff } from '@/lib/diff-utils';
@@ -19,6 +19,7 @@ import MonacoDiffView from './MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
 import CsvTable from './CsvTable';
 import ArchivePreview from './ArchivePreview';
+import FileMarkdownPreview from './FileMarkdownPreview';
 import { getHttpPort } from '@/lib/natives-http-port';
 
 // Lazy-loaded heavy components
@@ -106,7 +107,7 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
   const isMarkdown = isMarkdownFile(entry.name);
   const isCsv = isCsvFile(entry.name);
   const isArchive = isArchiveFile(entry.name);
-  const isCode = entry.kind === 'text' && !isMarkdown && !isCsv;
+  const isCode = shouldPreviewAsCode(entry.kind, entry.name, editMode);
 
   useEffect(() => {
     getHttpPort().then(setHttpPort).catch(() => {});
@@ -146,6 +147,7 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
                 isMarkdown={isMarkdown}
                 isCsv={isCsv}
                 isArchive={isArchive}
+                editMode={editMode}
                 onImageClick={setLightboxSrc}
               />
             )
@@ -249,12 +251,13 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
   return url;
 }
 
-function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageClick }: {
+function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, editMode, onImageClick }: {
   entry: FileEntry;
   locale: Locale;
   isMarkdown: boolean;
   isCsv: boolean;
   isArchive: boolean;
+  editMode: boolean;
   onImageClick: (src: string) => void;
 }) {
   const blobUrl = useFileBlobUrl(entry.path, entry.kind);
@@ -360,7 +363,9 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
 
   // Markdown WYSIWYG (Milkdown Crepe)
   if (isMarkdown) {
-    return <MdWysiwygPreview path={entry.path} locale={locale} />;
+    return editMode
+      ? <MdWysiwygEditor path={entry.path} locale={locale} />
+      : <FileMarkdownPreview path={entry.path} locale={locale} />;
   }
 
   // HTML isolated preview
@@ -392,7 +397,7 @@ function CsvPreview({ path, locale, delimiter }: { path: string; locale: Locale;
 
 // ── Markdown WYSIWYG Preview ──
 
-function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
+function MdWysiwygEditor({ path, locale }: { path: string; locale: Locale }) {
   const { content, mtime, reload } = useFileContent(path);
   const dirtyRef = useRef(false);
   const { save, hasConflict, overwrite, dismissConflict } = useEditorSave({

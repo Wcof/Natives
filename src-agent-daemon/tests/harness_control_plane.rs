@@ -277,6 +277,12 @@ fn workspace_returns_a_structured_draft_document() {
     assert_eq!(workspace["draft"]["revision"], draft["revision"]);
     assert!(workspace["draft"]["document"].is_object());
     assert!(workspace["draft"].get("document_json").is_none());
+    assert!(workspace["prompt_plan"]["blocks"].is_array());
+    assert!(workspace["prompt_plan"]["layers"].is_array());
+    assert!(workspace["prompt_plan"]["effective_prompt_hash"]
+        .as_str()
+        .is_some_and(|hash| !hash.is_empty()));
+    assert_eq!(workspace["prompt_plan"]["raw_persisted"], false);
 }
 
 #[test]
@@ -326,6 +332,77 @@ fn a_run_snapshot_cascades_with_its_run() {
     assert_eq!(after, 0, "snapshot must cascade with its run");
 }
 
+#[test]
+fn run_snapshot_records_the_exact_bounded_tool_plan_without_descriptions() {
+    let _serial = serial();
+    isolate_env();
+    let (conversation, run) = seed_run("tool-plan");
+    let schemas = vec![agent_core::ToolSchema {
+        name: "mcp__docs__search".into(),
+        description: "prompt-like text that must not persist".into(),
+        input_schema: serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+    }];
+    control_plane::resolve_run_with_tool_plan(&run, Some(&conversation), None, None, &schemas)
+        .expect("resolve");
+
+    let snapshot = call(
+        "harness.run.getSnapshot",
+        serde_json::json!({"run_id": run}),
+    );
+    assert_eq!(
+        snapshot["snapshot"]["tool_plan"]["tools"][0]["name"],
+        "mcp__docs__search"
+    );
+    assert_eq!(
+        snapshot["snapshot"]["tool_plan"]["tools"][0]["source"],
+        "mcp:docs"
+    );
+    assert!(snapshot["snapshot"]["tool_plan"]["tools"][0]
+        .get("description")
+        .is_none());
+    assert!(!snapshot.to_string().contains("prompt-like text"));
+}
+
+#[test]
+fn run_snapshot_is_persisted_only_after_effective_prompt_is_compiled() {
+    let _serial = serial();
+    isolate_env();
+    let (conversation, run) = seed_run("prompt-evidence");
+    let mut plan =
+        control_plane::prepare_run_with_tool_plan(&run, Some(&conversation), None, None, &[])
+            .expect("prepare");
+
+    let store = repository::store().expect("open store");
+    let conn = store.conn().expect("connection");
+    let before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM harness_run_snapshot WHERE run_id = ?1",
+            [&run],
+            |row| row.get(0),
+        )
+        .expect("count before bind");
+    assert_eq!(before, 0, "preparation must not persist partial evidence");
+
+    let mut builder = harness_core::PromptPlanBuilder::new();
+    builder.add_builtin_surface("native", "effective provider prompt");
+    let compiled = builder.build();
+    control_plane::persist_run_plan(&mut plan, &compiled).expect("persist");
+
+    let snapshot = call(
+        "harness.run.getSnapshot",
+        serde_json::json!({"run_id": run}),
+    );
+    assert_eq!(
+        snapshot["snapshot"]["prompt_plan"]["effective_prompt_hash"],
+        compiled.effective_prompt_hash
+    );
+    assert_eq!(
+        snapshot["snapshot"]["prompt_plan"]["layers"][0]["kind"],
+        "builtin_surface"
+    );
+    assert!(!snapshot.to_string().contains("effective provider prompt"));
+}
+
 // ── seeded defaults ─────────────────────────────────────────────────────────
 
 #[test]
@@ -364,6 +441,17 @@ fn topology_covers_every_stage_and_every_hook_event() {
     let value = call("harness.topology", json!({}));
     let stages = value["stages"].as_array().expect("stages");
     assert_eq!(stages.len(), 11);
+    let edges = value["edges"]
+        .as_array()
+        .expect("authoritative topology edges");
+    assert_eq!(edges.len(), 12);
+    assert!(edges.iter().all(|edge| {
+        stages.iter().any(|stage| stage["id"] == edge["from"])
+            && stages.iter().any(|stage| stage["id"] == edge["to"])
+    }));
+    assert!(edges.iter().any(|edge| {
+        edge["from"] == "stop" && edge["to"] == "provider" && edge["kind"] == "loop"
+    }));
 
     let events: Vec<String> = stages
         .iter()

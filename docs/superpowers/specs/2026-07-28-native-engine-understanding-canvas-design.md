@@ -10,7 +10,7 @@
 执行引擎首页必须让不懂 Agent、Harness、Hook 或 Prompt 的用户完成三件事：
 
 1. **看懂**：5 秒内知道 Native 引擎现在能不能工作。
-2. **理解**：沿一张画布理解请求如何被处理，以及问题会影响哪一步。
+2. **理解**：沿一张完整画布理解请求如何被处理，以及问题会影响哪个真实节点。
 3. **配置**：点击节点后进入该步骤真正支持的 Harness、Hook、Prompt 或能力配置。
 
 同一张画布还必须支持选择一条真实 Run 进行执行审计。用户沿与“工作原理”相同的路径，核对本次实际使用的 Harness、Prompt、Hook、模型与工具证据。
@@ -21,11 +21,11 @@
 
 | 方向 | 优点 | 缺点 | 决策 |
 |---|---|---|---|
-| A. 结论 + 执行路径 | 同时支持理解、定位和配置；健康时也有持续价值 | 需要严谨设计两层节点 | **采用，并升级为画布主界面** |
+| A. 结论 + 完整执行路径 | 同时支持理解、定位和配置；健康时也有持续价值 | 需要让全部技术节点保持易读 | **采用，并升级为画布主界面** |
 | B. 健康检查与修复中心 | 出问题时处理最快 | 健康时价值弱；原理与高级配置被藏深 | 不采用 |
 | C. 完整技术拓扑优先 | 工程信息密度最高 | 新用户无法在 5 秒内理解 | 仅作为“展开技术节点” |
 
-画布是主界面，不是在工程表单下附加一张图。固定执行拓扑由引擎提供；用户不能删除、重排或重新连线。
+画布是主界面，不是在工程表单下附加一张图。固定执行拓扑由引擎提供；后端返回多少个阶段，画布就逐个展示多少个节点。用户不能删除、重排或重新连线。
 
 ## 3. 首屏信息架构
 
@@ -41,26 +41,24 @@
    - `当前无法工作`
    - 同时显示问题数量和一个主要操作；结论不得由 Renderer 猜测。
 3. **执行画布**
-   - 默认显示 5 个白话节点。
+   - 默认完整显示引擎返回的每一个真实节点，不设固定数量上限。
    - 技术名只作为次级标签或提示。
-   - “展开技术节点”显示引擎返回的完整固定拓扑。
+   - 视觉分组帮助理解，但不得合并、折叠或省略真实节点。
 4. **节点详情抽屉**
    - 点击节点打开右侧抽屉，桌面端不遮住全部路径。
    - 窄屏改为底部抽屉，保留返回画布入口。
 
-默认画布节点：
+当前拓扑使用以下阅读分区，每个 stage 仍保持独立节点：
 
-| 用户节点 | 用户理解 | 对应真实技术阶段 |
+| 阅读分区 | 真实节点 | 白话目的 |
 |---|---|---|
-| 收到请求 | 接收目标、项目和上下文 | `session` |
-| 准备身份与规则 | 决定身份、规则和要携带的提示词 | `context` |
-| 调用 AI 模型 | 选择并请求可用模型 | `provider` |
-| 使用能力 | 判断工具、确认权限、执行工具或子 Agent | `tool_gate`、`permission`、`tool_execute`、`subagent` |
-| 返回结果 | 整理上下文、判断停止并返回结果 | `compact`、`stop`、`terminal` |
+| 开始与准备 | `session`、`context` | 接收请求并准备身份、规则与上下文 |
+| 思考与决策 | `provider`、`tool_gate` | 调用模型并判断下一步需要什么能力 |
+| 受控执行 | `permission`、`tool_execute`、`subagent` | 确认权限并执行工具或派发子 Agent |
+| 整理与结束 | `compact`、`stop`、`terminal` | 控制上下文、判断继续或结束并返回结果 |
+| 全程观察 | `cross_stage` | 承载跨阶段通知和异步事件 |
 
-`cross_stage` 是技术视图中的跨阶段通知总线，不伪装为第六个普通用户步骤。
-
-归并只改变表现层。每个用户节点必须携带其真实 stage IDs，状态和审计证据均由这些真实节点聚合，Renderer 不生成合成执行事实。
+分区属于 Renderer 的阅读辅助，不是新的执行实体。状态、审计证据和配置入口始终绑定单个真实 stage ID。未来出现未知 stage ID 时，画布必须使用后端 ID 作为保底名称并确定性排布，不能因前端尚无文案而丢失节点。
 
 ## 4. 两种画布模式
 
@@ -72,7 +70,7 @@
 - 为什么需要它？
 - 出问题会影响什么？
 
-每个节点显示名称、一个短句、健康状态和问题数。点击后，抽屉默认打开“看懂”页签；高级字段默认折叠。
+每个真实节点显示顺序、白话名称、一个短句、证据状态和相关 Hook/Prompt 数量。点击后，抽屉默认打开“看懂”页签；技术模块等高级字段默认折叠。
 
 ### 4.2 执行审计
 
@@ -161,15 +159,23 @@ Harness 审计显示 profile、scope、binding、published version、snapshot ha
 
 ### 7.3 配置
 
-配置页签只展示该节点真正可配置的项目：
+配置页签只展示该真实节点真正支持的项目：
 
-| 用户节点 | 配置入口 |
+| 真实节点 | 配置入口 |
 |---|---|
-| 收到请求 | 会话范围、`SessionStart` / `UserPromptSubmit` Hook |
-| 准备身份与规则 | Harness 绑定、Prompt Blocks、Prompt 来源与顺序、上下文 Hook |
-| 调用 AI 模型 | 跳转 Provider 所有者；请求相关 Hook 如协议支持 |
-| 使用能力 | Hook、工具保护、权限设置，以及 Capability Hub 中的 MCP/Skill/Extension/Agent Profile |
-| 返回结果 | Compact/Stop/SessionEnd/Error Hook、结果 Prompt Block（如 schema 支持） |
+| `session` | Harness 绑定、`SessionStart` / `UserPromptSubmit` Hook |
+| `context` | Prompt Blocks、Prompt 来源与顺序 |
+| `provider` | Provider 所有者、模型路由的只读投影 |
+| `tool_gate` | `PreToolUse` Hook、能力选择与工具保护 |
+| `permission` | 权限策略、`PermissionRequest` / `PermissionDenied` Hook |
+| `tool_execute` | `PostToolUse` / `PostToolUseFailure` Hook、工具能力 |
+| `subagent` | 子 Agent 能力、`SubagentStart` / `SubagentStop` Hook |
+| `compact` | `PreCompact` / `PostCompact` Hook |
+| `stop` | `Stop` / `StopFailure` Hook |
+| `terminal` | `SessionEnd` / `Error` Hook |
+| `cross_stage` | `Notification` Hook 与事件观察 |
+
+未知节点没有已证明的配置契约时，显示“当前没有可用配置”，仍保留其理解和证据页签。
 
 “配置”不代表画布拥有所有数据。Provider、Capability Hub、权限与运行保护保持各自权威，画布通过委托入口打开所属编辑面。Harness 只编辑 Blueprint 中 schema 允许的 Hook overlay、Natives Hook 和 Prompt Block。
 
@@ -186,7 +192,7 @@ Renderer → Tauri Host → UDS → Agent Daemon
 需要增加或完成 typed workspace projection，至少包含：
 
 - 经过验证的 global/project/session scope；
-- 固定 stage/edge 及用户节点分组标识；
+- 完整固定 stage/edge；不得因 Renderer 无本地元数据而过滤 stage；
 - 节点健康、结构化 issues 和检查时间；
 - Hook/Prompt attachment 摘要和所有者引用；
 - capability snapshot 引用与分组计数；
@@ -223,7 +229,7 @@ Scheduler/Job 不属于执行引擎画布，继续由独立任务模块拥有。
 ### P0：看懂并能进入配置
 
 - 执行引擎单一入口；
-- 白话 5 节点画布和完整技术节点切换；
+- 按真实数量完整展示的白话节点画布；
 - 总体健康、结构化问题和确认式处理；
 - 节点“看懂 / 执行证据 / 配置”抽屉；
 - 各权威配置入口；
@@ -242,7 +248,8 @@ P0 只能展示后端真实返回的现有证据。缺少 P1 wire/telemetry 时�
 
 ### 12.1 单元与契约测试
 
-- 11 个固定技术阶段到 5 个用户节点的映射完整且无重复遗漏；
+- 后端返回的每个 stage 恰好渲染一个节点，未知 stage 也不遗漏；
+- 当前 11 个固定技术阶段的阅读分区、白话文案和配置入口完整；
 - 总体健康聚合覆盖正常、影响、阻断、未知和部分数据缺失；
 - 工作原理与执行审计切换不改变节点身份和选择上下文；
 - 历史 Run 只读取 frozen snapshot/run events，不读取 Draft；
@@ -264,7 +271,7 @@ P0 只能展示后端真实返回的现有证据。缺少 P1 wire/telemetry 时�
 
 ### 12.3 产品验收场景
 
-1. 非技术用户打开页面，能说出“现在能不能工作”和 Native 引擎的 5 步处理过程。
+1. 非技术用户打开页面，能看到全部真实节点，并能借助分区说出 Native 引擎从请求进入到结果返回的完整过程。
 2. Provider 不可用时，用户能在“调用 AI 模型”节点看到影响、原因和正确配置入口。
 3. Hook 失败时，用户能定位到“使用能力”节点，看到脱敏输入/输出差异、失败策略和处理建议。
 4. Prompt 顺序偏离预期时，用户能看到实际 layer 顺序、版本/digest 和差异，但看不到无权查看的敏感正文。

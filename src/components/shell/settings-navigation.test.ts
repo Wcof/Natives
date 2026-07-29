@@ -8,19 +8,17 @@ import {
   normalizeSettingsTarget,
 } from './settings-navigation';
 
-test('settings sections include engine capability admin page', () => {
+test('settings exposes one execution-engine entry and redirects legacy links', () => {
   assert.deepEqual(SETTINGS_SECTIONS, [
     'general',
     'appearance',
     'providers',
     'runtime',
-    'engineering',
-    'engine',
     'plugins',
   ]);
   assert.equal(SETTINGS_SECTIONS.includes('env' as never), false);
-  assert.equal(getSettingsSection('settings:engine'), 'engine');
-  assert.equal(getSettingsSection('settings:engineering'), 'engineering');
+  assert.equal(getSettingsSection('settings:engine'), 'runtime');
+  assert.equal(getSettingsSection('settings:engineering'), 'runtime');
 });
 
 test('settings entry points normalize to general', () => {

@@ -1,13 +1,14 @@
 //! jobs/runner.rs — 30s tick 循环与到期处理（契约第 4 节）
 //!
 //! tick_once 是可注入时钟的纯逻辑 + store 调用，在 spawn_blocking 线程内
-//! 执行（R-B6：阻塞 SQLite 不占 async worker）。未接线（NotWired）语义：
-//! 不写 run 行，仅推进 next_run；once 任务一次性写一条 skipped run 行。
+//! 执行（R-B6：阻塞 SQLite 不占 async worker）。生产使用 NativeJobDispatcher；
+//! NotWired 语义仅用于 fail-closed：不写伪 run，once 记录 skipped。
 
 use super::dispatch::{DispatchError, DispatchReceipt, JobDispatcher, Trigger};
 use super::schedule;
 use super::store::{self, JobDefinition, JobRunRecord};
 use crate::{Error, Result};
+use assistant_protocol::v2::{RunStatusV2, RunV2};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use std::path::Path;
@@ -31,6 +32,73 @@ pub struct TickReport {
 
 fn new_run_row_id() -> String {
     format!("run_{}", uuid::Uuid::new_v4())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReconciledRunProjection {
+    status: &'static str,
+    finished_at: Option<String>,
+    error_code: Option<String>,
+}
+
+fn reconcile_run_projection(run: &RunV2) -> ReconciledRunProjection {
+    let status = match run.status {
+        RunStatusV2::Created | RunStatusV2::Queued => "dispatched",
+        RunStatusV2::Preparing
+        | RunStatusV2::Running
+        | RunStatusV2::WaitingPermission
+        | RunStatusV2::WaitingSubagent
+        | RunStatusV2::Cancelling => "running",
+        RunStatusV2::Completed => "succeeded",
+        RunStatusV2::Failed | RunStatusV2::Interrupted => "failed",
+        RunStatusV2::Cancelled => "cancelled",
+    };
+    ReconciledRunProjection {
+        status,
+        finished_at: run.finished_at.as_ref().map(schedule::format_utc),
+        error_code: run.error_code.clone(),
+    }
+}
+
+#[async_trait::async_trait]
+trait JobRunLookup: Send + Sync {
+    async fn get_run(&self, run_id: &str) -> std::result::Result<Option<RunV2>, String>;
+}
+
+struct DaemonRunLookup;
+
+#[async_trait::async_trait]
+impl JobRunLookup for DaemonRunLookup {
+    async fn get_run(&self, run_id: &str) -> std::result::Result<Option<RunV2>, String> {
+        crate::daemon_authority::get_run(run_id).await
+    }
+}
+
+fn reconcile_nonterminal_runs(conn: &Connection, lookup: &dyn JobRunLookup) -> Result<usize> {
+    let mut updated = 0;
+    for row in store::list_reconcilable_runs(conn)? {
+        let Some(run_id) = row.run_id.as_deref() else {
+            continue;
+        };
+        let run = match block_on_run_lookup(lookup, run_id) {
+            Ok(Some(run)) => run,
+            Ok(None) => continue,
+            Err(_) => continue,
+        };
+        let projected = reconcile_run_projection(&run);
+        store::update_run_result(
+            conn,
+            &row.id,
+            projected.status,
+            row.run_id.as_deref(),
+            row.conversation_id.as_deref(),
+            projected.error_code.as_deref(),
+            row.detail.as_deref(),
+            projected.finished_at.as_deref(),
+        )?;
+        updated += 1;
+    }
+    Ok(updated)
 }
 
 /// 单次 tick：过期回收 → 扫描到期任务 → 未接线推迟 / 派发。
@@ -98,7 +166,7 @@ pub fn tick_once(
             continue;
         }
 
-        // wired（P1 链路）：写 pending run 行 → dispatch → dispatched | dispatch_error
+        // wired 链路：写 pending run 行 → dispatch → dispatched | dispatch_error
         match dispatch_due_job(conn, dispatcher, &job, &spec, now) {
             Ok(_) => report.dispatched += 1,
             Err(_) => report.dispatch_errors += 1,
@@ -107,7 +175,7 @@ pub fn tick_once(
     Ok(report)
 }
 
-/// 到期任务的 wired 派发（P1 链路；P0 无 wired 适配器，不会走到这里）。
+/// 到期任务的 wired 派发。
 fn dispatch_due_job(
     conn: &Connection,
     dispatcher: &dyn JobDispatcher,
@@ -116,6 +184,8 @@ fn dispatch_due_job(
     now: DateTime<Utc>,
 ) -> Result<DispatchReceipt> {
     let now_iso = schedule::format_utc(&now);
+    let scheduled_at = schedule::parse_utc(&job.next_run)
+        .ok_or_else(|| Error::Message("JOB_INVALID_SCHEDULE: invalid next_run".to_string()))?;
     let next_iso = schedule::next_run(spec, now).map(|t| schedule::format_utc(&t));
     let row_id = new_run_row_id();
     store::insert_run(
@@ -158,7 +228,7 @@ fn dispatch_due_job(
         return Err(Error::Message("JOB_INVALID_PROJECT_PATH".to_string()));
     }
 
-    match block_on_dispatch(dispatcher, job, Trigger::Schedule) {
+    match block_on_dispatch(dispatcher, job, Trigger::Schedule, scheduled_at) {
         Ok(receipt) => {
             store::update_run_result(
                 conn,
@@ -181,18 +251,23 @@ fn dispatch_due_job(
         }
         Err(err) => {
             let (code, status) = dispatch_error_meta(&err);
+            let retry_next = if matches!(&err, DispatchError::Engine(_)) {
+                Some(job.next_run.as_str())
+            } else {
+                next_iso.as_deref()
+            };
             store::update_run_result(
                 conn,
                 &row_id,
                 "dispatch_error",
                 None,
                 None,
-                Some(code),
+                Some(&code),
                 Some(&err.to_string()),
                 Some(&now_iso),
             )?;
-            store::mark_dispatch_attempt(conn, &job.id, status, &now_iso, next_iso.as_deref())?;
-            Err(Error::Message(code.to_string()))
+            store::mark_dispatch_attempt(conn, &job.id, &status, &now_iso, retry_next)?;
+            Err(Error::Message(code))
         }
     }
 }
@@ -230,7 +305,7 @@ pub fn run_job_manual(
             detail: None,
         },
     )?;
-    match block_on_dispatch(dispatcher, job, Trigger::Manual) {
+    match block_on_dispatch(dispatcher, job, Trigger::Manual, now) {
         Ok(receipt) => {
             store::update_run_result(
                 conn,
@@ -260,12 +335,12 @@ pub fn run_job_manual(
                 "dispatch_error",
                 None,
                 None,
-                Some(code),
+                Some(&code),
                 Some(&err.to_string()),
                 Some(&now_iso),
             )?;
-            store::mark_dispatch_attempt(conn, &job.id, status, &now_iso, Some(&job.next_run))?;
-            Err(Error::Message(code.to_string()))
+            store::mark_dispatch_attempt(conn, &job.id, &status, &now_iso, Some(&job.next_run))?;
+            Err(Error::Message(code))
         }
     }
 }
@@ -280,11 +355,25 @@ fn project_path_valid(job: &JobDefinition) -> bool {
     }
 }
 
-fn dispatch_error_meta(err: &DispatchError) -> (&'static str, &'static str) {
+fn dispatch_error_meta(err: &DispatchError) -> (String, String) {
     match err {
-        DispatchError::NotWired => (NOT_WIRED_CODE, NOT_WIRED_STATUS),
-        DispatchError::InvalidJob(_) => ("invalid_job", "dispatch_error:invalid_job"),
-        DispatchError::Engine(_) => ("engine", "dispatch_error:engine"),
+        DispatchError::NotWired => (NOT_WIRED_CODE.to_string(), NOT_WIRED_STATUS.to_string()),
+        DispatchError::InvalidJob(message) => {
+            let code = message
+                .split(':')
+                .next()
+                .filter(|value| value.starts_with("JOB_"))
+                .unwrap_or("JOB_INVALID_JOB")
+                .to_string();
+            (
+                code.clone(),
+                format!("dispatch_error:{}", code.to_ascii_lowercase()),
+            )
+        }
+        DispatchError::Engine(_) => (
+            "JOB_ENGINE_ERROR".to_string(),
+            "dispatch_error:job_engine_error".to_string(),
+        ),
     }
 }
 
@@ -295,15 +384,32 @@ fn block_on_dispatch(
     dispatcher: &dyn JobDispatcher,
     job: &JobDefinition,
     trigger: Trigger,
+    scheduled_at: DateTime<Utc>,
 ) -> std::result::Result<DispatchReceipt, DispatchError> {
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle.block_on(dispatcher.dispatch(job, trigger)),
+        Ok(handle) => handle.block_on(dispatcher.dispatch(job, trigger, scheduled_at)),
         Err(_) => match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
-            Ok(rt) => rt.block_on(dispatcher.dispatch(job, trigger)),
+            Ok(rt) => rt.block_on(dispatcher.dispatch(job, trigger, scheduled_at)),
             Err(e) => Err(DispatchError::Engine(format!("no async runtime: {e}"))),
+        },
+    }
+}
+
+fn block_on_run_lookup(
+    lookup: &dyn JobRunLookup,
+    run_id: &str,
+) -> std::result::Result<Option<RunV2>, String> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(lookup.get_run(run_id)),
+        Err(_) => match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt.block_on(lookup.get_run(run_id)),
+            Err(error) => Err(format!("no async runtime: {error}")),
         },
     }
 }
@@ -318,6 +424,7 @@ pub fn start() {
                 interval.tick().await;
                 let joined = tokio::task::spawn_blocking(|| -> Result<TickReport> {
                     let conn = crate::db::get_assistant_db_conn()?;
+                    let _ = reconcile_nonterminal_runs(&conn, &DaemonRunLookup)?;
                     let dispatcher = super::global_dispatcher();
                     tick_once(&conn, dispatcher.as_ref(), Utc::now())
                 })
@@ -338,8 +445,71 @@ pub fn start() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::dispatch::NotWiredDispatcher;
+    use crate::jobs::dispatch::{NativeJobDispatcher, NotWiredDispatcher};
+    use assistant_protocol::v2::{RunStatusV2, RunV2};
     use chrono::TimeZone;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingDispatcher {
+        calls: Mutex<Vec<(Trigger, DateTime<Utc>)>>,
+    }
+
+    struct StaticRunLookup {
+        result: std::result::Result<Option<RunV2>, String>,
+    }
+
+    struct EngineErrorDispatcher;
+
+    #[async_trait::async_trait]
+    impl JobDispatcher for EngineErrorDispatcher {
+        fn is_wired(&self) -> bool {
+            true
+        }
+
+        async fn dispatch(
+            &self,
+            _job: &JobDefinition,
+            _trigger: Trigger,
+            _scheduled_at: DateTime<Utc>,
+        ) -> std::result::Result<DispatchReceipt, DispatchError> {
+            Err(DispatchError::Engine("uds unavailable".to_string()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl JobRunLookup for StaticRunLookup {
+        async fn get_run(&self, _run_id: &str) -> std::result::Result<Option<RunV2>, String> {
+            self.result.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl JobDispatcher for RecordingDispatcher {
+        fn is_wired(&self) -> bool {
+            true
+        }
+
+        async fn dispatch(
+            &self,
+            job: &JobDefinition,
+            trigger: Trigger,
+            scheduled_at: DateTime<Utc>,
+        ) -> std::result::Result<DispatchReceipt, DispatchError> {
+            self.calls
+                .lock()
+                .expect("recording dispatcher lock")
+                .push((trigger, scheduled_at));
+            Ok(DispatchReceipt {
+                conversation_id: format!("job-{}", job.id),
+                run_id: format!("run-{}", job.id),
+                idempotency_key: super::super::dispatch::idempotency_key(
+                    &job.id,
+                    scheduled_at.timestamp(),
+                ),
+            })
+        }
+    }
 
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory db");
@@ -391,6 +561,131 @@ mod tests {
     fn run_count(conn: &Connection) -> i64 {
         conn.query_row("SELECT COUNT(*) FROM task_runs", [], |r| r.get(0))
             .expect("count runs")
+    }
+
+    fn insert_job_run(conn: &Connection, status: &str) {
+        let job = base_job("j1", "interval", "300", "2026-07-30T00:00:00Z");
+        store::insert_job(conn, &job).expect("insert job");
+        store::insert_run(
+            conn,
+            &JobRunRecord {
+                id: "job-run-row".to_string(),
+                job_id: job.id,
+                started_at: "2026-07-29T03:00:00Z".to_string(),
+                finished_at: None,
+                status: Some(status.to_string()),
+                result_summary: None,
+                error: None,
+                run_id: Some("daemon-run".to_string()),
+                conversation_id: Some("job-j1".to_string()),
+                trigger: Some("schedule".to_string()),
+                error_code: None,
+                detail: None,
+            },
+        )
+        .expect("insert run");
+    }
+
+    fn daemon_run(status: RunStatusV2) -> RunV2 {
+        RunV2 {
+            id: "daemon-run".to_string(),
+            conversation_id: "job-j1".to_string(),
+            status,
+            parent_run_id: None,
+            agent_profile_id: None,
+            provider_id: "provider-a".to_string(),
+            key_id: None,
+            model_id: "model-a".to_string(),
+            permission_profile: "readonly".to_string(),
+            trigger_message_id: None,
+            started_at: None,
+            finished_at: None,
+            error_code: None,
+            step_count: 0,
+            max_steps: 50,
+            project_path: Some("/tmp".to_string()),
+            project_id: None,
+            project_identity_version: None,
+            retry_count: 0,
+            created_at: None,
+            last_event_sequence: 0,
+            idempotency_key: None,
+            effort: None,
+            runtime_id: Some("native".to_string()),
+            revision: 0,
+            capability_snapshot: None,
+        }
+    }
+
+    #[test]
+    fn completed_daemon_run_projects_to_succeeded_with_real_finish_time() {
+        let mut run = daemon_run(RunStatusV2::Completed);
+        run.finished_at = Some(utc(2026, 7, 29, 3, 4, 5));
+
+        let projected = reconcile_run_projection(&run);
+
+        assert_eq!(projected.status, "succeeded");
+        assert_eq!(
+            projected.finished_at.as_deref(),
+            Some("2026-07-29T03:04:05Z")
+        );
+        assert_eq!(projected.error_code, None);
+    }
+
+    #[test]
+    fn daemon_lifecycle_projects_to_the_job_run_state_machine() {
+        let cases = [
+            (RunStatusV2::Created, "dispatched"),
+            (RunStatusV2::Queued, "dispatched"),
+            (RunStatusV2::Preparing, "running"),
+            (RunStatusV2::Running, "running"),
+            (RunStatusV2::WaitingPermission, "running"),
+            (RunStatusV2::WaitingSubagent, "running"),
+            (RunStatusV2::Cancelling, "running"),
+            (RunStatusV2::Failed, "failed"),
+            (RunStatusV2::Interrupted, "failed"),
+            (RunStatusV2::Cancelled, "cancelled"),
+        ];
+
+        for (status, expected) in cases {
+            let projected = reconcile_run_projection(&daemon_run(status));
+            assert_eq!(projected.status, expected, "daemon status={status:?}");
+        }
+    }
+
+    #[test]
+    fn reconciliation_updates_nonterminal_job_run_from_daemon_truth() {
+        let conn = test_conn();
+        insert_job_run(&conn, "dispatched");
+        let mut run = daemon_run(RunStatusV2::Completed);
+        run.finished_at = Some(utc(2026, 7, 29, 3, 4, 5));
+        let lookup = StaticRunLookup {
+            result: Ok(Some(run)),
+        };
+
+        let updated = reconcile_nonterminal_runs(&conn, &lookup).expect("reconcile");
+
+        assert_eq!(updated, 1);
+        let (runs, _) = store::list_runs(&conn, Some("j1"), 10, 0).expect("runs");
+        assert_eq!(runs[0].status.as_deref(), Some("succeeded"));
+        assert_eq!(runs[0].finished_at.as_deref(), Some("2026-07-29T03:04:05Z"));
+    }
+
+    #[test]
+    fn reconciliation_keeps_local_state_when_daemon_is_temporarily_unreachable() {
+        let conn = test_conn();
+        insert_job_run(&conn, "dispatched");
+        let lookup = StaticRunLookup {
+            result: Err("uds unavailable".to_string()),
+        };
+
+        let updated = reconcile_nonterminal_runs(&conn, &lookup).expect("best-effort reconcile");
+
+        assert_eq!(updated, 0);
+        let (runs, _) = store::list_runs(&conn, Some("j1"), 10, 0).expect("runs");
+        assert_eq!(runs[0].status.as_deref(), Some("dispatched"));
+        assert_eq!(runs[0].finished_at, None);
+        assert_eq!(runs[0].error_code, None);
     }
 
     #[test]
@@ -496,5 +791,78 @@ mod tests {
             .expect_err("not wired must error");
         assert!(err.to_string().starts_with("JOB_DISPATCHER_NOT_WIRED"));
         assert_eq!(run_count(&conn), 0);
+    }
+
+    #[test]
+    fn scheduled_dispatch_uses_the_planned_due_time_not_the_late_tick_time() {
+        let conn = test_conn();
+        let job = base_job("j5", "interval", "300", "2026-07-26T11:00:00Z");
+        store::insert_job(&conn, &job).expect("insert");
+        let dispatcher = RecordingDispatcher::default();
+        let tick_time = utc(2026, 7, 26, 12, 0, 0);
+
+        let report = tick_once(&conn, &dispatcher, tick_time).expect("tick");
+
+        assert_eq!(report.dispatched, 1);
+        let calls = dispatcher.calls.lock().expect("calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, Trigger::Schedule);
+        assert_eq!(calls[0].1, utc(2026, 7, 26, 11, 0, 0));
+    }
+
+    #[test]
+    fn transient_engine_error_keeps_the_original_due_time_for_idempotent_retry() {
+        let conn = test_conn();
+        let job = base_job("j6", "interval", "300", "2026-07-26T11:00:00Z");
+        store::insert_job(&conn, &job).expect("insert");
+
+        let report =
+            tick_once(&conn, &EngineErrorDispatcher, utc(2026, 7, 26, 12, 0, 0)).expect("tick");
+
+        assert_eq!(report.dispatch_errors, 1);
+        let stored = store::get_job(&conn, "j6").expect("get").expect("job");
+        assert_eq!(
+            stored.next_run, "2026-07-26T11:00:00Z",
+            "the next tick must retry with the same scheduled_at/idempotency key"
+        );
+        assert!(stored.enabled);
+    }
+
+    #[test]
+    fn engine_dispatch_failure_uses_a_structured_job_error_code() {
+        let conn = test_conn();
+        let job = base_job("j-engine", "interval", "300", "2026-07-27T00:00:00Z");
+        store::insert_job(&conn, &job).expect("insert");
+
+        let error = run_job_manual(
+            &conn,
+            &EngineErrorDispatcher,
+            &job,
+            utc(2026, 7, 26, 12, 0, 0),
+        )
+        .expect_err("engine failure");
+
+        assert!(error.to_string().starts_with("JOB_ENGINE_ERROR"));
+        let (runs, _) = store::list_runs(&conn, Some("j-engine"), 10, 0).expect("runs");
+        assert_eq!(runs[0].error_code.as_deref(), Some("JOB_ENGINE_ERROR"));
+    }
+
+    #[test]
+    fn invalid_job_dispatch_preserves_the_specific_structured_error_code() {
+        let conn = test_conn();
+        let job = base_job("j7", "interval", "300", "2026-07-27T00:00:00Z");
+        store::insert_job(&conn, &job).expect("insert");
+
+        let error = run_job_manual(
+            &conn,
+            &NativeJobDispatcher::new(),
+            &job,
+            utc(2026, 7, 26, 12, 0, 0),
+        )
+        .expect_err("provider is missing");
+
+        assert!(error.to_string().starts_with("JOB_INVALID_PROVIDER"));
+        let (runs, _) = store::list_runs(&conn, Some("j7"), 10, 0).expect("runs");
+        assert_eq!(runs[0].error_code.as_deref(), Some("JOB_INVALID_PROVIDER"));
     }
 }

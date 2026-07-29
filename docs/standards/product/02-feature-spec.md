@@ -283,14 +283,13 @@ Dashboard
 ├── 能力子系统（daemon）
 │   ├── MCP 运行时（stdio/HTTP/SSE、信任门控；mcp.call 有意禁用、OAuth 流未实现；管理界面见 K 域能力库） P1 ← mcp_runtime.rs
 │   ├── Skills（项目/用户级扫描、信任 + 启用注入；管理界面见 K 域能力库） P1 ← skill_store.rs
-│   ├── 定时任务（后端 CRUD + 到期真实拉起 Run；前端仅只读列表） P1 ← scheduler_store.rs
 │   ├── 记忆 Memory（关键词检索，无 embedding；暂无用户界面） P2 ← memory_store.rs
-│   ├── 扩展 Extension（发现/信任/启停；无安装更新，前端只读） P2 ← extension_store.rs
+│   ├── 扩展 Extension（仅发现诊断；运行时未接线，不广告可执行/启用） P2 ← extension_store.rs
 │   └── 后台任务存储（task.list / wait / cancel）           P1 ← task_store.rs
 └── 引擎设置页
     ├── 执行引擎面板（三引擎选择/五态状态解释/偏好漂移警告/工具开关/自愈熔断；能力矩阵为静态说明文案，非实时探测） P0 ← RuntimePanel.tsx
-    ├── 引擎能力面板（限流设置可写；MCP/调度/扩展/Skills 只读列表） P1 ← EngineCapabilitiesPanel.tsx
-    └── Native Harness 控制面（设计就绪；后端 Phase 2 partial，Settings UI 未实施） P0 ← native-harness-control-plane-design.md
+    ├── 引擎能力面板（先按 daemon 能力广告门控；库存与 Run 已选/已加载证据分离；Scheduler 仅跳转独立任务模块；Extension 仅发现诊断） P1 ← EngineCapabilitiesPanel.tsx
+    └── Native Harness 控制面（Run Snapshot / Prompt layers/hash / Tool Plan hash 已接设置页；真实 Provider 桌面验收待） P0 ← NativeHarnessPanel.tsx
         ├── Overview / Blueprint / Hooks / Prompts              P0
         ├── Live Runs / Audit                                   P1
         └── Run 级不可变 Hook + Prompt Plan 快照                P0
@@ -446,20 +445,19 @@ Provider 路由与账号池
 
 ### L. 任务（Job Module）【Hub】— P0 〔ADR-0015〕
 
-主要依据：ADR-0015。数据权威在 Host SQLite（复用扩展 `scheduled_tasks` + `task_runs`）；调度判定归本模块（30 秒 tick），执行经 `JobDispatcher` 接缝委托助理模块走 `run.*` 单执行接口，禁止旁路。P0 派发未接线（唯一适配器 `NotWiredDispatcher`），前端三态诚实展示。
+主要依据：ADR-0015。数据权威在 Host SQLite（复用扩展 `scheduled_tasks` + `task_runs`）；调度判定归本模块（30 秒 tick），生产派发器为 `NativeJobDispatcher`，只经 Host `daemon_authority` → UDS → Agent Daemon `run.*` 单执行接口，禁止旁路。
 
 ```
 任务（一次性 / 周期性自动化任务，代码命名空间 jobs）
 ├── 任务 CRUD（8 个 job_* 命令面）                        P0 ← src-tauri/src/commands/jobs.rs、src-tauri/src/jobs/store.rs
 │   ├── schedule 三型（once=ISO8601 / interval≥60s / cron 5 字段含 * N */N A-B A,B,C） P0 ← src-tauri/src/jobs/schedule.rs
-│   ├── 能力绑定字段只存不校验（agent_profile_id / capability_refs，派发期校验——接缝 B） P0 ← store.rs
-│   └── 校验错误码（JOB_NOT_FOUND / JOB_INVALID_SCHEDULE / JOB_INVALID_PROJECT_PATH / JOB_DISPATCHER_NOT_WIRED） P0 ← commands/jobs.rs
+│   ├── 能力绑定写 `capability_selection`，复用 capability_refs JSON TEXT 列；旧空数组映射空选择、旧非空数组禁止猜类型 P0 ← commands/jobs.rs、dispatch.rs
+│   └── 校验错误码（JOB_NOT_FOUND / JOB_INVALID_SCHEDULE / JOB_INVALID_PROJECT_PATH / JOB_INVALID_CAPABILITY_SELECTION） P0 ← commands/jobs.rs
 ├── 到期扫描 tick（30s、可注入时钟、Once 幂等、once 过期 skipped、expires_at 到期停用） P0 ← src-tauri/src/jobs/runner.rs
-├── 派发接缝（JobDispatcher trait；P0 仅 NotWiredDispatcher，不写假 run 行）   P0 ← src-tauri/src/jobs/dispatch.rs
-│   └── 助理模块适配器（映射 CreateRunRequest/StartRunRequest 走 run 主链）    P1 ← 未实现（接缝 A）
-├── 运行历史（task_runs 状态机 pending→dispatched→running→终态 + skipped/dispatch_error） P0 ← store.rs、JobRunsView.tsx
-├── 任务 UI（列表/启停/表单/历史；未接线时「立即执行」禁用并展示原因；页面隐藏暂停轮询） P0 ← src/components/jobs/、src/lib/jobs-api.ts
-└── scheduler_store 收敛（jobs.json 迁入 Host 表 / 15s loop 退役 / cron 下沉共享 crate） P1 ← ADR-0015 第 4 节
+├── 派发接缝（显式 scheduled_at；conversation/job 幂等键稳定；仅 queued Run start） P0 ← src-tauri/src/jobs/dispatch.rs
+├── 运行历史（定期 get_run 对账；queued→dispatched、活动态→running、终态与真实 finished_at/error_code 回写） P0 ← runner.rs、store.rs、JobRunsView.tsx
+├── 任务 UI（列表/启停/表单/历史；显式选择真实 Provider/Model/Key 与 CapabilitySelection；页面隐藏暂停轮询） P0 ← src/components/jobs/、src/lib/jobs-api.ts
+└── 旧 Scheduler 收敛（Host 启动事务迁移 jobs.json、ID 幂等/冲突回滚、只读备份+marker；Daemon store/15s loop 已删除） P0 ← migration.rs、ADR-0015 第 4 节
 ```
 
 ---

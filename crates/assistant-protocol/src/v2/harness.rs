@@ -1,4 +1,4 @@
-//! Typed Harness control-plane streaming contracts.
+//! Typed Harness control-plane streaming and workspace projection contracts.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,19 @@ pub struct HarnessSubscribeResponse {
     pub reset_required: bool,
 }
 
+// ── Workspace Projection Wire Authorities ────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessWorkspaceGetRequest {
+    #[serde(default, alias = "profileId")]
+    pub profile_id: Option<String>,
+    #[serde(default, alias = "projectId")]
+    pub project_id: Option<String>,
+    #[serde(default, alias = "projectPath")]
+    pub project_path: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,5 +70,26 @@ mod tests {
         assert_eq!(request.cursor, 7);
         assert_eq!(request.wait_ms, 20);
         assert_eq!(request.limit, 100);
+    }
+
+    #[test]
+    fn workspace_request_deserializes_correctly() {
+        let req: HarnessWorkspaceGetRequest = serde_json::from_value(serde_json::json!({
+            "profile_id": "profile",
+            "projectId": "project",
+            "projectPath": "/app"
+        }))
+        .unwrap();
+        assert_eq!(req.profile_id, Some("profile".to_string()));
+        assert_eq!(req.project_id, Some("project".to_string()));
+        assert_eq!(req.project_path, Some("/app".to_string()));
+    }
+
+    #[test]
+    fn workspace_request_rejects_unknown_wire_fields() {
+        assert!(serde_json::from_value::<HarnessWorkspaceGetRequest>(
+            serde_json::json!({"invented": true})
+        )
+        .is_err());
     }
 }

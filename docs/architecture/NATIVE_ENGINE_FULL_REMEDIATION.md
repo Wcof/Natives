@@ -2,7 +2,7 @@
 
 > **唯一进度与契约源**（2026-07-23 文档清理后）：其它 `NATIVE_ENGINE_*` 快照 / task pack / linkage 状态文档已删除，请只更新本文件 + [`NATIVE-DAEMON-CAPABILITY-MAP.md`](./NATIVE-DAEMON-CAPABILITY-MAP.md) + [`NATIVE_ENGINE_ENV.md`](./NATIVE_ENGINE_ENV.md)。  
 > 冻结日期：2026-07-17（契约）；进度随代码更新  
-> **最近一次逐行核对**：2026-07-26，基线 `682453e3`，证据见 [`EXECUTION-ENGINE-CAPABILITY-AUDIT.md`](./EXECUTION-ENGINE-CAPABILITY-AUDIT.md)  
+> **最近一次增量核对**：2026-07-29，Native Harness 证据闭环与 ADR-0015 Job/Scheduler 收敛
 > 基座：`agent-core` / `provider-adapters` / `capability-gateway` / `assistant-protocol` / `src-agent-daemon` / `src-tauri`  
 > 分层约束：[`standards/technical/01-layering.md`](../standards/technical/01-layering.md)  
 > 状态语义：`not_started` | `in_progress` | `partial` | `done` | `blocked`  
@@ -16,7 +16,7 @@
 | 生产闭环最小集 | P0/P1 阻断项（工具消息、detached start、UDS façade、Gateway 门、Broker、project_path、persist-first） | **partial → 接近 done** |
 | **真正全量完成** | 本文件 DoD 全部满足 | **仍未完成：真网 Anthropic 与 GUI headed E2E 待环境验收** |
 
-**2026-07-26 校正**：`mcp` / `extensions` / `scheduler` 三个布尔位现已在 `crates/assistant-protocol/src/v2/capabilities.rs:106-111` 硬编码为 `true`，对应模块（`mcp_runtime.rs` 1014 行、`extension_store.rs` 233 行、`scheduler_store.rs` 577 行）确实存在并已接 RPC。原文「不得当作完成」的告诫方向需反转：现在的风险不是低报布尔位，而是 **`methods` 广告面里有 6 个方法在 `rpc.rs` 没有 handler**（见第 3 节），违反「广告 ⊆ 可调」。布尔位为 `true` 也只代表**最小真实表面**（如 extension 仅 list/enable、无隔离模型），不代表该能力域完成。
+**2026-07-29 校正**：Daemon 能力广告按真实执行面收敛为 `tools/hooks/subagents/mcp=true`、`extensions/scheduler=false`。`scheduler.*` 已从 Daemon 广告与生产分发移除，调度归 Host Job Module；`extension.list` 只保留发现诊断并返回 `discovered_not_executable`，未接隔离运行时前不宣称 enable/executable。Native Harness 的 Prompt 与 Tool 证据已复用同一生产编译/冻结结果；真正全量完成仍受真实 Provider 桌面验收门禁约束。
 
 生产模式目标：
 
@@ -41,7 +41,7 @@ Native Agent Daemon
   ├─ MCP Runtime
   ├─ Subagent Runtime
   ├─ Memory / Compaction
-  ├─ Extension / Skill / Scheduler
+  ├─ Capability-selected MCP / Skill / Expert / Team
   └─ Persistent Event Store (persist-first)
 ```
 
@@ -64,9 +64,9 @@ Native Agent Daemon
 | Credential | Tauri Broker / natives.db sidecar | credential.resolve | 无密钥事件 | `partial` | 维持。子 Agent 路由只存 ID（`subagent_store.rs:53-57`） |
 | 事件存储 | EventSequencer + 默认持久化 | run.replay / subscribe | sequence | `partial` | 维持 |
 | MCP | `src-agent-daemon/mcp_runtime` + 能力库 `capability/mcp.rs`（可信配置源，ADR-0016） | mcp.* RPC + capability.mcp.*（CRUD/导入/Hub） | MCP events | `partial` | **2026-07-27 上调证据**：2026-07-26 记的「只有 tools 面」已作废。协议面现为 `initialize` / `tools/list` / `tools/call` / `resources/list` / `resources/read` / `resources/templates/list` / `prompts/list` / `prompts/get` / `roots/list` / `notifications/*` 摄取（`mcp_runtime.rs` 2494 行，`list_resources:1263`、`list_resource_templates:1299`、`read_resource:1327`、`list_prompts:1481`、`get_prompt:1497`、`set_roots:1529`、`client_roots:1548`、`notifications:1591`），RPC 全部分发（`rpc.rs:1890`–`:2016`），协议面回归 `tests/mcp_protocol_surface.rs`（432 行）。`initialize` 的 `capabilities` 逐字捕获为 `McpServerCapabilities`，区分「未握手 / 不广告 / 广告但为空」三态。stdio 读循环按 `method`+`id` / `method` / `id` 三态解复用，服务端中途插入通知或反问 `roots/list` 不再让会话永久错帧。能力库侧：注册 / 按选可用 / schema 注入已落地（`capability/mcp.rs` 590 行，`enabled_runtime_configs:334`、`env_for_server:382`），`env` 里 secret-like key 必须写成 `secret:<id>` 引用（明文直接拒，`capability/mcp.rs:494`），untrusted MCP 在 resolve 与 invoke 两处双门拒；会话按 run 引用计数回收（`mcp_runtime.rs` `acquire:364` / `release_run:378` / `reap_idle:404`）。缺口：`sampling/*` 与 `elicitation/*` **刻意不实现且不进方法目录**（信任方向反转），收到时回 `-32601`；`mcp.call` 对 RPC 关闭（`direct_mcp_call_disabled`）；OAuth browser 流仅 Host 侧 `mcp_oauth_start`（`src-tauri/src/commands/mcp_oauth.rs:61`），daemon 侧 redirect 仍 unsupported |
-| Extension | `src-agent-daemon/extension_store.rs` | `extension.list` / `extension.enable` | — | `not_started` → **`partial`** | 233 行真实实现，RPC 已分发（`rpc.rs:1874` / `:1885`）。缺口：**无隔离模型**——`permissions` 字段只读入不消费（`extension_store.rs:119-127`），信任来源是 manifest 自称的 `trusted`；`extension-host/`（TS，503 行）未接入任何构建或运行路径 |
+| Extension | `src-agent-daemon/extension_store.rs` | `extension.list` 发现诊断 | — | **`not_started`（执行）** | 返回 `discovered_not_executable`；`extension.enable` 不广告并 fail-closed。`extension-host/` 尚未接入隔离执行主链 |
 | Skill | `src-agent-daemon/skill_store.rs` + 能力库 `capability/skills.rs`（ADR-0016） | `skill.list` + capability.skill.*；注入 system prompt / 按选注入 `prompt_for_selection` | — | `not_started` → **`partial`** | 276 行真实实现，RPC 已分发（`rpc.rs:1934`），注入点 `production.rs:442`（父）/ `:788`（子）。**2026-07-27 补录**：能力库侧元数据/分类/导入/按选注入已落地（`capability/skills.rs` 599 行，`prompt_for_selection:460`）。缺口：`skill_store` 侧仍不解析 YAML frontmatter、`inject_prompt` 拼全文无渐进披露（`skill_store.rs:178-184`）、`trusted: true` 硬编码（`:125-127`）、无 per-skill `allowed-tools`；能力库 git 导入为 P1 未做 |
-| Scheduler | `src-agent-daemon/scheduler_store.rs` | `scheduler.*` | 到期 tick → 走 Run 主链 | `not_started` → **`partial`** | 577 行真实实现，6 个方法全部分发（`rpc.rs:2025`–`:2185`） |
+| Job / Scheduler | Host `src-tauri/src/jobs/` | `job_*`；派发经 `daemon_authority::create_run/start_run` | Host `task_runs` + Daemon Run | **`done`（自动化）** | ADR-0015 P1 已落地：显式 scheduled_at 幂等、CapabilitySelection、Run 对账、旧 jobs.json 事务迁移；Daemon scheduler store/loop/RPC 已退役。真实 Provider 手动+定时桌面验收待 |
 | Memory | `src-agent-daemon/memory_store.rs` | `memory.search` / `memory.add` | — | `not_started` → **`partial`** | 193 行，RPC 已分发（`rpc.rs:1953` / `:1974`）。关键词扫描，无 embedding |
 | Compaction | `agent-core` `context.rs` / `compaction.rs` | engine 内 | PreCompact / PostCompact | `not_started` → **`partial`** | 两条独立路径均已接线：`compaction.rs:70` ←`engine.rs:1067`（工具输出截断）、`context.rs:254` ←`production.rs:455`（历史裁剪）。**核心缺口：两者都是纯机械截断，无模型摘要**；且 PostCompact 返回值被 `let _ =` 丢弃（`engine.rs:1088`），hook 无回写通道 |
 | Artifact/Attachment | `artifact_store.rs` + `conversation_store` | `artifact.*` | Artifact events | `partial` | 维持。`artifact.list/open` 已分发（`rpc.rs:1630` / `:1830`）；`artifact.reveal` 仅 Host 侧实现（`src-tauri/src/assistant_service.rs:99`），daemon 无 handler。附件在 daemon 侧降级为文本占位（`conversation_store.rs:506`） |
@@ -132,10 +132,10 @@ Native Agent Daemon
 | tool.list | implemented | **implemented** | `:1124` |
 | agent.list | implemented | **unsupported** | 目录内未广告，合规 |
 | subagent.list / touch / switchRoute | implemented | ~~unsupported~~ → **implemented** | `:1097` |
-| extension.list / enable | implemented | ~~unsupported~~ → **implemented** | `:1874` / `:1885` |
+| extension.list / enable | list 诊断 / enable 未广告 | **list=discovered_not_executable；enable=unsupported** | 执行隔离未接线前 fail-closed |
 | skill.list | implemented | ~~未列~~ → **implemented** | `:1934` |
 | memory.search / add | implemented | ~~未列~~ → **implemented** | `:1953` / `:1974` |
-| scheduler.*（6 个） | implemented | ~~unsupported~~ → **implemented** | `:2025` / `:2036` / `:2052` / `:2080` / `:2122` / `:2167` |
+| scheduler.*（6 个旧方法） | 未广告 | **unsupported** | 调度已归 Host Job Module；Daemon 分发与 15 秒 loop 已删除 |
 | mcp.list / start / stop / liveness / reconnect | implemented | ~~unsupported~~ → **implemented** | `:1334` / `:1350` / `:1398` / `:1450` / `:1482` |
 | mcp.auth.set / status / clear | implemented | **implemented** | `:1514` / `:1565` / `:1598` |
 | mcp.call | — | **故意关闭** | `:1430`，返回 `direct_mcp_call_disabled`，不进广告面 |
@@ -236,7 +236,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | 3 | Run 生命周期/恢复 + 默认事件持久化 | **partial**（状态机扩展；默认 JSONL 事件；Run 快照恢复为 Interrupted；start 幂等；禁 cwd project_path） |
 | 4 | Provider 全量 + Tool Gateway 安全 | **partial**（Gateway 主路径已有；Anthropic 真网门禁待凭据） |
 | 5 | Hook 全量 + Subagent 产品化 | **done（fixture 双 Provider 父子 Engine 闭环；真网凭据验收待）** |
-| 6 | MCP / Extension / Skill / Scheduler / Memory / Artifact | **partial**（六域**全部**已落地最小真实表面并接 RPC，非 `not_started`：MCP 主链与 SSE + 完整协议面（resources / resource templates / prompts / roots / notifications）+ 能力库注册与按选可用（ADR-0016）、`extension_store` 233 行、`skill_store` 276 行 + 能力库按选注入、`scheduler_store` 577 行、`memory_store` 193 行、`artifact_store` 217 行。缺口：Extension 无隔离模型且能力库未覆盖；Skill 无 frontmatter/渐进披露、能力库 git 导入 P1 未做；Memory 仅关键词扫描；Compaction 无模型摘要；MCP `sampling`/`elicitation` 刻意不实现（回 `-32601`）；OAuth browser 流仅 Host 侧 `mcp_oauth_start`，daemon 侧 redirect 明确 unsupported） |
+| 6 | MCP / Extension / Skill / Memory / Artifact；Job 归 Host | **partial**（MCP 主链与完整协议面 + 能力库按选可用已落地；Skill 按选注入、Memory、Artifact 有最小真实表面。Extension 仅发现诊断、执行仍 `not_started`。Scheduler 已从 Daemon 移除并由 Host Job Module 独立闭环。其余缺口：Skill 渐进披露/能力库 git 导入、Memory embedding、模型摘要 Compaction、MCP OAuth daemon redirect） |
 | 7 | UI 全路径联调 | **partial**（project_path 强制 + subscribe push_wait；headed GUI 录证待） |
 | 8 | 旧链删除 + 发布门禁 | **done（旧执行文件物理删除；审计脚本 + strict warning + CI runner）** |
 
@@ -265,7 +265,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 - [ ] 工具 / Hook / Permission / Subagent 同一主链  
 - [ ] Subagent 独立 Provider/Key/Model  
 - [ ] 事件默认持久化 + replay/subscribe  
-- [ ] MCP / Extension / Skill / Scheduler / Memory / Compaction / Artifact / Attachment 完成  
+- [ ] MCP / Extension / Skill / Memory / Compaction / Artifact / Attachment 完成（Scheduler 不属 Daemon；Host Job 自动化已闭环）
 - [ ] UI 全路径联调通过  
 - [ ] 两家 Provider 真实 Engine E2E  
 - [ ] 旧链物理删除或严格 deprecated + CI 禁生产 import  

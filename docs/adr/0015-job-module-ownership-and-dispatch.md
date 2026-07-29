@@ -1,6 +1,6 @@
 # ADR-0015: 任务模块归属与派发接缝
 
-- **状态**: 已接受
+- **状态**: 已接受；P1 收敛已于 2026-07-29 落地
 - **日期**: 2026-07-26
 - **决策者**: 技术方（工程归属拍板；产品需求由用户提出）
 - **关联**: [ADR-0012](./0012-product-identity-workshop-scope.md)、`docs/architecture/NATIVE-DAEMON-CAPABILITY-MAP.md`、`docs/superpowers/specs/2026-07-26-native-harness-control-plane-design.md`
@@ -44,16 +44,18 @@
 
 ### 3. 两条预留接缝
 
-- **接缝 A — 派发（JobDispatcher）**：`src-tauri/src/jobs/dispatch.rs` 定义 `JobDispatcher` trait（`is_wired()` + `dispatch()`）。**P0 唯一适配器是 `NotWiredDispatcher`**（`is_wired()=false`，派发恒返回 `NotWired`），前端据此三态诚实展示「执行链路未接线」，禁止假绿 / 假进度（R-F2）。P1 增加第二个适配器对接助理模块，把 JobDefinition 映射为 CreateRunRequest / StartRunRequest 走 run 主链——届时两个适配器让接缝成为真实接缝。
-- **接缝 B — 能力绑定**：`agent_profile_id` + `capability_refs` 字段**只存不校验**，校验延迟到派发期执行。原因：能力 profile 体系正在并行完善，此刻钉死校验规则只会制造联动返工；派发期校验天然覆盖「创建时合法、执行时已失效」的场景。
+- **接缝 A — 派发（JobDispatcher）**：`src-tauri/src/jobs/dispatch.rs` 定义 `JobDispatcher` trait（`is_wired()` + `dispatch(job, trigger, scheduled_at)`）。生产默认适配器现为 `NativeJobDispatcher`，经 Host `daemon_authority::create_run/start_run` 进入 UDS Daemon `run.*` 主链；计划触发使用原计划时间生成幂等键，手动触发使用点击时间。`NotWiredDispatcher` 仅保留为 fail-closed 契约与测试适配器。
+- **接缝 B — 能力绑定**：新命令和 UI 使用协议现有 `CapabilitySelection`，仍复用 `capability_refs` JSON TEXT 列，不新增权威表。旧空数组读取为显式空选择；旧非空无类型数组只读兼容，派发时返回 `JOB_INVALID_CAPABILITY_SELECTION`，禁止猜测 Skill/MCP 类型；新旧字段同时提交直接拒绝。
 
-### 4. 引擎侧 scheduler_store 定位为过渡实现
+### 4. 引擎侧 scheduler_store 收敛落地
 
-`src-agent-daemon/src/scheduler_store.rs` 当前可工作，**保留运行，暂不动它**（该文件有人并行修复中）。P1 派发接缝接通时收敛：
+P1 已完成以下收敛：
 
-1. 其 JSON 作业（`jobs.json`）迁入任务模块的 `scheduled_tasks` 表，数据权威归一到 Host；
-2. 其 15 秒 tick loop 退役，到期判定统一由任务模块 30 秒 tick 承担；
-3. 其 cron 解析（实现已支持 `*` / `N` / `*/N` / `A-B` / `A,B,C`，但文件头注释仍写着仅支持简化形式——注释过时）与任务模块的 cron 解析**下沉为共享 crate**，消除双份实现——同时偿还 R-B3（重复实现收敛）的债。
+1. Host 启动时把 `NATIVES_RUNTIME_DIR/scheduler/jobs.json` 单事务导入 `scheduled_tasks`；按 ID 幂等，同 ID 内容冲突整批回滚并 fail-closed；
+2. 成功后保留源 JSON、只读备份与版本化完成 marker，不直接删除用户数据；
+3. 15 秒 Daemon tick 与 `scheduler.*` 广告/分发退役，到期判定只由 Host Job 30 秒 tick 承担；
+4. `src-agent-daemon/src/scheduler_store.rs` 已删除，Cron 只剩 Host `jobs/schedule.rs` 一份实现，无需再为消除重复而下沉共享 crate；
+5. Host Runner 用 `daemon_authority::get_run` 对账非终态 Job Run；Daemon 不可达时保持本地状态，不伪造失败。
 
 ### 5. Host 旧 scheduler.rs 死代码删除
 
@@ -61,7 +63,7 @@
 
 ### 6. 对 NATIVE-DAEMON-CAPABILITY-MAP.md 的修订声明
 
-自本 ADR 起，`NATIVE-DAEMON-CAPABILITY-MAP.md` 中「调度」归属的相应条目（第 82 行能力域表、第 159 行模块职责表、第 203 行 RPC 面）**按新归属解释**：`scheduler_store` / `scheduler.*` 是引擎侧的过渡实现，调度能力的目标归属是 Hub 面任务模块；第 266 行单执行接口红线不变、继续有效。**本 ADR 不直接修改该文档**——引擎侧文件他人并行开发中，文本对齐留待 P1 收敛时随代码一并落盘。
+`NATIVE-DAEMON-CAPABILITY-MAP.md` 已同步改为 Host Job Module 归属；Daemon 不再广告 `scheduler.*`，第 7 节单执行接口红线不变、继续有效。
 
 ---
 
@@ -76,24 +78,20 @@
 
 ### 负面 / 成本
 
-- **P0 期任务不可执行，只可管理**：用户能创建、编辑、启停任务并看到 next_run，但「立即执行」被禁用并展示未接线原因。这是刻意取舍——先立数据权威与接缝，不为赶执行链路而旁路单执行接口或伪造进度。
-- **cron 解析短期存在两份实现**（任务模块 + scheduler_store 的简化版），记为已知债务，P1 下沉共享 crate 时偿还（见第 4 节）。
-- 文档归属表述在 P1 收敛前存在「ADR 声明与能力地图原文不一致」的窗口期，以本 ADR 第 6 节为准。
-
-### 中性
-
-- 引擎侧 `scheduler_store` 在过渡期继续服务其现有调用方，行为不变；ADR-0012 的三面 / 双轨模型不受影响，任务模块只是 Hub 面新增一域。
+- 无类型的旧非空 `capability_refs` 无法安全自动迁移；这类 Job 会保留定义，但派发时明确失败，需用户重新选择能力。
+- 自动化验证不能替代真实 Provider 桌面验收；手动/定时各一次真实 Run 仍是发布闭环条件。
 
 ---
 
 ## 落地检查清单
 
-- [ ] `src-tauri/src/jobs/`（store / schedule / runner / dispatch）+ `commands/jobs.rs` 落地，`lib.rs` 注册（R-B5）
-- [ ] `scheduled_tasks` / `task_runs` 条件 ALTER 补列（迁移不 DROP / rebuild）
-- [ ] `NotWiredDispatcher` 为 P0 唯一适配器；前端「立即执行」禁用态 + 未接线文案（中英 i18n 同步）
-- [ ] `src-tauri/src/scheduler.rs` 删除，`lib.rs` 声明与命令注册清理
-- [ ] P1：第二个 Dispatcher 适配器对接助理模块；`jobs.json` 迁移；scheduler_store loop 退役；cron 解析下沉共享 crate
-- [ ] P1：NATIVE-DAEMON-CAPABILITY-MAP.md 调度条目文本对齐本 ADR
+- [x] `src-tauri/src/jobs/`（store / schedule / runner / dispatch / migration）+ `commands/jobs.rs` 落地，`lib.rs` 注册（R-B5）
+- [x] `scheduled_tasks` / `task_runs` 条件 ALTER 补列（迁移不 DROP / rebuild）
+- [x] `NativeJobDispatcher` 经 Host `daemon_authority` 接入 UDS `run.*`；显式 `scheduled_at` 保证重试幂等
+- [x] `CapabilitySelection` 新字段写入 + 旧 `capability_refs` 一版兼容读取
+- [x] `src-tauri/src/scheduler.rs` 删除，`lib.rs` 声明与命令注册清理
+- [x] `jobs.json` 事务迁移、只读备份、marker、冲突回滚与 Run 状态对账
+- [x] Daemon `scheduler_store` / loop / RPC 广告退役，能力地图同步
 
 ---
 
@@ -102,3 +100,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-07-26 | 初版，裁定任务模块 Hub 归属、派发与能力绑定双接缝、scheduler_store 过渡定位、Host 死代码删除 |
+| 2026-07-29 | P1 收敛落地：Native Dispatcher、CapabilitySelection 兼容、Run 对账、旧 JSON 事务迁移与 Daemon scheduler_store 删除 |

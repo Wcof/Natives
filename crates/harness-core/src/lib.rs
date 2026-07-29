@@ -25,9 +25,10 @@ pub use hooks::{
 };
 
 pub use blueprint::{
-    canonical_json, sha256_hex, CommandMode, CommandWorkingDirPolicy, HarnessBlueprint,
-    HookAdapterSpecV3, HookOverlay, HookSemanticsVersion, NativeHookSpecV3, PromptBlockPlacement,
-    PromptBlockSpecV3, PromptSemanticsVersion, BLUEPRINT_SCHEMA_VERSION,
+    canonical_json, sha256_hex, BuiltinPromptReplacementSpecV4, CommandMode,
+    CommandWorkingDirPolicy, HarnessBlueprint, HookAdapterSpecV3, HookOverlay,
+    HookSemanticsVersion, NativeHookSpecV3, PromptBlockPlacement, PromptBlockSpecV3,
+    PromptSemanticsVersion, BLUEPRINT_SCHEMA_VERSION,
 };
 
 pub use prompt_plan::{CompiledPromptPlan, PromptLayerKind, PromptLayerSummary, PromptPlanBuilder};
@@ -35,7 +36,10 @@ pub use prompt_plan::{CompiledPromptPlan, PromptLayerKind, PromptLayerSummary, P
 pub use resolver::{
     is_locked, resolve, FieldOverride, ProfileLayer, Resolution, ResolutionIssue, ResolvedHook,
 };
-pub use snapshot::{LayerRef, PromptPlanSummary, ResolvedHarnessSnapshot};
+pub use snapshot::{
+    LayerRef, PromptLayerEvidence, PromptPlanSummary, ResolvedHarnessSnapshot, ToolPlanEntry,
+    ToolPlanSummary,
+};
 pub use topology::{
     hook_point_of, safe_point_name, stage_of, HookPoint, Stage, StageId, TriggerSite, STAGES,
     TOPOLOGY_VERSION,

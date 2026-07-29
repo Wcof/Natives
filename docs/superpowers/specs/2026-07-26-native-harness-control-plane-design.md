@@ -466,19 +466,20 @@ not a profile kind: a Session binding selects an already published profile.
 Phase 2 currently accepts `session_overlay`; Phase 2.5 must remove that creation
 path and migrate any existing rows before the Settings UI is exposed.
 
-### 9.1.1 Blueprint schema v2
+### 9.1.1 Blueprint schema v2–v4
 
 The Settings MVP requires a real schema upgrade. The current schema v1 contains
 only imported-Hook overlays and cannot implement either “create Natives Hook” or
 Prompt Engineering.
 
 ```text
-HarnessBlueprintV2
-├── schema_version = 2
+HarnessBlueprint
+├── schema_version = 4
 ├── hook_semantics_version
 ├── hook_overlays[]       # overlays for discovered/read-only Hooks
 ├── native_hooks[]        # complete Natives-owned Hook definitions
-└── prompt_blocks[]       # Natives-owned system-prompt fragments
+├── prompt_blocks[]       # Natives-owned system-prompt fragments
+└── builtin_prompt_replacements[] # full replacement of registered Native-owned surfaces
 ```
 
 - `hook_overlays` may change only enable/order/matcher/timeout/failure policy.
@@ -488,10 +489,18 @@ HarnessBlueprintV2
   identity.
 - `prompt_blocks` uses stable generated UUIDs, name, enabled state, order,
   placement, and Markdown content.
+- `builtin_prompt_replacements` is schema-v4-only. Each entry names a registered
+  Native-owned `surface_id`, carries the complete replacement Markdown and the
+  SHA-256 `base_default_digest` observed when it was created. Unknown surfaces
+  or a digest that no longer matches the code default block publish and Run
+  start with `harness_prompt_source_changed`. Removing the entry restores the
+  current code default. Capability Hub prompts remain read-only.
+- A replacement is limited to 64 KiB; total Natives-owned replacement and
+  Prompt Block content is limited to 256 KiB.
 - Every structure uses `deny_unknown_fields`. Duplicate IDs and references to
   unknown/locked Hooks fail validation.
-- Schema v1 remains readable. Publishing the first v2 edit creates a new
-  immutable version; stored v1 versions and old Run snapshots are never
+- Schema v1–v3 remain readable. Publishing the first v4 edit creates a new
+  immutable version; stored old versions and old Run snapshots are never
   rewritten.
 
 ### 9.2 Publishing

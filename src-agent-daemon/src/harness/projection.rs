@@ -20,7 +20,7 @@
 
 use harness_core::redaction::redact_kind;
 use harness_core::resolver::{Resolution, ResolvedHook};
-use harness_core::topology::{hook_point_of, safe_point_name, STAGES};
+use harness_core::topology::{hook_point_of, safe_point_name, EDGES, STAGES};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -159,6 +159,14 @@ pub fn topology(resolution: &Resolution) -> Value {
     serde_json::json!({
         "topology_version": harness_core::topology::TOPOLOGY_VERSION,
         "stages": stages,
+        "edges": EDGES
+            .iter()
+            .map(|edge| serde_json::json!({
+                "from": edge.from.as_str(),
+                "to": edge.to.as_str(),
+                "kind": edge.kind,
+            }))
+            .collect::<Vec<_>>(),
     })
 }
 

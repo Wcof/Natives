@@ -50,13 +50,34 @@ impl PromptPlanBuilder {
         id: impl Into<String>,
         text: impl Into<String>,
     ) -> &mut Self {
-        let text_str = text.into();
-        if !text_str.trim().is_empty() {
+        self.add_builtin_surface_with_replacements(id, text, &[])
+    }
+
+    pub fn add_builtin_surface_with_replacements(
+        &mut self,
+        id: impl Into<String>,
+        default_text: impl Into<String>,
+        replacements: &[crate::blueprint::BuiltinPromptReplacementSpecV4],
+    ) -> &mut Self {
+        let surface_id = id.into();
+        let default_str = default_text.into();
+
+        let (effective_text, owner) =
+            if let Some(rep) = replacements.iter().find(|r| r.surface_id == surface_id) {
+                (
+                    rep.markdown.clone(),
+                    format!("Harness Blueprint (Replaced {})", surface_id),
+                )
+            } else {
+                (default_str, "Native Engine".into())
+            };
+
+        if !effective_text.trim().is_empty() {
             self.layers.push((
-                id.into(),
+                surface_id,
                 PromptLayerKind::BuiltinSurface,
-                "Native Engine".into(),
-                text_str,
+                owner,
+                effective_text,
             ));
         }
         self
@@ -235,5 +256,28 @@ mod tests {
             .effective_full_text
             .contains("System instruction base."));
         assert!(plan.effective_full_text.contains("Project instruction."));
+    }
+
+    #[test]
+    fn prompt_plan_builder_replaces_builtin_surface() {
+        let replacements = vec![crate::blueprint::BuiltinPromptReplacementSpecV4 {
+            surface_id: "base".into(),
+            markdown: "Replaced system instruction base.".into(),
+            base_default_digest: "sha256_placeholder".into(),
+        }];
+
+        let mut builder = PromptPlanBuilder::new();
+        builder.add_builtin_surface_with_replacements("base", "Original base.", &replacements);
+
+        let plan = builder.build();
+        assert_eq!(plan.layers.len(), 1);
+        assert!(plan
+            .effective_full_text
+            .contains("Replaced system instruction base."));
+        assert!(!plan.effective_full_text.contains("Original base."));
+        assert_eq!(
+            plan.layers[0].source_owner,
+            "Harness Blueprint (Replaced base)"
+        );
     }
 }

@@ -21,7 +21,7 @@ import { useShellState } from './useShellState';
 import '@/types'; // ensure Window.nativesAPI type
 import { Edit2, Eye } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
-import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
+import { isCsvFile } from '@/lib/follow-mode';
 import { navigateToFiles } from '@/lib/file-events';
 import { onFollowChange } from '@/lib/follow-mode';
 import { fsApi, hasNativeFiles, thumbnailApi } from '@/lib/files-api';
@@ -488,9 +488,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           extraHeaderContent={
             state.rightPanelMode === 'file-preview' && selectedFile && state.previewSubMode === 'preview'
               ? (() => {
-                  const ext = getExt(selectedFile.name);
-                  const isCode = selectedFile.kind === 'text' && !isMarkdownFile(selectedFile.name) && !isCsvFile(selectedFile.name);
-                  if (!isCode) return undefined;
+                  const editableText = selectedFile.kind === 'text' && !isCsvFile(selectedFile.name);
+                  if (!editableText) return undefined;
                   return (
                     <button
                       className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"

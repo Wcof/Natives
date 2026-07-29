@@ -11,15 +11,29 @@
  */
 
 import type { JobRunStatus, JobScheduleType } from './jobs-api';
+import type { CapabilitySelection } from './assistant-protocol';
 
 // ── 表单校验 ──
 
-export type JobFormField = 'name' | 'prompt' | 'project_path' | 'schedule_value';
+export type JobFormField =
+  | 'name'
+  | 'prompt'
+  | 'project_path'
+  | 'provider_id'
+  | 'model_id'
+  | 'schedule_value';
 
 /** 值为 jobs.form.* 下的错误文案子键（errRequired / errInvalidCron …） */
 export type JobFormErrors = Partial<Record<JobFormField, string>>;
 
 export const JOB_INTERVAL_MIN_SECONDS = 60;
+
+export function hasAmbiguousLegacyCapabilities(
+  selection: CapabilitySelection | null | undefined,
+  legacyRefs: readonly string[] | null | undefined,
+): boolean {
+  return selection == null && (legacyRefs?.length ?? 0) > 0;
+}
 
 /** 五字段值域：分 0-59、时 0-23、日 1-31、月 1-12、周 0-7（7=周日，与 vixie cron 一致） */
 const CRON_FIELD_BOUNDS: ReadonlyArray<readonly [number, number]> = [
@@ -159,12 +173,16 @@ export function validateJobForm(fields: {
   name: string;
   prompt: string;
   project_path: string;
+  provider_id: string;
+  model_id: string;
   schedule_type: JobScheduleType;
   schedule_value: string;
 }): JobFormErrors {
   const errors: JobFormErrors = {};
   if (!fields.name.trim()) errors.name = 'errRequired';
   if (!fields.prompt.trim()) errors.prompt = 'errRequired';
+  if (!fields.provider_id.trim()) errors.provider_id = 'errRequired';
+  if (!fields.model_id.trim()) errors.model_id = 'errRequired';
   const path = fields.project_path.trim();
   if (!path) errors.project_path = 'errRequired';
   else if (!isAbsolutePath(path)) errors.project_path = 'errNotAbsolute';

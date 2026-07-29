@@ -11,6 +11,7 @@
 //! is worse than no Run.
 
 use crate::blueprint::{canonical_json, sha256_hex, HookSemanticsVersion};
+use crate::prompt_plan::PromptLayerKind;
 use crate::redaction::redact_kind;
 use crate::resolver::{ProfileLayer, Resolution, ResolutionIssue, ResolvedHook};
 use crate::topology::TOPOLOGY_VERSION;
@@ -48,14 +49,73 @@ pub struct ResolvedHarnessSnapshot {
     /// Prompt provenance only. Raw effective system prompt is never persisted.
     #[serde(default)]
     pub prompt_plan: PromptPlanSummary,
+    /// Exact model-visible schemas frozen before Provider work. Descriptions
+    /// are intentionally omitted; name, source and schema digest are enough
+    /// to prove parity without persisting prompt-like content.
+    #[serde(default)]
+    pub tool_plan: ToolPlanSummary,
     /// RFC 3339, set by the caller so tests can be deterministic.
     pub resolved_at: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptPlanSummary {
+    #[serde(default)]
     pub source_digests: Vec<String>,
+    #[serde(default)]
     pub token_estimate: usize,
+    #[serde(default)]
+    pub layers: Vec<PromptLayerEvidence>,
+    #[serde(default)]
+    pub effective_prompt_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptLayerEvidence {
+    pub layer_id: String,
+    pub kind: PromptLayerKind,
+    pub source_owner: String,
+    pub digest: String,
+    pub char_estimate: usize,
+}
+
+impl From<&crate::prompt_plan::CompiledPromptPlan> for PromptPlanSummary {
+    fn from(compiled: &crate::prompt_plan::CompiledPromptPlan) -> Self {
+        let layers = compiled
+            .layers
+            .iter()
+            .map(|layer| PromptLayerEvidence {
+                layer_id: layer.layer_id.clone(),
+                kind: layer.kind,
+                source_owner: layer.source_owner.clone(),
+                digest: layer.digest.clone(),
+                char_estimate: layer.char_estimate,
+            })
+            .collect::<Vec<_>>();
+        Self {
+            source_digests: layers.iter().map(|layer| layer.digest.clone()).collect(),
+            token_estimate: compiled
+                .layers
+                .iter()
+                .map(|layer| layer.char_estimate.div_ceil(4))
+                .sum(),
+            layers,
+            effective_prompt_hash: compiled.effective_prompt_hash.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolPlanSummary {
+    pub tools: Vec<ToolPlanEntry>,
+    pub canonical_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolPlanEntry {
+    pub name: String,
+    pub source: String,
+    pub schema_digest: String,
 }
 
 impl ResolvedHarnessSnapshot {
@@ -90,6 +150,7 @@ impl ResolvedHarnessSnapshot {
             hooks,
             issues: resolution.issues.clone(),
             prompt_plan: PromptPlanSummary::default(),
+            tool_plan: ToolPlanSummary::default(),
             resolved_at: resolved_at.into(),
         }
     }
@@ -250,5 +311,58 @@ mod tests {
         let text = serde_json::to_string(&snapshot).unwrap();
         let back: ResolvedHarnessSnapshot = serde_json::from_str(&text).unwrap();
         assert_eq!(back, snapshot);
+    }
+
+    #[test]
+    fn prompt_plan_summary_serializes_layer_evidence_and_effective_hash() {
+        let value = serde_json::to_value(PromptPlanSummary::default()).unwrap();
+        assert_eq!(value["layers"], serde_json::json!([]));
+        assert_eq!(value["effective_prompt_hash"], "");
+        assert!(
+            value.get("effective_full_text").is_none(),
+            "full prompt text must never enter a persisted snapshot"
+        );
+    }
+
+    #[test]
+    fn legacy_prompt_plan_summary_remains_deserializable() {
+        let summary: PromptPlanSummary = serde_json::from_value(serde_json::json!({
+            "source_digests": ["sha256:legacy"],
+            "token_estimate": 12
+        }))
+        .unwrap();
+        let value = serde_json::to_value(&summary).unwrap();
+        assert_eq!(value["layers"], serde_json::json!([]));
+        assert_eq!(value["effective_prompt_hash"], "");
+        assert_eq!(summary.source_digests, vec!["sha256:legacy"]);
+        assert_eq!(summary.token_estimate, 12);
+    }
+
+    #[test]
+    fn compiled_prompt_converts_to_redacted_snapshot_evidence() {
+        let mut builder = crate::PromptPlanBuilder::new();
+        builder
+            .add_builtin_surface("native", "secret=do-not-persist")
+            .add_skill_catalog("skills", "available skill summary");
+        let compiled = builder.build();
+
+        let summary: PromptPlanSummary = (&compiled).into();
+        assert_eq!(summary.layers.len(), 2);
+        assert_eq!(
+            summary.effective_prompt_hash,
+            compiled.effective_prompt_hash
+        );
+        assert_eq!(
+            summary.source_digests,
+            compiled
+                .layers
+                .iter()
+                .map(|layer| layer.digest.clone())
+                .collect::<Vec<_>>()
+        );
+        let persisted = serde_json::to_string(&summary).unwrap();
+        assert!(!persisted.contains("do-not-persist"));
+        assert!(!persisted.contains("available skill summary"));
+        assert!(!persisted.contains("redacted_preview"));
     }
 }

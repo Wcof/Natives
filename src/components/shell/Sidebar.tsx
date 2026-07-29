@@ -29,8 +29,6 @@ import {
   Plug,
   SlidersHorizontal,
   Cpu,
-  Server,
-  Workflow,
   PanelLeft,
   PanelLeftClose,
   Star,
@@ -112,8 +110,6 @@ const SETTINGS_NAV_ITEMS = [
   { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
   { id: 'providers', labelKey: 'settings.tabProviders', icon: Cpu },
   { id: 'runtime', labelKey: 'settings.tabExecutor', icon: SlidersHorizontal },
-  { id: 'engineering', labelKey: 'settings.tabEngineEngineering', icon: Workflow },
-  { id: 'engine', labelKey: 'settings.tabEngineCaps', icon: Server },
   { id: 'plugins', labelKey: 'settings.tabPlugins', icon: Plug },
 ] satisfies ReadonlyArray<{
   id: SettingsSection;

@@ -39,6 +39,7 @@ import {
   type HeaderFileState,
   type NavigateFilesPayload,
 } from '@/lib/file-events';
+import { shouldApplyHomeFallback } from '@/lib/file-startup-navigation';
 
 export type { FavoriteItem };
 
@@ -61,6 +62,7 @@ interface FileBrowserProps {
 
 export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/');
+  const navigationIntentRef = useRef(false);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   /** 当前目录项目类型（node/web/python/rust/go/git），来源：后端 list_dir_detailed */
   const [dirProject, setDirProject] = useState<string | null>(null);
@@ -214,6 +216,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   /** Resolve pasted/typed path via fs.stat; open parent if target is a file. */
   const resolveAndNavigate = useCallback(async (raw: string) => {
+    navigationIntentRef.current = true;
     let path = raw.trim();
     if (!path) return;
     // Expand bare ~ to home if roots available
@@ -221,7 +224,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       try {
         const roots = hasNativeFiles() ? await fsApi().roots() : null;
         const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
-        if (home?.path) {
+        if (home?.path && shouldApplyHomeFallback(currentPath, navigationIntentRef.current)) {
           path = path === '~' ? home.path : home.path + path.slice(1);
         }
       } catch { /* keep as-is */ }
