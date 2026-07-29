@@ -573,6 +573,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
         }))).map((tool) => ({
           name: tool.name,
           source: tool.source,
+          origin: runSnapshot?.snapshot?.tool_plan?.tools ? t(locale, 'settings.engineCanvasToolOriginSnapshot') : t(locale, 'settings.engineCanvasToolOriginBuiltin'),
           schema_digest: tool.schema_digest,
           description: builtinToolDescription(tool.name, locale),
         }))

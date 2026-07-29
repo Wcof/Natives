@@ -55,6 +55,7 @@ export type CanvasNodePrompt = {
 export type CanvasNodeTool = {
   name: string;
   source: string;
+  origin?: string;
   schema_digest?: string;
   description?: string;
 };

@@ -731,6 +731,8 @@ export const zh = {
     engineCanvasHarnessPromptBlock: 'Harness 自定义提示词',
     engineCanvasNodeTools: '工具',
     engineCanvasToolSchemaDigest: '入参契约',
+    engineCanvasToolOriginSnapshot: '来源：本次 Run 冻结快照',
+    engineCanvasToolOriginBuiltin: '来源：Native 默认内置清单',
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: '本次运行结果',
     engineCanvasNodeResultCount: '{count} 个结果',

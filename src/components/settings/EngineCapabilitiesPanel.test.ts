@@ -230,6 +230,9 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /placement: surface\.surface_id/);
   assert.match(panel, /engineCanvasHarnessPromptBlock/);
   assert.match(inspector, /engineCanvasNodeTools/);
+  assert.match(inspector, /tool\.origin/);
+  assert.match(panel, /engineCanvasToolOriginSnapshot/);
+  assert.match(panel, /engineCanvasToolOriginBuiltin/);
   assert.match(inspector, /engineCanvasNodeSubagents/);
   assert.match(inspector, /engineCanvasNodeRunResults/);
   assert.match(inspector, /engineCanvasRunInput/);

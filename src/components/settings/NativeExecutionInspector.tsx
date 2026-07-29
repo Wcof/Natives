@@ -557,6 +557,7 @@ function CurrentNodeDetail({
             <div key={`${tool.source}:${tool.name}`} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
               <strong className="block text-sm text-[var(--text)]">{tool.name}</strong>
               <span className="mt-1 block truncate text-[var(--text-secondary)]">{tool.source}</span>
+              {tool.origin ? <span className="mt-1 block text-[var(--text-disabled)]">{tool.origin}</span> : null}
               <span className="mt-1 block text-[var(--text-disabled)]">{tool.description || t(locale, 'settings.engineCanvasToolNoDescription')}</span>
               {tool.schema_digest ? (
                 <code className="mt-1 block truncate text-[var(--text-disabled)]">
