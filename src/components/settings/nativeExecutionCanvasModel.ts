@@ -41,6 +41,7 @@ export type CanvasNodeHook = {
 export type CanvasNodePrompt = {
   id: string;
   name: string;
+  source?: string;
   placement?: string;
   enabled?: boolean;
   markdown?: string;

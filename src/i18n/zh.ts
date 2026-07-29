@@ -726,6 +726,7 @@ export const zh = {
     engineCanvasNodeNoConfiguredPrompts: '该节点支持提示词设置，但还没有配置提示词。',
     engineCanvasNodeHooks: 'Hooks',
     engineCanvasNodePrompts: '提示词',
+    engineCanvasHarnessPromptBlock: 'Harness 自定义提示词',
     engineCanvasNodeTools: '工具',
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: '本次运行结果',

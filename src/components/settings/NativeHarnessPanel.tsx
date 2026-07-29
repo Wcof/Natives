@@ -528,6 +528,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             return {
               id: surface.surface_id,
               name: surface.surface_id,
+              source: t(locale, 'settings.engineEngineeringBuiltinPrompt'),
               placement: t(locale, 'settings.engineEngineeringBuiltinPrompt'),
               enabled: true,
               markdown: replacement?.markdown ?? surface.default_markdown,
@@ -538,6 +539,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           ...(document?.prompt_blocks ?? []).map((block) => ({
             id: block.id,
             name: block.name,
+            source: t(locale, 'settings.engineCanvasHarnessPromptBlock'),
             placement: block.placement,
             enabled: block.enabled,
             markdown: block.markdown,

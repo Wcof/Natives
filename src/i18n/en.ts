@@ -734,6 +734,7 @@ export const en = {
     engineCanvasNodeNoConfiguredPrompts: 'This node supports prompt settings, but no prompts are configured yet.',
     engineCanvasNodeHooks: 'Hooks',
     engineCanvasNodePrompts: 'Prompts',
+    engineCanvasHarnessPromptBlock: 'Harness custom prompt',
     engineCanvasNodeTools: 'Tools',
     engineCanvasNodeSubagents: 'Subagents',
     engineCanvasNodeRunResults: 'Run results',

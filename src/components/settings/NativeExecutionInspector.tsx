@@ -493,7 +493,9 @@ function CurrentNodeDetail({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <strong className="block truncate text-sm text-[var(--text)]">{prompt.name}</strong>
-                  <span className="mt-1 block truncate text-[var(--text-secondary)]">{prompt.placement ?? prompt.id}</span>
+                  <span className="mt-1 block truncate text-[var(--text-secondary)]">
+                    {[prompt.source, prompt.placement ?? prompt.id].filter(Boolean).join(' · ')}
+                  </span>
                 </div>
                 {prompt.enabled === false ? <span className="text-[var(--text-disabled)]">{t(locale, 'settings.engineCanvasDisabled')}</span> : null}
               </div>
