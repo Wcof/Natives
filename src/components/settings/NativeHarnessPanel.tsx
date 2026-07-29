@@ -118,6 +118,33 @@ const newPromptBlock = (): PromptBlock => ({
   order: 0, placement: 'after_project_instructions',
 });
 
+const builtinToolDescription = (name: string, locale: Locale): string | undefined => {
+  switch (name) {
+    case 'read_file': return t(locale, 'settings.engineCanvasToolDescriptions.readFile');
+    case 'search_files': return t(locale, 'settings.engineCanvasToolDescriptions.searchFiles');
+    case 'write_file': return t(locale, 'settings.engineCanvasToolDescriptions.writeFile');
+    case 'list_dir': return t(locale, 'settings.engineCanvasToolDescriptions.listDir');
+    case 'grep': return t(locale, 'settings.engineCanvasToolDescriptions.grep');
+    case 'edit_file': return t(locale, 'settings.engineCanvasToolDescriptions.editFile');
+    case 'run_terminal': return t(locale, 'settings.engineCanvasToolDescriptions.runTerminal');
+    case 'apply_patch': return t(locale, 'settings.engineCanvasToolDescriptions.applyPatch');
+    case 'memory_search': return t(locale, 'settings.engineCanvasToolDescriptions.memorySearch');
+    case 'memory_get': return t(locale, 'settings.engineCanvasToolDescriptions.memoryGet');
+    case 'task': return t(locale, 'settings.engineCanvasToolDescriptions.task');
+    case 'task_output': return t(locale, 'settings.engineCanvasToolDescriptions.taskOutput');
+    case 'kill_task': return t(locale, 'settings.engineCanvasToolDescriptions.killTask');
+    case 'skill': return t(locale, 'settings.engineCanvasToolDescriptions.skill');
+    case 'web_search': return t(locale, 'settings.engineCanvasToolDescriptions.webSearch');
+    case 'enter_plan_mode': return t(locale, 'settings.engineCanvasToolDescriptions.enterPlanMode');
+    case 'exit_plan_mode': return t(locale, 'settings.engineCanvasToolDescriptions.exitPlanMode');
+    case 'write_draft_module': return t(locale, 'settings.engineCanvasToolDescriptions.writeDraftModule');
+    case 'read_draft_module': return t(locale, 'settings.engineCanvasToolDescriptions.readDraftModule');
+    case 'rollback_draft_revision': return t(locale, 'settings.engineCanvasToolDescriptions.rollbackDraftRevision');
+    case 'lint_draft_module': return t(locale, 'settings.engineCanvasToolDescriptions.lintDraftModule');
+    default: return undefined;
+  }
+};
+
 export interface NativeHarnessPanelProps { locale: Locale }
 
 export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
@@ -514,6 +541,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           name: tool.name,
           source: tool.source,
           schema_digest: tool.schema_digest,
+          description: builtinToolDescription(tool.name, locale),
         }))
         : [];
       const snapshot = selectedRun?.capability_snapshot;
@@ -522,6 +550,11 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           ...(snapshot?.agentProfileId ? [{ id: snapshot.agentProfileId, kind: 'expert' as const }] : []),
           ...(snapshot?.teamId ? [{ id: snapshot.teamId, kind: 'team' as const }] : []),
           ...((snapshot?.teamMembers ?? []).map((id) => ({ id, kind: 'member' as const }))),
+          ...(!snapshot?.agentProfileId && !snapshot?.teamId ? [{
+            id: 'task',
+            kind: 'dynamic' as const,
+            prompt: t(locale, 'settings.engineCanvasDynamicSubagentPrompt'),
+          }] : []),
         ]
         : [];
       details[stage.id] = { hooks, prompts, tools, subagents };

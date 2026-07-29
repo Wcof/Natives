@@ -484,9 +484,12 @@ function CurrentNodeDetail({
         <div className="space-y-2">
           <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeSubagents')}</h5>
           {subagents.map((subagent) => (
-            <div key={`${subagent.kind}:${subagent.id}`} className="flex items-center justify-between gap-2 rounded border border-[var(--border-subtle)] p-3 text-xs">
-              <strong className="truncate text-sm text-[var(--text)]">{subagent.id}</strong>
-              <span className="text-[var(--text-secondary)]">{t(locale, `settings.engineCanvasSubagentKind.${subagent.kind}`)}</span>
+            <div key={`${subagent.kind}:${subagent.id}`} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <strong className="truncate text-sm text-[var(--text)]">{subagent.id}</strong>
+                <span className="text-[var(--text-secondary)]">{t(locale, `settings.engineCanvasSubagentKind.${subagent.kind}`)}</span>
+              </div>
+              {subagent.prompt ? <p className="mt-2 leading-5 text-[var(--text-secondary)]">{subagent.prompt}</p> : null}
             </div>
           ))}
         </div>
