@@ -585,9 +585,14 @@ function CurrentNodeDetail({
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
             <h5 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeSubagents')}</h5>
-            <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('capabilities', stageId)}>
-              {t(locale, 'settings.engineCanvasOpenCapabilities')}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('runs', stageId)}>
+                {t(locale, 'settings.engineCanvasOpenRuns')}
+              </button>
+              <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('capabilities', stageId)}>
+                {t(locale, 'settings.engineCanvasOpenCapabilities')}
+              </button>
+            </div>
           </div>
           {subagents.map((subagent) => (
             <div key={`${subagent.kind}:${subagent.id}`} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
