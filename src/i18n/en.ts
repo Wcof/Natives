@@ -812,6 +812,10 @@ export const en = {
     engineCanvasSubagentSourceRunSnapshot: 'Waiting for Run capability snapshot',
     engineCanvasSubagentSourceCapabilitySnapshot: 'Run capability snapshot',
     engineCanvasSubagentSourceMasterTask: 'Master task tool dynamic creation',
+    engineCanvasSubagentReasonUnresolved: 'Decision basis: no real Run is selected yet, so the frozen capability snapshot is unavailable.',
+    engineCanvasSubagentReasonPreset: 'Decision basis: the capability snapshot frozen at Run start binds a preset Subagent.',
+    engineCanvasSubagentReasonTeamMember: 'Decision basis: this member comes from the preset team orchestration in the Run snapshot.',
+    engineCanvasSubagentReasonDynamic: 'Decision basis: the Run snapshot has no preset expert or team, so the master creates one dynamically through the task tool.',
     engineCanvasSubagentKind: {
       expert: 'Preset expert',
       team: 'Preset team',

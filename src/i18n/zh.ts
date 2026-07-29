@@ -804,6 +804,10 @@ export const zh = {
     engineCanvasSubagentSourceRunSnapshot: '等待 Run 能力快照',
     engineCanvasSubagentSourceCapabilitySnapshot: 'Run 能力快照',
     engineCanvasSubagentSourceMasterTask: 'master task 工具动态创建',
+    engineCanvasSubagentReasonUnresolved: '判定依据：尚未选择真实 Run，无法读取冻结能力快照。',
+    engineCanvasSubagentReasonPreset: '判定依据：Run 开始时冻结的能力快照绑定了预设 Subagent。',
+    engineCanvasSubagentReasonTeamMember: '判定依据：该成员来自 Run 快照中的预设团队编排。',
+    engineCanvasSubagentReasonDynamic: '判定依据：Run 快照未绑定预设专家或团队，因此由 master 通过 task 工具动态创建。',
     engineCanvasSubagentKind: {
       expert: '预制专家',
       team: '预制团队',

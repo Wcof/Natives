@@ -234,6 +234,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /engineCanvasToolOriginSnapshot/);
   assert.match(panel, /engineCanvasToolOriginBuiltin/);
   assert.match(inspector, /engineCanvasNodeSubagents/);
+  assert.match(inspector, /subagent\.reason/);
   assert.match(inspector, /engineCanvasNodeRunResults/);
   assert.match(inspector, /engineCanvasRunInput/);
   assert.match(inspector, /engineCanvasRunOutput/);
@@ -252,6 +253,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /subagent\.source/);
   assert.match(panel, /engineCanvasSubagentSourceCapabilitySnapshot/);
   assert.match(panel, /engineCanvasSubagentSourceMasterTask/);
+  assert.match(panel, /engineCanvasSubagentReasonPreset/);
+  assert.match(panel, /engineCanvasSubagentReasonDynamic/);
   assert.match(inspector, /prompt\.canEdit/);
   assert.match(inspector, /onOpenWorkspace\('prompts', stageId, prompt\.id\)/);
   assert.match(inspector, /prompt\.removeLabel/);

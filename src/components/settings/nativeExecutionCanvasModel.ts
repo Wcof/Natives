@@ -64,6 +64,7 @@ export type CanvasNodeSubagent = {
   id: string;
   kind: 'expert' | 'team' | 'member' | 'dynamic' | 'unresolved';
   source?: string;
+  reason?: string;
   prompt?: string;
 };
 
