@@ -730,6 +730,8 @@ export const en = {
     engineCanvasNoHookPoints: 'This node currently has no Hook points.',
     engineCanvasNodeDetails: 'Current node configuration',
     engineCanvasNodeNoDetails: 'This node has no Hook, prompt, tool, or Subagent configuration to display.',
+    engineCanvasNodeNoConfiguredHooks: 'This node has Hook points, but no Hooks are configured yet.',
+    engineCanvasNodeNoConfiguredPrompts: 'This node supports prompt settings, but no prompts are configured yet.',
     engineCanvasNodeHooks: 'Hooks',
     engineCanvasNodePrompts: 'Prompts',
     engineCanvasNodeTools: 'Tools',

@@ -722,6 +722,8 @@ export const zh = {
     engineCanvasNoHookPoints: '该节点当前没有 Hook 接入点。',
     engineCanvasNodeDetails: '当前节点配置',
     engineCanvasNodeNoDetails: '当前节点没有可展示的 Hook、提示词、工具或 Subagent 配置。',
+    engineCanvasNodeNoConfiguredHooks: '该节点有 Hook 接入点，但还没有配置 Hook。',
+    engineCanvasNodeNoConfiguredPrompts: '该节点支持提示词设置，但还没有配置提示词。',
     engineCanvasNodeHooks: 'Hooks',
     engineCanvasNodePrompts: '提示词',
     engineCanvasNodeTools: '工具',

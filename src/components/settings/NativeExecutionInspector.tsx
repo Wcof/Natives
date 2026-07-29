@@ -232,6 +232,8 @@ export function NativeExecutionInspector({
               <CurrentNodeDetail
                 locale={locale}
                 stageId={stage.id}
+                canConfigureHooks={(stage.hook_points ?? []).length > 0}
+                canConfigurePrompts={['context', 'compact', 'stop'].includes(stage.id)}
                 detail={detail}
                 readOnly={readOnly}
                 onOpenWorkspace={onOpenWorkspace}
@@ -365,6 +367,8 @@ export function NativeExecutionInspector({
 function CurrentNodeDetail({
   locale,
   stageId,
+  canConfigureHooks,
+  canConfigurePrompts,
   detail,
   readOnly,
   onOpenWorkspace,
@@ -375,6 +379,8 @@ function CurrentNodeDetail({
 }: {
   locale: Locale;
   stageId: string;
+  canConfigureHooks: boolean;
+  canConfigurePrompts: boolean;
   detail?: CanvasNodeDetail;
   readOnly: boolean;
   onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string, itemId?: string) => void;
@@ -389,8 +395,9 @@ function CurrentNodeDetail({
   const subagents = detail?.subagents ?? [];
   const runResults = detail?.runResults ?? [];
   const isToolStage = stageId === 'provider' || stageId === 'tool_gate' || stageId === 'tool_execute';
+  const hasCreateEntrypoint = !readOnly && (canConfigureHooks || canConfigurePrompts);
 
-  if (!hooks.length && !prompts.length && !tools.length && !subagents.length && !runResults.length && !isToolStage) {
+  if (!hooks.length && !prompts.length && !tools.length && !subagents.length && !runResults.length && !isToolStage && !hasCreateEntrypoint) {
     return <EvidenceEmpty locale={locale}>{t(locale, 'settings.engineCanvasNodeNoDetails')}</EvidenceEmpty>;
   }
 
@@ -457,6 +464,12 @@ function CurrentNodeDetail({
             </article>
           ))}
         </div>
+      ) : hasCreateEntrypoint && canConfigureHooks ? (
+        <div className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+          <strong className="block text-sm text-[var(--text)]">{t(locale, 'settings.engineCanvasNodeHooks')}</strong>
+          <p className="mt-1 text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeNoConfiguredHooks')}</p>
+          <button type="button" className="btn btn-ghost mt-3 text-xs" onClick={() => onOpenWorkspace('hooks', stageId)}>{t(locale, 'settings.engineCanvasEditHooks')}</button>
+        </div>
       ) : null}
 
       {prompts.length ? (
@@ -496,6 +509,12 @@ function CurrentNodeDetail({
               ) : null}
             </article>
           ))}
+        </div>
+      ) : hasCreateEntrypoint && canConfigurePrompts ? (
+        <div className="rounded border border-[var(--border-subtle)] p-3 text-xs">
+          <strong className="block text-sm text-[var(--text)]">{t(locale, 'settings.engineCanvasNodePrompts')}</strong>
+          <p className="mt-1 text-[var(--text-secondary)]">{t(locale, 'settings.engineCanvasNodeNoConfiguredPrompts')}</p>
+          <button type="button" className="btn btn-ghost mt-3 text-xs" onClick={() => onOpenWorkspace('prompts', stageId)}>{t(locale, 'settings.engineCanvasEditPrompts')}</button>
         </div>
       ) : null}
 

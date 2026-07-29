@@ -195,6 +195,10 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
   assert.match(canvas, /detail=\{nodeDetails\[selectedStage\.id\]\}/);
   assert.match(inspector, /CurrentNodeDetail/);
+  assert.match(inspector, /canConfigureHooks/);
+  assert.match(inspector, /canConfigurePrompts/);
+  assert.match(inspector, /engineCanvasNodeNoConfiguredHooks/);
+  assert.match(inspector, /engineCanvasNodeNoConfiguredPrompts/);
   assert.match(inspector, /engineCanvasNodeHooks/);
   assert.match(inspector, /engineCanvasNodePrompts/);
   assert.match(inspector, /engineCanvasNodeTools/);
