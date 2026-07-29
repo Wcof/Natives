@@ -652,6 +652,16 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             count: snapshot?.teamMembers?.length ?? 0,
           }),
         }] : []),
+        ...(stage.id === 'compact' && selectedRun ? [{
+          id: `${selectedRun.id}:compact`,
+          action: t(locale, 'settings.engineCanvasRunCompactCheck'),
+          status: selectedRun.status,
+          timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
+          output: t(locale, selectedRun.error_code ? 'settings.engineCanvasRunCompactErrorDetail' : 'settings.engineCanvasRunCompactDetail', {
+            status: selectedRun.status,
+            code: selectedRun.error_code ?? '',
+          }),
+        }] : []),
         ...(stage.id === 'stop' && selectedRun ? [{
           id: `${selectedRun.id}:stop`,
           action: t(locale, 'settings.engineCanvasRunStopDecision'),
