@@ -529,6 +529,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               enabled: true,
               markdown: replacement?.markdown ?? surface.default_markdown,
               canEdit: true,
+              canRemove: Boolean(replacement),
             };
           }),
           ...(document?.prompt_blocks ?? []).map((block) => ({
@@ -655,6 +656,13 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   };
   const removeNodePrompt = (promptId: string) => {
     if (!document) return;
+    if (document.builtin_prompt_replacements?.some((item) => item.surface_id === promptId)) {
+      replaceDocument({
+        ...document,
+        builtin_prompt_replacements: document.builtin_prompt_replacements.filter((item) => item.surface_id !== promptId),
+      });
+      return;
+    }
     replaceDocument({ ...document, prompt_blocks: document.prompt_blocks.filter((block) => block.id !== promptId) });
   };
   const openCanvasWorkspace = (target: CanvasWorkspaceTarget, stageId: string, itemId?: string) => {
