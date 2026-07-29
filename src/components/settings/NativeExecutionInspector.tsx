@@ -52,6 +52,19 @@ const EVIDENCE_KEYS: Record<StageEvidenceCode, string> = {
   failed: 'settings.engineCanvasEvidenceFailed',
 };
 
+const RUN_STATUS_KEYS: Record<string, string> = {
+  created: 'settings.engineCanvasRunStatusCreated',
+  queued: 'settings.engineCanvasRunStatusQueued',
+  preparing: 'settings.engineCanvasRunStatusPreparing',
+  running: 'settings.engineCanvasRunStatusRunning',
+  waiting_permission: 'settings.engineCanvasRunStatusWaitingPermission',
+  waiting_subagent: 'settings.engineCanvasRunStatusWaitingSubagent',
+  cancelling: 'settings.engineCanvasRunStatusCancelling',
+  completed: 'settings.engineCanvasRunStatusCompleted',
+  failed: 'settings.engineCanvasRunStatusFailed',
+  cancelled: 'settings.engineCanvasRunStatusCancelled',
+};
+
 const TARGET_META: Record<CanvasWorkspaceTarget, { labelKey: string; descKey: string; icon: typeof Settings2 }> = {
   blueprint: {
     labelKey: 'settings.engineCanvasTargetBlueprint',
@@ -89,6 +102,10 @@ function EvidenceEmpty({ locale, children }: { locale: Locale; children?: React.
       </p>
     </div>
   );
+}
+
+function runStatusLabel(locale: Locale, status: string) {
+  return t(locale, RUN_STATUS_KEYS[status] ?? status);
 }
 
 export function NativeExecutionInspector({
@@ -417,7 +434,7 @@ function CurrentNodeDetail({
             <article key={result.id} className="rounded border border-[var(--border-subtle)] p-3 text-xs">
               <div className="flex items-start justify-between gap-2">
                 <strong className="min-w-0 truncate text-sm text-[var(--text)]">{result.action}</strong>
-                {result.status ? <span className={result.status === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--text-secondary)]'}>{result.status}</span> : null}
+                {result.status ? <span className={result.status === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--text-secondary)]'}>{runStatusLabel(locale, result.status)}</span> : null}
               </div>
               {result.input ? <p className="mt-2 break-words text-[var(--text-secondary)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunInput')}：</span>{result.input}</p> : null}
               {result.output ? <p className="mt-2 break-words text-[var(--text)]"><span className="font-medium">{t(locale, 'settings.engineCanvasRunOutput')}：</span>{result.output}</p> : null}
