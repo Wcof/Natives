@@ -479,10 +479,19 @@ function CurrentNodeDetail({
                   <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded bg-[var(--background)] p-2 font-mono text-[11px] text-[var(--text-secondary)]">{prompt.markdown}</pre>
                 </details>
               ) : null}
-              {!readOnly && prompt.canRemove ? (
-                <button type="button" className="btn btn-ghost mt-3 text-xs text-[var(--danger)]" onClick={() => onRemovePrompt?.(prompt.id)}>
-                  <Trash2 size={12} />{t(locale, 'common.delete')}
-                </button>
+              {!readOnly && (prompt.canEdit || prompt.canRemove) ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {prompt.canEdit ? (
+                    <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('prompts', stageId)}>
+                      {t(locale, 'common.edit')}
+                    </button>
+                  ) : null}
+                  {prompt.canRemove ? (
+                    <button type="button" className="btn btn-ghost text-xs text-[var(--danger)]" onClick={() => onRemovePrompt?.(prompt.id)}>
+                      <Trash2 size={12} />{t(locale, 'common.delete')}
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
             </article>
           ))}
