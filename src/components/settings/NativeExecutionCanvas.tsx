@@ -86,7 +86,7 @@ export function NativeExecutionCanvas({
   onModeChange?: (mode: CanvasMode) => void;
   onSelectRun?: (runId: string) => void;
   onRefreshAudit?: () => void;
-  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string, itemId?: string) => void;
   onSetHookEnabled?: (hookId: string, enabled: boolean) => void;
   onAuthorizeHook?: (hookId: string, authorized: boolean) => void;
   onRemoveHook?: (hookId: string) => void;

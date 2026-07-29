@@ -118,7 +118,7 @@ export function NativeExecutionInspector({
   detail?: CanvasNodeDetail;
   readOnly?: boolean;
   onClose: () => void;
-  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string, itemId?: string) => void;
   onSetHookEnabled?: (hookId: string, enabled: boolean) => void;
   onAuthorizeHook?: (hookId: string, authorized: boolean) => void;
   onRemoveHook?: (hookId: string) => void;
@@ -377,7 +377,7 @@ function CurrentNodeDetail({
   stageId: string;
   detail?: CanvasNodeDetail;
   readOnly: boolean;
-  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string) => void;
+  onOpenWorkspace: (target: CanvasWorkspaceTarget, stageId: string, itemId?: string) => void;
   onSetHookEnabled?: (hookId: string, enabled: boolean) => void;
   onAuthorizeHook?: (hookId: string, authorized: boolean) => void;
   onRemoveHook?: (hookId: string) => void;
@@ -482,7 +482,7 @@ function CurrentNodeDetail({
               {!readOnly && (prompt.canEdit || prompt.canRemove) ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {prompt.canEdit ? (
-                    <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('prompts', stageId)}>
+                    <button type="button" className="btn btn-ghost text-xs" onClick={() => onOpenWorkspace('prompts', stageId, prompt.id)}>
                       {t(locale, 'common.edit')}
                     </button>
                   ) : null}

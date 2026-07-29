@@ -157,6 +157,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   const [detailMode, setDetailMode] = useState<DetailMode | null>(null);
   const [workspaceTarget, setWorkspaceTarget] = useState<WorkspaceTarget>('preview');
   const [targetStageId, setTargetStageId] = useState<string | null>(null);
+  const [focusPromptId, setFocusPromptId] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [document, setDocument] = useState<Blueprint | null>(null);
   const [revision, setRevision] = useState(0);
@@ -628,9 +629,10 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     if (!document) return;
     replaceDocument({ ...document, prompt_blocks: document.prompt_blocks.filter((block) => block.id !== promptId) });
   };
-  const openCanvasWorkspace = (target: CanvasWorkspaceTarget, stageId: string) => {
+  const openCanvasWorkspace = (target: CanvasWorkspaceTarget, stageId: string, itemId?: string) => {
     setWorkspaceTarget(target);
     setTargetStageId(stageId);
+    setFocusPromptId(target === 'prompts' ? itemId ?? null : null);
     if (target === 'runs') {
       setCanvasMode('audit');
       void loadRuns(selectedRunId);
@@ -723,6 +725,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
           document={document}
           promptPreview={promptPreview}
           replaceDocument={replaceDocument}
+          focusPromptId={focusPromptId}
           readOnly={readOnly}
         /> : null}
 
@@ -983,13 +986,25 @@ function HookAdapterFields({ hook, index, locale, updateHook, updateAdapter }: {
   );
 }
 
-function PromptsEditor({ locale, document, promptPreview, replaceDocument, readOnly }: {
+function PromptsEditor({ locale, document, promptPreview, replaceDocument, focusPromptId, readOnly }: {
   locale: Locale;
   document: Blueprint;
   promptPreview: PromptPreview | null;
   replaceDocument: (next: Blueprint) => void;
+  focusPromptId: string | null;
   readOnly: boolean;
 }) {
+  const promptRefs = useRef<Record<string, HTMLElement | null>>({});
+  const builtinCount = promptPreview?.builtin_surfaces?.length ?? 0;
+  const promptCount = document.prompt_blocks.length;
+
+  useEffect(() => {
+    const node = focusPromptId ? promptRefs.current[focusPromptId] : null;
+    if (!node) return;
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    node.querySelector<HTMLTextAreaElement | HTMLInputElement | HTMLSelectElement>('textarea,input,select')?.focus();
+  }, [builtinCount, focusPromptId, promptCount]);
+
   return (
     <section className="settings-section-card space-y-4">
       <fieldset disabled={readOnly} className="space-y-4">
@@ -1008,7 +1023,12 @@ function PromptsEditor({ locale, document, promptPreview, replaceDocument, readO
               { surface_id: surface.surface_id, markdown, base_default_digest: surface.default_digest },
             ],
           });
-          return <article className="rounded-lg border border-[var(--border)] p-4" key={surface.surface_id}>
+          const focused = focusPromptId === surface.surface_id;
+          return <article
+            ref={(node) => { promptRefs.current[surface.surface_id] = node; }}
+            className={`rounded-lg border p-4 ${focused ? 'border-[var(--primary)] bg-[var(--primary-soft)]' : 'border-[var(--border)]'}`}
+            key={surface.surface_id}
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div><strong>{t(locale, 'settings.engineEngineeringBuiltinPrompt')}</strong><div className="mt-1 font-mono text-xs text-[var(--text-muted)]">{surface.surface_id}</div></div>
               {replacement
@@ -1024,7 +1044,12 @@ function PromptsEditor({ locale, document, promptPreview, replaceDocument, readO
             prompt_blocks[index] = { ...block, ...patch };
             replaceDocument({ ...document, prompt_blocks });
           };
-          return <article className="rounded-lg border border-[var(--border)] p-4" key={block.id}>
+          const focused = focusPromptId === block.id;
+          return <article
+            ref={(node) => { promptRefs.current[block.id] = node; }}
+            className={`rounded-lg border p-4 ${focused ? 'border-[var(--primary)] bg-[var(--primary-soft)]' : 'border-[var(--border)]'}`}
+            key={block.id}
+          >
             <div className="grid gap-3 lg:grid-cols-5">
               <input className="input lg:col-span-2" aria-label={t(locale, 'settings.engineEngineeringPromptName')} value={block.name} onChange={(event) => update({ name: event.target.value })} />
               <select className="input" aria-label={t(locale, 'settings.engineEngineeringPromptPlacement')} value={block.placement} onChange={(event) => update({ placement: event.target.value })}>

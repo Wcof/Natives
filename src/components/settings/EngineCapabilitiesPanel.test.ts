@@ -188,8 +188,10 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /engineCanvasToolNoDescription/);
   assert.match(inspector, /subagent\.prompt/);
   assert.match(inspector, /prompt\.canEdit/);
-  assert.match(inspector, /onOpenWorkspace\('prompts', stageId\)/);
+  assert.match(inspector, /onOpenWorkspace\('prompts', stageId, prompt\.id\)/);
   assert.match(panel, /builtinToolDescription/);
+  assert.match(panel, /focusPromptId/);
+  assert.match(panel, /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/);
   assert.match(panel, /traceEntriesForStage/);
   assert.match(panel, /engineCanvasRunPromptAssembly/);
   assert.match(model, /runResults\?: CanvasNodeRunResult\[\]/);
