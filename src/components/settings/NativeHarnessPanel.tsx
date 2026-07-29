@@ -817,21 +817,27 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   if ((detailMode === 'preview' || detailMode === 'edit') && selectedProfile) {
     const readOnly = detailMode === 'preview';
     const runPanel = (
-      <div className="grid gap-2 lg:grid-cols-[minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(16rem,1.2fr)_auto]">
-        <select className="input" value={runProjectPath} onChange={(event) => setRunProjectPath(event.target.value)} aria-label={t(locale, 'settings.engineEngineeringRunProject')}>
-          <option value="">{t(locale, 'settings.engineEngineeringSelectProject')}</option>
-          {projects.filter((project) => project.exists).map((project) => <option key={project.id} value={project.path}>{project.label}</option>)}
-        </select>
-        <select className="input" value={runProviderId} onChange={(event) => setRunProviderId(event.target.value)} aria-label={t(locale, 'settings.engineEngineeringRunProvider')}>
-          <option value="">{t(locale, 'settings.engineEngineeringRunProvider')}</option>
-          {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.displayName}</option>)}
-        </select>
-        <select className="input" value={runModelId} onChange={(event) => setRunModelId(event.target.value)} aria-label={t(locale, 'settings.engineEngineeringRunModel')}>
-          <option value="">{t(locale, 'settings.engineEngineeringRunModel')}</option>
-          {runModels.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.id}</option>)}
-        </select>
-        <textarea className="input min-h-10" value={runPrompt} onChange={(event) => setRunPrompt(event.target.value)} placeholder={t(locale, 'settings.engineEngineeringRunPromptPlaceholder')} />
-        <button type="button" className="btn btn-primary lg:w-28" disabled={busy || !runPrompt.trim() || !runProviderId || !runModelId || !runProjectPath} onClick={() => void runFromCanvas()}><Rocket size={14} />{t(locale, 'settings.engineEngineeringRun')}</button>
+      <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-3">
+        <div className="mb-3">
+          <strong className="block text-sm text-[var(--text)]">{t(locale, 'settings.engineEngineeringRunTrialTitle')}</strong>
+          <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{t(locale, 'settings.engineEngineeringRunTrialDesc')}</p>
+        </div>
+        <div className="grid gap-2 lg:grid-cols-[minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(16rem,1.2fr)_auto]">
+          <select className="input" value={runProjectPath} onChange={(event) => setRunProjectPath(event.target.value)} aria-label={t(locale, 'settings.engineEngineeringRunProject')}>
+            <option value="">{t(locale, 'settings.engineEngineeringSelectProject')}</option>
+            {projects.filter((project) => project.exists).map((project) => <option key={project.id} value={project.path}>{project.label}</option>)}
+          </select>
+          <select className="input" value={runProviderId} onChange={(event) => setRunProviderId(event.target.value)} aria-label={t(locale, 'settings.engineEngineeringRunProvider')}>
+            <option value="">{t(locale, 'settings.engineEngineeringRunProvider')}</option>
+            {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.displayName}</option>)}
+          </select>
+          <select className="input" value={runModelId} onChange={(event) => setRunModelId(event.target.value)} aria-label={t(locale, 'settings.engineEngineeringRunModel')}>
+            <option value="">{t(locale, 'settings.engineEngineeringRunModel')}</option>
+            {runModels.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.id}</option>)}
+          </select>
+          <textarea className="input min-h-10" value={runPrompt} onChange={(event) => setRunPrompt(event.target.value)} placeholder={t(locale, 'settings.engineEngineeringRunPromptPlaceholder')} />
+          <button type="button" className="btn btn-primary lg:w-28" disabled={busy || !runPrompt.trim() || !runProviderId || !runModelId || !runProjectPath} onClick={() => void runFromCanvas()}><Rocket size={14} />{t(locale, 'settings.engineEngineeringRun')}</button>
+        </div>
       </div>
     );
     const workspacePanel = (

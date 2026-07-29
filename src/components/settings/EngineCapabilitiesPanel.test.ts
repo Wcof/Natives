@@ -136,6 +136,8 @@ test('Harness run start requires explicit project/provider/model instead of copy
 
   assert.match(panel, /nativesAPI\.provider\.list\(\)/);
   assert.match(panel, /engineEngineeringRunConfigRequired/);
+  assert.match(panel, /engineEngineeringRunTrialTitle/);
+  assert.match(panel, /engineEngineeringRunTrialDesc/);
   assert.match(panel, /provider_id: runProviderId/);
   assert.match(panel, /model_id: runModelId/);
   assert.match(panel, /project_path: runProjectPath/);
