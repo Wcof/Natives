@@ -795,6 +795,7 @@ export const en = {
     engineCanvasEditHooks: 'Edit Hooks',
     engineCanvasEditPrompts: 'Edit prompts',
     engineCanvasViewPrompt: 'View prompt',
+    engineCanvasRestoreDefaultPrompt: 'Restore default',
     engineCanvasToolNoDescription: 'The current tool snapshot does not include a purpose description.',
     engineCanvasToolSnapshotRequired: 'The Native engine freezes the tool list when a Run starts, using the project, provider, permissions, and capability selection. Start or select a real Run to inspect this node’s model-visible tools.',
     engineCanvasOpenRuns: 'Open run evidence',

@@ -48,6 +48,7 @@ export type CanvasNodePrompt = {
   markdown?: string;
   canEdit?: boolean;
   canRemove?: boolean;
+  removeLabel?: string;
 };
 
 export type CanvasNodeTool = {

@@ -536,6 +536,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
               markdown: replacement?.markdown ?? surface.default_markdown,
               canEdit: true,
               canRemove: Boolean(replacement),
+              removeLabel: t(locale, 'settings.engineCanvasRestoreDefaultPrompt'),
             };
           }),
           ...(document?.prompt_blocks ?? []).map((block) => ({

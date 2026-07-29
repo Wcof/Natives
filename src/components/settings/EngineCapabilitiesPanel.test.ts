@@ -239,6 +239,8 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /engineCanvasSubagentSourceMasterTask/);
   assert.match(inspector, /prompt\.canEdit/);
   assert.match(inspector, /onOpenWorkspace\('prompts', stageId, prompt\.id\)/);
+  assert.match(inspector, /prompt\.removeLabel/);
+  assert.match(panel, /engineCanvasRestoreDefaultPrompt/);
   assert.match(panel, /BUILTIN_TOOL_NAMES/);
   assert.match(panel, /source: 'native:builtin'/);
   assert.match(panel, /builtinToolDescription/);

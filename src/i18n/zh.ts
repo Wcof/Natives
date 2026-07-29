@@ -787,6 +787,7 @@ export const zh = {
     engineCanvasEditHooks: '编辑 Hooks',
     engineCanvasEditPrompts: '编辑提示词',
     engineCanvasViewPrompt: '查看提示词',
+    engineCanvasRestoreDefaultPrompt: '恢复默认',
     engineCanvasToolNoDescription: '当前工具快照未提供作用说明。',
     engineCanvasToolSnapshotRequired: '工具清单由 Native 引擎在 Run 开始时按项目、Provider、权限和能力选择冻结；请先试运行或选择一次真实 Run，再查看本节点的模型可见工具。',
     engineCanvasOpenRuns: '查看运行证据',

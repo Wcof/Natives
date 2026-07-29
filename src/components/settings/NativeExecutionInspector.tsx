@@ -532,7 +532,7 @@ function CurrentNodeDetail({
                   ) : null}
                   {prompt.canRemove ? (
                     <button type="button" className="btn btn-ghost text-xs text-[var(--danger)]" onClick={() => onRemovePrompt?.(prompt.id)}>
-                      <Trash2 size={12} />{t(locale, 'common.delete')}
+                      <Trash2 size={12} />{prompt.removeLabel ?? t(locale, 'common.delete')}
                     </button>
                   ) : null}
                 </div>
