@@ -737,6 +737,8 @@ export const zh = {
     engineCanvasRunSessionDetail: 'Conversation：{conversation} · 权限：{permission} · Runtime：{runtime}',
     engineCanvasRunProviderSelection: '供应商选择',
     engineCanvasRunProviderDetail: 'Provider：{provider} · Model：{model}',
+    engineCanvasRunPermissionGate: '权限门禁',
+    engineCanvasRunPermissionDetail: '权限策略：{permission}',
     engineCanvasRunPromptAssembly: '提示词装配',
     engineCanvasRunToolPlan: '冻结工具清单',
     engineCanvasRunTerminalResult: 'Run 终态',

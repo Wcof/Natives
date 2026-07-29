@@ -611,6 +611,15 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
             model: selectedRun.model_id,
           }),
         }] : []),
+        ...(stage.id === 'permission' && selectedRun ? [{
+          id: `${selectedRun.id}:permission`,
+          action: t(locale, 'settings.engineCanvasRunPermissionGate'),
+          status: selectedRun.status,
+          timestamp: selectedRun.started_at ?? undefined,
+          output: t(locale, 'settings.engineCanvasRunPermissionDetail', {
+            permission: selectedRun.permission_profile,
+          }),
+        }] : []),
         ...(stage.id === 'context' && runSnapshot?.snapshot?.prompt_plan ? [{
           id: `${selectedRun?.id ?? 'run'}:prompt-plan`,
           action: t(locale, 'settings.engineCanvasRunPromptAssembly'),

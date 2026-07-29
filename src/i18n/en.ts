@@ -745,6 +745,8 @@ export const en = {
     engineCanvasRunSessionDetail: 'Conversation: {conversation} · Permission: {permission} · Runtime: {runtime}',
     engineCanvasRunProviderSelection: 'Provider selection',
     engineCanvasRunProviderDetail: 'Provider: {provider} · Model: {model}',
+    engineCanvasRunPermissionGate: 'Permission gate',
+    engineCanvasRunPermissionDetail: 'Permission profile: {permission}',
     engineCanvasRunPromptAssembly: 'Prompt assembly',
     engineCanvasRunToolPlan: 'Frozen tool plan',
     engineCanvasRunTerminalResult: 'Run terminal state',
