@@ -786,6 +786,9 @@ export const en = {
     engineCanvasPresetTeamPrompt: 'This Run uses a preset team orchestration with {count} team members. Team prompts and member roles are owned by capabilities.',
     engineCanvasTeamMemberPrompt: 'This member role prompt comes from its preset expert. Actual tools and permissions cannot exceed this Run’s capability selection.',
     engineCanvasDynamicSubagentPrompt: 'When no preset expert or team is bound, the master uses the task tool to write the child Agent persona for this task. Its permissions and tools cannot exceed the master Agent surface.',
+    engineCanvasSubagentSourceRunSnapshot: 'Waiting for Run capability snapshot',
+    engineCanvasSubagentSourceCapabilitySnapshot: 'Run capability snapshot',
+    engineCanvasSubagentSourceMasterTask: 'Master task tool dynamic creation',
     engineCanvasSubagentKind: {
       expert: 'Preset expert',
       team: 'Preset team',

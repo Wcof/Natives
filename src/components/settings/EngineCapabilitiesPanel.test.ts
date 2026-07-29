@@ -225,6 +225,9 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(inspector, /onOpenWorkspace\('runs', stageId\)/);
   assert.match(inspector, /onOpenWorkspace\('capabilities', stageId\)/);
   assert.match(inspector, /subagent\.prompt/);
+  assert.match(inspector, /subagent\.source/);
+  assert.match(panel, /engineCanvasSubagentSourceCapabilitySnapshot/);
+  assert.match(panel, /engineCanvasSubagentSourceMasterTask/);
   assert.match(inspector, /prompt\.canEdit/);
   assert.match(inspector, /onOpenWorkspace\('prompts', stageId, prompt\.id\)/);
   assert.match(panel, /BUILTIN_TOOL_NAMES/);

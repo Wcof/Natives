@@ -573,6 +573,7 @@ function CurrentNodeDetail({
                 <strong className="truncate text-sm text-[var(--text)]">{subagent.id}</strong>
                 <span className="text-[var(--text-secondary)]">{t(locale, `settings.engineCanvasSubagentKind.${subagent.kind}`)}</span>
               </div>
+              {subagent.source ? <div className="mt-1 text-[var(--text-disabled)]">{subagent.source}</div> : null}
               {subagent.prompt ? <p className="mt-2 leading-5 text-[var(--text-secondary)]">{subagent.prompt}</p> : null}
             </div>
           ))}

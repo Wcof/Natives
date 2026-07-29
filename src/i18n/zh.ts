@@ -778,6 +778,9 @@ export const zh = {
     engineCanvasPresetTeamPrompt: '本次 Run 使用预设团队编排，包含 {count} 个团队成员；团队提示词和成员角色由能力面维护。',
     engineCanvasTeamMemberPrompt: '团队成员的角色提示词来自对应预设专家；实际可用工具和权限不会超过本次 Run 的能力选择。',
     engineCanvasDynamicSubagentPrompt: '未绑定预制专家或团队时，master 会通过 task 工具按本次任务动态写入子 Agent 的角色提示词，并且权限与工具不会超过主 Agent 当前能力面。',
+    engineCanvasSubagentSourceRunSnapshot: '等待 Run 能力快照',
+    engineCanvasSubagentSourceCapabilitySnapshot: 'Run 能力快照',
+    engineCanvasSubagentSourceMasterTask: 'master task 工具动态创建',
     engineCanvasSubagentKind: {
       expert: '预制专家',
       team: '预制团队',
