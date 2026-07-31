@@ -1,4 +1,5 @@
 export const SETTINGS_SECTIONS = [
+  'overview',
   'general',
   'appearance',
   'providers',
@@ -10,7 +11,7 @@ export const SETTINGS_SECTIONS = [
 
 export type SettingsSection = typeof SETTINGS_SECTIONS[number];
 
-export const DEFAULT_SETTINGS_VIEW = 'settings:general' as const;
+export const DEFAULT_SETTINGS_VIEW = 'settings:overview' as const;
 
 const SETTINGS_SECTION_SET = new Set<string>(SETTINGS_SECTIONS);
 
@@ -19,12 +20,12 @@ export function isSettingsView(view?: string): boolean {
 }
 
 export function getSettingsSection(view?: string): SettingsSection {
-  if (!view?.startsWith('settings:')) return 'general';
+  if (!view?.startsWith('settings:')) return 'overview';
 
   const section = view.slice('settings:'.length);
   return SETTINGS_SECTION_SET.has(section)
     ? (section as SettingsSection)
-    : 'general';
+    : 'overview';
 }
 
 export function normalizeSettingsTarget(

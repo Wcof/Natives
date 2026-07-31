@@ -8,8 +8,9 @@ import {
   normalizeSettingsTarget,
 } from './settings-navigation';
 
-test('settings sections include engine capability admin page', () => {
+test('settings sections start with the personal overview', () => {
   assert.deepEqual(SETTINGS_SECTIONS, [
+    'overview',
     'general',
     'appearance',
     'providers',
@@ -23,9 +24,10 @@ test('settings sections include engine capability admin page', () => {
   assert.equal(getSettingsSection('settings:engineering'), 'engineering');
 });
 
-test('settings entry points normalize to general', () => {
+test('settings entry points normalize to the personal overview', () => {
   assert.equal(normalizeSettingsTarget('__settings__'), DEFAULT_SETTINGS_VIEW);
   assert.equal(normalizeSettingsTarget('settings'), DEFAULT_SETTINGS_VIEW);
+  assert.equal(DEFAULT_SETTINGS_VIEW, 'settings:overview');
 });
 
 test('valid settings targets are preserved', () => {
@@ -36,7 +38,7 @@ test('valid settings targets are preserved', () => {
   assert.equal(getSettingsSection('settings:runtime'), 'runtime');
 });
 
-test('invalid and removed settings targets fall back to general', () => {
+test('invalid and removed settings targets fall back to overview', () => {
   assert.equal(normalizeSettingsTarget('settings:env'), DEFAULT_SETTINGS_VIEW);
   assert.equal(normalizeSettingsTarget('settings:unknown'), DEFAULT_SETTINGS_VIEW);
 });

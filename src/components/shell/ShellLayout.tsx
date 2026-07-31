@@ -443,6 +443,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
                 iframeReloadKey={0}
                 terminalSessionId={terminalSessionIdRef.current}
                 onFileSelect={handleFileSelect}
+                onNavigate={setActiveView}
                 iframeContainerRef={iframeContainerRef}
               >
                 {children}

@@ -31,6 +31,7 @@ import {
   Cpu,
   Server,
   Workflow,
+  UserRound,
   PanelLeft,
   PanelLeftClose,
   Star,
@@ -108,6 +109,7 @@ const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
 ];
 
 const SETTINGS_NAV_ITEMS = [
+  { id: 'overview', labelKey: 'settings.tabOverview', icon: UserRound },
   { id: 'general', labelKey: 'settings.tabGeneral', icon: Settings },
   { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
   { id: 'providers', labelKey: 'settings.tabProviders', icon: Cpu },
@@ -957,7 +959,7 @@ export default function Sidebar({
             </button>
             <button
               type="button"
-              onClick={() => selectNavigation('__settings__', 'settings:general')}
+              onClick={() => selectNavigation('__settings__', 'settings:overview')}
               aria-current={activeNavigationId === '__settings__' ? 'page' : undefined}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
                 activeNavigationId === '__settings__'

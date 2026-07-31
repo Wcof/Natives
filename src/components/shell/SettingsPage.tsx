@@ -14,6 +14,7 @@ import { ProviderSettingsWorkspace } from '@/components/settings/provider-routin
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import EngineCapabilitiesPanel from '@/components/settings/EngineCapabilitiesPanel';
 import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
+import PersonalOverview from '@/components/settings/PersonalOverview';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
@@ -354,11 +355,13 @@ function InlineLoadError({
 }
 
 export default function SettingsPage({
-  activeSection = 'general',
+  activeSection = 'overview',
   locale: externalLocale,
+  onNavigate,
 }: {
   activeSection?: SettingsSection;
   locale?: Locale;
+  onNavigate?: (view: string) => void;
 }) {
   const { toast: globalToast } = useToast();
   const [locale, setLocaleState] = useState<Locale>(externalLocale ?? 'zh');
@@ -794,6 +797,8 @@ export default function SettingsPage({
 
   const renderActiveSection = () => {
     switch (activeSection) {
+      case 'overview':
+        return <PersonalOverview locale={locale} onNavigate={onNavigate} />;
       case 'general':
         return renderGeneral();
       case 'appearance':
@@ -820,7 +825,9 @@ export default function SettingsPage({
     <div style={{ height: '100%', overflow: 'auto' }}>
       <div
         style={{
-          width: activeSection === 'engineering' ? 'min(100%, 1380px)' : 'min(100%, 920px)',
+          width: activeSection === 'engineering' || activeSection === 'overview'
+            ? 'min(100%, 1380px)'
+            : 'min(100%, 920px)',
           margin: '0 auto',
           boxSizing: 'border-box',
           padding: `${SPACING.xl}px ${SPACING.lg}px ${SPACING.xxl}px`,

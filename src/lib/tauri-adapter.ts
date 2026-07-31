@@ -520,6 +520,7 @@ export interface ProjectSummary {
   label: string;
   conversationCount: number;
   exists: boolean;
+  lastOpenedAt: string;
 }
 
 export interface HarnessNotice {
