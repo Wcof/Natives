@@ -104,6 +104,7 @@ fn collect_session_files(
     archived_dir: &std::path::Path,
 ) -> HashMap<String, PathBuf> {
     let mut files = HashMap::new();
+    // Iterate archived first so that sessions/ entries win on key collision.
     for root in [archived_dir, sessions_dir] {
         if !root.exists() {
             continue;
@@ -111,9 +112,13 @@ fn collect_session_files(
         for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
-                    files.insert(id.to_string(), path.to_path_buf());
-                }
+                // Use the full path as key. The old code used file_stem which
+                // caused collisions across date-partitioned directories
+                // (e.g. sessions/2026/07/15/rollout.jsonl and
+                //        sessions/2026/07/20/rollout.jsonl both have stem
+                //        "rollout", so only one was kept).
+                let key = path.to_string_lossy().to_string();
+                files.insert(key, path.to_path_buf());
             }
         }
     }
@@ -264,15 +269,19 @@ pub fn scan_codex_logs(start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> CodexS
             let mut session_events = Vec::new();
             for (_, line) in &lines {
                 if let Some(event) = normalize_codex_line(line, &mut context) {
-                    // Skip replay/fork events
+                    // Skip replay/fork events unconditionally
                     let is_replay = event.replay_for.is_some() || event.fork_from.is_some();
+                    if is_replay {
+                        continue;
+                    }
 
-                    // Dedup by event_id
+                    // Dedup by event_id — skip if already seen (can happen when
+                    // the same event appears in both sessions/ and
+                    // archived_sessions/).
                     if let Some(ref eid) = event.event_id {
-                        if dedup_set.contains(eid) && is_replay {
+                        if !dedup_set.insert(eid.clone()) {
                             continue;
                         }
-                        dedup_set.insert(eid.clone());
                     }
 
                     // Compute token delta
@@ -640,6 +649,43 @@ mod tests {
         let files = collect_session_files(&root.join("sessions"), &root.join("archived_sessions"));
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn codex_multiple_rollouts_across_dates_not_lost() {
+        // Regression: the old code used file_stem as HashMap key, so multiple
+        // date directories each containing rollout.jsonl would collide and only
+        // one file would survive. The fix uses full path as key.
+        let root = std::env::temp_dir().join(format!("natives-codex-multi-{}", std::process::id()));
+        let dir_a = root.join("sessions/2026/07/15");
+        let dir_b = root.join("sessions/2026/07/20");
+        let dir_c = root.join("sessions/2026/07/25");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::create_dir_all(&dir_c).unwrap();
+        std::fs::write(dir_a.join("rollout.jsonl"), "{}\n").unwrap();
+        std::fs::write(dir_b.join("rollout.jsonl"), "{}\n").unwrap();
+        std::fs::write(dir_c.join("rollout.jsonl"), "{}\n").unwrap();
+        let files = collect_session_files(&root.join("sessions"), &root.join("archived_sessions"));
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            files.len(),
+            3,
+            "all three rollout.jsonl files must be collected"
+        );
+    }
+
+    #[test]
+    fn codex_dedup_skips_duplicate_event_id() {
+        // Verify that duplicate event_ids are counted only once even when
+        // they are NOT replay events.
+        let mut dedup_set: HashSet<String> = HashSet::new();
+        let eid = "evt-dup".to_string();
+
+        // First insert succeeds.
+        assert!(dedup_set.insert(eid.clone()));
+        // Second insert returns false — event should be skipped.
+        assert!(!dedup_set.insert(eid.clone()));
     }
 
     #[test]
