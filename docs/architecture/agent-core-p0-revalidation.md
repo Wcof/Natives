@@ -1,45 +1,43 @@
-# Agent Core P0 复核记录
-
-基线：`1b4b1792932e2e24160091c7700a2c092d01e5f2`（当前 Worktree HEAD）。复核基于生产调用路径和当前源码，不改变生产代码。
+# Agent Core P0 复核（深化基线）
 
 ## Credential Run 绑定
 
-- 当前是否仍存在：是。
-- 当前代码证据：`src-agent-daemon/src/production.rs` 的 `RealProvider::stream_with_controls` 调用 `resolve_credential_for_run(..., "provider-stream")`；`agent-core::EngineProvider` 没有请求上下文。
-- 与审计基线相比的变化：未见修复。
-- 本轮处理方式：为 Provider 调用增加最小 `EngineProviderContext`，由 `EngineRunConfig.run_id` 和 Attempt 序号传入；Daemon 使用真实 Run ID。
+- 当前是否仍存在：否（P0 已修复）。
+- 当前代码证据：`crates/agent-core/src/engine.rs` 的 `EngineProviderContext`；`src-agent-daemon/src/production.rs` 通过 `run_id` 进入路由；`production_credentials.rs` 按真实 Run 解析。
+- 与审计基线相比的变化：固定 `provider-stream` 已移除。
+- 本轮处理方式：保留并增加 `ProviderTurnRequest`，确保每次 Attempt 携带 Run ID 和序号。
 
-## Provider API 模式
+## Provider API Mode
 
-- 当前是否仍存在：是。
-- 当前代码证据：`src-agent-daemon/src/production.rs::resolve_adapter` 对 Responses 路由调用 `std::env::set_var("NATIVES_OPENAI_API", "responses")`；`provider-adapters/src/providers/openai.rs::prefers_responses_api` 读取该进程全局变量。
-- 与审计基线相比的变化：未见修复。
-- 本轮处理方式：把 OpenAI API Mode 作为 Adapter 的不可变字段；请求期间不再修改环境变量。
+- 当前是否仍存在：否（P0 已将模式改为 Adapter/Route 显式配置）。
+- 当前代码证据：`crates/provider-adapters/src/providers/openai.rs` 的 `OpenAiApiMode`；生产路径未在请求期间写环境变量。
+- 与审计基线相比的变化：Responses 与 Chat Completions 不再共享可变进程状态。
+- 本轮处理方式：增加 Provider Turn 请求 seam，未重新引入环境变量。
 
-## Tool 参数校验
+## Stop Reason 与截断 Tool Call
 
-- 当前是否仍存在：是。
-- 当前代码证据：`crates/agent-core/src/engine.rs` 使用 `serde_json::from_str(&args).unwrap_or(json!({"raw": args}))`；`CapabilityGateway::execute` 只执行路径策略、超时和输出限制，没有按 `Tool.schema` 做最终 Schema 校验。
-- 与审计基线相比的变化：未见修复。
-- 本轮处理方式：Core 对参数做严格 JSON framing；Gateway 在 Handler 前执行注册 Schema 的最终校验。
+- 当前是否仍存在：截断调用执行风险已关闭；统一原因仍由 Adapter 映射到 Core。
+- 当前代码证据：`crates/agent-core/src/engine.rs` 的 `ProviderStopReason`、`TRUNCATED_TOOL_CALL` / `UNKNOWN_PROVIDER_STOP_REASON` 分支；`crates/provider-adapters/src/stream/openai_sse.rs` 的 `from_raw`。
+- 与审计基线相比的变化：P0 已禁止 `Length`、未知原因和无 Final Event 的调用进入 Handler。
+- 本轮处理方式：增加跨 Provider reason 回归测试和 Turn 完成原因事件。
 
-## Stop Reason
+## JSON 与 Schema 边界
 
-- 当前是否仍存在：是。
-- 当前代码证据：`EngineProviderEvent::Completed` 无原因；Provider Adapter 的完成事件没有统一携带 `stop`、`tool_use`、`length`、`cancelled`、`error` 或未知原因；Provider Stream 缺少可靠终态时仍可能结束为普通 Completed。
-- 与审计基线相比的变化：未见修复。
-- 本轮处理方式：引入统一 Stop Reason，Adapter 映射原始原因；Core 对 `length`、未知原因和无 Final Event 的 Tool Call fail closed，并生成配对错误 Result。
+- 当前是否仍存在：P0 已移除全局 `{raw: ...}` 执行回退；Gateway 继续执行最终校验。
+- 当前代码证据：`crates/agent-core/src/engine.rs` 严格 `serde_json::from_str`；`crates/capability-gateway/src/lib.rs` 的 Gateway 验证路径。
+- 与审计基线相比的变化：解析失败生成配对错误结果而不是调用 Handler。
+- 本轮处理方式：保持边界，未把 Schema Registry 复制进 Core。
 
 ## Hook Deny 配对
 
-- 当前是否仍存在：是。
-- 当前代码证据：`crates/agent-core/src/engine.rs` 的 PreToolUse Deny 只加入 `denied` 项并发出 `ToolCallCompleted`，后续组装 `assistant_tool_calls` / `tool_results` 时跳过该项。
-- 与审计基线相比的变化：未见修复。
-- 本轮处理方式：拒绝项保留 Assistant Tool Call，并以相同 ID 生成错误 Tool Result；不调用 Handler。
+- 当前是否仍存在：否（拒绝终点已产生同 ID `ToolCallCompleted` 错误事实）。
+- 当前代码证据：`crates/agent-core/src/engine.rs` 的 `PreparedToolCall.rejected` 和 `HOOK_DENIED`。
+- 与审计基线相比的变化：拒绝不再删除 Assistant Tool Call。
+- 本轮处理方式：增加生命周期事件并保留既有配对测试。
 
 ## Gateway Cancel
 
-- 当前是否仍存在：是（部分 Handler 自行监听，通用 Wrapper 未监听）。
-- 当前代码证据：`crates/capability-gateway/src/lib.rs::CapabilityGateway::execute` 只使用 `tokio::time::timeout`；`ToolCallContext` 已携带 `CancellationToken`，但通用路径未同时 select Handler、Timeout 和 Cancel。
-- 与审计基线相比的变化：未见修复。
-- 本轮处理方式：通用 Wrapper 同时监听 Handler、Timeout、CancellationToken，并返回可区分的错误码；保留现有 Shell/MCP Handler 的资源清理逻辑。
+- 当前是否仍存在：P0 已在 Gateway 通用路径监听 Handler、Timeout、Cancellation；底层 Handler 的资源清理仍由具体执行器负责。
+- 当前代码证据：`crates/capability-gateway/src/lib.rs` 的执行包装器与 Shell/MCP 专项取消测试。
+- 与审计基线相比的变化：Cancel 与 Timeout 已区分。
+- 本轮处理方式：本阶段不重写 Scheduler；新增 Core `ToolProgressSink` seam 不改变取消语义。

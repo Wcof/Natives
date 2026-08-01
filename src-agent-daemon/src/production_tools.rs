@@ -297,6 +297,40 @@ impl EngineToolRuntime for PermissionGatedTools {
         )
     }
 
+    async fn list_tool_capabilities(&self) -> Vec<agent_core::ToolCapability> {
+        self.ensure_plan_latch();
+        model_visible_tool_schemas(
+            &self.gateway,
+            self.tool_allowlist.as_deref(),
+            &self.mcp_tool_schemas,
+            self.selected_mcp_servers.as_ref(),
+            plan_mode::is_active(&self.parent_run_id),
+        )
+        .into_iter()
+        .map(|schema| {
+            let mode = match self
+                .gateway
+                .get_tool(&schema.name)
+                .map(|tool| tool.side_effect)
+            {
+                Some(capability_gateway::SideEffect::ReadOnly) => {
+                    agent_core::ToolExecutionMode::ParallelSafe
+                }
+                Some(capability_gateway::SideEffect::Destructive)
+                | Some(capability_gateway::SideEffect::Process) => {
+                    agent_core::ToolExecutionMode::Exclusive
+                }
+                _ => agent_core::ToolExecutionMode::Sequential,
+            };
+            agent_core::ToolCapability {
+                name: schema.name,
+                execution_mode: mode,
+                conflict_key: None,
+            }
+        })
+        .collect()
+    }
+
     async fn execute_tool(
         &self,
         name: &str,

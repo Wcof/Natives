@@ -391,6 +391,10 @@ impl ProductionRuntime {
         self.interactions.assignment_inflight_arc()
     }
 
+    /// Legacy test/fixture default. Production runs use the immutable profile
+    /// captured in `RunStartContext`; no request may mutate a process-global
+    /// permission profile.
+    #[cfg(test)]
     pub async fn set_permission_profile(&self, profile: &str) {
         let p = match profile {
             "readonly" | "read_only" => PermissionProfile::ReadOnly,

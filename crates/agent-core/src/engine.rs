@@ -65,12 +65,28 @@ struct ExecutedToolCall {
 #[async_trait::async_trait]
 pub trait EngineToolRuntime: Send + Sync {
     async fn list_tool_schemas(&self) -> Vec<ToolSchema>;
+
+    /// Capability metadata is supplied by the Gateway. Unknown tools are
+    /// intentionally sequential so the core fails closed.
+    async fn list_tool_capabilities(&self) -> Vec<ToolCapability> {
+        Vec::new()
+    }
     async fn execute_tool(
         &self,
         name: &str,
         input: Value,
         cancel: &CancellationToken,
     ) -> ToolExecutionResult;
+
+    async fn execute_tool_with_progress(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        _progress: &dyn ToolProgressSink,
+    ) -> ToolExecutionResult {
+        self.execute_tool(name, input, cancel).await
+    }
 
     /// Optional batch entry for same-turn `task` tool calls.
     ///
@@ -105,11 +121,48 @@ pub struct ToolSchema {
     pub input_schema: Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolExecutionMode {
+    ParallelSafe,
+    Sequential,
+    Exclusive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCapability {
+    pub name: String,
+    pub execution_mode: ToolExecutionMode,
+    pub conflict_key: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolExecutionResult {
     pub output: Value,
     pub is_error: bool,
     pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolProgressUpdate {
+    pub run_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub stream: String,
+    pub text: String,
+    pub final_update: bool,
+}
+
+#[async_trait::async_trait]
+pub trait ToolProgressSink: Send + Sync {
+    async fn publish(&self, update: ToolProgressUpdate);
+}
+
+#[derive(Debug, Default)]
+pub struct NoopToolProgressSink;
+
+#[async_trait::async_trait]
+impl ToolProgressSink for NoopToolProgressSink {
+    async fn publish(&self, _update: ToolProgressUpdate) {}
 }
 
 /// Provider stream seam (maps onto provider-adapters without hard dep).
@@ -139,6 +192,22 @@ pub trait EngineProvider: Send + Sync {
         self.stream(model, messages, tools, system_prompt, cancel)
             .await
     }
+
+    async fn stream_turn(
+        &self,
+        request: ProviderTurnRequest,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_context(
+            request.context,
+            &request.model,
+            request.messages,
+            &request.tools,
+            request.system_prompt.as_deref(),
+            cancel,
+        )
+        .await
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +215,17 @@ pub struct EngineProviderContext {
     pub run_id: String,
     pub attempt: u32,
 }
+
+#[derive(Debug, Clone)]
+pub struct ProviderTurnRequest {
+    pub context: EngineProviderContext,
+    pub model: String,
+    pub system_prompt: Option<String>,
+    pub messages: Vec<EngineMessage>,
+    pub tools: Vec<ToolSchema>,
+}
+
+pub type ProviderTurnEvent = EngineProviderEvent;
 
 pub type EngineProviderEventStream =
     Pin<Box<dyn Stream<Item = EngineProviderEvent> + Send + 'static>>;
@@ -364,6 +444,8 @@ pub struct AgentEngine {
     model_compaction: bool,
     summary_attempts: AtomicU32,
     summary_failures: AtomicU32,
+    progress_sink: Arc<dyn ToolProgressSink>,
+    input_receiver: Option<Arc<dyn crate::EngineInputReceiver>>,
 }
 
 impl AgentEngine {
@@ -378,6 +460,8 @@ impl AgentEngine {
             model_compaction: true,
             summary_attempts: AtomicU32::new(0),
             summary_failures: AtomicU32::new(0),
+            progress_sink: Arc::new(NoopToolProgressSink),
+            input_receiver: None,
         }
     }
 
@@ -422,6 +506,47 @@ impl AgentEngine {
         self
     }
 
+    pub fn with_progress_sink(mut self, sink: Arc<dyn ToolProgressSink>) -> Self {
+        self.progress_sink = sink;
+        self
+    }
+
+    pub fn with_input_receiver(mut self, receiver: Arc<dyn crate::EngineInputReceiver>) -> Self {
+        self.input_receiver = Some(receiver);
+        self
+    }
+
+    async fn drain_inputs(
+        &self,
+        kind: crate::PendingInputKind,
+        mode: crate::DrainMode,
+        point: crate::InputSafePoint,
+        messages: &mut Vec<EngineMessage>,
+    ) -> bool {
+        let Some(receiver) = &self.input_receiver else {
+            return false;
+        };
+        let pending = receiver.drain(kind, mode, point).await;
+        if pending.is_empty() {
+            return false;
+        }
+        for input in pending {
+            messages.push(EngineMessage::text(
+                "user",
+                format!(
+                    "[{}]\n{}",
+                    match input.kind {
+                        crate::PendingInputKind::Steering => "steering",
+                        crate::PendingInputKind::FollowUp => "follow_up",
+                    },
+                    input.content
+                ),
+            ));
+            receiver.ack(&input.id).await;
+        }
+        true
+    }
+
     /// Shared cancel token for this engine run (clone freely; cancel is cooperative).
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
@@ -439,6 +564,13 @@ impl AgentEngine {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
+    }
+
+    fn append_critical(&self, run_id: &str, event: RunEventKind) -> Result<(), EngineError> {
+        self.events
+            .append_checked(run_id, event)
+            .map(|_| ())
+            .map_err(EngineError::Message)
     }
 
     /// Wait out a provider backoff before the next generation attempt.
@@ -544,6 +676,12 @@ impl AgentEngine {
         use crate::EngineOutcome;
         let run_id_owned = config.run_id.clone();
         let run_id = &run_id_owned;
+        let tool_capabilities: BTreeMap<String, ToolExecutionMode> = tools
+            .list_tool_capabilities()
+            .await
+            .into_iter()
+            .map(|capability| (capability.name, capability.execution_mode))
+            .collect();
         // Lifecycle status is owned by RunManager::commit_transition.
         // Engine only emits domain events and returns EngineOutcome.
         let session_start = self
@@ -608,6 +746,23 @@ impl AgentEngine {
                 return Err(EngineError::MaxSteps);
             }
 
+            let turn_id = crate::TurnId::new();
+            let assistant_message_id = crate::MessageId::new();
+            self.append_critical(
+                run_id,
+                RunEventKind::TurnStarted {
+                    turn_id: turn_id.to_string(),
+                },
+            )?;
+            self.append_critical(
+                run_id,
+                RunEventKind::MessageStarted {
+                    turn_id: turn_id.to_string(),
+                    message_id: assistant_message_id.to_string(),
+                    role: "assistant".into(),
+                },
+            )?;
+
             const MAX_PROVIDER_ATTEMPTS: u32 = 3;
             let mut attempt = 1u32;
             let (text_acc, tool_acc, stop_reason) = 'attempts: loop {
@@ -620,15 +775,17 @@ impl AgentEngine {
                 );
 
                 let provider_events = match provider
-                    .stream_with_context(
-                        EngineProviderContext {
-                            run_id: run_id.to_string(),
-                            attempt,
+                    .stream_turn(
+                        ProviderTurnRequest {
+                            context: EngineProviderContext {
+                                run_id: run_id.to_string(),
+                                attempt,
+                            },
+                            model: config.model.clone(),
+                            system_prompt: config.system_prompt.clone(),
+                            messages: messages.clone(),
+                            tools: tool_schemas.clone(),
                         },
-                        &config.model,
-                        messages.clone(),
-                        &tool_schemas,
-                        config.system_prompt.as_deref(),
                         self.cancel.clone(),
                     )
                     .await
@@ -695,6 +852,14 @@ impl AgentEngine {
                             text_acc.push_str(&t);
                             self.events
                                 .append(run_id, RunEventKind::TextDelta { text: t });
+                            self.events.append(
+                                run_id,
+                                RunEventKind::MessageDelta {
+                                    turn_id: turn_id.to_string(),
+                                    message_id: assistant_message_id.to_string(),
+                                    text: text_acc.clone(),
+                                },
+                            );
                         }
                         EngineProviderEvent::ReasoningDelta(t) => {
                             saw_generation_delta = true;
@@ -884,6 +1049,42 @@ impl AgentEngine {
             }
 
             if tool_acc.is_empty() {
+                if self
+                    .drain_inputs(
+                        crate::PendingInputKind::FollowUp,
+                        crate::DrainMode::All,
+                        crate::InputSafePoint::BeforeRunEnd,
+                        &mut messages,
+                    )
+                    .await
+                {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::Progress {
+                            message: "follow_up_consumed".into(),
+                            percentage: None,
+                        },
+                    );
+                    continue;
+                }
+                let stop_label = stop_reason_label(stop_reason.as_ref());
+                self.append_critical(
+                    run_id,
+                    RunEventKind::MessageCompleted {
+                        turn_id: turn_id.to_string(),
+                        message_id: assistant_message_id.to_string(),
+                        role: "assistant".into(),
+                    },
+                )?;
+                self.append_critical(
+                    run_id,
+                    RunEventKind::TurnCompleted {
+                        turn_id: turn_id.to_string(),
+                        stop_reason: stop_label,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                )?;
                 // No tools — complete. Status commit is RunManager's job.
                 let stop = self
                     .hooks
@@ -1012,7 +1213,10 @@ impl AgentEngine {
                     },
                 );
 
-                let parallel_safe = crate::session_coordinator::is_parallel_safe_tool(&name);
+                let parallel_safe = matches!(
+                    tool_capabilities.get(&name),
+                    Some(ToolExecutionMode::ParallelSafe)
+                );
                 prepared.push(PreparedToolCall {
                     id,
                     name,
@@ -1031,6 +1235,13 @@ impl AgentEngine {
                 crate::session_coordinator::SafePoint::AfterTool,
                 &mut messages,
             );
+            self.drain_inputs(
+                crate::PendingInputKind::Steering,
+                crate::DrainMode::All,
+                crate::InputSafePoint::AfterToolBatch,
+                &mut messages,
+            )
+            .await;
 
             let mut assistant_tool_calls = Vec::new();
             let mut tool_results = Vec::new();
@@ -1063,6 +1274,24 @@ impl AgentEngine {
                 images: Vec::new(),
             });
             messages.extend(tool_results);
+
+            self.append_critical(
+                run_id,
+                RunEventKind::MessageCompleted {
+                    turn_id: turn_id.to_string(),
+                    message_id: assistant_message_id.to_string(),
+                    role: "assistant".into(),
+                },
+            )?;
+            self.append_critical(
+                run_id,
+                RunEventKind::TurnCompleted {
+                    turn_id: turn_id.to_string(),
+                    stop_reason: stop_reason_label(stop_reason.as_ref()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            )?;
 
             // Compact large tool outputs + repair dangling tool_call_ids before
             // the next provider turn (no isolated tool calls).
@@ -1188,7 +1417,12 @@ impl AgentEngine {
                         let cancel = cancel.clone();
                         async move {
                             let result = tools
-                                .execute_tool(&call.name, call.input.clone(), &cancel)
+                                .execute_tool_with_progress(
+                                    &call.name,
+                                    call.input.clone(),
+                                    &cancel,
+                                    self.progress_sink.as_ref(),
+                                )
                                 .await;
                             (idx, result)
                         }
@@ -1248,7 +1482,12 @@ impl AgentEngine {
             // Serial path for write / process / network.
             let call = &prepared[i];
             let result = tools
-                .execute_tool(&call.name, call.input.clone(), &self.cancel)
+                .execute_tool_with_progress(
+                    &call.name,
+                    call.input.clone(),
+                    &self.cancel,
+                    self.progress_sink.as_ref(),
+                )
                 .await;
             let post_event = if result.is_error {
                 HookEvent::PostToolUseFailure
@@ -1580,6 +1819,18 @@ fn provider_backoff_ms(attempt: u32, retry_after_ms: Option<u64>) -> u64 {
         .unwrap_or(0)
         .min(MAX_PROVIDER_BACKOFF_MS)
         .max(local)
+}
+
+fn stop_reason_label(reason: Option<&ProviderStopReason>) -> String {
+    match reason {
+        Some(ProviderStopReason::Stop) => "stop".into(),
+        Some(ProviderStopReason::ToolUse) => "tool_use".into(),
+        Some(ProviderStopReason::Length) => "length".into(),
+        Some(ProviderStopReason::Cancelled) => "cancelled".into(),
+        Some(ProviderStopReason::Error) => "error".into(),
+        Some(ProviderStopReason::Unknown(raw)) => format!("unknown:{raw}"),
+        None => "unknown".into(),
+    }
 }
 
 fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {

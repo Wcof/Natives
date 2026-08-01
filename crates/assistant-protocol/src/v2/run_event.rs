@@ -277,6 +277,32 @@ pub enum RunEventKind {
     GenerationAttemptCommitted {
         attempt: u32,
     },
+    /// Additive execution lifecycle facts. These are deliberately distinct
+    /// from Run terminal events so a replay can reconstruct provider turns.
+    TurnStarted {
+        turn_id: String,
+    },
+    TurnCompleted {
+        turn_id: String,
+        stop_reason: String,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    MessageStarted {
+        turn_id: String,
+        message_id: String,
+        role: String,
+    },
+    MessageDelta {
+        turn_id: String,
+        message_id: String,
+        text: String,
+    },
+    MessageCompleted {
+        turn_id: String,
+        message_id: String,
+        role: String,
+    },
     Completed {
         reason: String,
     },
@@ -333,6 +359,11 @@ impl RunEventKind {
             Self::GenerationAttemptFailed { .. } => "generation_attempt_failed",
             Self::GenerationAttemptDiscarded { .. } => "generation_attempt_discarded",
             Self::GenerationAttemptCommitted { .. } => "generation_attempt_committed",
+            Self::TurnStarted { .. } => "turn_started",
+            Self::TurnCompleted { .. } => "turn_completed",
+            Self::MessageStarted { .. } => "message_started",
+            Self::MessageDelta { .. } => "message_delta",
+            Self::MessageCompleted { .. } => "message_completed",
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Cancelled { .. } => "cancelled",

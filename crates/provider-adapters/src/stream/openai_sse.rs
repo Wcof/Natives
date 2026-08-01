@@ -392,6 +392,34 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn normalizes_all_provider_stop_reason_families() {
+        assert_eq!(
+            ProviderStopReason::from_raw("tool_calls"),
+            ProviderStopReason::ToolUse
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("max_tokens"),
+            ProviderStopReason::Length
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("cancelled"),
+            ProviderStopReason::Cancelled
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("failed"),
+            ProviderStopReason::Error
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("end_turn"),
+            ProviderStopReason::Stop
+        );
+        assert!(matches!(
+            ProviderStopReason::from_raw("vendor_new_reason"),
+            ProviderStopReason::Unknown(_)
+        ));
+    }
+
     fn usage_of(events: &[ProviderEvent]) -> ProviderUsage {
         events
             .iter()
