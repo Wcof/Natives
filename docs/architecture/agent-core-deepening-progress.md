@@ -20,7 +20,7 @@
 | F. Event Fail Closed | 部分完成 | 81aad0f | agent-core 162 | Turn/Message 关键事实使用 append_checked；新增 persistence fault injection；旧非关键 delta 保持可丢弃 |
 | G. Lineage 与 Resume | 部分完成 | 81aad0f | lineage 1 | 新增 lineage/resume safety model；Checkpoint/DB 接线留待下一阶段 |
 | H. Projection 与权限清理 | 部分完成 | 81aad0f | daemon check | 生产路径禁用全局 profile setter；UI projection reducer 尚未迁移 |
-| I. 最终验证 | 待开始 |  |  |  |
+| I. 最终验证 | 部分完成 | 待提交 | fmt、protocol、定点测试通过；workspace 因磁盘耗尽，前端工具链缺少依赖 |
 
 ## 阻塞项
 

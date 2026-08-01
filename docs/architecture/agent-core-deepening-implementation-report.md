@@ -64,7 +64,12 @@ Provider stop reason family 映射测试。
 | `cargo test -p provider-adapters ...normalizes_all_provider_stop_reason_families` | 通过 | 1 passed |
 | `cargo check -p agent-core -p natives-agent-daemon` | 通过 | Provider/Daemon seam 编译 |
 | `cargo check -p assistant-protocol` | 通过 | additive event variant 编译 |
-| 完整 workspace/frontend 验证 | 待最终阶段 | 避免重复全量消耗 |
+| `cargo fmt --check` | 通过 | 无格式差异 |
+| `cargo test --workspace -- --test-threads=4` | 环境失败 | 编译阶段因 `No space left on device`，未发现本次代码断言失败 |
+| `npm run protocol:check` | 通过 | TS/Rust protocol surface aligned |
+| `npm run typecheck` / `lint` / `test` / `perf:check` | 环境未运行 | worktree 未安装 `tsc`/`eslint`/`tsx` |
+| `npm run verify:native-engine` | 环境失败 | 临时目录因 `No space left on device` |
+| `git diff --check` | 通过 | 无 whitespace 错误 |
 
 ## 5. 未完成或偏差
 

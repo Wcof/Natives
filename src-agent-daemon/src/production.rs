@@ -391,17 +391,12 @@ impl ProductionRuntime {
         self.interactions.assignment_inflight_arc()
     }
 
-    /// Legacy test/fixture default. Production runs use the immutable profile
-    /// captured in `RunStartContext`; no request may mutate a process-global
-    /// permission profile.
-    #[cfg(test)]
+    /// Legacy fixture compatibility. Production runs use the immutable profile
+    /// captured in `RunStartContext`; this method intentionally does not mutate
+    /// the shared PermissionManager profile.
+    #[deprecated(note = "run profiles are bound in RunStartContext")]
     pub async fn set_permission_profile(&self, profile: &str) {
-        let p = match profile {
-            "readonly" | "read_only" => PermissionProfile::ReadOnly,
-            "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
-            _ => PermissionProfile::ConfirmEach,
-        };
-        self.permissions.set_profile(p).await;
+        let _ = profile;
     }
 
     pub async fn respond_permission(
@@ -1456,12 +1451,12 @@ mod permission_bind_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn runtime_profile_maps_readonly_ask_and_full_access() {
+    async fn legacy_runtime_profile_setter_cannot_mutate_shared_profile() {
         let rt = ProductionRuntime::new();
         rt.set_permission_profile("readonly").await;
         assert_eq!(
             rt.permissions.get_profile().await,
-            PermissionProfile::ReadOnly
+            PermissionProfile::ConfirmEach
         );
         rt.set_permission_profile("ask").await;
         assert_eq!(
@@ -1471,7 +1466,7 @@ mod permission_bind_tests {
         rt.set_permission_profile("full_access").await;
         assert_eq!(
             rt.permissions.get_profile().await,
-            PermissionProfile::Autonomous
+            PermissionProfile::ConfirmEach
         );
     }
 
