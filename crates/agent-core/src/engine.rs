@@ -1967,6 +1967,7 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventPersistence;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -2500,6 +2501,65 @@ mod tests {
         assert_eq!(seen[1].content, "ack");
         assert_eq!(seen[2].content, "fallback should not be used");
         assert_eq!(seen[2].role, "user");
+    }
+
+    #[tokio::test]
+    async fn critical_turn_event_persistence_failure_stops_provider_call() {
+        struct FailingPersistence;
+        impl EventPersistence for FailingPersistence {
+            fn append(&self, _: &assistant_protocol::v2::RunEventV2) -> Result<(), String> {
+                Err("disk unavailable".into())
+            }
+            fn replay_after(
+                &self,
+                _: &str,
+                _: u64,
+            ) -> Result<Vec<assistant_protocol::v2::RunEventV2>, String> {
+                Ok(Vec::new())
+            }
+            fn last_sequence(&self, _: &str) -> Result<u64, String> {
+                Ok(0)
+            }
+        }
+        struct CountingProvider(AtomicUsize);
+        #[async_trait::async_trait]
+        impl EngineProvider for CountingProvider {
+            async fn stream(
+                &self,
+                _: &str,
+                _: Vec<EngineMessage>,
+                _: &[ToolSchema],
+                _: Option<&str>,
+                _: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    EngineProviderEvent::Completed,
+                ])))
+            }
+        }
+        let provider = CountingProvider(AtomicUsize::new(0));
+        let result = AgentEngine::new(EventSequencer::with_persistence(Arc::new(
+            FailingPersistence,
+        )))
+        .run(
+            EngineRunConfig {
+                run_id: "persist-fail".into(),
+                conversation_id: "conversation".into(),
+                model: "model".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "hello".into(),
+                max_steps: 1,
+            },
+            &provider,
+            &FakeTools,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(EngineError::Message(message)) if message == "PERSISTENCE_FAILED")
+        );
+        assert_eq!(provider.0.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

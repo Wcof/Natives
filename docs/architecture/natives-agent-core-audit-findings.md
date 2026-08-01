@@ -81,10 +81,11 @@
 
 - 严重等级：P1
 - 所属模块：agent-core event_seq 及调用者
-- 实现状态：未修复（本轮保持范围）
+- 实现状态：部分修复（深化阶段；非关键 delta 仍保持兼容的 best-effort）
 - 原始代码证据：event_seq.rs；多处 events.append 忽略返回值。
-- 当前行为：持久化失败可能返回未发布的 Failed payload，但调用者继续执行。
-- 建议：后续独立批次引入 checked lifecycle sink 与 fault-injection persistence。
+- 当前行为：`EventSequencer::append_checked` 已存在；本轮 Turn/Message 生命周期事实使用 checked seam，旧 delta 调用仍为 best-effort。
+- 新代码证据：`crates/agent-core/src/engine.rs::append_critical`。
+- 建议：下一阶段将 Tool/Run terminal 等关键事实统一迁移到 checked sink，并加入 fault-injection persistence。
 
 ## UI 会合成或重标终态展示事件
 
@@ -99,9 +100,10 @@
 
 - 严重等级：P2
 - 所属模块：src-agent-daemon / agent-core permissions
-- 实现状态：未修复；当前主工具路径未确认跨 Run 污染
+- 实现状态：主生产路径已收紧；测试/legacy setter 仅保留在 `cfg(test)`
 - 原始代码证据：共享 Arc<PermissionManager> 与 set_permission_profile；生产 PermissionGatedTools 使用 per-run profile。
-- 当前行为：legacy/global setter 仍存在，但未发现生产 RPC 使用；本轮不改变 Permission Profile 语义。
+- 当前行为：`PermissionGatedTools` 使用 `RunStartContext.permission_profile` 调用 profile-bound API；`ProductionRuntime::set_permission_profile` 仅在测试编译保留，不能改变生产进程全局状态。
+- 新代码证据：`src-agent-daemon/src/production.rs::set_permission_profile` 的 `cfg(test)`；`production_tools.rs::request_permission_for_profile`。
 - 建议：后续限制 global setter 为测试/deprecated，并加入 profile isolation 静态 gate。
 
 ## 已验证未发现的问题（原始结论保留）
