@@ -4,7 +4,7 @@
 
 - 分支：fix/agent-core-p0
 - 开始 Commit：1b4b1792932e2e24160091c7700a2c092d01e5f2
-- 代码结束 Commit：a601636（文档提交随后生成；最终 Worktree 提交以 git log 为准）
+- 代码结束 Commit：a601636 + bd3f88c（文档提交随后生成；最终 Worktree 提交以 git log 为准）
 - Worktree：/Users/ldh/Downloads/project/AiNative/Natives-agent-core-p0
 - Pi 参考 Commit：583f153d502aa8e958eefdb9af0fbd3344e68f95
 - 原工作区：保持原有 Settings/UI 冲突与研究文档未修改
