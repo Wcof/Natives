@@ -85,7 +85,7 @@ async fn live_text_stream_completes() {
     while let Some(ev) = stream.next().await {
         match ev {
             ProviderEvent::TextDelta(t) => text.push_str(&t),
-            ProviderEvent::Completed => completed = true,
+            ProviderEvent::Completed { .. } => completed = true,
             ProviderEvent::Error(e) => {
                 errors.push(e.message);
                 break;
@@ -197,7 +197,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
                 err = Some(e.message);
                 break;
             }
-            ProviderEvent::Completed => {}
+            ProviderEvent::Completed { .. } => {}
             _ => {}
         }
     }

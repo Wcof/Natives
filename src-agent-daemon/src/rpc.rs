@@ -375,7 +375,7 @@ async fn test_provider_model(
     while let Some(event) = stream.next().await {
         match event {
             ProviderEvent::TextDelta(delta) => text.push_str(&delta),
-            ProviderEvent::Completed => {
+            ProviderEvent::Completed { .. } => {
                 break;
             }
             ProviderEvent::Error(err) => return Err(err),
@@ -3195,7 +3195,9 @@ mod tests {
         let adapter = StaticStreamAdapter {
             events: vec![
                 ProviderEvent::TextDelta("ok".into()),
-                ProviderEvent::Completed,
+                ProviderEvent::Completed {
+                    reason: provider_adapters::stream::ProviderStopReason::Stop,
+                },
             ],
         };
         let result = test_provider_model(
@@ -3219,7 +3221,9 @@ mod tests {
     #[tokio::test]
     async fn provider_model_test_empty_stream_is_structured_error() {
         let adapter = StaticStreamAdapter {
-            events: vec![ProviderEvent::Completed],
+            events: vec![ProviderEvent::Completed {
+                reason: provider_adapters::stream::ProviderStopReason::Stop,
+            }],
         };
         let error = test_provider_model(
             &adapter,

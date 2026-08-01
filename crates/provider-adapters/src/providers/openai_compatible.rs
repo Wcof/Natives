@@ -73,8 +73,13 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
         let mut blocks = vec![ProviderResponseBlock::Text(content)];
         if let Some(tcs) = tools {
             for (id, name, args) in tcs {
-                let input =
-                    serde_json::from_str(&args).unwrap_or(serde_json::json!({ "raw": args }));
+                let input = serde_json::from_str(&args).map_err(|error| ProviderError {
+                    code: "invalid_tool_arguments".into(),
+                    message: format!("tool call {id} arguments are not valid JSON: {error}"),
+                    category: ProviderErrorCategory::BadRequest,
+                    retryable: false,
+                    retry_after_ms: None,
+                })?;
                 blocks.push(ProviderResponseBlock::ToolCall { id, name, input });
             }
         }

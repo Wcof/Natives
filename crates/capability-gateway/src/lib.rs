@@ -321,16 +321,36 @@ impl CapabilityGateway {
             retryable: false,
         })?;
 
+        validate_schema(&tool.schema, &input).map_err(|message| ToolError {
+            code: "invalid_arguments".into(),
+            message: format!("tool `{name}` arguments failed schema validation: {message}"),
+            retryable: false,
+        })?;
         self.enforce_input_policy(tool, &input)?;
 
         let timeout = std::time::Duration::from_millis(tool.timeout_ms.max(1));
-        let result = tokio::time::timeout(timeout, tool.handler.execute(input, context))
-            .await
-            .map_err(|_| ToolError {
-                code: "timeout".into(),
-                message: format!("tool `{name}` exceeded {}ms", tool.timeout_ms),
-                retryable: true,
-            })??;
+        let tool_cancel = context.cancel.child_token();
+        let mut tool_context = context.clone();
+        tool_context.cancel = tool_cancel.clone();
+        let result = tokio::select! {
+            result = tool.handler.execute(input, &tool_context) => result,
+            _ = tokio::time::sleep(timeout) => {
+                tool_cancel.cancel();
+                Err(ToolError {
+                    code: "timeout".into(),
+                    message: format!("tool `{name}` exceeded {}ms", tool.timeout_ms),
+                    retryable: true,
+                })
+            },
+            _ = context.cancel.cancelled() => {
+                tool_cancel.cancel();
+                Err(ToolError {
+                    code: "cancelled".into(),
+                    message: format!("tool `{name}` cancelled"),
+                    retryable: true,
+                })
+            },
+        }?;
 
         if policy::check_output_limit(result.result.to_string().as_bytes(), tool.output_limit) {
             return Err(ToolError {
@@ -340,6 +360,16 @@ impl CapabilityGateway {
             });
         }
         Ok(result)
+    }
+
+    /// Validate one registered schema without executing its handler.
+    pub fn validate_tool_schema(&self, name: &str) -> Result<(), ToolError> {
+        let tool = self.get_tool(name).ok_or_else(|| ToolError {
+            code: "unknown_tool".into(),
+            message: format!("unknown tool: {name}"),
+            retryable: false,
+        })?;
+        validate_schema_definition(&tool.schema)
     }
 
     fn enforce_input_policy(
@@ -397,8 +427,282 @@ impl CapabilityGateway {
     }
 }
 
+/// Small, dependency-free Draft-07 subset used by the built-in manifests.
+/// It covers the executable boundary (`type`, `properties`, `required`,
+/// `additionalProperties`, `items`, `enum`, and numeric bounds) without
+/// duplicating a full JSON Schema engine in the Agent Core.
+fn validate_schema(schema: &serde_json::Value, value: &serde_json::Value) -> Result<(), String> {
+    if let Some(types) = schema.get("type") {
+        let matches = types
+            .as_str()
+            .map(|ty| schema_type_matches(ty, value))
+            .unwrap_or_else(|| {
+                types.as_array().is_some_and(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .any(|ty| schema_type_matches(ty, value))
+                })
+            });
+        if !matches {
+            return Err(format!("expected {}, got {}", types, value_type(value)));
+        }
+    }
+    if let Some(enum_values) = schema.get("enum").and_then(|v| v.as_array()) {
+        if !enum_values.iter().any(|candidate| candidate == value) {
+            return Err(format!("value is not one of {enum_values:?}"));
+        }
+    }
+    if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "required only applies to objects".to_string())?;
+        for key in required.iter().filter_map(|v| v.as_str()) {
+            if !object.contains_key(key) {
+                return Err(format!("missing required property `{key}`"));
+            }
+        }
+    }
+    if let Some(properties) = schema.get("properties").and_then(|v| v.as_object()) {
+        if let Some(object) = value.as_object() {
+            for (key, property) in object {
+                if let Some(property_schema) = properties.get(key) {
+                    validate_schema(property_schema, property)
+                        .map_err(|error| format!("property `{key}`: {error}"))?;
+                } else if schema.get("additionalProperties")
+                    == Some(&serde_json::Value::Bool(false))
+                {
+                    return Err(format!("unknown property `{key}`"));
+                }
+            }
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        if let Some(array) = value.as_array() {
+            for (index, item) in array.iter().enumerate() {
+                validate_schema(items, item).map_err(|error| format!("item {index}: {error}"))?;
+            }
+        }
+    }
+    if let Some(minimum) = schema.get("minimum").and_then(|v| v.as_f64()) {
+        if value.as_f64().is_some_and(|number| number < minimum) {
+            return Err(format!("number is below minimum {minimum}"));
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(|v| v.as_f64()) {
+        if value.as_f64().is_some_and(|number| number > maximum) {
+            return Err(format!("number is above maximum {maximum}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_schema_definition(schema: &serde_json::Value) -> Result<(), ToolError> {
+    let Some(object) = schema.as_object() else {
+        return Err(ToolError {
+            code: "invalid_schema".into(),
+            message: "schema must be an object".into(),
+            retryable: false,
+        });
+    };
+    if let Some(ty) = object.get("type") {
+        let valid = ty
+            .as_str()
+            .map(|value| {
+                matches!(
+                    value,
+                    "object" | "array" | "string" | "integer" | "number" | "boolean" | "null"
+                )
+            })
+            .unwrap_or_else(|| {
+                ty.as_array().is_some_and(|items| {
+                    items.iter().all(|item| {
+                        item.as_str().is_some_and(|value| {
+                            matches!(
+                                value,
+                                "object"
+                                    | "array"
+                                    | "string"
+                                    | "integer"
+                                    | "number"
+                                    | "boolean"
+                                    | "null"
+                            )
+                        })
+                    })
+                })
+            });
+        if !valid {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "unsupported schema type".into(),
+                retryable: false,
+            });
+        }
+    }
+    if let Some(properties) = object.get("properties") {
+        let Some(properties) = properties.as_object() else {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "properties must be an object".into(),
+                retryable: false,
+            });
+        };
+        for property in properties.values() {
+            validate_schema_definition(property)?;
+        }
+    }
+    if let Some(items) = object.get("items") {
+        validate_schema_definition(items)?;
+    }
+    Ok(())
+}
+
+fn schema_type_matches(expected: &str, value: &serde_json::Value) -> bool {
+    match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+fn value_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 impl Default for CapabilityGateway {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod p0_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingHandler(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl ToolHandler for CountingHandler {
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolCallContext,
+        ) -> Result<ToolOutput, ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput {
+                result: serde_json::json!({"ok": true}),
+                truncated: false,
+                duration_ms: 0,
+            })
+        }
+    }
+
+    fn gateway(handler: Arc<dyn ToolHandler + Send + Sync>, timeout_ms: u64) -> CapabilityGateway {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register(Tool {
+            name: "p0_test",
+            description: "test",
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "mode": {"type": "string", "enum": ["read"]}},
+                "required": ["path"]
+            }),
+            side_effect: SideEffect::ReadOnly,
+            permission_class: PermissionClass::AlwaysAllowed,
+            path_scope: PathScope::Any,
+            timeout_ms,
+            output_limit: 4096,
+            cancellable: true,
+            handler,
+        });
+        gateway
+    }
+
+    fn context(cancel: CancellationToken) -> ToolCallContext {
+        ToolCallContext::with_cancel(
+            std::env::current_dir().unwrap(),
+            "run-p0".into(),
+            "conversation-p0".into(),
+            "call-p0".into(),
+            "readonly".into(),
+            cancel,
+        )
+    }
+
+    #[tokio::test]
+    async fn schema_failure_never_reaches_handler() {
+        let handler = Arc::new(CountingHandler(AtomicUsize::new(0)));
+        let gateway = gateway(handler.clone(), 1000);
+        let error = gateway
+            .execute(
+                "p0_test",
+                serde_json::json!({"path": 7}),
+                &context(CancellationToken::new()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn all_builtin_schemas_are_supported_by_validator() {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register_builtins();
+        for tool in gateway.list_tools() {
+            gateway
+                .validate_tool_schema(tool.name)
+                .unwrap_or_else(|error| panic!("{}: {}", tool.name, error.message));
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_over_blocking_handler() {
+        struct Blocking;
+        #[async_trait::async_trait]
+        impl ToolHandler for Blocking {
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                _: &ToolCallContext,
+            ) -> Result<ToolOutput, ToolError> {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok(ToolOutput {
+                    result: serde_json::json!({}),
+                    truncated: false,
+                    duration_ms: 0,
+                })
+            }
+        }
+        let cancel = CancellationToken::new();
+        let gateway = gateway(Arc::new(Blocking), 5000);
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            trigger.cancel();
+        });
+        let error = gateway
+            .execute(
+                "p0_test",
+                serde_json::json!({"path": "ok"}),
+                &context(cancel),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "cancelled");
     }
 }

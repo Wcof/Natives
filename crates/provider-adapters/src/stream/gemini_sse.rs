@@ -1,7 +1,7 @@
 //! Gemini GenerateContent stream parser → ProviderEvent.
 
 use crate::capabilities::{ProviderError, ProviderErrorCategory, ProviderUsage};
-use crate::stream::ProviderEvent;
+use crate::stream::{ProviderEvent, ProviderStopReason};
 use serde_json::Value;
 
 /// Parse a single Gemini streaming JSON object (array element or SSE data).
@@ -90,6 +90,11 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
         .unwrap_or_default();
 
     for candidate in candidates {
+        if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
+            events.push(ProviderEvent::Completed {
+                reason: ProviderStopReason::from_raw(reason),
+            });
+        }
         let parts = candidate
             .get("content")
             .and_then(|c| c.get("parts"))

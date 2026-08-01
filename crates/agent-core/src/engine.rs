@@ -48,7 +48,7 @@ struct PreparedToolCall {
     name: String,
     args: String,
     input: Value,
-    denied: bool,
+    rejected: Option<ToolExecutionResult>,
     parallel_safe: bool,
 }
 
@@ -58,7 +58,6 @@ struct ExecutedToolCall {
     id: String,
     name: String,
     args: String,
-    denied: bool,
     result: Option<ToolExecutionResult>,
 }
 
@@ -124,6 +123,28 @@ pub trait EngineProvider: Send + Sync {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError>;
+
+    /// Context-aware provider call. The default preserves existing lightweight
+    /// providers while production providers can bind credentials to the real
+    /// Run identity and Attempt number.
+    async fn stream_with_context(
+        &self,
+        _context: EngineProviderContext,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream(model, messages, tools, system_prompt, cancel)
+            .await
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineProviderContext {
+    pub run_id: String,
+    pub attempt: u32,
 }
 
 pub type EngineProviderEventStream =
@@ -231,7 +252,11 @@ pub enum EngineProviderEvent {
         /// Prompt-cache reads reported by the provider, when it reports them.
         cache_read_tokens: Option<u64>,
     },
+    /// Legacy completion used by fixture providers; treated as a reliable stop.
     Completed,
+    CompletedWithReason {
+        reason: ProviderStopReason,
+    },
     Error {
         message: String,
         code: String,
@@ -239,6 +264,16 @@ pub enum EngineProviderEvent {
         category: String,
         retry_after_ms: Option<u64>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderStopReason {
+    Stop,
+    ToolUse,
+    Length,
+    Cancelled,
+    Error,
+    Unknown(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -575,7 +610,7 @@ impl AgentEngine {
 
             const MAX_PROVIDER_ATTEMPTS: u32 = 3;
             let mut attempt = 1u32;
-            let (text_acc, tool_acc) = 'attempts: loop {
+            let (text_acc, tool_acc, stop_reason) = 'attempts: loop {
                 self.events.append(
                     run_id,
                     RunEventKind::GenerationAttemptStarted {
@@ -585,7 +620,11 @@ impl AgentEngine {
                 );
 
                 let provider_events = match provider
-                    .stream(
+                    .stream_with_context(
+                        EngineProviderContext {
+                            run_id: run_id.to_string(),
+                            attempt,
+                        },
                         &config.model,
                         messages.clone(),
                         &tool_schemas,
@@ -643,6 +682,7 @@ impl AgentEngine {
                 let mut text_acc = String::new();
                 let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
                 let mut saw_generation_delta = false;
+                let mut completed_reason: Option<ProviderStopReason> = None;
                 tokio::pin!(provider_events);
 
                 while let Some(event) = provider_events.next().await {
@@ -766,12 +806,32 @@ impl AgentEngine {
                                 retry_after_ms,
                             });
                         }
-                        EngineProviderEvent::Completed => {}
+                        EngineProviderEvent::CompletedWithReason { reason } => {
+                            completed_reason = Some(reason);
+                        }
+                        EngineProviderEvent::Completed => {
+                            completed_reason = Some(ProviderStopReason::Stop);
+                        }
                     }
                 }
 
                 if self.cancel.is_cancelled() {
                     return Ok(EngineOutcome::Cancelled);
+                }
+
+                if completed_reason.is_none() && !tool_acc.is_empty() {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::GenerationAttemptDiscarded {
+                            attempt,
+                            reason: "INCOMPLETE_TOOL_CALL".into(),
+                        },
+                    );
+                    break (
+                        text_acc,
+                        tool_acc,
+                        Some(ProviderStopReason::Unknown("INCOMPLETE_TOOL_CALL".into())),
+                    );
                 }
 
                 if !saw_generation_delta && attempt < 2 {
@@ -813,7 +873,7 @@ impl AgentEngine {
 
                 self.events
                     .append(run_id, RunEventKind::GenerationAttemptCommitted { attempt });
-                break (text_acc, tool_acc);
+                break (text_acc, tool_acc, completed_reason);
             };
 
             if !text_acc.is_empty() {
@@ -859,15 +919,44 @@ impl AgentEngine {
                 &mut messages,
             );
             let mut prepared: Vec<PreparedToolCall> = Vec::new();
+            let fail_closed_reason = stop_reason.as_ref().and_then(|reason| match reason {
+                ProviderStopReason::Length => Some((
+                    "TRUNCATED_TOOL_CALL",
+                    "provider output was truncated before the tool call could be executed",
+                )),
+                ProviderStopReason::Unknown(_) => Some((
+                    "UNKNOWN_PROVIDER_STOP_REASON",
+                    "provider did not provide a reliable stop reason; tool call was not executed",
+                )),
+                _ => None,
+            });
             for (_index, (id, name, args)) in tool_acc {
                 let id = if id.is_empty() {
                     uuid::Uuid::new_v4().to_string()
                 } else {
                     id
                 };
-                let mut input: Value = serde_json::from_str(&args).unwrap_or(serde_json::json!({
-                    "raw": args
-                }));
+                let (mut input, mut rejected) = match serde_json::from_str(&args) {
+                    Ok(value) => (value, None),
+                    Err(error) => (
+                        json!({}),
+                        Some(ToolExecutionResult {
+                            output: json!({
+                                "error_code": "INVALID_TOOL_ARGUMENTS",
+                                "error": format!("tool arguments are not valid JSON: {error}"),
+                            }),
+                            is_error: true,
+                            duration_ms: 0,
+                        }),
+                    ),
+                };
+                if let Some((code, message)) = fail_closed_reason {
+                    rejected = Some(ToolExecutionResult {
+                        output: json!({"error_code": code, "error": message}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
                 doom.observe_tool(&name, &tool_args_fingerprint(&args));
                 if let Some(reason) = doom.diagnose() {
                     return Err(EngineError::DoomLoop(reason));
@@ -883,12 +972,10 @@ impl AgentEngine {
                         input: input.clone(),
                     })
                     .await;
-                let mut denied = false;
                 let mut deny_reason: Option<String> = None;
                 for response in pre {
                     match response.decision {
                         HookDecision::Deny { reason } => {
-                            denied = true;
                             deny_reason = Some(reason);
                         }
                         HookDecision::Modify { payload } => {
@@ -897,27 +984,16 @@ impl AgentEngine {
                         _ => {}
                     }
                 }
-                if denied {
-                    let reason = deny_reason.unwrap_or_else(|| "denied".into());
-                    self.events.append(
-                        run_id,
-                        RunEventKind::ToolCallCompleted {
-                            id: id.clone(),
-                            name: name.clone(),
-                            output: serde_json::json!({ "error": reason, "denied_by_hook": true }),
-                            is_error: true,
-                            duration_ms: 0,
-                        },
-                    );
-                    prepared.push(PreparedToolCall {
-                        id,
-                        name,
-                        args,
-                        input,
-                        denied: true,
-                        parallel_safe: false,
+                if let Some(reason) = deny_reason {
+                    rejected = Some(ToolExecutionResult {
+                        output: json!({
+                            "error_code": "HOOK_DENIED",
+                            "error": reason,
+                            "denied_by_hook": true
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
                     });
-                    continue;
                 }
 
                 self.events.append(
@@ -942,7 +1018,7 @@ impl AgentEngine {
                     name,
                     args,
                     input,
-                    denied: false,
+                    rejected,
                     parallel_safe,
                 });
             }
@@ -959,10 +1035,6 @@ impl AgentEngine {
             let mut assistant_tool_calls = Vec::new();
             let mut tool_results = Vec::new();
             for item in executed {
-                // Denied by PreToolUse: already emitted ToolCallCompleted; skip pair.
-                if item.denied {
-                    continue;
-                }
                 assistant_tool_calls.push(EngineToolCall {
                     id: item.id.clone(),
                     name: item.name.clone(),
@@ -1008,7 +1080,7 @@ impl AgentEngine {
 
     /// Execute prepared tool calls with parallel_safe batching (max concurrency 4).
     /// Contiguous same-turn `task` tools are executed via `execute_task_batch`.
-    /// Non-parallel tools and denied hooks stay serial. Results keep original order.
+    /// Non-parallel tools and rejected calls stay serial. Results keep original order.
     async fn execute_prepared_tools(
         &self,
         run_id: &str,
@@ -1021,14 +1093,23 @@ impl AgentEngine {
         let mut out: Vec<ExecutedToolCall> = Vec::with_capacity(prepared.len());
         let mut i = 0;
         while i < prepared.len() {
-            if prepared[i].denied {
+            if let Some(result) = prepared[i].rejected.clone() {
                 out.push(ExecutedToolCall {
                     id: prepared[i].id.clone(),
                     name: prepared[i].name.clone(),
                     args: prepared[i].args.clone(),
-                    denied: true,
-                    result: None,
+                    result: Some(result.clone()),
                 });
+                self.events.append(
+                    run_id,
+                    RunEventKind::ToolCallCompleted {
+                        id: prepared[i].id.clone(),
+                        name: prepared[i].name.clone(),
+                        output: result.output,
+                        is_error: true,
+                        duration_ms: 0,
+                    },
+                );
                 i += 1;
                 continue;
             }
@@ -1036,7 +1117,10 @@ impl AgentEngine {
             // Contiguous non-denied `task` tools → one batch assignment.
             if prepared[i].name == "task" {
                 let mut batch = Vec::new();
-                while i < prepared.len() && prepared[i].name == "task" && !prepared[i].denied {
+                while i < prepared.len()
+                    && prepared[i].name == "task"
+                    && prepared[i].rejected.is_none()
+                {
                     batch.push(prepared[i].clone());
                     i += 1;
                 }
@@ -1080,7 +1164,6 @@ impl AgentEngine {
                         id: call.id,
                         name: call.name,
                         args: call.args,
-                        denied: false,
                         result: Some(result),
                     });
                 }
@@ -1092,7 +1175,7 @@ impl AgentEngine {
                 let mut batch = Vec::new();
                 while i < prepared.len()
                     && prepared[i].parallel_safe
-                    && !prepared[i].denied
+                    && prepared[i].rejected.is_none()
                     && batch.len() < PARALLEL_SAFE_MAX_CONCURRENCY
                 {
                     batch.push(prepared[i].clone());
@@ -1156,7 +1239,6 @@ impl AgentEngine {
                         id: call.id,
                         name: call.name,
                         args: call.args,
-                        denied: false,
                         result: Some(result),
                     });
                 }
@@ -1196,7 +1278,6 @@ impl AgentEngine {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 args: call.args.clone(),
-                denied: false,
                 result: Some(result),
             });
             i += 1;
@@ -1250,7 +1331,7 @@ impl AgentEngine {
 
         let values = engine_messages_to_values(&messages);
         let result = match self
-            .try_model_summary(model, provider, &values, tool_limit)
+            .try_model_summary(run_id, model, provider, &values, tool_limit)
             .await
         {
             Some(summarized) => summarized,
@@ -1311,6 +1392,7 @@ impl AgentEngine {
     /// answers it with mechanical compaction.
     async fn try_model_summary(
         &self,
+        run_id: &str,
         model: &str,
         provider: &dyn EngineProvider,
         values: &[Value],
@@ -1347,7 +1429,10 @@ impl AgentEngine {
             images: Vec::new(),
         }];
 
-        match self.stream_summary_text(model, provider, request).await {
+        match self
+            .stream_summary_text(run_id, model, provider, request)
+            .await
+        {
             Ok(summary) if !summary.trim().is_empty() => {
                 Some(apply_model_summary(values, split, &summary, tool_limit))
             }
@@ -1366,6 +1451,7 @@ impl AgentEngine {
     /// Bounded by the run cancel token and a wall-clock timeout.
     async fn stream_summary_text(
         &self,
+        run_id: &str,
         model: &str,
         provider: &dyn EngineProvider,
         messages: Vec<EngineMessage>,
@@ -1373,7 +1459,11 @@ impl AgentEngine {
         let cancel = self.cancel.clone();
         let collect = async {
             let mut stream = provider
-                .stream(
+                .stream_with_context(
+                    EngineProviderContext {
+                        run_id: run_id.to_string(),
+                        attempt: 0,
+                    },
                     model,
                     messages,
                     &[],
@@ -1937,6 +2027,160 @@ mod tests {
                 .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
                 || matches!(status, crate::EngineOutcome::Completed { .. })
         );
+    }
+
+    #[tokio::test]
+    async fn length_stop_never_executes_collected_tool_call() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some("truncated-1".into()),
+                        name: Some("echo".into()),
+                        arguments_delta: r#"{"path":"ok"}"#.into(),
+                    },
+                    EngineProviderEvent::CompletedWithReason {
+                        reason: ProviderStopReason::Length,
+                    },
+                ],
+                vec![
+                    EngineProviderEvent::TextDelta("recovered".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+        let calls = AtomicUsize::new(0);
+        struct CountingRuntime<'a>(&'a AtomicUsize);
+        #[async_trait::async_trait]
+        impl EngineToolRuntime for CountingRuntime<'_> {
+            async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+                vec![ToolSchema {
+                    name: "echo".into(),
+                    description: "echo".into(),
+                    input_schema: json!({"type":"object"}),
+                }]
+            }
+            async fn execute_tool(
+                &self,
+                _: &str,
+                _: Value,
+                _: &CancellationToken,
+            ) -> ToolExecutionResult {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                ToolExecutionResult {
+                    output: json!({"unexpected": true}),
+                    is_error: false,
+                    duration_ms: 0,
+                }
+            }
+        }
+        let runtime = CountingRuntime(&calls);
+        let run_id = format!("length-run-{}", uuid::Uuid::new_v4());
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "length-conversation".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "use echo".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &runtime,
+            )
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let completed = engine
+            .events
+            .replay_after(&run_id, 0)
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                RunEventKind::ToolCallCompleted {
+                    id,
+                    output,
+                    is_error: true,
+                    ..
+                } => Some((id, output)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].0, "truncated-1");
+        assert_eq!(completed[0].1["error_code"], "TRUNCATED_TOOL_CALL");
+    }
+
+    #[tokio::test]
+    async fn hook_deny_keeps_tool_call_and_emits_one_error_result() {
+        struct DenyHook;
+        #[async_trait::async_trait]
+        impl crate::hooks::HookHandler for DenyHook {
+            async fn handle(&self, _: HookRequest) -> crate::hooks::HookResponse {
+                crate::hooks::HookResponse {
+                    decision: HookDecision::Deny {
+                        reason: "policy".into(),
+                    },
+                }
+            }
+        }
+        let mut hooks = HookRegistry::new();
+        hooks.register(HookEvent::PreToolUse, Box::new(DenyHook));
+        let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some("deny-1".into()),
+                        name: Some("echo".into()),
+                        arguments_delta: r#"{"path":"ok"}"#.into(),
+                    },
+                    EngineProviderEvent::Completed,
+                ],
+                vec![
+                    EngineProviderEvent::TextDelta("after deny".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+        let run_id = format!("deny-run-{}", uuid::Uuid::new_v4());
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "deny-conversation".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "use echo".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        let completed = engine
+            .events
+            .replay_after(&run_id, 0)
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                RunEventKind::ToolCallCompleted {
+                    id,
+                    output,
+                    is_error: true,
+                    ..
+                } => Some((id, output)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].0, "deny-1");
+        assert_eq!(completed[0].1["error_code"], "HOOK_DENIED");
     }
 
     #[tokio::test]

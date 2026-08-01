@@ -538,7 +538,7 @@ impl ProviderAdapter for AnthropicAdapter {
                         for line in split_sse_lines(&mut buffer) {
                             if let Some(data) = sse_data_payload(&line) {
                                 for event in parser.push_data_line(data) {
-                                    if matches!(event, ProviderEvent::Completed) {
+                                    if matches!(event, ProviderEvent::Completed { .. }) {
                                         saw_completed = true;
                                     }
                                     yield event;
@@ -559,7 +559,9 @@ impl ProviderAdapter for AnthropicAdapter {
                 }
             }
             if !saw_completed {
-                yield ProviderEvent::Completed;
+                yield ProviderEvent::Completed {
+                    reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
+                };
             }
         };
         Ok(Box::pin(stream))

@@ -13,6 +13,13 @@ pub struct OpenAiAdapter {
     api_key: Option<String>,
     base_url: String,
     client: Client,
+    api_mode: Option<OpenAiApiMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiApiMode {
+    ChatCompletions,
+    Responses,
 }
 
 impl OpenAiAdapter {
@@ -21,6 +28,7 @@ impl OpenAiAdapter {
             api_key: None,
             base_url: "https://api.openai.com/v1".to_string(),
             client: Client::new(),
+            api_mode: None,
         }
     }
 
@@ -31,6 +39,11 @@ impl OpenAiAdapter {
 
     pub fn with_base_url(mut self, url: String) -> Self {
         self.base_url = url;
+        self
+    }
+
+    pub fn with_api_mode(mut self, mode: OpenAiApiMode) -> Self {
+        self.api_mode = Some(mode);
         self
     }
 
@@ -114,8 +127,13 @@ impl ProviderAdapter for OpenAiAdapter {
         }
         if let Some(tool_calls) = tools {
             for (id, name, args) in tool_calls {
-                let input =
-                    serde_json::from_str(&args).unwrap_or(serde_json::json!({ "raw": args }));
+                let input = serde_json::from_str(&args).map_err(|error| ProviderError {
+                    code: "invalid_tool_arguments".into(),
+                    message: format!("tool call {id} arguments are not valid JSON: {error}"),
+                    category: ProviderErrorCategory::BadRequest,
+                    retryable: false,
+                    retry_after_ms: None,
+                })?;
                 blocks.push(ProviderResponseBlock::ToolCall { id, name, input });
             }
         }
@@ -171,7 +189,7 @@ impl ProviderAdapter for OpenAiAdapter {
                 }
             }
             ProviderEvent::Usage(u) => ProviderStreamEvent::Done(u),
-            ProviderEvent::Completed => ProviderStreamEvent::Done(ProviderUsage::default()),
+            ProviderEvent::Completed { .. } => ProviderStreamEvent::Done(ProviderUsage::default()),
             ProviderEvent::Error(e) => ProviderStreamEvent::Error(e),
         });
         // Collect into a ready stream so we can return Unpin + Box
@@ -190,7 +208,11 @@ impl ProviderAdapter for OpenAiAdapter {
         let (key, base) = self.resolve_credential(&credential)?;
         let client = crate::http_client::client(credential.proxy_url.as_deref())?;
         // Production HTTP for both Chat Completions and Responses APIs.
-        if prefers_responses_api(&request) {
+        let use_responses = self
+            .api_mode
+            .map(|mode| mode == OpenAiApiMode::Responses)
+            .unwrap_or_else(|| prefers_responses_api(&request));
+        if use_responses {
             stream_responses(&client, &base, &key, request).await
         } else {
             stream_chat_completions(&client, &base, &key, request).await
@@ -289,16 +311,24 @@ impl ProviderAdapter for OpenAiAdapter {
 /// Select OpenAI Responses API when explicitly requested or for models that
 /// primarily expose the Responses surface.
 fn prefers_responses_api(request: &ProviderRequest) -> bool {
-    if std::env::var("NATIVES_OPENAI_API")
-        .map(|v| v.eq_ignore_ascii_case("responses"))
-        .unwrap_or(false)
-    {
-        return true;
-    }
     let m = request.model.to_ascii_lowercase();
     m.contains("o1")
         || m.contains("o3")
         || m.contains("o4")
         || m.starts_with("gpt-5")
         || m.contains("responses")
+}
+
+#[cfg(test)]
+mod api_mode_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_api_mode_is_request_independent() {
+        let responses = OpenAiAdapter::new().with_api_mode(OpenAiApiMode::Responses);
+        let chat = OpenAiAdapter::new().with_api_mode(OpenAiApiMode::ChatCompletions);
+        assert_eq!(responses.api_mode, Some(OpenAiApiMode::Responses));
+        assert_eq!(chat.api_mode, Some(OpenAiApiMode::ChatCompletions));
+        assert_ne!(responses.api_mode, chat.api_mode);
+    }
 }

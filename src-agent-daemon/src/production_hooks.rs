@@ -17,8 +17,9 @@
 //! project `.claude|grok|natives/hooks.json` command hooks.
 
 use agent_core::{
-    AllowAllHook, CommandHook, EngineMessage, EngineProvider, EngineProviderEvent, HookDecision,
-    HookHandler, HookOutcome, HookRegistry, HookRequest, HookResponse, HttpHook,
+    AllowAllHook, CommandHook, EngineMessage, EngineProvider, EngineProviderContext,
+    EngineProviderEvent, HookDecision, HookHandler, HookOutcome, HookRegistry, HookRequest,
+    HookResponse, HttpHook,
 };
 use assistant_protocol::v2::RunEventKind;
 use futures_util::StreamExt;
@@ -436,7 +437,11 @@ impl HookHandler for NativePromptHook {
         };
         let deadline =
             tokio::time::Instant::now() + std::time::Duration::from_millis(self.timeout_ms);
-        let stream = provider.stream(
+        let stream = provider.stream_with_context(
+            EngineProviderContext {
+                run_id: request.run_id.clone(),
+                attempt: 0,
+            },
             model,
             vec![EngineMessage::text("user", input)],
             &[],
@@ -462,7 +467,8 @@ impl HookHandler for NativePromptHook {
                 EngineProviderEvent::Error { message, .. } => {
                     return HookOutcome::Failed { reason: message }
                 }
-                EngineProviderEvent::Completed => break,
+                EngineProviderEvent::Completed
+                | EngineProviderEvent::CompletedWithReason { .. } => break,
                 _ => {}
             }
         }

@@ -4,8 +4,8 @@
 //! still sees one `EngineProvider`, so routing policy never leaks into agent-core.
 
 use agent_core::{
-    EngineError, EngineMessage, EngineProvider, EngineProviderEvent, EngineProviderEventStream,
-    ToolSchema,
+    EngineError, EngineMessage, EngineProvider, EngineProviderContext, EngineProviderEvent,
+    EngineProviderEventStream, ToolSchema,
 };
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
@@ -199,12 +199,36 @@ impl EngineProvider for RoutedProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_context(
+            EngineProviderContext {
+                run_id: "legacy-unbound".into(),
+                attempt: 0,
+            },
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    async fn stream_with_context(
+        &self,
+        context: EngineProviderContext,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
         let targets = self.plan.targets.clone();
         let base_model = model.to_string();
         let messages = messages.to_vec();
         let tools = tools.to_vec();
         let system_prompt = system_prompt.map(str::to_string);
         let controls = self.controls.clone();
+        let context = context.clone();
         let output = async_stream::stream! {
             let mut last_error: Option<EngineError> = None;
             for target in targets {
@@ -221,8 +245,8 @@ impl EngineProvider for RoutedProvider {
                         &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else if target.credential_kind == "api_key" {
-                    RealProvider { provider_id: target.provider_id.clone(), key_id: target.credential_id.clone() }.stream_with_controls(
-                        &controls, &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
+                    RealProvider { provider_id: target.provider_id.clone(), key_id: target.credential_id.clone() }.stream_with_context_controls(
+                        &context, &controls, &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else {
                     Err(EngineError::Message("unsupported routing credential kind".into()))
@@ -256,7 +280,7 @@ impl EngineProvider for RoutedProvider {
                             yield event;
                             return;
                         }
-                        EngineProviderEvent::Completed => { record_success(&target); completed = true; }
+                        EngineProviderEvent::Completed | EngineProviderEvent::CompletedWithReason { .. } => { record_success(&target); completed = true; }
                         _ => {}
                     }
                     yield event;
@@ -349,7 +373,7 @@ impl EngineProvider for Sub2ApiPoolProvider {
                             record_failure(&account_target); last_error = Some(event_to_error(&event)); retry_account = true; break;
                         }
                         EngineProviderEvent::Error { .. } => { record_failure(&account_target); yield event; return; }
-                        EngineProviderEvent::Completed => { record_success(&account_target); completed = true; }
+                        EngineProviderEvent::Completed | EngineProviderEvent::CompletedWithReason { .. } => { record_success(&account_target); completed = true; }
                         _ => {}
                     }
                     yield event;
@@ -659,7 +683,28 @@ fn provider_event_to_engine(event: ProviderEvent) -> EngineProviderEvent {
             cache_creation_tokens: usage.cache_creation_tokens,
             cache_read_tokens: usage.cache_read_tokens,
         },
-        ProviderEvent::Completed => EngineProviderEvent::Completed,
+        ProviderEvent::Completed { reason } => EngineProviderEvent::CompletedWithReason {
+            reason: match reason {
+                provider_adapters::stream::ProviderStopReason::Stop => {
+                    agent_core::ProviderStopReason::Stop
+                }
+                provider_adapters::stream::ProviderStopReason::ToolUse => {
+                    agent_core::ProviderStopReason::ToolUse
+                }
+                provider_adapters::stream::ProviderStopReason::Length => {
+                    agent_core::ProviderStopReason::Length
+                }
+                provider_adapters::stream::ProviderStopReason::Cancelled => {
+                    agent_core::ProviderStopReason::Cancelled
+                }
+                provider_adapters::stream::ProviderStopReason::Error => {
+                    agent_core::ProviderStopReason::Error
+                }
+                provider_adapters::stream::ProviderStopReason::Unknown(value) => {
+                    agent_core::ProviderStopReason::Unknown(value)
+                }
+            },
+        },
         ProviderEvent::Error(error) => EngineProviderEvent::Error {
             message: assistant_protocol::v2::redact_secrets(&error.message),
             code: error.code,

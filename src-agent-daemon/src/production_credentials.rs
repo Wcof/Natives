@@ -247,3 +247,29 @@ mod base_url_normalize_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod run_identity_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn broker_receives_distinct_run_ids() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_by_broker = seen.clone();
+        install_credential_broker(Arc::new(move |_provider, _key, run_id| {
+            seen_by_broker.lock().unwrap().push(run_id.to_string());
+            Ok(Credential {
+                api_key: "test-key".into(),
+                base_url: None,
+                proxy_url: None,
+                key_id: None,
+                provider_type: Some("openai".into()),
+            })
+        }));
+        let _ = resolve_credential_for_run("openai", None, "run-a").unwrap();
+        let _ = resolve_credential_for_run("openai", None, "run-b").unwrap();
+        clear_credential_broker_for_tests();
+        assert_eq!(*seen.lock().unwrap(), vec!["run-a", "run-b"]);
+    }
+}

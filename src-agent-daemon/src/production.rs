@@ -5,9 +5,10 @@
 
 use agent_core::assemble_context;
 use agent_core::{
-    AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderEvent,
-    EngineProviderEventStream, EngineRunConfig, EventSequencer, PermissionManager,
-    PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus, ToolSchema,
+    AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderContext,
+    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer,
+    PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
+    ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::CapabilityGateway;
@@ -1138,6 +1139,27 @@ impl EngineProvider for RealProvider {
         )
         .await
     }
+
+    async fn stream_with_context(
+        &self,
+        context: EngineProviderContext,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_context_controls(
+            &context,
+            &RequestControls::default(),
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
 }
 
 impl RealProvider {
@@ -1151,12 +1173,34 @@ impl RealProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
-        let credential = resolve_credential_for_run(
-            &self.provider_id,
-            self.key_id.as_deref(),
-            "provider-stream",
+        self.stream_with_context_controls(
+            &EngineProviderContext {
+                run_id: "legacy-unbound".into(),
+                attempt: 0,
+            },
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
         )
-        .map_err(EngineError::Message)?;
+        .await
+    }
+
+    pub async fn stream_with_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let credential =
+            resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), &context.run_id)
+                .map_err(EngineError::Message)?;
         let protocol = credential
             .provider_type
             .clone()
@@ -1298,7 +1342,16 @@ impl RealProvider {
                                     cache_creation_tokens: u.cache_creation_tokens,
                                     cache_read_tokens: u.cache_read_tokens,
                                 },
-                                ProviderEvent::Completed => EngineProviderEvent::Completed,
+                                ProviderEvent::Completed { reason } => EngineProviderEvent::CompletedWithReason {
+                                    reason: match reason {
+                                        provider_adapters::stream::ProviderStopReason::Stop => agent_core::ProviderStopReason::Stop,
+                                        provider_adapters::stream::ProviderStopReason::ToolUse => agent_core::ProviderStopReason::ToolUse,
+                                        provider_adapters::stream::ProviderStopReason::Length => agent_core::ProviderStopReason::Length,
+                                        provider_adapters::stream::ProviderStopReason::Cancelled => agent_core::ProviderStopReason::Cancelled,
+                                        provider_adapters::stream::ProviderStopReason::Error => agent_core::ProviderStopReason::Error,
+                                        provider_adapters::stream::ProviderStopReason::Unknown(value) => agent_core::ProviderStopReason::Unknown(value),
+                                    },
+                                },
                                 ProviderEvent::Error(e) => EngineProviderEvent::Error {
                                         message: provider_error_message(&e, &provider_id, &protocol, &model, key_id.as_deref(), base_url.as_deref()),
                                         code: e.code,
@@ -1382,9 +1435,10 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
     } else if lower.contains("compatible") || lower.contains("chat_completions") {
         Box::new(provider_adapters::providers::openai_compatible::OpenAiCompatibleAdapter::new())
     } else if lower.contains("responses") {
-        // Force Responses API path via env for this adapter instance.
-        std::env::set_var("NATIVES_OPENAI_API", "responses");
-        Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+        Box::new(
+            provider_adapters::providers::openai::OpenAiAdapter::new()
+                .with_api_mode(provider_adapters::providers::openai::OpenAiApiMode::Responses),
+        )
     } else {
         Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
     }

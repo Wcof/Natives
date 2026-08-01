@@ -1,7 +1,7 @@
 //! OpenAI Responses API event parser (subset) → ProviderEvent.
 
 use crate::capabilities::{ProviderError, ProviderErrorCategory, ProviderUsage};
-use crate::stream::ProviderEvent;
+use crate::stream::{ProviderEvent, ProviderStopReason};
 use serde_json::Value;
 
 /// Parse one Responses API SSE `data:` JSON object.
@@ -11,7 +11,9 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
         return Vec::new();
     }
     if data == "[DONE]" {
-        return vec![ProviderEvent::Completed];
+        return vec![ProviderEvent::Completed {
+            reason: ProviderStopReason::Unknown("missing_reason".into()),
+        }];
     }
     let value: Value = match serde_json::from_str(data) {
         Ok(v) => v,
@@ -98,7 +100,26 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
                     cost_usd: None,
                 }));
             }
-            events.push(ProviderEvent::Completed);
+            let reason = value
+                .pointer("/response/incomplete_details/reason")
+                .and_then(Value::as_str)
+                .map(ProviderStopReason::from_raw)
+                .unwrap_or_else(|| {
+                    if value
+                        .pointer("/response/output")
+                        .and_then(Value::as_array)
+                        .is_some_and(|items| {
+                            items.iter().any(|item| {
+                                item.get("type").and_then(Value::as_str) == Some("function_call")
+                            })
+                        })
+                    {
+                        ProviderStopReason::ToolUse
+                    } else {
+                        ProviderStopReason::Stop
+                    }
+                });
+            events.push(ProviderEvent::Completed { reason });
         }
         "error" => {
             let message = value
@@ -170,6 +191,8 @@ mod tests {
         assert_eq!(usage.input_tokens, 9000 - 8192);
         assert_eq!(usage.total_prompt_tokens(), 9000);
         assert_eq!(usage.reasoning_tokens, Some(64));
-        assert!(events.iter().any(|e| matches!(e, ProviderEvent::Completed)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProviderEvent::Completed { .. })));
     }
 }
