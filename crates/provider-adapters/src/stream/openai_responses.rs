@@ -105,7 +105,11 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
                 .and_then(Value::as_str)
                 .map(ProviderStopReason::from_raw)
                 .unwrap_or_else(|| {
-                    if value
+                    if value.pointer("/response/status").and_then(Value::as_str)
+                        == Some("incomplete")
+                    {
+                        ProviderStopReason::Length
+                    } else if value
                         .pointer("/response/output")
                         .and_then(Value::as_array)
                         .is_some_and(|items| {
