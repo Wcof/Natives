@@ -22,6 +22,14 @@ pub enum InputSafePoint {
     BeforeRunEnd,
 }
 
+/// Host-owned persistence hook for safe-point state transitions.
+/// Implementations must not consume durable interjections unless the actor
+/// mutation is persisted successfully.
+#[async_trait]
+pub trait EngineSafePointReceiver: Send + Sync {
+    async fn on_safe_point(&self, point: InputSafePoint) -> Result<Option<String>, String>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingInput {
     pub id: String,

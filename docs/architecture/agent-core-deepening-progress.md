@@ -75,3 +75,10 @@
 - Prompt Queue 的 send-now、idle start、terminal drain 必须成功更新/删除 durable row，conversation/provider 读取缺失直接失败；生产 `start_run` 不再忽略 terminal queue settlement 错误。
 - Retry checkpoint 查询、restore coverage 读取和 `start_with_seams` 的 history/cancel-token 注册不再静默降级。`coverage_for_run` 现在返回 `Result`，RPC 不会把数据库错误显示为 `unknown`。
 - 精确验证：`send_now_cancels_active_and_starts_new_run` 通过；最新严格 `RUSTFLAGS=-Dwarnings cargo check`、fmt 通过。workspace/native verifier、前端全量套件与真实外部 fixture 仍未运行。
+
+## 26. 最终生产信任边界收口（当前 Worktree）
+
+- AgentEngine 的生产 safe point 现在通过 `EngineSafePointReceiver` 接入 `DurableSafePointReceiver`；interjection 只有在 actor snapshot 成功落库后才算消费，落库失败会恢复内存项并阻止下一次 Provider 调用。
+- Retry 在 active run 上明确拒绝，避免复制正在执行的 Run；队列消息和 compaction summary 的 deterministic ID 冲突不再由 `INSERT OR IGNORE` 静默吞掉，重复写入必须身份与内容完全一致。
+- Gateway 在生产装配和 Run preflight 阶段校验全部已注册 Schema；任何坏 manifest 都以 `TOOL_SCHEMA_INVALID` 失败，不会关闭全局校验。
+- 精确验证：`checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；最新受控 strict Cargo check、fmt 和 diff check 通过。workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP 与 permission fault-injection 仍未验证。

@@ -1593,6 +1593,14 @@ impl RunManager {
             let mut gateway = capability_gateway::CapabilityGateway::new();
             gateway.set_project_root(project_root.to_string_lossy().to_string());
             crate::production::register_tools_for_surface(&mut gateway, allowlist.as_deref());
+            if let Err(error) = gateway.validate_registered_schemas() {
+                self.fail_run_if_active(
+                    &run.id,
+                    format!("tool schema validation failed: {}", error.message),
+                    "TOOL_SCHEMA_INVALID",
+                );
+                return Err(format!("tool schema validation failed: {}", error.message));
+            }
             let selected_mcp_servers = capability_snapshot
                 .selection_active
                 .then(|| capability_snapshot.mcp_servers.iter().cloned().collect());
@@ -2065,6 +2073,9 @@ impl RunManager {
         let original = self
             .get_run(&req.run_id)
             .ok_or_else(|| "run not found".to_string())?;
+        if original.status.is_active() {
+            return Err("active run cannot be retried; cancel it first".into());
+        }
         if let Some(store) = &self.data_store {
             let conn = store.conn()?;
             let uncertain: i64 = conn
@@ -3292,6 +3303,42 @@ mod tests {
             .unwrap();
         assert_ne!(original.id, retried.id);
         assert_eq!(retried.conversation_id, original.conversation_id);
+    }
+
+    #[test]
+    fn retry_rejects_active_run() {
+        let rm = RunManager::new();
+        let original = rm
+            .create_run(CreateRunRequest {
+                capability_selection: None,
+                conversation_id: "active-retry".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: None,
+                content: Some("do not duplicate".into()),
+                attachments: None,
+                max_steps: None,
+                parent_run_id: None,
+                project_path: None,
+                idempotency_key: None,
+                effort: None,
+                runtime_id: None,
+            })
+            .unwrap();
+        rm.commit_status(
+            &original.id,
+            RunStatusV2::Preparing,
+            TransitionMetadata::empty(),
+        )
+        .unwrap();
+        let error = rm
+            .retry(RetryRunRequest {
+                run_id: original.id,
+            })
+            .unwrap_err();
+        assert!(error.contains("active run cannot be retried"));
     }
 
     #[test]

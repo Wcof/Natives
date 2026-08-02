@@ -219,3 +219,11 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 启动恢复、Prompt Queue dispatch/terminal settlement、Retry/Restore 查询均保持 fail-closed；SQL 更新必须命中预期行数，数据库错误不会被折叠为空状态。
 - Active Context 的 mechanical compaction snapshot 现在以可重放的 typed system message 数组持久化，并有 daemon 回归测试验证压缩摘要重新进入历史。
 - 最新受控 `RUSTFLAGS=-Dwarnings cargo check`、`cargo fmt --check`、`git diff --check` 通过；工作区干净。受资源上限限制，workspace/native verifier/frontend 全量套件与真实外部 fixture 未重复运行，因此不宣称全量绿。
+
+## 26. 当前 Worktree 最终安全收口
+
+- 生产 safe point 已从直接操作内存 SessionCoordinator 改为 `EngineSafePointReceiver` → `DurableSafePointReceiver`；队列 interjection 的 claim、actor snapshot 持久化和失败恢复形成一个 fail-closed 边界。
+- `RunManager::retry` 不接受 active Run；queue/summary deterministic message ID 冲突执行严格身份与内容校验；已注册 Gateway Schema 在启动与 Run preflight 都必须可编译。
+- 精确命令：
+  `CARGO_TARGET_DIR=/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_INCREMENTAL=0 CARGO_TERM_PROGRESS_WHEN=never cargo test -p natives-agent-daemon checked_safe_point_persists_interjection_consumption -- --test-threads=2 --nocapture`（1 passed）。
+- `checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 均通过。最新 `RUSTFLAGS=-Dwarnings cargo check -p agent-core -p harness-core -p capability-gateway -p provider-adapters -p assistant-protocol -p natives-agent-daemon`、`cargo fmt --all` 与 `git diff --check` 通过；workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP fixture 和 permission fault-injection 仍未验证。

@@ -578,6 +578,11 @@ impl ProductionRuntime {
                 .with_cancel_token(cancel.clone())
                 .with_hooks(hooks)
                 .with_session_harness(crate::prompt_queue_store::global_harness())
+                .with_safe_point_receiver(Arc::new(
+                    crate::prompt_queue_store::DurableSafePointReceiver::new(
+                        conversation_id.clone(),
+                    ),
+                ))
                 .with_input_receiver(Arc::new(
                     crate::prompt_queue_store::DurableInputReceiver::new(
                         conversation_id.clone(),
@@ -649,6 +654,8 @@ impl ProductionRuntime {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root(project_root.to_string_lossy().to_string());
                 register_tools_for_surface(&mut g, tool_allowlist.as_deref());
+                g.validate_registered_schemas()
+                    .map_err(|error| format!("tool schema validation failed: {}", error.message))?;
                 Arc::new(g)
             },
             permissions: self.permissions.clone(),

@@ -552,6 +552,7 @@ pub struct AgentEngine {
     summary_failures: AtomicU32,
     progress_sink: Arc<dyn ToolProgressSink>,
     input_receiver: Option<Arc<dyn crate::EngineInputReceiver>>,
+    safe_point_receiver: Option<Arc<dyn crate::EngineSafePointReceiver>>,
     provider_context_window: Option<u64>,
 }
 
@@ -569,6 +570,7 @@ impl AgentEngine {
             summary_failures: AtomicU32::new(0),
             progress_sink: Arc::new(NoopToolProgressSink),
             input_receiver: None,
+            safe_point_receiver: None,
             provider_context_window: None,
         }
     }
@@ -621,6 +623,14 @@ impl AgentEngine {
 
     pub fn with_input_receiver(mut self, receiver: Arc<dyn crate::EngineInputReceiver>) -> Self {
         self.input_receiver = Some(receiver);
+        self
+    }
+
+    pub fn with_safe_point_receiver(
+        mut self,
+        receiver: Arc<dyn crate::EngineSafePointReceiver>,
+    ) -> Self {
+        self.safe_point_receiver = Some(receiver);
         self
     }
 
@@ -756,26 +766,45 @@ impl AgentEngine {
     }
 
     /// Apply coordinator action at a safe point: inject interjection into messages.
-    fn apply_safe_point(
+    async fn apply_safe_point(
         &self,
         conversation_id: &str,
         point: crate::session_coordinator::SafePoint,
         messages: &mut Vec<crate::AgentMessage>,
-    ) {
-        let Some(harness) = &self.session_harness else {
-            return;
-        };
-        match harness.on_safe_point(conversation_id, point) {
-            crate::session_coordinator::CoordinatorAction::InjectInterjection { content } => {
-                messages.push(crate::AgentMessage::User(crate::UserMessage {
-                    message_id: crate::MessageId::new(),
-                    content: vec![crate::ContentBlock::Text {
-                        text: format!("[interjection]\n{content}"),
-                    }],
-                }));
+    ) -> Result<(), EngineError> {
+        let input_point = match point {
+            crate::session_coordinator::SafePoint::AfterTool
+            | crate::session_coordinator::SafePoint::BeforeTool
+            | crate::session_coordinator::SafePoint::AfterPermissionResolved => {
+                crate::InputSafePoint::AfterToolBatch
             }
-            _ => {}
+            crate::session_coordinator::SafePoint::ProviderBatchBoundary => {
+                crate::InputSafePoint::BeforeProvider
+            }
+        };
+        let content = if let Some(receiver) = &self.safe_point_receiver {
+            receiver.on_safe_point(input_point).await.map_err(|error| {
+                EngineError::Message(format!("safe-point persistence failed: {error}"))
+            })?
+        } else if let Some(harness) = &self.session_harness {
+            match harness.on_safe_point(conversation_id, point) {
+                crate::session_coordinator::CoordinatorAction::InjectInterjection { content } => {
+                    Some(content)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(content) = content {
+            messages.push(crate::AgentMessage::User(crate::UserMessage {
+                message_id: crate::MessageId::new(),
+                content: vec![crate::ContentBlock::Text {
+                    text: format!("[interjection]\n{content}"),
+                }],
+            }));
         }
+        Ok(())
     }
 
     /// Execute a full agent loop against the given seams.
@@ -1737,7 +1766,8 @@ impl AgentEngine {
                 &config.conversation_id,
                 crate::session_coordinator::SafePoint::AfterTool,
                 &mut typed_messages,
-            );
+            )
+            .await?;
             if let Err(error) = self
                 .drain_inputs(
                     crate::PendingInputKind::Steering,
@@ -1767,7 +1797,8 @@ impl AgentEngine {
                 &config.conversation_id,
                 crate::session_coordinator::SafePoint::ProviderBatchBoundary,
                 &mut typed_messages,
-            );
+            )
+            .await?;
         }
     }
 

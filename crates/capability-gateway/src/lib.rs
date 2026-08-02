@@ -476,6 +476,19 @@ impl CapabilityGateway {
         validate_schema_definition(&tool.schema)
     }
 
+    /// Validate every registered schema before a run advertises the surface.
+    /// A malformed manifest is a startup/preflight error, never a reason to
+    /// silently disable validation for the whole Gateway.
+    pub fn validate_registered_schemas(&self) -> Result<(), ToolError> {
+        for tool in &self.tools {
+            validate_schema_definition(&tool.schema).map_err(|mut error| {
+                error.message = format!("{}: {}", tool.name, error.message);
+                error
+            })?;
+        }
+        Ok(())
+    }
+
     /// Validate a dynamically advertised schema (for example an MCP tool)
     /// without registering a local handler.  The Gateway remains the single
     /// executable Schema boundary; callers must still perform their own
@@ -783,11 +796,9 @@ mod p0_tests {
     fn all_builtin_schemas_are_supported_by_validator() {
         let mut gateway = CapabilityGateway::new();
         gateway.register_builtins();
-        for tool in gateway.list_tools() {
-            gateway
-                .validate_tool_schema(tool.name)
-                .unwrap_or_else(|error| panic!("{}: {}", tool.name, error.message));
-        }
+        gateway
+            .validate_registered_schemas()
+            .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
     }
 
     #[tokio::test]

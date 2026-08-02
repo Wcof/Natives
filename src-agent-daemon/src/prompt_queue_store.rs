@@ -11,9 +11,9 @@ use crate::conversation_store;
 use crate::run_manager::global_run_manager;
 use crate::storage::DataStore;
 use agent_core::{
-    CoordinatorAction, DrainMode, EngineInputReceiver, HarnessAction, InputSafePoint, PendingInput,
-    PendingInputKind, PromptSource, QueueItem, QueueItemStatus, SafePoint, SessionActorSnapshot,
-    SessionCoordinator,
+    CoordinatorAction, DrainMode, EngineInputReceiver, EngineSafePointReceiver, HarnessAction,
+    InputSafePoint, PendingInput, PendingInputKind, PromptSource, QueueItem, QueueItemStatus,
+    SafePoint, SessionActorSnapshot, SessionCoordinator,
 };
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{CancelRunRequest, StartRunRequest};
@@ -47,6 +47,36 @@ impl DurableInputReceiver {
         Self {
             conversation_id: conversation_id.into(),
             run_id: run_id.into(),
+        }
+    }
+}
+
+/// Durable safe-point bridge used by the production AgentEngine. The engine
+/// must not mutate the in-memory actor directly: a claimed interjection is
+/// restored when its post-claim snapshot cannot be persisted.
+pub struct DurableSafePointReceiver {
+    conversation_id: String,
+}
+
+impl DurableSafePointReceiver {
+    pub fn new(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EngineSafePointReceiver for DurableSafePointReceiver {
+    async fn on_safe_point(&self, point: InputSafePoint) -> Result<Option<String>, String> {
+        let point = match point {
+            InputSafePoint::AfterToolBatch => SafePoint::AfterTool,
+            InputSafePoint::BeforeProvider => SafePoint::ProviderBatchBoundary,
+            InputSafePoint::BeforeRunEnd => SafePoint::ProviderBatchBoundary,
+        };
+        match on_safe_point_checked(&self.conversation_id, point)? {
+            CoordinatorAction::InjectInterjection { content } => Ok(Some(content)),
+            _ => Ok(None),
         }
     }
 }
@@ -315,13 +345,6 @@ pub fn persist_actor_snapshot(conversation_id: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("persist session_actor failed: {e}"))?;
     Ok(())
-}
-
-/// Best-effort wrapper for non-critical paths that historically ignored errors.
-fn persist_actor_snapshot_best_effort(conversation_id: &str) {
-    if let Err(e) = persist_actor_snapshot(conversation_id) {
-        eprintln!("[prompt_queue] persist_actor_snapshot: {e}");
-    }
 }
 
 fn load_actor_snapshot(conversation_id: &str) -> Result<Option<SessionActorSnapshot>, String> {
@@ -933,12 +956,37 @@ async fn send_now(params: Value) -> Result<Value, String> {
 }
 
 /// Engine / permission hook: process a safe point for a conversation.
-pub fn on_safe_point(conversation_id: &str, point: SafePoint) -> HarnessAction {
+pub fn on_safe_point_checked(
+    conversation_id: &str,
+    point: SafePoint,
+) -> Result<HarnessAction, String> {
     let action = global_harness().on_safe_point(conversation_id, point);
-    if !matches!(action, CoordinatorAction::None) {
-        persist_actor_snapshot_best_effort(conversation_id);
+    if let CoordinatorAction::InjectInterjection { content } = &action {
+        if let Err(error) = persist_actor_snapshot(conversation_id) {
+            global_harness().restore_interjection(conversation_id, content.clone());
+            return Err(error);
+        }
+    } else if !matches!(action, CoordinatorAction::None) {
+        persist_actor_snapshot(conversation_id)?;
     }
-    action
+    Ok(action)
+}
+
+/// Compatibility wrapper for non-engine harness callers. Production Core
+/// paths use `on_safe_point_checked` so persistence errors stop the run.
+pub fn on_safe_point(conversation_id: &str, point: SafePoint) -> HarnessAction {
+    match on_safe_point_checked(conversation_id, point) {
+        Ok(action) => action,
+        Err(error) => {
+            eprintln!("[prompt_queue] safe-point persistence failed: {error}");
+            CoordinatorAction::None
+        }
+    }
+}
+
+pub fn restore_interjection_checked(conversation_id: &str, content: String) -> Result<(), String> {
+    global_harness().restore_interjection(conversation_id, content);
+    persist_actor_snapshot(conversation_id)
 }
 
 /// Called when a run reaches a real terminal state.
@@ -1182,6 +1230,26 @@ mod tests {
                 action,
                 HarnessAction::InjectInterjection { content } if content == "inject me"
             ));
+        });
+    }
+
+    #[test]
+    fn checked_safe_point_persists_interjection_consumption() {
+        with_temp_db(|| {
+            let cid = format!("pq-{}", Uuid::new_v4());
+            interject(json!({
+                "conversation_id": cid,
+                "content": "consume durably",
+            }))
+            .unwrap();
+            let action = on_safe_point_checked(&cid, SafePoint::AfterTool).unwrap();
+            assert!(matches!(
+                action,
+                HarnessAction::InjectInterjection { content } if content == "consume durably"
+            ));
+            global_harness().clear_conversation(&cid);
+            hydrate_conversation(&cid).unwrap();
+            assert!(global_harness().pending_interjection(&cid).is_none());
         });
     }
 

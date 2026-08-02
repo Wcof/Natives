@@ -437,3 +437,43 @@
 - 当前行为：数据库和 replay 错误传播为失败结果；仅“没有记录”才返回合法的 `unknown` coverage。
 - 影响：恢复决策不再建立在不可见或损坏的副作用事实之上。
 - 测试方式：严格 warning-as-error check 通过；数据库 fault-injection 尚待补充。
+
+## Safe point 消费未与 actor snapshot 持久化绑定
+
+- 严重等级：P1
+- 所属模块：`crates/agent-core/src/engine.rs`、`src-agent-daemon/src/prompt_queue_store.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`EngineSafePointReceiver`、`DurableSafePointReceiver`、`on_safe_point_checked`
+- 原始行为：生产 Engine 直接调用内存 SessionCoordinator；safe-point claim 后 snapshot 失败可能丢失 durable interjection。
+- 当前行为：生产路径先经 checked receiver；snapshot 失败恢复 interjection 并返回 Engine 错误，兼容 wrapper 仅保留给旧 harness 调用。
+- 测试方式：`checked_safe_point_persists_interjection_consumption` 通过；持久化 fault-injection 仍待补充。
+
+## Active Run 可被 Retry 复制
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/run_manager.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`RunManager::retry`
+- 原始行为：active Run 缺少拒绝门，可能复制正在执行的 Run。
+- 当前行为：`status.is_active()` 时拒绝 Retry，并要求先取消原 Run。
+- 测试方式：编译通过；active-run fault-injection 精测仍待补充。
+
+## Deterministic message ID 冲突被 INSERT OR IGNORE 掩盖
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/conversation_store.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`persist_queued_input_and_ack`、`persist_summary_text_message`
+- 原始行为：同 ID 的跨 conversation/run/content 冲突可能被静默忽略。
+- 当前行为：重复写入必须身份、角色、状态、绑定和文本完全一致，否则返回 collision 错误。
+- 测试方式：strict check 通过；collision fault-injection 精测仍待补充。
+
+## 已注册 Tool Schema 未在生产 preflight 全量验证
+
+- 严重等级：P1
+- 所属模块：`crates/capability-gateway/src/lib.rs`、`src-agent-daemon/src/production.rs`、`run_manager.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`CapabilityGateway::validate_registered_schemas`
+- 原始行为：单工具校验存在，但坏 manifest 可能在生产广告/执行前未被整体发现。
+- 当前行为：装配和 Run preflight 都校验所有注册 Schema；失败以 `TOOL_SCHEMA_INVALID` 终止。
+- 测试方式：strict check 通过；启动坏 manifest fixture 仍待补充。

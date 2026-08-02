@@ -589,6 +589,18 @@ impl SessionCoordinator {
         self.with_actor(conversation_id, |a| a.pending_interjection.clone())
     }
 
+    /// Restore an interjection when a host-side safe-point persistence step
+    /// fails after the coordinator claimed it. A newer pending interjection
+    /// wins, preserving the actor's latest-wins semantics.
+    pub fn restore_interjection(&self, conversation_id: &str, content: String) {
+        self.with_actor(conversation_id, |actor| {
+            if actor.pending_interjection.is_none() {
+                actor.pending_interjection = Some(content);
+                actor.version = actor.version.saturating_add(1);
+            }
+        });
+    }
+
     pub fn queue_len(&self, conversation_id: &str) -> usize {
         self.with_actor(conversation_id, |a| a.prompt_queue.len())
     }

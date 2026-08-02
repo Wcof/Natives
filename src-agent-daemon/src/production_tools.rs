@@ -2014,15 +2014,36 @@ impl PermissionGatedTools {
         // push into provider history here. Call the harness so the seam is live,
         // then re-queue any interjection so Engine's AfterTool/ProviderBatch can
         // inject it into messages (on_safe_point consumes pending).
-        match crate::prompt_queue_store::on_safe_point(
+        match crate::prompt_queue_store::on_safe_point_checked(
             &self.conversation_id,
             agent_core::SafePoint::AfterPermissionResolved,
         ) {
-            agent_core::HarnessAction::InjectInterjection { content } => {
-                crate::prompt_queue_store::global_harness()
-                    .interject(&self.conversation_id, content);
+            Ok(agent_core::HarnessAction::InjectInterjection { content }) => {
+                if let Err(error) = crate::prompt_queue_store::restore_interjection_checked(
+                    &self.conversation_id,
+                    content,
+                ) {
+                    return Some(ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "QUEUE_PERSISTENCE_FAILED",
+                            "error": format!("safe-point interjection restore failed: {error}"),
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
             }
-            _ => {}
+            Ok(_) => {}
+            Err(error) => {
+                return Some(ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "QUEUE_PERSISTENCE_FAILED",
+                        "error": format!("safe-point state could not be persisted: {error}"),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+            }
         }
         if approved {
             None

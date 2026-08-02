@@ -84,3 +84,12 @@
 ## 7. 回滚
 
 本轮修改均为 additive：回滚 migration 028、AgentEngine 的 Input/Progress 装配和 typed persistence 接线即可；不删除既有 RPC、UI、UDS、RunManager terminal authority 或 P0 安全校验。
+
+## 8. 当前 Worktree 校正
+
+本报告早期章节保留了生产接线阶段的历史状态；以下为当前 HEAD 的权威补充：
+
+- `AgentEngine` 的生产 safe point 通过 `EngineSafePointReceiver` 进入 durable prompt queue。Interjection 只有在 actor snapshot 成功持久化后才从队列消费；失败会恢复 pending 项并 fail closed。
+- Gateway 注册 Schema 在 ProductionRuntime 装配和 RunManager preflight 均执行全量校验；坏 manifest 以 `TOOL_SCHEMA_INVALID` 阻止 Run。
+- Retry active-run guard 与 deterministic message ID identity/content 校验防止正在执行的 Run 被复制及 SQL `INSERT OR IGNORE` 掩盖事实冲突。
+- 精确验证：`checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；strict warning-as-error Cargo check、fmt、diff check 通过。workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP 与 permission fault-injection 仍未完成，不能按早期章节的“未接生产”描述理解当前状态。

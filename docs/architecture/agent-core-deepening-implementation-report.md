@@ -176,3 +176,10 @@ Provider stop reason family 映射测试。
 - `RunManager::try_new_with_store`、Prompt Queue dispatch/terminal settlement、Retry/Restore 查询统一传播恢复与持久化错误；不再以空队列、缺省 conversation 或 `unknown` coverage 继续执行。
 - Mechanical compaction snapshot 采用可重放 typed system message 形状，`load_active_context_snapshot` 回归测试验证摘要可重新进入 Agent history。
 - 本地 worktree 已提交且干净；严格 warning-as-error check、fmt 和 diff check 通过。workspace/native verifier、前端全量套件和真实外部 fixture 仍按资源策略保持未重复运行。
+
+## 20. 最终生产信任边界收口（当前 Worktree）
+
+- `AgentEngine::apply_safe_point` 在生产路径使用 `EngineSafePointReceiver`；`DurableSafePointReceiver` 通过 `on_safe_point_checked` 将 interjection 消费与 actor snapshot 持久化绑定。失败会恢复 pending interjection，并返回 Engine 错误。
+- `RunManager::retry` 拒绝 active Run；队列 user message 与 compaction summary 的 deterministic ID 已改为严格 identity/content 检查，避免 `INSERT OR IGNORE` 掩盖跨 conversation、run 或内容冲突。
+- `CapabilityGateway::validate_registered_schemas` 在 ProductionRuntime 装配和 RunManager preflight 被调用，坏 Schema 使 Run 失败并带 `TOOL_SCHEMA_INVALID`。
+- 精确测试 `checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；strict `RUSTFLAGS=-Dwarnings cargo check` 通过。完整 workspace/native verifier、前端全量测试、真实外部 fixture 和 permission fault-injection 仍不宣称完成。
