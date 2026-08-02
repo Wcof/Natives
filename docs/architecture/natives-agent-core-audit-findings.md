@@ -153,6 +153,24 @@
 - 代码证据：`retry`/`continue_run` 插入 `approved`；`mark_resume_plan_executed` 仅在 detached start 成功后更新 `executed`。
 - 当前行为：计划批准、Run 创建和 Run 真正启动三个事实不再混为一个预先写入的终态。
 
+## Child Run 未继承父取消 Token
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production.rs`、`run_manager.rs`
+- 修复状态：已修复（`eaf54ac7`）
+- 代码证据：`RunStartContext.parent_run_id`；`ProductionRuntime::start_run` 调用 `ensure_execution_token(&run_id, parent_run_id.as_deref())`；RunManager 构造上下文时传入 `run.parent_run_id`。
+- 当前行为：Child Run 使用自己的 Run ID 注册到父取消树，取消父 Run 会取消 child；child Credential/Permission/Project Root 仍按 child scope 装配。
+- 验证：`production_runtime_registers_child_under_parent_token`、`dual_provider_engine_fixture_subagent` 精准通过。
+
+## Prompt Queue 启动失败会丢失已认领消息
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/prompt_queue_store.rs`、`crates/harness-core/src/session_actor.rs`
+- 修复状态：已修复（`1d235cd5`）
+- 代码证据：`send_now` 与 `on_run_terminal` 在 `start_detached_global` 成功后才删除 `prompt_queue` 行；失败路径调用 `SessionCoordinator::requeue` 并持久化 actor snapshot。
+- 当前行为：SQLite durable row 在 Run 尚未被 RunManager 接受前保留；重试不会静默丢失 queued/steering 输入，已 claimed item 也会恢复为 queued。
+- 验证：`send_now_cancels_active_and_starts_new_run`、`requeue_restores_claimed_item_at_front` 精准通过。
+
 ## PermissionManager 共享实例存在遗留全局 Profile 接口
 
 - 严重等级：P2

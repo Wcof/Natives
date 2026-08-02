@@ -123,3 +123,10 @@ Provider stop reason family 映射测试。
 - 测试环境的 side-effect ledger fallback 改为真实临时 SQLite `DataStore`，仅在测试且未装配全局 store 时启用；生产路径仍在无 store 时 fail closed。
 - ToolThenText、权限请求和取消 fixture 显式携带 `CompletedWithReason::ToolUse`，保留阶段 0 对未知/不完整 stop reason 的拒绝语义。
 - 该提交未引入 Turn/Message/Scheduler/Projection 的新生产架构，只修正验证装配和 fixture 事实。
+
+## 13. 本轮剩余生产接线收口（`eaf54ac7`、`1d235cd5`）
+
+- `RunStartContext` 携带真实 `parent_run_id`，ProductionRuntime 将 child token 注册到父取消树；fixture gateway 也按 Run 的 project path 设置 project root。
+- 测试构造器跳过后台 subagent reaper，避免环境锁与 Tokio runtime drop 的互等；非测试构建仍启动生产 reaper。
+- Prompt Queue 在 `send_now` 与 terminal drain 中延迟删除 durable row，RunManager 同步启动失败时恢复 actor item；`SessionCoordinator::requeue` 同时覆盖已存在的 claimed item，防止 Running 状态残留。
+- 精准回归已通过：child cancellation、live subagent fixture、daemon history seam、send-now drain、prompt requeue；strict warning check、fmt 和 diff check 也通过。

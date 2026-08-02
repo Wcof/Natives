@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：代码收口 `3bc18472`；文档收口为本提交
+- 结束 Commit：`1d235cd5`（代码收口）；本报告随后同步更新
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -75,7 +75,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - `run.continue` 已接入 daemon RPC/authority，要求 source terminal、durable checkpoint、snapshot 存在且无 uncertain side effect；Fork 已复制 source conversation 的 typed message/block，并为新分支重新使用 `ask` 权限 profile。Replay 仍是只读事件回放，不重跑工具。
 - HTTP/SSE MCP 逐行解析 JSON/SSE 帧并转成 ToolOutputDelta；取消可杀掉并 wait curl；stdio MCP 同样支持 notifications/progress。
 - Handler 若不响应 Gateway child token，在 250ms 清理窗口后会返回 `cleanup_failed` 并 abort task；这保证不伪装成功，但真实外部资源仍需专项 quiet fixture。
-- `start_with_seams_loads_daemon_conversation_history` 在本轮独立运行超过两分钟无输出后中止，未计为通过；native-engine 脚本此前同族测试仍报告 QueryReturnedNoRows，需后续单独诊断。
+- `start_with_seams_loads_daemon_conversation_history` 曾因单元测试后台 reaper 与环境锁互等而无输出；关闭该测试构造器中的 reaper 后已精准通过。`verify:native-engine` 的历史 live/native 失败仍不能据此宣称全量通过。
 - Renderer projection 已拒绝伪造事件；adapter 将 `ProjectionRecovery` 暴露给 workspace state，专用 UI 文案仍可后续补齐。
 
 ## 7. 合并顺序与回滚
@@ -88,7 +88,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 本轮 Cargo check：4（含 2 次修复后重跑）；本轮精准 Cargo Test：1；Workspace Test：0。
 - 最大 target 大小：共享 target 约 2.5 GiB；native verifier 产生的本地 target 约 5 GiB。
 - 最低可用磁盘：约 70 GiB。
-- 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 精确测试无输出超过两分钟后以 stdin Ctrl-C 中止；本轮无 Cargo 进程被终止。
+- 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 测试进程按资源规则中止；本轮没有终止 Cargo/Rustc。
 - 清理的临时目录：无；`cargo clean`：否。
 
 ## 9. 后续闭环提交（`5734ef5f`，含 `39d6514f`）
@@ -133,3 +133,10 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 最新精确验证继续通过：typed provider seam、legacy reasoning round-trip、compaction fallback、tool-call collection、plan/permission/MCP/cancel 关键测试，以及 `RUSTFLAGS=-Dwarnings cargo check`。
 - `cargo test --workspace` 未重复运行（共享 target/磁盘策略）；首次运行暴露的两个 fixture 已精准复验。
 - `npm run typecheck/lint/test/perf:check` 仍受 worktree 未安装 `node_modules` 阻塞；`verify:native-engine` 的 daemon/live fixture 仍有未解决失败，故本报告不宣称全量闭环完成。
+
+## 15. 本轮生产收口（`eaf54ac7`、`1d235cd5`）
+
+- `ProductionRuntime::start_run` 现在接收并使用 `RunStartContext.parent_run_id`；父 Run 取消会真实级联到 child token。Native fixture gateway 同样继承已解析的 project root，不扩大路径作用域。
+- 单元测试构造器不再启动会访问 SQLite/环境锁的 subagent reaper，避免测试 runtime drop 死锁；生产与集成构建仍保留 reaper。
+- Prompt Queue 的 `send_now` 和 terminal drain 只在 `RunManager` 接受新 Run 后删除 durable row；同步启动失败会 requeue actor item 并保留 SQLite 行。`SessionCoordinator::requeue` 对已存在的 claimed item 也恢复为 queued，避免重复或 Running 残留。
+- 新增精准证据：`production_runtime_registers_child_under_parent_token`、`dual_provider_engine_fixture_subagent`、`start_with_seams_loads_daemon_conversation_history`、`send_now_cancels_active_and_starts_new_run`、`requeue_restores_claimed_item_at_front` 均通过；strict `cargo check -Dwarnings`、`cargo fmt --check`、`git diff --check` 通过。
