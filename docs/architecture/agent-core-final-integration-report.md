@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：待本轮提交后填写（代码；文档随后更新）
+- 结束 Commit：`8bed49a2`
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -101,7 +101,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 
 本提交没有实现完整 TurnPolicy、Tool Scheduler 重写、UI ProjectionRecovery 展示、真实 provider/shell/MCP fixture 或 workspace/frontend 全量测试；这些仍是后续验收项，不在本报告中伪称完成。
 
-## 10. 本轮收口补充（提交前工作树）
+## 10. 本轮收口补充（`8bed49a2`）
 
 - Provider `ReasoningDelta` 现在进入 typed Assistant `Thinking` block；取消、Provider Error、空响应和 retry backoff 的失败路径补齐 `MessageCompleted`/`TurnCompleted` 事实。
 - Tool Call 只有 `tool_use` stop reason 才可执行；`stop`、`length`、`cancelled`、`error`、`unknown` 和无 Final 均 fail closed，并保留同 ID 错误 Tool Result。

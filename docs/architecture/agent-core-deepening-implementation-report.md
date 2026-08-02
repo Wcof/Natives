@@ -97,7 +97,7 @@ Provider stop reason family 映射测试。
 - Gateway 通用执行包装器在 timeout/cancel 后等待 250ms 清理；无法 quiet 返回 `cleanup_failed`。HTTP/SSE MCP 的 curl 子进程可被取消杀掉并逐行转发中间 progress。
 - Tool completion 关键事实持久化失败会取消 Engine，并由 `mark_tool_call_uncertain` 写入 side-effect ledger，阻止后续自动恢复。
 
-## 9. 生产收口补充（`5734ef5f`，含 `39d6514f`）
+## 9. 生产收口补充（`8bed49a2`，含 `5734ef5f` 与 `39d6514f`）
 
 - 旧消息只在生产入口转换一次为 `AgentMessage`，Core 主执行路径统一为 typed transcript；空历史不再切换 legacy Agent Loop。
 - Durable prompt queue 的 ack 现在可返回错误；SQLite 消息写入、turn 绑定与 queue consumed 在同一事务中完成，失败即停止输入消费。
