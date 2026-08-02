@@ -222,8 +222,55 @@ impl EngineProvider for RoutedProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages
+            .into_iter()
+            .map(crate::production::engine_message_to_history)
+            .collect();
+        self.stream_history_with_context(
+            context,
+            model.to_string(),
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    async fn stream_turn(
+        &self,
+        request: agent_core::ProviderTurnRequest,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = request
+            .messages
+            .into_iter()
+            .map(crate::production::agent_message_to_history)
+            .collect();
+        self.stream_history_with_context(
+            request.context,
+            request.model,
+            messages,
+            &request.tools,
+            request.system_prompt.as_deref(),
+            cancel,
+        )
+        .await
+    }
+}
+
+impl RoutedProvider {
+    async fn stream_history_with_context(
+        &self,
+        context: EngineProviderContext,
+        model: String,
+        messages: Vec<provider_adapters::capabilities::HistoryMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
         let targets = self.plan.targets.clone();
-        let base_model = model.to_string();
+        let base_model = model;
         let messages = messages.to_vec();
         let tools = tools.to_vec();
         let system_prompt = system_prompt.map(str::to_string);
@@ -241,11 +288,11 @@ impl EngineProvider for RoutedProvider {
                 let route_model = if target.model_id.trim().is_empty() { base_model.clone() } else { target.model_id.clone() };
                 let result = tokio::time::timeout(Duration::from_secs(60), async {
                     if target.credential_kind == "sub2api_pool" {
-                    Sub2ApiPoolProvider { provider_id: target.provider_id.clone(), controls: controls.clone() }.stream(
-                        &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
+                    Sub2ApiPoolProvider { provider_id: target.provider_id.clone(), controls: controls.clone() }.stream_history(
+                        route_model.clone(), messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else if target.credential_kind == "api_key" {
-                    RealProvider { provider_id: target.provider_id.clone(), key_id: target.credential_id.clone() }.stream_with_context_controls(
+                    RealProvider { provider_id: target.provider_id.clone(), key_id: target.credential_id.clone() }.stream_with_history_context_controls(
                         &context, &controls, &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else {
@@ -323,6 +370,44 @@ impl EngineProvider for Sub2ApiPoolProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages
+            .into_iter()
+            .map(crate::production::engine_message_to_history)
+            .collect();
+        self.stream_history(model.to_string(), messages, tools, system_prompt, cancel)
+            .await
+    }
+
+    async fn stream_turn(
+        &self,
+        request: agent_core::ProviderTurnRequest,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = request
+            .messages
+            .into_iter()
+            .map(crate::production::agent_message_to_history)
+            .collect();
+        self.stream_history(
+            request.model,
+            messages,
+            &request.tools,
+            request.system_prompt.as_deref(),
+            cancel,
+        )
+        .await
+    }
+}
+
+impl Sub2ApiPoolProvider {
+    async fn stream_history(
+        &self,
+        model: String,
+        messages: Vec<provider_adapters::capabilities::HistoryMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
         let broker = NativesDbBroker::open(crate::natives_db_broker::default_natives_db_path())
             .map_err(EngineError::Message)?;
         let accounts = broker
@@ -331,7 +416,6 @@ impl EngineProvider for Sub2ApiPoolProvider {
         if accounts.is_empty() {
             return Err(EngineError::Message("no active Sub2API accounts".into()));
         }
-        let model = model.to_string();
         let messages = messages.to_vec();
         let tools = tools.to_vec();
         let system_prompt = system_prompt.map(str::to_string);
@@ -357,7 +441,7 @@ impl EngineProvider for Sub2ApiPoolProvider {
                 if circuit_open(&account_target) { continue; }
                 let Some(_lease) = acquire_account(&account, &account_target) else { continue; };
                 record_selected(&account_target);
-                let result = tokio::time::timeout(Duration::from_secs(60), account_stream(&account, &controls, &model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone())).await.unwrap_or_else(|_| Err(timeout_error("provider first byte timed out")));
+                let result = tokio::time::timeout(Duration::from_secs(60), account_stream_history(&account, &controls, &model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone())).await.unwrap_or_else(|_| Err(timeout_error("provider first byte timed out")));
                 let mut stream = match result {
                     Ok(stream) => stream,
                     Err(error) if error.retryable() => { record_failure(&account_target); last_error = Some(error); continue; }
@@ -387,11 +471,11 @@ impl EngineProvider for Sub2ApiPoolProvider {
     }
 }
 
-async fn account_stream(
+async fn account_stream_history(
     account: &Sub2ApiAccountCredential,
     controls: &RequestControls,
     model: &str,
-    messages: Vec<EngineMessage>,
+    messages: Vec<provider_adapters::capabilities::HistoryMessage>,
     tools: &[ToolSchema],
     system_prompt: Option<&str>,
     cancel: CancellationToken,
@@ -404,7 +488,6 @@ async fn account_stream(
         model: model.to_string(),
         messages: messages
             .into_iter()
-            .map(crate::production::engine_message_to_history)
             .map(history_message_to_provider)
             .collect(),
         system_prompt: system_prompt.map(str::to_string),

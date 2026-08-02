@@ -1249,7 +1249,7 @@ fn append_single_assistant_turn(
         let mut content = Vec::new();
         if !thinking.trim().is_empty() {
             content.push(agent_core::ContentBlock::Thinking {
-                text: text.clone(),
+                text: thinking,
                 signature: None,
             });
         }

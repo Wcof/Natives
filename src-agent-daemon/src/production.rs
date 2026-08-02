@@ -1240,6 +1240,23 @@ impl EngineProvider for RealProvider {
         )
         .await
     }
+
+    async fn stream_turn(
+        &self,
+        request: agent_core::ProviderTurnRequest,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_typed_context_controls(
+            &request.context,
+            &RequestControls::default(),
+            &request.model,
+            request.messages,
+            &request.tools,
+            request.system_prompt.as_deref(),
+            cancel,
+        )
+        .await
+    }
 }
 
 impl RealProvider {
@@ -1278,6 +1295,55 @@ impl RealProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages
+            .into_iter()
+            .map(engine_message_to_history)
+            .collect();
+        self.stream_with_history_context_controls(
+            context,
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    pub async fn stream_with_typed_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<agent_core::AgentMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages.into_iter().map(agent_message_to_history).collect();
+        self.stream_with_history_context_controls(
+            context,
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    pub(crate) async fn stream_with_history_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<HistoryMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
         let credential =
             resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), &context.run_id)
                 .map_err(EngineError::Message)?;
@@ -1305,7 +1371,6 @@ impl RealProvider {
 
         let provider_messages: Vec<_> = messages
             .into_iter()
-            .map(engine_message_to_history)
             .map(history_message_to_provider)
             .collect();
         let provider_tools: Vec<ProviderTool> = tools
@@ -1499,6 +1564,156 @@ pub(crate) fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
                 media_type: image.media_type,
             })
             .collect(),
+    }
+}
+
+/// Convert the Core-owned typed transcript directly to the provider adapter's
+/// neutral history shape. Production never needs to rebuild an `EngineMessage`
+/// just to cross the provider boundary; the old conversion above remains only
+/// for legacy callers and fixtures.
+pub(crate) fn agent_message_to_history(message: agent_core::AgentMessage) -> HistoryMessage {
+    fn content_parts(
+        blocks: &[agent_core::ContentBlock],
+    ) -> (String, Vec<ImageSource>, Option<Vec<HistoryToolCall>>) {
+        let mut text = String::new();
+        let mut images = Vec::new();
+        let mut calls = Vec::new();
+        for block in blocks {
+            match block {
+                agent_core::ContentBlock::Text { text: value }
+                | agent_core::ContentBlock::Thinking { text: value, .. } => text.push_str(value),
+                agent_core::ContentBlock::Image { source } => images.push(ImageSource {
+                    url: source.url.clone(),
+                    detail: source.detail.clone(),
+                    media_type: source.media_type.clone(),
+                }),
+                agent_core::ContentBlock::ToolCall(call) => calls.push(HistoryToolCall {
+                    id: call.tool_call_id.to_string(),
+                    name: call.name.clone(),
+                    arguments: call.arguments_json.clone(),
+                }),
+            }
+        }
+        (text, images, (!calls.is_empty()).then_some(calls))
+    }
+
+    fn result_text(blocks: &[agent_core::ToolResultBlock]) -> String {
+        blocks
+            .iter()
+            .map(|block| match block {
+                agent_core::ToolResultBlock::Text { text } => text.clone(),
+                agent_core::ToolResultBlock::Json { value } => value.to_string(),
+                agent_core::ToolResultBlock::Artifact {
+                    artifact_id,
+                    preview,
+                } => preview.clone().unwrap_or_else(|| artifact_id.clone()),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    match message {
+        agent_core::AgentMessage::User(message) => {
+            let (content, images, tool_calls) = content_parts(&message.content);
+            HistoryMessage {
+                role: "user".into(),
+                content,
+                images,
+                tool_calls,
+                ..Default::default()
+            }
+        }
+        agent_core::AgentMessage::Assistant(message) => {
+            let (content, images, tool_calls) = content_parts(&message.content);
+            HistoryMessage {
+                role: "assistant".into(),
+                content,
+                images,
+                tool_calls,
+                ..Default::default()
+            }
+        }
+        agent_core::AgentMessage::ToolResult(message) => HistoryMessage {
+            role: "tool".into(),
+            content: result_text(&message.content),
+            tool_call_id: Some(message.tool_call_id.to_string()),
+            tool_name: Some(message.tool_name),
+            ..Default::default()
+        },
+        agent_core::AgentMessage::System(message) => HistoryMessage {
+            role: "system".into(),
+            content: message.text,
+            ..Default::default()
+        },
+        agent_core::AgentMessage::Custom(message) => HistoryMessage {
+            role: message.kind,
+            content: message.payload.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+#[cfg(test)]
+mod typed_provider_history_tests {
+    use super::*;
+
+    #[test]
+    fn typed_boundary_preserves_blocks_and_tool_identity() {
+        let history = agent_message_to_history(agent_core::AgentMessage::Assistant(
+            agent_core::AssistantMessage {
+                message_id: agent_core::MessageId::from("message-1"),
+                content: vec![
+                    agent_core::ContentBlock::Thinking {
+                        text: "plan".into(),
+                        signature: Some("sig".into()),
+                    },
+                    agent_core::ContentBlock::Text {
+                        text: "calling".into(),
+                    },
+                    agent_core::ContentBlock::Image {
+                        source: agent_core::ImageSource {
+                            url: "data:image/png;base64,x".into(),
+                            media_type: Some("image/png".into()),
+                            detail: Some("high".into()),
+                        },
+                    },
+                    agent_core::ContentBlock::ToolCall(agent_core::ToolCall {
+                        tool_call_id: agent_core::ToolCallId::from("call-1"),
+                        name: "read_file".into(),
+                        arguments_json: r#"{"path":"a.txt"}"#.into(),
+                    }),
+                ],
+                stop_reason: Some(agent_core::StopReason::ToolUse),
+            },
+        ));
+
+        assert_eq!(history.role, "assistant");
+        assert_eq!(history.content, "plancalling");
+        assert_eq!(history.images.len(), 1);
+        let calls = history
+            .tool_calls
+            .expect("tool call must remain structured");
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments, r#"{"path":"a.txt"}"#);
+
+        let result = agent_message_to_history(agent_core::AgentMessage::ToolResult(
+            agent_core::ToolResultMessage {
+                message_id: agent_core::MessageId::from("result-1"),
+                tool_call_id: agent_core::ToolCallId::from("call-1"),
+                tool_name: "read_file".into(),
+                content: vec![agent_core::ToolResultBlock::Artifact {
+                    artifact_id: "artifact-1".into(),
+                    preview: Some("preview".into()),
+                }],
+                is_error: false,
+                code: None,
+            },
+        ));
+        assert_eq!(result.role, "tool");
+        assert_eq!(result.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(result.tool_name.as_deref(), Some("read_file"));
+        assert_eq!(result.content, "preview");
     }
 }
 
