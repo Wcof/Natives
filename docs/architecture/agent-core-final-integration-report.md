@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`1d235cd5`（代码收口）；本报告随后同步更新
+- 结束 Commit：`fefc8ff0`（当前 Worktree）；本报告随后同步更新
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 

@@ -20,7 +20,7 @@
 | F. Event Fail Closed | 已接生产（关键事实） | 5734ef5f | cargo check | 关键事实使用 checked；ledger start/complete persistence failure 生成配对错误结果并停止 Engine；delta/progress 仍可丢弃 |
 | G. Lineage 与 Resume | 已接生产 | 5734ef5f | side-effect guard | retry/continue 记录 source/checkpoint/turn lineage；resume_plan 在 detached start 后结算；continue 只从 durable checkpoint 启动独立 Run |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
-| I. 最终验证 | 部分完成 | 9c066af5 | strict check + controlled frontend verification | strict `-Dwarnings` check、typed seam、legacy reasoning、stop-reason fixture、ledger/permission/cancel、child cancel、prompt requeue、projection recovery、fork/continue persistence 精测通过；typecheck/lint/perf 通过；workspace/native verifier 与完整 frontend test 仍未全绿 |
+| I. 最终验证 | 部分完成 | fefc8ff0 | strict check + controlled frontend verification | strict `-Dwarnings` check、typed seam、legacy reasoning、stop-reason fixture、ledger/permission/cancel、child cancel、prompt requeue、projection recovery、fork/continue persistence 精测通过；typecheck/lint/perf 通过；workspace/native verifier 与完整 frontend test 仍未全绿 |
 
 ## 阻塞项
 
