@@ -499,88 +499,6 @@ impl EngineToolRuntime for PermissionGatedTools {
         .collect()
     }
 
-    async fn execute_task_batch_with_progress(
-        &self,
-        tasks: Vec<(String, Value)>,
-        cancel: &CancellationToken,
-        progress: Arc<dyn ToolProgressSink>,
-        turn_id: Option<&str>,
-        message_id: Option<&str>,
-    ) -> Vec<ToolExecutionResult> {
-        let mut results = Vec::with_capacity(tasks.len());
-        for (call_id, input) in tasks {
-            progress
-                .publish(ToolProgressUpdate {
-                    run_id: self.parent_run_id.clone(),
-                    tool_call_id: call_id.clone(),
-                    tool_name: "task".into(),
-                    stream: "subagent".into(),
-                    text: "starting child run".into(),
-                    final_update: false,
-                    turn_id: turn_id.map(str::to_string),
-                    message_id: message_id.map(str::to_string),
-                    progress_sequence: 0,
-                })
-                .await;
-            let result = self
-                .execute_tool_with_call_id_and_progress(
-                    "task",
-                    input,
-                    cancel,
-                    Some(&call_id),
-                    turn_id,
-                    message_id,
-                    progress.clone(),
-                )
-                .await;
-            let child_run_id = result
-                .output
-                .get("run_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            if !result.is_error
-                && result.output.get("status").and_then(Value::as_str) == Some("running")
-            {
-                if let Some(child_run_id) = child_run_id {
-                    spawn_subagent_progress(
-                        self.events.clone(),
-                        self.parent_run_id.clone(),
-                        call_id.clone(),
-                        child_run_id,
-                        progress.clone(),
-                        turn_id.map(str::to_string),
-                        message_id.map(str::to_string),
-                    );
-                }
-            } else {
-                progress
-                    .publish(ToolProgressUpdate {
-                        run_id: self.parent_run_id.clone(),
-                        tool_call_id: call_id.clone(),
-                        tool_name: "task".into(),
-                        stream: "subagent".into(),
-                        text: if result.is_error {
-                            "failed"
-                        } else {
-                            "completed"
-                        }
-                        .into(),
-                        final_update: true,
-                        turn_id: turn_id.map(str::to_string),
-                        message_id: message_id.map(str::to_string),
-                        progress_sequence: 0,
-                    })
-                    .await;
-                progress.mark_tool_call_settled(&call_id).await;
-            }
-            results.push(result);
-            if cancel.is_cancelled() {
-                break;
-            }
-        }
-        results
-    }
-
     async fn mark_tool_call_uncertain(
         &self,
         call_id: &str,
@@ -678,7 +596,23 @@ impl EngineToolRuntime for PermissionGatedTools {
                 progress.clone(),
             )
             .await;
-        if result.output.get("status").and_then(Value::as_str) != Some("running") {
+        let child_run_id = result
+            .output
+            .get("run_id")
+            .and_then(Value::as_str)
+            .filter(|_| result.output.get("status").and_then(Value::as_str) == Some("running"))
+            .map(str::to_string);
+        if let Some(child_run_id) = child_run_id {
+            spawn_subagent_progress(
+                self.events.clone(),
+                self.parent_run_id.clone(),
+                call_id.to_string(),
+                child_run_id,
+                progress.clone(),
+                turn_id.map(str::to_string),
+                message_id.map(str::to_string),
+            );
+        } else {
             progress
                 .publish(ToolProgressUpdate {
                     run_id: self.parent_run_id.clone(),
@@ -2510,6 +2444,29 @@ impl PermissionGatedTools {
         } else {
             parent_cancel.clone()
         };
+        let ledger_summary = serde_json::json!({
+            "server": server_id.clone(),
+            "tool": tool_name.clone(),
+        });
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &call_id,
+            "mcp_call",
+            "mcp",
+            "started",
+            false,
+            turn_id,
+            &ledger_summary,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("MCP side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+            };
+        }
         let progress_callback: Arc<dyn Fn(Value) + Send + Sync> = {
             let progress = progress.clone();
             let run_id = self.parent_run_id.clone();
@@ -2564,16 +2521,36 @@ impl PermissionGatedTools {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
-                let _ = crate::side_effect_ledger::record_tool_effect_state(
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
                     &call_id,
                     "mcp_call",
                     "mcp",
                     "completed",
                     false,
-                    None,
-                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
+                    turn_id,
+                    &ledger_summary,
                 );
+                if let Err(error) = ledger_result {
+                    let _ = crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &call_id,
+                        "mcp_call",
+                        "mcp",
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &ledger_summary,
+                    );
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "PERSISTENCE_FAILED",
+                            "error": format!("MCP side-effect ledger could not be completed: {error}"),
+                        }),
+                        is_error: true,
+                        duration_ms,
+                    };
+                }
                 ToolExecutionResult {
                     output: serde_json::json!({
                         "server": server_id,
@@ -2587,7 +2564,7 @@ impl PermissionGatedTools {
             }
             Err(e) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
-                let _ = crate::side_effect_ledger::record_tool_effect_state(
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
                     &call_id,
                     "mcp_call",
@@ -2598,9 +2575,29 @@ impl PermissionGatedTools {
                         "failed"
                     },
                     false,
-                    None,
-                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
+                    turn_id,
+                    &ledger_summary,
                 );
+                if let Err(error) = ledger_result {
+                    let _ = crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &call_id,
+                        "mcp_call",
+                        "mcp",
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &ledger_summary,
+                    );
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "PERSISTENCE_FAILED",
+                            "error": format!("MCP side-effect ledger could not be settled: {error}"),
+                        }),
+                        is_error: true,
+                        duration_ms,
+                    };
+                }
                 ToolExecutionResult {
                     output: serde_json::json!({
                         "server": server_id,
@@ -3029,14 +3026,30 @@ impl PermissionGatedTools {
                 .await;
         }
 
-        self.events.append(
+        if let Err(error) = self.events.append_checked(
             &self.parent_run_id,
             RunEventKind::SubagentCreated {
                 sub_run_id: child_run_id.clone(),
                 agent_profile_id: child_profile_id.clone(),
                 task: prompt.clone(),
             },
-        );
+        ) {
+            let _ = crate::global_run_manager()
+                .cancel(assistant_protocol::v2::CancelRunRequest {
+                    run_id: child_run_id.clone(),
+                })
+                .await;
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&error));
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("subagent creation event could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
 
         let task_id = session_id.clone();
         self.task_outputs.lock().await.insert(
@@ -3130,26 +3143,55 @@ impl PermissionGatedTools {
                 if !run.status.is_terminal() {
                     continue;
                 }
-                let text = events
-                    .replay_after(&child_run_id_bg, 0)
-                    .into_iter()
-                    .filter_map(|e| match e.payload {
-                        RunEventKind::TextDelta { text } => Some(text),
+                let child_events = match events.replay_after_checked(&child_run_id_bg, 0) {
+                    Ok(events) => events,
+                    Err(error) => {
+                        let message = format!("child event replay failed: {error}");
+                        let _ = subagents
+                            .update_status(&mem_task_id_bg, SubAgentStatus::Failed(message.clone()))
+                            .await;
+                        let _ = crate::subagent_store::close_subagent_session(
+                            &session_id_bg,
+                            "failed",
+                            Some(&message),
+                        );
+                        let _ = events.append_checked(
+                            &parent_run_id,
+                            RunEventKind::SubagentFailed {
+                                sub_run_id: child_run_id_bg.clone(),
+                                error: message.clone(),
+                            },
+                        );
+                        task_outputs.lock().await.insert(
+                            task_id_bg,
+                            TaskRecord {
+                                run_id: child_run_id_bg.clone(),
+                                status: "failed".into(),
+                                output: Some(message),
+                            },
+                        );
+                        break;
+                    }
+                };
+                let text = child_events
+                    .iter()
+                    .filter_map(|e| match &e.payload {
+                        RunEventKind::TextDelta { text } => Some(text.clone()),
                         _ => None,
                     })
                     .collect::<String>();
                 let mut task_output = text.clone();
+                let mut final_status = status.clone();
                 if status == "completed" {
                     // Best-effort token settle from usage events + text estimate.
-                    let usage_tokens: u64 = events
-                        .replay_after(&child_run_id_bg, 0)
-                        .into_iter()
-                        .filter_map(|e| match e.payload {
+                    let usage_tokens: u64 = child_events
+                        .iter()
+                        .filter_map(|e| match &e.payload {
                             RunEventKind::UsageUpdated {
                                 input_tokens,
                                 output_tokens,
                                 ..
-                            } => Some(input_tokens.saturating_add(output_tokens)),
+                            } => Some((*input_tokens).saturating_add(*output_tokens)),
                             _ => None,
                         })
                         .max()
@@ -3165,13 +3207,28 @@ impl PermissionGatedTools {
                         "completed",
                         None,
                     );
-                    events.append(
+                    if let Err(error) = events.append_checked(
                         &parent_run_id,
                         RunEventKind::SubagentCompleted {
                             sub_run_id: child_run_id_bg.clone(),
                             result: text.clone(),
                         },
-                    );
+                    ) {
+                        final_status = "failed".into();
+                        task_output =
+                            format!("PERSISTENCE_FAILED: subagent completion event: {error}");
+                        let _ = subagents
+                            .update_status(
+                                &mem_task_id_bg,
+                                SubAgentStatus::Failed(task_output.clone()),
+                            )
+                            .await;
+                        let _ = crate::subagent_store::close_subagent_session(
+                            &session_id_bg,
+                            "failed",
+                            Some(&task_output),
+                        );
+                    }
                 } else {
                     let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
                     if task_output.is_empty() {
@@ -3189,13 +3246,16 @@ impl PermissionGatedTools {
                         },
                         Some(&err_msg),
                     );
-                    events.append(
+                    if let Err(error) = events.append_checked(
                         &parent_run_id,
                         RunEventKind::SubagentFailed {
                             sub_run_id: child_run_id_bg.clone(),
                             error: err_msg,
                         },
-                    );
+                    ) {
+                        task_output =
+                            format!("PERSISTENCE_FAILED: subagent failure event: {error}");
+                    }
                 }
                 // SubagentStop fires for every terminal outcome, not just
                 // success — a hook watching for children that died is exactly
@@ -3212,7 +3272,7 @@ impl PermissionGatedTools {
                     tool_name: Some("task".into()),
                     input: serde_json::json!({
                         "sub_run_id": child_run_id_bg.clone(),
-                        "status": status.clone(),
+                        "status": final_status.clone(),
                         "output": text.clone(),
                     }),
                 })
@@ -3220,7 +3280,7 @@ impl PermissionGatedTools {
 
                 let rec = TaskRecord {
                     run_id: child_run_id_bg.clone(),
-                    status,
+                    status: final_status,
                     output: if task_output.is_empty() {
                         None
                     } else {

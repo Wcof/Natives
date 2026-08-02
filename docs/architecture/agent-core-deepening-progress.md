@@ -60,3 +60,11 @@
 - `ProductionRuntime` 仅在启动前置持久化/恢复读取成功后注册 engine；Checkpoint skeleton 写入失败会回滚 live map，运行结束先移除 handle 再做 post-processing。
 - Gateway handler 已完成但 ledger settle 写入失败时追加 conservative `uncertain` 状态并返回 `PERSISTENCE_FAILED`。
 - 受控 `RUSTFLAGS=-Dwarnings cargo check` 通过；workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP fixture 与 permission fault-injection 仍未重新运行。
+
+## 24. 生产闭环再审计收口（当前 Worktree）
+
+- Core scheduler 已移除 `task` 工具名特判；生产批次只读取 Gateway 广告的 `ToolCapability.execution_mode`、`parallel_safe` 与冲突键。Sub Agent progress 改由通用调用路径按运行结果启动，不再依赖 Core 的工具名分支。
+- `ContextSnapshotCommitted` 的模型摘要现在同时写入 `message`/`message_block`；旧 `ContextCompressed` 事件也生成稳定的系统摘要消息 ID。Runtime 合并 snapshot 与 durable history 时按 snapshot message ID 去重，避免压缩后的摘要尾部重复。
+- Prompt Queue 启动恢复、actor snapshot、lease/status 行与 malformed queue item 均改为严格错误传播；RPC/Authority 的 event replay 使用 checked API，不再把坏事件流当成空数组。
+- MCP side-effect ledger 在实际 transport 前记录 `started`，完成/失败/取消后必须 settle；settle 失败尝试 `uncertain` 并返回 `PERSISTENCE_FAILED`。Continue 的 branch parent message 查询也不再 `.ok()` 静默降级。
+- 精确验证：`tool_name_does_not_select_batch_execution`、Gateway schema rejection、Gateway cancellation、`malformed_queue_snapshot_is_rejected`、`context_compression_events_persist_snapshot_and_reenter_history` 通过；受控 `RUSTFLAGS=-Dwarnings cargo check` 与 `cargo fmt` 通过。workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP fixture 与 permission fault-injection 仍未按资源规则重复运行。

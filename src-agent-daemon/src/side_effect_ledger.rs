@@ -42,7 +42,8 @@ pub fn record_tool_effect(
     let store = ledger_store()?;
     let conn = store.conn()?;
     let id = uuid::Uuid::new_v4().to_string();
-    let summary_s = serde_json::to_string(summary).unwrap_or_else(|_| "{}".into());
+    let summary_s = serde_json::to_string(summary)
+        .map_err(|error| format!("serialize side-effect summary: {error}"))?;
     let target = summary
         .get("path")
         .or_else(|| summary.get("command"))
@@ -102,7 +103,8 @@ pub fn record_tool_effect_state(
             rusqlite::params![
                 category,
                 target,
-                serde_json::to_string(summary).unwrap_or_else(|_| "{}".into()),
+                serde_json::to_string(summary)
+                    .map_err(|error| format!("serialize side-effect summary: {error}"))?,
                 turn_id,
                 category,
                 status,
@@ -131,7 +133,8 @@ pub fn record_tool_effect_state(
             tool_call_id,
             category,
             target,
-            serde_json::to_string(summary).unwrap_or_else(|_| "{}".into()),
+            serde_json::to_string(summary)
+                .map_err(|error| format!("serialize side-effect summary: {error}"))?,
             turn_id,
             category,
             status,

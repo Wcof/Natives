@@ -271,10 +271,12 @@ impl ExecutionAuthority for EmbeddedAuthority {
         after_sequence: u64,
     ) -> Result<Vec<RunEventV2>, AuthorityError> {
         self.install_broker();
-        Ok(global_run_manager().replay(ReplayRunRequest {
-            run_id: run_id.to_string(),
-            after_sequence,
-        }))
+        global_run_manager()
+            .replay_checked(ReplayRunRequest {
+                run_id: run_id.to_string(),
+                after_sequence,
+            })
+            .map_err(Into::into)
     }
 
     async fn subscribe_events(
@@ -288,10 +290,12 @@ impl ExecutionAuthority for EmbeddedAuthority {
             run_id: run_id.to_string(),
             after_sequence,
         };
-        Ok(global_run_manager().replay(ReplayRunRequest {
-            run_id: run_id.to_string(),
-            after_sequence,
-        }))
+        global_run_manager()
+            .replay_checked(ReplayRunRequest {
+                run_id: run_id.to_string(),
+                after_sequence,
+            })
+            .map_err(Into::into)
     }
 
     async fn respond_permission(

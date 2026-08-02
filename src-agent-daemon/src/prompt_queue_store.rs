@@ -223,20 +223,34 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
-fn value_to_queue_item(item: &Value) -> Option<QueueItem> {
-    let id = item.get("id")?.as_str()?.to_string();
-    let conversation_id = item.get("conversation_id")?.as_str()?.to_string();
-    let content = item.get("content")?.as_str()?.to_string();
+fn value_to_queue_item(item: &Value) -> Result<QueueItem, String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "prompt queue row missing id".to_string())?
+        .to_string();
+    let conversation_id = item
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("prompt queue row {id} missing conversation_id"))?
+        .to_string();
+    let content = item
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("prompt queue row {id} missing content"))?
+        .to_string();
     let source = item
         .get("source")
         .and_then(Value::as_str)
         .map(PromptSource::parse)
-        .unwrap_or(PromptSource::User);
+        .ok_or_else(|| format!("prompt queue row {id} missing source"))?;
     let position = item
         .get("position")
         .or_else(|| item.get("order"))
         .and_then(Value::as_i64)
-        .unwrap_or(0);
+        .ok_or_else(|| format!("prompt queue row {id} missing position"))?;
     let client_temp_id = item
         .get("client_temp_id")
         .and_then(Value::as_str)
@@ -244,14 +258,14 @@ fn value_to_queue_item(item: &Value) -> Option<QueueItem> {
     let created_at = item
         .get("created_at")
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .ok_or_else(|| format!("prompt queue row {id} missing created_at"))?
         .to_string();
     let status = item
         .get("status")
         .and_then(Value::as_str)
         .map(QueueItemStatus::parse)
-        .unwrap_or(QueueItemStatus::Queued);
-    Some(QueueItem {
+        .ok_or_else(|| format!("prompt queue row {id} missing status"))?;
+    Ok(QueueItem {
         id,
         conversation_id,
         content,
@@ -310,9 +324,9 @@ fn persist_actor_snapshot_best_effort(conversation_id: &str) {
     }
 }
 
-fn load_actor_snapshot(conversation_id: &str) -> Option<SessionActorSnapshot> {
-    let store = store().ok()?;
-    let conn = store.conn().ok()?;
+fn load_actor_snapshot(conversation_id: &str) -> Result<Option<SessionActorSnapshot>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
     conn.query_row(
         "SELECT conversation_id, active_run_id, running_prompt_id, pending_interjection,
                 pending_interaction_id, cancel_and_send_id, cancel_requested, drain_on_finish,
@@ -327,15 +341,14 @@ fn load_actor_snapshot(conversation_id: &str) -> Option<SessionActorSnapshot> {
                 pending_interjection: row.get(3)?,
                 pending_interaction_id: row.get(4)?,
                 cancel_and_send_id: row.get(5)?,
-                cancel_requested: row.get::<_, i64>(6).unwrap_or(0) != 0,
-                drain_on_finish: row.get::<_, i64>(7).unwrap_or(1) != 0,
-                version: row.get::<_, i64>(8).unwrap_or(0) as u64,
+                cancel_requested: row.get::<_, i64>(6)? != 0,
+                drain_on_finish: row.get::<_, i64>(7)? != 0,
+                version: row.get::<_, i64>(8)? as u64,
             })
         },
     )
     .optional()
-    .ok()
-    .flatten()
+    .map_err(|e| e.to_string())
 }
 
 /// Rebuild in-memory coordinator for a conversation from SQLite (queue + actor).
@@ -360,14 +373,13 @@ pub fn hydrate_conversation(conversation_id: &str) -> Result<(), String> {
     let rows = stmt
         .query_map(params![conversation_id], row_to_item)
         .map_err(|e| e.to_string())?;
-    for row in rows.flatten() {
-        if let Some(item) = value_to_queue_item(&row) {
-            items.push(item);
-        }
+    for row in rows {
+        let row = row.map_err(|e| e.to_string())?;
+        items.push(value_to_queue_item(&row)?);
     }
     let harness = global_harness();
     harness.reload_queue(conversation_id, items);
-    if let Some(snap) = load_actor_snapshot(conversation_id) {
+    if let Some(snap) = load_actor_snapshot(conversation_id)? {
         harness.restore_snapshot(snap);
     }
     Ok(())
@@ -379,43 +391,53 @@ pub fn recover_session_actors_on_startup() -> Result<usize, String> {
     let store = store()?;
     let conn = store.conn()?;
     let mut ids: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT DISTINCT conversation_id FROM prompt_queue
-         WHERE COALESCE(status, 'queued') IN ('queued', 'running')",
-    ) {
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0));
-        if let Ok(rows) = rows {
-            for id in rows.flatten() {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT conversation_id FROM prompt_queue
+                 WHERE COALESCE(status, 'queued') IN ('queued', 'running', 'leased')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for id in rows {
+            let id = id.map_err(|e| e.to_string())?;
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
     }
-    if let Ok(mut stmt) = conn.prepare("SELECT conversation_id FROM session_actor") {
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0));
-        if let Ok(rows) = rows {
-            for id in rows.flatten() {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+    {
+        let mut stmt = conn
+            .prepare("SELECT conversation_id FROM session_actor")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for id in rows {
+            let id = id.map_err(|e| e.to_string())?;
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
     }
-    let _ = conn.execute(
+    conn.execute(
         "UPDATE prompt_queue SET status = 'queued', lease_token = NULL,
             lease_run_id = NULL, leased_at = NULL, updated_at = ?1
          WHERE status IN ('running', 'leased')",
         params![chrono::Utc::now().to_rfc3339()],
-    );
-    let _ = conn.execute(
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
         "UPDATE session_actor SET active_run_id = NULL, running_prompt_id = NULL,
             cancel_requested = 0, updated_at = ?1",
         params![chrono::Utc::now().to_rfc3339()],
-    );
+    )
+    .map_err(|e| e.to_string())?;
     let n = ids.len();
     for id in ids {
-        let _ = hydrate_conversation(&id);
+        hydrate_conversation(&id)?;
     }
     Ok(n)
 }
@@ -459,13 +481,18 @@ fn list(params: Value) -> Result<Value, String> {
     let rows = stmt
         .query_map(params![conversation_id], row_to_item)
         .map_err(|e| e.to_string())?;
-    let items: Vec<Value> = rows.filter_map(Result::ok).collect();
+    let items: Vec<Value> = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
 
     // SQLite is source of truth — always rehydrate coordinator from durable rows.
-    let q_items: Vec<QueueItem> = items.iter().filter_map(value_to_queue_item).collect();
+    let q_items: Vec<QueueItem> = items
+        .iter()
+        .map(value_to_queue_item)
+        .collect::<Result<Vec<_>, _>>()?;
     let harness = global_harness();
     harness.reload_queue(conversation_id, q_items);
-    if let Some(snap) = load_actor_snapshot(conversation_id) {
+    if let Some(snap) = load_actor_snapshot(conversation_id)? {
         harness.restore_snapshot(snap);
     }
 
@@ -1098,6 +1125,19 @@ mod tests {
             assert_eq!(arr[0]["content"], "one");
             assert_eq!(arr[1]["content"], "two");
         });
+    }
+
+    #[test]
+    fn malformed_queue_snapshot_is_rejected() {
+        assert!(value_to_queue_item(&json!({
+            "id": "q1",
+            "conversation_id": "c1",
+            "content": "prompt",
+            "source": "user",
+            "position": 0,
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .is_err());
     }
 
     #[test]

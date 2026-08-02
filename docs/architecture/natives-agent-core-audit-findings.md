@@ -360,3 +360,47 @@
 - 当前行为：handler 已运行而 completion/取消/超时 ledger 更新失败时，追加 `uncertain` 尝试并返回 `PERSISTENCE_FAILED`，不返回成功结果。
 - 影响：恢复逻辑不会误以为副作用已安全结算；Tool Result 仍由 Core 配对。
 - 测试方式：严格 warning-as-error 编译通过；ledger 数据库 fault-injection 尚待补充。
+
+## Core 按工具名选择批处理
+
+- 严重等级：P1
+- 所属模块：`crates/agent-core/src/engine.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`AgentEngine::execute_prepared_tools`
+- 原始行为：Core 对 `task` 名称进入专用 batch 分支，工具并发语义被名称耦合。
+- 当前行为：生产调度只读取 `ToolCapability` 的 execution mode、parallel-safe 与冲突键；旧 batch trait 仅保留兼容接口。
+- 影响：Gateway 能力声明成为唯一安全边界，新增工具不会因命名意外获得并发权限。
+- 测试方式：`tool_name_does_not_select_batch_execution` 通过。
+
+## Compaction 摘要未进入 durable message history
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/conversation_store.rs`、`src-agent-daemon/src/production.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`persist_context_snapshots_from_events`、`persist_summary_text_message`、snapshot message ID 去重合并。
+- 原始行为：摘要只存在 snapshot JSON/ContextCompressed 事件中，重放 message history 时无法独立审计；合并 snapshot 与 durable tail 还可能重复。
+- 当前行为：模型摘要和旧压缩摘要均写入 system message/message_block，合并按 message identity 去重。
+- 影响：Active Context 可重建，Conversation history 不重复。
+- 测试方式：`context_compression_events_persist_snapshot_and_reenter_history` 通过。
+
+## Queue/Replay 恢复错误静默降级
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/prompt_queue_store.rs`、`src-agent-daemon/src/rpc.rs`、`src-agent-daemon/src/authority.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`value_to_queue_item`、`recover_session_actors_on_startup`、`replay_checked`。
+- 原始行为：坏行、坏 actor snapshot 或坏 event replay 可能被过滤/折叠为空队列或空事件。
+- 当前行为：字段、SQL、JSON、重放错误直接返回；RPC 发送内部错误而不是空数组。
+- 影响：恢复不会在不完整事实集上继续执行或误报“无事件”。
+- 测试方式：`malformed_queue_snapshot_is_rejected` 通过；strict check 通过。
+
+## MCP side-effect ledger 未覆盖实际 transport settle
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production_tools.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`PermissionGatedTools::execute_mcp_call`
+- 原始行为：MCP transport 之前没有统一 started 记录，完成/失败 settle 可能被忽略。
+- 当前行为：transport 前必须写 started；完成/失败/取消写 settle，settle 失败尝试 uncertain 并返回 `PERSISTENCE_FAILED`。
+- 影响：MCP 副作用不会在 ledger 缺口下被报告为成功，也能阻止不安全自动恢复。
+- 测试方式：严格 warning-as-error check 通过；真实 MCP fault-injection 尚待运行。

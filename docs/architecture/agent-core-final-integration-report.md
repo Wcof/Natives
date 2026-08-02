@@ -198,3 +198,11 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 工具完成后的 ledger 结算写失败会记录 conservative `uncertain` 状态并返回 `PERSISTENCE_FAILED`，避免副作用已发生却向模型报告成功。
 - 本节未扩大 UI/RPC/DB surface，也未引入完整 TurnLoop、Scheduler 重写、Progress Sink 新协议或 Pi Runtime。
 - 严格 warning-as-error Cargo check、fmt 和 diff check 通过；完整 workspace/native verifier、真实 provider/shell/MCP 与 permission fault injection 仍未验证。
+
+## 23. 生产闭环与恢复边界再收口
+
+- 调度器不再按 `task` 名称决定批处理；Gateway capability 是唯一并发依据。通用 tool-call wrapper 仍负责 Sub Agent progress，避免移除特判后丢失进度。
+- Compaction summary 现在可在 `message`/`message_block` 重放；snapshot 与 durable history 合并按 message identity 去重。普通会话的 nullable `branch_id` 读取已修复并有压缩回归证据。
+- Queue recovery 与 event replay 的 SQL/JSON 错误向上返回；RPC 以错误响应结束，不再发送空事件数组。MCP ledger settle 失败转为 uncertain/PERSISTENCE_FAILED；child event replay 损坏转为 SubagentFailed。
+- 本轮未扩大 UI、RPC 或数据库 schema surface，也未引入 TurnLoop/Scheduler/Progress Sink 的后续架构重写。
+- 精确测试和受控 strict check 通过；真实外部 fixture 与资源受限的全量命令仍保持未验证状态。

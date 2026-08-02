@@ -10,6 +10,7 @@ use assistant_protocol::v2::{
     CancelRunRequest, ContinueRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest,
     RetryRunRequest, RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
+use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -1065,6 +1066,15 @@ impl RunManager {
         self.runtime
             .events
             .replay_after(&req.run_id, req.after_sequence)
+    }
+
+    /// Checked replay for authoritative consumers. A corrupt event stream is
+    /// an error, not an empty replay that could make a renderer or recovery
+    /// path conclude that no facts exist.
+    pub fn replay_checked(&self, req: ReplayRunRequest) -> Result<Vec<RunEventV2>, String> {
+        self.runtime
+            .events
+            .replay_after_checked(&req.run_id, req.after_sequence)
     }
 
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {
@@ -2255,7 +2265,8 @@ impl RunManager {
                 rusqlite::params![&source.conversation_id],
                 |row| row.get::<_, String>(0),
             )
-            .ok();
+            .optional()
+            .map_err(|error| format!("load branch parent message: {error}"))?;
         drop(conn);
         let mut new_run = self.create_run(CreateRunRequest {
             capability_selection: None,

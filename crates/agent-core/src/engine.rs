@@ -1771,9 +1771,10 @@ impl AgentEngine {
         }
     }
 
-    /// Execute prepared tool calls with parallel_safe batching (max concurrency 4).
-    /// Contiguous same-turn `task` tools are executed via `execute_task_batch`.
-    /// Non-parallel tools and rejected calls stay serial. Results keep original order.
+    /// Execute prepared tool calls with capability-driven batching (max
+    /// concurrency 4). Non-parallel tools and rejected calls stay serial;
+    /// results keep original source order. The Core does not special-case tool
+    /// names when deciding concurrency.
     async fn execute_prepared_tools(
         &self,
         run_id: &str,
@@ -1834,85 +1835,6 @@ impl AgentEngine {
                         .await;
                 }
                 i += 1;
-                continue;
-            }
-
-            // Contiguous non-denied `task` tools → one batch assignment.
-            if prepared[i].name == "task" {
-                let mut batch = Vec::new();
-                while i < prepared.len()
-                    && prepared[i].name == "task"
-                    && prepared[i].rejected.is_none()
-                {
-                    batch.push(prepared[i].clone());
-                    i += 1;
-                }
-                let cancel = self.cancel.clone();
-                let task_inputs: Vec<(String, Value)> = batch
-                    .iter()
-                    .map(|c| (c.id.clone(), c.input.clone()))
-                    .collect();
-                let results = tools
-                    .execute_task_batch_with_progress(
-                        task_inputs,
-                        &cancel,
-                        self.progress_sink.clone(),
-                        Some(turn_id),
-                        Some(message_id),
-                    )
-                    .await;
-                for (idx, call) in batch.into_iter().enumerate() {
-                    let result = results.get(idx).cloned().unwrap_or(ToolExecutionResult {
-                        output: json!({"error": "missing task batch result"}),
-                        is_error: true,
-                        duration_ms: 0,
-                    });
-                    let post_event = if result.is_error {
-                        HookEvent::PostToolUseFailure
-                    } else {
-                        HookEvent::PostToolUse
-                    };
-                    let _ = self
-                        .hooks
-                        .dispatch(HookRequest {
-                            event: post_event,
-                            run_id: run_id.to_string(),
-                            tool_name: Some(call.name.clone()),
-                            input: json!({ "input": call.input, "output": result.output }),
-                        })
-                        .await;
-                    if let Err(error) = self.append_critical(
-                        run_id,
-                        RunEventKind::ToolCallCompleted {
-                            id: call.id.clone(),
-                            name: call.name.clone(),
-                            output: result.output.clone(),
-                            is_error: result.is_error,
-                            duration_ms: result.duration_ms,
-                        },
-                    ) {
-                        tools
-                            .mark_tool_call_uncertain(
-                                &call.id,
-                                &call.name,
-                                Some(turn_id),
-                                &call.input,
-                            )
-                            .await;
-                        self.cancel.cancel();
-                        self.progress_sink.mark_tool_call_settled(&call.id).await;
-                        return Err(error);
-                    }
-                    if !is_long_running_tool_result(&result) {
-                        self.progress_sink.mark_tool_call_settled(&call.id).await;
-                    }
-                    out.push(ExecutedToolCall {
-                        id: call.id,
-                        name: call.name,
-                        args: call.args,
-                        result: Some(result),
-                    });
-                }
                 continue;
             }
 
@@ -3368,7 +3290,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executes_task_batch_collects_all_call_ids() {
+    async fn tool_name_does_not_select_batch_execution() {
         use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
         struct BatchTools {
@@ -3479,8 +3401,8 @@ mod tests {
             matches!(status, crate::EngineOutcome::Completed { .. }),
             "{status:?}"
         );
-        assert_eq!(tools.batch_calls.load(AtomicOrdering::SeqCst), 1);
-        assert_eq!(tools.single_task_calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(tools.batch_calls.load(AtomicOrdering::SeqCst), 0);
+        assert_eq!(tools.single_task_calls.load(AtomicOrdering::SeqCst), 3);
         let events = engine.events.replay_after(&run_id, 0);
         let completed: Vec<_> = events
             .iter()

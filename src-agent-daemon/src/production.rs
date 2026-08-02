@@ -695,6 +695,16 @@ impl ProductionRuntime {
         ) {
             Some(snapshot) => {
                 let mut active = snapshot.messages;
+                let snapshot_message_ids: std::collections::HashSet<String> = active
+                    .iter()
+                    .map(|message| match message {
+                        agent_core::AgentMessage::User(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Assistant(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::ToolResult(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::System(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
+                    })
+                    .collect();
                 active.extend(typed_history.into_iter().filter(|message| {
                     let id = match message {
                         agent_core::AgentMessage::User(value) => value.message_id.to_string(),
@@ -703,7 +713,7 @@ impl ProductionRuntime {
                         agent_core::AgentMessage::System(value) => value.message_id.to_string(),
                         agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
                     };
-                    !snapshot.input_message_ids.contains(&id)
+                    !snapshot.input_message_ids.contains(&id) && !snapshot_message_ids.contains(&id)
                 }));
                 active
             }

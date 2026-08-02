@@ -1465,9 +1465,8 @@ fn persist_context_snapshots_from_events(
             .query_row(
                 "SELECT branch_id FROM conversation WHERE id = ?1",
                 params![conversation_id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()
             .map_err(|e| e.to_string())?,
         None => None,
     };
@@ -1517,6 +1516,28 @@ fn persist_context_snapshots_from_events(
             )
             .map_err(|e| e.to_string())?;
         if exists > 0 {
+            if let Some(committed) = committed.as_ref() {
+                persist_summary_message(
+                    &conn,
+                    conversation_id.as_deref(),
+                    run_id,
+                    committed.6,
+                    committed.1,
+                    committed.8,
+                )?;
+            } else if !summary.trim().is_empty() {
+                persist_summary_text_message(
+                    &conn,
+                    conversation_id.as_deref(),
+                    run_id,
+                    None,
+                    &format!(
+                        "context-summary-{run_id}-{}",
+                        event.effective_run_sequence()
+                    ),
+                    summary,
+                )?;
+            }
             continue;
         }
         let event_turn_id = events[..events
@@ -1533,6 +1554,7 @@ fn persist_context_snapshots_from_events(
                 _ => None,
             });
         let turn_id = committed
+            .as_ref()
             .and_then(|value| value.6.map(str::to_string))
             .or(event_turn_id);
         let snapshot_id = snapshot_id
@@ -1547,35 +1569,34 @@ fn persist_context_snapshots_from_events(
             artifact_reference,
             source_revision,
             snapshot_json,
-        ) = committed
-            .map(|value| {
-                (
-                    serde_json::to_string(value.0).unwrap_or_else(|_| "[]".into()),
-                    value.1.map(str::to_string),
-                    value.2.map(str::to_string),
-                    value.3.to_string(),
-                    value.4,
-                    value.5.map(str::to_string),
-                    value.7,
-                    value.8.clone(),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    "[]".into(),
-                    None,
-                    None,
-                    "mechanical-v1".into(),
-                    None,
-                    None,
-                    event.effective_run_sequence(),
-                    serde_json::json!({
-                        "before_tokens": before_tokens,
-                        "after_tokens": after_tokens,
-                        "event_sequence": event.effective_run_sequence(),
-                    }),
-                )
-            });
+        ) = if let Some(value) = committed.as_ref() {
+            (
+                serde_json::to_string(value.0)
+                    .map_err(|e| format!("serialize snapshot input ids: {e}"))?,
+                value.1.map(str::to_string),
+                value.2.map(str::to_string),
+                value.3.to_string(),
+                value.4,
+                value.5.map(str::to_string),
+                value.7,
+                value.8.clone(),
+            )
+        } else {
+            (
+                "[]".into(),
+                None,
+                None,
+                "mechanical-v1".into(),
+                None,
+                None,
+                event.effective_run_sequence(),
+                serde_json::json!({
+                    "before_tokens": before_tokens,
+                    "after_tokens": after_tokens,
+                    "event_sequence": event.effective_run_sequence(),
+                }),
+            )
+        };
         let estimated_tokens = if after_tokens > 0 {
             after_tokens as i64
         } else {
@@ -1608,7 +1629,102 @@ fn persist_context_snapshots_from_events(
             ],
         )
         .map_err(|e| e.to_string())?;
+        if let Some(committed) = committed.as_ref() {
+            persist_summary_message(
+                &conn,
+                conversation_id.as_deref(),
+                run_id,
+                turn_id.as_deref(),
+                committed.1,
+                committed.8,
+            )?;
+        } else if !summary.trim().is_empty() {
+            persist_summary_text_message(
+                &conn,
+                conversation_id.as_deref(),
+                run_id,
+                turn_id.as_deref(),
+                &format!(
+                    "context-summary-{run_id}-{}",
+                    event.effective_run_sequence()
+                ),
+                summary,
+            )?;
+        }
     }
+    Ok(())
+}
+
+/// Keep a model-written compaction summary as a first-class system message.
+/// The active snapshot still carries the complete provider-valid view, but a
+/// durable conversation must be able to reload and audit the summary without
+/// depending on the snapshot JSON alone.
+fn persist_summary_message(
+    conn: &rusqlite::Connection,
+    conversation_id: Option<&str>,
+    run_id: &str,
+    turn_id: Option<&str>,
+    summary_message_id: Option<&str>,
+    snapshot_json: &Value,
+) -> Result<(), String> {
+    let Some(conversation_id) = conversation_id else {
+        return Ok(());
+    };
+    let Some(summary_message_id) = summary_message_id else {
+        return Ok(());
+    };
+    let summary = snapshot_json
+        .as_array()
+        .and_then(|messages| {
+            messages.iter().find(|message| {
+                message.get("message_id").and_then(Value::as_str) == Some(summary_message_id)
+                    && message.get("role").and_then(Value::as_str) == Some("system")
+            })
+        })
+        .and_then(|message| message.get("content").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| {
+            format!("context snapshot references missing summary message {summary_message_id}")
+        })?;
+    persist_summary_text_message(
+        conn,
+        Some(conversation_id),
+        run_id,
+        turn_id,
+        summary_message_id,
+        summary,
+    )
+}
+
+fn persist_summary_text_message(
+    conn: &rusqlite::Connection,
+    conversation_id: Option<&str>,
+    run_id: &str,
+    turn_id: Option<&str>,
+    summary_message_id: &str,
+    summary: &str,
+) -> Result<(), String> {
+    let Some(conversation_id) = conversation_id else {
+        return Ok(());
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR IGNORE INTO message
+         (id, conversation_id, role, status, run_id, turn_id, legacy_marker, created_at)
+         VALUES (?1, ?2, 'system', 'complete', ?3, ?4, 'context_summary', ?5)",
+        rusqlite::params![summary_message_id, conversation_id, run_id, turn_id, now],
+    )
+    .map_err(|e| format!("persist summary message: {e}"))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO message_block
+         (message_id, sort_order, block_type, block_json)
+         VALUES (?1, 0, 'text', ?2)",
+        rusqlite::params![
+            summary_message_id,
+            serde_json::json!({"text": summary}).to_string()
+        ],
+    )
+    .map_err(|e| format!("persist summary block: {e}"))?;
     Ok(())
 }
 
@@ -2511,6 +2627,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+        let summary_count: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM message
+                 WHERE conversation_id = 'compact-conv' AND legacy_marker = 'context_summary'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary_count, 1);
         let history = engine_history("compact-conv").unwrap();
         assert_eq!(history[0].role, "system");
         assert!(history[0].content.contains("alpha survives"));

@@ -1079,18 +1079,51 @@ pub async fn handle_rpc(
                 .get("run_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let events = run_manager().replay(ReplayRunRequest {
+            match run_manager().replay_checked(ReplayRunRequest {
                 run_id: run_id.to_string(),
                 after_sequence: after,
-            });
-            send_success(
-                writer,
-                &request.request_id,
-                &request.client_id,
-                &request.session_token,
-                serde_json::to_value(events).unwrap_or_default(),
-            )
-            .await;
+            }) {
+                Ok(events) => {
+                    let payload = match serde_json::to_value(events) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            send_error(
+                                writer,
+                                &DaemonError::new(
+                                    error_codes::INTERNAL_ERROR,
+                                    ErrorCategory::Internal,
+                                    false,
+                                    format!("serialize replay response failed: {error}"),
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        payload,
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INTERNAL_ERROR,
+                            ErrorCategory::Internal,
+                            false,
+                            format!("authoritative event replay failed: {error}"),
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            }
         }
         names::RUN_SUBSCRIBE => {
             // Hybrid subscribe:
@@ -1124,10 +1157,25 @@ pub async fn handle_rpc(
                 .unwrap_or(false)
                 || wait_ms > 0;
 
-            let mut events = run_manager().replay(ReplayRunRequest {
+            let mut events = match run_manager().replay_checked(ReplayRunRequest {
                 run_id: run_id.clone(),
                 after_sequence: after,
-            });
+            }) {
+                Ok(events) => events,
+                Err(error) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INTERNAL_ERROR,
+                            ErrorCategory::Internal,
+                            false,
+                            format!("authoritative event replay failed: {error}"),
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
             let mut mode = "subscribe_poll";
             if want_push && events.is_empty() {
                 let timeout = std::time::Duration::from_millis(wait_ms.clamp(1, 30_000));
@@ -1152,10 +1200,25 @@ pub async fn handle_rpc(
                         }
                         Ok(Ok(_)) => continue,
                         Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                            events = run_manager().replay(ReplayRunRequest {
+                            events = match run_manager().replay_checked(ReplayRunRequest {
                                 run_id: run_id.clone(),
                                 after_sequence: after,
-                            });
+                            }) {
+                                Ok(events) => events,
+                                Err(error) => {
+                                    send_error(
+                                        writer,
+                                        &DaemonError::new(
+                                            error_codes::INTERNAL_ERROR,
+                                            ErrorCategory::Internal,
+                                            false,
+                                            format!("authoritative event replay failed: {error}"),
+                                        ),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            };
                             break;
                         }
                         Ok(Err(_)) | Err(_) => break,

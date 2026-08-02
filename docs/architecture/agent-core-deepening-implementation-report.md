@@ -151,3 +151,15 @@ Provider stop reason family 映射测试。
 - Engine handle 延迟到启动前置检查完成后注册，并在运行结束后先移除；ledger settle 失败追加 `uncertain` 尝试并返回 `PERSISTENCE_FAILED`。
 - 统一 provider stop reason 在 assistant turn 持久化中保留，不再将每次带工具结果的 turn 硬编码为 `tool_use`。
 - 验证：共享 target 的严格 warning-as-error Cargo check 通过；未重复资源受限的 workspace/native/frontend 全量检查。
+
+## 17. 生产路径再审计修复（当前 Worktree）
+
+- `crates/agent-core/src/engine.rs` 删除按 `name == "task"` 选择批处理的生产分支；调度只接受 Gateway capability metadata。保留旧 trait 方法仅用于兼容测试/实现，不再是 Core 生产调度入口。
+- `src-agent-daemon/src/conversation_store.rs` 将压缩摘要落成一等 system message，并修复普通 conversation `branch_id` SQL NULL 的严格读取；`production.rs` 避免 snapshot message 与 durable tail 重复。
+- `src-agent-daemon/src/prompt_queue_store.rs` 的 queue/actor 恢复、行转换和启动状态更新不再吞掉 SQL、行解码或字段缺失错误；`run_manager.rs`、`authority.rs`、`rpc.rs` 使用 checked replay。
+- `src-agent-daemon/src/production_tools.rs` 为 MCP transport 建立 started/completed/failed/uncertain ledger 边界；子 Agent watcher 使用 checked event replay，失败时形成 SubagentFailed 而不伪造成功输出。
+- 新增/更新精测：工具名不触发批处理、malformed queue snapshot 拒绝、压缩摘要 message 落库；Gateway schema/cancel 精测保持通过。严格 `RUSTFLAGS=-Dwarnings cargo check` 通过。
+
+### 未完成验证
+
+- 真实 Provider、Shell、HTTP/SSE MCP 和 permission fault-injection 仍未运行；workspace test、native verifier、前端完整套件按资源上限不重复运行。报告不将这些项目标记为通过。
