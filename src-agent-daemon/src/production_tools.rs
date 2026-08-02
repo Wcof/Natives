@@ -387,6 +387,43 @@ impl EngineToolRuntime for PermissionGatedTools {
         result
     }
 
+    async fn execute_tool_with_progress_for_call(
+        &self,
+        call_id: &str,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        progress: &dyn ToolProgressSink,
+    ) -> ToolExecutionResult {
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: call_id.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: "started".into(),
+                final_update: false,
+            })
+            .await;
+        let result = self.execute_tool(name, input, cancel).await;
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: call_id.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: if result.is_error {
+                    "failed"
+                } else {
+                    "completed"
+                }
+                .into(),
+                final_update: true,
+            })
+            .await;
+        result
+    }
+
     async fn execute_tool(
         &self,
         name: &str,
@@ -682,13 +719,14 @@ impl EngineToolRuntime for PermissionGatedTools {
                 // Side-effect ledger for restore coverage honesty.
                 let cat = crate::side_effect_ledger::category_for_tool(name);
                 let reversible = cat == "workspace_file";
-                let _ = crate::side_effect_ledger::record_tool_effect(
+                let _ = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
+                    &stream_tool_call_id,
                     name,
                     cat,
-                    &input,
+                    "completed",
                     reversible,
-                    None,
+                    &input,
                 );
                 if name == "run_terminal" {
                     emit_terminal_output_deltas(
@@ -793,11 +831,27 @@ impl EngineToolRuntime for PermissionGatedTools {
                     duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
                 }
             }
-            Err(err) => ToolExecutionResult {
-                output: serde_json::json!({"error": err.message, "code": err.code}),
-                is_error: true,
-                duration_ms: started.elapsed().as_millis() as u64,
-            },
+            Err(err) => {
+                let status = if err.code == "cancelled" || err.code == "timeout" {
+                    "uncertain"
+                } else {
+                    "failed"
+                };
+                let _ = crate::side_effect_ledger::record_tool_effect_state(
+                    &self.parent_run_id,
+                    &stream_tool_call_id,
+                    name,
+                    crate::side_effect_ledger::category_for_tool(name),
+                    status,
+                    false,
+                    &input,
+                );
+                ToolExecutionResult {
+                    output: serde_json::json!({"error": err.message, "code": err.code}),
+                    is_error: true,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                }
+            }
         }
     }
 }
@@ -1620,7 +1674,7 @@ impl PermissionGatedTools {
                 self.events.append(
                     &self.parent_run_id,
                     RunEventKind::ToolCallCompleted {
-                        id: call_id,
+                        id: call_id.clone(),
                         name: display_name,
                         output: result.clone(),
                         is_error: false,
@@ -1628,13 +1682,14 @@ impl PermissionGatedTools {
                     },
                 );
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
-                let _ = crate::side_effect_ledger::record_tool_effect(
+                let _ = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
+                    &call_id,
                     "mcp_call",
                     "mcp",
-                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
+                    "completed",
                     false,
-                    None,
+                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
                 );
                 ToolExecutionResult {
                     output: serde_json::json!({
@@ -1649,10 +1704,23 @@ impl PermissionGatedTools {
             }
             Err(e) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
+                let _ = crate::side_effect_ledger::record_tool_effect_state(
+                    &self.parent_run_id,
+                    &call_id,
+                    "mcp_call",
+                    "mcp",
+                    if cancel.is_cancelled() {
+                        "uncertain"
+                    } else {
+                        "failed"
+                    },
+                    false,
+                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
+                );
                 self.events.append(
                     &self.parent_run_id,
                     RunEventKind::ToolCallCompleted {
-                        id: call_id,
+                        id: call_id.clone(),
                         name: display_name,
                         output: serde_json::json!({"error": e}),
                         is_error: true,

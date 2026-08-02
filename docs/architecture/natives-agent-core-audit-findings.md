@@ -72,10 +72,11 @@
 
 - 严重等级：P1
 - 所属模块：Conversation Store / agent-core message model
-- 实现状态：未修复（阶段 1）
+- 实现状态：部分修复（深化阶段；完整 Active Context 重放仍待验证）
 - 原始代码证据：conversation_store.rs；agent-core EngineMessage。
-- 当前行为：tool/thinking/block 顺序和 compaction active snapshot 仍可能丢失；本轮只增加运行期 Tool Result 配对，没有修改数据库模型。
-- 建议：阶段 1 additive typed messages、Turn/Message event 与 active context snapshot。
+- 当前行为：typed message 已写入/读取 `message_block` 并保留 ToolCall/ToolResult identity；compaction artifact 与完整 active snapshot 仍可能丢失。
+- 新代码证据：`src-agent-daemon/src/conversation_store.rs::load_agent_messages`、migration 028 的 context_snapshot 字段。
+- 建议：补齐 artifact 内容、source message ids 和 provider window 的可重放 fixture。
 
 ## Event 持久化失败未在所有执行接缝 fail closed
 
@@ -91,10 +92,11 @@
 
 - 严重等级：P1
 - 所属模块：Renderer DaemonAssistantAdapter
-- 实现状态：未修复（本轮禁止 UI 修改）
+- 实现状态：部分修复（adapter 已拒绝伪造终态；UI 状态展示仍待接线）
 - 原始代码证据：src/lib/assistant-gateway/daemon-adapter.ts。
-- 当前行为：断线兼容逻辑可能从状态合成本地 projection；持久 RunManager 终态权威未改变。
-- 建议：将 ProjectionRecovery 与持久 RunEvent 分型，禁止伪造 daemon sequence。
+- 当前行为：`DaemonAssistantAdapter` 缺失权威终态时抛出 `AuthoritativeEventMissing`，不再重标 sequence；上层仍需展示 incomplete 状态。
+- 新代码证据：`src/lib/assistant-protocol/projection.ts`、`daemon-adapter.ts::recoverTerminalEvent`。
+- 建议：将 `ProjectionRecovery` 状态接入工作区 reducer 的恢复提示。
 
 ## PermissionManager 共享实例存在遗留全局 Profile 接口
 

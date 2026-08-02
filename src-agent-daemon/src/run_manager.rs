@@ -1978,6 +1978,21 @@ impl RunManager {
         let original = self
             .get_run(&req.run_id)
             .ok_or_else(|| "run not found".to_string())?;
+        if let Some(store) = &self.data_store {
+            let conn = store.conn()?;
+            let uncertain: i64 = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM side_effect_record WHERE run_id = ?1 AND status = 'uncertain')",
+                    rusqlite::params![&req.run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if uncertain != 0 {
+                return Err(
+                    "run has uncertain side effects; inspect or compensate before retrying".into(),
+                );
+            }
+        }
         let content = self
             .last_content
             .lock()

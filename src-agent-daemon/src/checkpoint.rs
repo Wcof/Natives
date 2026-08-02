@@ -118,6 +118,37 @@ impl CheckpointManager {
         Ok(id)
     }
 
+    /// Attach the durable Core cursor to the workspace checkpoint.  Keeping
+    /// this additive lets old callers continue to create file-only checkpoints
+    /// while resume code can refuse to guess a turn or ledger position.
+    pub fn set_run_metadata(
+        &self,
+        run_id: &str,
+        turn_id: Option<&str>,
+        active_context_snapshot_id: Option<&str>,
+        side_effect_ledger_cursor: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        let conn = store.conn()?;
+        conn.execute(
+            "UPDATE checkpoint
+             SET turn_id = COALESCE(?1, turn_id),
+                 active_context_snapshot_id = COALESCE(?2, active_context_snapshot_id),
+                 side_effect_ledger_cursor = COALESCE(?3, side_effect_ledger_cursor)
+             WHERE run_id = ?4",
+            params![
+                turn_id,
+                active_context_snapshot_id,
+                side_effect_ledger_cursor,
+                run_id
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Lazy capture before-image the first time a relative path is touched.
     pub fn capture_before(&self, run_id: &str, rel_path: &str) -> Result<(), String> {
         let mut map = self.live.lock().map_err(|e| e.to_string())?;

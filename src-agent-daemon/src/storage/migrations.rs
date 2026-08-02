@@ -1075,7 +1075,7 @@ ALTER TABLE side_effect_record ADD COLUMN replay_safe INTEGER NOT NULL DEFAULT 0
 ALTER TABLE side_effect_record ADD COLUMN idempotency_key TEXT;
 ALTER TABLE side_effect_record ADD COLUMN external_reference TEXT;
 CREATE INDEX IF NOT EXISTS idx_side_effect_run_status
-    ON side_effect_record(run_id, status, updated_at);
+    ON side_effect_record(run_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS resume_plan (
     id TEXT PRIMARY KEY,

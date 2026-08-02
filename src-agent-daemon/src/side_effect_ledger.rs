@@ -44,6 +44,49 @@ pub fn record_tool_effect(
     Ok(())
 }
 
+/// Record the execution state with the call identity used by Core.  Unknown
+/// completion is deliberately durable: resume code must block rather than
+/// replaying a side effect it cannot prove safe.
+pub fn record_tool_effect_state(
+    run_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    category: &str,
+    status: &str,
+    replay_safe: bool,
+    summary: &Value,
+) -> Result<(), String> {
+    let store = crate::run_manager::global_run_manager()
+        .data_store_ref()
+        .ok_or_else(|| "no data store for side_effect_record".to_string())?;
+    let conn = store.conn()?;
+    let target = summary
+        .get("path")
+        .or_else(|| summary.get("command"))
+        .or_else(|| summary.get("url"))
+        .and_then(Value::as_str)
+        .unwrap_or(tool_name);
+    conn.execute(
+        "INSERT INTO side_effect_record
+         (id, run_id, tool_call_id, category, target_summary, reversible, coverage_note,
+          turn_id, side_effect_class, status, replay_safe, idempotency_key, external_reference)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, NULL, ?7, ?8, ?9, NULL, NULL)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            run_id,
+            tool_call_id,
+            category,
+            target,
+            serde_json::to_string(summary).unwrap_or_else(|_| "{}".into()),
+            category,
+            status,
+            if replay_safe { 1 } else { 0 },
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Aggregate coverage label for restore preview.
 pub fn coverage_for_run(run_id: &str) -> Option<String> {
     let store = crate::run_manager::global_run_manager().data_store_ref()?;

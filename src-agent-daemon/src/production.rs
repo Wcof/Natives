@@ -654,8 +654,13 @@ impl ProductionRuntime {
         };
 
         // Compact history against resolved token budget (chars/4 fallback estimate).
-        let raw_history =
-            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
+        let typed_history =
+            crate::conversation_store::load_agent_messages(&conversation_id).unwrap_or_default();
+        let raw_history = if typed_history.is_empty() {
+            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default()
+        } else {
+            agent_core::agent_messages_to_engine_messages(&typed_history)
+        };
         let history_pairs: Vec<(String, String)> = raw_history
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
@@ -698,17 +703,41 @@ impl ProductionRuntime {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
-        // Finalize checkpoint — failure closes related side effects (no silent half-state).
-        if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
-            eprintln!("[production] checkpoint finalize_run failed: {e}");
+        let run_events = self.events.replay_after(&run_id, 0);
+        if let Some(turn_id) = run_events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                assistant_protocol::v2::RunEventKind::TurnCompleted { turn_id, .. } => {
+                    Some(turn_id.as_str())
+                }
+                _ => None,
+            })
+        {
+            let _ = crate::checkpoint::global_checkpoint_manager().set_run_metadata(
+                &run_id,
+                Some(turn_id),
+                None,
+                Some(
+                    &run_events
+                        .last()
+                        .map(|e| e.effective_run_sequence())
+                        .unwrap_or(0)
+                        .to_string(),
+                ),
+            );
         }
         let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
         if success {
             crate::conversation_store::append_assistant_turn_from_events(
                 &conversation_id,
                 &run_id,
-                &self.events.replay_after(&run_id, 0),
+                &run_events,
             )?;
+        }
+        // Finalize checkpoint — failure closes related side effects (no silent half-state).
+        if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
+            eprintln!("[production] checkpoint finalize_run failed: {e}");
         }
         // Do NOT commit_outcome or append terminal lifecycle events here.
         // RunManager is the sole lifecycle committer after this returns.

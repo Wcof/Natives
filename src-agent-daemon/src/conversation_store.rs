@@ -521,6 +521,189 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
     Ok(history)
 }
 
+/// Load the durable typed transcript used by Core replay.  The older
+/// `engine_history` helper intentionally remains for RPC/fixture compatibility;
+/// production callers should prefer this lossless representation.
+pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, String> {
+    let raw = get_messages(serde_json::json!({ "conversation_id": conversation_id }))?;
+    let Some(rows) = raw.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "message id missing".to_string())?;
+        let role = row
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("assistant");
+        let blocks = row
+            .get("content_blocks")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let stop_reason =
+            row.get("stop_reason")
+                .and_then(Value::as_str)
+                .map(|reason| match reason {
+                    "stop" => agent_core::StopReason::Stop,
+                    "tool_use" => agent_core::StopReason::ToolUse,
+                    "length" => agent_core::StopReason::Length,
+                    "cancelled" => agent_core::StopReason::Cancelled,
+                    "error" => agent_core::StopReason::Error,
+                    other => agent_core::StopReason::Provider(other.to_string()),
+                });
+        if let Some(tool_block) = blocks
+            .iter()
+            .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        {
+            let payload = tool_block.get("content").unwrap_or(tool_block);
+            let content = payload
+                .get("content")
+                .and_then(Value::as_array)
+                .map(|blocks| parse_tool_result_blocks(blocks))
+                .unwrap_or_default();
+            out.push(AgentMessage::ToolResult(agent_core::ToolResultMessage {
+                message_id: agent_core::MessageId::from(id),
+                tool_call_id: agent_core::ToolCallId::from(
+                    payload
+                        .get("tool_call_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ),
+                tool_name: tool_block
+                    .get("content")
+                    .and_then(|v| v.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                content,
+                is_error: payload
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                code: payload
+                    .get("error_code")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            }));
+            continue;
+        }
+        let content = blocks
+            .iter()
+            .filter_map(parse_content_block)
+            .collect::<Vec<_>>();
+        match role {
+            "user" => out.push(AgentMessage::User(agent_core::UserMessage {
+                message_id: agent_core::MessageId::from(id),
+                content,
+            })),
+            "system" => out.push(AgentMessage::System(agent_core::SystemMessage {
+                message_id: agent_core::MessageId::from(id),
+                text: content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            })),
+            _ => out.push(AgentMessage::Assistant(agent_core::AssistantMessage {
+                message_id: agent_core::MessageId::from(id),
+                content,
+                stop_reason,
+            })),
+        }
+    }
+    Ok(out)
+}
+
+fn parse_content_block(block: &Value) -> Option<ContentBlock> {
+    let kind = block.get("type").and_then(Value::as_str)?;
+    let content = block.get("content").unwrap_or(block);
+    match kind {
+        "text" => Some(ContentBlock::Text {
+            text: content
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        }),
+        "thinking" | "reasoning" => Some(ContentBlock::Thinking {
+            text: content
+                .get("text")
+                .or_else(|| content.get("reasoning"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            signature: content
+                .get("signature")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        "tool_call" => Some(ContentBlock::ToolCall(agent_core::ToolCall {
+            tool_call_id: agent_core::ToolCallId::from(
+                content
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            name: content
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            arguments_json: content
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })),
+        "image" => serde_json::from_value::<agent_core::ImageSource>(
+            content
+                .get("source")
+                .cloned()
+                .unwrap_or_else(|| content.clone()),
+        )
+        .ok()
+        .map(|source| ContentBlock::Image { source }),
+        _ => None,
+    }
+}
+
+fn parse_tool_result_blocks(blocks: &[Value]) -> Vec<ToolResultBlock> {
+    blocks
+        .iter()
+        .filter_map(|block| match block.get("type").and_then(Value::as_str) {
+            Some("text") => Some(ToolResultBlock::Text {
+                text: block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            }),
+            Some("json") => Some(ToolResultBlock::Json {
+                value: block.get("value").cloned().unwrap_or(Value::Null),
+            }),
+            Some("artifact") => Some(ToolResultBlock::Artifact {
+                artifact_id: block
+                    .get("artifact_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                preview: block
+                    .get("preview")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 fn latest_context_summary(conversation_id: &str) -> Result<Option<String>, String> {
     let store = store()?;
     let conn = store.conn()?;
@@ -775,6 +958,14 @@ fn persist_context_snapshots_from_events(
 ) -> Result<(), String> {
     let store = store()?;
     let conn = store.conn()?;
+    let conversation_id: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM run WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
     for event in events {
         let RunEventKind::ContextCompressed {
             before_tokens,
@@ -795,21 +986,40 @@ fn persist_context_snapshots_from_events(
         if exists > 0 {
             continue;
         }
+        let turn_id = events[..events
+            .iter()
+            .position(|candidate| {
+                candidate.effective_run_sequence() == event.effective_run_sequence()
+            })
+            .unwrap_or(0)]
+            .iter()
+            .rev()
+            .find_map(|candidate| match &candidate.payload {
+                RunEventKind::TurnCompleted { turn_id, .. }
+                | RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
+                _ => None,
+            });
         conn.execute(
             "INSERT INTO context_snapshot (
-                id, run_id, sequence, snapshot_type, token_count, summary, snapshot_json
+                id, run_id, conversation_id, turn_id, sequence, snapshot_type, token_count, summary,
+                source_revision, algorithm_version, snapshot_json
              )
-             VALUES (?1, ?2, ?3, 'compaction', ?4, ?5, ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, 'compaction', ?6, ?7, ?5, 'mechanical-v1', ?8)",
             params![
                 uuid::Uuid::new_v4().to_string(),
                 run_id,
+                conversation_id,
+                turn_id,
                 event.effective_run_sequence() as i64,
                 *after_tokens as i64,
                 summary,
                 serde_json::json!({
                     "before_tokens": before_tokens,
                     "after_tokens": after_tokens,
-                    "event_sequence": event.effective_run_sequence()
+                    "event_sequence": event.effective_run_sequence(),
+                    "input_message_ids": [],
+                    "replaced_range": null,
+                    "provider_context_window": null,
                 })
                 .to_string()
             ],
@@ -1764,5 +1974,37 @@ mod tests {
             usage_in >= 100,
             "usage_stats should retain folded tokens, got {usage_in}"
         );
+    }
+
+    #[test]
+    fn typed_message_round_trip_preserves_tool_call_identity() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("typed-roundtrip.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("typed-conv", "openai", "gpt-4o", None, None).unwrap();
+        let message = AgentMessage::ToolResult(agent_core::ToolResultMessage {
+            message_id: agent_core::MessageId::from("message-1"),
+            tool_call_id: agent_core::ToolCallId::from("call-1"),
+            tool_name: "read_file".into(),
+            content: vec![ToolResultBlock::Json {
+                value: serde_json::json!({"ok": true}),
+            }],
+            is_error: false,
+            code: None,
+        });
+        append_agent_message("typed-conv", None, None, &message).unwrap();
+        let loaded = load_agent_messages("typed-conv").unwrap();
+        assert_eq!(loaded, vec![message]);
     }
 }

@@ -88,6 +88,21 @@ pub trait EngineToolRuntime: Send + Sync {
         self.execute_tool(name, input, cancel).await
     }
 
+    /// Progress variant carrying Core's stable ToolCall identity.  The older
+    /// method remains as a compatibility hook for lightweight runtimes.
+    async fn execute_tool_with_progress_for_call(
+        &self,
+        call_id: &str,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        progress: &dyn ToolProgressSink,
+    ) -> ToolExecutionResult {
+        let _ = call_id;
+        self.execute_tool_with_progress(name, input, cancel, progress)
+            .await
+    }
+
     /// Optional batch entry for same-turn `task` tool calls.
     ///
     /// Default falls back to sequential `execute_tool("task", ...)`.
@@ -1039,8 +1054,7 @@ impl AgentEngine {
                     });
                 }
 
-                self.events
-                    .append(run_id, RunEventKind::GenerationAttemptCommitted { attempt });
+                self.append_critical(run_id, RunEventKind::GenerationAttemptCommitted { attempt })?;
                 break (text_acc, tool_acc, completed_reason);
             };
 
@@ -1052,6 +1066,30 @@ impl AgentEngine {
             }
 
             if tool_acc.is_empty() {
+                // Commit the assistant message before consuming a follow-up.
+                // Otherwise the next provider request would lose the response
+                // that caused the safe-point transition.
+                typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
+                    message_id: assistant_message_id.clone(),
+                    content: (!text_acc.is_empty())
+                        .then(|| {
+                            vec![crate::ContentBlock::Text {
+                                text: text_acc.clone(),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    stop_reason: Some(
+                        match stop_reason.clone().unwrap_or(ProviderStopReason::Stop) {
+                            ProviderStopReason::Stop => crate::StopReason::Stop,
+                            ProviderStopReason::ToolUse => crate::StopReason::ToolUse,
+                            ProviderStopReason::Length => crate::StopReason::Length,
+                            ProviderStopReason::Cancelled => crate::StopReason::Cancelled,
+                            ProviderStopReason::Error => crate::StopReason::Error,
+                            ProviderStopReason::Unknown(raw) => crate::StopReason::Provider(raw),
+                        },
+                    ),
+                }));
+                messages.push(EngineMessage::text("assistant", text_acc.clone()));
                 if self
                     .drain_inputs(
                         crate::PendingInputKind::FollowUp,
@@ -1201,21 +1239,21 @@ impl AgentEngine {
                     });
                 }
 
-                self.events.append(
+                self.append_critical(
                     run_id,
                     RunEventKind::ToolCallRequested {
                         id: id.clone(),
                         name: name.clone(),
                         input: input.clone(),
                     },
-                );
-                self.events.append(
+                )?;
+                self.append_critical(
                     run_id,
                     RunEventKind::ToolCallStarted {
                         id: id.clone(),
                         name: name.clone(),
                     },
-                );
+                )?;
 
                 let parallel_safe = matches!(
                     tool_capabilities.get(&name),
@@ -1231,7 +1269,7 @@ impl AgentEngine {
                 });
             }
 
-            let executed = self.execute_prepared_tools(run_id, tools, prepared).await;
+            let executed = self.execute_prepared_tools(run_id, tools, prepared).await?;
 
             // Safe point: after tool batch completes.
             self.apply_safe_point(
@@ -1249,11 +1287,13 @@ impl AgentEngine {
 
             let mut assistant_tool_calls = Vec::new();
             let mut tool_results = Vec::new();
+            let mut typed_tool_calls = Vec::new();
+            let mut typed_tool_results = Vec::new();
             for item in executed {
                 assistant_tool_calls.push(EngineToolCall {
                     id: item.id.clone(),
                     name: item.name.clone(),
-                    arguments: item.args,
+                    arguments: item.args.clone(),
                 });
                 tool_results.push(EngineMessage {
                     role: "tool".into(),
@@ -1262,22 +1302,61 @@ impl AgentEngine {
                         .as_ref()
                         .map(|r| r.output.to_string())
                         .unwrap_or_else(|| "{}".into()),
-                    tool_call_id: Some(item.id),
-                    tool_name: Some(item.name),
+                    tool_call_id: Some(item.id.clone()),
+                    tool_name: Some(item.name.clone()),
                     tool_calls: None,
                     images: Vec::new(),
                 });
+                typed_tool_calls.push(crate::ContentBlock::ToolCall(crate::ToolCall {
+                    tool_call_id: crate::ToolCallId::from(item.id.clone()),
+                    name: item.name.clone(),
+                    arguments_json: item.args.clone(),
+                }));
+                if let Some(result) = item.result {
+                    let code = result
+                        .output
+                        .get("error_code")
+                        .or_else(|| result.output.get("code"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let output = result.output;
+                    typed_tool_results.push(crate::AgentMessage::ToolResult(
+                        crate::ToolResultMessage {
+                            message_id: crate::MessageId::new(),
+                            tool_call_id: crate::ToolCallId::from(item.id),
+                            tool_name: item.name,
+                            content: vec![crate::ToolResultBlock::Json { value: output }],
+                            is_error: result.is_error,
+                            code,
+                        },
+                    ));
+                }
             }
 
             messages.push(EngineMessage {
                 role: "assistant".into(),
-                content: text_acc,
+                content: text_acc.clone(),
                 tool_call_id: None,
                 tool_name: None,
                 tool_calls: Some(assistant_tool_calls),
                 images: Vec::new(),
             });
             messages.extend(tool_results);
+            typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
+                message_id: assistant_message_id.clone(),
+                content: {
+                    let mut content = Vec::new();
+                    if !text_acc.is_empty() {
+                        content.push(crate::ContentBlock::Text {
+                            text: text_acc.clone(),
+                        });
+                    }
+                    content.extend(typed_tool_calls);
+                    content
+                },
+                stop_reason: Some(crate::StopReason::ToolUse),
+            }));
+            typed_messages.extend(typed_tool_results);
 
             self.append_critical(
                 run_id,
@@ -1320,7 +1399,7 @@ impl AgentEngine {
         run_id: &str,
         tools: &dyn EngineToolRuntime,
         prepared: Vec<PreparedToolCall>,
-    ) -> Vec<ExecutedToolCall> {
+    ) -> Result<Vec<ExecutedToolCall>, EngineError> {
         use crate::session_coordinator::PARALLEL_SAFE_MAX_CONCURRENCY;
         use futures_util::stream::{self, StreamExt};
 
@@ -1334,7 +1413,7 @@ impl AgentEngine {
                     args: prepared[i].args.clone(),
                     result: Some(result.clone()),
                 });
-                self.events.append(
+                self.append_critical(
                     run_id,
                     RunEventKind::ToolCallCompleted {
                         id: prepared[i].id.clone(),
@@ -1343,7 +1422,7 @@ impl AgentEngine {
                         is_error: true,
                         duration_ms: 0,
                     },
-                );
+                )?;
                 i += 1;
                 continue;
             }
@@ -1384,7 +1463,7 @@ impl AgentEngine {
                             input: json!({ "input": call.input, "output": result.output }),
                         })
                         .await;
-                    self.events.append(
+                    self.append_critical(
                         run_id,
                         RunEventKind::ToolCallCompleted {
                             id: call.id.clone(),
@@ -1393,7 +1472,7 @@ impl AgentEngine {
                             is_error: result.is_error,
                             duration_ms: result.duration_ms,
                         },
-                    );
+                    )?;
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -1422,7 +1501,8 @@ impl AgentEngine {
                         let cancel = cancel.clone();
                         async move {
                             let result = tools
-                                .execute_tool_with_progress(
+                                .execute_tool_with_progress_for_call(
+                                    &call.id,
                                     &call.name,
                                     call.input.clone(),
                                     &cancel,
@@ -1464,7 +1544,7 @@ impl AgentEngine {
                             input: json!({ "input": call.input, "output": result.output }),
                         })
                         .await;
-                    self.events.append(
+                    self.append_critical(
                         run_id,
                         RunEventKind::ToolCallCompleted {
                             id: call.id.clone(),
@@ -1473,7 +1553,7 @@ impl AgentEngine {
                             is_error: result.is_error,
                             duration_ms: result.duration_ms,
                         },
-                    );
+                    )?;
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -1487,7 +1567,8 @@ impl AgentEngine {
             // Serial path for write / process / network.
             let call = &prepared[i];
             let result = tools
-                .execute_tool_with_progress(
+                .execute_tool_with_progress_for_call(
+                    &call.id,
                     &call.name,
                     call.input.clone(),
                     &self.cancel,
@@ -1508,7 +1589,7 @@ impl AgentEngine {
                     input: json!({ "input": call.input, "output": result.output }),
                 })
                 .await;
-            self.events.append(
+            self.append_critical(
                 run_id,
                 RunEventKind::ToolCallCompleted {
                     id: call.id.clone(),
@@ -1517,7 +1598,7 @@ impl AgentEngine {
                     is_error: result.is_error,
                     duration_ms: result.duration_ms,
                 },
-            );
+            )?;
             out.push(ExecutedToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),
@@ -1526,7 +1607,7 @@ impl AgentEngine {
             });
             i += 1;
         }
-        out
+        Ok(out)
     }
 
     /// Convert engine history → JSON messages, compact, convert back.
@@ -1968,7 +2049,7 @@ fn engine_messages_to_agent_messages(messages: &[EngineMessage]) -> Vec<crate::A
         .collect()
 }
 
-fn agent_messages_to_engine_messages(messages: &[crate::AgentMessage]) -> Vec<EngineMessage> {
+pub fn agent_messages_to_engine_messages(messages: &[crate::AgentMessage]) -> Vec<EngineMessage> {
     messages
         .iter()
         .map(|message| match message {
