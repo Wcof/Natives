@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`64a1c9d1`（基于 `6894fe9f86352b92e89e1542f9d9455e67633aa7`）
+- 结束 Commit：待本轮本地提交（当前基线 `c6495f061854981141d439173460a10fd1c10929`）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -13,12 +13,12 @@
 
 | 能力 | 当前生产证据 | 状态 |
 |---|---|---|
-| Typed Message / Turn | `agent-core/src/engine.rs` 发送 `ProviderTurnRequest`；daemon `load_agent_messages` 可从 `message_block` 回放稳定 ID | 已接生产，兼容边界仍保留 `EngineMessage` |
+| Typed Message / Turn | `agent-core/src/engine.rs` 的 `run_with_typed_messages` 直接驱动生产 transcript；daemon 只有旧 typed 空历史才回退 `EngineMessage` | 已接生产；兼容边界仍保留但不在真实 typed 主链往返 |
 | Context Snapshot | migration 028 + `persist_context_snapshots_from_events` 写入 conversation/turn/source revision 与完整 typed `snapshot_json`；生产启动以最新 snapshot 为基线，并按 `input_message_ids` 追加压缩后新写入的完整消息 | 已接生产 |
 | Capability Scheduler | `PermissionGatedTools::list_tool_capabilities` 从 Gateway side-effect 映射模式，Core 保持调度 | 已接生产 |
-| Progress | `execute_tool_with_progress_for_call` 使用真实 ToolCall/Turn/Message ID；daemon sink 有序号、50ms 限流、settled late-drop | 已接生产；底层 MCP/网络实时 chunk 仍依赖 handler 合作 |
+| Progress | Shell `ToolCallContext.progress`、MCP stdio progress notification、Sub Agent child event 都进入 `DaemonToolProgressSink`；sink 有序号、50ms 限流、settled late-drop | 已接生产；HTTP/SSE MCP 仍只在完整响应后返回，未提供增量 progress |
 | Steering / Follow-up | `DurableInputReceiver` SQLite lease/ack/recovery；ack 同事务写入 user message + queue sent | 已接生产 |
-| Critical Events | Turn/Message/Tool prepared/started/completed/GenerationAttemptCommitted/Checkpoint/Snapshot/Permission 使用 `append_checked`；checkpoint open/commit 分离 | 已接生产关键事实；delta 仍允许 best-effort |
+| Critical Events | Turn/Message/Tool prepared/started/completed/GenerationAttemptCommitted/Checkpoint/Snapshot/Permission 使用 `append_checked`；Tool completion 持久化失败会取消运行并写 side-effect `uncertain` | 已接生产关键事实；delta/progress 仍允许 best-effort |
 | Ledger / Checkpoint | side-effect 状态记录；checkpoint 写入 turn/ledger cursor | 部分完成；外部副作用仍不可回滚 |
 | Retry / Resume | RunManager retry/continue 均创建独立 Run，记录 checkpoint、lineage 与 resume_plan；不确定副作用 fail closed | 已接生产；Replay 保持只读事件重放，Fork 复制 typed transcript 并重置权限 |
 | Renderer Projection | 新增 `ProjectionState`、`ProjectionRecovery`、`AuthoritativeEventMissing`；禁止伪造终态序列 | 已接生产 |
@@ -27,7 +27,7 @@
 
 ### Typed Message / Turn
 
-`AgentEngine` 在生产入口一次性把兼容历史转换为 typed transcript；Provider 调用统一走 `EngineProvider::stream_turn(ProviderTurnRequest, CancellationToken)`，每次 provider attempt 只在提交后形成一个 Turn。`TurnStarted/Completed`、`MessageStarted/Delta/Completed` 和 typed Assistant/ToolResult 事实由 Core 产生，旧 `EngineMessage` 仅保留在 provider/fixture 兼容边界。Run 的 retry/continue lineage 字段在 protocol、SQLite、daemon start 与 renderer wire 映射中保持一致。
+`AgentEngine::run_with_typed_messages` 接收 daemon 已加载的 typed transcript；主循环只在 provider 边界做一次 provider-neutral 转换，Provider 调用统一走 `EngineProvider::stream_turn(ProviderTurnRequest, CancellationToken)`。`MessageCompleted` 现在携带完整 provider-neutral content，事件丢失时仍可独立恢复 Assistant blocks。旧 `EngineMessage` 仅保留在旧数据库/fixture 兼容边界。每次 provider attempt 只在提交后形成一个 Turn。
 
 ### Typed Message / Conversation
 
@@ -35,7 +35,7 @@
 
 ### Scheduler / Progress
 
-Core 新增带 call identity 的 progress seam，daemon 使用 Core 生成的 ID；Gateway 仍是 Schema、权限、路径、超时和执行安全边界。Side-effect ledger 在成功/失败/timeout/cancel 分别记录 `completed`、`failed` 或 `uncertain`。
+Gateway 的 `list_capabilities()` 是调度元数据唯一来源；Core 只消费 `ExecutionMode`/`conflict_key`，未知能力按 Sequential 处理。Shell stdout/stderr、MCP stdio progress notification、Sub Agent 子 Run 事件通过稳定 call/turn/message ID 进入 sink；Gateway 通用执行包装器在取消/超时后保留 Handler 清理窗口，无法 quiet 时返回 `cleanup_failed`。Side-effect ledger 在成功/失败/timeout/cancel 以及 completion 事实持久化失败时分别记录状态。
 
 ### Recovery / Projection
 
@@ -60,6 +60,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 | `rtk npm run protocol:check` | 通过 |
 | `rtk cargo check -p agent-core -p capability-gateway -p provider-adapters -p natives-agent-daemon` | 通过（本轮接线后） |
 | `rtk cargo fmt --check` | 通过（本轮格式化后） |
+| `rtk cargo test -p capability-gateway cancellation_wins_over_blocking_handler -- --test-threads=2` | 通过：1 |
 | `rtk npm run verify:native-engine` | 失败：静态 audit OK；daemon lib 326 passed/2 failed，live e2e 0 passed/1 failed；frontend commands因缺少 `tsx`/`tsc` 失败 |
 | `rtk npm run typecheck` | 未执行：worktree 无 `node_modules/.bin/tsc`，命令退出 127 |
 | `rtk cargo test --workspace` | 未运行，受共享资源策略限制 |
@@ -71,7 +72,8 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 
 - Active Context 已在生产启动接线：snapshot 的 `input_message_ids` 作为去重边界，压缩后新增消息追加到 active context；完整历史仍保留在 message 表。
 - `run.continue` 已接入 daemon RPC/authority，要求 source terminal、durable checkpoint、snapshot 存在且无 uncertain side effect；Fork 已复制 source conversation 的 typed message/block，并为新分支重新使用 `ask` 权限 profile。Replay 仍是只读事件回放，不重跑工具。
-- MCP/网络 handler 的底层取消清理依赖其自身 future/token 合作，缺少 live integration fixture；Shell supervisor 已 kill+wait。
+- HTTP/SSE MCP 的响应仍通过 curl 完整帧返回，取消可杀掉 curl，但尚未把 SSE 中间 progress 转成 ToolOutputDelta；stdio MCP 已支持 notifications/progress。
+- Handler 若不响应 Gateway child token，在 250ms 清理窗口后会返回 `cleanup_failed` 并 abort task；这保证不伪装成功，但真实外部资源仍需专项 quiet fixture。
 - `start_with_seams_loads_daemon_conversation_history` 在本轮独立运行超过两分钟无输出后中止，未计为通过；native-engine 脚本此前同族测试仍报告 QueryReturnedNoRows，需后续单独诊断。
 - Renderer projection 已拒绝伪造事件，但上层 UI 仍需展示 `ProjectionRecovery` 状态。
 
@@ -82,8 +84,8 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 ## 8. 资源使用
 
 - 共享 `CARGO_TARGET_DIR`：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`
-- 本轮 Cargo check：2；本轮精准 Cargo Test：0；Workspace Test：0。
+- 本轮 Cargo check：4（含 2 次修复后重跑）；本轮精准 Cargo Test：1；Workspace Test：0。
 - 最大 target 大小：共享 target 约 2.5 GiB；native verifier 产生的本地 target 约 5 GiB。
-- 最低可用磁盘：约 73 GiB。
+- 最低可用磁盘：约 70 GiB。
 - 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 精确测试无输出超过两分钟后以 stdin Ctrl-C 中止；本轮无 Cargo 进程被终止。
 - 清理的临时目录：无；`cargo clean`：否。

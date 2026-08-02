@@ -61,12 +61,12 @@
 
 - 严重等级：P1
 - 所属模块：agent-core / capability-gateway / src-agent-daemon
-- 实现状态：部分修复（Cancel 已修复；Progress 明确不在本轮）
+- 实现状态：部分修复（Cancel 已接生产；Progress 已接 Shell/MCP stdio/Sub Agent，HTTP/SSE 增量仍未完成）
 - 原始代码证据：EngineToolRuntime；CapabilityGateway::execute；Shell/MCP Handler。
 - 原始行为：Gateway 通用路径只 race Timeout，实际取消依赖各 Handler；没有完整 Progress Sink。
-- 修复后行为：Gateway 为每次调用创建 child CancellationToken，同时 select Handler、Timeout、父 Cancel；Timeout/Cancel 返回不同错误码，并先取消 child token 让资源型 Handler 清理。Shell/MCP 既有逻辑保持不变。
+- 修复后行为：Gateway 为每次调用创建 child CancellationToken，同时 select Handler、Timeout、父 Cancel；Timeout/Cancel 返回不同错误码，给予 Handler 250ms 清理窗口，无法 quiet 时返回 `cleanup_failed` 并 abort。Shell/MCP stdio/Sub Agent progress 通过 Core sink 发送并在 settled/cancel 后丢弃迟到更新。
 - 影响/触发条件：普通 Handler 取消边界统一；第三方/网络 Handler quiet 仍需集成验证。
-- 测试方式：capability-gateway::p0_tests::cancellation_wins_over_blocking_handler；后续补 shell kill+wait、MCP pending、并行整体取消和 late completion。
+- 测试方式：`capability-gateway::p0_tests::cancellation_wins_over_blocking_handler`（本轮 1 passed）；仍需真实 shell kill+wait、HTTP/MCP pending 和并行 quiet fixture。
 
 ## Conversation Active History 不能无损恢复执行上下文
 
@@ -83,11 +83,11 @@
 
 - 严重等级：P1
 - 所属模块：agent-core event_seq 及调用者
-- 实现状态：部分修复（深化阶段；非关键 delta 仍保持兼容的 best-effort）
+- 实现状态：已接生产关键事实（非关键 delta/progress 仍保持兼容的 best-effort）
 - 原始代码证据：event_seq.rs；多处 events.append 忽略返回值。
-- 当前行为：`EventSequencer::append_checked` 已存在；本轮 Turn/Message 生命周期事实使用 checked seam，旧 delta 调用仍为 best-effort。
+- 当前行为：`EventSequencer::append_checked` 已存在；Turn/Message/Tool/Permission/Snapshot/Checkpoint 生命周期事实使用 checked seam；Tool completion 持久化失败会取消 Engine 并写 side-effect `uncertain`，旧 delta/progress 调用仍为 best-effort。
 - 新代码证据：`crates/agent-core/src/engine.rs::append_critical`。
-- 建议：下一阶段将 Tool/Run terminal 等关键事实统一迁移到 checked sink，并加入 fault-injection persistence。
+- 建议：为 checked sink 增加 fault-injection persistence fixture，并补齐 HTTP/MCP/并行取消 quiet 证据。
 
 ## UI 会合成或重标终态展示事件
 

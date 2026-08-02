@@ -88,3 +88,11 @@ Provider stop reason family 映射测试。
 - Additive protocol 变体需要旧客户端忽略未知 event type；不改变既有 RunEvent terminal payload。
 - capability 未声明时顺序执行，性能保守但安全；回滚只需移除 production capability override。
 - 新类型均为内部/兼容 seam；若 migration fixture 不通过，不合并 DB 或 UI 接线。
+
+## 8. 本轮闭环补充（基于 `c6495f06`）
+
+- 生产 Daemon 现在优先调用 `AgentEngine::run_with_typed_messages`；只有旧数据库没有 typed rows 时才走 `EngineMessage` 兼容读取。
+- `MessageCompleted` 携带完整 provider-neutral content；Context Snapshot 持久化 branch、turn、source revision 与 token estimate，Tool Result artifact 保留引用和错误码。
+- Gateway capability metadata 直接驱动 Core scheduler；Shell stdout/stderr、MCP stdio progress notification、Sub Agent child event 进入稳定 call/turn/message progress sink，并在 settled/cancel 后丢弃迟到更新。
+- Gateway 通用执行包装器在 timeout/cancel 后等待 250ms 清理；无法 quiet 返回 `cleanup_failed`。HTTP MCP 的 curl 子进程可被取消杀掉，但尚未把 SSE 中间帧转为增量 progress。
+- Tool completion 关键事实持久化失败会取消 Engine，并由 `mark_tool_call_uncertain` 写入 side-effect ledger，阻止后续自动恢复。
