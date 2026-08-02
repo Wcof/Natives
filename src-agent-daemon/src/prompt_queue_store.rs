@@ -750,7 +750,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
 
     // Cancel active runs when needed. Only the winner of finish_run(expected_run_id)
     // may start the next prompt — either us (after cancel settles) or on_run_terminal.
-    if matches!(action, CoordinatorAction::CancelThenStart { .. }) {
+    if matches!(&action, CoordinatorAction::CancelThenStart { .. }) {
         let rm = global_run_manager();
         let active_ids: Vec<String> = rm
             .list_runs(Some(&conversation_id))
@@ -785,16 +785,6 @@ async fn send_now(params: Value) -> Result<Value, String> {
         if let Some(expected_run_id) = expected {
             if let Some(next) = harness.finish_run(&conversation_id, &expected_run_id, false) {
                 if let CoordinatorAction::StartPrompt { item } = next {
-                    {
-                        let conn = store.conn()?;
-                        let now = chrono::Utc::now().to_rfc3339();
-                        let _ = conn.execute(
-                            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-                            params![now, item.id],
-                        );
-                        let _ = conn
-                            .execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
-                    }
                     let start_req = StartRunRequest {
                         agent_profile_id: None,
                         capability_selection: None,
@@ -813,7 +803,23 @@ async fn send_now(params: Value) -> Result<Value, String> {
                         effort: None,
                         runtime_id: None,
                     };
-                    let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
+                    let run = match crate::run_manager::RunManager::start_detached_global(start_req)
+                    {
+                        Ok(run) => run,
+                        Err(error) => {
+                            harness.requeue(&conversation_id, item.clone());
+                            persist_actor_snapshot(&conversation_id)?;
+                            return Err(error);
+                        }
+                    };
+                    let conn = store.conn()?;
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let _ = conn.execute(
+                        "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                        params![now, item.id],
+                    );
+                    let _ =
+                        conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
                     harness.mark_running_item(
                         &conversation_id,
                         &run.id,
@@ -845,17 +851,13 @@ async fn send_now(params: Value) -> Result<Value, String> {
         }));
     }
 
-    // Idle path: StartPrompt immediately.
-    {
-        let conn = store.conn()?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let _ = conn.execute(
-            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-            params![now, id],
-        );
-        conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
-    }
+    // Idle path: StartPrompt immediately. Keep the durable row until the
+    // RunManager accepts the new run so a synchronous start failure can be
+    // retried instead of silently dropping the prompt.
+    let item = match action {
+        CoordinatorAction::StartPrompt { item } => item,
+        _ => return Err("queue coordinator returned no start action".into()),
+    };
 
     let _ = attachments_raw
         .as_ref()
@@ -869,20 +871,35 @@ async fn send_now(params: Value) -> Result<Value, String> {
         provider_id: Some(provider_id),
         model_id: Some(model_id),
         key_id: None,
-        content: Some(content.clone()),
+        content: Some(item.content.clone()),
         attachments: None,
         trigger_message_id: None,
         permission_profile: None,
         max_steps: None,
         project_path,
         // Unified queue idempotency key (also used by drain / cancel-and-send).
-        idempotency_key: Some(format!("prompt-queue:{id}")),
+        idempotency_key: Some(format!("prompt-queue:{}", item.id)),
         effort: None,
         runtime_id: None,
     };
 
-    let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
-    harness.mark_running_item(&conversation_id, &run.id, Some(id), &content);
+    let run = match crate::run_manager::RunManager::start_detached_global(start_req) {
+        Ok(run) => run,
+        Err(error) => {
+            harness.requeue(&conversation_id, item.clone());
+            persist_actor_snapshot(&conversation_id)?;
+            return Err(error);
+        }
+    };
+    let conn = store.conn()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+        params![now, item.id],
+    );
+    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+        .map_err(|e| e.to_string())?;
+    harness.mark_running_item(&conversation_id, &run.id, Some(&item.id), &item.content);
     persist_actor_snapshot(&conversation_id)?;
 
     Ok(serde_json::to_value(run).unwrap_or_else(|_| {
@@ -940,16 +957,6 @@ pub async fn on_run_terminal(
                 .unwrap_or_else(|| ("unknown".into(), "unknown".into(), None))
             };
 
-            {
-                let conn = store.conn()?;
-                let now = chrono::Utc::now().to_rfc3339();
-                let _ = conn.execute(
-                    "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-                    params![now, item.id],
-                );
-                let _ = conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
-            }
-
             let start_req = StartRunRequest {
                 agent_profile_id: None,
                 capability_selection: None,
@@ -969,7 +976,21 @@ pub async fn on_run_terminal(
                 effort: None,
                 runtime_id: None,
             };
-            let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
+            let run = match crate::run_manager::RunManager::start_detached_global(start_req) {
+                Ok(run) => run,
+                Err(error) => {
+                    harness.requeue(conversation_id, item.clone());
+                    persist_actor_snapshot(conversation_id)?;
+                    return Err(error);
+                }
+            };
+            let conn = store.conn()?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let _ = conn.execute(
+                "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                params![now, item.id],
+            );
+            let _ = conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
             harness.mark_running_item(conversation_id, &run.id, Some(&item.id), &item.content);
             persist_actor_snapshot(conversation_id)?;
             Ok(Some(run.id))
