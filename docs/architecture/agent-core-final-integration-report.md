@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：工作区增量待提交（基于 `50e8822ee1702868d6a8d086a786e1cf9018aec9`）
+- 结束 Commit：`64a1c9d1`（基于 `6894fe9f86352b92e89e1542f9d9455e67633aa7`）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -20,14 +20,14 @@
 | Steering / Follow-up | `DurableInputReceiver` SQLite lease/ack/recovery；ack 同事务写入 user message + queue sent | 已接生产 |
 | Critical Events | Turn/Message/Tool prepared/started/completed/GenerationAttemptCommitted/Checkpoint/Snapshot/Permission 使用 `append_checked`；checkpoint open/commit 分离 | 已接生产关键事实；delta 仍允许 best-effort |
 | Ledger / Checkpoint | side-effect 状态记录；checkpoint 写入 turn/ledger cursor | 部分完成；外部副作用仍不可回滚 |
-| Retry / Resume | RunManager retry；uncertain side-effect fail closed；resume_plan 记录 blocked/executed retry | 已接生产，continue/fork/replay 产品语义未扩展 |
+| Retry / Resume | RunManager retry/continue 均创建独立 Run，记录 checkpoint、lineage 与 resume_plan；不确定副作用 fail closed | 已接生产；Replay 保持只读事件重放，Fork 复制 typed transcript 并重置权限 |
 | Renderer Projection | 新增 `ProjectionState`、`ProjectionRecovery`、`AuthoritativeEventMissing`；禁止伪造终态序列 | 已接生产 |
 
 ## 3. 关键改动
 
 ### Typed Message / Turn
 
-`AgentEngine` 在生产入口一次性把兼容历史转换为 typed transcript；Provider 调用统一走 `EngineProvider::stream_turn(ProviderTurnRequest, CancellationToken)`，每次 provider attempt 只在提交后形成一个 Turn。`TurnStarted/Completed`、`MessageStarted/Delta/Completed` 和 typed Assistant/ToolResult 事实由 Core 产生，旧 `EngineMessage` 仅保留在 provider/fixture 兼容边界。
+`AgentEngine` 在生产入口一次性把兼容历史转换为 typed transcript；Provider 调用统一走 `EngineProvider::stream_turn(ProviderTurnRequest, CancellationToken)`，每次 provider attempt 只在提交后形成一个 Turn。`TurnStarted/Completed`、`MessageStarted/Delta/Completed` 和 typed Assistant/ToolResult 事实由 Core 产生，旧 `EngineMessage` 仅保留在 provider/fixture 兼容边界。Run 的 retry/continue lineage 字段在 protocol、SQLite、daemon start 与 renderer wire 映射中保持一致。
 
 ### Typed Message / Conversation
 
@@ -44,14 +44,14 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 ## 4. 数据库与协议
 
 - migration 028 维持 additive：turn、typed message 元数据、context snapshot lineage、prompt lease、checkpoint cursor、side-effect status、resume_plan。
-- 未修改外部 RPC surface；RunManager 仍是唯一 terminal fact authority。
+- 新增 `run.continue`（仍由 RunManager 负责创建/启动独立 Run）；其他既有 RPC 与数据库表保持兼容，RunManager 仍是唯一 terminal fact authority。
 - 未将 Gateway、Provider Adapter 或 Daemon 重新归类为 Core；未集成 Pi Runtime。
 
 ## 5. 精确验证
 
 | 命令 | 结果 |
 |---|---|
-| `rtk cargo check -p agent-core -p capability-gateway -p provider-adapters -p natives-agent-daemon` | 通过（本轮最新） |
+| `rtk cargo check -p agent-core -p capability-gateway -p provider-adapters -p natives-agent-daemon -p natives` | 通过（本轮最新，0 errors） |
 | `rtk cargo test -p agent-core --lib compaction_ -- --nocapture` | 通过：5 |
 | `rtk cargo test -p capability-gateway --lib` | 通过：91 |
 | `rtk cargo test -p natives-agent-daemon typed_message_round_trip_preserves_tool_call_identity -- --nocapture` | 通过：1 |
@@ -70,7 +70,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 ## 6. 未完成与风险
 
 - Active Context 已在生产启动接线：snapshot 的 `input_message_ids` 作为去重边界，压缩后新增消息追加到 active context；完整历史仍保留在 message 表。
-- resume_plan 已记录 retry blocked/executed，但 continue/fork/replay 尚未扩展 RPC。
+- `run.continue` 已接入 daemon RPC/authority，要求 source terminal、durable checkpoint、snapshot 存在且无 uncertain side effect；Fork 已复制 source conversation 的 typed message/block，并为新分支重新使用 `ask` 权限 profile。Replay 仍是只读事件回放，不重跑工具。
 - MCP/网络 handler 的底层取消清理依赖其自身 future/token 合作，缺少 live integration fixture；Shell supervisor 已 kill+wait。
 - `start_with_seams_loads_daemon_conversation_history` 在本轮独立运行超过两分钟无输出后中止，未计为通过；native-engine 脚本此前同族测试仍报告 QueryReturnedNoRows，需后续单独诊断。
 - Renderer projection 已拒绝伪造事件，但上层 UI 仍需展示 `ProjectionRecovery` 状态。
@@ -82,8 +82,8 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 ## 8. 资源使用
 
 - 共享 `CARGO_TARGET_DIR`：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`
-- 本轮 Cargo check：1；本轮精准 Cargo Test：0；Workspace Test：0。
-- 最大 target 大小：共享 target 约 1.7 GiB；native verifier 产生的本地 target 约 5 GiB。
+- 本轮 Cargo check：2；本轮精准 Cargo Test：0；Workspace Test：0。
+- 最大 target 大小：共享 target 约 2.5 GiB；native verifier 产生的本地 target 约 5 GiB。
 - 最低可用磁盘：约 73 GiB。
 - 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 精确测试无输出超过两分钟后以 stdin Ctrl-C 中止；本轮无 Cargo 进程被终止。
 - 清理的临时目录：无；`cargo clean`：否。

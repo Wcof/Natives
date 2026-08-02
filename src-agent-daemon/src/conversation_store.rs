@@ -361,7 +361,177 @@ fn fork(params: Value) -> Result<Value, String> {
             .and_then(Value::as_str)
             .unwrap_or("Conversation")
     ));
-    create(params)
+    // A fork inherits transcript metadata only; permissions/credentials are
+    // re-resolved for the new branch and never copy a pending grant.
+    params["permission_profile_id"] = serde_json::json!("ask");
+    let forked = create(params)?;
+    let fork_id = required_str(&forked, "id")?;
+    let branch_id = uuid::Uuid::new_v4().to_string();
+    let parent_message_id = {
+        let store = store()?;
+        let conn = store.conn()?;
+        conn.query_row(
+            "SELECT id FROM message WHERE conversation_id = ?1
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            rusqlite::params![source_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    };
+    let store = store()?;
+    let conn = store.conn()?;
+    copy_transcript(&conn, source_id, fork_id)?;
+    conn.execute(
+        "UPDATE conversation
+         SET branch_id = ?1, parent_conversation_id = ?2,
+             branch_parent_message_id = ?3
+         WHERE id = ?4",
+        rusqlite::params![branch_id, source_id, parent_message_id, fork_id],
+    )
+    .map_err(|e| e.to_string())?;
+    let mut forked = forked;
+    forked["branch_id"] = serde_json::json!(branch_id);
+    forked["parent_conversation_id"] = serde_json::json!(source_id);
+    forked["branch_parent_message_id"] = serde_json::json!(parent_message_id);
+    Ok(forked)
+}
+
+/// Copy the durable typed transcript into a fork with new message identities.
+/// Parent links are remapped so the fork is independent while tool-call IDs
+/// inside content blocks remain stable for replay and audit correlation.
+fn copy_transcript(
+    conn: &rusqlite::Connection,
+    source_conversation_id: &str,
+    fork_conversation_id: &str,
+) -> Result<(), String> {
+    let mut messages = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, parent_message_id, role, status, input_tokens, output_tokens,
+                        reasoning_tokens, cost_usd, created_at, turn_id, run_id, stop_reason,
+                        legacy_marker, truncated
+                 FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![source_conversation_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<f64>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, i64>(13)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            messages.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+    let mut id_map = std::collections::HashMap::new();
+    for (old_id, ..) in &messages {
+        id_map.insert(
+            old_id.clone(),
+            format!("fork:{fork_conversation_id}:{old_id}"),
+        );
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for (
+        old_id,
+        parent_id,
+        role,
+        status,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        cost_usd,
+        created_at,
+        _turn_id,
+        _run_id,
+        stop_reason,
+        legacy_marker,
+        truncated,
+    ) in messages
+    {
+        let new_id = id_map
+            .get(&old_id)
+            .ok_or_else(|| "fork message identity missing".to_string())?;
+        let new_parent = parent_id.as_deref().and_then(|id| id_map.get(id));
+        tx.execute(
+            "INSERT INTO message
+             (id, conversation_id, parent_message_id, role, status, input_tokens, output_tokens,
+              reasoning_tokens, cost_usd, created_at, turn_id, run_id, stop_reason, legacy_marker, truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                new_id,
+                fork_conversation_id,
+                new_parent,
+                role,
+                status,
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                cost_usd,
+                created_at,
+                // Runs/turns belong to the source execution lineage; the
+                // fork starts a fresh run while retaining the transcript.
+                Option::<String>::None,
+                Option::<String>::None,
+                stop_reason,
+                legacy_marker,
+                truncated,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        let block_rows = {
+            let mut blocks = tx
+                .prepare(
+                    "SELECT sort_order, block_type, block_json, artifact_id, truncated
+                     FROM message_block WHERE message_id = ?1 ORDER BY sort_order ASC, id ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = blocks
+                .query_map(params![old_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        for (sort_order, block_type, block_json, artifact_id, block_truncated) in block_rows {
+            tx.execute(
+                "INSERT INTO message_block
+                 (message_id, sort_order, block_type, block_json, artifact_id, truncated)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    new_id,
+                    sort_order,
+                    block_type,
+                    block_json,
+                    artifact_id,
+                    block_truncated,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 fn get_messages(params: Value) -> Result<Value, String> {
@@ -719,6 +889,40 @@ pub fn load_active_context_snapshot(
              WHERE conversation_id = ?1 AND snapshot_type = 'compaction'
              ORDER BY sequence DESC LIMIT 1",
             params![conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((raw, input_ids)) = row else {
+        return Ok(None);
+    };
+    let value = serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string())?;
+    let ids = serde_json::from_str::<Vec<String>>(&input_ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    Ok(Some(ActiveContextSnapshot {
+        messages: agent_core::agent_messages_from_json(&value),
+        input_message_ids: ids,
+    }))
+}
+
+/// Load the snapshot explicitly attached to a checkpoint. Continue/Resume
+/// must not silently jump to a newer conversation snapshot.
+pub fn load_active_context_snapshot_for_checkpoint(
+    conversation_id: &str,
+    checkpoint_id: &str,
+) -> Result<Option<ActiveContextSnapshot>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT cs.snapshot_json, cs.input_message_ids
+             FROM checkpoint cp
+             JOIN context_snapshot cs ON cs.id = cp.active_context_snapshot_id
+             WHERE cp.id = ?1 AND cp.conversation_id = ?2
+             LIMIT 1",
+            params![checkpoint_id, conversation_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()

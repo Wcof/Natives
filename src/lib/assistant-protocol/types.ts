@@ -257,6 +257,13 @@ export interface Run {
   maxSteps?: number;
   projectPath?: string | null;
   retryCount?: number;
+  retryOfRunId?: string | null;
+  retryOfTurnId?: string | null;
+  continuedFromRunId?: string | null;
+  branchId?: string | null;
+  branchParentMessageId?: string | null;
+  checkpointId?: string | null;
+  resumeOfRunId?: string | null;
   createdAt?: string | null;
   lastEventSequence?: number;
   idempotencyKey?: string | null;
@@ -580,6 +587,7 @@ export type AssistantMethod =
   | 'run.start'
   | 'run.cancel'
   | 'run.retry'
+  | 'run.continue'
   | 'run.subscribe'
   | 'run.replay'
   | 'run.list'

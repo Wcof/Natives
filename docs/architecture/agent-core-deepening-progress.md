@@ -18,9 +18,9 @@
 | D. Tool Scheduler 与 Progress | 已接生产 | 工作区变更 | cargo check | Gateway side-effect 驱动模式、整批顺序降级、真实 call-id/turn/message progress、settled late-drop/rate-limit 已接线 |
 | E. Steering 与 Next Turn | 已接生产 | 工作区变更 | cargo check | SQLite lease/recovery 与 queue-message 单事务 ack 已接线 |
 | F. Event Fail Closed | 已接生产（关键事实） | 工作区变更 | cargo check | Turn/Message/Tool prepared/started/completed、attempt committed、checkpoint open/commit、snapshot、permission 使用 checked；delta 仍可丢弃 |
-| G. Lineage 与 Resume | 已接生产（部分） | 工作区变更 | side-effect guard | checkpoint cursor/uncertain retry guard/resume_plan retry 记录已接线；continue/fork/replay RPC 未扩展 |
+| G. Lineage 与 Resume | 已接生产 | 工作区变更 | side-effect guard | retry/continue 记录 source/checkpoint/turn lineage；continue 只从 durable checkpoint 启动独立 Run；fork 复制 typed transcript；replay 保持只读 |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
-| I. 最终验证 | 部分完成 | 待提交 | controlled check + precise test + protocol | agent-core compaction 5、gateway 91、daemon typed 1、目标 check、fmt、protocol 通过；workspace/native live/frontend 仍受既有环境限制 |
+| I. 最终验证 | 部分完成 | 64a1c9d1 | controlled check + precise test + protocol | agent-core compaction 5、gateway 91、daemon typed 1、目标 check（含 natives）、fmt、protocol 通过；workspace/native live/frontend 仍受既有环境限制 |
 
 ## 阻塞项
 
@@ -30,4 +30,4 @@
 
 ## 设计偏差
 
-- 新 Worktree 基于 P0 最新提交；本轮只做 additive 生产接线，不改变 RPC/UI/RunManager terminal authority。
+- 新 Worktree 基于 P0 最新提交；本轮新增一个 `run.continue` RPC 方法及 renderer wire 字段，但未改变 RunManager terminal authority、UI 行为或数据库既有列语义。

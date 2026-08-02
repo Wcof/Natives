@@ -54,6 +54,7 @@ pub fn record_tool_effect_state(
     category: &str,
     status: &str,
     replay_safe: bool,
+    turn_id: Option<&str>,
     summary: &Value,
 ) -> Result<(), String> {
     let store = crate::run_manager::global_run_manager()
@@ -66,11 +67,13 @@ pub fn record_tool_effect_state(
         .or_else(|| summary.get("url"))
         .and_then(Value::as_str)
         .unwrap_or(tool_name);
+    let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO side_effect_record
          (id, run_id, tool_call_id, category, target_summary, reversible, coverage_note,
-          turn_id, side_effect_class, status, replay_safe, idempotency_key, external_reference)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, NULL, ?7, ?8, ?9, NULL, NULL)",
+          turn_id, side_effect_class, status, replay_safe, idempotency_key, external_reference,
+          resource, started_at, completed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12, ?12)",
         rusqlite::params![
             uuid::Uuid::new_v4().to_string(),
             run_id,
@@ -78,9 +81,12 @@ pub fn record_tool_effect_state(
             category,
             target,
             serde_json::to_string(summary).unwrap_or_else(|_| "{}".into()),
+            turn_id,
             category,
             status,
             if replay_safe { 1 } else { 0 },
+            target,
+            now,
         ],
     )
     .map_err(|e| e.to_string())?;

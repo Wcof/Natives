@@ -16,10 +16,10 @@ use capability_gateway::plan_mode::{self, PlanDecision};
 use capability_gateway::{CapabilityGateway, SideEffect};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
@@ -474,7 +474,14 @@ impl EngineToolRuntime for PermissionGatedTools {
             })
             .await;
         let result = self
-            .execute_tool_with_call_id(name, input, cancel, Some(call_id))
+            .execute_tool_with_call_id_and_progress(
+                name,
+                input,
+                cancel,
+                Some(call_id),
+                turn_id,
+                message_id,
+            )
             .await;
         progress
             .publish(ToolProgressUpdate {
@@ -513,6 +520,19 @@ impl EngineToolRuntime for PermissionGatedTools {
         input: Value,
         cancel: &CancellationToken,
         call_id: Option<&str>,
+    ) -> ToolExecutionResult {
+        self.execute_tool_with_call_id_and_progress(name, input, cancel, call_id, None, None)
+            .await
+    }
+
+    async fn execute_tool_with_call_id_and_progress(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        call_id: Option<&str>,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
     ) -> ToolExecutionResult {
         if cancel.is_cancelled() {
             return ToolExecutionResult {
@@ -746,7 +766,7 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
         // MCP tools: always after permission gate (ExternalWrite / Network).
         if name == "mcp_call" || name.starts_with("mcp__") {
-            return self.execute_mcp_call(name, input).await;
+            return self.execute_mcp_call(name, input, call_id).await;
         }
 
         let Some(_tool) = tool else {
@@ -793,11 +813,58 @@ impl EngineToolRuntime for PermissionGatedTools {
         } else {
             CancellationToken::new()
         };
+        let live_settled = Arc::new(AtomicBool::new(false));
+        let live_forwarder = if name == "run_terminal" {
+            let (tx, mut rx) =
+                tokio::sync::mpsc::unbounded_channel::<capability_gateway::ToolProgressChunk>();
+            let events = self.events.clone();
+            let run_id = self.parent_run_id.clone();
+            let call_id = stream_tool_call_id.clone();
+            let turn_id = turn_id.map(str::to_string);
+            let message_id = message_id.map(str::to_string);
+            let settled = live_settled.clone();
+            let forwarder = tokio::spawn(async move {
+                let mut last_emit = Instant::now() - Duration::from_millis(50);
+                static NEXT_PROGRESS_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+                while let Some(chunk) = rx.recv().await {
+                    if settled.load(AtomicOrdering::Acquire) {
+                        break;
+                    }
+                    if last_emit.elapsed() < Duration::from_millis(50) {
+                        continue;
+                    }
+                    last_emit = Instant::now();
+                    let sequence = NEXT_PROGRESS_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+                    events.append(
+                        &run_id,
+                        RunEventKind::ToolOutputDelta {
+                            tool_call_id: call_id.clone(),
+                            stream: chunk.stream,
+                            text: chunk.text,
+                            truncated: false,
+                            turn_id: turn_id.clone(),
+                            message_id: message_id.clone(),
+                            progress_sequence: Some(sequence),
+                        },
+                    );
+                }
+            });
+            Some((tx, forwarder))
+        } else {
+            None
+        };
+        let progress_tx = live_forwarder.as_ref().map(|(tx, _)| tx.clone());
         let tool_context = self
-            .build_tool_call_context(stream_tool_call_id.clone(), cancel)
+            .build_tool_call_context(
+                stream_tool_call_id.clone(),
+                cancel.clone(),
+                progress_tx,
+                turn_id.map(str::to_string),
+                message_id.map(str::to_string),
+            )
             .await;
 
-        match self
+        let result = match self
             .gateway
             .execute(name, input.clone(), &tool_context)
             .await
@@ -813,6 +880,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                     cat,
                     "completed",
                     reversible,
+                    turn_id,
                     &input,
                 );
                 if name == "run_terminal" {
@@ -919,7 +987,9 @@ impl EngineToolRuntime for PermissionGatedTools {
                 }
             }
             Err(err) => {
-                let status = if err.code == "cancelled" || err.code == "timeout" {
+                let status = if err.code == "cancelled" {
+                    "cancelled"
+                } else if err.code == "timeout" {
                     "uncertain"
                 } else {
                     "failed"
@@ -931,6 +1001,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                     crate::side_effect_ledger::category_for_tool(name),
                     status,
                     false,
+                    turn_id,
                     &input,
                 );
                 ToolExecutionResult {
@@ -939,7 +1010,14 @@ impl EngineToolRuntime for PermissionGatedTools {
                     duration_ms: started.elapsed().as_millis() as u64,
                 }
             }
+        };
+        live_settled.store(true, AtomicOrdering::Release);
+        drop(tool_context);
+        if let Some((tx, forwarder)) = live_forwarder {
+            drop(tx);
+            forwarder.abort();
         }
+        result
     }
 }
 /// Emit batched terminal stdout/stderr as ToolOutputDelta (≤8KB chunks, ≤1MB total).
@@ -1129,18 +1207,26 @@ impl PermissionGatedTools {
         &self,
         tool_call_id: String,
         cancel: CancellationToken,
+        progress: Option<UnboundedSender<capability_gateway::ToolProgressChunk>>,
+        turn_id: Option<String>,
+        message_id: Option<String>,
     ) -> capability_gateway::ToolCallContext {
         if let Some(identity) = self.verified_project_identity().await {
-            return capability_gateway::ToolCallContext::from_verified_identity_with_cancel(
-                identity.project_id.clone(),
-                identity.identity_version,
-                std::path::PathBuf::from(&identity.canonical_path),
-                self.parent_run_id.clone(),
-                self.conversation_id.clone(),
-                tool_call_id,
-                self.permission_profile.clone(),
-                cancel,
-            );
+            let mut context =
+                capability_gateway::ToolCallContext::from_verified_identity_with_cancel(
+                    identity.project_id.clone(),
+                    identity.identity_version,
+                    std::path::PathBuf::from(&identity.canonical_path),
+                    self.parent_run_id.clone(),
+                    self.conversation_id.clone(),
+                    tool_call_id,
+                    self.permission_profile.clone(),
+                    cancel,
+                );
+            context.progress = progress;
+            context.turn_id = turn_id;
+            context.message_id = message_id;
+            return context;
         }
         let project_root = self
             .gateway
@@ -1148,14 +1234,18 @@ impl PermissionGatedTools {
             .as_ref()
             .map(|s| std::path::PathBuf::from(s))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        capability_gateway::ToolCallContext::with_cancel(
+        let mut context = capability_gateway::ToolCallContext::with_cancel(
             project_root,
             self.parent_run_id.clone(),
             self.conversation_id.clone(),
             tool_call_id,
             self.permission_profile.clone(),
             cancel,
-        )
+        );
+        context.progress = progress;
+        context.turn_id = turn_id;
+        context.message_id = message_id;
+        context
     }
 
     /// Run the permission gate for one tool call.
@@ -1444,7 +1534,7 @@ impl PermissionGatedTools {
             CancellationToken::new()
         };
         let context = self
-            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel)
+            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel, None, None, None)
             .await;
         match self
             .gateway
@@ -1750,7 +1840,12 @@ impl PermissionGatedTools {
     }
 
     /// Route `mcp_call` / namespaced `mcp__server__tool` through daemon MCP runtime.
-    async fn execute_mcp_call(&self, name: &str, input: Value) -> ToolExecutionResult {
+    async fn execute_mcp_call(
+        &self,
+        name: &str,
+        input: Value,
+        core_call_id: Option<&str>,
+    ) -> ToolExecutionResult {
         let started = Instant::now();
         let (server_id, tool_name, arguments) = if name == "mcp_call" {
             let server = input
@@ -1789,16 +1884,10 @@ impl PermissionGatedTools {
                 duration_ms: started.elapsed().as_millis() as u64,
             };
         }
-        let call_id = format!("mcp-{server_id}-{tool_name}");
-        let display_name = format!("mcp_call:{server_id}/{tool_name}");
-        // Structured audit event (permission already passed).
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::ToolCallStarted {
-                id: call_id.clone(),
-                name: display_name.clone(),
-            },
-        );
+        let call_id = core_call_id
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("mcp-{server_id}-{tool_name}"));
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
@@ -1818,16 +1907,6 @@ impl PermissionGatedTools {
         {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: call_id.clone(),
-                        name: display_name,
-                        output: result.clone(),
-                        is_error: false,
-                        duration_ms,
-                    },
-                );
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
                 let _ = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
@@ -1836,6 +1915,7 @@ impl PermissionGatedTools {
                     "mcp",
                     "completed",
                     false,
+                    None,
                     &serde_json::json!({ "server": server_id, "tool": tool_name }),
                 );
                 ToolExecutionResult {
@@ -1862,17 +1942,8 @@ impl PermissionGatedTools {
                         "failed"
                     },
                     false,
+                    None,
                     &serde_json::json!({ "server": server_id, "tool": tool_name }),
-                );
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: call_id.clone(),
-                        name: display_name,
-                        output: serde_json::json!({"error": e}),
-                        is_error: true,
-                        duration_ms,
-                    },
                 );
                 ToolExecutionResult {
                     output: serde_json::json!({

@@ -162,6 +162,23 @@ pub struct RunV2 {
     /// Audit-facing: ids and schema names only, never secrets or config bodies.
     #[serde(default)]
     pub capability_snapshot: Option<serde_json::Value>,
+    /// Lineage for retry/continue/fork/resume operations. These are additive
+    /// and intentionally nullable: legacy runs remain valid and never inherit
+    /// a credential lease or an unfinished future.
+    #[serde(default)]
+    pub retry_of_run_id: Option<String>,
+    #[serde(default)]
+    pub retry_of_turn_id: Option<String>,
+    #[serde(default)]
+    pub continued_from_run_id: Option<String>,
+    #[serde(default)]
+    pub branch_id: Option<String>,
+    #[serde(default)]
+    pub branch_parent_message_id: Option<String>,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub resume_of_run_id: Option<String>,
 }
 
 /// Capability selection for a run: which library-managed skills, MCP servers
@@ -278,6 +295,17 @@ pub struct CancelRunRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryRunRequest {
     pub run_id: String,
+}
+
+/// Continue a run from a durable checkpoint/context snapshot. The new run is
+/// always independent; no provider/tool future from the source is revived.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContinueRunRequest {
+    pub run_id: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

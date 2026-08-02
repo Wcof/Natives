@@ -9,8 +9,8 @@
 //! call Provider / Stream / legacy agent_loop directly.
 
 use assistant_protocol::v2::{
-    CancelRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest, RunEventV2, RunV2,
-    StartRunRequest, SubscribeRunRequest,
+    CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest,
+    RunEventV2, RunV2, StartRunRequest, SubscribeRunRequest,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -145,6 +145,32 @@ impl ExecutionAuthority for EmbeddedAuthority {
                     .ok_or_else(|| AuthorityError::Message("run_id required".into()))?;
                 serde_json::to_value(self.retry_run(run_id).await?)
                     .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.continue" => {
+                let req: ContinueRunRequest = serde_json::from_value(params)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                let new_run = global_run_manager()
+                    .continue_run(req)
+                    .map_err(AuthorityError::from)?;
+                serde_json::to_value(RunManager::start_detached_global(StartRunRequest {
+                    agent_profile_id: None,
+                    capability_selection: None,
+                    run_id: Some(new_run.id.clone()),
+                    conversation_id: Some(new_run.conversation_id.clone()),
+                    provider_id: Some(new_run.provider_id.clone()),
+                    model_id: Some(new_run.model_id.clone()),
+                    key_id: new_run.key_id.clone(),
+                    content: None,
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: Some(new_run.permission_profile.clone()),
+                    max_steps: Some(new_run.max_steps),
+                    project_path: new_run.project_path.clone(),
+                    idempotency_key: None,
+                    effort: new_run.effort.clone(),
+                    runtime_id: new_run.runtime_id.clone(),
+                })?)
+                .map_err(|e| AuthorityError::Message(e.to_string()))
             }
             "run.list" => {
                 let conversation_id = params.get("conversation_id").and_then(Value::as_str);

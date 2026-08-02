@@ -568,6 +568,9 @@ impl ProductionRuntime {
         let checkpoint_id = crate::checkpoint::global_checkpoint_manager()
             .begin_run(&run_id, &conversation_id, &project_root)
             .map_err(|error| format!("checkpoint begin failed: {error}"))?;
+        crate::global_run_manager()
+            .set_run_checkpoint_id(&run_id, &checkpoint_id)
+            .map_err(|error| format!("checkpoint lineage bind failed: {error}"))?;
         self.events
             .append_checked(
                 &run_id,
@@ -653,28 +656,38 @@ impl ProductionRuntime {
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let typed_history =
             crate::conversation_store::load_agent_messages(&conversation_id).unwrap_or_default();
-        let typed_history =
-            match crate::conversation_store::load_active_context_snapshot(&conversation_id) {
-                Ok(Some(snapshot)) => {
-                    let mut active = snapshot.messages;
-                    active.extend(typed_history.into_iter().filter(|message| {
-                        let id = match message {
-                            agent_core::AgentMessage::User(value) => value.message_id.to_string(),
-                            agent_core::AgentMessage::Assistant(value) => {
-                                value.message_id.to_string()
-                            }
-                            agent_core::AgentMessage::ToolResult(value) => {
-                                value.message_id.to_string()
-                            }
-                            agent_core::AgentMessage::System(value) => value.message_id.to_string(),
-                            agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
-                        };
-                        !snapshot.input_message_ids.contains(&id)
-                    }));
-                    active
-                }
-                _ => typed_history,
-            };
+        let checkpoint_snapshot = crate::global_run_manager()
+            .get_run(&run_id)
+            .and_then(|run| run.checkpoint_id)
+            .and_then(|checkpoint_id| {
+                crate::conversation_store::load_active_context_snapshot_for_checkpoint(
+                    &conversation_id,
+                    &checkpoint_id,
+                )
+                .ok()
+                .flatten()
+            });
+        let typed_history = match checkpoint_snapshot.or_else(|| {
+            crate::conversation_store::load_active_context_snapshot(&conversation_id)
+                .ok()
+                .flatten()
+        }) {
+            Some(snapshot) => {
+                let mut active = snapshot.messages;
+                active.extend(typed_history.into_iter().filter(|message| {
+                    let id = match message {
+                        agent_core::AgentMessage::User(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Assistant(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::ToolResult(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::System(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
+                    };
+                    !snapshot.input_message_ids.contains(&id)
+                }));
+                active
+            }
+            _ => typed_history,
+        };
         let raw_history = if typed_history.is_empty() {
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default()
         } else {
@@ -717,10 +730,20 @@ impl ProductionRuntime {
                 _ => None,
             })
         {
+            let snapshot_id = run_events
+                .iter()
+                .rev()
+                .find_map(|event| match &event.payload {
+                    assistant_protocol::v2::RunEventKind::ContextSnapshotCommitted {
+                        snapshot_id,
+                        ..
+                    } => Some(snapshot_id.as_str()),
+                    _ => None,
+                });
             let _ = crate::checkpoint::global_checkpoint_manager().set_run_metadata(
                 &run_id,
                 Some(turn_id),
-                None,
+                snapshot_id,
                 Some(
                     &run_events
                         .last()

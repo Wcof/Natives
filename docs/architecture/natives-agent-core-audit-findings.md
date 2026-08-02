@@ -74,9 +74,10 @@
 - 所属模块：Conversation Store / agent-core message model
 - 实现状态：部分修复（当前 worktree；已保存 snapshot_json 并提供 replay API）
 - 原始代码证据：conversation_store.rs；agent-core EngineMessage。
-- 当前行为：typed message 已写入/读取 `message_block` 并保留 ToolCall/ToolResult identity；ContextSnapshotCommitted 现在持久化完整 typed `snapshot_json`，但尚未把 snapshot 作为所有重启路径的唯一 active-context 来源。
+- 当前行为：typed message 已写入/读取 `message_block` 并保留 ToolCall/ToolResult identity；ContextSnapshotCommitted 持久化完整 typed `snapshot_json`，生产启动优先使用 checkpoint 绑定 snapshot，再按 `input_message_ids` 合并压缩后新增消息；完整历史仍保留。
 - 新代码证据：`src-agent-daemon/src/conversation_store.rs::load_agent_messages`、`load_active_context_messages`、`persist_context_snapshots_from_events`；`crates/agent-core/src/engine.rs::agent_messages_from_json`；migration 028 的 context_snapshot 字段。
-- 建议：补齐 artifact 内容、source message ids 和 provider window 的可重放 fixture。
+- 新增代码证据：`conversation_store.rs::load_active_context_snapshot_for_checkpoint`、`production.rs` 的 `run.checkpoint_id` 选择路径；`run_manager.rs::continue_run` 对 checkpoint/snapshot 存在性与 uncertain side effect 的 fail-closed 检查。
+- 建议：补齐 artifact 内容、source message ids 和 provider window 的可重放 fixture，并为 Continue/Fork 增加持久化集成测试。
 
 ## Event 持久化失败未在所有执行接缝 fail closed
 
@@ -97,6 +98,15 @@
 - 当前行为：`DaemonAssistantAdapter` 缺失权威终态时抛出 `AuthoritativeEventMissing`，不再重标 sequence；上层仍需展示 incomplete 状态。
 - 新代码证据：`src/lib/assistant-protocol/projection.ts`、`daemon-adapter.ts::recoverTerminalEvent`。
 - 建议：将 `ProjectionRecovery` 状态接入工作区 reducer 的恢复提示。
+
+## Run Lineage 与恢复动作
+
+- 严重等级：P1
+- 所属模块：assistant-protocol / RunManager / Conversation Store
+- 实现状态：已接生产（Continue/Fork/Replay 语义分离）
+- 代码证据：`run_manager.rs::retry`、`continue_run`；`conversation_store.rs::fork`；`assistant_protocol::v2::RunV2` lineage 字段；`run.continue` RPC dispatch。
+- 当前行为：Retry/Continue 都创建独立 Run 并记录 source/checkpoint/turn lineage；Continue 拒绝无 durable checkpoint、缺 snapshot 或 uncertain side effect；Fork 复制 typed message/block、重映射 parent IDs 并重置权限 profile 为 `ask`；Replay 只读事件，不重跑工具。
+- 风险：Continue/Fork 的端到端 daemon fixture 尚未在本轮运行；resume_plan 的 `executed` 写入发生在 detached start 之前，后续可改为 start 成功后结算。
 
 ## PermissionManager 共享实例存在遗留全局 Profile 接口
 

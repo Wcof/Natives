@@ -90,6 +90,21 @@ pub trait EngineToolRuntime: Send + Sync {
         self.execute_tool(name, input, cancel).await
     }
 
+    /// Optional call-identity-aware execution hook for runtimes that can emit
+    /// live handler progress. The default keeps lightweight runtimes compatible.
+    async fn execute_tool_with_call_id_and_progress(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        call_id: Option<&str>,
+        _turn_id: Option<&str>,
+        _message_id: Option<&str>,
+    ) -> ToolExecutionResult {
+        self.execute_tool_with_call_id(name, input, cancel, call_id)
+            .await
+    }
+
     async fn execute_tool_with_progress(
         &self,
         name: &str,

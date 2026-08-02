@@ -24,7 +24,16 @@ pub use process_supervisor::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
+
+/// Best-effort output emitted by a long-running handler. The Gateway owns the
+/// process/MCP safety boundary; the caller owns persistence and rate limiting.
+#[derive(Debug, Clone)]
+pub struct ToolProgressChunk {
+    pub stream: String,
+    pub text: String,
+}
 
 /// Context passed to tool handlers during execution.
 ///
@@ -50,6 +59,11 @@ pub struct ToolCallContext {
     pub project_identity_version: Option<u32>,
     /// Shared run cancellation token (task-03). Tools/MCP must select on this.
     pub cancel: CancellationToken,
+    /// Optional live output channel for handlers that can stream progress.
+    /// `None` keeps lightweight/test handlers allocation-free.
+    pub progress: Option<UnboundedSender<ToolProgressChunk>>,
+    pub turn_id: Option<String>,
+    pub message_id: Option<String>,
 }
 
 impl ToolCallContext {
@@ -93,6 +107,9 @@ impl ToolCallContext {
             project_id: None,
             project_identity_version: None,
             cancel,
+            progress: None,
+            turn_id: None,
+            message_id: None,
         }
     }
 
@@ -140,6 +157,9 @@ impl ToolCallContext {
             project_id: Some(project_id.into()),
             project_identity_version: Some(identity_version),
             cancel,
+            progress: None,
+            turn_id: None,
+            message_id: None,
         }
     }
 

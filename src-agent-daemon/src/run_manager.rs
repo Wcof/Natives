@@ -7,8 +7,8 @@ use agent_core::{
     RunLifecycleAuthority, TransitionMetadata,
 };
 use assistant_protocol::v2::{
-    CancelRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest, RetryRunRequest,
-    RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
+    CancelRunRequest, ContinueRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest,
+    RetryRunRequest, RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -292,11 +292,13 @@ impl RunManager {
                 started_at, finished_at, error_code, step_count, max_steps,
                 token_budget, total_input_tokens, total_output_tokens, created_at,
                 parent_run_id, agent_profile_id, key_id, permission_profile,
-                project_path, retry_count, idempotency_key, revision, capability_snapshot_json
+                project_path, retry_count, idempotency_key, revision, capability_snapshot_json,
+                retry_of_run_id, retry_of_turn_id, continued_from_run_id, branch_id,
+                branch_parent_message_id, checkpoint_id, resume_of_run_id
              )
              VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12,
-                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
              )
              ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
@@ -316,7 +318,14 @@ impl RunManager {
                 retry_count = excluded.retry_count,
                 idempotency_key = excluded.idempotency_key,
                 revision = excluded.revision,
-                capability_snapshot_json = excluded.capability_snapshot_json",
+                capability_snapshot_json = excluded.capability_snapshot_json,
+                retry_of_run_id = excluded.retry_of_run_id,
+                retry_of_turn_id = excluded.retry_of_turn_id,
+                continued_from_run_id = excluded.continued_from_run_id,
+                branch_id = excluded.branch_id,
+                branch_parent_message_id = excluded.branch_parent_message_id,
+                checkpoint_id = excluded.checkpoint_id,
+                resume_of_run_id = excluded.resume_of_run_id",
             rusqlite::params![
                 run.id,
                 run.conversation_id,
@@ -338,7 +347,14 @@ impl RunManager {
                 run.retry_count as i64,
                 run.idempotency_key,
                 run.revision as i64,
-                run.capability_snapshot.as_ref().map(|v| v.to_string())
+                run.capability_snapshot.as_ref().map(|v| v.to_string()),
+                run.retry_of_run_id,
+                run.retry_of_turn_id,
+                run.continued_from_run_id,
+                run.branch_id,
+                run.branch_parent_message_id,
+                run.checkpoint_id,
+                run.resume_of_run_id,
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
@@ -359,7 +375,9 @@ impl RunManager {
                         provider_id, key_id, model_id, permission_profile,
                         trigger_message_id, started_at, finished_at, error_code,
                         step_count, max_steps, project_path, retry_count,
-                        created_at, idempotency_key, COALESCE(revision, 0)
+                        created_at, idempotency_key, COALESCE(revision, 0),
+                        retry_of_run_id, retry_of_turn_id, continued_from_run_id,
+                        branch_id, branch_parent_message_id, checkpoint_id, resume_of_run_id
                  FROM run WHERE idempotency_key = ?1 OR id = ?1 LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
@@ -405,6 +423,13 @@ impl RunManager {
             revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
             project_id: None,
             project_identity_version: None,
+            retry_of_run_id: row.get(20).map_err(|e| e.to_string())?,
+            retry_of_turn_id: row.get(21).map_err(|e| e.to_string())?,
+            continued_from_run_id: row.get(22).map_err(|e| e.to_string())?,
+            branch_id: row.get(23).map_err(|e| e.to_string())?,
+            branch_parent_message_id: row.get(24).map_err(|e| e.to_string())?,
+            checkpoint_id: row.get(25).map_err(|e| e.to_string())?,
+            resume_of_run_id: row.get(26).map_err(|e| e.to_string())?,
         }))
     }
 
@@ -801,6 +826,19 @@ impl RunManager {
         std::fs::write(path, raw).map_err(|e| e.to_string())
     }
 
+    /// Bind the workspace checkpoint to the run before execution begins.
+    pub fn set_run_checkpoint_id(&self, run_id: &str, checkpoint_id: &str) -> Result<(), String> {
+        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+        let run = runs
+            .get_mut(run_id)
+            .ok_or_else(|| format!("run not found: {run_id}"))?;
+        run.checkpoint_id = Some(checkpoint_id.to_string());
+        let snapshot = run.clone();
+        drop(runs);
+        self.persist_run_row(&snapshot)?;
+        self.persist_runs_snapshot()
+    }
+
     /// Load non-terminal runs from disk; mark interrupted activity for safe resume UX.
     pub fn restore_runs_snapshot(&self) -> Result<usize, String> {
         let path = self.snapshot_path();
@@ -914,6 +952,13 @@ impl RunManager {
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let run = RunV2 {
             capability_snapshot: None,
+            retry_of_run_id: None,
+            retry_of_turn_id: None,
+            continued_from_run_id: None,
+            branch_id: None,
+            branch_parent_message_id: None,
+            checkpoint_id: None,
+            resume_of_run_id: None,
             id: id.clone(),
             conversation_id: req.conversation_id,
             status: RunStatusV2::Queued,
@@ -1989,8 +2034,9 @@ impl RunManager {
                 .map_err(|e| e.to_string())?;
             if uncertain != 0 {
                 let _ = store.conn()?.execute(
-                    "INSERT INTO resume_plan (id, source_run_id, action, status, unresolved_effects_json)
-                     VALUES (?1, ?2, 'retry', 'blocked', ?3)",
+                    "INSERT INTO resume_plan
+                     (id, source_run_id, action, status, decision, unresolved_effects_json)
+                     VALUES (?1, ?2, 'retry', 'blocked', 'Blocked', ?3)",
                     rusqlite::params![
                         uuid::Uuid::new_v4().to_string(),
                         &req.run_id,
@@ -2012,7 +2058,7 @@ impl RunManager {
             .lock()
             .ok()
             .and_then(|m| m.get(&req.run_id).map(|p| p.to_string_lossy().to_string()));
-        let new_run = self.create_run(CreateRunRequest {
+        let mut new_run = self.create_run(CreateRunRequest {
             capability_selection: None,
             conversation_id: original.conversation_id,
             provider_id: original.provider_id,
@@ -2029,13 +2075,40 @@ impl RunManager {
             effort: original.effort.clone(),
             runtime_id: original.runtime_id.clone(),
         })?;
+        let (checkpoint_id, retry_of_turn_id) = if let Some(store) = &self.data_store {
+            let conn = store.conn()?;
+            conn.query_row(
+                "SELECT id, turn_id FROM checkpoint WHERE run_id = ?1
+                 ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![&req.run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .ok()
+            .map_or((None, None), |(id, turn)| (Some(id), turn))
+        } else {
+            (None, None)
+        };
+        new_run.retry_of_run_id = Some(req.run_id.clone());
+        new_run.retry_of_turn_id = retry_of_turn_id;
+        new_run.checkpoint_id = checkpoint_id.clone();
+        self.persist_run_row(&new_run)?;
+        self.runs
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(new_run.id.clone(), new_run.clone());
         if let Some(store) = &self.data_store {
             let _ = store.conn()?.execute(
-                "INSERT INTO resume_plan (id, source_run_id, new_run_id, action, checkpoint_id, status)
+                "INSERT INTO resume_plan
+                 (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
                  VALUES (?1, ?2, ?3, 'retry',
-                         (SELECT id FROM checkpoint WHERE run_id = ?2 ORDER BY created_at DESC LIMIT 1),
-                         'executed')",
-                rusqlite::params![uuid::Uuid::new_v4().to_string(), &req.run_id, &new_run.id],
+                         ?4,
+                         'executed', 'SafeToContinue')",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    &req.run_id,
+                    &new_run.id,
+                    checkpoint_id,
+                ],
             );
         }
         if let Some(c) = content {
@@ -2044,6 +2117,151 @@ impl RunManager {
                 .map_err(|e| e.to_string())?
                 .insert(new_run.id.clone(), c);
         }
+        Ok(new_run)
+    }
+
+    /// Create an independent run from a durable checkpoint. This is a
+    /// planning operation: the caller starts the returned run separately, so
+    /// no source Future, permission waiter, or credential lease is revived.
+    pub fn continue_run(&self, req: ContinueRunRequest) -> Result<RunV2, String> {
+        let source = self
+            .get_run(&req.run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        if !source.status.is_terminal() {
+            return Err("run must be terminal before continue".into());
+        }
+        let Some(store) = &self.data_store else {
+            return Err("continue requires durable daemon storage".into());
+        };
+        let conn = store.conn()?;
+        let checkpoint = if let Some(checkpoint_id) = req.checkpoint_id.as_deref() {
+            conn.query_row(
+                "SELECT id, turn_id, active_context_snapshot_id
+                 FROM checkpoint WHERE id = ?1 AND run_id = ?2",
+                rusqlite::params![checkpoint_id, &source.id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .map_err(|_| "checkpoint not found for source run".to_string())?
+        } else {
+            conn.query_row(
+                "SELECT id, turn_id, active_context_snapshot_id
+                 FROM checkpoint WHERE run_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![&source.id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .map_err(|_| "source run has no durable checkpoint".to_string())?
+        };
+        if let Some(snapshot_id) = checkpoint.2.as_deref() {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM context_snapshot WHERE id = ?1)",
+                    rusqlite::params![snapshot_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if exists == 0 {
+                return Err("checkpoint references a missing context snapshot".into());
+            }
+        }
+        let uncertain: i64 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM side_effect_record
+                 WHERE run_id = ?1 AND status = 'uncertain')",
+                rusqlite::params![&source.id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if uncertain != 0 {
+            let _ = conn.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
+                 VALUES (?1, ?2, 'continue', ?3, 'blocked', 'Blocked', ?4)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    &source.id,
+                    &checkpoint.0,
+                    serde_json::json!({"reason": "uncertain_side_effect"}).to_string(),
+                ],
+            );
+            return Err("run has uncertain side effects; continue requires confirmation".into());
+        }
+        let content = req.content.or_else(|| {
+            self.last_content
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&source.id).cloned())
+        });
+        let branch_parent_message_id = conn
+            .query_row(
+                "SELECT id FROM message WHERE conversation_id = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                rusqlite::params![&source.conversation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
+        drop(conn);
+        let mut new_run = self.create_run(CreateRunRequest {
+            capability_selection: None,
+            conversation_id: source.conversation_id.clone(),
+            provider_id: source.provider_id.clone(),
+            model_id: source.model_id.clone(),
+            key_id: source.key_id.clone(),
+            agent_profile_id: source.agent_profile_id.clone(),
+            permission_profile: Some(source.permission_profile.clone()),
+            content: content.clone(),
+            attachments: None,
+            max_steps: Some(source.max_steps),
+            parent_run_id: None,
+            project_path: source.project_path.clone(),
+            idempotency_key: None,
+            effort: source.effort.clone(),
+            runtime_id: source.runtime_id.clone(),
+        })?;
+        new_run.continued_from_run_id = Some(source.id.clone());
+        new_run.resume_of_run_id = Some(source.id.clone());
+        new_run.checkpoint_id = Some(checkpoint.0.clone());
+        new_run.retry_of_turn_id = checkpoint.1.clone();
+        new_run.branch_id = source
+            .branch_id
+            .clone()
+            .or_else(|| Some(source.conversation_id.clone()));
+        new_run.branch_parent_message_id = branch_parent_message_id;
+        self.persist_run_row(&new_run)?;
+        self.runs
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(new_run.id.clone(), new_run.clone());
+        if let Some(content) = content {
+            self.last_content
+                .lock()
+                .map_err(|e| e.to_string())?
+                .insert(new_run.id.clone(), content);
+        }
+        let conn = store.conn()?;
+        conn.execute(
+            "INSERT INTO resume_plan
+             (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
+             VALUES (?1, ?2, ?3, 'continue', ?4, 'executed', 'SafeToContinue')",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                &source.id,
+                &new_run.id,
+                &checkpoint.0,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(new_run)
     }
 
