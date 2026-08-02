@@ -1245,6 +1245,7 @@ fn append_single_assistant_turn(
             _ => {}
         }
     }
+    let has_committed_content = committed_content.is_some();
     let content = committed_content.unwrap_or_else(|| {
         let mut content = Vec::new();
         if !thinking.trim().is_empty() {
@@ -1269,9 +1270,6 @@ fn append_single_assistant_turn(
     let typed_turn_id = turn_id.unwrap_or_else(|| format!("legacy-turn:{run_id}"));
     let assistant_id = assistant_message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     persist_turn_record(run_id, &typed_turn_id, stop_reason.as_deref(), events)?;
-    let has_typed_thinking = content
-        .iter()
-        .any(|block| matches!(block, agent_core::ContentBlock::Thinking { .. }));
     let assistant = agent_core::AssistantMessage {
         message_id: assistant_id.into(),
         content,
@@ -1283,7 +1281,10 @@ fn append_single_assistant_turn(
         Some(&typed_turn_id),
         &AgentMessage::Assistant(assistant),
     )?;
-    if !has_typed_thinking {
+    // Legacy event batches may only contain deltas and have no committed typed
+    // payload. Keep their duration-bearing reasoning block for old renderers;
+    // production MessageCompleted batches already carry canonical Thinking.
+    if !has_committed_content {
         if let Some(reasoning) = reasoning_block_from_events(events) {
             let db = store()?;
             let conn = db.conn()?;

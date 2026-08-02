@@ -2427,6 +2427,7 @@ fn stop_reason_label(reason: Option<&ProviderStopReason>) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
     messages
         .iter()
@@ -2959,6 +2960,7 @@ fn tool_result_content(blocks: &[crate::ToolResultBlock]) -> String {
         .join("\n")
 }
 
+#[allow(dead_code)]
 fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
     values
         .iter()
