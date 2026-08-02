@@ -78,6 +78,18 @@ pub trait EngineToolRuntime: Send + Sync {
         cancel: &CancellationToken,
     ) -> ToolExecutionResult;
 
+    /// Execute with a stable Core ToolCall id so gateway output and ledger
+    /// records cannot drift to a second per-handler UUID.
+    async fn execute_tool_with_call_id(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        _call_id: Option<&str>,
+    ) -> ToolExecutionResult {
+        self.execute_tool(name, input, cancel).await
+    }
+
     async fn execute_tool_with_progress(
         &self,
         name: &str,
@@ -93,6 +105,8 @@ pub trait EngineToolRuntime: Send + Sync {
     async fn execute_tool_with_progress_for_call(
         &self,
         call_id: &str,
+        _turn_id: Option<&str>,
+        _message_id: Option<&str>,
         name: &str,
         input: Value,
         cancel: &CancellationToken,
@@ -146,8 +160,21 @@ pub enum ToolExecutionMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCapability {
     pub name: String,
+    pub schema: Value,
     pub execution_mode: ToolExecutionMode,
+    pub side_effect: ToolSideEffect,
     pub conflict_key: Option<String>,
+}
+
+/// Provider-neutral safety classification advertised by the Gateway.
+/// Core never infers this from a tool name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSideEffect {
+    ReadOnly,
+    Write,
+    Destructive,
+    Network,
+    Process,
 }
 
 #[derive(Debug, Clone)]
@@ -165,11 +192,16 @@ pub struct ToolProgressUpdate {
     pub stream: String,
     pub text: String,
     pub final_update: bool,
+    pub turn_id: Option<String>,
+    pub message_id: Option<String>,
+    pub progress_sequence: u64,
 }
 
 #[async_trait::async_trait]
 pub trait ToolProgressSink: Send + Sync {
     async fn publish(&self, update: ToolProgressUpdate);
+
+    async fn mark_tool_call_settled(&self, _tool_call_id: &str) {}
 }
 
 #[derive(Debug, Default)]
@@ -555,7 +587,7 @@ impl AgentEngine {
         kind: crate::PendingInputKind,
         mode: crate::DrainMode,
         point: crate::InputSafePoint,
-        messages: &mut Vec<EngineMessage>,
+        messages: &mut Vec<crate::AgentMessage>,
     ) -> bool {
         let Some(receiver) = &self.input_receiver else {
             return false;
@@ -565,17 +597,19 @@ impl AgentEngine {
             return false;
         }
         for input in pending {
-            messages.push(EngineMessage::text(
-                "user",
-                format!(
-                    "[{}]\n{}",
-                    match input.kind {
-                        crate::PendingInputKind::Steering => "steering",
-                        crate::PendingInputKind::FollowUp => "follow_up",
-                    },
-                    input.content
-                ),
-            ));
+            messages.push(crate::AgentMessage::User(crate::UserMessage {
+                message_id: crate::MessageId::new(),
+                content: vec![crate::ContentBlock::Text {
+                    text: format!(
+                        "[{}]\n{}",
+                        match input.kind {
+                            crate::PendingInputKind::Steering => "steering",
+                            crate::PendingInputKind::FollowUp => "follow_up",
+                        },
+                        input.content
+                    ),
+                }],
+            }));
             receiver.ack(&input.id).await;
         }
         true
@@ -608,21 +642,19 @@ impl AgentEngine {
         &self,
         conversation_id: &str,
         point: crate::session_coordinator::SafePoint,
-        messages: &mut Vec<EngineMessage>,
+        messages: &mut Vec<crate::AgentMessage>,
     ) {
         let Some(harness) = &self.session_harness else {
             return;
         };
         match harness.on_safe_point(conversation_id, point) {
             crate::session_coordinator::CoordinatorAction::InjectInterjection { content } => {
-                messages.push(EngineMessage {
-                    role: "user".into(),
-                    content: format!("[interjection]\n{content}"),
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_calls: None,
-                    images: Vec::new(),
-                });
+                messages.push(crate::AgentMessage::User(crate::UserMessage {
+                    message_id: crate::MessageId::new(),
+                    content: vec![crate::ContentBlock::Text {
+                        text: format!("[interjection]\n{content}"),
+                    }],
+                }));
             }
             _ => {}
         }
@@ -691,11 +723,11 @@ impl AgentEngine {
         use crate::EngineOutcome;
         let run_id_owned = config.run_id.clone();
         let run_id = &run_id_owned;
-        let tool_capabilities: BTreeMap<String, ToolExecutionMode> = tools
+        let tool_capabilities: BTreeMap<String, ToolCapability> = tools
             .list_tool_capabilities()
             .await
             .into_iter()
-            .map(|capability| (capability.name, capability.execution_mode))
+            .map(|capability| (capability.name.clone(), capability))
             .collect();
         // Lifecycle status is owned by RunManager::commit_transition.
         // Engine only emits domain events and returns EngineOutcome.
@@ -723,7 +755,7 @@ impl AgentEngine {
         // History is prior turns; always ensure the current user prompt appears
         // exactly once (append when history is empty or does not already end
         // with the same user content).
-        let mut messages = if config.messages.is_empty() {
+        let initial_messages = if config.messages.is_empty() {
             vec![EngineMessage {
                 role: "user".into(),
                 content: config.user_content.clone(),
@@ -749,9 +781,9 @@ impl AgentEngine {
             }
             msgs
         };
-        // The typed transcript is the Core truth. `messages` remains a
-        // provider/compaction compatibility buffer at the adapter boundary.
-        let mut typed_messages = engine_messages_to_agent_messages(&messages);
+        // The typed transcript is the only mutable Core transcript. The legacy
+        // EngineMessage vector exists only at this initial compatibility edge.
+        let mut typed_messages = engine_messages_to_agent_messages(&initial_messages);
         let mut doom = DoomLoopDetector::new();
         let mut step = 0u32;
 
@@ -1089,13 +1121,12 @@ impl AgentEngine {
                         },
                     ),
                 }));
-                messages.push(EngineMessage::text("assistant", text_acc.clone()));
                 if self
                     .drain_inputs(
                         crate::PendingInputKind::FollowUp,
                         crate::DrainMode::All,
                         crate::InputSafePoint::BeforeRunEnd,
-                        &mut messages,
+                        &mut typed_messages,
                     )
                     .await
                 {
@@ -1106,7 +1137,6 @@ impl AgentEngine {
                             percentage: None,
                         },
                     );
-                    typed_messages = engine_messages_to_agent_messages(&messages);
                     continue;
                 }
                 let stop_label = stop_reason_label(stop_reason.as_ref());
@@ -1155,12 +1185,8 @@ impl AgentEngine {
             // Execute tools and continue loop.
             // Phase 2: parallel_safe readonly tools may run concurrently (max 4);
             // write / process / network stay serial. Results are filled in call order.
-            // Safe point: before any tool in this batch.
-            self.apply_safe_point(
-                &config.conversation_id,
-                crate::session_coordinator::SafePoint::BeforeTool,
-                &mut messages,
-            );
+            // No user input is injected while a provider response is being
+            // prepared; the next safe point is after the complete tool batch.
             let mut prepared: Vec<PreparedToolCall> = Vec::new();
             let fail_closed_reason = stop_reason.as_ref().and_then(|reason| match reason {
                 ProviderStopReason::Length => Some((
@@ -1247,6 +1273,21 @@ impl AgentEngine {
                         input: input.clone(),
                     },
                 )?;
+                let capability = tool_capabilities.get(&name);
+                self.append_critical(
+                    run_id,
+                    RunEventKind::ToolCallPrepared {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                        execution_mode: capability
+                            .map(|value| format!("{:?}", value.execution_mode))
+                            .unwrap_or_else(|| "Sequential".into()),
+                        side_effect: capability
+                            .map(|value| format!("{:?}", value.side_effect))
+                            .unwrap_or_else(|| "Destructive".into()),
+                    },
+                )?;
                 self.append_critical(
                     run_id,
                     RunEventKind::ToolCallStarted {
@@ -1256,7 +1297,7 @@ impl AgentEngine {
                 )?;
 
                 let parallel_safe = matches!(
-                    tool_capabilities.get(&name),
+                    capability.map(|value| value.execution_mode),
                     Some(ToolExecutionMode::ParallelSafe)
                 );
                 prepared.push(PreparedToolCall {
@@ -1269,44 +1310,33 @@ impl AgentEngine {
                 });
             }
 
-            let executed = self.execute_prepared_tools(run_id, tools, prepared).await?;
+            let executed = self
+                .execute_prepared_tools(
+                    run_id,
+                    turn_id.0.as_str(),
+                    assistant_message_id.0.as_str(),
+                    tools,
+                    prepared,
+                )
+                .await?;
 
             // Safe point: after tool batch completes.
             self.apply_safe_point(
                 &config.conversation_id,
                 crate::session_coordinator::SafePoint::AfterTool,
-                &mut messages,
+                &mut typed_messages,
             );
             self.drain_inputs(
                 crate::PendingInputKind::Steering,
                 crate::DrainMode::All,
                 crate::InputSafePoint::AfterToolBatch,
-                &mut messages,
+                &mut typed_messages,
             )
             .await;
 
-            let mut assistant_tool_calls = Vec::new();
-            let mut tool_results = Vec::new();
             let mut typed_tool_calls = Vec::new();
             let mut typed_tool_results = Vec::new();
             for item in executed {
-                assistant_tool_calls.push(EngineToolCall {
-                    id: item.id.clone(),
-                    name: item.name.clone(),
-                    arguments: item.args.clone(),
-                });
-                tool_results.push(EngineMessage {
-                    role: "tool".into(),
-                    content: item
-                        .result
-                        .as_ref()
-                        .map(|r| r.output.to_string())
-                        .unwrap_or_else(|| "{}".into()),
-                    tool_call_id: Some(item.id.clone()),
-                    tool_name: Some(item.name.clone()),
-                    tool_calls: None,
-                    images: Vec::new(),
-                });
                 typed_tool_calls.push(crate::ContentBlock::ToolCall(crate::ToolCall {
                     tool_call_id: crate::ToolCallId::from(item.id.clone()),
                     name: item.name.clone(),
@@ -1333,15 +1363,6 @@ impl AgentEngine {
                 }
             }
 
-            messages.push(EngineMessage {
-                role: "assistant".into(),
-                content: text_acc.clone(),
-                tool_call_id: None,
-                tool_name: None,
-                tool_calls: Some(assistant_tool_calls),
-                images: Vec::new(),
-            });
-            messages.extend(tool_results);
             typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
                 message_id: assistant_message_id.clone(),
                 content: {
@@ -1379,15 +1400,20 @@ impl AgentEngine {
             // Compact large tool outputs + repair dangling tool_call_ids before
             // the next provider turn (no isolated tool calls).
             // Safe point: ProviderBatchBoundary — between tool batch and next provider turn.
-            messages = self
-                .maybe_compact_history(run_id, &config.model, provider, messages)
-                .await;
+            typed_messages = self
+                .maybe_compact_typed_history(
+                    run_id,
+                    &turn_id,
+                    &config.model,
+                    provider,
+                    typed_messages,
+                )
+                .await?;
             self.apply_safe_point(
                 &config.conversation_id,
                 crate::session_coordinator::SafePoint::ProviderBatchBoundary,
-                &mut messages,
+                &mut typed_messages,
             );
-            typed_messages = engine_messages_to_agent_messages(&messages);
         }
     }
 
@@ -1397,6 +1423,8 @@ impl AgentEngine {
     async fn execute_prepared_tools(
         &self,
         run_id: &str,
+        turn_id: &str,
+        message_id: &str,
         tools: &dyn EngineToolRuntime,
         prepared: Vec<PreparedToolCall>,
     ) -> Result<Vec<ExecutedToolCall>, EngineError> {
@@ -1404,6 +1432,12 @@ impl AgentEngine {
         use futures_util::stream::{self, StreamExt};
 
         let mut out: Vec<ExecutedToolCall> = Vec::with_capacity(prepared.len());
+        // A batch is parallel only when every non-rejected call is explicitly
+        // advertised ParallelSafe. One sequential/exclusive call serializes
+        // the whole batch, preserving deterministic side-effect order.
+        let batch_parallel = prepared
+            .iter()
+            .all(|call| call.rejected.is_some() || call.parallel_safe);
         let mut i = 0;
         while i < prepared.len() {
             if let Some(result) = prepared[i].rejected.clone() {
@@ -1423,6 +1457,9 @@ impl AgentEngine {
                         duration_ms: 0,
                     },
                 )?;
+                self.progress_sink
+                    .mark_tool_call_settled(&prepared[i].id)
+                    .await;
                 i += 1;
                 continue;
             }
@@ -1473,6 +1510,7 @@ impl AgentEngine {
                             duration_ms: result.duration_ms,
                         },
                     )?;
+                    self.progress_sink.mark_tool_call_settled(&call.id).await;
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -1484,7 +1522,7 @@ impl AgentEngine {
             }
 
             // Gather a contiguous parallel_safe run (cap concurrency).
-            if prepared[i].parallel_safe {
+            if batch_parallel && prepared[i].parallel_safe {
                 let mut batch = Vec::new();
                 while i < prepared.len()
                     && prepared[i].parallel_safe
@@ -1503,6 +1541,8 @@ impl AgentEngine {
                             let result = tools
                                 .execute_tool_with_progress_for_call(
                                     &call.id,
+                                    Some(turn_id),
+                                    Some(message_id),
                                     &call.name,
                                     call.input.clone(),
                                     &cancel,
@@ -1554,6 +1594,7 @@ impl AgentEngine {
                             duration_ms: result.duration_ms,
                         },
                     )?;
+                    self.progress_sink.mark_tool_call_settled(&call.id).await;
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -1569,6 +1610,8 @@ impl AgentEngine {
             let result = tools
                 .execute_tool_with_progress_for_call(
                     &call.id,
+                    Some(turn_id),
+                    Some(message_id),
                     &call.name,
                     call.input.clone(),
                     &self.cancel,
@@ -1599,6 +1642,7 @@ impl AgentEngine {
                     duration_ms: result.duration_ms,
                 },
             )?;
+            self.progress_sink.mark_tool_call_settled(&call.id).await;
             out.push(ExecutedToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),
@@ -1610,31 +1654,65 @@ impl AgentEngine {
         Ok(out)
     }
 
-    /// Convert engine history → JSON messages, compact, convert back.
+    /// Compact the typed Core transcript at the provider-neutral JSON boundary.
     ///
     /// Over budget the engine first asks the model for a structured summary of
     /// the old prefix (see [`crate::compaction::SUMMARY_SYSTEM_PROMPT`]) and
     /// keeps only `[summary] + recent tail`. Every failure path — provider
     /// error, timeout, cancellation, empty answer, budget exhausted — falls
     /// back to mechanical compaction. Compaction never fails a Run.
-    async fn maybe_compact_history(
+    async fn maybe_compact_typed_history(
+        &self,
+        run_id: &str,
+        turn_id: &crate::TurnId,
+        model: &str,
+        provider: &dyn EngineProvider,
+        messages: Vec<crate::AgentMessage>,
+    ) -> Result<Vec<crate::AgentMessage>, EngineError> {
+        let values = agent_messages_to_values(&messages);
+        let compacted = self
+            .maybe_compact_values(run_id, model, provider, values)
+            .await;
+        if compacted != agent_messages_to_values(&messages) {
+            self.append_critical(
+                run_id,
+                RunEventKind::ContextSnapshotCommitted {
+                    snapshot_id: uuid::Uuid::new_v4().to_string(),
+                    turn_id: Some(turn_id.to_string()),
+                    source_revision: self.events.last_sequence(run_id),
+                    input_message_ids: messages.iter().map(agent_message_id).collect(),
+                    summary_message_id: None,
+                    replaced_range: None,
+                    algorithm_version: "typed-compaction-v1".into(),
+                    provider_context_window: None,
+                    artifact_reference: None,
+                    snapshot_json: Value::Array(compacted.clone()),
+                },
+            )?;
+        }
+        Ok(values_to_agent_messages(&compacted))
+    }
+
+    async fn maybe_compact_values(
         &self,
         run_id: &str,
         model: &str,
         provider: &dyn EngineProvider,
-        messages: Vec<EngineMessage>,
-    ) -> Vec<EngineMessage> {
+        messages: Vec<Value>,
+    ) -> Vec<Value> {
         let history_limit = self.history_compact_chars.unwrap_or(HISTORY_COMPACT_CHARS);
         let tool_limit = self.tool_output_max_chars.unwrap_or(TOOL_OUTPUT_MAX_CHARS);
-        let before_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+        let before_chars: usize = messages
+            .iter()
+            .map(|message| message.to_string().len())
+            .sum();
         if before_chars < history_limit {
             // Still repair dangling pairs cheaply.
-            let values = engine_messages_to_values(&messages);
-            let (fixed, repaired) = repair_dangling_tool_calls(&values);
+            let (fixed, repaired) = repair_dangling_tool_calls(&messages);
             if repaired == 0 {
                 return messages;
             }
-            return values_to_engine_messages(&fixed);
+            return fixed;
         }
 
         let pre_compact = self
@@ -1654,13 +1732,12 @@ impl AgentEngine {
             return messages;
         }
 
-        let values = engine_messages_to_values(&messages);
         let result = match self
-            .try_model_summary(run_id, model, provider, &values, tool_limit)
+            .try_model_summary(run_id, model, provider, &messages, tool_limit)
             .await
         {
             Some(summarized) => summarized,
-            None => compact_tool_history(&values, tool_limit),
+            None => compact_tool_history(&messages, tool_limit),
         };
         let mode = if result.summarized_messages > 0 {
             "model"
@@ -1670,12 +1747,7 @@ impl AgentEngine {
         let after_chars: usize = result
             .messages
             .iter()
-            .map(|m| {
-                m.get("content")
-                    .and_then(|c| c.as_str())
-                    .map(|s| s.len())
-                    .unwrap_or(0)
-            })
+            .map(|message| message.to_string().len())
             .sum();
 
         self.events.append(
@@ -1708,7 +1780,7 @@ impl AgentEngine {
             })
             .await;
 
-        values_to_engine_messages(&result.messages)
+        result.messages
     }
 
     /// Model-backed compaction: `Some` only when a usable summary came back.
@@ -1972,6 +2044,315 @@ fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
             Value::Object(obj)
         })
         .collect()
+}
+
+fn agent_messages_to_values(messages: &[crate::AgentMessage]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|message| match message {
+            crate::AgentMessage::User(message) => json!({
+                "role": "user",
+                "message_id": message.message_id,
+                "content": message
+                    .content
+                    .iter()
+                    .map(content_block_to_value)
+                    .collect::<Vec<_>>(),
+            }),
+            crate::AgentMessage::Assistant(message) => json!({
+                "role": "assistant",
+                "message_id": message.message_id,
+                "content": message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        crate::ContentBlock::Text { text }
+                        | crate::ContentBlock::Thinking { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+                "blocks": message
+                    .content
+                    .iter()
+                    .map(content_block_to_value)
+                    .collect::<Vec<_>>(),
+                "tool_calls": message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        crate::ContentBlock::ToolCall(call) => Some(json!({
+                            "id": call.tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.arguments_json,
+                            }
+                        })),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                "stop_reason": message.stop_reason.as_ref().map(ToString::to_string),
+            }),
+            crate::AgentMessage::ToolResult(message) => json!({
+                "role": "tool",
+                "message_id": message.message_id,
+                "tool_call_id": message.tool_call_id,
+                "name": message.tool_name,
+                "content": tool_result_content(&message.content),
+                "tool_result_blocks": message
+                    .content
+                    .iter()
+                    .map(tool_result_block_to_value)
+                    .collect::<Vec<_>>(),
+                "is_error": message.is_error,
+                "error_code": message.code,
+            }),
+            crate::AgentMessage::System(message) => json!({
+                "role": "system",
+                "message_id": message.message_id,
+                "content": message.text,
+            }),
+            crate::AgentMessage::Custom(message) => json!({
+                "role": message.kind,
+                "message_id": message.message_id,
+                "content": message.payload.to_string(),
+            }),
+        })
+        .collect()
+}
+
+fn agent_message_id(message: &crate::AgentMessage) -> String {
+    match message {
+        crate::AgentMessage::User(value) => value.message_id.to_string(),
+        crate::AgentMessage::Assistant(value) => value.message_id.to_string(),
+        crate::AgentMessage::ToolResult(value) => value.message_id.to_string(),
+        crate::AgentMessage::System(value) => value.message_id.to_string(),
+        crate::AgentMessage::Custom(value) => value.message_id.to_string(),
+    }
+}
+
+fn content_block_to_value(block: &crate::ContentBlock) -> Value {
+    match block {
+        crate::ContentBlock::Text { text } => json!({ "type": "text", "text": text }),
+        crate::ContentBlock::Thinking { text, signature } => {
+            json!({ "type": "thinking", "text": text, "signature": signature })
+        }
+        crate::ContentBlock::Image { source } => json!({ "type": "image", "source": source }),
+        crate::ContentBlock::ToolCall(call) => json!({
+            "type": "tool_call",
+            "tool_call_id": call.tool_call_id,
+            "name": call.name,
+            "arguments": call.arguments_json,
+        }),
+    }
+}
+
+fn tool_result_block_to_value(block: &crate::ToolResultBlock) -> Value {
+    match block {
+        crate::ToolResultBlock::Text { text } => json!({ "type": "text", "text": text }),
+        crate::ToolResultBlock::Json { value } => json!({ "type": "json", "value": value }),
+        crate::ToolResultBlock::Artifact {
+            artifact_id,
+            preview,
+        } => json!({ "type": "artifact", "artifact_id": artifact_id, "preview": preview }),
+    }
+}
+
+fn values_to_agent_messages(values: &[Value]) -> Vec<crate::AgentMessage> {
+    values
+        .iter()
+        .filter_map(|value| {
+            let role = value.get("role").and_then(Value::as_str).unwrap_or("user");
+            let message_id = value
+                .get("message_id")
+                .and_then(Value::as_str)
+                .map(crate::MessageId::from)
+                .unwrap_or_else(crate::MessageId::new);
+            match role {
+                "tool" => {
+                    let blocks = value
+                        .get("tool_result_blocks")
+                        .and_then(Value::as_array)
+                        .map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(value_to_tool_result_block)
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|blocks| !blocks.is_empty())
+                        .unwrap_or_else(|| {
+                            vec![crate::ToolResultBlock::Text {
+                                text: value
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            }]
+                        });
+                    Some(crate::AgentMessage::ToolResult(crate::ToolResultMessage {
+                        message_id,
+                        tool_call_id: crate::ToolCallId::from(
+                            value
+                                .get("tool_call_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                        ),
+                        tool_name: value
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        content: blocks,
+                        is_error: value
+                            .get("is_error")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        code: value
+                            .get("error_code")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    }))
+                }
+                "assistant" => Some(crate::AgentMessage::Assistant(crate::AssistantMessage {
+                    message_id,
+                    content: value
+                        .get("blocks")
+                        .and_then(Value::as_array)
+                        .map(|blocks| blocks.iter().filter_map(value_to_content_block).collect())
+                        .unwrap_or_else(|| {
+                            value
+                                .get("content")
+                                .and_then(Value::as_str)
+                                .filter(|text| !text.is_empty())
+                                .map(|text| vec![crate::ContentBlock::Text { text: text.into() }])
+                                .unwrap_or_default()
+                        }),
+                    stop_reason: value
+                        .get("stop_reason")
+                        .and_then(Value::as_str)
+                        .map(stop_reason_from_label),
+                })),
+                "system" => Some(crate::AgentMessage::System(crate::SystemMessage {
+                    message_id,
+                    text: value
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                })),
+                "user" => Some(crate::AgentMessage::User(crate::UserMessage {
+                    message_id,
+                    content: value
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .map(|blocks| blocks.iter().filter_map(value_to_content_block).collect())
+                        .unwrap_or_else(|| {
+                            value
+                                .get("content")
+                                .and_then(Value::as_str)
+                                .map(|text| vec![crate::ContentBlock::Text { text: text.into() }])
+                                .unwrap_or_default()
+                        }),
+                })),
+                kind => Some(crate::AgentMessage::Custom(crate::CustomMessage {
+                    message_id,
+                    kind: kind.to_string(),
+                    payload: value.get("content").cloned().unwrap_or(Value::Null),
+                })),
+            }
+        })
+        .collect()
+}
+
+/// Replay a persisted active-context snapshot without exposing the provider
+/// wire representation to the daemon.
+pub fn agent_messages_from_json(value: &Value) -> Vec<crate::AgentMessage> {
+    value
+        .as_array()
+        .map_or_else(Vec::new, |items| values_to_agent_messages(items))
+}
+
+fn value_to_content_block(value: &Value) -> Option<crate::ContentBlock> {
+    match value.get("type").and_then(Value::as_str)? {
+        "text" => Some(crate::ContentBlock::Text {
+            text: value
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+        }),
+        "thinking" => Some(crate::ContentBlock::Thinking {
+            text: value
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+            signature: value
+                .get("signature")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        "image" => serde_json::from_value(value.get("source")?.clone())
+            .ok()
+            .map(|source| crate::ContentBlock::Image { source }),
+        "tool_call" => Some(crate::ContentBlock::ToolCall(crate::ToolCall {
+            tool_call_id: crate::ToolCallId::from(
+                value
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            name: value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+            arguments_json: value
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+        })),
+        _ => None,
+    }
+}
+
+fn value_to_tool_result_block(value: &Value) -> Option<crate::ToolResultBlock> {
+    match value.get("type").and_then(Value::as_str)? {
+        "text" => Some(crate::ToolResultBlock::Text {
+            text: value
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+        }),
+        "json" => Some(crate::ToolResultBlock::Json {
+            value: value.get("value").cloned().unwrap_or(Value::Null),
+        }),
+        "artifact" => Some(crate::ToolResultBlock::Artifact {
+            artifact_id: value
+                .get("artifact_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
+            preview: value
+                .get("preview")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        _ => None,
+    }
+}
+
+fn stop_reason_from_label(label: &str) -> crate::StopReason {
+    match label {
+        "stop" => crate::StopReason::Stop,
+        "tool_use" => crate::StopReason::ToolUse,
+        "length" => crate::StopReason::Length,
+        "cancelled" => crate::StopReason::Cancelled,
+        "error" => crate::StopReason::Error,
+        value => crate::StopReason::Provider(value.to_string()),
+    }
 }
 
 fn engine_messages_to_agent_messages(messages: &[EngineMessage]) -> Vec<crate::AgentMessage> {

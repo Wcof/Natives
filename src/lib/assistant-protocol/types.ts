@@ -272,6 +272,8 @@ export type RunEventType =
   | 'text_delta'
   | 'reasoning_delta'
   | 'tool_call_requested'
+  | 'tool_call_prepared'
+  | 'context_snapshot_committed'
   | 'tool_call_started'
   | 'tool_call_delta'
   | 'tool_call_completed'

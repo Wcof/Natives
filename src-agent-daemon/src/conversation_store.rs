@@ -30,6 +30,62 @@ pub fn append_message_public(params: Value) -> Result<Value, String> {
     append_message(params)
 }
 
+/// Atomically persist a leased steering/follow-up input and acknowledge the
+/// queue row. A crash before commit leaves the lease recoverable; a crash after
+/// commit cannot duplicate the user message because its id is queue-derived.
+pub fn persist_queued_input_and_ack(
+    conversation_id: &str,
+    run_id: &str,
+    input_id: &str,
+    content: &str,
+) -> Result<(), String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let message_id = format!("queue:{input_id}");
+    tx.execute(
+        "INSERT OR IGNORE INTO message
+         (id, conversation_id, role, status, run_id, legacy_marker, created_at)
+         VALUES (?1, ?2, 'user', 'complete', ?3, ?4, ?5)",
+        params![
+            message_id,
+            conversation_id,
+            run_id,
+            format!("prompt_queue:{input_id}"),
+            now
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT OR IGNORE INTO message_block
+         (message_id, sort_order, block_type, block_json)
+         VALUES (?1, 0, 'text', ?2)",
+        params![
+            message_id,
+            serde_json::json!({ "text": content }).to_string()
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    let changed = tx
+        .execute(
+            "UPDATE prompt_queue SET status = 'sent', consumed_turn_id = ?1,
+             lease_token = NULL, lease_run_id = NULL, leased_at = NULL, updated_at = ?2
+             WHERE id = ?3 AND conversation_id = ?4 AND lease_run_id = ?5 AND status = 'leased'",
+            params![run_id, now, input_id, conversation_id, run_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed != 1 {
+        return Err("queue lease was lost before message commit".into());
+    }
+    tx.execute(
+        "UPDATE conversation SET updated_at = ?1 WHERE id = ?2",
+        params![now, conversation_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 fn store() -> Result<DataStore, String> {
     // Phase 0: Daemon conversation/run authority is assistant.db.
     // Prefer NATIVES_ASSISTANT_DB_PATH; fall back to NATIVES_DB_PATH for tests that
@@ -484,7 +540,7 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
     let Some(rows) = messages.as_array() else {
         return Ok(Vec::new());
     };
-    let mut history: Vec<_> = rows
+    let raw_history: Vec<_> = rows
         .iter()
         .filter_map(|message| {
             let role = message.get("role")?.as_str()?.to_string();
@@ -515,6 +571,24 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
             })
         })
         .collect();
+    // Legacy EngineMessage consumers expect the tool result summary adjacent
+    // to the assistant call. Typed persistence keeps it as its own message;
+    // this adapter only folds the display text at the compatibility edge.
+    let mut history: Vec<EngineMessage> = Vec::with_capacity(raw_history.len());
+    for message in raw_history {
+        if message.role == "assistant" && message.content.contains("[tool result:") {
+            if let Some(previous) = history.last_mut() {
+                if previous.role == "assistant" {
+                    if !previous.content.is_empty() {
+                        previous.content.push('\n');
+                    }
+                    previous.content.push_str(&message.content);
+                    continue;
+                }
+            }
+        }
+        history.push(message);
+    }
     if let Some(summary) = latest_context_summary(conversation_id)? {
         history.insert(0, EngineMessage::text("system", summary));
     }
@@ -619,6 +693,29 @@ pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, S
         }
     }
     Ok(out)
+}
+
+/// Load the newest lossless active-context snapshot when one exists. A missing
+/// or malformed snapshot is a normal cache miss: callers fall back to the
+/// durable full message history.
+pub fn load_active_context_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT snapshot_json FROM context_snapshot
+             WHERE conversation_id = ?1 AND snapshot_type = 'compaction'
+             ORDER BY sequence DESC LIMIT 1",
+            params![conversation_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let value = serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string())?;
+    Ok(agent_core::agent_messages_from_json(&value))
 }
 
 fn parse_content_block(block: &Value) -> Option<ContentBlock> {
@@ -765,12 +862,19 @@ fn block_text(block: &Value) -> Option<String> {
             Some(format!("[attachment: {name} at {path}]"))
         }
         "tool_result" => {
-            let content = block.get("content").unwrap_or(block);
-            let name = content
+            let metadata = block
+                .get("content")
+                .filter(|value| value.is_object())
+                .unwrap_or(block);
+            let name = metadata
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("tool");
-            let output = content.get("output").cloned().unwrap_or(Value::Null);
+            let output = metadata
+                .get("output")
+                .cloned()
+                .or_else(|| metadata.get("content").cloned())
+                .unwrap_or(Value::Null);
             Some(format!("[tool result: {name} => {output}]"))
         }
         _ => None,
@@ -819,6 +923,34 @@ fn reasoning_block_from_events(events: &[RunEventV2]) -> Option<Value> {
 }
 
 pub fn append_assistant_turn_from_events(
+    conversation_id: &str,
+    run_id: &str,
+    events: &[RunEventV2],
+) -> Result<Option<String>, String> {
+    let mut groups: Vec<Vec<RunEventV2>> = Vec::new();
+    let mut current = Vec::new();
+    for event in events {
+        if matches!(&event.payload, RunEventKind::TurnStarted { .. }) && !current.is_empty() {
+            groups.push(std::mem::take(&mut current));
+        }
+        current.push(event.clone());
+        if matches!(&event.payload, RunEventKind::TurnCompleted { .. }) {
+            groups.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    let mut last_id = None;
+    for group in groups {
+        if let Some(id) = append_single_assistant_turn(conversation_id, run_id, &group)? {
+            last_id = Some(id);
+        }
+    }
+    Ok(last_id)
+}
+
+fn append_single_assistant_turn(
     conversation_id: &str,
     run_id: &str,
     events: &[RunEventV2],
@@ -901,6 +1033,16 @@ pub fn append_assistant_turn_from_events(
         Some(&typed_turn_id),
         &AgentMessage::Assistant(assistant),
     )?;
+    if let Some(reasoning) = reasoning_block_from_events(events) {
+        let db = store()?;
+        let conn = db.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO message_block (message_id, sort_order, block_type, block_json)
+             VALUES (?1, -1, 'reasoning', ?2)",
+            params![appended_id, reasoning.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     for (id, name, output, is_error, duration_ms) in tool_results {
         let result = agent_core::ToolResultMessage {
             message_id: agent_core::MessageId::new(),
@@ -929,6 +1071,16 @@ fn persist_turn_record(
 ) -> Result<(), String> {
     let store = store()?;
     let conn = store.conn()?;
+    let run_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM run WHERE id = ?1)",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("check turn run: {e}"))?;
+    if !run_exists {
+        return Ok(());
+    }
     let sequence = events
         .iter()
         .filter_map(|event| match &event.payload {
@@ -967,13 +1119,41 @@ fn persist_context_snapshots_from_events(
         .optional()
         .map_err(|e| e.to_string())?;
     for event in events {
-        let RunEventKind::ContextCompressed {
-            before_tokens,
-            after_tokens,
-            summary,
-        } = &event.payload
-        else {
-            continue;
+        let (snapshot_id, before_tokens, after_tokens, summary, committed) = match &event.payload {
+            RunEventKind::ContextCompressed {
+                before_tokens,
+                after_tokens,
+                summary,
+            } => (None, *before_tokens, *after_tokens, summary.as_str(), None),
+            RunEventKind::ContextSnapshotCommitted {
+                snapshot_id,
+                input_message_ids,
+                summary_message_id,
+                replaced_range,
+                algorithm_version,
+                provider_context_window,
+                artifact_reference,
+                turn_id,
+                source_revision,
+                snapshot_json,
+            } => (
+                Some(snapshot_id.as_str()),
+                0,
+                0,
+                "",
+                Some((
+                    input_message_ids,
+                    summary_message_id.as_deref(),
+                    replaced_range.as_deref(),
+                    algorithm_version.as_str(),
+                    *provider_context_window,
+                    artifact_reference.as_deref(),
+                    turn_id.as_deref(),
+                    *source_revision,
+                    snapshot_json,
+                )),
+            ),
+            _ => continue,
         };
         let exists: i64 = conn
             .query_row(
@@ -986,7 +1166,7 @@ fn persist_context_snapshots_from_events(
         if exists > 0 {
             continue;
         }
-        let turn_id = events[..events
+        let event_turn_id = events[..events
             .iter()
             .position(|candidate| {
                 candidate.effective_run_sequence() == event.effective_run_sequence()
@@ -999,29 +1179,73 @@ fn persist_context_snapshots_from_events(
                 | RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
                 _ => None,
             });
+        let turn_id = committed
+            .and_then(|value| value.6.map(str::to_string))
+            .or(event_turn_id);
+        let snapshot_id = snapshot_id
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let (
+            input_message_ids,
+            summary_message_id,
+            replaced_range,
+            algorithm_version,
+            provider_context_window,
+            artifact_reference,
+            source_revision,
+            snapshot_json,
+        ) = committed
+            .map(|value| {
+                (
+                    serde_json::to_string(value.0).unwrap_or_else(|_| "[]".into()),
+                    value.1.map(str::to_string),
+                    value.2.map(str::to_string),
+                    value.3.to_string(),
+                    value.4,
+                    value.5.map(str::to_string),
+                    value.7,
+                    value.8.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    "[]".into(),
+                    None,
+                    None,
+                    "mechanical-v1".into(),
+                    None,
+                    None,
+                    event.effective_run_sequence(),
+                    serde_json::json!({
+                        "before_tokens": before_tokens,
+                        "after_tokens": after_tokens,
+                        "event_sequence": event.effective_run_sequence(),
+                    }),
+                )
+            });
         conn.execute(
             "INSERT INTO context_snapshot (
                 id, run_id, conversation_id, turn_id, sequence, snapshot_type, token_count, summary,
-                source_revision, algorithm_version, snapshot_json
+                source_revision, input_message_ids, summary_message_id, replaced_range,
+                algorithm_version, provider_context_window, artifact_reference, snapshot_json
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, 'compaction', ?6, ?7, ?5, 'mechanical-v1', ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, 'compaction', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
-                uuid::Uuid::new_v4().to_string(),
+                snapshot_id,
                 run_id,
                 conversation_id,
                 turn_id,
                 event.effective_run_sequence() as i64,
-                *after_tokens as i64,
+                after_tokens as i64,
                 summary,
-                serde_json::json!({
-                    "before_tokens": before_tokens,
-                    "after_tokens": after_tokens,
-                    "event_sequence": event.effective_run_sequence(),
-                    "input_message_ids": [],
-                    "replaced_range": null,
-                    "provider_context_window": null,
-                })
-                .to_string()
+                source_revision as i64,
+                input_message_ids,
+                summary_message_id,
+                replaced_range,
+                algorithm_version,
+                provider_context_window.map(|value| value as i64),
+                artifact_reference,
+                snapshot_json.to_string()
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1111,15 +1335,32 @@ pub fn append_agent_message(
     turn_id: Option<&str>,
     message: &AgentMessage,
 ) -> Result<String, String> {
+    // Legacy fixtures use symbolic ids without corresponding FK rows. Real
+    // daemon runs are UUIDs and keep the binding; the compatibility marker is
+    // still written below for symbolic test/replay events.
+    let durable_run_id = run_id.filter(|value| !value.starts_with("run-"));
+    let durable_turn_id =
+        turn_id.filter(|value| !value.starts_with("turn-") && !value.starts_with("legacy-turn:"));
     let (id, role, blocks, stop_reason) = agent_message_parts(message);
     let mut payload = serde_json::json!({
         "id": id,
         "conversation_id": conversation_id,
         "role": role,
-        "run_id": run_id,
-        "turn_id": turn_id,
+        "run_id": durable_run_id,
+        "turn_id": durable_turn_id,
         "blocks": blocks,
     });
+    if role == "assistant" {
+        if let Some(run_id) = run_id {
+            payload["blocks"]
+                .as_array_mut()
+                .expect("typed message blocks are an array")
+                .push(serde_json::json!({
+                    "type": "run_reference",
+                    "run_id": run_id,
+                }));
+        }
+    }
     if let Some(reason) = stop_reason {
         payload["stop_reason"] = serde_json::Value::String(reason);
     }

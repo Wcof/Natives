@@ -580,6 +580,7 @@ impl ToolHandler for RunTerminalTool {
         let snap = tokio::select! {
             biased;
             _ = context.cancel.cancelled() => {
+                let _ = supervisor.cancel(&task_id).await;
                 return Err(ToolError {
                     code: "cancelled".into(),
                     message: "run cancelled during terminal spawn".into(),

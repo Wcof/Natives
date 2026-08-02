@@ -15,7 +15,8 @@ use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
 use capability_gateway::{CapabilityGateway, SideEffect};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Mutex};
@@ -191,11 +192,40 @@ pub struct PermissionGatedTools {
 
 pub struct DaemonToolProgressSink {
     pub events: EventSequencer,
+    settled: Arc<Mutex<HashSet<String>>>,
+    last_emit: Arc<Mutex<HashMap<String, Instant>>>,
+    sequence: Arc<AtomicU64>,
+}
+
+impl DaemonToolProgressSink {
+    pub fn new(events: EventSequencer) -> Self {
+        Self {
+            events,
+            settled: Arc::new(Mutex::new(HashSet::new())),
+            last_emit: Arc::new(Mutex::new(HashMap::new())),
+            sequence: Arc::new(AtomicU64::new(1)),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl ToolProgressSink for DaemonToolProgressSink {
     async fn publish(&self, update: ToolProgressUpdate) {
+        if self.settled.lock().await.contains(&update.tool_call_id) {
+            return;
+        }
+        if !update.final_update {
+            let mut last = self.last_emit.lock().await;
+            let now = Instant::now();
+            if last
+                .get(&update.tool_call_id)
+                .is_some_and(|value| now.duration_since(*value) < Duration::from_millis(50))
+            {
+                return;
+            }
+            last.insert(update.tool_call_id.clone(), now);
+        }
+        let progress_sequence = self.sequence.fetch_add(1, AtomicOrdering::Relaxed);
         self.events.append(
             &update.run_id,
             RunEventKind::ToolOutputDelta {
@@ -203,8 +233,15 @@ impl ToolProgressSink for DaemonToolProgressSink {
                 stream: update.stream,
                 text: update.text,
                 truncated: false,
+                turn_id: update.turn_id,
+                message_id: update.message_id,
+                progress_sequence: Some(progress_sequence),
             },
         );
+    }
+
+    async fn mark_tool_call_settled(&self, tool_call_id: &str) {
+        self.settled.lock().await.insert(tool_call_id.to_string());
     }
 }
 impl PermissionGatedTools {
@@ -328,11 +365,11 @@ impl EngineToolRuntime for PermissionGatedTools {
         )
         .into_iter()
         .map(|schema| {
-            let mode = match self
+            let gateway_side_effect = self
                 .gateway
                 .get_tool(&schema.name)
-                .map(|tool| tool.side_effect)
-            {
+                .map(|tool| tool.side_effect);
+            let mode = match gateway_side_effect {
                 Some(capability_gateway::SideEffect::ReadOnly) => {
                     agent_core::ToolExecutionMode::ParallelSafe
                 }
@@ -342,9 +379,27 @@ impl EngineToolRuntime for PermissionGatedTools {
                 }
                 _ => agent_core::ToolExecutionMode::Sequential,
             };
+            let side_effect = match gateway_side_effect {
+                Some(capability_gateway::SideEffect::ReadOnly) => {
+                    agent_core::ToolSideEffect::ReadOnly
+                }
+                Some(capability_gateway::SideEffect::Write) => agent_core::ToolSideEffect::Write,
+                Some(capability_gateway::SideEffect::Destructive) => {
+                    agent_core::ToolSideEffect::Destructive
+                }
+                Some(capability_gateway::SideEffect::Network) => {
+                    agent_core::ToolSideEffect::Network
+                }
+                Some(capability_gateway::SideEffect::Process) => {
+                    agent_core::ToolSideEffect::Process
+                }
+                None => agent_core::ToolSideEffect::Destructive,
+            };
             agent_core::ToolCapability {
                 name: schema.name,
+                schema: schema.input_schema,
                 execution_mode: mode,
+                side_effect,
                 conflict_key: None,
             }
         })
@@ -366,9 +421,14 @@ impl EngineToolRuntime for PermissionGatedTools {
                 stream: "status".into(),
                 text: "started".into(),
                 final_update: false,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: 0,
             })
             .await;
-        let result = self.execute_tool(name, input, cancel).await;
+        let result = self
+            .execute_tool_with_call_id(name, input, cancel, None)
+            .await;
         progress
             .publish(ToolProgressUpdate {
                 run_id: self.parent_run_id.clone(),
@@ -382,6 +442,9 @@ impl EngineToolRuntime for PermissionGatedTools {
                 }
                 .into(),
                 final_update: true,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: 0,
             })
             .await;
         result
@@ -390,6 +453,8 @@ impl EngineToolRuntime for PermissionGatedTools {
     async fn execute_tool_with_progress_for_call(
         &self,
         call_id: &str,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
         name: &str,
         input: Value,
         cancel: &CancellationToken,
@@ -403,9 +468,14 @@ impl EngineToolRuntime for PermissionGatedTools {
                 stream: "status".into(),
                 text: "started".into(),
                 final_update: false,
+                turn_id: turn_id.map(str::to_string),
+                message_id: message_id.map(str::to_string),
+                progress_sequence: 0,
             })
             .await;
-        let result = self.execute_tool(name, input, cancel).await;
+        let result = self
+            .execute_tool_with_call_id(name, input, cancel, Some(call_id))
+            .await;
         progress
             .publish(ToolProgressUpdate {
                 run_id: self.parent_run_id.clone(),
@@ -419,6 +489,9 @@ impl EngineToolRuntime for PermissionGatedTools {
                 }
                 .into(),
                 final_update: true,
+                turn_id: turn_id.map(str::to_string),
+                message_id: message_id.map(str::to_string),
+                progress_sequence: 0,
             })
             .await;
         result
@@ -429,6 +502,17 @@ impl EngineToolRuntime for PermissionGatedTools {
         name: &str,
         input: Value,
         cancel: &CancellationToken,
+    ) -> ToolExecutionResult {
+        self.execute_tool_with_call_id(name, input, cancel, None)
+            .await
+    }
+
+    async fn execute_tool_with_call_id(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        call_id: Option<&str>,
     ) -> ToolExecutionResult {
         if cancel.is_cancelled() {
             return ToolExecutionResult {
@@ -695,7 +779,10 @@ impl EngineToolRuntime for PermissionGatedTools {
         let started = Instant::now();
         // Stable id for tool_output_delta correlation (engine also emits its own
         // tool_call_* ids; UI merges by tool_call_id when present on deltas).
-        let stream_tool_call_id = uuid::Uuid::new_v4().to_string();
+        let stream_tool_call_id = call_id
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Create tool call context
         let cancel = if let Some(rt) = &self.runtime {
@@ -886,6 +973,9 @@ fn emit_terminal_output_deltas(
                         stream: stream.into(),
                         text: String::new(),
                         truncated: true,
+                        turn_id: None,
+                        message_id: None,
+                        progress_sequence: None,
                     },
                 );
                 return;
@@ -902,6 +992,9 @@ fn emit_terminal_output_deltas(
                     stream: stream.into(),
                     text: chunk,
                     truncated: persisted >= MAX_PERSIST || end < bytes.len() && take < CHUNK,
+                    turn_id: None,
+                    message_id: None,
+                    progress_sequence: None,
                 },
             );
             offset = end;

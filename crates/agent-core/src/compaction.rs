@@ -108,12 +108,17 @@ pub fn compact_messages(messages: &[Value], max_tool_chars: usize) -> CompactRes
                 ));
                 let mut trimmed = m.clone();
                 if let Some(obj) = trimmed.as_object_mut() {
+                    let compacted = format!(
+                        "{preview}\n…[truncated {} chars for compaction]",
+                        content.len().saturating_sub(preview.len())
+                    );
+                    obj.insert("content".into(), json!(compacted.clone()));
+                    // Typed transcripts also carry lossless blocks. Replace
+                    // those blocks at the same boundary or the parser would
+                    // silently restore the oversized JSON on the next turn.
                     obj.insert(
-                        "content".into(),
-                        json!(format!(
-                            "{preview}\n…[truncated {} chars for compaction]",
-                            content.len().saturating_sub(preview.len())
-                        )),
+                        "tool_result_blocks".into(),
+                        json!([{ "type": "text", "text": compacted }]),
                     );
                 }
                 out.push(trimmed);
@@ -281,8 +286,13 @@ fn render_message_line(message: &Value, max_message_chars: usize) -> String {
     let role = role_of(message);
     let mut body = message
         .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string())
+        })
+        .unwrap_or_default()
         .trim()
         .to_string();
     if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {

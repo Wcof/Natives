@@ -6,7 +6,7 @@
 
 - 严重等级：P0
 - 所属模块：src-agent-daemon Provider 装配 / Credential Broker
-- 实现状态：已修复（本轮代码，待合并）
+- 实现状态：已修复（当前 worktree）
 - 原始代码证据：production.rs 的 RealProvider::stream_with_controls；production_credentials.rs 的 resolve_credential_for_run。
 - 原始行为：Provider 使用固定 provider-stream，EngineProvider 没有 Run identity。
 - 修复后行为：agent-core 的 EngineProviderContext 携带 run_id 与 attempt；AgentEngine 调用 stream_with_context；RoutedProvider 将上下文传给 RealProvider::stream_with_context_controls；Broker 现在收到真实 Run ID。无上下文 helper 仅保留 legacy-unbound，不在 Engine 生产主链使用。
@@ -17,7 +17,7 @@
 
 - 严重等级：P0
 - 所属模块：src-agent-daemon / provider-adapters
-- 实现状态：已修复（本轮代码，待合并）
+- 实现状态：已修复（当前 worktree）
 - 原始代码证据：production.rs::resolve_adapter；provider-adapters/providers/openai.rs::prefers_responses_api。
 - 原始行为：Responses 路由通过 std::env::set_var("NATIVES_OPENAI_API", "responses") 改写进程状态。
 - 修复后行为：OpenAiAdapter 增加不可变 OpenAiApiMode；Daemon 直接构造 Responses 模式；prefers_responses_api 不再读取环境变量。
@@ -28,7 +28,7 @@
 
 - 严重等级：P0
 - 所属模块：agent-core / capability-gateway
-- 实现状态：已修复（本轮代码，待合并）
+- 实现状态：已修复（当前 worktree）
 - 原始代码证据：agent-core engine 参数累积处；CapabilityGateway::execute。
 - 原始行为：解析失败后包装 { "raw": ... }，Gateway 不验证注册 Schema。
 - 修复后行为：Core 严格 JSON 解析，失败生成 INVALID_TOOL_ARGUMENTS；Gateway 在 Handler 前执行 type、properties、required、additionalProperties、items、enum 和 numeric bounds 校验。全部内置 Schema 已通过清点。
@@ -39,7 +39,7 @@
 
 - 严重等级：P0
 - 所属模块：provider-adapters → src-agent-daemon → agent-core
-- 实现状态：已修复（本轮代码，待合并；缺少完整 live provider 验证）
+- 实现状态：已修复（当前 worktree；缺少完整 live provider 验证）
 - 原始代码证据：各 Adapter 的无参数 ProviderEvent::Completed；agent-core::EngineProviderEvent。
 - 原始行为：Core 无法区分 stop、tool_use、length。
 - 修复后行为：Provider Adapter 统一携带 ProviderStopReason；OpenAI SSE、Responses、Anthropic、Gemini 与兼容路径均映射完成原因。Core 对 Length、Unknown 或无 Final Event 的 Tool Call 构造配对错误结果，Handler 不执行。
@@ -50,7 +50,7 @@
 
 - 严重等级：P0
 - 所属模块：crates/agent-core
-- 实现状态：已修复（本轮代码，待合并）
+- 实现状态：已修复（当前 worktree）
 - 原始代码证据：PreToolUse Deny 分支及后续 denied 跳过逻辑。
 - 原始行为：拒绝项只发事件，Assistant Tool Call / Tool Result 被跳过。
 - 修复后行为：PreparedToolCall.rejected 统一承载 Hook Deny、Invalid JSON 和 fail-closed 错误；execute_prepared_tools 跳过 Handler 但保留 ExecutedToolCall；后续始终加入 Assistant Tool Call 与同 ID Tool Result，并发出一个 ToolCallCompleted。
@@ -72,10 +72,10 @@
 
 - 严重等级：P1
 - 所属模块：Conversation Store / agent-core message model
-- 实现状态：部分修复（深化阶段；完整 Active Context 重放仍待验证）
+- 实现状态：部分修复（当前 worktree；已保存 snapshot_json 并提供 replay API）
 - 原始代码证据：conversation_store.rs；agent-core EngineMessage。
-- 当前行为：typed message 已写入/读取 `message_block` 并保留 ToolCall/ToolResult identity；compaction artifact 与完整 active snapshot 仍可能丢失。
-- 新代码证据：`src-agent-daemon/src/conversation_store.rs::load_agent_messages`、migration 028 的 context_snapshot 字段。
+- 当前行为：typed message 已写入/读取 `message_block` 并保留 ToolCall/ToolResult identity；ContextSnapshotCommitted 现在持久化完整 typed `snapshot_json`，但尚未把 snapshot 作为所有重启路径的唯一 active-context 来源。
+- 新代码证据：`src-agent-daemon/src/conversation_store.rs::load_agent_messages`、`load_active_context_messages`、`persist_context_snapshots_from_events`；`crates/agent-core/src/engine.rs::agent_messages_from_json`；migration 028 的 context_snapshot 字段。
 - 建议：补齐 artifact 内容、source message ids 和 provider window 的可重放 fixture。
 
 ## Event 持久化失败未在所有执行接缝 fail closed

@@ -556,9 +556,7 @@ impl ProductionRuntime {
                         run_id.clone(),
                     ),
                 ))
-                .with_progress_sink(Arc::new(DaemonToolProgressSink {
-                    events: self.events.clone(),
-                }))
+                .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.events.clone())))
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
         self.engines
@@ -567,19 +565,18 @@ impl ProductionRuntime {
             .insert(run_id.clone(), engine.clone());
 
         // Phase 3: logical checkpoint at run start (lazy before-images on writes).
-        if let Ok(cp_id) = crate::checkpoint::global_checkpoint_manager().begin_run(
-            &run_id,
-            &conversation_id,
-            &project_root,
-        ) {
-            self.events.append(
+        let checkpoint_id = crate::checkpoint::global_checkpoint_manager()
+            .begin_run(&run_id, &conversation_id, &project_root)
+            .map_err(|error| format!("checkpoint begin failed: {error}"))?;
+        self.events
+            .append_checked(
                 &run_id,
                 RunEventKind::CheckpointCreated {
-                    checkpoint_id: cp_id,
+                    checkpoint_id,
                     label: Some("run_start".into()),
                 },
-            );
-        }
+            )
+            .map_err(|error| format!("checkpoint event persistence failed: {error}"))?;
         // Mark coordinator running so terminal drain / cancel-and-send are scoped.
         crate::prompt_queue_store::global_harness().mark_running(
             &conversation_id,
@@ -661,26 +658,10 @@ impl ProductionRuntime {
         } else {
             agent_core::agent_messages_to_engine_messages(&typed_history)
         };
-        let history_pairs: Vec<(String, String)> = raw_history
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let (compacted, _) = agent_core::compact_messages(&history_pairs, budget.token_budget);
-        // Map compacted (role, content) back to EngineMessage, preserving tool fields
-        // for messages still present (match by role+content).
-        let messages: Vec<EngineMessage> = compacted
-            .into_iter()
-            .map(|(role, content)| {
-                if let Some(orig) = raw_history
-                    .iter()
-                    .find(|m| m.role == role && m.content == content)
-                {
-                    orig.clone()
-                } else {
-                    EngineMessage::text(role, content)
-                }
-            })
-            .collect();
+        // The Core owns active-context compaction. Keep the daemon boundary
+        // lossless so typed tool calls/results are not flattened before the
+        // engine can snapshot or repair them.
+        let messages = raw_history;
         let config = EngineRunConfig {
             run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
@@ -736,9 +717,18 @@ impl ProductionRuntime {
             )?;
         }
         // Finalize checkpoint — failure closes related side effects (no silent half-state).
-        if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
-            eprintln!("[production] checkpoint finalize_run failed: {e}");
-        }
+        let checkpoint = crate::checkpoint::global_checkpoint_manager()
+            .finalize_run(&run_id)
+            .map_err(|error| format!("checkpoint finalize_run failed: {error}"))?;
+        self.events
+            .append_checked(
+                &run_id,
+                RunEventKind::CheckpointCreated {
+                    checkpoint_id: checkpoint.id,
+                    label: Some("run_complete".into()),
+                },
+            )
+            .map_err(|error| format!("checkpoint commit event persistence failed: {error}"))?;
         // Do NOT commit_outcome or append terminal lifecycle events here.
         // RunManager is the sole lifecycle committer after this returns.
         self.engines.lock().await.remove(&run_id);

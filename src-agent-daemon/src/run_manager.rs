@@ -1988,6 +1988,15 @@ impl RunManager {
                 )
                 .map_err(|e| e.to_string())?;
             if uncertain != 0 {
+                let _ = store.conn()?.execute(
+                    "INSERT INTO resume_plan (id, source_run_id, action, status, unresolved_effects_json)
+                     VALUES (?1, ?2, 'retry', 'blocked', ?3)",
+                    rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        &req.run_id,
+                        serde_json::json!({"reason": "uncertain_side_effect"}).to_string()
+                    ],
+                );
                 return Err(
                     "run has uncertain side effects; inspect or compensate before retrying".into(),
                 );
@@ -2020,6 +2029,15 @@ impl RunManager {
             effort: original.effort.clone(),
             runtime_id: original.runtime_id.clone(),
         })?;
+        if let Some(store) = &self.data_store {
+            let _ = store.conn()?.execute(
+                "INSERT INTO resume_plan (id, source_run_id, new_run_id, action, checkpoint_id, status)
+                 VALUES (?1, ?2, ?3, 'retry',
+                         (SELECT id FROM checkpoint WHERE run_id = ?2 ORDER BY created_at DESC LIMIT 1),
+                         'executed')",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), &req.run_id, &new_run.id],
+            );
+        }
         if let Some(c) = content {
             self.last_content
                 .lock()

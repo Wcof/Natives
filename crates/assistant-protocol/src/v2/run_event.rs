@@ -90,6 +90,14 @@ pub enum RunEventKind {
         name: String,
         input: serde_json::Value,
     },
+    /// Prepared after JSON/schema/hook checks and before permission/handler.
+    ToolCallPrepared {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+        execution_mode: String,
+        side_effect: String,
+    },
     ToolCallStarted {
         id: String,
         name: String,
@@ -114,6 +122,12 @@ pub enum RunEventKind {
         stream: String,
         text: String,
         truncated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        progress_sequence: Option<u64>,
     },
     PermissionRequested {
         tool_call_id: String,
@@ -237,6 +251,20 @@ pub enum RunEventKind {
         after_tokens: u64,
         summary: String,
     },
+    /// Durable active-context snapshot committed after compaction.
+    ContextSnapshotCommitted {
+        snapshot_id: String,
+        turn_id: Option<String>,
+        source_revision: u64,
+        input_message_ids: Vec<String>,
+        summary_message_id: Option<String>,
+        replaced_range: Option<String>,
+        algorithm_version: String,
+        provider_context_window: Option<u64>,
+        artifact_reference: Option<String>,
+        #[serde(default)]
+        snapshot_json: serde_json::Value,
+    },
     SubagentCreated {
         sub_run_id: String,
         agent_profile_id: Option<String>,
@@ -333,6 +361,7 @@ impl RunEventKind {
             Self::TextDelta { .. } => "text_delta",
             Self::ReasoningDelta { .. } => "reasoning_delta",
             Self::ToolCallRequested { .. } => "tool_call_requested",
+            Self::ToolCallPrepared { .. } => "tool_call_prepared",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallDelta { .. } => "tool_call_delta",
             Self::ToolCallCompleted { .. } => "tool_call_completed",
@@ -351,6 +380,7 @@ impl RunEventKind {
             Self::ContextUsageUpdated { .. } => "context_usage_updated",
             Self::UsageUpdated { .. } => "usage_updated",
             Self::ContextCompressed { .. } => "context_compressed",
+            Self::ContextSnapshotCommitted { .. } => "context_snapshot_committed",
             Self::SubagentCreated { .. } => "subagent_created",
             Self::SubagentCompleted { .. } => "subagent_completed",
             Self::SubagentFailed { .. } => "subagent_failed",

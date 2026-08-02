@@ -122,17 +122,22 @@ impl EngineInputReceiver for DurableInputReceiver {
     async fn ack(&self, input_id: &str) {
         let Ok(store) = store() else { return };
         let Ok(conn) = store.conn() else { return };
-        let _ = conn.execute(
-            "UPDATE prompt_queue SET status = 'sent', consumed_turn_id = ?1,
-                lease_token = NULL, lease_run_id = NULL, leased_at = NULL,
-                updated_at = ?2 WHERE id = ?3 AND lease_run_id = ?4",
-            params![
-                self.run_id,
-                chrono::Utc::now().to_rfc3339(),
+        let content = conn
+            .query_row(
+                "SELECT content FROM prompt_queue
+                 WHERE id = ?1 AND conversation_id = ?2 AND lease_run_id = ?3 AND status = 'leased'",
+                params![input_id, self.conversation_id, self.run_id],
+                |row| row.get::<_, String>(0),
+            );
+        drop(conn);
+        if let Ok(content) = content {
+            let _ = conversation_store::persist_queued_input_and_ack(
+                &self.conversation_id,
+                &self.run_id,
                 input_id,
-                self.run_id
-            ],
-        );
+                &content,
+            );
+        }
     }
 }
 
