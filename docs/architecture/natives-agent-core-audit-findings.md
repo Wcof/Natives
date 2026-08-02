@@ -477,3 +477,13 @@
 - 原始行为：单工具校验存在，但坏 manifest 可能在生产广告/执行前未被整体发现。
 - 当前行为：装配和 Run preflight 都校验所有注册 Schema；失败以 `TOOL_SCHEMA_INVALID` 终止。
 - 测试方式：strict check 通过；启动坏 manifest fixture 仍待补充。
+## Typed transcript block 被静默降级
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/conversation_store.rs`、`crates/agent-core/src/engine.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`parse_content_block`、`validate_snapshot_content_blocks`
+- 原始行为：typed reload 对缺失字段、未知 block、坏 image source 使用 `Option`/`filter_map` 静默丢弃；tool call 可带空身份或未经 JSON 校验的 arguments；`file_reference` 无法恢复。
+- 当前行为：所有 typed block 严格返回结构错误；tool call identity 与 arguments 必须有效 JSON；附件恢复为 provider-safe marker；snapshot 采用同等 JSON 校验。
+- 影响：损坏历史不会被当作可执行上下文，合法附件不会在恢复时使整段对话丢失。
+- 测试方式：`typed_loader_handles_attachments_and_rejects_malformed_tool_calls`、`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过；真实损坏数据库 fault-injection 仍待运行。

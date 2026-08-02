@@ -2770,6 +2770,18 @@ fn validate_snapshot_content_blocks(message_id: &str, value: &Value) -> Result<(
                         ));
                     }
                 }
+                let arguments =
+                    block
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            format!("snapshot message {message_id} tool call arguments are missing")
+                        })?;
+                serde_json::from_str::<Value>(arguments).map_err(|error| {
+                    format!(
+                        "snapshot message {message_id} tool call arguments are invalid JSON: {error}"
+                    )
+                })?;
             }
             other => {
                 return Err(format!(
@@ -3180,6 +3192,19 @@ mod tests {
         }]);
         let decoded = try_agent_messages_from_json(&valid).expect("valid snapshot");
         assert_eq!(decoded.len(), 1);
+
+        let malformed_arguments = serde_json::json!([{
+            "role": "assistant",
+            "message_id": "m-3",
+            "blocks": [{
+                "type": "tool_call",
+                "tool_call_id": "call-2",
+                "name": "read_file",
+                "arguments": "{not-json}"
+            }]
+        }]);
+        let error = try_agent_messages_from_json(&malformed_arguments).unwrap_err();
+        assert!(error.contains("arguments are invalid JSON"));
     }
 
     struct FakeProvider {

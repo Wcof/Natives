@@ -227,3 +227,9 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 精确命令：
   `CARGO_TARGET_DIR=/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_INCREMENTAL=0 CARGO_TERM_PROGRESS_WHEN=never cargo test -p natives-agent-daemon checked_safe_point_persists_interjection_consumption -- --test-threads=2 --nocapture`（1 passed）。
 - `checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 均通过。最新 `RUSTFLAGS=-Dwarnings cargo check -p agent-core -p harness-core -p capability-gateway -p provider-adapters -p assistant-protocol -p natives-agent-daemon`、`cargo fmt --all` 与 `git diff --check` 通过；workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP fixture 和 permission fault-injection 仍未验证。
+## 27. Typed history reload safety closure（当前 Worktree）
+
+- Typed conversation reload 现在对所有 content block 做严格结构、身份和 JSON 校验；坏 tool-call 不会恢复成可执行消息，未知 block 不会静默消失。
+- `file_reference` 恢复为明确的 provider-safe attachment marker，避免已持久化附件导致整段 history 被错误丢弃。
+- Snapshot validator 同样拒绝不可解析的 tool-call arguments。
+- 精确测试 `typed_loader_handles_attachments_and_rejects_malformed_tool_calls` 与 `strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过；全量 workspace/native/frontend 和真实外部 fixture 仍保持未验证。

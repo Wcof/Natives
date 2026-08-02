@@ -183,3 +183,9 @@ Provider stop reason family 映射测试。
 - `RunManager::retry` 拒绝 active Run；队列 user message 与 compaction summary 的 deterministic ID 已改为严格 identity/content 检查，避免 `INSERT OR IGNORE` 掩盖跨 conversation、run 或内容冲突。
 - `CapabilityGateway::validate_registered_schemas` 在 ProductionRuntime 装配和 RunManager preflight 被调用，坏 Schema 使 Run 失败并带 `TOOL_SCHEMA_INVALID`。
 - 精确测试 `checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；strict `RUSTFLAGS=-Dwarnings cargo check` 通过。完整 workspace/native verifier、前端全量测试、真实外部 fixture 和 permission fault-injection 仍不宣称完成。
+## 21. Typed transcript reload closure（当前 Worktree）
+
+- `src-agent-daemon/src/conversation_store.rs` 的 typed block loader 改为严格 `Result`：tool call 必须包含非空 `tool_call_id`、`name` 和合法 JSON arguments；未知/损坏 block 不再被 `filter_map` 静默忽略。
+- `file_reference` 按 provider-safe text marker 恢复，保留附件事实而不把本地路径扩展成新的工具能力。
+- `crates/agent-core/src/engine.rs` 的 snapshot validator 对 tool-call arguments 做最终 JSON 校验。
+- 精确测试：`typed_loader_handles_attachments_and_rejects_malformed_tool_calls`、`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 均通过；未宣称 workspace/native/frontend 全量或真实外部 fixture 完成。

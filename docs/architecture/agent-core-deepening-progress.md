@@ -82,3 +82,9 @@
 - Retry 在 active run 上明确拒绝，避免复制正在执行的 Run；队列消息和 compaction summary 的 deterministic ID 冲突不再由 `INSERT OR IGNORE` 静默吞掉，重复写入必须身份与内容完全一致。
 - Gateway 在生产装配和 Run preflight 阶段校验全部已注册 Schema；任何坏 manifest 都以 `TOOL_SCHEMA_INVALID` 失败，不会关闭全局校验。
 - 精确验证：`checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；最新受控 strict Cargo check、fmt 和 diff check 通过。workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP 与 permission fault-injection 仍未验证。
+## 27. Typed transcript reload trust boundary（当前 Worktree）
+
+- `conversation_store::parse_content_block` 现在对 typed transcript 使用严格解析：缺失身份、空文本、坏 image source、坏 tool-call JSON 或未知 block 均直接返回错误，不再静默丢弃或构造空的可执行调用。
+- 已持久化的 `file_reference` block 现在以 provider-safe attachment marker 重新进入 typed history，避免附件消息在恢复时被误判为损坏。
+- Active Context snapshot 的 tool-call arguments 也必须是可解析 JSON；损坏 snapshot fail closed。
+- 精确验证：`typed_loader_handles_attachments_and_rejects_malformed_tool_calls`、`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过；fmt/diff check 通过。workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP 与 permission fault-injection 仍未验证。

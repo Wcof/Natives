@@ -93,3 +93,8 @@
 - Gateway 注册 Schema 在 ProductionRuntime 装配和 RunManager preflight 均执行全量校验；坏 manifest 以 `TOOL_SCHEMA_INVALID` 阻止 Run。
 - Retry active-run guard 与 deterministic message ID identity/content 校验防止正在执行的 Run 被复制及 SQL `INSERT OR IGNORE` 掩盖事实冲突。
 - 精确验证：`checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；strict warning-as-error Cargo check、fmt、diff check 通过。workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP 与 permission fault-injection 仍未完成，不能按早期章节的“未接生产”描述理解当前状态。
+### 8.1 Typed transcript reload correction
+
+- `load_agent_messages` 不再把 malformed typed blocks 转为空数组项；tool-call identity/JSON、image source 和 required text 均严格检查。
+- Durable `file_reference` blocks 恢复为 provider-safe attachment marker；Active Context snapshot 的 tool-call arguments 也经过 JSON 校验。
+- 精确验证：`typed_loader_handles_attachments_and_rejects_malformed_tool_calls`、`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过。该补丁不改变 RPC、UI 或数据库 schema。

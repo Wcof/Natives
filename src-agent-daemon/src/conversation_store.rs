@@ -916,8 +916,8 @@ pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, S
             .iter()
             .enumerate()
             .map(|(index, block)| {
-                parse_content_block(block).ok_or_else(|| {
-                    format!("message {id} content block {index} is malformed or unsupported")
+                parse_content_block(block).map_err(|error| {
+                    format!("message {id} content block {index} is malformed: {error}")
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1028,56 +1028,85 @@ pub fn load_active_context_messages(conversation_id: &str) -> Result<Vec<AgentMe
         .unwrap_or_default())
 }
 
-fn parse_content_block(block: &Value) -> Option<ContentBlock> {
-    let kind = block.get("type").and_then(Value::as_str)?;
+fn parse_content_block(block: &Value) -> Result<ContentBlock, String> {
+    let kind = block
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "block type is required".to_string())?;
     let content = block.get("content").unwrap_or(block);
     match kind {
-        "text" => Some(ContentBlock::Text {
+        "text" => Ok(ContentBlock::Text {
             text: content
                 .get("text")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
+                .ok_or_else(|| "text block has no text".to_string())?
                 .to_string(),
         }),
-        "thinking" | "reasoning" => Some(ContentBlock::Thinking {
+        "thinking" | "reasoning" => Ok(ContentBlock::Thinking {
             text: content
                 .get("text")
                 .or_else(|| content.get("reasoning"))
                 .and_then(Value::as_str)
-                .unwrap_or_default()
+                .ok_or_else(|| "thinking block has no text".to_string())?
                 .to_string(),
             signature: content
                 .get("signature")
                 .and_then(Value::as_str)
                 .map(str::to_string),
         }),
-        "tool_call" => Some(ContentBlock::ToolCall(agent_core::ToolCall {
-            tool_call_id: agent_core::ToolCallId::from(
-                content
-                    .get("tool_call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            ),
-            name: content
+        "tool_call" => {
+            let name = content
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            arguments_json: content
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "tool call has no name".to_string())?;
+            let tool_call_id = content
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "tool call has no tool_call_id".to_string())?;
+            let arguments_json = content
                 .get("arguments")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        })),
-        "image" => serde_json::from_value::<agent_core::ImageSource>(
-            content
-                .get("source")
-                .cloned()
-                .unwrap_or_else(|| content.clone()),
-        )
-        .ok()
-        .map(|source| ContentBlock::Image { source }),
-        _ => None,
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "tool call has no arguments".to_string())?;
+            serde_json::from_str::<Value>(arguments_json)
+                .map_err(|error| format!("tool call arguments are invalid JSON: {error}"))?;
+            Ok(ContentBlock::ToolCall(agent_core::ToolCall {
+                tool_call_id: agent_core::ToolCallId::from(tool_call_id),
+                name: name.to_string(),
+                arguments_json: arguments_json.to_string(),
+            }))
+        }
+        "image" => {
+            let source = serde_json::from_value::<agent_core::ImageSource>(
+                content
+                    .get("source")
+                    .cloned()
+                    .unwrap_or_else(|| content.clone()),
+            )
+            .map_err(|error| format!("invalid image source: {error}"))?;
+            if source.url.trim().is_empty() {
+                return Err("image source url is empty".into());
+            }
+            Ok(ContentBlock::Image { source })
+        }
+        "file_reference" => {
+            let path = content
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "file reference has no path".to_string())?;
+            let name = content
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(path);
+            Ok(ContentBlock::Text {
+                text: format!("[attachment: {name} at {path}]"),
+            })
+        }
+        other => Err(format!("unsupported block type {other}")),
     }
 }
 
@@ -2378,6 +2407,26 @@ mod tests {
             "content": { "imageUrl": "  " }
         }))
         .is_none());
+    }
+
+    #[test]
+    fn typed_loader_handles_attachments_and_rejects_malformed_tool_calls() {
+        let attachment = parse_content_block(&serde_json::json!({
+            "type": "file_reference",
+            "content": {"path": "/tmp/example.png", "name": "example.png"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            attachment,
+            ContentBlock::Text { text } if text == "[attachment: example.png at /tmp/example.png]"
+        ));
+
+        let malformed = parse_content_block(&serde_json::json!({
+            "type": "tool_call",
+            "content": {"name": "read_file", "arguments": "{}"}
+        }))
+        .unwrap_err();
+        assert!(malformed.contains("tool_call_id"));
     }
 
     #[tokio::test]
