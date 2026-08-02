@@ -5,6 +5,31 @@
 
 use serde_json::Value;
 
+fn ledger_store() -> Result<std::sync::Arc<crate::storage::DataStore>, String> {
+    if let Some(store) = crate::run_manager::global_run_manager().data_store_ref() {
+        return Ok(store);
+    }
+    #[cfg(test)]
+    {
+        use std::sync::OnceLock;
+        static TEST_STORE: OnceLock<std::sync::Arc<crate::storage::DataStore>> = OnceLock::new();
+        let store = TEST_STORE.get_or_init(|| {
+            let db = std::env::temp_dir().join(format!(
+                "natives-side-effect-ledger-test-{}.db",
+                std::process::id()
+            ));
+            let artifacts = db.with_extension("artifacts");
+            std::sync::Arc::new(
+                crate::storage::DataStore::new(&db, &artifacts)
+                    .expect("test side-effect ledger store must migrate"),
+            )
+        });
+        return Ok(store.clone());
+    }
+    #[allow(unreachable_code)]
+    Err("no data store for side_effect_record".to_string())
+}
+
 /// Record a tool side-effect after execution.
 pub fn record_tool_effect(
     run_id: &str,
@@ -14,9 +39,7 @@ pub fn record_tool_effect(
     reversible: bool,
     checkpoint_id: Option<&str>,
 ) -> Result<(), String> {
-    let store = crate::run_manager::global_run_manager()
-        .data_store_ref()
-        .ok_or_else(|| "no data store for side_effect_record".to_string())?;
+    let store = ledger_store()?;
     let conn = store.conn()?;
     let id = uuid::Uuid::new_v4().to_string();
     let summary_s = serde_json::to_string(summary).unwrap_or_else(|_| "{}".into());
@@ -57,9 +80,7 @@ pub fn record_tool_effect_state(
     turn_id: Option<&str>,
     summary: &Value,
 ) -> Result<(), String> {
-    let store = crate::run_manager::global_run_manager()
-        .data_store_ref()
-        .ok_or_else(|| "no data store for side_effect_record".to_string())?;
+    let store = ledger_store()?;
     let conn = store.conn()?;
     let target = summary
         .get("path")

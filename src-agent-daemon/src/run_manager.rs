@@ -3986,7 +3986,9 @@ mod tests {
                             name: Some("read_file".into()),
                             arguments_delta: r#"{"path":"x"}"#.into(),
                         },
-                        agent_core::EngineProviderEvent::Completed,
+                        agent_core::EngineProviderEvent::CompletedWithReason {
+                            reason: agent_core::ProviderStopReason::ToolUse,
+                        },
                     ])))
                 }
             }

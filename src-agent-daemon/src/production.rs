@@ -2391,7 +2391,9 @@ impl EngineProvider for FixtureProvider {
                     name: Some("read_file".into()),
                     arguments_delta: r#"{"path":"Cargo.toml"}"#.into(),
                 },
-                EngineProviderEvent::Completed,
+                EngineProviderEvent::CompletedWithReason {
+                    reason: agent_core::ProviderStopReason::ToolUse,
+                },
             ],
             // Side-effecting tool so PermissionManager ConfirmEach emits permission_requested.
             FixtureMode::RequestPermissionPath => vec![
@@ -2402,7 +2404,9 @@ impl EngineProvider for FixtureProvider {
                     arguments_delta: r#"{"path":"/tmp/natives-perm-test.txt","content":"x"}"#
                         .into(),
                 },
-                EngineProviderEvent::Completed,
+                EngineProviderEvent::CompletedWithReason {
+                    reason: agent_core::ProviderStopReason::ToolUse,
+                },
             ],
         };
         Ok(Box::pin(futures_util::stream::iter(events)))
