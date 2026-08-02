@@ -119,6 +119,8 @@ pub enum RunEventKind {
     /// Incremental tool/process output (terminal stdout/stderr). Batched ~250ms / 8KB.
     ToolOutputDelta {
         tool_call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
         stream: String,
         text: String,
         truncated: bool,

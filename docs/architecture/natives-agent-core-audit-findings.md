@@ -190,3 +190,43 @@
 - 协议广告无 dispatch：未发现。protocol:check 与 rpc_dispatch_contract 在基线通过。
 - 多 Tool Call 只能顺序：不成立。Core 已有受限并行与源序结果回灌，本轮没有重写 Scheduler。
 - 压缩只有字符裁剪：不成立。已有模型摘要、budget 与 dangling repair；token estimate/replay 仍不精确。
+
+## Checkpoint 与 Event Store 使用了不同的持久化权威
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production.rs`、`checkpoint.rs`、`rpc.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：`RunManager::new_with_store` 虽注入了事件 `DataStore`，Checkpoint 和 rewind 仍可能通过进程级 `global_checkpoint_manager()` 打开默认数据库。
+- 修复后行为：`ProductionRuntime` 持有实例级 `Arc<CheckpointManager>`；事件、checkpoint、生产工具捕获和 rewind 使用同一 `DataStore`，无 store 的 fixture 才保留显式兼容 fallback。
+- 影响：避免多实例/测试数据库中 Run、Event、Checkpoint 不一致，降低恢复和 rewind 读取错误权威的风险。
+- 测试方式：严格 `cargo check -Dwarnings` 通过；需后续补多 DataStore 集成 fixture。
+
+## 完整 typed turn 在失败/取消时可能未写入 Conversation
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production.rs`、`conversation_store.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：生产只在 `EngineOutcome::Completed` 时扫描事件写入 assistant turn，Provider error/cancelled 会丢失已经完整结算的 typed turn。
+- 修复后行为：所有 outcome 都调用 typed event persistence；Conversation Store 对包含 `TurnStarted` 但没有 `TurnCompleted` 的部分 turn fail closed，保持完整失败 turn 并跳过真正未结算的 stream。
+- 影响：Full History 与执行事件的一致性提高，且不会把半个 assistant message 当成可恢复对话。
+- 测试方式：`incomplete_typed_turn_is_not_committed_to_conversation`；旧 delta-only round-trip 仍保持兼容。
+
+## Tool Progress 结算与迟到更新存在竞态
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production_tools.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：`publish` 和 `mark_tool_call_settled` 分别获取 settled/pending 锁，结算后仍可能追加迟到 `ToolOutputDelta`。
+- 修复后行为：两条路径按相同锁序持有 pending 与 settled；事件追加和结算形成互斥顺序，settled call 的更新被丢弃。
+- 影响：避免 ToolCallCompleted 后出现可见的伪进度；不改变 progress sink 的限流策略。
+- 测试方式：`settled_tool_drops_late_progress` 精测通过。
+
+## 动态 MCP Schema 未覆盖未知/外部工具执行边界
+
+- 严重等级：P1
+- 所属模块：`crates/capability-gateway/src/lib.rs`、`src-agent-daemon/src/production_tools.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：Gateway 的本地注册工具校验不能覆盖 namespaced MCP schema，未知 namespaced 名称可能继续进入 transport。
+- 修复后行为：Gateway 暴露单一 `validate_external_input` 校验边界；生产工具先拒绝未知 namespaced MCP，再按 MCP 广告 schema 校验动态参数，之后才进入 permission/transport。
+- 影响：Schema 不再只是模型提示，动态外部工具也必须通过最终校验；generic `mcp_call` 保持既有 envelope 兼容。
+- 测试方式：严格 `cargo check -Dwarnings` 通过；真实 MCP fixture 仍待受控集成验证。

@@ -2946,7 +2946,6 @@ fn handle_rewind_rpc(
     method: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    use crate::checkpoint::global_checkpoint_manager;
     let run_id = params
         .get("run_id")
         .and_then(|v| v.as_str())
@@ -2992,7 +2991,11 @@ fn handle_rewind_rpc(
                 .collect()
         })
     });
-    let mgr = global_checkpoint_manager();
+    // Rewind must use the same CheckpointManager/SQLite authority that owns
+    // this Run's events and ledger, not a process-global default database.
+    let mgr = crate::run_manager::global_run_manager()
+        .runtime
+        .checkpoint_manager();
     match method {
         "run.rewindPreview" | "run.rewind" => {
             // Deprecated: ambiguous "whole run rewind". Prefer workspace.restore*.

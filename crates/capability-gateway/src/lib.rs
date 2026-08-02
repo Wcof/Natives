@@ -476,6 +476,22 @@ impl CapabilityGateway {
         validate_schema_definition(&tool.schema)
     }
 
+    /// Validate a dynamically advertised schema (for example an MCP tool)
+    /// without registering a local handler.  The Gateway remains the single
+    /// executable Schema boundary; callers must still perform their own
+    /// lookup and permission checks before invoking the external transport.
+    pub fn validate_external_input(
+        schema: &serde_json::Value,
+        input: &serde_json::Value,
+    ) -> Result<(), ToolError> {
+        validate_schema_definition(schema)?;
+        validate_schema(schema, input).map_err(|message| ToolError {
+            code: "schema_validation".into(),
+            message,
+            retryable: false,
+        })
+    }
+
     fn enforce_input_policy(
         &self,
         tool: &Tool,

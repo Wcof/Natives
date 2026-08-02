@@ -211,42 +211,41 @@ impl DaemonToolProgressSink {
 #[async_trait::async_trait]
 impl ToolProgressSink for DaemonToolProgressSink {
     async fn publish(&self, update: ToolProgressUpdate) {
-        if self.settled.lock().await.contains(&update.tool_call_id) {
-            return;
-        }
         const MAX_BATCH_BYTES: usize = 8 * 1024;
         const MAX_BATCH_AGE: Duration = Duration::from_millis(250);
         let now = Instant::now();
         let call_id = update.tool_call_id.clone();
-        let emit = {
-            let mut pending = self.pending.lock().await;
-            if update.final_update {
-                let mut final_update = pending.remove(&call_id).map(|(_, mut value)| {
-                    value.text.push_str(&update.text);
-                    value.final_update = true;
-                    value
-                });
-                if final_update.is_none() {
-                    final_update = Some(update);
-                }
-                final_update
+        let mut pending = self.pending.lock().await;
+        let settled = self.settled.lock().await;
+        if settled.contains(&call_id) {
+            return;
+        }
+        let emit = if update.final_update {
+            let mut final_update = pending.remove(&call_id).map(|(_, mut value)| {
+                value.text.push_str(&update.text);
+                value.final_update = true;
+                value
+            });
+            if final_update.is_none() {
+                final_update = Some(update);
+            }
+            final_update
+        } else {
+            let flush = pending
+                .get_mut(&call_id)
+                .map(|(started, buffered)| {
+                    buffered.text.push_str(&update.text);
+                    buffered.text.len() >= MAX_BATCH_BYTES
+                        || now.duration_since(*started) >= MAX_BATCH_AGE
+                })
+                .unwrap_or(false);
+            if flush {
+                pending.remove(&call_id).map(|(_, value)| value)
             } else {
-                let flush = pending
-                    .get_mut(&call_id)
-                    .map(|(started, buffered)| {
-                        buffered.text.push_str(&update.text);
-                        buffered.text.len() >= MAX_BATCH_BYTES
-                            || now.duration_since(*started) >= MAX_BATCH_AGE
-                    })
-                    .unwrap_or(false);
-                if flush {
-                    pending.remove(&call_id).map(|(_, value)| value)
-                } else {
-                    if !pending.contains_key(&call_id) {
-                        pending.insert(call_id, (now, update));
-                    }
-                    None
+                if !pending.contains_key(&call_id) {
+                    pending.insert(call_id, (now, update));
                 }
+                None
             }
         };
         if let Some(update) = emit {
@@ -255,6 +254,7 @@ impl ToolProgressSink for DaemonToolProgressSink {
                 &update.run_id,
                 RunEventKind::ToolOutputDelta {
                     tool_call_id: update.tool_call_id,
+                    tool_name: Some(update.tool_name),
                     stream: update.stream,
                     text: update.text,
                     truncated: false,
@@ -267,11 +267,22 @@ impl ToolProgressSink for DaemonToolProgressSink {
     }
 
     async fn mark_tool_call_settled(&self, tool_call_id: &str) {
-        self.settled.lock().await.insert(tool_call_id.to_string());
-        self.pending.lock().await.remove(tool_call_id);
+        // Keep the same lock order as `publish`: either the event is appended
+        // before settlement, or settlement wins and the late update is dropped.
+        let mut pending = self.pending.lock().await;
+        let mut settled = self.settled.lock().await;
+        settled.insert(tool_call_id.to_string());
+        pending.remove(tool_call_id);
     }
 }
 impl PermissionGatedTools {
+    fn checkpoint_manager(&self) -> &crate::checkpoint::CheckpointManager {
+        match self.runtime.as_deref() {
+            Some(runtime) => runtime.checkpoint_manager(),
+            None => crate::checkpoint::global_checkpoint_manager(),
+        }
+    }
+
     fn tool_allowed(&self, name: &str) -> bool {
         // Server whitelist gate first (ADR-0016): with an active MCP selection
         // a namespaced tool outside the selected servers is invisible/denied,
@@ -788,6 +799,86 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: 0,
             };
         }
+        if name.starts_with("mcp__")
+            && !self
+                .mcp_tool_schemas
+                .iter()
+                .any(|schema| schema.name == name)
+        {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "UNKNOWN_TOOL",
+                    "error": format!("unknown advertised MCP tool: {name}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
+        if let Some(tool) = tool {
+            if let Err(error) = CapabilityGateway::validate_external_input(&tool.schema, &input) {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "SCHEMA_INVALID",
+                        "error": error.message,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
+        // Dynamic MCP tools are not local Gateway handlers, but their
+        // advertised schemas are still an execution trust boundary. Validate
+        // the actual tool arguments before permission or transport dispatch;
+        // generic `mcp_call` unwraps its nested `arguments` object first.
+        if is_mcp {
+            let schema_name = if name == "mcp_call" {
+                let server = input
+                    .get("server")
+                    .or_else(|| input.get("server_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let tool_name = input
+                    .get("tool")
+                    .or_else(|| input.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                (!server.is_empty() && !tool_name.is_empty())
+                    .then(|| format!("mcp__{server}__{tool_name}"))
+            } else {
+                Some(name.to_string())
+            };
+            if let Some(schema_name) = schema_name {
+                if let Some(schema) = self
+                    .mcp_tool_schemas
+                    .iter()
+                    .find(|schema| schema.name == schema_name)
+                {
+                    let schema_input = if name == "mcp_call" {
+                        input
+                            .get("arguments")
+                            .or_else(|| input.get("input"))
+                            .unwrap_or(&Value::Null)
+                    } else {
+                        &input
+                    };
+                    if let Err(error) = CapabilityGateway::validate_external_input(
+                        &schema.input_schema,
+                        schema_input,
+                    ) {
+                        return ToolExecutionResult {
+                            output: serde_json::json!({
+                                "error_code": "SCHEMA_INVALID",
+                                "error": error.message,
+                            }),
+                            is_error: true,
+                            duration_ms: 0,
+                        };
+                    }
+                }
+            }
+        }
 
         // Permission gate: PermissionClass + SideEffect (G5).
         // Orchestration tools always go through this gate (never early-return around it).
@@ -971,8 +1062,19 @@ impl EngineToolRuntime for PermissionGatedTools {
         // Phase 3: lazy before-image for write tools (write_file / apply_patch).
         let write_paths = extract_write_paths(name, &input);
         for rel in &write_paths {
-            let _ = crate::checkpoint::global_checkpoint_manager()
-                .capture_before(&self.parent_run_id, rel);
+            if let Err(error) = self
+                .checkpoint_manager()
+                .capture_before(&self.parent_run_id, rel)
+            {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("checkpoint before-image could not be persisted: {error}"),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
         }
 
         if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
@@ -1031,6 +1133,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                         &run_id,
                         RunEventKind::ToolOutputDelta {
                             tool_call_id: call_id.clone(),
+                            tool_name: Some("run_terminal".into()),
                             stream: chunk.stream,
                             text: chunk.text,
                             truncated: false,
@@ -1064,19 +1167,49 @@ impl EngineToolRuntime for PermissionGatedTools {
             Ok(out) => {
                 let mut output = out.result;
                 attach_tool_output_artifact(&self.parent_run_id, &stream_tool_call_id, &mut output);
+                let mut checkpoint_error = None;
+                for rel in &write_paths {
+                    if let Err(error) = self
+                        .checkpoint_manager()
+                        .capture_after(&self.parent_run_id, rel)
+                    {
+                        checkpoint_error = Some(error);
+                        break;
+                    }
+                }
+                let checkpoint_failed = checkpoint_error.is_some();
                 // Side-effect ledger for restore coverage honesty.
                 let cat = crate::side_effect_ledger::category_for_tool(name);
                 let reversible = cat == "workspace_file";
-                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
-                    &self.parent_run_id,
-                    &stream_tool_call_id,
-                    name,
-                    cat,
-                    "completed",
-                    reversible,
-                    turn_id,
-                    &input,
-                );
+                let ledger_result = if checkpoint_failed {
+                    crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        name,
+                        cat,
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &input,
+                    )
+                } else {
+                    crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        name,
+                        cat,
+                        "completed",
+                        reversible,
+                        turn_id,
+                        &input,
+                    )
+                };
+                if let Some(error) = checkpoint_error.as_deref() {
+                    output = serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("checkpoint after-image could not be persisted: {error}"),
+                    });
+                }
                 if let Err(error) = ledger_result {
                     output = serde_json::json!({
                         "error_code": "PERSISTENCE_FAILED",
@@ -1129,30 +1262,31 @@ impl EngineToolRuntime for PermissionGatedTools {
                         }
                     }
                 }
-                for rel in &write_paths {
-                    let _ = crate::checkpoint::global_checkpoint_manager()
-                        .capture_after(&self.parent_run_id, rel);
-                    // Best-effort FileChanged with before/after from checkpoint live map.
-                    if let Ok(preview) = crate::checkpoint::global_checkpoint_manager()
-                        .checkpoint_for_run_public(&self.parent_run_id)
-                    {
-                        if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
-                            self.events.append(
-                                &self.parent_run_id,
-                                RunEventKind::FileChanged {
-                                    path: rel.clone(),
-                                    change_type: if !snap.existed_before {
-                                        "created".into()
-                                    } else {
-                                        "modified".into()
+                if !checkpoint_failed {
+                    for rel in &write_paths {
+                        // Best-effort FileChanged with before/after from checkpoint live map.
+                        if let Ok(preview) = self
+                            .checkpoint_manager()
+                            .checkpoint_for_run_public(&self.parent_run_id)
+                        {
+                            if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
+                                self.events.append(
+                                    &self.parent_run_id,
+                                    RunEventKind::FileChanged {
+                                        path: rel.clone(),
+                                        change_type: if !snap.existed_before {
+                                            "created".into()
+                                        } else {
+                                            "modified".into()
+                                        },
+                                        before: snap.before_content.clone(),
+                                        after: snap.after_content.clone(),
+                                        before_hash: snap.before_hash.clone(),
+                                        after_hash: snap.after_hash.clone(),
+                                        diff_artifact_id: None,
                                     },
-                                    before: snap.before_content.clone(),
-                                    after: snap.after_content.clone(),
-                                    before_hash: snap.before_hash.clone(),
-                                    after_hash: snap.after_hash.clone(),
-                                    diff_artifact_id: None,
-                                },
-                            );
+                                );
+                            }
                         }
                     }
                 }
@@ -1353,6 +1487,7 @@ fn emit_terminal_output_deltas(
                     run_id,
                     RunEventKind::ToolOutputDelta {
                         tool_call_id: tool_call_id.to_string(),
+                        tool_name: Some("run_terminal".into()),
                         stream: stream.into(),
                         text: String::new(),
                         truncated: true,
@@ -1372,6 +1507,7 @@ fn emit_terminal_output_deltas(
                 run_id,
                 RunEventKind::ToolOutputDelta {
                     tool_call_id: tool_call_id.to_string(),
+                    tool_name: Some("run_terminal".into()),
                     stream: stream.into(),
                     text: chunk,
                     truncated: persisted >= MAX_PERSIST || end < bytes.len() && take < CHUNK,
@@ -3379,6 +3515,72 @@ fn use_fixture_flag(input: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct CapturedEvents(std::sync::Mutex<Vec<assistant_protocol::v2::RunEventV2>>);
+
+    impl agent_core::EventPersistence for CapturedEvents {
+        fn append(&self, event: &assistant_protocol::v2::RunEventV2) -> Result<(), String> {
+            self.0.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+
+        fn replay_after(
+            &self,
+            run_id: &str,
+            after_sequence: u64,
+        ) -> Result<Vec<assistant_protocol::v2::RunEventV2>, String> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.run_id == run_id && event.effective_run_sequence() > after_sequence
+                })
+                .cloned()
+                .collect())
+        }
+
+        fn last_sequence(&self, run_id: &str) -> Result<u64, String> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event.run_id == run_id)
+                .map(|event| event.effective_run_sequence())
+                .max()
+                .unwrap_or(0))
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_tool_drops_late_progress() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        let update = ToolProgressUpdate {
+            run_id: "progress-run".into(),
+            tool_call_id: "progress-call".into(),
+            tool_name: "run_terminal".into(),
+            stream: "stdout".into(),
+            text: "before settlement".into(),
+            final_update: true,
+            turn_id: Some("turn-1".into()),
+            message_id: Some("message-1".into()),
+            progress_sequence: 0,
+        };
+        sink.publish(update.clone()).await;
+        sink.mark_tool_call_settled(&update.tool_call_id).await;
+        sink.publish(update).await;
+
+        let events = captured.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].payload,
+            RunEventKind::ToolOutputDelta { .. }
+        ));
+    }
 
     #[test]
     fn model_visible_tool_limit_fails_closed_without_truncation() {

@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：当前 Worktree `HEAD`（代码验证基线：`9c40bc49`）
+- 结束 Commit：当前 Worktree `HEAD`（本轮最新受控代码）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -158,3 +158,12 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - `npm ci --ignore-scripts` 使用 `package-lock.json` 安装 801 个包；`node_modules` 未被 Git 跟踪。
 - 当前共享 Cargo target 约 7.5 GiB，Worktree target 约 5.6 GiB，可用磁盘约 60 GiB；没有遗留 Cargo/Rustc/Node 测试进程。
 - 未执行 `cargo clean`、未删除共享 target、未 push；原始 Worktree 仍保持用户的 dirty 状态。
+
+## 18. 本轮生产接线补充
+
+- `ProductionRuntime` 现在为每个运行实例持有 `CheckpointManager`；`new_with_event_store` 将 Checkpoint、EventLog 与同一个 `DataStore` 配对，生产工具和 rewind RPC 不再默认打开进程级 Checkpoint 数据库。
+- `ProductionRuntime::start_run` 对成功、取消和失败 outcome 都尝试持久化完整 typed assistant turn；`conversation_store` 只跳过带 `TurnStarted` 但缺少 `TurnCompleted` 的部分 typed turn，旧 delta-only 兼容批次仍可加载。
+- 写工具的 checkpoint before/after、side-effect ledger start/complete 失败均 fail closed；after-image 或 ledger completion 无法落库时不返回成功输出，并将副作用标记为 `uncertain`。
+- 动态 MCP 工具在进入 permission/transport 前按广告 Schema 校验；未注册的 namespaced MCP 名称返回 `UNKNOWN_TOOL`，不进入 transport。
+- `DaemonToolProgressSink` 与 settled 状态使用同一锁序，保证结算与迟到进度不会交叉产生事件；`ToolOutputDelta` 增加可选 `tool_name`，保留旧协议反序列化兼容。
+- 受控验证：严格 `cargo check -Dwarnings` 通过；`settled_tool_drops_late_progress` 精测通过。此前 workspace/native verifier 和前端全量测试仍按资源上限未重跑，不能宣称全量绿。

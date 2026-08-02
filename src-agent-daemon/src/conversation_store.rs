@@ -1180,6 +1180,19 @@ pub fn append_assistant_turn_from_events(
     }
     let mut last_id = None;
     for group in groups {
+        // A typed turn is committed only after the Core emitted its terminal
+        // TurnCompleted fact.  Keep the older delta-only event batches
+        // compatible, but never turn a crashed/partial typed turn into a
+        // durable assistant message.
+        let has_turn_start = group
+            .iter()
+            .any(|event| matches!(&event.payload, RunEventKind::TurnStarted { .. }));
+        let has_turn_completed = group
+            .iter()
+            .any(|event| matches!(&event.payload, RunEventKind::TurnCompleted { .. }));
+        if has_turn_start && !has_turn_completed {
+            continue;
+        }
         if let Some(id) = append_single_assistant_turn(conversation_id, run_id, &group)? {
             last_id = Some(id);
         }
@@ -2613,5 +2626,94 @@ mod tests {
         append_agent_message("typed-conv", None, None, &message).unwrap();
         let loaded = load_agent_messages("typed-conv").unwrap();
         assert_eq!(loaded, vec![message]);
+    }
+
+    #[test]
+    fn incomplete_typed_turn_is_not_committed_to_conversation() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("incomplete-turn.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("incomplete-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('incomplete-run', 'incomplete-conv', 'failed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+
+        append_assistant_turn_from_events(
+            "incomplete-conv",
+            "incomplete-run",
+            &[
+                RunEventV2 {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 1,
+                    run_id: "incomplete-run".into(),
+                    sequence: 1,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::TurnStarted {
+                        turn_id: "turn-incomplete".into(),
+                    },
+                },
+                RunEventV2 {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 2,
+                    run_id: "incomplete-run".into(),
+                    sequence: 2,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::MessageStarted {
+                        turn_id: "turn-incomplete".into(),
+                        message_id: "message-incomplete".into(),
+                        role: "assistant".into(),
+                    },
+                },
+                RunEventV2 {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 3,
+                    run_id: "incomplete-run".into(),
+                    sequence: 3,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::TextDelta {
+                        text: "partial".into(),
+                    },
+                },
+            ],
+        )
+        .unwrap();
+
+        let conn = store.conn().unwrap();
+        let message_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE conversation_id = 'incomplete-conv'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let turn_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM turn WHERE run_id = 'incomplete-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(message_count, 0);
+        assert_eq!(turn_count, 0);
     }
 }

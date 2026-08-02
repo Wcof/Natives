@@ -62,6 +62,8 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
 /// rather than reaching into maps when possible.
 pub struct ProductionRuntime {
     pub events: EventSequencer,
+    /// Checkpoint authority paired with this runtime's Run/Event store.
+    pub(crate) checkpoints: Arc<crate::checkpoint::CheckpointManager>,
     pub permissions: Arc<PermissionManager>,
     pub subagents: Arc<SubAgentManager>,
     // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
@@ -241,18 +243,28 @@ pub struct RunStartContext {
 
 impl ProductionRuntime {
     pub fn new() -> Self {
-        Self::new_with_events(EventSequencer::new())
+        Self::new_with_events_and_checkpoint(
+            EventSequencer::new(),
+            Arc::new(crate::checkpoint::CheckpointManager::new()),
+        )
     }
 
     pub fn new_with_event_store(data_store: Arc<crate::storage::DataStore>) -> Self {
-        Self::new_with_events(EventSequencer::with_persistence(Arc::new(
-            crate::event_log::EventLog::new(data_store),
-        )))
+        Self::new_with_events_and_checkpoint(
+            EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new(
+                data_store.clone(),
+            ))),
+            Arc::new(crate::checkpoint::CheckpointManager::with_store(data_store)),
+        )
     }
 
-    fn new_with_events(events: EventSequencer) -> Self {
+    fn new_with_events_and_checkpoint(
+        events: EventSequencer,
+        checkpoints: Arc<crate::checkpoint::CheckpointManager>,
+    ) -> Self {
         let rt = Self {
             events,
+            checkpoints,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
             interactions: Arc::new(crate::runtime::InteractionHub::new()),
@@ -280,6 +292,10 @@ impl ProductionRuntime {
         #[cfg(not(test))]
         spawn_subagent_reaper();
         rt
+    }
+
+    pub(crate) fn checkpoint_manager(&self) -> &crate::checkpoint::CheckpointManager {
+        &self.checkpoints
     }
 
     /// Register a hard tool allowlist for a run that will be started via RunManager.
@@ -575,7 +591,8 @@ impl ProductionRuntime {
             .insert(run_id.clone(), engine.clone());
 
         // Phase 3: logical checkpoint at run start (lazy before-images on writes).
-        let checkpoint_id = crate::checkpoint::global_checkpoint_manager()
+        let checkpoint_id = self
+            .checkpoint_manager()
             .begin_run(&run_id, &conversation_id, &project_root)
             .map_err(|error| format!("checkpoint begin failed: {error}"))?;
         crate::global_run_manager()
@@ -758,29 +775,28 @@ impl ProductionRuntime {
                     } => Some(snapshot_id.as_str()),
                     _ => None,
                 });
-            let _ = crate::checkpoint::global_checkpoint_manager().set_run_metadata(
-                &run_id,
-                Some(turn_id),
-                snapshot_id,
-                Some(
-                    &run_events
-                        .last()
-                        .map(|e| e.effective_run_sequence())
-                        .unwrap_or(0)
-                        .to_string(),
-                ),
-            );
+            let event_cursor = run_events
+                .last()
+                .map(|e| e.effective_run_sequence())
+                .unwrap_or(0)
+                .to_string();
+            self.checkpoint_manager()
+                .set_run_metadata(&run_id, Some(turn_id), snapshot_id, Some(&event_cursor))
+                .map_err(|error| format!("checkpoint metadata persistence failed: {error}"))?;
         }
         let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
-        if success {
-            crate::conversation_store::append_assistant_turn_from_events(
-                &conversation_id,
-                &run_id,
-                &run_events,
-            )?;
-        }
+        // Persist every complete typed turn, including cancelled/provider-error
+        // outcomes.  The store itself rejects only genuinely partial typed
+        // turns, so a failed Run cannot silently lose an already committed
+        // assistant message while still keeping incomplete streams out.
+        crate::conversation_store::append_assistant_turn_from_events(
+            &conversation_id,
+            &run_id,
+            &run_events,
+        )?;
         // Finalize checkpoint — failure closes related side effects (no silent half-state).
-        let checkpoint = crate::checkpoint::global_checkpoint_manager()
+        let checkpoint = self
+            .checkpoint_manager()
             .finalize_run(&run_id)
             .map_err(|error| format!("checkpoint finalize_run failed: {error}"))?;
         self.events
