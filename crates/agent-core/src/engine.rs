@@ -3260,7 +3260,9 @@ mod tests {
                         name: Some("task".into()),
                         arguments_delta: r#"{"prompt":"c"}"#.into(),
                     },
-                    EngineProviderEvent::Completed,
+                    EngineProviderEvent::CompletedWithReason {
+                        reason: ProviderStopReason::ToolUse,
+                    },
                 ],
                 vec![
                     EngineProviderEvent::TextDelta("done".into()),
@@ -4275,7 +4277,9 @@ mod tests {
                 name: Some("echo".into()),
                 arguments_delta: format!(r#"{{"x":{n}}}"#),
             },
-            EngineProviderEvent::Completed,
+            EngineProviderEvent::CompletedWithReason {
+                reason: ProviderStopReason::ToolUse,
+            },
         ]
     }
 
