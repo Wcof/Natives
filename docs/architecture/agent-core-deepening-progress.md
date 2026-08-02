@@ -20,18 +20,19 @@
 | F. Event Fail Closed | 已接生产（关键事实） | 5734ef5f | cargo check | 关键事实使用 checked；ledger start/complete persistence failure 生成配对错误结果并停止 Engine；delta/progress 仍可丢弃 |
 | G. Lineage 与 Resume | 已接生产 | 5734ef5f | side-effect guard | retry/continue 记录 source/checkpoint/turn lineage；resume_plan 在 detached start 后结算；continue 只从 durable checkpoint 启动独立 Run |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
-| I. 最终验证 | 环境阻塞 | 1d235cd5 | strict check + precise regressions | strict `-Dwarnings` check、typed seam、legacy reasoning、stop-reason fixture、ledger/permission/cancel、child cancel、prompt requeue 精测通过；workspace/native live/frontend 仍有既有环境限制 |
+| I. 最终验证 | 部分完成 | 9c066af5 | strict check + controlled frontend verification | strict `-Dwarnings` check、typed seam、legacy reasoning、stop-reason fixture、ledger/permission/cancel、child cancel、prompt requeue、projection recovery 精测通过；typecheck/lint/perf 通过；workspace/native verifier 与完整 frontend test 仍未全绿 |
 
 ## 阻塞项
 
 - 资源策略限制 Cargo 次数：共享 target `/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`，jobs=2、incremental=0；本轮未重复 workspace test。
-- 前端校验与 live provider/shell/HTTP-MCP fixture 尚未在本 Worktree 验证；stdio/HTTP MCP 完成代码级接线但无真实外部 fixture。
+- 前端 typecheck/lint/perf 已在安装锁文件依赖后通过；完整 frontend test 首次 751/752，旧合成终态断言已改正并精准复验，未按资源规则重复全套。live provider/shell/HTTP-MCP fixture 仍无真实外部验证。
 - `start_with_seams_loads_daemon_conversation_history` 曾因测试 reaper 与环境锁死锁；已禁用单元测试中的后台 reaper 并精准复验通过。
 - `b2ab95d3` 将 `ProviderTurnRequest` 直接接入三个生产 provider 实现；旧 `EngineMessage` 转换保留为 legacy/fixture 兼容边界，并补 typed block identity 精测。
 - `0a2542a0` 修正 strict warning 与 legacy reasoning 兼容回归；workspace 初次运行的两个 fail-closed fixture 已精准复验通过。完整 workspace/native verifier 仍未重新宣称通过。
 - `3bc18472` 让测试 ledger 使用真实临时 SQLite，并让 ToolUse fixture 明确声明 `CompletedWithReason::ToolUse`；没有放宽 Core 的 fail-closed 规则。
 - `eaf54ac7` 将真实 `parent_run_id` 传入 ProductionRuntime，修复 child cancel tree 注册；测试构造器不再启动会争用环境锁的 reaper，并补齐 fixture project root。
 - `1d235cd5` 让 Prompt Queue 在 RunManager 同步启动失败时保留 SQLite 行并恢复 actor 队列，补充 requeue 回归测试。
+- `9c066af5` 将 Renderer 旧的“从 run.list 合成终态”测试改为权威事件缺失恢复测试；不改变生产投影的 fail-closed 行为。
 
 ## 设计偏差
 

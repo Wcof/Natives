@@ -130,3 +130,8 @@ Provider stop reason family 映射测试。
 - 测试构造器跳过后台 subagent reaper，避免环境锁与 Tokio runtime drop 的互等；非测试构建仍启动生产 reaper。
 - Prompt Queue 在 `send_now` 与 terminal drain 中延迟删除 durable row，RunManager 同步启动失败时恢复 actor item；`SessionCoordinator::requeue` 同时覆盖已存在的 claimed item，防止 Running 状态残留。
 - 精准回归已通过：child cancellation、live subagent fixture、daemon history seam、send-now drain、prompt requeue；strict warning check、fmt 和 diff check 也通过。
+
+## 14. Renderer 验证收口（`9c066af5`）
+
+- 修正与当前 Projection 设计相反的旧测试：终态数据库状态没有权威事件时，adapter 必须抛出 `AuthoritativeEventMissing`，而不是合成 `failed` 事件。
+- `npm run typecheck`、`npm run lint`、`npm run perf:check` 通过；前端全量测试首次为 751/752，修复后的失败用例已单独精准通过，未重复完整套件。

@@ -132,7 +132,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 
 - 最新精确验证继续通过：typed provider seam、legacy reasoning round-trip、compaction fallback、tool-call collection、plan/permission/MCP/cancel 关键测试，以及 `RUSTFLAGS=-Dwarnings cargo check`。
 - `cargo test --workspace` 未重复运行（共享 target/磁盘策略）；首次运行暴露的两个 fixture 已精准复验。
-- `npm run typecheck/lint/test/perf:check` 仍受 worktree 未安装 `node_modules` 阻塞；`verify:native-engine` 的 daemon/live fixture 仍有未解决失败，故本报告不宣称全量闭环完成。
+- 前端依赖已按锁文件在本 Worktree 安装；`npm run typecheck`、`npm run lint`、`npm run perf:check` 通过。首次 `npm run test` 为 751/752：唯一失败是与新投影不变量冲突的旧“合成终态”断言；已改为 `AuthoritativeEventMissing`/本地 recovery 断言，精准用例通过，但按资源规则未重复整个前端套件，因此不宣称全量测试绿。
 
 ## 15. 本轮生产收口（`eaf54ac7`、`1d235cd5`）
 
@@ -140,3 +140,9 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 单元测试构造器不再启动会访问 SQLite/环境锁的 subagent reaper，避免测试 runtime drop 死锁；生产与集成构建仍保留 reaper。
 - Prompt Queue 的 `send_now` 和 terminal drain 只在 `RunManager` 接受新 Run 后删除 durable row；同步启动失败会 requeue actor item 并保留 SQLite 行。`SessionCoordinator::requeue` 对已存在的 claimed item 也恢复为 queued，避免重复或 Running 残留。
 - 新增精准证据：`production_runtime_registers_child_under_parent_token`、`dual_provider_engine_fixture_subagent`、`start_with_seams_loads_daemon_conversation_history`、`send_now_cancels_active_and_starts_new_run`、`requeue_restores_claimed_item_at_front` 均通过；strict `cargo check -Dwarnings`、`cargo fmt --check`、`git diff --check` 通过。
+
+## 16. Renderer 投影测试校正（`9c066af5`）
+
+- 旧测试曾要求在只有 `run.list` 终态而缺少权威事件时合成 `failed` 事件，这与 Projection 分型设计冲突。
+- 现在测试验证 `AuthoritativeEventMissing`，并确认 `ProjectionIncomplete(authoritative_event_missing)` 仅写入 Renderer 本地恢复状态，不伪造 Daemon sequence。
+- 精准测试通过；`npm run typecheck`、`npm run lint`、`npm run perf:check` 通过。全量 `npm run test` 的首次退出仍保留为 751/752，未重复全量套件。

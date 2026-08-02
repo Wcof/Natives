@@ -98,6 +98,7 @@
 - 当前行为：`DaemonAssistantAdapter` 缺失权威终态时抛出 `AuthoritativeEventMissing`，不再重标 sequence；controller 将 incomplete 状态写入 workspace state，不写回 Daemon Event Store。
 - 新代码证据：`src/lib/assistant-protocol/projection.ts`、`daemon-adapter.ts::recoverTerminalEvent`。
 - 建议：将 `ProjectionRecovery` 状态接入工作区 reducer 的恢复提示。
+- 新增验证：`subscribe rejects terminal status without an authoritative event` 通过；测试确认不会从 `run.list` 伪造 `failed` 事件，并保留 `ProjectionIncomplete(authoritative_event_missing)`。
 
 ## Run Lineage 与恢复动作
 
