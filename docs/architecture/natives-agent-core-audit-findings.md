@@ -106,7 +106,31 @@
 - 实现状态：已接生产（Continue/Fork/Replay 语义分离）
 - 代码证据：`run_manager.rs::retry`、`continue_run`；`conversation_store.rs::fork`；`assistant_protocol::v2::RunV2` lineage 字段；`run.continue` RPC dispatch。
 - 当前行为：Retry/Continue 都创建独立 Run 并记录 source/checkpoint/turn lineage；Continue 拒绝无 durable checkpoint、缺 snapshot 或 uncertain side effect；Fork 复制 typed message/block、重映射 parent IDs 并重置权限 profile 为 `ask`；Replay 只读事件，不重跑工具。
-- 风险：Continue/Fork 的端到端 daemon fixture 尚未在本轮运行；resume_plan 的 `executed` 写入发生在 detached start 之前，后续可改为 start 成功后结算。
+- 风险：Continue/Fork 的端到端 daemon fixture 尚未在本轮运行；`resume_plan` 已改为先 `approved`，detached start 成功后再结算 `executed`，仍需端到端验证。
+
+## Prompt Queue Ack 与 typed transcript 一致性
+
+- 严重等级：P1
+- 所属模块：`crates/agent-core/src/input.rs`、`src-agent-daemon/src/prompt_queue_store.rs`、`conversation_store.rs`
+- 实现状态：已修复（`39d6514f`）
+- 代码证据：`EngineInputReceiver::ack` 返回 `Result`；`DurableInputReceiver::ack` 调用 `persist_queued_input_and_ack(..., turn_id)`；`AgentEngine::drain_inputs` 在修改 typed transcript 前等待 ack 成功。
+- 当前行为：queue lease、typed user message 与 consumed 状态在同一事务完成；数据库故障不会静默丢失 steering/follow-up。
+
+## Side-effect Ledger 开始/完成事实
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production_tools.rs`、`side_effect_ledger.rs`
+- 实现状态：已修复（`39d6514f`）
+- 代码证据：handler 前 `record_tool_effect_state(..., "started", ...)` 失败返回 `PERSISTENCE_FAILED`；完成记录失败也返回同码；Core 仍生成同 ID Tool Result 后停止后续 Provider turn。
+- 当前行为：外部副作用没有 ledger start 事实时不执行；完成事实无法落库时不伪装成功或继续自动恢复。
+
+## Resume Plan 结算时机
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/run_manager.rs`、`rpc.rs`
+- 实现状态：已修复（`39d6514f`）
+- 代码证据：`retry`/`continue_run` 插入 `approved`；`mark_resume_plan_executed` 仅在 detached start 成功后更新 `executed`。
+- 当前行为：计划批准、Run 创建和 Run 真正启动三个事实不再混为一个预先写入的终态。
 
 ## PermissionManager 共享实例存在遗留全局 Profile 接口
 

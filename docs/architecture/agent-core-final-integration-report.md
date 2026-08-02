@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`3133aff0`（代码 `7ca9abee`）
+- 结束 Commit：`39d6514f`（代码；文档随后更新）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -13,14 +13,14 @@
 
 | 能力 | 当前生产证据 | 状态 |
 |---|---|---|
-| Typed Message / Turn | `agent-core/src/engine.rs` 的 `run_with_typed_messages` 直接驱动生产 transcript；daemon 只有旧 typed 空历史才回退 `EngineMessage` | 已接生产；兼容边界仍保留但不在真实 typed 主链往返 |
+| Typed Message / Turn | `agent-core/src/engine.rs` 的 `run_with_typed_messages` 直接驱动生产 transcript；旧 `EngineMessage` 只在入口一次性转换 | 已接生产；Core 主链不再按历史是否为空切换第二套 Loop |
 | Context Snapshot | migration 028 + `persist_context_snapshots_from_events` 写入 conversation/turn/source revision 与完整 typed `snapshot_json`；生产启动以最新 snapshot 为基线，并按 `input_message_ids` 追加压缩后新写入的完整消息 | 已接生产 |
 | Capability Scheduler | `PermissionGatedTools::list_tool_capabilities` 从 Gateway side-effect 映射模式，Core 保持调度 | 已接生产 |
-| Progress | Shell `ToolCallContext.progress`、MCP stdio progress notification、Sub Agent child event 都进入 `DaemonToolProgressSink`；sink 有序号、50ms 限流、settled late-drop | 已接生产；HTTP/SSE MCP 仍只在完整响应后返回，未提供增量 progress |
-| Steering / Follow-up | `DurableInputReceiver` SQLite lease/ack/recovery；ack 同事务写入 user message + queue sent | 已接生产 |
+| Progress | Shell `ToolCallContext.progress`、MCP stdio/HTTP/SSE progress notification、Sub Agent child event 都进入 `DaemonToolProgressSink`；sink 有序号、50ms 限流、settled late-drop | 已接生产；真实 SSE fixture 仍未运行 |
+| Steering / Follow-up | `DurableInputReceiver` SQLite lease/ack/recovery；ack 同事务写入 user message + queue sent，失败不消费 | 已接生产 |
 | Critical Events | Turn/Message/Tool prepared/started/completed/GenerationAttemptCommitted/Checkpoint/Snapshot/Permission 使用 `append_checked`；Tool completion 持久化失败会取消运行并写 side-effect `uncertain` | 已接生产关键事实；delta/progress 仍允许 best-effort |
 | Ledger / Checkpoint | side-effect 状态记录；checkpoint 写入 turn/ledger cursor | 部分完成；外部副作用仍不可回滚 |
-| Retry / Resume | RunManager retry/continue 均创建独立 Run，记录 checkpoint、lineage 与 resume_plan；不确定副作用 fail closed | 已接生产；Replay 保持只读事件重放，Fork 复制 typed transcript 并重置权限 |
+| Retry / Resume | RunManager retry/continue 均创建独立 Run，记录 checkpoint、lineage 与 resume_plan；plan 在 detached start 成功后才结算；不确定副作用 fail closed | 已接生产；Replay 保持只读事件重放，Fork 复制 typed transcript 并重置权限 |
 | Renderer Projection | 新增 `ProjectionState`、`ProjectionRecovery`、`AuthoritativeEventMissing`；禁止伪造终态序列 | 已接生产 |
 
 ## 3. 关键改动
@@ -89,3 +89,14 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 最低可用磁盘：约 70 GiB。
 - 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 精确测试无输出超过两分钟后以 stdin Ctrl-C 中止；本轮无 Cargo 进程被终止。
 - 清理的临时目录：无；`cargo clean`：否。
+
+## 9. 后续闭环提交（`39d6514f`）
+
+- `EngineInputReceiver::ack` 改为可失败；Daemon 的 SQLite queue ack 先在同一事务写入 typed user message，再标记 queue consumed，并记录真实 `turn_id`。任何持久化失败都停止 Engine，避免“已消费但未进入上下文”。
+- 旧消息行只在入口转换为 typed message；生产执行统一走 `run_with_typed_messages`。Provider context window 进入 snapshot，机械 compaction 记录替换范围。
+- dangling tool call 不再删除 assistant call；按源调用顺序保留真实结果并补 `DANGLING_TOOL_CALL` 错误结果，避免无配对或结果乱序。
+- side-effect ledger 的 `started` 记录在 handler 前必须成功；完成记录失败返回 `PERSISTENCE_FAILED`，Core 在生成配对 Tool Result 后 fail closed。重复状态更新保留原 started 时间。
+- MCP HTTP/SSE transport 逐行读取 `data:` 帧，转发 `notifications/progress`，并在 cancel/timeout 时 kill + wait + join reader；不改变 Gateway 的安全边界。
+- Retry/Continue 的 `resume_plan` 从 `approved` 开始，只有 detached run 启动成功后才转为 `executed`。
+
+本提交没有实现完整 TurnPolicy、Tool Scheduler 重写、UI ProjectionRecovery 展示、真实 provider/shell/MCP fixture 或 workspace/frontend 全量测试；这些仍是后续验收项，不在本报告中伪称完成。

@@ -96,3 +96,12 @@ Provider stop reason family 映射测试。
 - Gateway capability metadata 直接驱动 Core scheduler；Shell stdout/stderr、MCP stdio progress notification、Sub Agent child event 进入稳定 call/turn/message progress sink，并在 settled/cancel 后丢弃迟到更新。
 - Gateway 通用执行包装器在 timeout/cancel 后等待 250ms 清理；无法 quiet 返回 `cleanup_failed`。HTTP MCP 的 curl 子进程可被取消杀掉，但尚未把 SSE 中间帧转为增量 progress。
 - Tool completion 关键事实持久化失败会取消 Engine，并由 `mark_tool_call_uncertain` 写入 side-effect ledger，阻止后续自动恢复。
+
+## 9. 生产收口补充（`39d6514f`）
+
+- 旧消息只在生产入口转换一次为 `AgentMessage`，Core 主执行路径统一为 typed transcript；空历史不再切换 legacy Agent Loop。
+- Durable prompt queue 的 ack 现在可返回错误；SQLite 消息写入、turn 绑定与 queue consumed 在同一事务中完成，失败即停止输入消费。
+- Compaction 的 dangling repair 保留 assistant Tool Call，并按调用源顺序补齐 `DANGLING_TOOL_CALL` 错误 Tool Result；Side-effect ledger start/complete persistence failure 统一为 `PERSISTENCE_FAILED`，Core 生成配对结果后停止。
+- HTTP/SSE MCP 逐行读取 JSON/SSE 帧并转发 progress，cancel/timeout 会 kill、wait、join；Retry/Continue 的 resume plan 在 detached start 成功后才结算。
+
+本轮仍未声称完成真实外部 fixture、Renderer recovery 展示、workspace/frontend 全量测试或后续 TurnPolicy/Scheduler 重构。
