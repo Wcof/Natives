@@ -656,22 +656,22 @@ impl RunManager {
             return Ok(());
         }
         if status == RunStatusV2::Queued {
-            let _ = self.commit_status(
+            self.commit_status(
                 run_id,
                 RunStatusV2::Preparing,
                 TransitionMetadata::empty().with_lifecycle_hint("preparing"),
-            );
+            )?;
         }
         let status = self
             .get_run(run_id)
             .map(|r| r.status)
             .unwrap_or(RunStatusV2::Preparing);
         if status == RunStatusV2::Preparing {
-            let _ = self.commit_status(
+            self.commit_status(
                 run_id,
                 RunStatusV2::Running,
                 TransitionMetadata::empty().with_lifecycle_hint("started"),
-            );
+            )?;
         }
         Ok(())
     }
@@ -1476,11 +1476,11 @@ impl RunManager {
             .map_err(|e| e.to_string())?
             .insert(run.id.clone(), content.clone());
 
-        let _ = self.commit_status(
+        self.commit_status(
             &run.id,
             RunStatusV2::Preparing,
             TransitionMetadata::empty().with_lifecycle_hint("preparing"),
-        );
+        )?;
 
         let request_project_path = req.project_path.clone();
         let provider_id = req.provider_id.unwrap_or_else(|| run.provider_id.clone());
@@ -1696,14 +1696,14 @@ impl RunManager {
                 Err(e) => e,
             };
             self.runtime.execution.mark_finished(&run.id).await;
-            let _ = self.commit_status(
+            self.commit_status(
                 &run.id,
                 RunStatusV2::Failed,
                 TransitionMetadata::empty()
                     .with_error_code("CODEX_UNAVAILABLE")
                     .with_reason(err.clone())
                     .with_lifecycle_hint("failed"),
-            );
+            )?;
             return Err(if err.contains("unavailable") {
                 err
             } else {
@@ -1722,11 +1722,11 @@ impl RunManager {
                 .await?;
             // Commit Running before the turn: Preparing→{Completed,Cancelled} are not
             // legal edges, but Running→terminal are. CLI is actively running here.
-            let _ = self.commit_status(
+            self.commit_status(
                 &run.id,
                 RunStatusV2::Running,
                 TransitionMetadata::empty().with_lifecycle_hint("running"),
-            );
+            )?;
             let project = request_project_path
                 .as_deref()
                 .or(run.project_path.as_deref())
@@ -1751,7 +1751,7 @@ impl RunManager {
                         .with_error_code("CLI_RUNTIME")
                         .with_reason(e)
                         .with_lifecycle_hint("failed");
-                    let _ = self.commit_status(&run.id, RunStatusV2::Failed, meta);
+                    self.commit_status(&run.id, RunStatusV2::Failed, meta)?;
                     return self
                         .get_run(&run.id)
                         .ok_or_else(|| "run missing after cli turn".to_string());
@@ -1776,7 +1776,7 @@ impl RunManager {
                     .with_lifecycle_hint("interrupted"),
                 _ => TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str()),
             };
-            let _ = self.commit_status(&run.id, final_status, meta);
+            self.commit_status(&run.id, final_status, meta)?;
             return self
                 .get_run(&run.id)
                 .ok_or_else(|| "run missing after cli turn".to_string());
@@ -1829,7 +1829,12 @@ impl RunManager {
             let engine = Arc::new(
                 AgentEngine::new(self.runtime.events.clone())
                     .with_cancel_token(cancel)
-                    .with_hooks(hooks),
+                    .with_hooks(hooks)
+                    .with_progress_sink(Arc::new(
+                        crate::production_tools::DaemonToolProgressSink::new(
+                            self.runtime.events.clone(),
+                        ),
+                    )),
             );
             self.runtime.register_engine(&run.id, engine.clone()).await;
             let provider = FixtureProvider {
@@ -1871,14 +1876,21 @@ impl RunManager {
                 mcp_tool_schemas: Vec::new(),
                 selected_mcp_servers: None,
             };
+            let legacy_history = crate::conversation_store::engine_history(&run.conversation_id)?;
+            let typed_history =
+                crate::conversation_store::load_agent_messages(&run.conversation_id)?;
+            let typed_history = if typed_history.is_empty() && !legacy_history.is_empty() {
+                agent_core::engine_messages_to_agent_messages(&legacy_history)
+            } else {
+                typed_history
+            };
             let config = EngineRunConfig {
                 run_id: run.id.clone(),
                 conversation_id: run.conversation_id.clone(),
                 model: model_id.clone(),
                 system_prompt: (!effective_prompt.effective_full_text.is_empty())
                     .then(|| effective_prompt.effective_full_text.clone()),
-                messages: crate::conversation_store::engine_history(&run.conversation_id)
-                    .unwrap_or_default(),
+                messages: legacy_history,
                 user_content: content,
                 max_steps,
             };
@@ -1889,20 +1901,24 @@ impl RunManager {
                 return Err(error);
             }
             let outcome = match engine
-                .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
+                .run_with_typed_messages(
+                    config,
+                    &provider,
+                    &tools,
+                    frozen_tool_schemas,
+                    typed_history,
+                )
                 .await
             {
                 Ok(o) => o,
                 Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
             };
-            if matches!(outcome, EngineOutcome::Completed { .. }) {
-                let _ = crate::conversation_store::append_assistant_turn_from_events(
-                    &run.conversation_id,
-                    &run.id,
-                    &self.runtime.events.replay_after(&run.id, 0),
-                );
-            }
             self.runtime.remove_engine(&run.id).await;
+            crate::conversation_store::append_assistant_turn_from_events(
+                &run.conversation_id,
+                &run.id,
+                &self.runtime.events.replay_after_checked(&run.id, 0)?,
+            )?;
             return self.commit_outcome(&run.id, &outcome);
         }
 

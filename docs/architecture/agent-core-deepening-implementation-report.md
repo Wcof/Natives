@@ -143,3 +143,11 @@ Provider stop reason family 映射测试。
 - Permission response 先持久化 resolved interaction，再唤醒 waiter；Retry/Continue 的 `resume_plan` 写入失败不再被忽略。
 - Progress sink 增加 250ms bounded idle flush，并保留 settled late-drop；未引入完整 Progress Sink 或 Scheduler 重构。
 - 验证：严格 `RUSTFLAGS=-Dwarnings cargo check` 与 `progress_flushes_after_batch_window_without_next_update` 通过；完整 workspace/native verifier、前端全量测试、真实外部 Provider/Shell/MCP fixture、permission fault-injection 未按资源策略重跑。
+
+## 16. 当前 Worktree 的 fail-closed 收尾
+
+- `load_agent_messages`、`try_agent_messages_from_json` 和 tool-result parser 不再把缺失身份、未知 block 或坏 JSON 静默降级为空内容。
+- EventLog/EventSequencer replay 与 Checkpoint snapshot 解码错误直接传播；Checkpoint begin 的数据库失败回滚内存 live state。
+- Engine handle 延迟到启动前置检查完成后注册，并在运行结束后先移除；ledger settle 失败追加 `uncertain` 尝试并返回 `PERSISTENCE_FAILED`。
+- 统一 provider stop reason 在 assistant turn 持久化中保留，不再将每次带工具结果的 turn 硬编码为 `tool_use`。
+- 验证：共享 target 的严格 warning-as-error Cargo check 通过；未重复资源受限的 workspace/native/frontend 全量检查。

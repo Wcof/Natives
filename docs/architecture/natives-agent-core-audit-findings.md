@@ -320,3 +320,43 @@
 - 修复后行为：首次非终态更新安排 bounded timer，窗口到期主动 flush；settled call 仍丢弃迟到更新。
 - 影响：长时间静默工具仍能看到有限延迟的进度，且不会在结算后产生迟到事件。
 - 测试方式：`progress_flushes_after_batch_window_without_next_update` 精测通过。
+
+## Typed 恢复记录被静默降级
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/conversation_store.rs`、`crates/agent-core/src/engine.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`load_agent_messages`、`try_agent_messages_from_json`、`parse_tool_result_blocks`
+- 当前行为：缺失 message identity/role、未知 content block、坏 tool-result block 或坏 snapshot JSON 直接返回错误，不再制造默认 assistant、空 blocks 或兼容执行输入。
+- 影响：Daemon 重启、checkpoint resume 和 active-context replay 不会在损坏历史上继续执行副作用工具。
+- 测试方式：`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过；严格 warning-as-error 编译通过。
+
+## Event/Checkpoint 重放错误被吞掉
+
+- 严重等级：P1
+- 所属模块：`crates/agent-core/src/event_seq.rs`、`src-agent-daemon/src/event_log.rs`、`src-agent-daemon/src/checkpoint.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`replay_after_checked`、严格 EventLog decode、`parse_files_json`、`CheckpointManager::begin_run`
+- 当前行为：坏 JSONL、坏 timestamp、坏 checkpoint snapshot 或 checkpoint skeleton 写入失败均 fail closed；live checkpoint 插入失败回滚内存 map。
+- 影响：Run 不会因历史损坏而继续或把持久化失败当作空事件流。
+- 测试方式：严格 `RUSTFLAGS=-Dwarnings cargo check` 通过；完整 fault-injection 尚待补充。
+
+## 启动前置失败遗留 Engine Handle
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`ProductionRuntime::start_run`
+- 当前行为：Engine 仅在 checkpoint、actor snapshot、history、context snapshot 和 tool-limit 前置检查成功后注册；运行结束立即移除再做 post-processing。
+- 影响：取消/重试不会命中已失败启动或已结束运行的 stale handle。
+- 测试方式：严格 warning-as-error 编译通过；启动故障注入仍待补充。
+
+## Ledger settle 失败后副作用状态不确定
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production_tools.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`PermissionGatedTools::execute_tool_with_call_id_and_progress`
+- 当前行为：handler 已运行而 completion/取消/超时 ledger 更新失败时，追加 `uncertain` 尝试并返回 `PERSISTENCE_FAILED`，不返回成功结果。
+- 影响：恢复逻辑不会误以为副作用已安全结算；Tool Result 仍由 Core 配对。
+- 测试方式：严格 warning-as-error 编译通过；ledger 数据库 fault-injection 尚待补充。

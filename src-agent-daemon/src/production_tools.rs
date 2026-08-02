@@ -1264,6 +1264,19 @@ impl EngineToolRuntime for PermissionGatedTools {
                     });
                 }
                 if let Err(error) = ledger_result {
+                    // The handler already ran, so a failed completion write is
+                    // an unknown side effect. Keep the ledger conservative even
+                    // when the first completion update failed.
+                    let _ = crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        name,
+                        cat,
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &input,
+                    );
                     output = serde_json::json!({
                         "error_code": "PERSISTENCE_FAILED",
                         "error": format!("tool side-effect ledger could not be completed: {error}"),
@@ -1379,7 +1392,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                 } else {
                     "failed"
                 };
-                let _ = crate::side_effect_ledger::record_tool_effect_state(
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
                     &stream_tool_call_id,
                     name,
@@ -1389,8 +1402,15 @@ impl EngineToolRuntime for PermissionGatedTools {
                     turn_id,
                     &input,
                 );
+                let output = match ledger_result {
+                    Ok(()) => serde_json::json!({"error": err.message, "code": err.code}),
+                    Err(ledger_error) => serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("tool side-effect ledger could not be settled: {ledger_error}"),
+                    }),
+                };
                 ToolExecutionResult {
-                    output: serde_json::json!({"error": err.message, "code": err.code}),
+                    output,
                     is_error: true,
                     duration_ms: started.elapsed().as_millis() as u64,
                 }
@@ -1420,7 +1440,11 @@ fn spawn_subagent_progress(
         let mut pending = String::new();
         let mut last_emit = Instant::now() - Duration::from_millis(50);
         for _ in 0..3_600 {
-            for event in events.replay_after(&child_run_id, cursor) {
+            let child_events = match events.replay_after_checked(&child_run_id, cursor) {
+                Ok(events) => events,
+                Err(_) => break,
+            };
+            for event in child_events {
                 cursor = cursor.max(event.effective_run_sequence());
                 match event.payload {
                     RunEventKind::TextDelta { text } | RunEventKind::ReasoningDelta { text } => {

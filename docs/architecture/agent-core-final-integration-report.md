@@ -190,3 +190,11 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - Permission response 先写 resolved interaction，再唤醒绑定 Run 的 waiter；Retry/Continue 的 blocked/approved `resume_plan` 写入失败均拒绝继续，approved 失败会结算新 Run 为失败。
 - `DaemonToolProgressSink` 为非终态首条更新安排 250ms bounded flush，保留 8KiB/age flush 与 settled late-drop，不引入完整 Progress Sink 架构。
 - 本轮精确验证：严格 `RUSTFLAGS=-Dwarnings cargo check`、`progress_flushes_after_batch_window_without_next_update`、`cargo fmt --check` 与 `git diff --check`。完整 workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP fixture 与 permission fault-injection 仍未重新运行，不能宣称全量绿。
+
+## 22. 当前 Worktree 最终生产接缝
+
+- 恢复读取不再依赖 `unwrap_or_default`/`filter_map`：typed message、tool-result block、Active Context、EventLog 和 Checkpoint snapshot 在结构损坏时停止。
+- 启动阶段的 Checkpoint 与 engine registry 具备回滚/延迟注册语义；引擎运行结束后先移除 handle，再执行事件重放与后续持久化。
+- 工具完成后的 ledger 结算写失败会记录 conservative `uncertain` 状态并返回 `PERSISTENCE_FAILED`，避免副作用已发生却向模型报告成功。
+- 本节未扩大 UI/RPC/DB surface，也未引入完整 TurnLoop、Scheduler 重写、Progress Sink 新协议或 Pi Runtime。
+- 严格 warning-as-error Cargo check、fmt 和 diff check 通过；完整 workspace/native verifier、真实 provider/shell/MCP 与 permission fault injection 仍未验证。

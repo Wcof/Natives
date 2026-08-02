@@ -264,10 +264,8 @@ impl EventLog {
                 .get(3)
                 .map_err(|e| format!("Failed to get timestamp: {e}"))?;
 
-            let payload = match decode_payload(&event_type, &payload_str) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
+            let payload = decode_payload(&event_type, &payload_str)
+                .map_err(|error| format!("Failed to decode replay event {sequence}: {error}"))?;
             // SQLite datetime('now') returns "YYYY-MM-DD HH:MM:SS" without timezone.
             // Prefer RFC3339 when present.
             let dt = chrono::DateTime::parse_from_rfc3339(&timestamp)
@@ -276,7 +274,9 @@ impl EventLog {
                     chrono::NaiveDateTime::parse_from_str(&timestamp, "%Y-%m-%d %H:%M:%S")
                         .map(|ndt| ndt.and_utc())
                 })
-                .unwrap_or_else(|_| chrono::Utc::now());
+                .map_err(|error| {
+                    format!("Failed to decode replay timestamp {sequence}: {error}")
+                })?;
             events.push(RunEvent {
                 run_id: run_id.to_string(),
                 sequence: sequence as u64,

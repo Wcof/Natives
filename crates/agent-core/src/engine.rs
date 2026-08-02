@@ -1696,7 +1696,7 @@ impl AgentEngine {
             typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
                 message_id: assistant_message_id.clone(),
                 content: assistant_content.clone(),
-                stop_reason: Some(crate::StopReason::ToolUse),
+                stop_reason: Some(core_stop_reason(stop_reason.as_ref())),
             }));
             typed_messages.extend(typed_tool_results);
 
@@ -2417,6 +2417,17 @@ fn stop_reason_label(reason: Option<&ProviderStopReason>) -> String {
     }
 }
 
+fn core_stop_reason(reason: Option<&ProviderStopReason>) -> crate::StopReason {
+    match reason.cloned().unwrap_or(ProviderStopReason::ToolUse) {
+        ProviderStopReason::Stop => crate::StopReason::Stop,
+        ProviderStopReason::ToolUse => crate::StopReason::ToolUse,
+        ProviderStopReason::Length => crate::StopReason::Length,
+        ProviderStopReason::Cancelled => crate::StopReason::Cancelled,
+        ProviderStopReason::Error => crate::StopReason::Error,
+        ProviderStopReason::Unknown(raw) => crate::StopReason::Provider(raw),
+    }
+}
+
 #[allow(dead_code)]
 fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
     messages
@@ -2697,6 +2708,169 @@ pub fn agent_messages_from_json(value: &Value) -> Vec<crate::AgentMessage> {
     value
         .as_array()
         .map_or_else(Vec::new, |items| values_to_agent_messages(items))
+}
+
+/// Strict active-context snapshot decoder.  The compatibility decoder above
+/// intentionally tolerates old provider-shaped values; durable recovery must
+/// not silently invent message IDs or drop malformed blocks.
+pub fn try_agent_messages_from_json(value: &Value) -> Result<Vec<crate::AgentMessage>, String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| "active context snapshot must be an array".to_string())?;
+    for (index, item) in items.iter().enumerate() {
+        let object = item
+            .as_object()
+            .ok_or_else(|| format!("snapshot message {index} is not an object"))?;
+        let message_id = object
+            .get("message_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| format!("snapshot message {index} is missing message_id"))?;
+        let role = object
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("snapshot message {message_id} is missing role"))?;
+        match role {
+            "assistant" => {
+                if let Some(blocks) = object.get("blocks") {
+                    validate_snapshot_content_blocks(message_id, blocks)?;
+                } else if object.get("content").and_then(Value::as_str).is_none() {
+                    return Err(format!("snapshot assistant {message_id} has no content"));
+                }
+            }
+            "user" => {
+                if let Some(blocks) = object.get("content") {
+                    if !blocks.is_string() {
+                        validate_snapshot_content_blocks(message_id, blocks)?;
+                    }
+                } else {
+                    return Err(format!("snapshot user {message_id} has no content"));
+                }
+            }
+            "system" => {
+                if object.get("content").and_then(Value::as_str).is_none() {
+                    return Err(format!("snapshot system {message_id} has no content"));
+                }
+            }
+            "tool" => {
+                let call_id = object
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| format!("snapshot tool {message_id} is missing tool_call_id"))?;
+                if object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|name| name.trim().is_empty())
+                {
+                    return Err(format!("snapshot tool {call_id} is missing name"));
+                }
+                if let Some(blocks) = object.get("tool_result_blocks") {
+                    validate_snapshot_tool_result_blocks(call_id, blocks)?;
+                } else if object.get("content").and_then(Value::as_str).is_none() {
+                    return Err(format!("snapshot tool {call_id} has no content"));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "snapshot message {message_id} has unknown role {other}"
+                ))
+            }
+        }
+    }
+    Ok(values_to_agent_messages(items))
+}
+
+fn validate_snapshot_content_blocks(message_id: &str, value: &Value) -> Result<(), String> {
+    let blocks = value
+        .as_array()
+        .ok_or_else(|| format!("snapshot message {message_id} blocks are not an array"))?;
+    for (index, block) in blocks.iter().enumerate() {
+        let kind = block
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("snapshot message {message_id} block {index} has no type"))?;
+        match kind {
+            "text" | "thinking" => {
+                if block.get("text").and_then(Value::as_str).is_none() {
+                    return Err(format!(
+                        "snapshot message {message_id} block {index} has no text"
+                    ));
+                }
+            }
+            "image" => {
+                let source = block
+                    .get("source")
+                    .ok_or_else(|| format!("snapshot message {message_id} image has no source"))?;
+                serde_json::from_value::<crate::ImageSource>(source.clone())
+                    .map_err(|e| format!("invalid snapshot image source: {e}"))?;
+            }
+            "tool_call" => {
+                for field in ["tool_call_id", "name", "arguments"] {
+                    if block
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .is_none_or(|value| value.trim().is_empty())
+                    {
+                        return Err(format!(
+                            "snapshot message {message_id} tool call missing {field}"
+                        ));
+                    }
+                }
+            }
+            other => {
+                return Err(format!(
+                    "snapshot message {message_id} has unknown block {other}"
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_snapshot_tool_result_blocks(call_id: &str, value: &Value) -> Result<(), String> {
+    let blocks = value
+        .as_array()
+        .ok_or_else(|| format!("snapshot tool {call_id} result blocks are not an array"))?;
+    for (index, block) in blocks.iter().enumerate() {
+        let kind = block
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("snapshot tool {call_id} result {index} has no type"))?;
+        match kind {
+            "text" => {
+                if block.get("text").and_then(Value::as_str).is_none() {
+                    return Err(format!(
+                        "snapshot tool {call_id} result {index} has no text"
+                    ));
+                }
+            }
+            "json" => {
+                if !block.get("value").is_some() {
+                    return Err(format!(
+                        "snapshot tool {call_id} result {index} has no value"
+                    ));
+                }
+            }
+            "artifact" => {
+                if block
+                    .get("artifact_id")
+                    .and_then(Value::as_str)
+                    .is_none_or(|id| id.trim().is_empty())
+                {
+                    return Err(format!(
+                        "snapshot tool {call_id} result {index} has no artifact_id"
+                    ));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "snapshot tool {call_id} has unknown result block {other}"
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn value_to_content_block(value: &Value) -> Option<crate::ContentBlock> {
@@ -3033,6 +3207,27 @@ mod tests {
     use crate::EventPersistence;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks() {
+        let missing_id = serde_json::json!([{"role":"assistant","blocks":[]}]);
+        assert!(try_agent_messages_from_json(&missing_id).is_err());
+        let unknown_block = serde_json::json!([{
+            "role": "assistant",
+            "message_id": "m-1",
+            "blocks": [{"type": "future_block"}]
+        }]);
+        assert!(try_agent_messages_from_json(&unknown_block).is_err());
+        let valid = serde_json::json!([{
+            "role": "tool",
+            "message_id": "m-2",
+            "tool_call_id": "call-1",
+            "name": "read_file",
+            "tool_result_blocks": [{"type": "json", "value": {"ok": true}}]
+        }]);
+        let decoded = try_agent_messages_from_json(&valid).expect("valid snapshot");
+        assert_eq!(decoded.len(), 1);
+    }
 
     struct FakeProvider {
         rounds: Mutex<Vec<Vec<EngineProviderEvent>>>,

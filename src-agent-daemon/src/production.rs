@@ -588,11 +588,6 @@ impl ProductionRuntime {
                 .with_provider_context_window(model_window)
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
-        self.engines
-            .lock()
-            .await
-            .insert(run_id.clone(), engine.clone());
-
         // Phase 3: logical checkpoint at run start (lazy before-images on writes).
         let checkpoint_id = self
             .checkpoint_manager()
@@ -739,6 +734,12 @@ impl ProductionRuntime {
         };
 
         crate::production_tools::validate_tool_limit(frozen_tool_schemas.len())?;
+        // Register only once all preflight persistence and context loads have
+        // succeeded; an early error must not leave a cancellable stale handle.
+        self.engines
+            .lock()
+            .await
+            .insert(run_id.clone(), engine.clone());
         let outcome = match engine
             .run_with_typed_messages(
                 config,
@@ -752,7 +753,14 @@ impl ProductionRuntime {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
-        let run_events = self.events.replay_after(&run_id, 0);
+        // The provider/tool future is finished before durable post-processing;
+        // do not retain a stale engine handle if history/checkpoint persistence
+        // below fails.
+        self.engines.lock().await.remove(&run_id);
+        let run_events = self
+            .events
+            .replay_after_checked(&run_id, 0)
+            .map_err(|error| format!("run event replay failed: {error}"))?;
         if let Some(turn_id) = run_events
             .iter()
             .rev()
@@ -807,8 +815,6 @@ impl ProductionRuntime {
             .map_err(|error| format!("checkpoint commit event persistence failed: {error}"))?;
         // Do NOT commit_outcome or append terminal lifecycle events here.
         // RunManager is the sole lifecycle committer after this returns.
-        self.engines.lock().await.remove(&run_id);
-
         // SessionCoordinator: drain next prompt / cancel-and-send after real terminal.
         // Never re-executes the just-finished run — only starts a *new* queued item.
         let _ =

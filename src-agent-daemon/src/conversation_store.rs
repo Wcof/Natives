@@ -387,7 +387,8 @@ fn fork(params: Value) -> Result<Value, String> {
             rusqlite::params![source_id],
             |row| row.get::<_, String>(0),
         )
-        .ok()
+        .optional()
+        .map_err(|e| e.to_string())?
     };
     let store = store()?;
     let conn = store.conn()?;
@@ -588,7 +589,9 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 },
             )
             .map_err(|e| e.to_string())?;
-        let mut rows: Vec<Value> = rows.filter_map(Result::ok).collect();
+        let mut rows: Vec<Value> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         rows.reverse();
         rows
     } else {
@@ -608,7 +611,8 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 "truncated": row.get::<_, i64>(12).unwrap_or(0) != 0,
             }))
         }).map_err(|e| e.to_string())?;
-        rows.filter_map(Result::ok).collect()
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
     };
 
     let mut blocks = conn
@@ -630,14 +634,19 @@ fn get_messages(params: Value) -> Result<Value, String> {
         })
         .map_err(|e| e.to_string())?;
     let mut by_message = std::collections::HashMap::<String, Vec<Value>>::new();
-    for (message_id, block_type, index, json) in block_rows.filter_map(Result::ok) {
+    for (message_id, block_type, index, json) in block_rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
+    {
+        let content = serde_json::from_str::<Value>(&json)
+            .map_err(|e| format!("invalid message block JSON: {e}"))?;
         by_message
             .entry(message_id)
             .or_default()
             .push(serde_json::json!({
                 "type": block_type,
                 "index": index,
-                "content": serde_json::from_str::<Value>(&json).unwrap_or_else(|_| serde_json::json!({ "text": json })),
+                "content": content,
             }));
     }
     for message in &mut messages {
@@ -657,19 +666,24 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 .iter()
                 .any(|block| block.get("type").and_then(Value::as_str) == Some("reasoning"))
             {
-                let event_payloads = conn
+                let mut event_stmt = conn
                     .prepare(
                         "SELECT payload FROM run_event WHERE run_id = ?1 ORDER BY sequence ASC",
                     )
-                    .and_then(|mut stmt| {
-                        stmt.query_map(params![run_id], |row| row.get::<_, String>(0))
-                            .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
-                    })
-                    .unwrap_or_default();
+                    .map_err(|e| e.to_string())?;
+                let event_rows = event_stmt
+                    .query_map(params![run_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                let event_payloads = event_rows
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
                 let events = event_payloads
                     .iter()
-                    .filter_map(|payload| serde_json::from_str::<RunEventV2>(payload).ok())
-                    .collect::<Vec<_>>();
+                    .map(|payload| {
+                        serde_json::from_str::<RunEventV2>(payload)
+                            .map_err(|e| format!("invalid run event for message history: {e}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 if let Some(reasoning) = reasoning_block_from_events(&events) {
                     content_blocks.insert(
                         0,
@@ -794,12 +808,12 @@ pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, S
         let role = row
             .get("role")
             .and_then(Value::as_str)
-            .unwrap_or("assistant");
+            .ok_or_else(|| format!("message {id} role missing"))?;
         let blocks = row
             .get("content_blocks")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| format!("message {id} content_blocks missing"))?;
         let stop_reason =
             row.get("stop_reason")
                 .and_then(Value::as_str)
@@ -819,38 +833,53 @@ pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, S
             let content = payload
                 .get("content")
                 .and_then(Value::as_array)
-                .map(|blocks| parse_tool_result_blocks(blocks))
-                .unwrap_or_default();
+                .ok_or_else(|| format!("tool result {id} content blocks missing"))
+                .and_then(|blocks| parse_tool_result_blocks(blocks))?;
+            let tool_call_id = payload
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("legacy-missing-tool-call:{id}"));
+            let tool_name = tool_block
+                .get("content")
+                .and_then(|v| v.get("name"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("legacy-tool")
+                .to_string();
             out.push(AgentMessage::ToolResult(agent_core::ToolResultMessage {
                 message_id: agent_core::MessageId::from(id),
-                tool_call_id: agent_core::ToolCallId::from(
-                    payload
-                        .get("tool_call_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                ),
-                tool_name: tool_block
-                    .get("content")
-                    .and_then(|v| v.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                tool_call_id: agent_core::ToolCallId::from(tool_call_id),
+                tool_name,
                 content,
                 is_error: payload
                     .get("is_error")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false),
+                    .unwrap_or(false)
+                    || payload.get("tool_call_id").is_none(),
                 code: payload
                     .get("error_code")
                     .and_then(Value::as_str)
-                    .map(str::to_string),
+                    .map(str::to_string)
+                    .or_else(|| {
+                        payload
+                            .get("tool_call_id")
+                            .is_none()
+                            .then_some("LEGACY_TOOL_RESULT_ID_MISSING".into())
+                    }),
             }));
             continue;
         }
         let content = blocks
             .iter()
-            .filter_map(parse_content_block)
-            .collect::<Vec<_>>();
+            .enumerate()
+            .map(|(index, block)| {
+                parse_content_block(block).ok_or_else(|| {
+                    format!("message {id} content block {index} is malformed or unsupported")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         match role {
             "user" => out.push(AgentMessage::User(agent_core::UserMessage {
                 message_id: agent_core::MessageId::from(id),
@@ -913,7 +942,7 @@ pub fn load_active_context_snapshot(
         .into_iter()
         .collect();
     Ok(Some(ActiveContextSnapshot {
-        messages: agent_core::agent_messages_from_json(&value),
+        messages: agent_core::try_agent_messages_from_json(&value)?,
         input_message_ids: ids,
     }))
 }
@@ -947,7 +976,7 @@ pub fn load_active_context_snapshot_for_checkpoint(
         .into_iter()
         .collect();
     Ok(Some(ActiveContextSnapshot {
-        messages: agent_core::agent_messages_from_json(&value),
+        messages: agent_core::try_agent_messages_from_json(&value)?,
         input_message_ids: ids,
     }))
 }
@@ -1011,33 +1040,43 @@ fn parse_content_block(block: &Value) -> Option<ContentBlock> {
     }
 }
 
-fn parse_tool_result_blocks(blocks: &[Value]) -> Vec<ToolResultBlock> {
+fn parse_tool_result_blocks(blocks: &[Value]) -> Result<Vec<ToolResultBlock>, String> {
     blocks
         .iter()
-        .filter_map(|block| match block.get("type").and_then(Value::as_str) {
-            Some("text") => Some(ToolResultBlock::Text {
-                text: block
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            }),
-            Some("json") => Some(ToolResultBlock::Json {
-                value: block.get("value").cloned().unwrap_or(Value::Null),
-            }),
-            Some("artifact") => Some(ToolResultBlock::Artifact {
-                artifact_id: block
-                    .get("artifact_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                preview: block
-                    .get("preview")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            }),
-            _ => None,
-        })
+        .enumerate()
+        .map(
+            |(index, block)| match block.get("type").and_then(Value::as_str) {
+                Some("text") => Ok(ToolResultBlock::Text {
+                    text: block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| format!("tool result block {index} text missing"))?
+                        .to_string(),
+                }),
+                Some("json") => Ok(ToolResultBlock::Json {
+                    value: block
+                        .get("value")
+                        .cloned()
+                        .ok_or_else(|| format!("tool result block {index} value missing"))?,
+                }),
+                Some("artifact") => Ok(ToolResultBlock::Artifact {
+                    artifact_id: block
+                        .get("artifact_id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.trim().is_empty())
+                        .ok_or_else(|| format!("tool result block {index} artifact_id missing"))?
+                        .to_string(),
+                    preview: block
+                        .get("preview")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                }),
+                Some(other) => Err(format!(
+                    "tool result block {index} type {other} unsupported"
+                )),
+                None => Err(format!("tool result block {index} type missing")),
+            },
+        )
         .collect()
 }
 
@@ -1294,7 +1333,7 @@ fn append_single_assistant_turn(
     let assistant = agent_core::AssistantMessage {
         message_id: assistant_id.into(),
         content,
-        stop_reason: stop_reason.map(agent_core::StopReason::Provider),
+        stop_reason: stop_reason.as_deref().map(parse_stop_reason),
     };
     let appended_id = append_agent_message(
         conversation_id,
@@ -1353,6 +1392,17 @@ fn append_single_assistant_turn(
         )?;
     }
     Ok(Some(appended_id))
+}
+
+fn parse_stop_reason(value: &str) -> agent_core::StopReason {
+    match value {
+        "stop" => agent_core::StopReason::Stop,
+        "tool_use" => agent_core::StopReason::ToolUse,
+        "length" => agent_core::StopReason::Length,
+        "cancelled" => agent_core::StopReason::Cancelled,
+        "error" => agent_core::StopReason::Error,
+        other => agent_core::StopReason::Provider(other.to_string()),
+    }
 }
 
 fn persist_turn_record(
@@ -1800,48 +1850,44 @@ pub fn append_trigger_message_idempotent(
     run_id: Option<&str>,
 ) -> Result<Option<String>, String> {
     if let Some(run_id) = run_id.filter(|s| !s.trim().is_empty()) {
-        if let Ok(store) = store() {
-            if let Ok(conn) = store.conn() {
-                if let Ok(Some(existing)) = conn
-                    .query_row(
-                        "SELECT trigger_message_id FROM run WHERE id = ?1 AND trigger_message_id IS NOT NULL",
-                        params![run_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                {
-                    return Ok(Some(existing));
-                }
-            }
+        let store = store()?;
+        let conn = store.conn()?;
+        if let Some(existing) = conn
+            .query_row(
+                "SELECT trigger_message_id FROM run WHERE id = ?1 AND trigger_message_id IS NOT NULL",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(existing));
         }
     }
 
     // If the latest user message already has the same text, reuse it (duplicate start).
     if let Some(text) = content.filter(|s| !s.trim().is_empty()) {
-        if let Ok(messages) =
-            get_messages(serde_json::json!({ "conversation_id": conversation_id }))
-        {
-            if let Some(rows) = messages.as_array() {
-                if let Some(last) = rows
-                    .iter()
-                    .rev()
-                    .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
-                {
-                    let last_text = last
-                        .get("content_blocks")
-                        .and_then(Value::as_array)
-                        .map(|blocks| {
-                            blocks
-                                .iter()
-                                .filter_map(block_text)
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default();
-                    if last_text.trim() == text.trim() {
-                        if let Some(id) = last.get("id").and_then(Value::as_str) {
-                            return Ok(Some(id.to_string()));
-                        }
+        let messages = get_messages(serde_json::json!({ "conversation_id": conversation_id }))?;
+        if let Some(rows) = messages.as_array() {
+            if let Some(last) = rows
+                .iter()
+                .rev()
+                .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+            {
+                let last_text = last
+                    .get("content_blocks")
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(block_text)
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if last_text.trim() == text.trim() {
+                    if let Some(id) = last.get("id").and_then(Value::as_str) {
+                        return Ok(Some(id.to_string()));
                     }
                 }
             }

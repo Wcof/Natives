@@ -33,6 +33,7 @@ struct Inner {
     events: HashMap<String, Vec<RunEventV2>>,
     buses: HashMap<String, broadcast::Sender<RunEventV2>>,
     loaded: HashMap<String, bool>,
+    load_errors: HashMap<String, String>,
 }
 
 impl Default for Inner {
@@ -42,6 +43,7 @@ impl Default for Inner {
             events: HashMap::new(),
             buses: HashMap::new(),
             loaded: HashMap::new(),
+            load_errors: HashMap::new(),
         }
     }
 }
@@ -90,21 +92,30 @@ impl EventSequencer {
         }
         inner.loaded.insert(run_id.to_string(), true);
         if let Some(persistence) = &self.persistence {
-            if let Ok(loaded) = persistence.replay_after(run_id, 0) {
-                if !loaded.is_empty() {
-                    let max_seq = loaded
-                        .iter()
-                        .map(|ev| ev.effective_run_sequence())
-                        .max()
-                        .unwrap_or(0);
-                    inner.sequences.insert(run_id.to_string(), max_seq);
-                    inner.events.insert(run_id.to_string(), loaded);
+            let loaded = match persistence.replay_after(run_id, 0) {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    inner.load_errors.insert(run_id.to_string(), error);
                     return;
                 }
+            };
+            if !loaded.is_empty() {
+                let max_seq = loaded
+                    .iter()
+                    .map(|ev| ev.effective_run_sequence())
+                    .max()
+                    .unwrap_or(0);
+                inner.sequences.insert(run_id.to_string(), max_seq);
+                inner.events.insert(run_id.to_string(), loaded);
+                return;
             }
-            if let Ok(max_seq) = persistence.last_sequence(run_id) {
-                if max_seq > 0 {
+            match persistence.last_sequence(run_id) {
+                Ok(max_seq) if max_seq > 0 => {
                     inner.sequences.insert(run_id.to_string(), max_seq);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    inner.load_errors.insert(run_id.to_string(), error);
                 }
             }
             return;
@@ -118,13 +129,22 @@ impl EventSequencer {
         };
         let mut max_seq = 0u64;
         let mut loaded = Vec::new();
-        for line in text.lines() {
+        for (line_number, line) in text.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Ok(ev) = serde_json::from_str::<RunEventV2>(line) {
-                max_seq = max_seq.max(ev.effective_run_sequence());
-                loaded.push(ev);
+            match serde_json::from_str::<RunEventV2>(line) {
+                Ok(ev) => {
+                    max_seq = max_seq.max(ev.effective_run_sequence());
+                    loaded.push(ev);
+                }
+                Err(error) => {
+                    inner.load_errors.insert(
+                        run_id.to_string(),
+                        format!("invalid event log line {}: {error}", line_number + 1),
+                    );
+                    return;
+                }
             }
         }
         if !loaded.is_empty() {
@@ -161,6 +181,16 @@ impl EventSequencer {
         payload = sanitize_payload(payload);
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, run_id);
+        if let Some(error) = inner.load_errors.get(run_id) {
+            return RunEventV2::new(
+                run_id,
+                0,
+                RunEventKind::Failed {
+                    error: redact_secrets(error),
+                    code: "PERSISTENCE_FAILED".into(),
+                },
+            );
+        }
         let next = inner.sequences.entry(run_id.to_string()).or_insert(0);
         *next += 1;
         let sequence = *next;
@@ -232,9 +262,21 @@ impl EventSequencer {
     }
 
     pub fn replay_after(&self, run_id: &str, after_sequence: u64) -> Vec<RunEventV2> {
+        self.replay_after_checked(run_id, after_sequence)
+            .unwrap_or_default()
+    }
+
+    pub fn replay_after_checked(
+        &self,
+        run_id: &str,
+        after_sequence: u64,
+    ) -> Result<Vec<RunEventV2>, String> {
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, run_id);
-        inner
+        if let Some(error) = inner.load_errors.get(run_id) {
+            return Err(error.clone());
+        }
+        Ok(inner
             .events
             .get(run_id)
             .map(|events| {
@@ -244,7 +286,7 @@ impl EventSequencer {
                     .cloned()
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     pub fn subscribe(&self, run_id: &str) -> broadcast::Receiver<RunEventV2> {

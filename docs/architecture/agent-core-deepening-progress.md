@@ -53,3 +53,10 @@
 ## 设计偏差
 
 - 新 Worktree 基于 P0 最新提交；本轮新增一个 `run.continue` RPC 方法及 renderer wire 字段，但未改变 RunManager terminal authority、UI 行为或数据库既有列语义。
+
+## 23. 恢复读取与启动资源收口（当前 Worktree）
+
+- typed transcript、Active Context snapshot、EventLog replay 和 Checkpoint file snapshot 均严格校验身份、结构、JSON 和时间戳；损坏记录 fail closed。
+- `ProductionRuntime` 仅在启动前置持久化/恢复读取成功后注册 engine；Checkpoint skeleton 写入失败会回滚 live map，运行结束先移除 handle 再做 post-processing。
+- Gateway handler 已完成但 ledger settle 写入失败时追加 conservative `uncertain` 状态并返回 `PERSISTENCE_FAILED`。
+- 受控 `RUSTFLAGS=-Dwarnings cargo check` 通过；workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP fixture 与 permission fault-injection 仍未重新运行。
