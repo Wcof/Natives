@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`b2ab95d3`
+- 结束 Commit：代码收口 `3bc18472`；文档收口为本提交
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -121,3 +121,15 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - `RUSTFLAGS=-Dwarnings cargo check -p natives -p natives-agent-daemon -p assistant-protocol -p agent-core -p provider-adapters -p capability-gateway` 通过；仅兼容测试转换 helper 使用 `#[allow(dead_code)]`，不进入生产主链。
 - legacy delta-only assistant persistence 仍保留 duration-bearing `reasoning` block；生产带 `MessageCompleted` 的 typed Thinking 不重复写兼容块；`conversation_round_trip_uses_daemon_tables` 精准测试通过。
 - 全 workspace 首次运行暴露的两个 tool fixture 已改为显式 `ToolUse` stop reason，并各自精准复验通过；未伪称 workspace 已重新全量通过。
+
+## 13. Fixture 与 Ledger 持久化收口（`3bc18472`）
+
+- `side_effect_ledger` 的测试 fallback 使用真实临时 SQLite `DataStore`，不再以 no-op store 掩盖 Plan Mode/ledger 断言；生产路径无 DataStore 时仍 fail closed。
+- `ToolThenText`、权限请求、慢工具取消等 fixture 明确发出 `CompletedWithReason::ToolUse`，与 Core 的 fail-closed stop-reason 语义一致；不放宽生产执行条件。
+- 这些变更只修正测试/fixture 的事实输入与测试持久化装配，未改变 RunManager 的终态权威或生产安全边界。
+
+## 14. 受控验证边界
+
+- 最新精确验证继续通过：typed provider seam、legacy reasoning round-trip、compaction fallback、tool-call collection、plan/permission/MCP/cancel 关键测试，以及 `RUSTFLAGS=-Dwarnings cargo check`。
+- `cargo test --workspace` 未重复运行（共享 target/磁盘策略）；首次运行暴露的两个 fixture 已精准复验。
+- `npm run typecheck/lint/test/perf:check` 仍受 worktree 未安装 `node_modules` 阻塞；`verify:native-engine` 的 daemon/live fixture 仍有未解决失败，故本报告不宣称全量闭环完成。

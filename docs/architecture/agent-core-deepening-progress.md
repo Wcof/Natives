@@ -20,7 +20,7 @@
 | F. Event Fail Closed | 已接生产（关键事实） | 5734ef5f | cargo check | 关键事实使用 checked；ledger start/complete persistence failure 生成配对错误结果并停止 Engine；delta/progress 仍可丢弃 |
 | G. Lineage 与 Resume | 已接生产 | 5734ef5f | side-effect guard | retry/continue 记录 source/checkpoint/turn lineage；resume_plan 在 detached start 后结算；continue 只从 durable checkpoint 启动独立 Run |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
-| I. 最终验证 | 部分完成 | 0a2542a0 | strict check + precise regressions | strict `-Dwarnings` check、typed seam、legacy reasoning、stop-reason fixture 精测通过；workspace/native live/frontend 仍有既有环境限制 |
+| I. 最终验证 | 部分完成 | 3bc18472 | strict check + precise regressions | strict `-Dwarnings` check、typed seam、legacy reasoning、stop-reason fixture、ledger/permission/cancel 精测通过；workspace/native live/frontend 仍有既有环境限制 |
 
 ## 阻塞项
 
@@ -29,6 +29,7 @@
 - `start_with_seams_loads_daemon_conversation_history` 独立运行无输出超过两分钟后中止，保持未验证状态。
 - `b2ab95d3` 将 `ProviderTurnRequest` 直接接入三个生产 provider 实现；旧 `EngineMessage` 转换保留为 legacy/fixture 兼容边界，并补 typed block identity 精测。
 - `0a2542a0` 修正 strict warning 与 legacy reasoning 兼容回归；workspace 初次运行的两个 fail-closed fixture 已精准复验通过。完整 workspace/native verifier 仍未重新宣称通过。
+- `3bc18472` 让测试 ledger 使用真实临时 SQLite，并让 ToolUse fixture 明确声明 `CompletedWithReason::ToolUse`；没有放宽 Core 的 fail-closed 规则。
 
 ## 设计偏差
 

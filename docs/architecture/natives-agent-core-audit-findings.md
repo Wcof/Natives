@@ -137,6 +137,13 @@
 - 实现状态：已修复（`5734ef5f`）
 - 代码证据：实际 Gateway handler 前 `record_tool_effect_state(..., "started", ...)` 失败返回 `PERSISTENCE_FAILED`；不经过 Gateway 的 skill/task 编排路径不写孤立 started 行；完成记录失败也返回同码；Core 仍生成同 ID Tool Result 后停止后续 Provider turn。
 - 当前行为：外部副作用没有 ledger start 事实时不执行；完成事实无法落库时不伪装成功或继续自动恢复。
+- 追加证据（`3bc18472`）：测试未装配全局 DataStore 时使用真实临时 SQLite，而非 no-op store；因此 Plan Mode/ledger 回归断言仍验证持久事实，生产无 store 继续 fail closed。
+
+## Fail-closed ToolUse Fixture 事实
+
+- 修复状态：测试装配已修复；生产规则未放宽。
+- 代码证据：`src-agent-daemon/src/production.rs`、`src-agent-daemon/src/run_manager.rs` 中 ToolThenText、权限请求和取消 fixture 使用 `ProviderStopReason::ToolUse`。
+- 当前行为：需要执行工具的 fixture 明确声明 `ToolUse`；Core 对裸 `Completed`、`Length`、Unknown 或无 Final Event 仍拒绝执行并生成配对错误结果。
 
 ## Resume Plan 结算时机
 

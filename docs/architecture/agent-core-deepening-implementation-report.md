@@ -117,3 +117,9 @@ Provider stop reason family 映射测试。
 - strict `RUSTFLAGS=-Dwarnings cargo check` 覆盖 natives、daemon、protocol、Core、provider-adapters、capability-gateway，通过。
 - legacy delta-only conversation fixture 保留 duration-bearing reasoning compatibility block；带 `MessageCompleted` 的 typed path 只持久化 canonical Thinking。
 - workspace 首次运行中两个旧 tool fixture 因未声明 `ToolUse` stop reason 失败，已改 fixture 并用两个精准测试复验通过；workspace 未因资源策略重复运行。
+
+## 12. Fixture 与 Ledger 收口（`3bc18472`）
+
+- 测试环境的 side-effect ledger fallback 改为真实临时 SQLite `DataStore`，仅在测试且未装配全局 store 时启用；生产路径仍在无 store 时 fail closed。
+- ToolThenText、权限请求和取消 fixture 显式携带 `CompletedWithReason::ToolUse`，保留阶段 0 对未知/不完整 stop reason 的拒绝语义。
+- 该提交未引入 Turn/Message/Scheduler/Projection 的新生产架构，只修正验证装配和 fixture 事实。
