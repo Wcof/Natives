@@ -61,10 +61,10 @@
 
 - 严重等级：P1
 - 所属模块：agent-core / capability-gateway / src-agent-daemon
-- 实现状态：部分修复（Cancel 已接生产；Progress 已接 Shell/MCP stdio/Sub Agent，HTTP/SSE 增量仍未完成）
+- 实现状态：已修复主链（Cancel 已接生产；Progress 已接 Shell/MCP stdio/HTTP/SSE/Sub Agent，并由 sink 合并与丢弃迟到更新；真实外部 fixture 未运行）
 - 原始代码证据：EngineToolRuntime；CapabilityGateway::execute；Shell/MCP Handler。
 - 原始行为：Gateway 通用路径只 race Timeout，实际取消依赖各 Handler；没有完整 Progress Sink。
-- 修复后行为：Gateway 为每次调用创建 child CancellationToken，同时 select Handler、Timeout、父 Cancel；Timeout/Cancel 返回不同错误码，给予 Handler 250ms 清理窗口，无法 quiet 时返回 `cleanup_failed` 并 abort。Shell/MCP stdio/Sub Agent progress 通过 Core sink 发送并在 settled/cancel 后丢弃迟到更新。
+- 修复后行为：Gateway 为每次调用创建 child CancellationToken，同时 select Handler、Timeout、父 Cancel；Timeout/Cancel 返回不同错误码，给予 Handler 250ms 清理窗口，无法 quiet 时返回 `cleanup_failed` 并 abort。Shell/MCP stdio/HTTP/SSE/Sub Agent progress 通过 Core sink 发送，按 8KiB/250ms 合并并在 settled/cancel 后丢弃迟到更新。
 - 影响/触发条件：普通 Handler 取消边界统一；第三方/网络 Handler quiet 仍需集成验证。
 - 测试方式：`capability-gateway::p0_tests::cancellation_wins_over_blocking_handler`（本轮 1 passed）；仍需真实 shell kill+wait、HTTP/MCP pending 和并行 quiet fixture。
 
@@ -93,9 +93,9 @@
 
 - 严重等级：P1
 - 所属模块：Renderer DaemonAssistantAdapter
-- 实现状态：部分修复（adapter 已拒绝伪造终态；UI 状态展示仍待接线）
+- 实现状态：已修复投影接线（adapter 已拒绝伪造终态，并将缺失权威事件作为本地 `ProjectionRecovery` 写入 workspace state；专用 UI 文案仍待接线）
 - 原始代码证据：src/lib/assistant-gateway/daemon-adapter.ts。
-- 当前行为：`DaemonAssistantAdapter` 缺失权威终态时抛出 `AuthoritativeEventMissing`，不再重标 sequence；上层仍需展示 incomplete 状态。
+- 当前行为：`DaemonAssistantAdapter` 缺失权威终态时抛出 `AuthoritativeEventMissing`，不再重标 sequence；controller 将 incomplete 状态写入 workspace state，不写回 Daemon Event Store。
 - 新代码证据：`src/lib/assistant-protocol/projection.ts`、`daemon-adapter.ts::recoverTerminalEvent`。
 - 建议：将 `ProjectionRecovery` 状态接入工作区 reducer 的恢复提示。
 

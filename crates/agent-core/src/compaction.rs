@@ -367,6 +367,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 pub fn summary_message(summary: &str, omitted_messages: usize) -> Value {
     json!({
         "role": "system",
+        "message_id": uuid::Uuid::new_v4().to_string(),
         "content": format!(
             "{SUMMARY_MARKER} The first {omitted_messages} messages of this conversation were \
     replaced by the summary below to stay inside the context budget. Treat it as an accurate \

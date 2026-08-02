@@ -193,7 +193,7 @@ pub struct PermissionGatedTools {
 pub struct DaemonToolProgressSink {
     pub events: EventSequencer,
     settled: Arc<Mutex<HashSet<String>>>,
-    last_emit: Arc<Mutex<HashMap<String, Instant>>>,
+    pending: Arc<Mutex<HashMap<String, (Instant, ToolProgressUpdate)>>>,
     sequence: Arc<AtomicU64>,
 }
 
@@ -202,7 +202,7 @@ impl DaemonToolProgressSink {
         Self {
             events,
             settled: Arc::new(Mutex::new(HashSet::new())),
-            last_emit: Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(Mutex::new(HashMap::new())),
             sequence: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -214,34 +214,61 @@ impl ToolProgressSink for DaemonToolProgressSink {
         if self.settled.lock().await.contains(&update.tool_call_id) {
             return;
         }
-        if !update.final_update {
-            let mut last = self.last_emit.lock().await;
-            let now = Instant::now();
-            if last
-                .get(&update.tool_call_id)
-                .is_some_and(|value| now.duration_since(*value) < Duration::from_millis(50))
-            {
-                return;
+        const MAX_BATCH_BYTES: usize = 8 * 1024;
+        const MAX_BATCH_AGE: Duration = Duration::from_millis(250);
+        let now = Instant::now();
+        let call_id = update.tool_call_id.clone();
+        let emit = {
+            let mut pending = self.pending.lock().await;
+            if update.final_update {
+                let mut final_update = pending.remove(&call_id).map(|(_, mut value)| {
+                    value.text.push_str(&update.text);
+                    value.final_update = true;
+                    value
+                });
+                if final_update.is_none() {
+                    final_update = Some(update);
+                }
+                final_update
+            } else {
+                let flush = pending
+                    .get_mut(&call_id)
+                    .map(|(started, buffered)| {
+                        buffered.text.push_str(&update.text);
+                        buffered.text.len() >= MAX_BATCH_BYTES
+                            || now.duration_since(*started) >= MAX_BATCH_AGE
+                    })
+                    .unwrap_or(false);
+                if flush {
+                    pending.remove(&call_id).map(|(_, value)| value)
+                } else {
+                    if !pending.contains_key(&call_id) {
+                        pending.insert(call_id, (now, update));
+                    }
+                    None
+                }
             }
-            last.insert(update.tool_call_id.clone(), now);
+        };
+        if let Some(update) = emit {
+            let progress_sequence = self.sequence.fetch_add(1, AtomicOrdering::Relaxed);
+            self.events.append(
+                &update.run_id,
+                RunEventKind::ToolOutputDelta {
+                    tool_call_id: update.tool_call_id,
+                    stream: update.stream,
+                    text: update.text,
+                    truncated: false,
+                    turn_id: update.turn_id,
+                    message_id: update.message_id,
+                    progress_sequence: Some(progress_sequence),
+                },
+            );
         }
-        let progress_sequence = self.sequence.fetch_add(1, AtomicOrdering::Relaxed);
-        self.events.append(
-            &update.run_id,
-            RunEventKind::ToolOutputDelta {
-                tool_call_id: update.tool_call_id,
-                stream: update.stream,
-                text: update.text,
-                truncated: false,
-                turn_id: update.turn_id,
-                message_id: update.message_id,
-                progress_sequence: Some(progress_sequence),
-            },
-        );
     }
 
     async fn mark_tool_call_settled(&self, tool_call_id: &str) {
         self.settled.lock().await.insert(tool_call_id.to_string());
+        self.pending.lock().await.remove(tool_call_id);
     }
 }
 impl PermissionGatedTools {

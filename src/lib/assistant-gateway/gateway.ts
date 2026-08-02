@@ -8,6 +8,7 @@ import type {
   DaemonCapabilities,
   RunEvent,
 } from '@/lib/assistant-protocol';
+import type { ProjectionRecovery } from '@/lib/assistant-protocol';
 
 export interface AssistantGateway {
   connect(): Promise<void>;
@@ -17,6 +18,8 @@ export interface AssistantGateway {
   getSnapshot(conversationId: string): Promise<ConversationSnapshot>;
   /** Optional: listen to connection-level status from the adapter. */
   getCapabilities?(): Promise<DaemonCapabilities | null>;
+  /** Renderer-local projection status; never a synthetic daemon event. */
+  getProjectionRecovery?(runId: string): ProjectionRecovery | undefined;
 }
 
 export type GatewayFactory = () => AssistantGateway;

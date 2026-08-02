@@ -51,6 +51,10 @@ export class DaemonAssistantAdapter implements AssistantGateway {
   private connected = false;
   private pollIntervalMs: number;
   private abortControllers = new Map<string, AbortController>();
+  private projectionRecovery = new Map<
+    string,
+    ReturnType<typeof createProjectionState>['recovery']
+  >();
 
   constructor(options: DaemonAdapterOptions = {}) {
     this.requestFn = options.requestFn ?? null;
@@ -78,6 +82,10 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     for (const c of this.abortControllers.values()) c.abort();
     this.abortControllers.clear();
     this.connected = false;
+  }
+
+  getProjectionRecovery(runId: string) {
+    return this.projectionRecovery.get(runId);
   }
 
   async getCapabilities(): Promise<DaemonCapabilities | null> {
@@ -132,6 +140,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
           if (event.sequence <= seq) continue;
           seq = event.sequence;
           projection = applyProjectionEvent(projection, event);
+          this.projectionRecovery.set(runId, projection.recovery);
           yield event;
           if (isTerminalEventType(event.type)) {
             sawTerminalEvent = true;
@@ -150,6 +159,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
           const recovered = await this.recoverTerminalEvent(runId, seq);
           if (recovered) {
             projection = applyProjectionEvent(projection, recovered);
+            this.projectionRecovery.set(runId, projection.recovery);
             if (recovered.sequence <= seq) throw new AuthoritativeEventMissing(runId);
             seq = recovered.sequence;
             yield recovered;
@@ -157,6 +167,11 @@ export class DaemonAssistantAdapter implements AssistantGateway {
           }
           // A terminal DB status without its authoritative event is an
           // incomplete projection, not permission to fabricate a sequence.
+          this.projectionRecovery.set(runId, {
+            kind: 'incomplete',
+            lastSequence: seq,
+            reason: 'authoritative_event_missing',
+          });
           throw new AuthoritativeEventMissing(runId);
         }
 

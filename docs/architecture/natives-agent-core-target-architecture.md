@@ -29,7 +29,7 @@ Protocol v2 变体存在，RunManager 仍是唯一终态事实权威。
 - `EngineRunId`、`TurnId`、`MessageId`、`ToolCallId`：不可混用的 opaque ID。
 - `AgentMessage`、`ContentBlock`、`ToolResultMessage`：provider-neutral 运行期模型；UI projection 不进入 transcript。
 - `ToolCapability`：由 Gateway/Daemon 广告执行模式；未知工具默认 `Sequential`。
-- `ToolProgressSink`：可选通知 seam，本阶段默认 no-op，不改变工具安全策略。
+- `ToolProgressSink`：由 Daemon 生产实现提供，Core 只依赖抽象；生产 sink 负责 8KiB/250ms 合并和 settled late-drop，不改变工具安全策略。
 - `EngineInputReceiver`：Steering/FollowUp 只在 Core safe point drain/ack。
 - `ActiveContextSnapshot`、`ResumePlan`：运行期恢复模型，存储仍由 Daemon 管理。
 

@@ -1269,6 +1269,9 @@ fn append_single_assistant_turn(
     let typed_turn_id = turn_id.unwrap_or_else(|| format!("legacy-turn:{run_id}"));
     let assistant_id = assistant_message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     persist_turn_record(run_id, &typed_turn_id, stop_reason.as_deref(), events)?;
+    let has_typed_thinking = content
+        .iter()
+        .any(|block| matches!(block, agent_core::ContentBlock::Thinking { .. }));
     let assistant = agent_core::AssistantMessage {
         message_id: assistant_id.into(),
         content,
@@ -1280,15 +1283,17 @@ fn append_single_assistant_turn(
         Some(&typed_turn_id),
         &AgentMessage::Assistant(assistant),
     )?;
-    if let Some(reasoning) = reasoning_block_from_events(events) {
-        let db = store()?;
-        let conn = db.conn()?;
-        conn.execute(
+    if !has_typed_thinking {
+        if let Some(reasoning) = reasoning_block_from_events(events) {
+            let db = store()?;
+            let conn = db.conn()?;
+            conn.execute(
             "INSERT OR IGNORE INTO message_block (message_id, sort_order, block_type, block_json)
              VALUES (?1, -1, 'reasoning', ?2)",
             params![appended_id, reasoning.to_string()],
         )
         .map_err(|e| e.to_string())?;
+        }
     }
     for (id, name, output, is_error, duration_ms) in tool_results {
         let code = output

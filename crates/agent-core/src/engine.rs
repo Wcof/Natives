@@ -692,6 +692,51 @@ impl AgentEngine {
             .map_err(EngineError::Message)
     }
 
+    fn close_failed_turn(
+        &self,
+        run_id: &str,
+        turn_id: &crate::TurnId,
+        message_id: &crate::MessageId,
+        stop_reason: &str,
+        text: &str,
+        reasoning: &str,
+    ) -> Result<(), EngineError> {
+        let mut content = Vec::new();
+        if !reasoning.is_empty() {
+            content.push(crate::ContentBlock::Thinking {
+                text: reasoning.to_string(),
+                signature: None,
+            });
+        }
+        if !text.is_empty() {
+            content.push(crate::ContentBlock::Text {
+                text: text.to_string(),
+            });
+        }
+        self.append_critical(
+            run_id,
+            RunEventKind::MessageCompleted {
+                turn_id: turn_id.to_string(),
+                message_id: message_id.to_string(),
+                role: "assistant".into(),
+                content: Some(json!({
+                    "message_id": message_id.to_string(),
+                    "role": "assistant",
+                    "content": content,
+                })),
+            },
+        )?;
+        self.append_critical(
+            run_id,
+            RunEventKind::TurnCompleted {
+                turn_id: turn_id.to_string(),
+                stop_reason: stop_reason.to_string(),
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        )
+    }
+
     /// Wait out a provider backoff before the next generation attempt.
     ///
     /// Returns `false` when the run was cancelled mid-wait; the caller must
@@ -937,7 +982,7 @@ impl AgentEngine {
 
             const MAX_PROVIDER_ATTEMPTS: u32 = 3;
             let mut attempt = 1u32;
-            let (text_acc, tool_acc, stop_reason) = 'attempts: loop {
+            let (text_acc, reasoning_acc, tool_acc, stop_reason) = 'attempts: loop {
                 self.events.append(
                     run_id,
                     RunEventKind::GenerationAttemptStarted {
@@ -964,9 +1009,25 @@ impl AgentEngine {
                 {
                     Ok(stream) => stream,
                     Err(EngineError::Cancelled) => {
+                        self.close_failed_turn(
+                            run_id,
+                            &turn_id,
+                            &assistant_message_id,
+                            "cancelled",
+                            "",
+                            "",
+                        )?;
                         return Ok(EngineOutcome::Cancelled);
                     }
                     Err(_e) if self.cancel.is_cancelled() => {
+                        self.close_failed_turn(
+                            run_id,
+                            &turn_id,
+                            &assistant_message_id,
+                            "cancelled",
+                            "",
+                            "",
+                        )?;
                         return Ok(EngineOutcome::Cancelled);
                     }
                     Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
@@ -988,6 +1049,14 @@ impl AgentEngine {
                             .sleep_provider_backoff(attempt, e.retry_after_ms())
                             .await
                         {
+                            self.close_failed_turn(
+                                run_id,
+                                &turn_id,
+                                &assistant_message_id,
+                                "cancelled",
+                                "",
+                                "",
+                            )?;
                             return Ok(EngineOutcome::Cancelled);
                         }
                         attempt += 1;
@@ -1004,11 +1073,20 @@ impl AgentEngine {
                                 retry_in_ms: None,
                             },
                         );
+                        self.close_failed_turn(
+                            run_id,
+                            &turn_id,
+                            &assistant_message_id,
+                            "error",
+                            "",
+                            "",
+                        )?;
                         return Err(e);
                     }
                 };
 
                 let mut text_acc = String::new();
+                let mut reasoning_acc = String::new();
                 let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
                 let mut saw_generation_delta = false;
                 let mut completed_reason: Option<ProviderStopReason> = None;
@@ -1016,6 +1094,18 @@ impl AgentEngine {
 
                 while let Some(event) = provider_events.next().await {
                     if self.cancel.is_cancelled() {
+                        if !tool_acc.is_empty() {
+                            completed_reason = Some(ProviderStopReason::Cancelled);
+                            break;
+                        }
+                        self.close_failed_turn(
+                            run_id,
+                            &turn_id,
+                            &assistant_message_id,
+                            "cancelled",
+                            &text_acc,
+                            &reasoning_acc,
+                        )?;
                         return Ok(EngineOutcome::Cancelled);
                     }
                     match event {
@@ -1035,6 +1125,7 @@ impl AgentEngine {
                         }
                         EngineProviderEvent::ReasoningDelta(t) => {
                             saw_generation_delta = true;
+                            reasoning_acc.push_str(&t);
                             self.events
                                 .append(run_id, RunEventKind::ReasoningDelta { text: t });
                         }
@@ -1111,6 +1202,14 @@ impl AgentEngine {
                                     },
                                 );
                                 if !self.sleep_provider_backoff(attempt, retry_after_ms).await {
+                                    self.close_failed_turn(
+                                        run_id,
+                                        &turn_id,
+                                        &assistant_message_id,
+                                        "cancelled",
+                                        &text_acc,
+                                        &reasoning_acc,
+                                    )?;
                                     return Ok(EngineOutcome::Cancelled);
                                 }
                                 attempt += 1;
@@ -1135,6 +1234,18 @@ impl AgentEngine {
                                     retry_in_ms: None,
                                 },
                             );
+                            if !tool_acc.is_empty() {
+                                completed_reason = Some(ProviderStopReason::Error);
+                                break;
+                            }
+                            self.close_failed_turn(
+                                run_id,
+                                &turn_id,
+                                &assistant_message_id,
+                                "error",
+                                &text_acc,
+                                &reasoning_acc,
+                            )?;
                             return Err(EngineError::Provider {
                                 message,
                                 code,
@@ -1152,7 +1263,15 @@ impl AgentEngine {
                     }
                 }
 
-                if self.cancel.is_cancelled() {
+                if self.cancel.is_cancelled() && tool_acc.is_empty() {
+                    self.close_failed_turn(
+                        run_id,
+                        &turn_id,
+                        &assistant_message_id,
+                        "cancelled",
+                        &text_acc,
+                        &reasoning_acc,
+                    )?;
                     return Ok(EngineOutcome::Cancelled);
                 }
 
@@ -1166,6 +1285,7 @@ impl AgentEngine {
                     );
                     break (
                         text_acc,
+                        reasoning_acc,
                         tool_acc,
                         Some(ProviderStopReason::Unknown("INCOMPLETE_TOOL_CALL".into())),
                     );
@@ -1183,6 +1303,14 @@ impl AgentEngine {
                         },
                     );
                     if !self.sleep_provider_backoff(attempt, None).await {
+                        self.close_failed_turn(
+                            run_id,
+                            &turn_id,
+                            &assistant_message_id,
+                            "cancelled",
+                            &text_acc,
+                            &reasoning_acc,
+                        )?;
                         return Ok(EngineOutcome::Cancelled);
                     }
                     attempt += 1;
@@ -1199,6 +1327,14 @@ impl AgentEngine {
                             retry_in_ms: None,
                         },
                     );
+                    self.close_failed_turn(
+                        run_id,
+                        &turn_id,
+                        &assistant_message_id,
+                        "error",
+                        &text_acc,
+                        &reasoning_acc,
+                    )?;
                     return Err(EngineError::Provider {
                         message: "provider returned empty response".into(),
                         code: "EMPTY_RESPONSE".into(),
@@ -1209,13 +1345,21 @@ impl AgentEngine {
                 }
 
                 self.append_critical(run_id, RunEventKind::GenerationAttemptCommitted { attempt })?;
-                break (text_acc, tool_acc, completed_reason);
+                break (text_acc, reasoning_acc, tool_acc, completed_reason);
             };
 
             if !text_acc.is_empty() {
                 doom.observe_text(&text_acc);
             }
             if let Some(reason) = doom.diagnose() {
+                self.close_failed_turn(
+                    run_id,
+                    &turn_id,
+                    &assistant_message_id,
+                    "error",
+                    &text_acc,
+                    &reasoning_acc,
+                )?;
                 return Err(EngineError::DoomLoop(reason));
             }
 
@@ -1223,13 +1367,18 @@ impl AgentEngine {
                 // Commit the assistant message before consuming a follow-up.
                 // Otherwise the next provider request would lose the response
                 // that caused the safe-point transition.
-                let assistant_content = (!text_acc.is_empty())
-                    .then(|| {
-                        vec![crate::ContentBlock::Text {
-                            text: text_acc.clone(),
-                        }]
-                    })
-                    .unwrap_or_default();
+                let mut assistant_content = Vec::new();
+                if !reasoning_acc.is_empty() {
+                    assistant_content.push(crate::ContentBlock::Thinking {
+                        text: reasoning_acc.clone(),
+                        signature: None,
+                    });
+                }
+                if !text_acc.is_empty() {
+                    assistant_content.push(crate::ContentBlock::Text {
+                        text: text_acc.clone(),
+                    });
+                }
                 typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
                     message_id: assistant_message_id.clone(),
                     content: assistant_content.clone(),
@@ -1244,7 +1393,7 @@ impl AgentEngine {
                         },
                     ),
                 }));
-                if self
+                let follow_up_consumed = match self
                     .drain_inputs(
                         crate::PendingInputKind::FollowUp,
                         crate::DrainMode::All,
@@ -1252,8 +1401,22 @@ impl AgentEngine {
                         &mut typed_messages,
                         Some(turn_id.0.as_str()),
                     )
-                    .await?
+                    .await
                 {
+                    Ok(consumed) => consumed,
+                    Err(error) => {
+                        self.close_failed_turn(
+                            run_id,
+                            &turn_id,
+                            &assistant_message_id,
+                            "error",
+                            &text_acc,
+                            &reasoning_acc,
+                        )?;
+                        return Err(error);
+                    }
+                };
+                if follow_up_consumed {
                     self.events.append(
                         run_id,
                         RunEventKind::Progress {
@@ -1308,7 +1471,21 @@ impl AgentEngine {
                         .await;
                     return Err(EngineError::Message(format!("stop hook denied: {reason}")));
                 }
-                return Ok(EngineOutcome::completed("stop"));
+                return Ok(match stop_reason.as_ref() {
+                    Some(ProviderStopReason::Cancelled) => EngineOutcome::Cancelled,
+                    Some(ProviderStopReason::Error) => EngineOutcome::failed(
+                        "PROVIDER_STOP_ERROR",
+                        "provider ended the response with an error stop reason",
+                        false,
+                    ),
+                    Some(ProviderStopReason::Unknown(raw)) => EngineOutcome::failed(
+                        "UNKNOWN_PROVIDER_STOP_REASON",
+                        format!("provider ended with unknown stop reason: {raw}"),
+                        false,
+                    ),
+                    Some(reason) => EngineOutcome::completed(stop_reason_label(Some(reason))),
+                    None => EngineOutcome::completed("unknown"),
+                });
             }
 
             // Execute tools and continue loop.
@@ -1317,17 +1494,33 @@ impl AgentEngine {
             // No user input is injected while a provider response is being
             // prepared; the next safe point is after the complete tool batch.
             let mut prepared: Vec<PreparedToolCall> = Vec::new();
-            let fail_closed_reason = stop_reason.as_ref().and_then(|reason| match reason {
-                ProviderStopReason::Length => Some((
+            // A tool call is executable only when the provider explicitly says
+            // that the turn ended for tool use. Every other stop reason is a
+            // fail-closed boundary, including provider errors/cancellation and
+            // legacy streams that omit a final event.
+            let fail_closed_reason = match stop_reason.as_ref() {
+                Some(ProviderStopReason::ToolUse) => None,
+                Some(ProviderStopReason::Length) => Some((
                     "TRUNCATED_TOOL_CALL",
                     "provider output was truncated before the tool call could be executed",
                 )),
-                ProviderStopReason::Unknown(_) => Some((
+                Some(ProviderStopReason::Cancelled) => Some((
+                    "CANCELLED_TOOL_CALL",
+                    "provider cancelled before the tool call could be executed",
+                )),
+                Some(ProviderStopReason::Error) => Some((
+                    "PROVIDER_ERROR_TOOL_CALL",
+                    "provider ended with an error before the tool call could be executed",
+                )),
+                Some(ProviderStopReason::Stop) => Some((
+                    "INVALID_TOOL_CALL_STOP_REASON",
+                    "provider stopped without authorizing tool execution",
+                )),
+                Some(ProviderStopReason::Unknown(_)) | None => Some((
                     "UNKNOWN_PROVIDER_STOP_REASON",
                     "provider did not provide a reliable stop reason; tool call was not executed",
                 )),
-                _ => None,
-            });
+            };
             for (_index, (id, name, args)) in tool_acc {
                 let id = if id.is_empty() {
                     uuid::Uuid::new_v4().to_string()
@@ -1454,14 +1647,26 @@ impl AgentEngine {
                 crate::session_coordinator::SafePoint::AfterTool,
                 &mut typed_messages,
             );
-            self.drain_inputs(
-                crate::PendingInputKind::Steering,
-                crate::DrainMode::All,
-                crate::InputSafePoint::AfterToolBatch,
-                &mut typed_messages,
-                Some(turn_id.0.as_str()),
-            )
-            .await?;
+            if let Err(error) = self
+                .drain_inputs(
+                    crate::PendingInputKind::Steering,
+                    crate::DrainMode::All,
+                    crate::InputSafePoint::AfterToolBatch,
+                    &mut typed_messages,
+                    Some(turn_id.0.as_str()),
+                )
+                .await
+            {
+                self.close_failed_turn(
+                    run_id,
+                    &turn_id,
+                    &assistant_message_id,
+                    "error",
+                    &text_acc,
+                    &reasoning_acc,
+                )?;
+                return Err(error);
+            }
 
             let mut typed_tool_calls = Vec::new();
             let mut typed_tool_results = Vec::new();
@@ -1505,6 +1710,12 @@ impl AgentEngine {
 
             let assistant_content = {
                 let mut content = Vec::new();
+                if !reasoning_acc.is_empty() {
+                    content.push(crate::ContentBlock::Thinking {
+                        text: reasoning_acc.clone(),
+                        signature: None,
+                    });
+                }
                 if !text_acc.is_empty() {
                     content.push(crate::ContentBlock::Text {
                         text: text_acc.clone(),
@@ -1891,6 +2102,14 @@ impl AgentEngine {
             .maybe_compact_values(run_id, model, provider, values)
             .await;
         if compacted != agent_messages_to_values(&messages) {
+            let summary_message_id = compacted.iter().find_map(|message| {
+                let content = message.get("content").and_then(Value::as_str)?;
+                (message.get("role").and_then(Value::as_str) == Some("system")
+                    && content.starts_with(crate::compaction::SUMMARY_MARKER))
+                .then(|| message.get("message_id").and_then(Value::as_str))
+                .flatten()
+                .map(str::to_string)
+            });
             self.append_critical(
                 run_id,
                 RunEventKind::ContextSnapshotCommitted {
@@ -1898,7 +2117,7 @@ impl AgentEngine {
                     turn_id: Some(turn_id.to_string()),
                     source_revision: self.events.last_sequence(run_id),
                     input_message_ids: messages.iter().map(agent_message_id).collect(),
-                    summary_message_id: None,
+                    summary_message_id,
                     replaced_range: Some(format!("0..{}", messages.len())),
                     algorithm_version: "typed-compaction-v1".into(),
                     provider_context_window: self.provider_context_window,

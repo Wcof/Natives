@@ -15,12 +15,12 @@
 | A. P0 强化验证 | 已完成 | 81aad0f | agent-core 161；provider reason 1 | 复核文档、截断/拒绝回归测试复用 P0 基线并补齐跨 Provider reason 映射 |
 | B. Turn 与类型化消息 | 已完成 | 81aad0f | agent-core 161 | opaque IDs、Turn/Message 事件、ProviderTurnRequest；保留 EngineMessage 兼容转换 |
 | C. Context 与持久历史 | 已接生产 | 5734ef5f | typed roundtrip 1（前序） | typed transcript 是唯一生产入口；旧 EngineMessage 只做一次兼容转换；snapshot 记录 provider window 与替换范围 |
-| D. Tool Scheduler 与 Progress | 已接生产 | 5734ef5f | Gateway cancel 精测 1 | Gateway capability 驱动模式、conflict key、Shell stdout/stderr、MCP stdio/HTTP/SSE、Sub Agent progress、settled late-drop/rate-limit 已接线；真实 SSE fixture 未运行 |
+| D. Tool Scheduler 与 Progress | 已接生产 | working tree | Gateway cancel 精测 1 | Gateway capability 驱动模式、conflict key、Shell stdout/stderr、MCP stdio/HTTP/SSE、Sub Agent progress、8KiB/250ms 合并、settled late-drop 已接线；真实 SSE fixture 未运行 |
 | E. Steering 与 Next Turn | 已接生产 | 5734ef5f | cargo check | SQLite lease/recovery 与 queue-message 单事务 ack 已接线；ack 失败 fail closed |
 | F. Event Fail Closed | 已接生产（关键事实） | 5734ef5f | cargo check | 关键事实使用 checked；ledger start/complete persistence failure 生成配对错误结果并停止 Engine；delta/progress 仍可丢弃 |
 | G. Lineage 与 Resume | 已接生产 | 5734ef5f | side-effect guard | retry/continue 记录 source/checkpoint/turn lineage；resume_plan 在 detached start 后结算；continue 只从 durable checkpoint 启动独立 Run |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
-| I. 最终验证 | 部分完成 | 工作区变更 | controlled check + precise test | 目标 crate check、fmt、git diff、Gateway cancel 精测通过；workspace/native live/frontend 仍受既有环境限制 |
+| I. 最终验证 | 部分完成 | working tree | controlled check + precise test | 目标 crate check、fmt、git diff、长度截断精测通过；workspace/native live/frontend 仍受既有环境限制 |
 
 ## 阻塞项
 

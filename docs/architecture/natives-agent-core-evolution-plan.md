@@ -16,19 +16,19 @@ Tool Result 配对和 Gateway Cancel 已落地。证据见
 验收：161 个 agent-core 单测通过；Provider request 每次携带 run/attempt；关键
 生命周期事件 persist-first。
 
-## 阶段 2：Context/History Snapshot（本轮部分完成）
+## 阶段 2：Context/History Snapshot（本轮已接生产）
 
 `context_snapshot.rs` 定义 FullHistory、ActiveContext 和可序列化快照，保留现有
 compaction 与 provider window 估算。下一批增加 daemon-owned artifact 表和 migration，
 并为旧 transcript 保留 legacy marker。
 
-## 阶段 3：Tool Capability/Progress（本轮部分完成）
+## 阶段 3：Tool Capability/Progress（本轮已接生产）
 
 Gateway/Daemon 广告 `ParallelSafe/Sequential/Exclusive`；Core 未收到声明时顺序执行。
-Progress Sink 作为 no-op 默认 seam，后续再接入 batched RunEvent，规定取消后丢弃 late
-update，不增加本轮 UI 语义。
+Progress Sink 由 Daemon 生产实现接入 batched RunEvent（8KiB/250ms），并在 settled 后丢弃
+late update；真实外部 fixture和 UI 文案仍待补。
 
-## 阶段 4：Steering/FollowUp/Policy（本轮部分完成）
+## 阶段 4：Steering/FollowUp/Policy（本轮已接生产，Policy 保持现有最小策略）
 
 `EngineInputReceiver` 只在 `AfterToolBatch`、`BeforeProvider`、`BeforeRunEnd` 等 safe
 point drain；每项 input 显式 ack。现有 Prompt Queue 仍负责持久化，下一批实现 lease/

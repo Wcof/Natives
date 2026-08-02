@@ -34,7 +34,7 @@ Provider stop reason family 映射测试。
 
 - `ToolCapability` 和 `ToolExecutionMode` 由 Daemon/Gateway 广告；生产 ReadOnly→ParallelSafe，Process/Destructive→Exclusive，其余 Sequential；未知默认 Sequential。
 - 删除 Engine 生产路径对工具名称的并行分类依赖；保留旧 helper 供兼容代码。
-- `ToolProgressSink` 和 `execute_tool_with_progress` 为 no-op 兼容 seam，未接 UI 或完整批处理。
+- `DaemonToolProgressSink` 已接入 Shell、MCP stdio/HTTP/SSE 和 Sub Agent；按 8KiB/250ms 合并并在 tool settled 后丢弃迟到更新，尚未接入完整 UI Progress Sink。
 - `EngineInputReceiver` 定义 Steering/FollowUp、DrainMode、safe point、ack；现有 Prompt Queue 仍是持久化权威。
 
 ### 2.5 Event Fail Closed 与权限边界
@@ -50,7 +50,7 @@ Provider stop reason family 映射测试。
 | 类型化消息 | Core 内部类型已创建 | `message.rs` | UI/RPC 尚未迁移 |
 | Tool Schema | P0 已 fail closed | Gateway `validate_schema` | Core 不复制 registry |
 | 并行工具 | Gateway capability 驱动 | `production_tools.rs` | 默认顺序，未知不并行 |
-| Tool Progress | trait/no-op seam | `ToolProgressSink` | 完整 batching 留后续 |
+| Tool Progress | 生产 sink 已接线 | `DaemonToolProgressSink`、`production_tools.rs` | UI 展示与外部 SSE fixture 留后续 |
 | Steering/Follow-up | Core safe point receiver | `input.rs` | durable lease 留后续 |
 | Context Snapshot | 可序列化运行期模型 | `context_snapshot.rs` | DB/artifact 留后续 |
 | Resume | safety model | `lineage.rs` | 不自动重放未知副作用 |
@@ -74,7 +74,7 @@ Provider stop reason family 映射测试。
 ## 5. 未完成或偏差
 
 - 未修改 Conversation 数据库、UI projection、Prompt Queue 产品语义。
-- 未实现完整 Tool Progress batching、TurnPolicy 多策略、Checkpoint DB migration、事件 fault-injection 全链路。
+- 未实现完整 UI Tool Progress 展示、TurnPolicy 多策略、事件 fault-injection 全链路。
 - Provider live HTTP fixture、Shell/MCP kill+wait 和并行整体 cancel 仍需阶段性集成测试。
 
 ## 6. 阶段 1 前置条件
@@ -94,7 +94,7 @@ Provider stop reason family 映射测试。
 - 生产 Daemon 现在优先调用 `AgentEngine::run_with_typed_messages`；只有旧数据库没有 typed rows 时才走 `EngineMessage` 兼容读取。
 - `MessageCompleted` 携带完整 provider-neutral content；Context Snapshot 持久化 branch、turn、source revision 与 token estimate，Tool Result artifact 保留引用和错误码。
 - Gateway capability metadata 直接驱动 Core scheduler；Shell stdout/stderr、MCP stdio progress notification、Sub Agent child event 进入稳定 call/turn/message progress sink，并在 settled/cancel 后丢弃迟到更新。
-- Gateway 通用执行包装器在 timeout/cancel 后等待 250ms 清理；无法 quiet 返回 `cleanup_failed`。HTTP MCP 的 curl 子进程可被取消杀掉，但尚未把 SSE 中间帧转为增量 progress。
+- Gateway 通用执行包装器在 timeout/cancel 后等待 250ms 清理；无法 quiet 返回 `cleanup_failed`。HTTP/SSE MCP 的 curl 子进程可被取消杀掉并逐行转发中间 progress。
 - Tool completion 关键事实持久化失败会取消 Engine，并由 `mark_tool_call_uncertain` 写入 side-effect ledger，阻止后续自动恢复。
 
 ## 9. 生产收口补充（`5734ef5f`，含 `39d6514f`）
@@ -104,4 +104,4 @@ Provider stop reason family 映射测试。
 - Compaction 的 dangling repair 保留 assistant Tool Call，并按调用源顺序补齐 `DANGLING_TOOL_CALL` 错误 Tool Result；实际 Gateway handler 的 Side-effect ledger start/complete persistence failure 统一为 `PERSISTENCE_FAILED`，Core 生成配对结果后停止，编排工具不留下孤立 started 行。
 - HTTP/SSE MCP 逐行读取 JSON/SSE 帧并转发 progress，cancel/timeout 会 kill、wait、join；Retry/Continue 的 resume plan 在 detached start 成功后才结算。
 
-本轮仍未声称完成真实外部 fixture、Renderer recovery 展示、workspace/frontend 全量测试或后续 TurnPolicy/Scheduler 重构。
+本轮仍未声称完成真实外部 fixture、Renderer recovery 的专用 UI 文案、workspace/frontend 全量测试或后续 TurnPolicy/Scheduler 重构。
