@@ -135,3 +135,11 @@ Provider stop reason family 映射测试。
 
 - 修正与当前 Projection 设计相反的旧测试：终态数据库状态没有权威事件时，adapter 必须抛出 `AuthoritativeEventMissing`，而不是合成 `failed` 事件。
 - `npm run typecheck`、`npm run lint`、`npm run perf:check` 通过；前端全量测试首次为 751/752，修复后的失败用例已单独精准通过，未重复完整套件。
+
+## 15. Durable 输入、恢复与进度收口（当前 Worktree）
+
+- `PendingInput` 增加 durable lease token；SQLite drain/ack 绑定 token 并检查单行更新，避免并发或重试跨 lease 消费。
+- 生产 history、actor snapshot、checkpoint snapshot 和 branch lookup 的数据库错误不再回退为空；损坏的 typed `MessageCompleted` 直接停止恢复。
+- Permission response 先持久化 resolved interaction，再唤醒 waiter；Retry/Continue 的 `resume_plan` 写入失败不再被忽略。
+- Progress sink 增加 250ms bounded idle flush，并保留 settled late-drop；未引入完整 Progress Sink 或 Scheduler 重构。
+- 验证：严格 `RUSTFLAGS=-Dwarnings cargo check` 与 `progress_flushes_after_batch_window_without_next_update` 通过；完整 workspace/native verifier、前端全量测试、真实外部 Provider/Shell/MCP fixture、permission fault-injection 未按资源策略重跑。

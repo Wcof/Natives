@@ -90,25 +90,27 @@ impl EngineInputReceiver for DurableInputReceiver {
         let leased_at = chrono::Utc::now().to_rfc3339();
         for row in queued {
             let token = Uuid::new_v4().to_string();
-            if tx
+            let changed = tx
                 .execute(
                     "UPDATE prompt_queue SET status = 'leased', lease_token = ?1,
                     lease_run_id = ?2, leased_at = ?3, updated_at = ?3
                  WHERE id = ?4 AND status = 'queued'",
                     params![token, self.run_id, leased_at, row.0],
                 )
-                .is_ok()
-            {
-                items.push(PendingInput {
-                    id: row.0,
-                    kind: if kind == "steering" {
-                        PendingInputKind::Steering
-                    } else {
-                        PendingInputKind::FollowUp
-                    },
-                    content: row.1,
-                });
+                .map_err(|e| format!("lease prompt input failed: {e}"))?;
+            if changed != 1 {
+                return Err(format!("prompt input {} was no longer queued", row.0));
             }
+            items.push(PendingInput {
+                id: row.0,
+                kind: if kind == "steering" {
+                    PendingInputKind::Steering
+                } else {
+                    PendingInputKind::FollowUp
+                },
+                content: row.1,
+                lease_token: Some(token),
+            });
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(items)
@@ -120,14 +122,17 @@ impl EngineInputReceiver for DurableInputReceiver {
         let conn = store.conn()?;
         let content = conn
             .query_row(
-                "SELECT content FROM prompt_queue
+                "SELECT content, lease_token FROM prompt_queue
                  WHERE id = ?1 AND conversation_id = ?2 AND lease_run_id = ?3 AND status = 'leased'",
                 params![input_id, self.conversation_id, self.run_id],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             );
         drop(conn);
-        let queued_content =
+        let (queued_content, lease_token) =
             content.map_err(|error| format!("load queued input for ack: {error}"))?;
+        if input.lease_token.as_deref() != lease_token.as_deref() {
+            return Err("prompt input lease token mismatch".into());
+        }
         let content = format!(
             "[{}]\n{}",
             match input.kind {
@@ -142,6 +147,7 @@ impl EngineInputReceiver for DurableInputReceiver {
             input_id,
             &content,
             turn_id,
+            input.lease_token.as_deref(),
         )
     }
 }

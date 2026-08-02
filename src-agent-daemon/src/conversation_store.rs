@@ -40,6 +40,7 @@ pub fn persist_queued_input_and_ack(
     input_id: &str,
     content: &str,
     turn_id: Option<&str>,
+    lease_token: Option<&str>,
 ) -> Result<(), String> {
     let store = store()?;
     let conn = store.conn()?;
@@ -74,13 +75,15 @@ pub fn persist_queued_input_and_ack(
         .execute(
             "UPDATE prompt_queue SET status = 'sent', consumed_turn_id = ?1,
              lease_token = NULL, lease_run_id = NULL, leased_at = NULL, updated_at = ?2
-             WHERE id = ?3 AND conversation_id = ?4 AND lease_run_id = ?5 AND status = 'leased'",
+             WHERE id = ?3 AND conversation_id = ?4 AND lease_run_id = ?5
+               AND lease_token = ?6 AND status = 'leased'",
             params![
                 turn_id.unwrap_or(run_id),
                 now,
                 input_id,
                 conversation_id,
-                run_id
+                run_id,
+                lease_token
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1250,10 +1253,15 @@ fn append_single_assistant_turn(
                 *duration_ms,
             )),
             RunEventKind::MessageCompleted { content, .. } => {
-                committed_content = content
-                    .as_ref()
-                    .and_then(|value| value.get("content"))
-                    .and_then(|value| serde_json::from_value(value.clone()).ok());
+                if let Some(content) = content {
+                    let blocks = content
+                        .get("content")
+                        .ok_or_else(|| "message completed content missing blocks".to_string())?;
+                    committed_content = Some(
+                        serde_json::from_value(blocks.clone())
+                            .map_err(|e| format!("invalid message completed content: {e}"))?,
+                    );
+                }
             }
             _ => {}
         }
@@ -1402,16 +1410,17 @@ fn persist_context_snapshots_from_events(
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let branch_id: Option<String> = conversation_id.as_deref().and_then(|conversation_id| {
-        conn.query_row(
-            "SELECT branch_id FROM conversation WHERE id = ?1",
-            params![conversation_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-    });
+    let branch_id: Option<String> = match conversation_id.as_deref() {
+        Some(conversation_id) => conn
+            .query_row(
+                "SELECT branch_id FROM conversation WHERE id = ?1",
+                params![conversation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?,
+        None => None,
+    };
     for event in events {
         let (snapshot_id, before_tokens, after_tokens, summary, committed) = match &event.payload {
             RunEventKind::ContextCompressed {

@@ -270,3 +270,53 @@
 - 修复后行为：`drain` 返回 `Result`；任一持久化错误都传播为 Engine 错误，队列不会被伪装成空队列，下一轮 Provider 调用不会继续。
 - 影响：Steering/Follow-up 的 lease/ack 失败保持可审计并 fail closed，避免输入事实丢失。
 - 测试方式：严格 `RUSTFLAGS=-Dwarnings cargo check` 通过；Follow-up Turn 边界精测通过。
+
+## Durable 输入 ack 未绑定本次 lease
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/prompt_queue_store.rs`、`conversation_store.rs`、`crates/agent-core/src/input.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：已 lease 的输入只按 run/id 查询，旧 lease 可能在重试或并发 ack 时被错误消费。
+- 修复后行为：PendingInput 携带 lease token；drain 检查每次 lease 恰改一行，ack 同时校验 token，并在同一事务写入消息与消费队列项。
+- 影响：Steering/Follow-up 不会跨 lease 重复或错消费；失败保持 durable queued/leased 事实而不是静默成功。
+- 测试方式：严格编译检查；现有 queue ack/turn-boundary 测试覆盖事务路径。
+
+## 生产启动/恢复读取错误被折叠为空历史
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production.rs`、`conversation_store.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：历史、actor snapshot 和 checkpoint snapshot 的读取错误曾通过 `unwrap_or_default`/`ok` 变成空上下文，可能覆盖或错误继续执行。
+- 修复后行为：生产 typed history、legacy fallback、actor snapshot、checkpoint snapshot 和 branch lookup 的持久化错误均传播并阻止运行；损坏的 MessageCompleted content 也 fail closed。
+- 影响：恢复不会把数据库故障伪装成新对话，避免副作用工具在错误上下文中运行。
+- 测试方式：严格编译检查；typed conversation round-trip 与 checkpoint 精测保持通过。
+
+## Permission 响应已落库但内存 waiter 发送失败
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：RPC 先 best-effort 唤醒 waiter，再 best-effort 写 interaction row，持久化失败仍可能继续授权。
+- 修复后行为：先持久化 resolved interaction，再解析绑定 run 的 waiter；发送失败返回错误，不授予隐含成功。
+- 影响：Permission Grant 必须有可恢复的 durable response；RunManager 仍是唯一终态权威。
+- 测试方式：严格编译检查；现有 permission broker/response 精测保持通过；fault-injection fixture 仍待补充。
+
+## Resume Plan 写入失败被忽略
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/run_manager.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：Retry/Continue 的 approved 或 blocked plan 插入使用 best-effort，可能启动没有可审计恢复计划的 Run。
+- 修复后行为：blocked plan 写入错误直接返回；approved plan 写入失败会结算新 Run 为失败并拒绝继续。
+- 影响：Retry/Continue 的 lineage、checkpoint 和恢复状态不会脱离 durable plan。
+- 测试方式：严格编译检查；已有 retry/continue lineage 精测保持通过。
+
+## Tool Progress 只在后续更新到达时刷新
+
+- 严重等级：P2
+- 所属模块：`src-agent-daemon/src/production_tools.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：单个非终态进度在 250ms 窗口内没有下一次更新时可能永久停留在内存 pending。
+- 修复后行为：首次非终态更新安排 bounded timer，窗口到期主动 flush；settled call 仍丢弃迟到更新。
+- 影响：长时间静默工具仍能看到有限延迟的进度，且不会在结算后产生迟到事件。
+- 测试方式：`progress_flushes_after_batch_window_without_next_update` 精测通过。

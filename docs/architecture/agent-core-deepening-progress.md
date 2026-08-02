@@ -34,6 +34,14 @@
 - `1d235cd5` 让 Prompt Queue 在 RunManager 同步启动失败时保留 SQLite 行并恢复 actor 队列，补充 requeue 回归测试。
 - `9c066af5` 将 Renderer 旧的“从 run.list 合成终态”测试改为权威事件缺失恢复测试；不改变生产投影的 fail-closed 行为。
 
+## 当前 Worktree 新增收口
+
+- Durable queue lease 现在贯穿 `PendingInput`、SQLite drain 和 ack；token 不匹配、lease UPDATE 非单行和事务错误均 fail closed。
+- 生产启动/恢复的 history、actor snapshot、checkpoint snapshot、branch lookup 以及 typed MessageCompleted 解码错误不再被当作空上下文。
+- Permission response 先持久化再唤醒 waiter；Retry/Continue 的 resume plan 写入错误不再被忽略。
+- Tool progress 首条非终态更新增加 250ms bounded flush；settled call 的迟到更新继续丢弃。
+- 本轮新增精确测试 `progress_flushes_after_batch_window_without_next_update` 通过；严格检查已通过。完整 workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP fixture 和 permission fault-injection 仍未验证。
+
 ## 当前收口状态（当前 Worktree）
 
 - Follow-up/Steering：**已接生产**；上一 Turn 的 `MessageCompleted/TurnCompleted` 先于 queue lease/ack 消费，ack 失败 fail closed；精准 Follow-up Turn 边界测试通过。

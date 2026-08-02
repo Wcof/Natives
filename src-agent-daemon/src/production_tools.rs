@@ -194,6 +194,7 @@ pub struct DaemonToolProgressSink {
     pub events: EventSequencer,
     settled: Arc<Mutex<HashSet<String>>>,
     pending: Arc<Mutex<HashMap<String, (Instant, ToolProgressUpdate)>>>,
+    scheduled_flushes: Arc<Mutex<HashSet<String>>>,
     sequence: Arc<AtomicU64>,
 }
 
@@ -203,8 +204,54 @@ impl DaemonToolProgressSink {
             events,
             settled: Arc::new(Mutex::new(HashSet::new())),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            scheduled_flushes: Arc::new(Mutex::new(HashSet::new())),
             sequence: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    fn schedule_flush(&self, call_id: String) {
+        let pending = self.pending.clone();
+        let settled = self.settled.clone();
+        let scheduled_flushes = self.scheduled_flushes.clone();
+        let events = self.events.clone();
+        let sequence = self.sequence.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let update = {
+                let mut pending = pending.lock().await;
+                let settled = settled.lock().await;
+                let update = if settled.contains(&call_id) {
+                    pending.remove(&call_id).map(|(_, value)| value)
+                } else {
+                    pending.remove(&call_id).map(|(_, mut value)| {
+                        value.final_update = false;
+                        value
+                    })
+                };
+                // Keep the same pending → settled → scheduled lock order as
+                // publish/mark_tool_call_settled. This closes the race where a
+                // new update arrives while the timer is flushing the old batch.
+                let mut scheduled = scheduled_flushes.lock().await;
+                scheduled.remove(&call_id);
+                update
+            };
+            if let Some(update) = update {
+                let progress_sequence = sequence.fetch_add(1, AtomicOrdering::Relaxed);
+                events.append(
+                    &update.run_id,
+                    RunEventKind::ToolOutputDelta {
+                        tool_call_id: update.tool_call_id,
+                        tool_name: Some(update.tool_name),
+                        stream: update.stream,
+                        text: update.text,
+                        truncated: false,
+                        turn_id: update.turn_id,
+                        message_id: update.message_id,
+                        progress_sequence: Some(progress_sequence),
+                    },
+                );
+            }
+        });
     }
 }
 
@@ -215,39 +262,45 @@ impl ToolProgressSink for DaemonToolProgressSink {
         const MAX_BATCH_AGE: Duration = Duration::from_millis(250);
         let now = Instant::now();
         let call_id = update.tool_call_id.clone();
-        let mut pending = self.pending.lock().await;
-        let settled = self.settled.lock().await;
-        if settled.contains(&call_id) {
-            return;
-        }
-        let emit = if update.final_update {
-            let mut final_update = pending.remove(&call_id).map(|(_, mut value)| {
-                value.text.push_str(&update.text);
-                value.final_update = true;
-                value
-            });
-            if final_update.is_none() {
-                final_update = Some(update);
+        let (emit, schedule) = {
+            let mut pending = self.pending.lock().await;
+            let settled = self.settled.lock().await;
+            if settled.contains(&call_id) {
+                return;
             }
-            final_update
-        } else {
-            let flush = pending
-                .get_mut(&call_id)
-                .map(|(started, buffered)| {
-                    buffered.text.push_str(&update.text);
-                    buffered.text.len() >= MAX_BATCH_BYTES
-                        || now.duration_since(*started) >= MAX_BATCH_AGE
-                })
-                .unwrap_or(false);
-            if flush {
-                pending.remove(&call_id).map(|(_, value)| value)
-            } else {
-                if !pending.contains_key(&call_id) {
-                    pending.insert(call_id, (now, update));
+            if update.final_update {
+                let mut final_update = pending.remove(&call_id).map(|(_, mut value)| {
+                    value.text.push_str(&update.text);
+                    value.final_update = true;
+                    value
+                });
+                if final_update.is_none() {
+                    final_update = Some(update);
                 }
-                None
+                (final_update, false)
+            } else {
+                let flush = pending
+                    .get_mut(&call_id)
+                    .map(|(started, buffered)| {
+                        buffered.text.push_str(&update.text);
+                        buffered.text.len() >= MAX_BATCH_BYTES
+                            || now.duration_since(*started) >= MAX_BATCH_AGE
+                    })
+                    .unwrap_or(false);
+                if flush {
+                    (pending.remove(&call_id).map(|(_, value)| value), false)
+                } else if pending.contains_key(&call_id) {
+                    (None, false)
+                } else {
+                    pending.insert(call_id.clone(), (now, update));
+                    let mut scheduled = self.scheduled_flushes.lock().await;
+                    (None, scheduled.insert(call_id.clone()))
+                }
             }
         };
+        if schedule {
+            self.schedule_flush(call_id);
+        }
         if let Some(update) = emit {
             let progress_sequence = self.sequence.fetch_add(1, AtomicOrdering::Relaxed);
             self.events.append(
@@ -3672,6 +3725,30 @@ mod tests {
             events[0].payload,
             RunEventKind::ToolOutputDelta { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn progress_flushes_after_batch_window_without_next_update() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        sink.publish(ToolProgressUpdate {
+            run_id: "progress-timer-run".into(),
+            tool_call_id: "progress-timer-call".into(),
+            tool_name: "run_terminal".into(),
+            stream: "stdout".into(),
+            text: "idle batch".into(),
+            final_update: false,
+            turn_id: Some("turn-1".into()),
+            message_id: Some("message-1".into()),
+            progress_sequence: 0,
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let events = captured.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.payload,
+            RunEventKind::ToolOutputDelta { ref text, .. } if text == "idle batch"
+        )));
     }
 
     #[test]

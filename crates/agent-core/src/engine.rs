@@ -4982,6 +4982,7 @@ mod tests {
                         id: "follow-up-1".into(),
                         kind,
                         content: "continue with the next step".into(),
+                        lease_token: None,
                     }])
                 } else {
                     Ok(Vec::new())

@@ -182,3 +182,11 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - Retry/Continue 的 `resume_plan` 由 RunManager 在运行计划持久化后结算，RPC 不再在 Preparing 响应阶段提前结算。
 - 最终精确 Follow-up Turn 边界测试通过；因固定测试 Run ID 会读取默认持久化事件日志，本轮将该 fixture 改为 UUID Run ID，避免跨次测试污染。
 - 本轮最终 strict Cargo check、fmt/diff 检查和精确测试均通过；workspace/native verifier、完整前端套件和真实外部 Provider/Shell/MCP fixture 仍未按资源上限重跑。
+
+## 21. Durable lease、恢复读取与进度窗口收口
+
+- Durable Steering/Follow-up 的 `PendingInput` 现在携带 SQLite lease token；drain 的 UPDATE 必须恰改一行，ack 同时校验 token，并在单事务内写入 typed user message 与 consumed 状态。
+- 生产启动不再把 actor snapshot、typed/legacy history 或 checkpoint snapshot 的读取错误折叠为空上下文；branch lookup 与损坏的 `MessageCompleted` content 也 fail closed。
+- Permission response 先写 resolved interaction，再唤醒绑定 Run 的 waiter；Retry/Continue 的 blocked/approved `resume_plan` 写入失败均拒绝继续，approved 失败会结算新 Run 为失败。
+- `DaemonToolProgressSink` 为非终态首条更新安排 250ms bounded flush，保留 8KiB/age flush 与 settled late-drop，不引入完整 Progress Sink 架构。
+- 本轮精确验证：严格 `RUSTFLAGS=-Dwarnings cargo check`、`progress_flushes_after_batch_window_without_next_update`、`cargo fmt --check` 与 `git diff --check`。完整 workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP fixture 与 permission fault-injection 仍未重新运行，不能宣称全量绿。

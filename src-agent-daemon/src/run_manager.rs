@@ -2045,7 +2045,7 @@ impl RunManager {
                 )
                 .map_err(|e| e.to_string())?;
             if uncertain != 0 {
-                let _ = store.conn()?.execute(
+                store.conn()?.execute(
                     "INSERT INTO resume_plan
                      (id, source_run_id, action, status, decision, unresolved_effects_json)
                      VALUES (?1, ?2, 'retry', 'blocked', 'Blocked', ?3)",
@@ -2054,7 +2054,12 @@ impl RunManager {
                         &req.run_id,
                         serde_json::json!({"reason": "uncertain_side_effect"}).to_string()
                     ],
-                );
+                )
+                .map_err(|error| {
+                    format!(
+                        "run has uncertain side effects and blocked resume plan could not be persisted: {error}"
+                    )
+                })?;
                 return Err(
                     "run has uncertain side effects; inspect or compensate before retrying".into(),
                 );
@@ -2109,7 +2114,7 @@ impl RunManager {
             .map_err(|e| e.to_string())?
             .insert(new_run.id.clone(), new_run.clone());
         if let Some(store) = &self.data_store {
-            let _ = store.conn()?.execute(
+            if let Err(error) = store.conn()?.execute(
                 "INSERT INTO resume_plan
                  (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
                  VALUES (?1, ?2, ?3, 'retry',
@@ -2121,7 +2126,14 @@ impl RunManager {
                     &new_run.id,
                     checkpoint_id,
                 ],
-            );
+            ) {
+                self.fail_run_if_active(
+                    &new_run.id,
+                    error.to_string(),
+                    "RESUME_PLAN_PERSISTENCE_FAILED",
+                );
+                return Err(format!("persist retry resume plan failed: {error}"));
+            }
         }
         if let Some(c) = content {
             self.last_content
@@ -2196,7 +2208,7 @@ impl RunManager {
             )
             .map_err(|e| e.to_string())?;
         if uncertain != 0 {
-            let _ = conn.execute(
+            conn.execute(
                 "INSERT INTO resume_plan
                  (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
                  VALUES (?1, ?2, 'continue', ?3, 'blocked', 'Blocked', ?4)",
@@ -2206,7 +2218,12 @@ impl RunManager {
                     &checkpoint.0,
                     serde_json::json!({"reason": "uncertain_side_effect"}).to_string(),
                 ],
-            );
+            )
+            .map_err(|error| {
+                format!(
+                    "run has uncertain side effects and blocked resume plan could not be persisted: {error}"
+                )
+            })?;
             return Err("run has uncertain side effects; continue requires confirmation".into());
         }
         let content = req.content.or_else(|| {
@@ -2262,7 +2279,7 @@ impl RunManager {
                 .insert(new_run.id.clone(), content);
         }
         let conn = store.conn()?;
-        conn.execute(
+        if let Err(error) = conn.execute(
             "INSERT INTO resume_plan
              (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
              VALUES (?1, ?2, ?3, 'continue', ?4, 'approved', 'SafeToContinue')",
@@ -2272,8 +2289,14 @@ impl RunManager {
                 &new_run.id,
                 &checkpoint.0,
             ],
-        )
-        .map_err(|e| e.to_string())?;
+        ) {
+            self.fail_run_if_active(
+                &new_run.id,
+                error.to_string(),
+                "RESUME_PLAN_PERSISTENCE_FAILED",
+            );
+            return Err(format!("persist continue resume plan failed: {error}"));
+        }
         Ok(new_run)
     }
 

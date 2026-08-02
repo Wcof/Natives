@@ -432,16 +432,19 @@ impl ProductionRuntime {
             return Err("request_id required".into());
         }
         let scope = normalize_permission_scope(scope.unwrap_or("once"));
+        // Persist the response before touching the in-memory waiter. If the
+        // durable interaction is unavailable, leave the waiter untouched so
+        // the Engine remains fail-closed and the RPC reports the failure.
+        crate::interaction_store::mark_resolved(
+            request_id,
+            serde_json::json!({ "approved": approved, "scope": scope }),
+        )?;
         let (_bound_run, _tool_name, tx) = self
             .interactions
             .resolve_permission_for_run(request_id, run_id)
             .await?;
-        let _ = tx.send((approved, scope.clone()));
-        // Best-effort: resolve any matching interaction row for restart recovery.
-        let _ = crate::interaction_store::mark_resolved(
-            request_id,
-            serde_json::json!({ "approved": approved, "scope": scope }),
-        );
+        tx.send((approved, scope))
+            .map_err(|_| "permission waiter was closed before response delivery".to_string())?;
         Ok(())
     }
 
@@ -613,9 +616,8 @@ impl ProductionRuntime {
             &run_id,
             &user_content,
         );
-        if let Err(e) = crate::prompt_queue_store::persist_actor_snapshot(&conversation_id) {
-            eprintln!("[production] persist_actor_snapshot on run start: {e}");
-        }
+        crate::prompt_queue_store::persist_actor_snapshot(&conversation_id)
+            .map_err(|error| format!("persist actor snapshot on run start failed: {error}"))?;
 
         let run_effort = crate::global_run_manager()
             .get_run(&run_id)
@@ -681,8 +683,7 @@ impl ProductionRuntime {
         };
 
         // Compact history against resolved token budget (chars/4 fallback estimate).
-        let typed_history =
-            crate::conversation_store::load_agent_messages(&conversation_id).unwrap_or_default();
+        let typed_history = crate::conversation_store::load_agent_messages(&conversation_id)?;
         let checkpoint_snapshot = crate::global_run_manager()
             .get_run(&run_id)
             .and_then(|run| run.checkpoint_id)
@@ -691,14 +692,12 @@ impl ProductionRuntime {
                     &conversation_id,
                     &checkpoint_id,
                 )
-                .ok()
-                .flatten()
+                .transpose()
             });
-        let typed_history = match checkpoint_snapshot.or_else(|| {
-            crate::conversation_store::load_active_context_snapshot(&conversation_id)
-                .ok()
-                .flatten()
-        }) {
+        let checkpoint_snapshot = checkpoint_snapshot.transpose()?;
+        let typed_history = match checkpoint_snapshot.or(
+            crate::conversation_store::load_active_context_snapshot(&conversation_id)?,
+        ) {
             Some(snapshot) => {
                 let mut active = snapshot.messages;
                 active.extend(typed_history.into_iter().filter(|message| {
@@ -719,8 +718,7 @@ impl ProductionRuntime {
         // lossless: typed history goes through the typed entry point without
         // flattening to EngineMessage. Legacy rows are converted once below
         // when a database predates typed message rows.
-        let legacy_history =
-            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
+        let legacy_history = crate::conversation_store::engine_history(&conversation_id)?;
         let typed_history = if typed_history.is_empty() && !legacy_history.is_empty() {
             agent_core::engine_messages_to_agent_messages(&legacy_history)
         } else {

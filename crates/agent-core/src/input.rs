@@ -27,6 +27,9 @@ pub struct PendingInput {
     pub id: String,
     pub kind: PendingInputKind,
     pub content: String,
+    /// Durable queue lease token. In-memory receivers may leave this empty;
+    /// the daemon-backed receiver uses it to prevent cross-lease acks.
+    pub lease_token: Option<String>,
 }
 
 #[async_trait]

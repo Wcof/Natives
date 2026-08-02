@@ -41,3 +41,10 @@
 - 当前代码证据：`crates/capability-gateway/src/lib.rs` 的执行包装器与 Shell/MCP 专项取消测试。
 - 与审计基线相比的变化：Cancel 与 Timeout 已区分。
 - 本轮处理方式：本阶段不重写 Scheduler；新增 Core `ToolProgressSink` seam 不改变取消语义。
+
+## 深化阶段新增持久化边界
+
+- 当前是否仍存在：部分 best-effort 持久化缺口已关闭；真实外部故障注入仍待验证。
+- 当前代码证据：`prompt_queue_store.rs` 的 lease token/单行更新检查；`production.rs` 的 history/snapshot 与 permission fail-closed；`run_manager.rs` 的 resume plan 错误传播；`production_tools.rs` 的 idle progress flush。
+- 与审计基线相比的变化：输入 ack、恢复读取、权限响应和恢复计划不再把错误折叠为空或成功；非终态进度有 bounded idle flush。
+- 本轮处理方式：只增加局部错误传播与 lease 绑定，没有改变 RPC、数据库模型或 RunManager 终态权威；严格 `-Dwarnings` check 与精确进度测试通过。
