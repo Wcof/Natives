@@ -2102,7 +2102,7 @@ impl RunManager {
                  (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
                  VALUES (?1, ?2, ?3, 'retry',
                          ?4,
-                         'executed', 'SafeToContinue')",
+                         'approved', 'SafeToContinue')",
                 rusqlite::params![
                     uuid::Uuid::new_v4().to_string(),
                     &req.run_id,
@@ -2253,7 +2253,7 @@ impl RunManager {
         conn.execute(
             "INSERT INTO resume_plan
              (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
-             VALUES (?1, ?2, ?3, 'continue', ?4, 'executed', 'SafeToContinue')",
+             VALUES (?1, ?2, ?3, 'continue', ?4, 'approved', 'SafeToContinue')",
             rusqlite::params![
                 Uuid::new_v4().to_string(),
                 &source.id,
@@ -2263,6 +2263,29 @@ impl RunManager {
         )
         .map_err(|e| e.to_string())?;
         Ok(new_run)
+    }
+
+    pub fn mark_resume_plan_executed(
+        &self,
+        source_run_id: &str,
+        new_run_id: &str,
+    ) -> Result<(), String> {
+        let Some(store) = &self.data_store else {
+            return Ok(());
+        };
+        let changed = store
+            .conn()?
+            .execute(
+                "UPDATE resume_plan
+             SET status = 'executed', resolved_at = datetime('now')
+             WHERE source_run_id = ?1 AND new_run_id = ?2 AND status = 'approved'",
+                rusqlite::params![source_run_id, new_run_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 0 {
+            return Err("approved resume plan not found".into());
+        }
+        Ok(())
     }
 
     pub async fn respond_permission(&self, request_id: &str, approved: bool) -> Result<(), String> {

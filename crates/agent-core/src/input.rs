@@ -37,7 +37,10 @@ pub trait EngineInputReceiver: Send + Sync {
         mode: DrainMode,
         point: InputSafePoint,
     ) -> Vec<PendingInput>;
-    async fn ack(&self, input_id: &str);
+    /// Persist the consumed input before Core mutates the next Provider
+    /// transcript. Failure must stop the run rather than silently losing a
+    /// steering/follow-up message.
+    async fn ack(&self, input: &PendingInput, turn_id: Option<&str>) -> Result<(), String>;
 }
 
 #[derive(Debug, Default)]
@@ -53,5 +56,7 @@ impl EngineInputReceiver for NoopInputReceiver {
     ) -> Vec<PendingInput> {
         Vec::new()
     }
-    async fn ack(&self, _input_id: &str) {}
+    async fn ack(&self, _input: &PendingInput, _turn_id: Option<&str>) -> Result<(), String> {
+        Ok(())
+    }
 }

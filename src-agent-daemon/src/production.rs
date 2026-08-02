@@ -557,6 +557,7 @@ impl ProductionRuntime {
                     ),
                 ))
                 .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.events.clone())))
+                .with_provider_context_window(model_window)
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
         self.engines
@@ -692,10 +693,12 @@ impl ProductionRuntime {
         // lossless: typed history goes through the typed entry point without
         // flattening to EngineMessage. Legacy history is used only when the
         // database predates typed message rows.
-        let legacy_history = if typed_history.is_empty() {
-            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default()
+        let legacy_history = crate::conversation_store::engine_history(&conversation_id)
+            .unwrap_or_default();
+        let typed_history = if typed_history.is_empty() && !legacy_history.is_empty() {
+            agent_core::engine_messages_to_agent_messages(&legacy_history)
         } else {
-            Vec::new()
+            typed_history
         };
         let config = EngineRunConfig {
             run_id: run_id.clone(),
@@ -712,21 +715,16 @@ impl ProductionRuntime {
         };
 
         crate::production_tools::validate_tool_limit(frozen_tool_schemas.len())?;
-        let outcome = match if typed_history.is_empty() {
-            engine
-                .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
-                .await
-        } else {
-            engine
-                .run_with_typed_messages(
-                    config,
-                    &provider,
-                    &tools,
-                    frozen_tool_schemas,
-                    typed_history,
-                )
-                .await
-        } {
+        let outcome = match engine
+            .run_with_typed_messages(
+                config,
+                &provider,
+                &tools,
+                frozen_tool_schemas,
+                typed_history,
+            )
+            .await
+        {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };

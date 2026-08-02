@@ -119,9 +119,10 @@ impl EngineInputReceiver for DurableInputReceiver {
         items
     }
 
-    async fn ack(&self, input_id: &str) {
-        let Ok(store) = store() else { return };
-        let Ok(conn) = store.conn() else { return };
+    async fn ack(&self, input: &PendingInput, turn_id: Option<&str>) -> Result<(), String> {
+        let input_id = &input.id;
+        let store = store()?;
+        let conn = store.conn()?;
         let content = conn
             .query_row(
                 "SELECT content FROM prompt_queue
@@ -130,14 +131,23 @@ impl EngineInputReceiver for DurableInputReceiver {
                 |row| row.get::<_, String>(0),
             );
         drop(conn);
-        if let Ok(content) = content {
-            let _ = conversation_store::persist_queued_input_and_ack(
-                &self.conversation_id,
-                &self.run_id,
-                input_id,
-                &content,
-            );
-        }
+        let queued_content =
+            content.map_err(|error| format!("load queued input for ack: {error}"))?;
+        let content = format!(
+            "[{}]\n{}",
+            match input.kind {
+                PendingInputKind::Steering => "steering",
+                PendingInputKind::FollowUp => "follow_up",
+            },
+            queued_content
+        );
+        conversation_store::persist_queued_input_and_ack(
+            &self.conversation_id,
+            &self.run_id,
+            input_id,
+            &content,
+            turn_id,
+        )
     }
 }
 

@@ -39,6 +39,7 @@ pub fn persist_queued_input_and_ack(
     run_id: &str,
     input_id: &str,
     content: &str,
+    turn_id: Option<&str>,
 ) -> Result<(), String> {
     let store = store()?;
     let conn = store.conn()?;
@@ -47,12 +48,13 @@ pub fn persist_queued_input_and_ack(
     let message_id = format!("queue:{input_id}");
     tx.execute(
         "INSERT OR IGNORE INTO message
-         (id, conversation_id, role, status, run_id, legacy_marker, created_at)
-         VALUES (?1, ?2, 'user', 'complete', ?3, ?4, ?5)",
+         (id, conversation_id, role, status, run_id, turn_id, legacy_marker, created_at)
+         VALUES (?1, ?2, 'user', 'complete', ?3, ?4, ?5, ?6)",
         params![
             message_id,
             conversation_id,
             run_id,
+            turn_id,
             format!("prompt_queue:{input_id}"),
             now
         ],
@@ -73,7 +75,13 @@ pub fn persist_queued_input_and_ack(
             "UPDATE prompt_queue SET status = 'sent', consumed_turn_id = ?1,
              lease_token = NULL, lease_run_id = NULL, leased_at = NULL, updated_at = ?2
              WHERE id = ?3 AND conversation_id = ?4 AND lease_run_id = ?5 AND status = 'leased'",
-            params![run_id, now, input_id, conversation_id, run_id],
+            params![
+                turn_id.unwrap_or(run_id),
+                now,
+                input_id,
+                conversation_id,
+                run_id
+            ],
         )
         .map_err(|e| e.to_string())?;
     if changed != 1 {
@@ -1636,6 +1644,9 @@ pub fn append_agent_message(
     }
     if let Some(reason) = stop_reason {
         payload["stop_reason"] = serde_json::Value::String(reason);
+    }
+    if turn_id.is_some_and(|value| value.starts_with("legacy-turn:")) {
+        payload["legacy_marker"] = serde_json::Value::String("legacy_turn_unknown".into());
     }
     let row = append_message(payload)?;
     row.get("id")

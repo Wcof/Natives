@@ -68,12 +68,42 @@ pub fn record_tool_effect_state(
         .and_then(Value::as_str)
         .unwrap_or(tool_name);
     let now = chrono::Utc::now().to_rfc3339();
+    let terminal = matches!(status, "completed" | "failed" | "cancelled" | "uncertain");
+    let changed = conn
+        .execute(
+            "UPDATE side_effect_record
+             SET category = ?1, target_summary = ?2, coverage_note = ?3,
+                 turn_id = ?4, side_effect_class = ?5, status = ?6,
+                 replay_safe = ?7, resource = ?8,
+                 completed_at = CASE WHEN ?9 THEN ?10 ELSE completed_at END
+             WHERE run_id = ?11 AND tool_call_id = ?12
+               AND (status NOT IN ('cancelled', 'uncertain') OR ?6 = 'uncertain')",
+            rusqlite::params![
+                category,
+                target,
+                serde_json::to_string(summary).unwrap_or_else(|_| "{}".into()),
+                turn_id,
+                category,
+                status,
+                if replay_safe { 1 } else { 0 },
+                target,
+                terminal,
+                now,
+                run_id,
+                tool_call_id,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed > 0 {
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO side_effect_record
          (id, run_id, tool_call_id, category, target_summary, reversible, coverage_note,
           turn_id, side_effect_class, status, replay_safe, idempotency_key, external_reference,
           resource, started_at, completed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12, ?12)",
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12,
+                 CASE WHEN ?13 THEN ?12 ELSE NULL END)",
         rusqlite::params![
             uuid::Uuid::new_v4().to_string(),
             run_id,
@@ -87,6 +117,7 @@ pub fn record_tool_effect_state(
             if replay_safe { 1 } else { 0 },
             target,
             now,
+            terminal,
         ],
     )
     .map_err(|e| e.to_string())?;

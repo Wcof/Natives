@@ -11,7 +11,7 @@
 //!
 //! Guarantees for tool-call integrity (providers hard-error when these break):
 //! - Never drop an assistant message that contains tool_calls without its
-//!   matching tool results (or strip tool_calls if results are gone).
+//!   matching tool results; missing results become explicit error results.
 //! - Never keep a tool result whose originating assistant tool_call is gone.
 //! - Preserve tool_call_id associations.
 //! - Emit a summary of trimmed tool outputs for re-injection.
@@ -31,51 +31,72 @@ pub struct CompactResult {
     pub summarized_messages: usize,
 }
 
-/// Repair dangling tool calls: if an assistant message references tool_call ids
-/// that have no subsequent tool role message, strip those tool_calls or inject
-/// a synthetic error tool result (prefer strip for safety with providers).
+/// Repair dangling tool calls: keep the assistant call fact and inject a
+/// synthetic error tool result for every missing pair. Providers then see a
+/// valid, fail-closed pair and cannot mistake a repaired call for successful
+/// execution.
 pub fn repair_dangling_tool_calls(messages: &[Value]) -> (Vec<Value>, usize) {
-    let mut result_ids = std::collections::HashSet::new();
-    for m in messages {
-        let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        if role == "tool" {
-            if let Some(id) = m.get("tool_call_id").and_then(|v| v.as_str()) {
-                result_ids.insert(id.to_string());
-            }
-        }
-    }
     let mut repaired = 0usize;
     let mut out = Vec::with_capacity(messages.len());
-    for m in messages {
+    let mut consumed_results = std::collections::HashSet::new();
+    for (index, m) in messages.iter().enumerate() {
         let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let Some(calls) = m.get("tool_calls").and_then(Value::as_array) else {
+            if role != "tool" || !consumed_results.contains(&index) {
+                out.push(m.clone());
+            }
+            continue;
+        };
         if role != "assistant" {
             out.push(m.clone());
             continue;
         }
-        let Some(calls) = m.get("tool_calls").and_then(|v| v.as_array()) else {
-            out.push(m.clone());
-            continue;
-        };
-        let kept: Vec<Value> = calls
-            .iter()
-            .filter(|c| {
-                let id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                result_ids.contains(id)
-            })
-            .cloned()
-            .collect();
-        if kept.len() != calls.len() {
-            repaired += calls.len() - kept.len();
-        }
-        let mut msg = m.clone();
-        if kept.is_empty() {
-            if let Some(obj) = msg.as_object_mut() {
-                obj.remove("tool_calls");
+        out.push(m.clone());
+        for call in calls {
+            let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if id.is_empty() {
+                continue;
             }
-        } else if let Some(obj) = msg.as_object_mut() {
-            obj.insert("tool_calls".into(), Value::Array(kept));
+            let search_end = ((index + 1)..messages.len())
+                .find(|candidate| {
+                    messages[*candidate].get("role").and_then(Value::as_str) == Some("assistant")
+                })
+                .unwrap_or(messages.len());
+            let matching_result = ((index + 1)..search_end).find(|candidate| {
+                if consumed_results.contains(candidate) {
+                    return false;
+                }
+                let candidate_message = &messages[*candidate];
+                let candidate_role = candidate_message
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                candidate_role == "tool"
+                    && candidate_message
+                        .get("tool_call_id")
+                        .and_then(Value::as_str)
+                        == Some(id)
+            });
+            if let Some(result_index) = matching_result {
+                consumed_results.insert(result_index);
+                out.push(messages[result_index].clone());
+                continue;
+            }
+            repaired += 1;
+            let name = call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            out.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "name": name,
+                "content": "DANGLING_TOOL_CALL: execution result was missing; call was not executed",
+                "is_error": true,
+                "error_code": "DANGLING_TOOL_CALL",
+            }));
         }
-        out.push(msg);
     }
     (out, repaired)
 }
@@ -385,7 +406,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strips_dangling_tool_calls() {
+    fn repairs_dangling_tool_calls_with_error_results() {
         let msgs = vec![
             json!({"role":"user","content":"hi"}),
             json!({
@@ -401,8 +422,10 @@ mod tests {
         let (fixed, n) = repair_dangling_tool_calls(&msgs);
         assert_eq!(n, 1);
         let calls = fixed[1].get("tool_calls").unwrap().as_array().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0]["id"], "c1");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(fixed[2]["tool_call_id"], "c1");
+        assert_eq!(fixed[3]["tool_call_id"], "c2");
+        assert_eq!(fixed[3]["error_code"], "DANGLING_TOOL_CALL");
     }
 
     #[test]

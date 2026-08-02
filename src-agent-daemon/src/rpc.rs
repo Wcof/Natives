@@ -942,6 +942,20 @@ pub async fn handle_rpc(
                             };
                             match crate::run_manager::RunManager::start_detached_global(start_req) {
                                 Ok(run) => {
+                                    if let Err(e) = run_manager()
+                                        .mark_resume_plan_executed(&new_run.retry_of_run_id.clone().unwrap_or_default(), &new_run.id)
+                                    {
+                                        send_error(
+                                            writer,
+                                            &DaemonError::new(
+                                                "run_retry_resume_plan_failed",
+                                                ErrorCategory::Internal,
+                                                true,
+                                                e,
+                                            ),
+                                        )
+                                        .await;
+                                    } else {
                                     send_success(
                                         writer,
                                         &request.request_id,
@@ -950,6 +964,7 @@ pub async fn handle_rpc(
                                         serde_json::to_value(run).unwrap_or_default(),
                                     )
                                     .await
+                                    }
                                 }
                                 Err(e) => {
                                     send_error(
@@ -1017,6 +1032,20 @@ pub async fn handle_rpc(
                         };
                         match crate::run_manager::RunManager::start_detached_global(start_req) {
                             Ok(run) => {
+                                if let Err(e) = run_manager()
+                                    .mark_resume_plan_executed(&new_run.continued_from_run_id.clone().unwrap_or_default(), &new_run.id)
+                                {
+                                    send_error(
+                                        writer,
+                                        &DaemonError::new(
+                                            "run_continue_resume_plan_failed",
+                                            ErrorCategory::Internal,
+                                            true,
+                                            e,
+                                        ),
+                                    )
+                                    .await;
+                                } else {
                                 send_success(
                                     writer,
                                     &request.request_id,
@@ -1025,6 +1054,7 @@ pub async fn handle_rpc(
                                     serde_json::to_value(run).unwrap_or_default(),
                                 )
                                 .await
+                                }
                             }
                             Err(e) => {
                                 send_error(

@@ -857,6 +857,25 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: 0,
             };
         }
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &stream_tool_call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "started",
+            false,
+            turn_id,
+            &input,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("tool side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
 
         if name == "skill" {
             let skill_name = input.get("name").and_then(Value::as_str).unwrap_or("");
@@ -1021,7 +1040,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                 // Side-effect ledger for restore coverage honesty.
                 let cat = crate::side_effect_ledger::category_for_tool(name);
                 let reversible = cat == "workspace_file";
-                let _ = crate::side_effect_ledger::record_tool_effect_state(
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
                     &stream_tool_call_id,
                     name,
@@ -1031,7 +1050,13 @@ impl EngineToolRuntime for PermissionGatedTools {
                     turn_id,
                     &input,
                 );
-                if name == "run_terminal" {
+                if let Err(error) = ledger_result {
+                    output = serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("tool side-effect ledger could not be completed: {error}"),
+                    });
+                }
+                if name == "run_terminal" && live_forwarder.is_none() {
                     emit_terminal_output_deltas(
                         &self.events,
                         &self.parent_run_id,
@@ -1124,9 +1149,11 @@ impl EngineToolRuntime for PermissionGatedTools {
                         })
                         .await;
                 }
+                let is_error =
+                    output.get("error_code").and_then(Value::as_str) == Some("PERSISTENCE_FAILED");
                 ToolExecutionResult {
                     output,
-                    is_error: false,
+                    is_error,
                     duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
                 }
             }

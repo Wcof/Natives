@@ -552,6 +552,7 @@ pub struct AgentEngine {
     summary_failures: AtomicU32,
     progress_sink: Arc<dyn ToolProgressSink>,
     input_receiver: Option<Arc<dyn crate::EngineInputReceiver>>,
+    provider_context_window: Option<u64>,
 }
 
 impl AgentEngine {
@@ -568,6 +569,7 @@ impl AgentEngine {
             summary_failures: AtomicU32::new(0),
             progress_sink: Arc::new(NoopToolProgressSink),
             input_receiver: None,
+            provider_context_window: None,
         }
     }
 
@@ -622,6 +624,11 @@ impl AgentEngine {
         self
     }
 
+    pub fn with_provider_context_window(mut self, window: Option<u64>) -> Self {
+        self.provider_context_window = window;
+        self
+    }
+
     /// Shared cancel token for this engine run (clone freely; cancel is cooperative).
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
@@ -647,17 +654,22 @@ impl AgentEngine {
         mode: crate::DrainMode,
         point: crate::InputSafePoint,
         messages: &mut Vec<crate::AgentMessage>,
-    ) -> bool {
+        turn_id: Option<&str>,
+    ) -> Result<bool, EngineError> {
         let Some(receiver) = &self.input_receiver else {
-            return false;
+            return Ok(false);
         };
         let pending = receiver.drain(kind, mode, point).await;
         if pending.is_empty() {
-            return false;
+            return Ok(false);
         }
         for input in pending {
+            receiver
+                .ack(&input, turn_id)
+                .await
+                .map_err(|error| EngineError::Message(format!("input ack failed: {error}")))?;
             messages.push(crate::AgentMessage::User(crate::UserMessage {
-                message_id: crate::MessageId::new(),
+                message_id: crate::MessageId::from(format!("queue:{}", input.id)),
                 content: vec![crate::ContentBlock::Text {
                     text: format!(
                         "[{}]\n{}",
@@ -669,9 +681,8 @@ impl AgentEngine {
                     ),
                 }],
             }));
-            receiver.ack(&input.id).await;
         }
-        true
+        Ok(true)
     }
 
     fn append_critical(&self, run_id: &str, event: RunEventKind) -> Result<(), EngineError> {
@@ -1239,8 +1250,9 @@ impl AgentEngine {
                         crate::DrainMode::All,
                         crate::InputSafePoint::BeforeRunEnd,
                         &mut typed_messages,
+                        Some(turn_id.0.as_str()),
                     )
-                    .await
+                    .await?
                 {
                     self.events.append(
                         run_id,
@@ -1429,6 +1441,12 @@ impl AgentEngine {
                     prepared,
                 )
                 .await?;
+            let persistence_failed = executed.iter().any(|item| {
+                item.result.as_ref().is_some_and(|result| {
+                    result.output.get("error_code").and_then(Value::as_str)
+                        == Some("PERSISTENCE_FAILED")
+                })
+            });
 
             // Safe point: after tool batch completes.
             self.apply_safe_point(
@@ -1441,8 +1459,9 @@ impl AgentEngine {
                 crate::DrainMode::All,
                 crate::InputSafePoint::AfterToolBatch,
                 &mut typed_messages,
+                Some(turn_id.0.as_str()),
             )
-            .await;
+            .await?;
 
             let mut typed_tool_calls = Vec::new();
             let mut typed_tool_results = Vec::new();
@@ -1523,6 +1542,13 @@ impl AgentEngine {
                     output_tokens: 0,
                 },
             )?;
+
+            if persistence_failed {
+                self.cancel.cancel();
+                return Err(EngineError::Message(
+                    "critical tool persistence failed; run stopped fail-closed".into(),
+                ));
+            }
 
             // Compact large tool outputs + repair dangling tool_call_ids before
             // the next provider turn (no isolated tool calls).
@@ -1873,9 +1899,9 @@ impl AgentEngine {
                     source_revision: self.events.last_sequence(run_id),
                     input_message_ids: messages.iter().map(agent_message_id).collect(),
                     summary_message_id: None,
-                    replaced_range: None,
+                    replaced_range: Some(format!("0..{}", messages.len())),
                     algorithm_version: "typed-compaction-v1".into(),
-                    provider_context_window: None,
+                    provider_context_window: self.provider_context_window,
                     artifact_reference: None,
                     snapshot_json: Value::Array(compacted.clone()),
                 },
@@ -2546,7 +2572,7 @@ fn stop_reason_from_label(label: &str) -> crate::StopReason {
     }
 }
 
-fn engine_messages_to_agent_messages(messages: &[EngineMessage]) -> Vec<crate::AgentMessage> {
+pub fn engine_messages_to_agent_messages(messages: &[EngineMessage]) -> Vec<crate::AgentMessage> {
     messages
         .iter()
         .map(|message| {
