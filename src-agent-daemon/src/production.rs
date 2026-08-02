@@ -688,15 +688,15 @@ impl ProductionRuntime {
             }
             _ => typed_history,
         };
-        let raw_history = if typed_history.is_empty() {
+        // The Core owns active-context compaction. Keep the daemon boundary
+        // lossless: typed history goes through the typed entry point without
+        // flattening to EngineMessage. Legacy history is used only when the
+        // database predates typed message rows.
+        let legacy_history = if typed_history.is_empty() {
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default()
         } else {
-            agent_core::agent_messages_to_engine_messages(&typed_history)
+            Vec::new()
         };
-        // The Core owns active-context compaction. Keep the daemon boundary
-        // lossless so typed tool calls/results are not flattened before the
-        // engine can snapshot or repair them.
-        let messages = raw_history;
         let config = EngineRunConfig {
             run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
@@ -706,16 +706,27 @@ impl ProductionRuntime {
             } else {
                 Some(effective_prompt.effective_full_text)
             },
-            messages,
+            messages: legacy_history,
             user_content,
             max_steps,
         };
 
         crate::production_tools::validate_tool_limit(frozen_tool_schemas.len())?;
-        let outcome = match engine
-            .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
-            .await
-        {
+        let outcome = match if typed_history.is_empty() {
+            engine
+                .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
+                .await
+        } else {
+            engine
+                .run_with_typed_messages(
+                    config,
+                    &provider,
+                    &tools,
+                    frozen_tool_schemas,
+                    typed_history,
+                )
+                .await
+        } {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };

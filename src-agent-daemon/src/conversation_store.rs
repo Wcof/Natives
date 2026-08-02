@@ -1189,6 +1189,7 @@ fn append_single_assistant_turn(
     let mut thinking = String::new();
     let mut tool_calls = Vec::new();
     let mut tool_results = Vec::new();
+    let mut committed_content: Option<Vec<agent_core::ContentBlock>> = None;
     let turn_id = events.iter().find_map(|event| match &event.payload {
         RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
         _ => None,
@@ -1227,24 +1228,33 @@ fn append_single_assistant_turn(
                 *is_error,
                 *duration_ms,
             )),
+            RunEventKind::MessageCompleted { content, .. } => {
+                committed_content = content
+                    .as_ref()
+                    .and_then(|value| value.get("content"))
+                    .and_then(|value| serde_json::from_value(value.clone()).ok());
+            }
             _ => {}
         }
     }
-    let mut content = Vec::new();
-    if !thinking.trim().is_empty() {
-        content.push(agent_core::ContentBlock::Thinking {
-            text: thinking,
-            signature: None,
-        });
-    }
-    if !text.trim().is_empty() {
-        content.push(agent_core::ContentBlock::Text { text });
-    }
-    content.extend(
-        tool_calls
-            .into_iter()
-            .map(agent_core::ContentBlock::ToolCall),
-    );
+    let content = committed_content.unwrap_or_else(|| {
+        let mut content = Vec::new();
+        if !thinking.trim().is_empty() {
+            content.push(agent_core::ContentBlock::Thinking {
+                text: text.clone(),
+                signature: None,
+            });
+        }
+        if !text.trim().is_empty() {
+            content.push(agent_core::ContentBlock::Text { text });
+        }
+        content.extend(
+            tool_calls
+                .into_iter()
+                .map(agent_core::ContentBlock::ToolCall),
+        );
+        content
+    });
     if content.is_empty() && tool_results.is_empty() {
         return Ok(None);
     }
@@ -1273,13 +1283,31 @@ fn append_single_assistant_turn(
         .map_err(|e| e.to_string())?;
     }
     for (id, name, output, is_error, duration_ms) in tool_results {
+        let code = output
+            .get("error_code")
+            .or_else(|| output.get("code"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let content = output
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .map(|artifact_id| {
+                vec![ToolResultBlock::Artifact {
+                    artifact_id: artifact_id.to_string(),
+                    preview: output
+                        .get("preview")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                }]
+            })
+            .unwrap_or_else(|| vec![ToolResultBlock::Json { value: output }]);
         let result = agent_core::ToolResultMessage {
             message_id: agent_core::MessageId::new(),
             tool_call_id: id.into(),
             tool_name: name,
-            content: vec![ToolResultBlock::Json { value: output }],
+            content,
             is_error,
-            code: is_error.then(|| "TOOL_EXECUTION_ERROR".to_string()),
+            code,
         };
         let _ = duration_ms;
         append_agent_message(
@@ -1347,6 +1375,16 @@ fn persist_context_snapshots_from_events(
         )
         .optional()
         .map_err(|e| e.to_string())?;
+    let branch_id: Option<String> = conversation_id.as_deref().and_then(|conversation_id| {
+        conn.query_row(
+            "SELECT branch_id FROM conversation WHERE id = ?1",
+            params![conversation_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    });
     for event in events {
         let (snapshot_id, before_tokens, after_tokens, summary, committed) = match &event.payload {
             RunEventKind::ContextCompressed {
@@ -1452,20 +1490,26 @@ fn persist_context_snapshots_from_events(
                     }),
                 )
             });
+        let estimated_tokens = if after_tokens > 0 {
+            after_tokens as i64
+        } else {
+            (snapshot_json.to_string().len() as i64 / 4).max(1)
+        };
         conn.execute(
             "INSERT INTO context_snapshot (
-                id, run_id, conversation_id, turn_id, sequence, snapshot_type, token_count, summary,
+                id, run_id, conversation_id, branch_id, turn_id, sequence, snapshot_type, token_count, summary,
                 source_revision, input_message_ids, summary_message_id, replaced_range,
                 algorithm_version, provider_context_window, artifact_reference, snapshot_json
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, 'compaction', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'compaction', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 snapshot_id,
                 run_id,
                 conversation_id,
+                branch_id,
                 turn_id,
                 event.effective_run_sequence() as i64,
-                after_tokens as i64,
+                estimated_tokens,
                 summary,
                 source_revision as i64,
                 input_message_ids,

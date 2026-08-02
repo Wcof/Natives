@@ -334,6 +334,10 @@ pub enum RunEventKind {
         turn_id: String,
         message_id: String,
         role: String,
+        /// Complete provider-neutral content so a dropped delta stream does
+        /// not make the committed message unrecoverable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<serde_json::Value>,
     },
     Completed {
         reason: String,

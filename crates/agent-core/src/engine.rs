@@ -50,6 +50,7 @@ struct PreparedToolCall {
     input: Value,
     rejected: Option<ToolExecutionResult>,
     parallel_safe: bool,
+    conflict_key: Option<String>,
 }
 
 /// Tool call after execution (or hook denial), in original order.
@@ -59,6 +60,14 @@ struct ExecutedToolCall {
     name: String,
     args: String,
     result: Option<ToolExecutionResult>,
+}
+
+fn is_long_running_tool_result(result: &ToolExecutionResult) -> bool {
+    result
+        .output
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "running" | "pending"))
 }
 
 /// Tool execution seam used by the engine.
@@ -87,7 +96,16 @@ pub trait EngineToolRuntime: Send + Sync {
         cancel: &CancellationToken,
         _call_id: Option<&str>,
     ) -> ToolExecutionResult {
-        self.execute_tool(name, input, cancel).await
+        self.execute_tool_with_call_id_and_progress(
+            name,
+            input,
+            cancel,
+            _call_id,
+            None,
+            None,
+            Arc::new(NoopToolProgressSink),
+        )
+        .await
     }
 
     /// Optional call-identity-aware execution hook for runtimes that can emit
@@ -97,12 +115,12 @@ pub trait EngineToolRuntime: Send + Sync {
         name: &str,
         input: Value,
         cancel: &CancellationToken,
-        call_id: Option<&str>,
+        _call_id: Option<&str>,
         _turn_id: Option<&str>,
         _message_id: Option<&str>,
+        _progress: Arc<dyn ToolProgressSink>,
     ) -> ToolExecutionResult {
-        self.execute_tool_with_call_id(name, input, cancel, call_id)
-            .await
+        self.execute_tool(name, input, cancel).await
     }
 
     async fn execute_tool_with_progress(
@@ -125,10 +143,10 @@ pub trait EngineToolRuntime: Send + Sync {
         name: &str,
         input: Value,
         cancel: &CancellationToken,
-        progress: &dyn ToolProgressSink,
+        progress: Arc<dyn ToolProgressSink>,
     ) -> ToolExecutionResult {
         let _ = call_id;
-        self.execute_tool_with_progress(name, input, cancel, progress)
+        self.execute_tool_with_progress(name, input, cancel, progress.as_ref())
             .await
     }
 
@@ -155,6 +173,32 @@ pub trait EngineToolRuntime: Send + Sync {
             out.push(self.execute_tool("task", input, cancel).await);
         }
         out
+    }
+
+    /// Progress-aware batch seam for subagent tools. The default preserves
+    /// compatibility with lightweight runtimes; production runtimes can keep
+    /// the sink alive while child Runs emit their own events.
+    async fn execute_task_batch_with_progress(
+        &self,
+        tasks: Vec<(String, Value)>,
+        cancel: &CancellationToken,
+        _progress: Arc<dyn ToolProgressSink>,
+        _turn_id: Option<&str>,
+        _message_id: Option<&str>,
+    ) -> Vec<ToolExecutionResult> {
+        self.execute_task_batch(tasks, cancel).await
+    }
+
+    /// Called when a handler returned but the authoritative completion fact
+    /// could not be persisted. Production runtimes record this as `uncertain`
+    /// so resume code cannot replay an unknown side effect.
+    async fn mark_tool_call_uncertain(
+        &self,
+        _call_id: &str,
+        _name: &str,
+        _turn_id: Option<&str>,
+        _input: &Value,
+    ) {
     }
 }
 
@@ -698,8 +742,38 @@ impl AgentEngine {
         tools: &dyn EngineToolRuntime,
         tool_schemas: Vec<ToolSchema>,
     ) -> Result<crate::EngineOutcome, EngineError> {
+        self.run_with_typed_transcript(config, provider, tools, tool_schemas, None)
+            .await
+    }
+
+    /// Production entry point for a transcript that has already crossed the
+    /// daemon's typed persistence boundary.  The legacy `EngineMessage` field
+    /// remains available to fixture/compatibility callers, but production does
+    /// not flatten typed blocks and immediately rebuild them.
+    pub async fn run_with_typed_messages(
+        &self,
+        config: EngineRunConfig,
+        provider: &dyn EngineProvider,
+        tools: &dyn EngineToolRuntime,
+        tool_schemas: Vec<ToolSchema>,
+        messages: Vec<crate::AgentMessage>,
+    ) -> Result<crate::EngineOutcome, EngineError> {
+        self.run_with_typed_transcript(config, provider, tools, tool_schemas, Some(messages))
+            .await
+    }
+
+    async fn run_with_typed_transcript(
+        &self,
+        config: EngineRunConfig,
+        provider: &dyn EngineProvider,
+        tools: &dyn EngineToolRuntime,
+        tool_schemas: Vec<ToolSchema>,
+        typed_transcript: Option<Vec<crate::AgentMessage>>,
+    ) -> Result<crate::EngineOutcome, EngineError> {
         let run_id = config.run_id.clone();
-        let result = self.run_inner(config, provider, tools, tool_schemas).await;
+        let result = self
+            .run_inner(config, provider, tools, tool_schemas, typed_transcript)
+            .await;
         if let Err(error) = &result {
             let _ = self
                 .hooks
@@ -734,6 +808,7 @@ impl AgentEngine {
         provider: &dyn EngineProvider,
         tools: &dyn EngineToolRuntime,
         tool_schemas: Vec<ToolSchema>,
+        typed_transcript: Option<Vec<crate::AgentMessage>>,
     ) -> Result<crate::EngineOutcome, EngineError> {
         use crate::EngineOutcome;
         let run_id_owned = config.run_id.clone();
@@ -768,37 +843,58 @@ impl AgentEngine {
         apply_prompt_hook_responses(&mut config, prompt_submit)?;
 
         // History is prior turns; always ensure the current user prompt appears
-        // exactly once (append when history is empty or does not already end
-        // with the same user content).
-        let initial_messages = if config.messages.is_empty() {
-            vec![EngineMessage {
-                role: "user".into(),
-                content: config.user_content.clone(),
-                tool_call_id: None,
-                tool_name: None,
-                tool_calls: None,
-                images: Vec::new(),
-            }]
+        // exactly once. Production supplies typed history directly. Legacy
+        // callers cross the conversion boundary once here and never re-enter it.
+        let mut typed_messages = if let Some(messages) = typed_transcript {
+            messages
         } else {
-            let mut msgs = config.messages.clone();
-            let already_has_current = msgs.last().is_some_and(|m| {
-                m.role == "user" && m.content.trim() == config.user_content.trim()
-            });
-            if !already_has_current && !config.user_content.trim().is_empty() {
-                msgs.push(EngineMessage {
+            let initial_messages = if config.messages.is_empty() {
+                vec![EngineMessage {
                     role: "user".into(),
                     content: config.user_content.clone(),
                     tool_call_id: None,
                     tool_name: None,
                     tool_calls: None,
                     images: Vec::new(),
+                }]
+            } else {
+                let mut msgs = config.messages.clone();
+                let already_has_current = msgs.last().is_some_and(|m| {
+                    m.role == "user" && m.content.trim() == config.user_content.trim()
                 });
-            }
-            msgs
+                if !already_has_current && !config.user_content.trim().is_empty() {
+                    msgs.push(EngineMessage {
+                        role: "user".into(),
+                        content: config.user_content.clone(),
+                        tool_call_id: None,
+                        tool_name: None,
+                        tool_calls: None,
+                        images: Vec::new(),
+                    });
+                }
+                msgs
+            };
+            engine_messages_to_agent_messages(&initial_messages)
         };
-        // The typed transcript is the only mutable Core transcript. The legacy
-        // EngineMessage vector exists only at this initial compatibility edge.
-        let mut typed_messages = engine_messages_to_agent_messages(&initial_messages);
+        if !config.user_content.trim().is_empty()
+            && !typed_messages.last().is_some_and(|message| {
+                matches!(
+                    message,
+                    crate::AgentMessage::User(value)
+                        if value.content.iter().any(|block| matches!(
+                            block,
+                            crate::ContentBlock::Text { text } if text.trim() == config.user_content.trim()
+                        ))
+                )
+            })
+        {
+            typed_messages.push(crate::AgentMessage::User(crate::UserMessage {
+                message_id: crate::MessageId::new(),
+                content: vec![crate::ContentBlock::Text {
+                    text: config.user_content.clone(),
+                }],
+            }));
+        }
         let mut doom = DoomLoopDetector::new();
         let mut step = 0u32;
 
@@ -1116,15 +1212,16 @@ impl AgentEngine {
                 // Commit the assistant message before consuming a follow-up.
                 // Otherwise the next provider request would lose the response
                 // that caused the safe-point transition.
+                let assistant_content = (!text_acc.is_empty())
+                    .then(|| {
+                        vec![crate::ContentBlock::Text {
+                            text: text_acc.clone(),
+                        }]
+                    })
+                    .unwrap_or_default();
                 typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
                     message_id: assistant_message_id.clone(),
-                    content: (!text_acc.is_empty())
-                        .then(|| {
-                            vec![crate::ContentBlock::Text {
-                                text: text_acc.clone(),
-                            }]
-                        })
-                        .unwrap_or_default(),
+                    content: assistant_content.clone(),
                     stop_reason: Some(
                         match stop_reason.clone().unwrap_or(ProviderStopReason::Stop) {
                             ProviderStopReason::Stop => crate::StopReason::Stop,
@@ -1161,6 +1258,11 @@ impl AgentEngine {
                         turn_id: turn_id.to_string(),
                         message_id: assistant_message_id.to_string(),
                         role: "assistant".into(),
+                        content: Some(json!({
+                            "message_id": assistant_message_id.to_string(),
+                            "role": "assistant",
+                            "content": assistant_content,
+                        })),
                     },
                 )?;
                 self.append_critical(
@@ -1303,14 +1405,6 @@ impl AgentEngine {
                             .unwrap_or_else(|| "Destructive".into()),
                     },
                 )?;
-                self.append_critical(
-                    run_id,
-                    RunEventKind::ToolCallStarted {
-                        id: id.clone(),
-                        name: name.clone(),
-                    },
-                )?;
-
                 let parallel_safe = matches!(
                     capability.map(|value| value.execution_mode),
                     Some(ToolExecutionMode::ParallelSafe)
@@ -1322,6 +1416,7 @@ impl AgentEngine {
                     input,
                     rejected,
                     parallel_safe,
+                    conflict_key: capability.and_then(|value| value.conflict_key.clone()),
                 });
             }
 
@@ -1365,12 +1460,23 @@ impl AgentEngine {
                         .and_then(Value::as_str)
                         .map(str::to_string);
                     let output = result.output;
+                    let result_block = output
+                        .get("artifact_id")
+                        .and_then(Value::as_str)
+                        .map(|artifact_id| crate::ToolResultBlock::Artifact {
+                            artifact_id: artifact_id.to_string(),
+                            preview: output
+                                .get("preview")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        })
+                        .unwrap_or(crate::ToolResultBlock::Json { value: output });
                     typed_tool_results.push(crate::AgentMessage::ToolResult(
                         crate::ToolResultMessage {
                             message_id: crate::MessageId::new(),
                             tool_call_id: crate::ToolCallId::from(item.id),
                             tool_name: item.name,
-                            content: vec![crate::ToolResultBlock::Json { value: output }],
+                            content: vec![result_block],
                             is_error: result.is_error,
                             code,
                         },
@@ -1378,18 +1484,19 @@ impl AgentEngine {
                 }
             }
 
+            let assistant_content = {
+                let mut content = Vec::new();
+                if !text_acc.is_empty() {
+                    content.push(crate::ContentBlock::Text {
+                        text: text_acc.clone(),
+                    });
+                }
+                content.extend(typed_tool_calls);
+                content
+            };
             typed_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
                 message_id: assistant_message_id.clone(),
-                content: {
-                    let mut content = Vec::new();
-                    if !text_acc.is_empty() {
-                        content.push(crate::ContentBlock::Text {
-                            text: text_acc.clone(),
-                        });
-                    }
-                    content.extend(typed_tool_calls);
-                    content
-                },
+                content: assistant_content.clone(),
                 stop_reason: Some(crate::StopReason::ToolUse),
             }));
             typed_messages.extend(typed_tool_results);
@@ -1400,6 +1507,11 @@ impl AgentEngine {
                     turn_id: turn_id.to_string(),
                     message_id: assistant_message_id.to_string(),
                     role: "assistant".into(),
+                    content: Some(json!({
+                        "message_id": assistant_message_id.to_string(),
+                        "role": "assistant",
+                        "content": assistant_content,
+                    })),
                 },
             )?;
             self.append_critical(
@@ -1450,19 +1562,30 @@ impl AgentEngine {
         // A batch is parallel only when every non-rejected call is explicitly
         // advertised ParallelSafe. One sequential/exclusive call serializes
         // the whole batch, preserving deterministic side-effect order.
-        let batch_parallel = prepared
-            .iter()
-            .all(|call| call.rejected.is_some() || call.parallel_safe);
+        let mut conflict_keys = std::collections::HashSet::new();
+        let batch_parallel = prepared.iter().all(|call| {
+            if call.rejected.is_some() {
+                return true;
+            }
+            if !call.parallel_safe {
+                return false;
+            }
+            call.conflict_key
+                .as_ref()
+                .map(|key| conflict_keys.insert(key.clone()))
+                .unwrap_or(true)
+        });
         let mut i = 0;
         while i < prepared.len() {
             if let Some(result) = prepared[i].rejected.clone() {
+                let keeps_progress = is_long_running_tool_result(&result);
                 out.push(ExecutedToolCall {
                     id: prepared[i].id.clone(),
                     name: prepared[i].name.clone(),
                     args: prepared[i].args.clone(),
                     result: Some(result.clone()),
                 });
-                self.append_critical(
+                if let Err(error) = self.append_critical(
                     run_id,
                     RunEventKind::ToolCallCompleted {
                         id: prepared[i].id.clone(),
@@ -1471,10 +1594,18 @@ impl AgentEngine {
                         is_error: true,
                         duration_ms: 0,
                     },
-                )?;
-                self.progress_sink
-                    .mark_tool_call_settled(&prepared[i].id)
-                    .await;
+                ) {
+                    self.cancel.cancel();
+                    self.progress_sink
+                        .mark_tool_call_settled(&prepared[i].id)
+                        .await;
+                    return Err(error);
+                }
+                if !keeps_progress {
+                    self.progress_sink
+                        .mark_tool_call_settled(&prepared[i].id)
+                        .await;
+                }
                 i += 1;
                 continue;
             }
@@ -1494,7 +1625,15 @@ impl AgentEngine {
                     .iter()
                     .map(|c| (c.id.clone(), c.input.clone()))
                     .collect();
-                let results = tools.execute_task_batch(task_inputs, &cancel).await;
+                let results = tools
+                    .execute_task_batch_with_progress(
+                        task_inputs,
+                        &cancel,
+                        self.progress_sink.clone(),
+                        Some(turn_id),
+                        Some(message_id),
+                    )
+                    .await;
                 for (idx, call) in batch.into_iter().enumerate() {
                     let result = results.get(idx).cloned().unwrap_or(ToolExecutionResult {
                         output: json!({"error": "missing task batch result"}),
@@ -1515,7 +1654,7 @@ impl AgentEngine {
                             input: json!({ "input": call.input, "output": result.output }),
                         })
                         .await;
-                    self.append_critical(
+                    if let Err(error) = self.append_critical(
                         run_id,
                         RunEventKind::ToolCallCompleted {
                             id: call.id.clone(),
@@ -1524,8 +1663,22 @@ impl AgentEngine {
                             is_error: result.is_error,
                             duration_ms: result.duration_ms,
                         },
-                    )?;
-                    self.progress_sink.mark_tool_call_settled(&call.id).await;
+                    ) {
+                        tools
+                            .mark_tool_call_uncertain(
+                                &call.id,
+                                &call.name,
+                                Some(turn_id),
+                                &call.input,
+                            )
+                            .await;
+                        self.cancel.cancel();
+                        self.progress_sink.mark_tool_call_settled(&call.id).await;
+                        return Err(error);
+                    }
+                    if !is_long_running_tool_result(&result) {
+                        self.progress_sink.mark_tool_call_settled(&call.id).await;
+                    }
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -1561,7 +1714,7 @@ impl AgentEngine {
                                     &call.name,
                                     call.input.clone(),
                                     &cancel,
-                                    self.progress_sink.as_ref(),
+                                    self.progress_sink.clone(),
                                 )
                                 .await;
                             (idx, result)
@@ -1599,7 +1752,7 @@ impl AgentEngine {
                             input: json!({ "input": call.input, "output": result.output }),
                         })
                         .await;
-                    self.append_critical(
+                    if let Err(error) = self.append_critical(
                         run_id,
                         RunEventKind::ToolCallCompleted {
                             id: call.id.clone(),
@@ -1608,8 +1761,22 @@ impl AgentEngine {
                             is_error: result.is_error,
                             duration_ms: result.duration_ms,
                         },
-                    )?;
-                    self.progress_sink.mark_tool_call_settled(&call.id).await;
+                    ) {
+                        tools
+                            .mark_tool_call_uncertain(
+                                &call.id,
+                                &call.name,
+                                Some(turn_id),
+                                &call.input,
+                            )
+                            .await;
+                        self.cancel.cancel();
+                        self.progress_sink.mark_tool_call_settled(&call.id).await;
+                        return Err(error);
+                    }
+                    if !is_long_running_tool_result(&result) {
+                        self.progress_sink.mark_tool_call_settled(&call.id).await;
+                    }
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -1630,7 +1797,7 @@ impl AgentEngine {
                     &call.name,
                     call.input.clone(),
                     &self.cancel,
-                    self.progress_sink.as_ref(),
+                    self.progress_sink.clone(),
                 )
                 .await;
             let post_event = if result.is_error {
@@ -1647,7 +1814,7 @@ impl AgentEngine {
                     input: json!({ "input": call.input, "output": result.output }),
                 })
                 .await;
-            self.append_critical(
+            if let Err(error) = self.append_critical(
                 run_id,
                 RunEventKind::ToolCallCompleted {
                     id: call.id.clone(),
@@ -1656,8 +1823,17 @@ impl AgentEngine {
                     is_error: result.is_error,
                     duration_ms: result.duration_ms,
                 },
-            )?;
-            self.progress_sink.mark_tool_call_settled(&call.id).await;
+            ) {
+                tools
+                    .mark_tool_call_uncertain(&call.id, &call.name, Some(turn_id), &call.input)
+                    .await;
+                self.cancel.cancel();
+                self.progress_sink.mark_tool_call_settled(&call.id).await;
+                return Err(error);
+            }
+            if !is_long_running_tool_result(&result) {
+                self.progress_sink.mark_tool_call_settled(&call.id).await;
+            }
             out.push(ExecutedToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),

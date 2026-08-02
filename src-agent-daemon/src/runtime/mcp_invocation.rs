@@ -8,6 +8,7 @@
 //! (`direct_mcp_call_disabled`).
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// Invoke a registered MCP tool with cancel + schema + trust checks.
@@ -20,6 +21,17 @@ pub async fn invoke_mcp_tool(
     arguments: Value,
     cancel: &CancellationToken,
     run_id: Option<&str>,
+) -> Result<Value, String> {
+    invoke_mcp_tool_with_progress(server_id, tool_name, arguments, cancel, run_id, None).await
+}
+
+pub async fn invoke_mcp_tool_with_progress(
+    server_id: &str,
+    tool_name: &str,
+    arguments: Value,
+    cancel: &CancellationToken,
+    run_id: Option<&str>,
+    progress: Option<Arc<dyn Fn(Value) + Send + Sync>>,
 ) -> Result<Value, String> {
     if cancel.is_cancelled() {
         audit(
@@ -78,8 +90,17 @@ pub async fn invoke_mcp_tool(
     let sid = server_id.to_string();
     let tname = tool_name.to_string();
     let args_for_transport = arguments.clone();
+    let cancel_for_transport = cancel.clone();
     let invoke = tokio::task::spawn_blocking(move || {
-        crate::mcp_runtime::global_mcp().call_tool(&sid, &tname, args_for_transport)
+        let cancel_callback: crate::mcp_runtime::McpCancelCallback =
+            std::sync::Arc::new(move || cancel_for_transport.is_cancelled());
+        crate::mcp_runtime::global_mcp().call_tool_with_progress_and_cancel(
+            &sid,
+            &tname,
+            args_for_transport,
+            progress,
+            Some(cancel_callback),
+        )
     });
     tokio::pin!(invoke);
     tokio::select! {

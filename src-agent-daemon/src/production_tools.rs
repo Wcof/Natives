@@ -7,9 +7,9 @@
 
 use agent_core::{
     default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime, EventSequencer, HookEvent,
-    HookRegistry, HookRequest, PermissionAggregate, PermissionManager, PermissionProfile,
-    SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolProgressSink, ToolProgressUpdate,
-    ToolSchema,
+    HookRegistry, HookRequest, NoopToolProgressSink, PermissionAggregate, PermissionManager,
+    PermissionProfile, SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolProgressSink,
+    ToolProgressUpdate, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
@@ -356,6 +356,7 @@ impl EngineToolRuntime for PermissionGatedTools {
 
     async fn list_tool_capabilities(&self) -> Vec<agent_core::ToolCapability> {
         self.ensure_plan_latch();
+        let gateway_capabilities = self.gateway.list_capabilities();
         model_visible_tool_schemas(
             &self.gateway,
             self.tool_allowlist.as_deref(),
@@ -365,21 +366,21 @@ impl EngineToolRuntime for PermissionGatedTools {
         )
         .into_iter()
         .map(|schema| {
-            let gateway_side_effect = self
-                .gateway
-                .get_tool(&schema.name)
-                .map(|tool| tool.side_effect);
-            let mode = match gateway_side_effect {
-                Some(capability_gateway::SideEffect::ReadOnly) => {
+            let gateway_capability = gateway_capabilities
+                .iter()
+                .find(|capability| capability.name == schema.name);
+            let mode = match gateway_capability.map(|capability| capability.execution_mode) {
+                Some(capability_gateway::ExecutionMode::ParallelSafe) => {
                     agent_core::ToolExecutionMode::ParallelSafe
                 }
-                Some(capability_gateway::SideEffect::Destructive)
-                | Some(capability_gateway::SideEffect::Process) => {
+                Some(capability_gateway::ExecutionMode::Exclusive) => {
                     agent_core::ToolExecutionMode::Exclusive
                 }
-                _ => agent_core::ToolExecutionMode::Sequential,
+                Some(capability_gateway::ExecutionMode::Sequential) | None => {
+                    agent_core::ToolExecutionMode::Sequential
+                }
             };
-            let side_effect = match gateway_side_effect {
+            let side_effect = match gateway_capability.map(|capability| capability.side_effect) {
                 Some(capability_gateway::SideEffect::ReadOnly) => {
                     agent_core::ToolSideEffect::ReadOnly
                 }
@@ -400,10 +401,112 @@ impl EngineToolRuntime for PermissionGatedTools {
                 schema: schema.input_schema,
                 execution_mode: mode,
                 side_effect,
-                conflict_key: None,
+                conflict_key: gateway_capability
+                    .and_then(|capability| capability.conflict_key.clone()),
             }
         })
         .collect()
+    }
+
+    async fn execute_task_batch_with_progress(
+        &self,
+        tasks: Vec<(String, Value)>,
+        cancel: &CancellationToken,
+        progress: Arc<dyn ToolProgressSink>,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
+    ) -> Vec<ToolExecutionResult> {
+        let mut results = Vec::with_capacity(tasks.len());
+        for (call_id, input) in tasks {
+            progress
+                .publish(ToolProgressUpdate {
+                    run_id: self.parent_run_id.clone(),
+                    tool_call_id: call_id.clone(),
+                    tool_name: "task".into(),
+                    stream: "subagent".into(),
+                    text: "starting child run".into(),
+                    final_update: false,
+                    turn_id: turn_id.map(str::to_string),
+                    message_id: message_id.map(str::to_string),
+                    progress_sequence: 0,
+                })
+                .await;
+            let result = self
+                .execute_tool_with_call_id_and_progress(
+                    "task",
+                    input,
+                    cancel,
+                    Some(&call_id),
+                    turn_id,
+                    message_id,
+                    progress.clone(),
+                )
+                .await;
+            let child_run_id = result
+                .output
+                .get("run_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if !result.is_error
+                && result.output.get("status").and_then(Value::as_str) == Some("running")
+            {
+                if let Some(child_run_id) = child_run_id {
+                    spawn_subagent_progress(
+                        self.events.clone(),
+                        self.parent_run_id.clone(),
+                        call_id.clone(),
+                        child_run_id,
+                        progress.clone(),
+                        turn_id.map(str::to_string),
+                        message_id.map(str::to_string),
+                    );
+                }
+            } else {
+                progress
+                    .publish(ToolProgressUpdate {
+                        run_id: self.parent_run_id.clone(),
+                        tool_call_id: call_id.clone(),
+                        tool_name: "task".into(),
+                        stream: "subagent".into(),
+                        text: if result.is_error {
+                            "failed"
+                        } else {
+                            "completed"
+                        }
+                        .into(),
+                        final_update: true,
+                        turn_id: turn_id.map(str::to_string),
+                        message_id: message_id.map(str::to_string),
+                        progress_sequence: 0,
+                    })
+                    .await;
+                progress.mark_tool_call_settled(&call_id).await;
+            }
+            results.push(result);
+            if cancel.is_cancelled() {
+                break;
+            }
+        }
+        results
+    }
+
+    async fn mark_tool_call_uncertain(
+        &self,
+        call_id: &str,
+        name: &str,
+        turn_id: Option<&str>,
+        input: &Value,
+    ) {
+        let _ = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "uncertain",
+            false,
+            turn_id,
+            input,
+        );
     }
 
     async fn execute_tool_with_progress(
@@ -458,7 +561,7 @@ impl EngineToolRuntime for PermissionGatedTools {
         name: &str,
         input: Value,
         cancel: &CancellationToken,
-        progress: &dyn ToolProgressSink,
+        progress: Arc<dyn ToolProgressSink>,
     ) -> ToolExecutionResult {
         progress
             .publish(ToolProgressUpdate {
@@ -481,26 +584,29 @@ impl EngineToolRuntime for PermissionGatedTools {
                 Some(call_id),
                 turn_id,
                 message_id,
+                progress.clone(),
             )
             .await;
-        progress
-            .publish(ToolProgressUpdate {
-                run_id: self.parent_run_id.clone(),
-                tool_call_id: call_id.to_string(),
-                tool_name: name.to_string(),
-                stream: "status".into(),
-                text: if result.is_error {
-                    "failed"
-                } else {
-                    "completed"
-                }
-                .into(),
-                final_update: true,
-                turn_id: turn_id.map(str::to_string),
-                message_id: message_id.map(str::to_string),
-                progress_sequence: 0,
-            })
-            .await;
+        if result.output.get("status").and_then(Value::as_str) != Some("running") {
+            progress
+                .publish(ToolProgressUpdate {
+                    run_id: self.parent_run_id.clone(),
+                    tool_call_id: call_id.to_string(),
+                    tool_name: name.to_string(),
+                    stream: "status".into(),
+                    text: if result.is_error {
+                        "failed"
+                    } else {
+                        "completed"
+                    }
+                    .into(),
+                    final_update: true,
+                    turn_id: turn_id.map(str::to_string),
+                    message_id: message_id.map(str::to_string),
+                    progress_sequence: 0,
+                })
+                .await;
+        }
         result
     }
 
@@ -521,8 +627,16 @@ impl EngineToolRuntime for PermissionGatedTools {
         cancel: &CancellationToken,
         call_id: Option<&str>,
     ) -> ToolExecutionResult {
-        self.execute_tool_with_call_id_and_progress(name, input, cancel, call_id, None, None)
-            .await
+        self.execute_tool_with_call_id_and_progress(
+            name,
+            input,
+            cancel,
+            call_id,
+            None,
+            None,
+            Arc::new(NoopToolProgressSink),
+        )
+        .await
     }
 
     async fn execute_tool_with_call_id_and_progress(
@@ -533,6 +647,7 @@ impl EngineToolRuntime for PermissionGatedTools {
         call_id: Option<&str>,
         turn_id: Option<&str>,
         message_id: Option<&str>,
+        progress: Arc<dyn ToolProgressSink>,
     ) -> ToolExecutionResult {
         if cancel.is_cancelled() {
             return ToolExecutionResult {
@@ -541,6 +656,10 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: 0,
             };
         }
+        let stream_tool_call_id = call_id
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Hard allowlist gate before permission / orchestration (Phase 0).
         if !self.tool_allowed(name) {
@@ -708,11 +827,35 @@ impl EngineToolRuntime for PermissionGatedTools {
                 capability_gateway::policy::PolicyResult::NeedsApproval(_)
             ) && profile_str != "readonly";
             if let Some(denied) = self
-                .await_tool_permission(name, &input, auto_approve_allowed)
+                .await_tool_permission(&stream_tool_call_id, name, &input, auto_approve_allowed)
                 .await
             {
                 return denied;
             }
+        }
+
+        // This is the first event that authorizes handler execution. It is
+        // emitted only after allowlist, project identity and permission gates;
+        // rejected calls never receive a started fact.
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::ToolCallStarted {
+                    id: stream_tool_call_id.clone(),
+                    name: name.to_string(),
+                },
+            )
+            .is_err()
+        {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": "tool start event could not be persisted"
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
         }
 
         if name == "skill" {
@@ -766,7 +909,17 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
         // MCP tools: always after permission gate (ExternalWrite / Network).
         if name == "mcp_call" || name.starts_with("mcp__") {
-            return self.execute_mcp_call(name, input, call_id).await;
+            return self
+                .execute_mcp_call(
+                    name,
+                    input,
+                    Some(&stream_tool_call_id),
+                    turn_id,
+                    message_id,
+                    cancel,
+                    progress.clone(),
+                )
+                .await;
         }
 
         let Some(_tool) = tool else {
@@ -797,21 +950,14 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
 
         let started = Instant::now();
-        // Stable id for tool_output_delta correlation (engine also emits its own
-        // tool_call_* ids; UI merges by tool_call_id when present on deltas).
-        let stream_tool_call_id = call_id
-            .filter(|id| !id.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
         // Create tool call context
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
                 .await
-                .unwrap_or_else(CancellationToken::new)
+                .unwrap_or_else(|| cancel.clone())
         } else {
-            CancellationToken::new()
+            cancel.clone()
         };
         let live_settled = Arc::new(AtomicBool::new(false));
         let live_forwarder = if name == "run_terminal" {
@@ -870,6 +1016,8 @@ impl EngineToolRuntime for PermissionGatedTools {
             .await
         {
             Ok(out) => {
+                let mut output = out.result;
+                attach_tool_output_artifact(&self.parent_run_id, &stream_tool_call_id, &mut output);
                 // Side-effect ledger for restore coverage honesty.
                 let cat = crate::side_effect_ledger::category_for_tool(name);
                 let reversible = cat == "workspace_file";
@@ -888,23 +1036,20 @@ impl EngineToolRuntime for PermissionGatedTools {
                         &self.events,
                         &self.parent_run_id,
                         &stream_tool_call_id,
-                        &out.result,
+                        &output,
                     );
                     // Background shell tasks: surface on Activity task list.
-                    if out
-                        .result
+                    if output
                         .get("background")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
                     {
-                        let task_id = out
-                            .result
+                        let task_id = output
                             .get("task_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or(&stream_tool_call_id)
                             .to_string();
-                        let label = out
-                            .result
+                        let label = output
                             .get("display_command")
                             .and_then(|v| v.as_str())
                             .unwrap_or("terminal")
@@ -923,8 +1068,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                                 TaskRecord {
                                     run_id: self.parent_run_id.clone(),
                                     status: "running".into(),
-                                    output: out
-                                        .result
+                                    output: output
                                         .get("output")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
@@ -975,13 +1119,13 @@ impl EngineToolRuntime for PermissionGatedTools {
                             tool_name: Some(name.to_string()),
                             input: serde_json::json!({
                                 "input": input,
-                                "output": out.result.clone(),
+                                "output": output.clone(),
                             }),
                         })
                         .await;
                 }
                 ToolExecutionResult {
-                    output: out.result,
+                    output,
                     is_error: false,
                     duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
                 }
@@ -1020,6 +1164,113 @@ impl EngineToolRuntime for PermissionGatedTools {
         result
     }
 }
+
+fn spawn_subagent_progress(
+    events: EventSequencer,
+    parent_run_id: String,
+    tool_call_id: String,
+    child_run_id: String,
+    progress: Arc<dyn ToolProgressSink>,
+    turn_id: Option<String>,
+    message_id: Option<String>,
+) {
+    tokio::spawn(async move {
+        let mut cursor = 0u64;
+        let mut pending = String::new();
+        let mut last_emit = Instant::now() - Duration::from_millis(50);
+        for _ in 0..3_600 {
+            for event in events.replay_after(&child_run_id, cursor) {
+                cursor = cursor.max(event.effective_run_sequence());
+                match event.payload {
+                    RunEventKind::TextDelta { text } | RunEventKind::ReasoningDelta { text } => {
+                        pending.push_str(&text)
+                    }
+                    RunEventKind::Progress { message, .. } => {
+                        pending.push_str(&message);
+                    }
+                    _ => {}
+                }
+            }
+            if !pending.is_empty() && last_emit.elapsed() >= Duration::from_millis(50) {
+                let text = std::mem::take(&mut pending);
+                progress
+                    .publish(ToolProgressUpdate {
+                        run_id: parent_run_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: "task".into(),
+                        stream: "subagent".into(),
+                        text,
+                        final_update: false,
+                        turn_id: turn_id.clone(),
+                        message_id: message_id.clone(),
+                        progress_sequence: 0,
+                    })
+                    .await;
+                last_emit = Instant::now();
+            }
+            let Some(run) = crate::global_run_manager().get_run(&child_run_id) else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            if run.status.is_terminal() {
+                if !pending.is_empty() {
+                    progress
+                        .publish(ToolProgressUpdate {
+                            run_id: parent_run_id.clone(),
+                            tool_call_id: tool_call_id.clone(),
+                            tool_name: "task".into(),
+                            stream: "subagent".into(),
+                            text: std::mem::take(&mut pending),
+                            final_update: false,
+                            turn_id: turn_id.clone(),
+                            message_id: message_id.clone(),
+                            progress_sequence: 0,
+                        })
+                        .await;
+                }
+                progress
+                    .publish(ToolProgressUpdate {
+                        run_id: parent_run_id,
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: "task".into(),
+                        stream: "subagent".into(),
+                        text: run.status.as_str().to_string(),
+                        final_update: true,
+                        turn_id,
+                        message_id,
+                        progress_sequence: 0,
+                    })
+                    .await;
+                progress.mark_tool_call_settled(&tool_call_id).await;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+}
+
+fn attach_tool_output_artifact(run_id: &str, call_id: &str, output: &mut Value) {
+    const ARTIFACT_THRESHOLD: usize = 16 * 1024;
+    let serialized = output.to_string();
+    if serialized.len() < ARTIFACT_THRESHOLD {
+        return;
+    }
+    let preview: String = serialized.chars().take(4_000).collect();
+    if let Ok(meta) = crate::artifact_store::global_artifacts().put(
+        run_id,
+        &format!("tool-{call_id}.json"),
+        serialized.as_bytes(),
+        Some("application/json".into()),
+    ) {
+        *output = serde_json::json!({
+            "artifact_id": meta.id,
+            "preview": preview,
+            "truncated": true,
+            "bytes": serialized.len(),
+        });
+    }
+}
+
 /// Emit batched terminal stdout/stderr as ToolOutputDelta (≤8KB chunks, ≤1MB total).
 fn emit_terminal_output_deltas(
     events: &EventSequencer,
@@ -1257,6 +1508,7 @@ impl PermissionGatedTools {
     /// skip the prompt. Hooks never widen it.
     async fn await_tool_permission(
         &self,
+        tool_call_id: &str,
         name: &str,
         input: &Value,
         auto_approve_allowed: bool,
@@ -1295,7 +1547,6 @@ impl PermissionGatedTools {
             "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
             _ => PermissionProfile::ConfirmEach,
         };
-        let tool_call_id = uuid::Uuid::new_v4().to_string();
         match hook_permission_gate(
             HookRegistry::aggregate_permission(&hook_outcomes),
             profile,
@@ -1328,7 +1579,7 @@ impl PermissionGatedTools {
                     .append_checked(
                         &self.parent_run_id,
                         RunEventKind::PermissionRequested {
-                            tool_call_id: tool_call_id.clone(),
+                            tool_call_id: tool_call_id.to_string(),
                             tool_name: name.to_string(),
                             reason: format!("Approve tool `{name}`"),
                             permission_id: permission_id.clone(),
@@ -1410,7 +1661,7 @@ impl PermissionGatedTools {
             .append_checked(
                 &self.parent_run_id,
                 RunEventKind::PermissionRequested {
-                    tool_call_id: tool_call_id.clone(),
+                    tool_call_id: tool_call_id.to_string(),
                     tool_name: name.to_string(),
                     reason: format!("Approve tool `{name}`"),
                     permission_id: permission_id.clone(),
@@ -1845,6 +2096,10 @@ impl PermissionGatedTools {
         name: &str,
         input: Value,
         core_call_id: Option<&str>,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
+        parent_cancel: &CancellationToken,
+        progress: Arc<dyn ToolProgressSink>,
     ) -> ToolExecutionResult {
         let started = Instant::now();
         let (server_id, tool_name, arguments) = if name == "mcp_call" {
@@ -1892,16 +2147,58 @@ impl PermissionGatedTools {
             rt.execution
                 .token(&self.parent_run_id)
                 .await
-                .unwrap_or_else(CancellationToken::new)
+                .unwrap_or_else(|| parent_cancel.clone())
         } else {
-            CancellationToken::new()
+            parent_cancel.clone()
         };
-        match crate::runtime::mcp_invocation::invoke_mcp_tool(
+        let progress_callback: Arc<dyn Fn(Value) + Send + Sync> = {
+            let progress = progress.clone();
+            let run_id = self.parent_run_id.clone();
+            let call_id = call_id.clone();
+            let turn_id = turn_id.map(str::to_string);
+            let message_id = message_id.map(str::to_string);
+            Arc::new(move |frame: Value| {
+                let text = frame
+                    .get("params")
+                    .and_then(|params| params.get("message").or_else(|| params.get("progress")))
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| value.to_string())
+                    })
+                    .unwrap_or_else(|| frame.to_string());
+                let progress = progress.clone();
+                let run_id = run_id.clone();
+                let call_id = call_id.clone();
+                let turn_id = turn_id.clone();
+                let message_id = message_id.clone();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        progress
+                            .publish(ToolProgressUpdate {
+                                run_id,
+                                tool_call_id: call_id,
+                                tool_name: "mcp_call".into(),
+                                stream: "mcp".into(),
+                                text,
+                                final_update: false,
+                                turn_id,
+                                message_id,
+                                progress_sequence: 0,
+                            })
+                            .await;
+                    });
+                }
+            })
+        };
+        match crate::runtime::mcp_invocation::invoke_mcp_tool_with_progress(
             &server_id,
             &tool_name,
             arguments,
             &cancel,
             Some(&self.parent_run_id),
+            Some(progress_callback),
         )
         .await
         {

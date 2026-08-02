@@ -234,6 +234,24 @@ pub enum SideEffect {
     Process,
 }
 
+/// Scheduling declaration owned by the Gateway. Core consumes this metadata
+/// but never infers concurrency from tool names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionMode {
+    ParallelSafe,
+    Sequential,
+    Exclusive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCapability {
+    pub name: String,
+    pub schema: serde_json::Value,
+    pub execution_mode: ExecutionMode,
+    pub side_effect: SideEffect,
+    pub conflict_key: Option<String>,
+}
+
 /// Permission class for a tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionClass {
@@ -319,6 +337,23 @@ impl CapabilityGateway {
         self.tools.iter().collect()
     }
 
+    pub fn list_capabilities(&self) -> Vec<ToolCapability> {
+        self.tools
+            .iter()
+            .map(|tool| ToolCapability {
+                name: tool.name.to_string(),
+                schema: tool.schema.clone(),
+                execution_mode: match tool.side_effect {
+                    SideEffect::ReadOnly => ExecutionMode::ParallelSafe,
+                    SideEffect::Destructive | SideEffect::Process => ExecutionMode::Exclusive,
+                    SideEffect::Write | SideEffect::Network => ExecutionMode::Sequential,
+                },
+                side_effect: tool.side_effect,
+                conflict_key: None,
+            })
+            .collect()
+    }
+
     /// Register all built-in tools.
     pub fn register_builtins(&mut self) {
         let builtins = tools::builtin_tools();
@@ -352,23 +387,72 @@ impl CapabilityGateway {
         let tool_cancel = context.cancel.child_token();
         let mut tool_context = context.clone();
         tool_context.cancel = tool_cancel.clone();
+        // Keep the handler alive long enough to observe cancellation. Dropping
+        // the future at the select boundary would skip handler-owned cleanup
+        // (child wait/reap, network close, MCP request disposal).
+        let handler = tool.handler.clone();
+        let handler_task = tokio::spawn(async move { handler.execute(input, &tool_context).await });
+        let mut handler_task = Box::pin(handler_task);
+        const CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
         let result = tokio::select! {
-            result = tool.handler.execute(input, &tool_context) => result,
-            _ = tokio::time::sleep(timeout) => {
-                tool_cancel.cancel();
-                Err(ToolError {
-                    code: "timeout".into(),
-                    message: format!("tool `{name}` exceeded {}ms", tool.timeout_ms),
+            joined = &mut handler_task => joined
+                .map_err(|error| ToolError {
+                    code: "handler_error".into(),
+                    message: format!("tool `{name}` task failed: {error}"),
                     retryable: true,
                 })
+                .and_then(|result| result),
+            _ = tokio::time::sleep(timeout) => {
+                tool_cancel.cancel();
+                match tokio::time::timeout(CLEANUP_GRACE, &mut handler_task).await {
+                    Ok(Ok(_)) => Err(ToolError {
+                        code: "timeout".into(),
+                        message: format!("tool `{name}` exceeded {}ms", tool.timeout_ms),
+                        retryable: true,
+                    }),
+                    Ok(Err(error)) => Err(ToolError {
+                        code: "cleanup_failed".into(),
+                        message: format!("tool `{name}` cleanup task failed: {error}"),
+                        retryable: false,
+                    }),
+                    Err(_) => {
+                        // The handler ignored the cancellation token; abort the
+                        // task so the wrapper cannot leak it past the call.
+                        // `cleanup_failed` keeps the uncertain resource visible.
+                        //
+                        // ponytail: fixed grace window; handlers that need a
+                        // longer shutdown must expose their own bounded cleanup.
+                        handler_task.as_mut().abort();
+                        Err(ToolError {
+                            code: "cleanup_failed".into(),
+                            message: format!("tool `{name}` did not stop after timeout"),
+                            retryable: false,
+                        })
+                    }
+                }
             },
             _ = context.cancel.cancelled() => {
                 tool_cancel.cancel();
-                Err(ToolError {
-                    code: "cancelled".into(),
-                    message: format!("tool `{name}` cancelled"),
-                    retryable: true,
-                })
+                match tokio::time::timeout(CLEANUP_GRACE, &mut handler_task).await {
+                    Ok(Ok(_)) => Err(ToolError {
+                        code: "cancelled".into(),
+                        message: format!("tool `{name}` cancelled"),
+                        retryable: true,
+                    }),
+                    Ok(Err(error)) => Err(ToolError {
+                        code: "cleanup_failed".into(),
+                        message: format!("tool `{name}` cleanup task failed: {error}"),
+                        retryable: false,
+                    }),
+                    Err(_) => {
+                        handler_task.as_mut().abort();
+                        Err(ToolError {
+                            code: "cleanup_failed".into(),
+                            message: format!("tool `{name}` did not stop after cancellation"),
+                            retryable: false,
+                        })
+                    }
+                }
             },
         }?;
 
@@ -698,14 +782,20 @@ mod p0_tests {
             async fn execute(
                 &self,
                 _: serde_json::Value,
-                _: &ToolCallContext,
+                context: &ToolCallContext,
             ) -> Result<ToolOutput, ToolError> {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                Ok(ToolOutput {
-                    result: serde_json::json!({}),
-                    truncated: false,
-                    duration_ms: 0,
-                })
+                tokio::select! {
+                    _ = context.cancel.cancelled() => Err(ToolError {
+                        code: "cancelled".into(),
+                        message: "fake handler observed cancellation".into(),
+                        retryable: false,
+                    }),
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => Ok(ToolOutput {
+                        result: serde_json::json!({}),
+                        truncated: false,
+                        duration_ms: 0,
+                    }),
+                }
             }
         }
         let cancel = CancellationToken::new();
