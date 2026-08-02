@@ -116,6 +116,13 @@
 - 代码证据：`EngineInputReceiver::ack` 返回 `Result`；`DurableInputReceiver::ack` 调用 `persist_queued_input_and_ack(..., turn_id)`；`AgentEngine::drain_inputs` 在修改 typed transcript 前等待 ack 成功。
 - 当前行为：queue lease、typed user message 与 consumed 状态在同一事务完成；数据库故障不会静默丢失 steering/follow-up。
 
+## Provider typed transcript 生产边界
+
+- 修复状态：已接生产；旧 `EngineMessage` 只保留 legacy/fixture 兼容边界。
+- 代码证据：`crates/agent-core/src/engine.rs` 的 `ProviderTurnRequest`；`src-agent-daemon/src/production.rs` 的 `RealProvider::stream_turn` 与 `agent_message_to_history`；`src-agent-daemon/src/routing.rs` 的 `RoutedProvider::stream_turn`、`Sub2ApiPoolProvider::stream_turn`。
+- 当前行为：生产 Core 主循环调用 `stream_turn`，daemon 在 provider-neutral `HistoryMessage` 边界保留 Thinking、Image、ToolCall、ToolResult identity；不再通过 trait 默认实现重建 `EngineMessage`。
+- 验证：`typed_boundary_preserves_blocks_and_tool_identity` 通过；完整 workspace/live provider 验证仍按报告标记未完成。
+
 ## Side-effect Ledger 开始/完成事实
 
 - 严重等级：P1

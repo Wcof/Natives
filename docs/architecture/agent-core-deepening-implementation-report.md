@@ -105,3 +105,9 @@ Provider stop reason family 映射测试。
 - HTTP/SSE MCP 逐行读取 JSON/SSE 帧并转发 progress，cancel/timeout 会 kill、wait、join；Retry/Continue 的 resume plan 在 detached start 成功后才结算。
 
 本轮仍未声称完成真实外部 fixture、Renderer recovery 的专用 UI 文案、workspace/frontend 全量测试或后续 TurnPolicy/Scheduler 重构。
+
+## 10. Provider typed seam 收口（`b2ab95d3`）
+
+- 生产 `RealProvider`、`RoutedProvider`、`Sub2ApiPoolProvider` 显式实现 `stream_turn`，直接接收 Core 的 `ProviderTurnRequest`。
+- typed transcript 只在 provider-neutral `HistoryMessage` 边界转换；`EngineMessage` 仅保留旧数据库/fixture 兼容路径。
+- 增加 Thinking/Image/ToolCall/ToolResult identity 回归测试，并修正 assistant fallback Thinking 内容。

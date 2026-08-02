@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`8bed49a2`
+- 结束 Commit：`b2ab95d3`
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -13,7 +13,7 @@
 
 | 能力 | 当前生产证据 | 状态 |
 |---|---|---|
-| Typed Message / Turn | `agent-core/src/engine.rs` 的 `run_with_typed_messages` 直接驱动生产 transcript；旧 `EngineMessage` 只在入口一次性转换 | 已接生产；Core 主链不再按历史是否为空切换第二套 Loop |
+| Typed Message / Turn | `agent-core/src/engine.rs` 的 `run_with_typed_messages` 直接驱动生产 transcript；`RealProvider`、`RoutedProvider`、`Sub2ApiPoolProvider` 显式实现 `stream_turn(ProviderTurnRequest, ...)`，只在 provider-neutral `HistoryMessage` 边界转换；旧 `EngineMessage` 只在 legacy/fixture 入口使用 | 已接生产；Core 主链不再按历史是否为空切换第二套 Loop |
 | Context Snapshot | migration 028 + `persist_context_snapshots_from_events` 写入 conversation/turn/source revision 与完整 typed `snapshot_json`；生产启动以最新 snapshot 为基线，并按 `input_message_ids` 追加压缩后新写入的完整消息 | 已接生产 |
 | Capability Scheduler | `PermissionGatedTools::list_tool_capabilities` 从 Gateway side-effect 映射模式，Core 保持调度 | 已接生产 |
 | Progress | Shell `ToolCallContext.progress`、MCP stdio/HTTP/SSE progress notification、Sub Agent child event 都进入 `DaemonToolProgressSink`；sink 有序号、8KiB/250ms 合并、settled late-drop | 已接生产；真实 SSE fixture 仍未运行 |
@@ -61,6 +61,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 | `rtk cargo check -p agent-core -p capability-gateway -p provider-adapters -p natives-agent-daemon` | 通过（本轮接线后） |
 | `rtk cargo fmt --check` | 通过（本轮格式化后） |
 | `rtk cargo test -p capability-gateway cancellation_wins_over_blocking_handler -- --test-threads=2` | 通过：1 |
+| `CARGO_TARGET_DIR=... cargo test -p natives-agent-daemon typed_boundary_preserves_blocks_and_tool_identity -- --nocapture --test-threads=2` | 通过：1；验证 typed provider seam 保留 Thinking/Image/ToolCall/ToolResult identity |
 | `rtk npm run verify:native-engine` | 失败：静态 audit OK；daemon lib 326 passed/2 failed，live e2e 0 passed/1 failed；frontend commands因缺少 `tsx`/`tsc` 失败 |
 | `rtk npm run typecheck` | 未执行：worktree 无 `node_modules/.bin/tsc`，命令退出 127 |
 | `rtk cargo test --workspace` | 未运行，受共享资源策略限制 |
@@ -108,3 +109,9 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - `DaemonToolProgressSink` 由 50ms 丢弃改为 8KiB/250ms 合并；settled call 的迟到更新丢弃。
 - `ProjectionRecovery` 由 adapter 暴露并写入 workspace reducer；gap 与缺失权威终态保持 Renderer 本地状态，不产生伪造 Daemon Event。
 - 资源记录：共享 target `/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`；本轮受控 `cargo check` 2 次、精准 `cargo test` 1 次；最大观测 shared target 2.7 GiB、可用磁盘约 70 GiB；未执行 `cargo clean`，未主动终止任务进程。
+
+## 11. Typed Provider 生产接线（`b2ab95d3`）
+
+- `RealProvider`、`RoutedProvider` 和 `Sub2ApiPoolProvider` 现在都显式覆盖 `EngineProvider::stream_turn`；生产 `ProviderTurnRequest` 不再落入 trait 默认的 typed→`EngineMessage` 兼容转换。
+- Daemon 只在 provider-neutral `HistoryMessage` 边界把 typed blocks 转成 adapter 输入；旧 `EngineMessage` helper 仍保留给 legacy/fixture 路径。
+- 修复 legacy assistant turn fallback 将 Thinking block 错写成普通文本的问题。

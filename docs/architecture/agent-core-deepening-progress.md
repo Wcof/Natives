@@ -20,13 +20,14 @@
 | F. Event Fail Closed | 已接生产（关键事实） | 5734ef5f | cargo check | 关键事实使用 checked；ledger start/complete persistence failure 生成配对错误结果并停止 Engine；delta/progress 仍可丢弃 |
 | G. Lineage 与 Resume | 已接生产 | 5734ef5f | side-effect guard | retry/continue 记录 source/checkpoint/turn lineage；resume_plan 在 detached start 后结算；continue 只从 durable checkpoint 启动独立 Run |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
-| I. 最终验证 | 部分完成 | 8bed49a2 | controlled check + precise test | 目标 crate check、fmt、git diff、长度截断精测通过；workspace/native live/frontend 仍受既有环境限制 |
+| I. 最终验证 | 部分完成 | b2ab95d3 | controlled check + precise test | 目标 crate check、typed provider seam 精测、fmt、git diff 通过；workspace/native live/frontend 仍受既有环境限制 |
 
 ## 阻塞项
 
 - 资源策略限制 Cargo 次数：共享 target `/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`，jobs=2、incremental=0；本轮未重复 workspace test。
 - 前端校验与 live provider/shell/HTTP-MCP fixture 尚未在本 Worktree 验证；stdio/HTTP MCP 完成代码级接线但无真实外部 fixture。
 - `start_with_seams_loads_daemon_conversation_history` 独立运行无输出超过两分钟后中止，保持未验证状态。
+- `b2ab95d3` 将 `ProviderTurnRequest` 直接接入三个生产 provider 实现；旧 `EngineMessage` 转换保留为 legacy/fixture 兼容边界，并补 typed block identity 精测。
 
 ## 设计偏差
 
