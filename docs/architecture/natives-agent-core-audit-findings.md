@@ -108,6 +108,7 @@
 - 代码证据：`run_manager.rs::retry`、`continue_run`；`conversation_store.rs::fork`；`assistant_protocol::v2::RunV2` lineage 字段；`run.continue` RPC dispatch。
 - 当前行为：Retry/Continue 都创建独立 Run 并记录 source/checkpoint/turn lineage；Continue 拒绝无 durable checkpoint、缺 snapshot 或 uncertain side effect；Fork 复制 typed message/block、重映射 parent IDs 并重置权限 profile 为 `ask`；Replay 只读事件，不重跑工具。
 - 风险：Continue/Fork 的端到端 daemon fixture 尚未在本轮运行；`resume_plan` 已改为先 `approved`，detached start 成功后再结算 `executed`，仍需端到端验证。
+- 新增精准证据：`fork_copies_typed_transcript_with_new_message_ids_and_ask_profile` 与 `continue_creates_lineage_from_durable_checkpoint` 通过；前者验证新分支 transcript/权限隔离，后者验证 checkpoint/snapshot lineage 与 resume plan 结算。
 
 ## Prompt Queue Ack 与 typed transcript 一致性
 
