@@ -170,3 +170,9 @@ Provider stop reason family 映射测试。
 - `prompt_queue_store` 的 send-now、idle start、terminal drain 对 sent UPDATE、row DELETE 和 conversation lookup 做严格检查，并在生产 Run 结束时传播 queue settlement 错误。
 - Retry 的 checkpoint lookup、restore preview 的 side-effect coverage、legacy seam 的 history/replay/cancel-token 注册均改为 fail closed。
 - 精确验证：`send_now_cancels_active_and_starts_new_run` 通过；strict warning-as-error check 通过。
+
+## 19. 当前提交收口（`9f04d18e`）
+
+- `RunManager::try_new_with_store`、Prompt Queue dispatch/terminal settlement、Retry/Restore 查询统一传播恢复与持久化错误；不再以空队列、缺省 conversation 或 `unknown` coverage 继续执行。
+- Mechanical compaction snapshot 采用可重放 typed system message 形状，`load_active_context_snapshot` 回归测试验证摘要可重新进入 Agent history。
+- 本地 worktree 已提交且干净；严格 warning-as-error check、fmt 和 diff check 通过。workspace/native verifier、前端全量套件和真实外部 fixture 仍按资源策略保持未重复运行。

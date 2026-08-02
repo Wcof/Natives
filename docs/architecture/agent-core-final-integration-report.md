@@ -213,3 +213,9 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - Prompt Queue 不再吞掉 sent UPDATE/DELETE 或缺失 conversation/provider；Run terminal settlement 失败会返回到 RunManager 的失败结算路径。
 - Retry/Restore 的 checkpoint 与 side-effect coverage 读取改为错误传播，不再用空/unknown 结果掩盖数据库损坏。
 - `send_now_cancels_active_and_starts_new_run` 和最新 strict check 通过；完整外部与全量验证仍未宣称通过。
+
+## 25. 当前提交收口（`9f04d18e`）
+
+- 启动恢复、Prompt Queue dispatch/terminal settlement、Retry/Restore 查询均保持 fail-closed；SQL 更新必须命中预期行数，数据库错误不会被折叠为空状态。
+- Active Context 的 mechanical compaction snapshot 现在以可重放的 typed system message 数组持久化，并有 daemon 回归测试验证压缩摘要重新进入历史。
+- 最新受控 `RUSTFLAGS=-Dwarnings cargo check`、`cargo fmt --check`、`git diff --check` 通过；工作区干净。受资源上限限制，workspace/native verifier/frontend 全量套件与真实外部 fixture 未重复运行，因此不宣称全量绿。
