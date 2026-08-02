@@ -562,7 +562,7 @@ impl CapabilityGateway {
 
 /// Small, dependency-free Draft-07 subset used by the built-in manifests.
 /// It covers the executable boundary (`type`, `properties`, `required`,
-/// `additionalProperties`, `items`, `enum`, and numeric bounds) without
+/// `additionalProperties`, `items`, `enum`, collection bounds, and numeric bounds) without
 /// duplicating a full JSON Schema engine in the Agent Core.
 fn validate_schema(schema: &serde_json::Value, value: &serde_json::Value) -> Result<(), String> {
     if let Some(types) = schema.get("type") {
@@ -614,6 +614,34 @@ fn validate_schema(schema: &serde_json::Value, value: &serde_json::Value) -> Res
         if let Some(array) = value.as_array() {
             for (index, item) in array.iter().enumerate() {
                 validate_schema(items, item).map_err(|error| format!("item {index}: {error}"))?;
+            }
+        }
+    }
+    if let Some(min_items) = schema.get("minItems").and_then(|v| v.as_u64()) {
+        if let Some(array) = value.as_array() {
+            if array.len() < min_items as usize {
+                return Err(format!("array has fewer than {min_items} items"));
+            }
+        }
+    }
+    if let Some(max_items) = schema.get("maxItems").and_then(|v| v.as_u64()) {
+        if let Some(array) = value.as_array() {
+            if array.len() > max_items as usize {
+                return Err(format!("array has more than {max_items} items"));
+            }
+        }
+    }
+    if let Some(min_length) = schema.get("minLength").and_then(|v| v.as_u64()) {
+        if let Some(string) = value.as_str() {
+            if string.chars().count() < min_length as usize {
+                return Err(format!("string has fewer than {min_length} characters"));
+            }
+        }
+    }
+    if let Some(max_length) = schema.get("maxLength").and_then(|v| v.as_u64()) {
+        if let Some(string) = value.as_str() {
+            if string.chars().count() > max_length as usize {
+                return Err(format!("string has more than {max_length} characters"));
             }
         }
     }
@@ -687,6 +715,41 @@ fn validate_schema_definition(schema: &serde_json::Value) -> Result<(), ToolErro
     }
     if let Some(items) = object.get("items") {
         validate_schema_definition(items)?;
+    }
+    for keyword in ["minItems", "maxItems", "minLength", "maxLength"] {
+        if let Some(value) = object.get(keyword) {
+            if value.as_u64().is_none() {
+                return Err(ToolError {
+                    code: "invalid_schema".into(),
+                    message: format!("{keyword} must be a non-negative integer"),
+                    retryable: false,
+                });
+            }
+        }
+    }
+    if let (Some(min), Some(max)) = (
+        object.get("minItems").and_then(|value| value.as_u64()),
+        object.get("maxItems").and_then(|value| value.as_u64()),
+    ) {
+        if min > max {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "minItems cannot exceed maxItems".into(),
+                retryable: false,
+            });
+        }
+    }
+    if let (Some(min), Some(max)) = (
+        object.get("minLength").and_then(|value| value.as_u64()),
+        object.get("maxLength").and_then(|value| value.as_u64()),
+    ) {
+        if min > max {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "minLength cannot exceed maxLength".into(),
+                retryable: false,
+            });
+        }
     }
     Ok(())
 }
@@ -784,6 +847,40 @@ mod p0_tests {
             .execute(
                 "p0_test",
                 serde_json::json!({"path": 7}),
+                &context(CancellationToken::new()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn array_bounds_are_enforced_before_handler() {
+        let handler = Arc::new(CountingHandler(AtomicUsize::new(0)));
+        let mut gateway = CapabilityGateway::new();
+        gateway.register(Tool {
+            name: "bounded_array",
+            description: "test",
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "items": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}}
+                },
+                "required": ["items"]
+            }),
+            side_effect: SideEffect::ReadOnly,
+            permission_class: PermissionClass::AlwaysAllowed,
+            path_scope: PathScope::Any,
+            timeout_ms: 1000,
+            output_limit: 4096,
+            cancellable: true,
+            handler: handler.clone(),
+        });
+        let error = gateway
+            .execute(
+                "bounded_array",
+                serde_json::json!({"items": []}),
                 &context(CancellationToken::new()),
             )
             .await

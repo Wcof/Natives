@@ -446,7 +446,7 @@
 - 代码证据：`EngineSafePointReceiver`、`DurableSafePointReceiver`、`on_safe_point_checked`
 - 原始行为：生产 Engine 直接调用内存 SessionCoordinator；safe-point claim 后 snapshot 失败可能丢失 durable interjection。
 - 当前行为：生产路径先经 checked receiver；snapshot 失败恢复 interjection 并返回 Engine 错误，兼容 wrapper 仅保留给旧 harness 调用。
-- 测试方式：`checked_safe_point_persists_interjection_consumption` 通过；持久化 fault-injection 仍待补充。
+- 测试方式：`durable_steering_ack_removes_live_queue_item` 通过；持久化 fault-injection 仍待补充。
 
 ## Active Run 可被 Retry 复制
 
@@ -487,3 +487,33 @@
 - 当前行为：所有 typed block 严格返回结构错误；tool call identity 与 arguments 必须有效 JSON；附件恢复为 provider-safe marker；snapshot 采用同等 JSON 校验。
 - 影响：损坏历史不会被当作可执行上下文，合法附件不会在恢复时使整段对话丢失。
 - 测试方式：`typed_loader_handles_attachments_and_rejects_malformed_tool_calls`、`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过；真实损坏数据库 fault-injection 仍待运行。
+
+## Provider 摘要/Hook 绕过 typed request seam
+
+- 严重等级：P1
+- 所属模块：`crates/agent-core/src/engine.rs`、`src-agent-daemon/src/production_hooks.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`AgentEngine::stream_summary_text`、`NativePromptHook::handle_outcome` 均构造 `ProviderTurnRequest` 并调用 `EngineProvider::stream_turn`。
+- 原始行为：摘要和 Native prompt hook 使用 legacy `stream_with_context`，生产 Provider entry 不唯一。
+- 当前行为：两类内部 Provider round trip 也携带 typed messages、模型、system prompt、真实 Run ID 和 attempt。
+- 测试方式：`compaction_requests_model_summary_and_injects_it_into_history` 通过；Daemon crate check 通过。
+
+## Durable steering ack 后遗留 live actor queue item
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/prompt_queue_store.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`interject` 写入 `prompt_queue(kind='steering')`；`DurableInputReceiver::ack` 在事务成功后调用 `SessionCoordinator::remove` 并持久化 actor snapshot。
+- 原始行为：UI interject 使用 actor pending slot，或 durable ack 后仍保留 actor queue item，terminal drain 可能重复启动已消费输入。
+- 当前行为：interject 统一走 SQLite Lease/Ack，ack 后 live actor 与 durable status 同步收敛；`DrainMode::One/All` 由 row 的 `drain_mode` 约束。
+- 测试方式：`durable_steering_ack_removes_live_queue_item` 通过。
+
+## Built-in Schema collection bounds 未执行
+
+- 严重等级：P1
+- 所属模块：`crates/capability-gateway/src/lib.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`validate_schema` 执行 `minItems`、`maxItems`、`minLength`、`maxLength` 后才进入 Handler。
+- 原始行为：Plan 等广告 Schema 的 collection bounds 只作为提示存在，最终执行校验可能放行越界参数。
+- 当前行为：越界输入返回 `invalid_arguments`，Handler invocation 保持为 0。
+- 测试方式：`array_bounds_are_enforced_before_handler` 通过；完整坏 manifest 启动 fault-injection 仍待补充。

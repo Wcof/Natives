@@ -101,22 +101,33 @@ impl EngineInputReceiver for DurableInputReceiver {
         let mut conn = store.conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut items = Vec::new();
-        let queued = {
+        let mut queued = {
             let mut stmt = tx
                 .prepare(
-                    "SELECT id, content FROM prompt_queue
+                    "SELECT id, content, COALESCE(drain_mode, 'all') FROM prompt_queue
                  WHERE conversation_id = ?1 AND kind = ?2 AND status = 'queued'
                  ORDER BY position, created_at LIMIT ?3",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![self.conversation_id, kind, limit], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
                 })
                 .map_err(|e| e.to_string())?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(|e| e.to_string())?
         };
+        if matches!(mode, DrainMode::All)
+            && queued
+                .first()
+                .is_some_and(|(_, _, drain_mode)| drain_mode == "one")
+        {
+            queued.truncate(1);
+        }
         let leased_at = chrono::Utc::now().to_rfc3339();
         for row in queued {
             let token = Uuid::new_v4().to_string();
@@ -178,7 +189,11 @@ impl EngineInputReceiver for DurableInputReceiver {
             &content,
             turn_id,
             input.lease_token.as_deref(),
-        )
+        )?;
+        // SQLite is authoritative, but the live actor must not retain an
+        // already-acked item that terminal queue draining could start again.
+        let _ = global_harness().remove(&self.conversation_id, input_id);
+        persist_actor_snapshot(&self.conversation_id)
     }
 }
 
@@ -532,7 +547,8 @@ fn enqueue(params: Value) -> Result<Value, String> {
         .get("content")
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "content is required".to_string())?;
+        .ok_or_else(|| "content is required".to_string())?
+        .to_string();
     let source = params
         .get("source")
         .and_then(Value::as_str)
@@ -551,6 +567,14 @@ fn enqueue(params: Value) -> Result<Value, String> {
     } else {
         "follow_up"
     };
+    let drain_mode = params
+        .get("drain_mode")
+        .or_else(|| params.get("drainMode"))
+        .and_then(Value::as_str)
+        .unwrap_or("all");
+    if !matches!(drain_mode, "one" | "all") {
+        return Err("drain_mode must be one or all".into());
+    }
 
     ensure_conversation_for_queue(conversation_id, &params)?;
 
@@ -569,7 +593,7 @@ fn enqueue(params: Value) -> Result<Value, String> {
     conn.execute(
         "INSERT INTO prompt_queue
             (id, conversation_id, content, source, attachments, position, client_temp_id, created_at, updated_at, status, kind, drain_mode)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 'queued', ?9, 'all')",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 'queued', ?9, ?10)",
         params![
             id,
             conversation_id,
@@ -579,7 +603,8 @@ fn enqueue(params: Value) -> Result<Value, String> {
             position,
             client_temp_id,
             now,
-            kind
+            kind,
+            drain_mode
         ],
     )
     .or_else(|e| {
@@ -607,7 +632,7 @@ fn enqueue(params: Value) -> Result<Value, String> {
 
     let item = global_harness().enqueue(
         conversation_id,
-        content,
+        content.clone(),
         PromptSource::parse(source),
         client_temp_id.clone(),
         Some(id.clone()),
@@ -733,22 +758,28 @@ fn interject(params: Value) -> Result<Value, String> {
         .get("conversation_id")
         .or_else(|| params.get("conversationId"))
         .and_then(Value::as_str)
-        .ok_or_else(|| "conversation_id is required".to_string())?;
+        .ok_or_else(|| "conversation_id is required".to_string())?
+        .to_string();
     let content = params
         .get("content")
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "content is required".to_string())?;
+        .ok_or_else(|| "content is required".to_string())?
+        .to_string();
 
-    ensure_conversation_for_queue(conversation_id, &params)?;
-    global_harness().interject(conversation_id, content);
-    // Durable: session_actor.pending_interjection (latest wins across restart).
-    persist_actor_snapshot(conversation_id)?;
+    let mut queued = params;
+    if let Some(object) = queued.as_object_mut() {
+        object.insert("source".into(), Value::String("interjection".into()));
+        object.insert("drain_mode".into(), Value::String("all".into()));
+    }
+    let result = enqueue(queued)?;
     Ok(json!({
         "conversation_id": conversation_id,
         "interjected": true,
         "content": content,
-        "note": "pending until next SafePoint (provider batch / tool / permission); durable in session_actor",
+        "id": result.get("id"),
+        "status": "queued",
+        "note": "leased and acknowledged by the AgentEngine at a safe point",
     }))
 }
 
@@ -1213,28 +1244,24 @@ mod tests {
     }
 
     #[test]
-    fn interject_marks_harness_pending() {
+    fn interject_is_a_durable_steering_queue_item() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
-            interject(json!({
+            let result = interject(json!({
                 "conversation_id": cid,
                 "content": "inject me",
             }))
             .unwrap();
-            assert_eq!(
-                global_harness().pending_interjection(&cid).as_deref(),
-                Some("inject me")
-            );
-            let action = on_safe_point(&cid, SafePoint::AfterPermissionResolved);
-            assert!(matches!(
-                action,
-                HarnessAction::InjectInterjection { content } if content == "inject me"
-            ));
+            assert_eq!(result["status"], "queued");
+            assert!(global_harness().pending_interjection(&cid).is_none());
+            let queued = global_harness().list(&cid);
+            assert_eq!(queued.len(), 1);
+            assert_eq!(queued[0].source, PromptSource::Interjection);
         });
     }
 
     #[test]
-    fn checked_safe_point_persists_interjection_consumption() {
+    fn steering_queue_survives_coordinator_rehydrate() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
             interject(json!({
@@ -1242,19 +1269,14 @@ mod tests {
                 "content": "consume durably",
             }))
             .unwrap();
-            let action = on_safe_point_checked(&cid, SafePoint::AfterTool).unwrap();
-            assert!(matches!(
-                action,
-                HarnessAction::InjectInterjection { content } if content == "consume durably"
-            ));
             global_harness().clear_conversation(&cid);
             hydrate_conversation(&cid).unwrap();
-            assert!(global_harness().pending_interjection(&cid).is_none());
+            assert_eq!(global_harness().list(&cid).len(), 1);
         });
     }
 
     #[test]
-    fn interject_survives_coordinator_rehydrate() {
+    fn interject_does_not_use_legacy_pending_slot() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
             interject(json!({
@@ -1262,14 +1284,46 @@ mod tests {
                 "content": "durable inject",
             }))
             .unwrap();
-            // Simulate process restart: clear memory then hydrate from SQLite.
-            global_harness().clear_conversation(&cid);
             assert!(global_harness().pending_interjection(&cid).is_none());
-            hydrate_conversation(&cid).unwrap();
-            assert_eq!(
-                global_harness().pending_interjection(&cid).as_deref(),
-                Some("durable inject")
-            );
+        });
+    }
+
+    #[test]
+    fn durable_steering_ack_removes_live_queue_item() {
+        with_temp_db(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let cid = format!("pq-{}", Uuid::new_v4());
+                let run_id = format!("run-{}", Uuid::new_v4());
+                interject(json!({
+                    "conversation_id": cid,
+                    "content": "ack me",
+                }))
+                .unwrap();
+                let receiver = DurableInputReceiver::new(&cid, &run_id);
+                store()
+                    .unwrap()
+                    .conn()
+                    .unwrap()
+                    .execute(
+                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                         VALUES (?1, ?2, 'running', 'test', 'test')",
+                        params![run_id, cid],
+                    )
+                    .unwrap();
+                let mut inputs = receiver
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(inputs.len(), 1);
+                let input = inputs.pop().unwrap();
+                receiver.ack(&input, None).await.unwrap();
+                assert!(global_harness().list(&cid).is_empty());
+            });
         });
     }
 

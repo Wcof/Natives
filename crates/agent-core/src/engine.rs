@@ -2196,14 +2196,10 @@ impl AgentEngine {
             SUMMARY_TRANSCRIPT_MAX_CHARS,
             SUMMARY_MESSAGE_MAX_CHARS,
         );
-        let request = vec![EngineMessage {
-            role: "user".into(),
-            content: transcript,
-            tool_call_id: None,
-            tool_name: None,
-            tool_calls: None,
-            images: Vec::new(),
-        }];
+        let request = vec![crate::AgentMessage::User(crate::UserMessage {
+            message_id: crate::MessageId::new(),
+            content: vec![crate::ContentBlock::Text { text: transcript }],
+        })];
 
         match self
             .stream_summary_text(run_id, model, provider, request)
@@ -2230,20 +2226,22 @@ impl AgentEngine {
         run_id: &str,
         model: &str,
         provider: &dyn EngineProvider,
-        messages: Vec<EngineMessage>,
+        messages: Vec<crate::AgentMessage>,
     ) -> Result<String, String> {
         let cancel = self.cancel.clone();
         let collect = async {
             let mut stream = provider
-                .stream_with_context(
-                    EngineProviderContext {
-                        run_id: run_id.to_string(),
-                        attempt: 0,
+                .stream_turn(
+                    ProviderTurnRequest {
+                        context: EngineProviderContext {
+                            run_id: run_id.to_string(),
+                            attempt: 0,
+                        },
+                        model: model.to_string(),
+                        system_prompt: Some(SUMMARY_SYSTEM_PROMPT.to_string()),
+                        messages,
+                        tools: Vec::new(),
                     },
-                    model,
-                    messages,
-                    &[],
-                    Some(SUMMARY_SYSTEM_PROMPT),
                     cancel.clone(),
                 )
                 .await

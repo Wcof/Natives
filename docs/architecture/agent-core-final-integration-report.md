@@ -1,11 +1,11 @@
-# Agent Core 最终深化与生产闭环报告
+# Agent Core 最终生产集成报告
 
 ## 1. 基线
 
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：当前 Worktree `HEAD`（本轮最新受控代码）
+- 结束 Commit：本轮最终提交（以当前 Worktree `git rev-parse HEAD` 为准）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -90,8 +90,11 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 
 - 共享 `CARGO_TARGET_DIR`：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`
 - 共享 target：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`；jobs=2、incremental=0。
+- 本轮新增 Cargo Check：3 次（两次受控 crate check，1 次最终 `RUSTFLAGS=-Dwarnings` check）。
+- 本轮精准 Cargo Test：4 次命令（Gateway 1 次通过、Daemon 1 次失败后 1 次通过、Agent Core 1 次通过）；没有运行全 crate 测试。
+- Workspace Test：1 次（前序受控全量运行；本轮未重复）。
 - 本轮严格 Cargo check 与精准 Cargo test 均使用共享 target；workspace test 与 native verifier 各只运行一次，未重复全量。
-- 观测到 shared target 约 7.5 GiB、worktree target 约 5.6 GiB；最低可用磁盘约 60 GiB。
+- 观测到 shared target 约 7.6 GiB、worktree target 约 5.6 GiB；本轮最低可用磁盘约 56 GiB。
 - 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 测试进程按资源规则中止；本轮没有终止 Cargo/Rustc。
 - 清理的临时目录：无；`cargo clean`：否。
 
@@ -225,11 +228,18 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 生产 safe point 已从直接操作内存 SessionCoordinator 改为 `EngineSafePointReceiver` → `DurableSafePointReceiver`；队列 interjection 的 claim、actor snapshot 持久化和失败恢复形成一个 fail-closed 边界。
 - `RunManager::retry` 不接受 active Run；queue/summary deterministic message ID 冲突执行严格身份与内容校验；已注册 Gateway Schema 在启动与 Run preflight 都必须可编译。
 - 精确命令：
-  `CARGO_TARGET_DIR=/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_INCREMENTAL=0 CARGO_TERM_PROGRESS_WHEN=never cargo test -p natives-agent-daemon checked_safe_point_persists_interjection_consumption -- --test-threads=2 --nocapture`（1 passed）。
-- `checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 均通过。最新 `RUSTFLAGS=-Dwarnings cargo check -p agent-core -p harness-core -p capability-gateway -p provider-adapters -p assistant-protocol -p natives-agent-daemon`、`cargo fmt --all` 与 `git diff --check` 通过；workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP fixture 和 permission fault-injection 仍未验证。
+  `CARGO_TARGET_DIR=/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 CARGO_INCREMENTAL=0 CARGO_TERM_PROGRESS_WHEN=never cargo test -p natives-agent-daemon durable_steering_ack_removes_live_queue_item -- --test-threads=2 --nocapture`（1 passed）。
+- `durable_steering_ack_removes_live_queue_item`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 均通过。最新 `RUSTFLAGS=-Dwarnings cargo check -p agent-core -p harness-core -p capability-gateway -p provider-adapters -p assistant-protocol -p natives-agent-daemon`、`cargo fmt --all` 与 `git diff --check` 通过；workspace/native verifier、前端全量套件、真实 Provider/Shell/MCP fixture 和 permission fault-injection 仍未验证。
 ## 27. Typed history reload safety closure（当前 Worktree）
 
 - Typed conversation reload 现在对所有 content block 做严格结构、身份和 JSON 校验；坏 tool-call 不会恢复成可执行消息，未知 block 不会静默消失。
 - `file_reference` 恢复为明确的 provider-safe attachment marker，避免已持久化附件导致整段 history 被错误丢弃。
 - Snapshot validator 同样拒绝不可解析的 tool-call arguments。
 - 精确测试 `typed_loader_handles_attachments_and_rejects_malformed_tool_calls` 与 `strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 通过；全量 workspace/native/frontend 和真实外部 fixture 仍保持未验证。
+
+## 28. 最终 Provider/Queue 接缝校正
+
+- Compaction summary 与 Native prompt hook 统一走 `ProviderTurnRequest`，保持 production provider entry 单一且携带真实 Run context。
+- Gateway Schema validator 执行 `minItems`/`maxItems`/`minLength`/`maxLength`，数组边界回归测试确认 Handler 调用次数为 0。
+- Interjection 统一进入 SQLite steering queue；Lease/Ack 成功后删除 live actor queue item，防止同一输入在 terminal drain 再启动。
+- 精确测试 `compaction_requests_model_summary_and_injects_it_into_history`、`array_bounds_are_enforced_before_handler`、`durable_steering_ack_removes_live_queue_item` 通过。全量 workspace/native verifier、前端全量套件和真实外部 fixture 仍未验证。

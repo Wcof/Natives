@@ -182,10 +182,18 @@ Provider stop reason family 映射测试。
 - `AgentEngine::apply_safe_point` 在生产路径使用 `EngineSafePointReceiver`；`DurableSafePointReceiver` 通过 `on_safe_point_checked` 将 interjection 消费与 actor snapshot 持久化绑定。失败会恢复 pending interjection，并返回 Engine 错误。
 - `RunManager::retry` 拒绝 active Run；队列 user message 与 compaction summary 的 deterministic ID 已改为严格 identity/content 检查，避免 `INSERT OR IGNORE` 掩盖跨 conversation、run 或内容冲突。
 - `CapabilityGateway::validate_registered_schemas` 在 ProductionRuntime 装配和 RunManager preflight 被调用，坏 Schema 使 Run 失败并带 `TOOL_SCHEMA_INVALID`。
-- 精确测试 `checked_safe_point_persists_interjection_consumption`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；strict `RUSTFLAGS=-Dwarnings cargo check` 通过。完整 workspace/native verifier、前端全量测试、真实外部 fixture 和 permission fault-injection 仍不宣称完成。
+- 精确测试 `durable_steering_ack_removes_live_queue_item`、`retry_rejects_active_run`、`all_builtin_schemas_are_supported_by_validator` 通过；strict `RUSTFLAGS=-Dwarnings cargo check` 通过。完整 workspace/native verifier、前端全量测试、真实外部 fixture 和 permission fault-injection 仍不宣称完成。
 ## 21. Typed transcript reload closure（当前 Worktree）
 
 - `src-agent-daemon/src/conversation_store.rs` 的 typed block loader 改为严格 `Result`：tool call 必须包含非空 `tool_call_id`、`name` 和合法 JSON arguments；未知/损坏 block 不再被 `filter_map` 静默忽略。
 - `file_reference` 按 provider-safe text marker 恢复，保留附件事实而不把本地路径扩展成新的工具能力。
 - `crates/agent-core/src/engine.rs` 的 snapshot validator 对 tool-call arguments 做最终 JSON 校验。
 - 精确测试：`typed_loader_handles_attachments_and_rejects_malformed_tool_calls`、`strict_snapshot_decode_rejects_missing_identity_and_unknown_blocks` 均通过；未宣称 workspace/native/frontend 全量或真实外部 fixture 完成。
+
+## 22. Provider seam 与 durable steering 收口（当前 Worktree）
+
+- `AgentEngine::stream_summary_text` 与生产 `NativePromptHook` 均使用 `ProviderTurnRequest`；摘要和 Hook 调用不再绕过 typed provider entry。
+- Gateway 执行边界补齐数组/字符串长度 Schema 约束；无效输入仍在 Handler 前拒绝。
+- `prompt_queue_store::interject` 写入 durable steering row；`DurableInputReceiver::ack` 成功后移除 live actor item 并保存 snapshot，避免 terminal drain 重复启动已消费输入。
+- 精确测试：`compaction_requests_model_summary_and_injects_it_into_history`、`array_bounds_are_enforced_before_handler`、`durable_steering_ack_removes_live_queue_item` 通过；受控 crate check、fmt、diff check 通过。
+- 全量 workspace/native/frontend、真实 Provider/Shell/MCP fixture 与 permission fault-injection 仍未宣称完成。
