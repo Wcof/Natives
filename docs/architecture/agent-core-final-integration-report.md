@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`fefc8ff0`（当前 Worktree）；本报告随后同步更新
+- 结束 Commit：当前 Worktree `HEAD`（代码验证基线：`9c40bc49`）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -51,7 +51,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 
 | 命令 | 结果 |
 |---|---|
-| `rtk cargo check -p agent-core -p capability-gateway -p provider-adapters -p natives-agent-daemon -p natives` | 通过（本轮最新，0 errors） |
+| `RUSTFLAGS=-Dwarnings CARGO_TARGET_DIR=/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo check -p agent-core -p capability-gateway -p provider-adapters -p assistant-protocol -p natives-agent-daemon` | 通过（strict，0 errors；代码验证基线 `9c40bc49`） |
 | `rtk cargo test -p agent-core --lib compaction_ -- --nocapture` | 通过：5 |
 | `rtk cargo test -p capability-gateway --lib` | 通过：91 |
 | `rtk cargo test -p natives-agent-daemon typed_message_round_trip_preserves_tool_call_identity -- --nocapture` | 通过：1 |
@@ -63,9 +63,13 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 | `rtk cargo test -p capability-gateway cancellation_wins_over_blocking_handler -- --test-threads=2` | 通过：1 |
 | `CARGO_TARGET_DIR=... cargo test -p natives-agent-daemon typed_boundary_preserves_blocks_and_tool_identity -- --nocapture --test-threads=2` | 通过：1；验证 typed provider seam 保留 Thinking/Image/ToolCall/ToolResult identity |
 | `npm run verify:native-engine` | 失败：静态 audit/protocol OK；严格 warning check 已单独通过；daemon lib 323 passed/6 failed，live fixture 0/1 failed；frontend commands 因缺少 `tsx`/`tsc` 失败 |
-| `rtk npm run typecheck` | 未执行：worktree 无 `node_modules/.bin/tsc`，命令退出 127 |
-| `CARGO_TARGET_DIR=... cargo test --workspace -- --test-threads=2` | 运行：agent-core 首次 160/162 通过；两个 legacy fixture 因仍发送无授权 `Completed` 失败；改为显式 `CompletedWithReason::ToolUse` 后两个精准回归通过，未重复 workspace 全量 |
-| frontend lint/test/perf | 未运行，依赖未安装 |
+| `npm run typecheck` | 通过 |
+| `npm run lint` | 通过 |
+| `npm run perf:check` | 通过（含 typecheck/lint/build/perf budget） |
+| `npm run protocol:check` | 通过 |
+| `npm run test` | 首次集中运行 751/752 通过；唯一失败为过期的“缺事件时合成终态”断言，已改为 fail-closed 断言并精准复验通过；按资源规则未重复全量 |
+| `cargo test --workspace -- --test-threads=2` | 已运行一次；agent-core 首次 160/162，两个 legacy fixture 已修正并精准复验；未重复 workspace 全量 |
+| `npm run verify:native-engine` | 已运行一次；静态/protocol 通过，但 daemon/live 历史 fixture 与当时缺失 frontend 工具导致失败；修复后受资源上限未重复运行 |
 
 直接执行的 Cargo 命令使用共享 target、jobs=2、incremental=0；未执行 clean/rm -rf，未终止其他任务进程。仓库自带 `verify:native-engine` 内部未继承 target 环境，使用了 worktree `target/`，已在本报告明确记录。前三次精确测试失败分别暴露 migration 028 错误索引、测试外键和 block 解码路径，均已修复后通过。
 
@@ -85,9 +89,9 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 ## 8. 资源使用
 
 - 共享 `CARGO_TARGET_DIR`：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`
-- 本轮 Cargo check：4（含 2 次修复后重跑）；本轮精准 Cargo Test：1；Workspace Test：0。
-- 最大 target 大小：共享 target 约 2.5 GiB；native verifier 产生的本地 target 约 5 GiB。
-- 最低可用磁盘：约 70 GiB。
+- 共享 target：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`；jobs=2、incremental=0。
+- 本轮严格 Cargo check 与精准 Cargo test 均使用共享 target；workspace test 与 native verifier 各只运行一次，未重复全量。
+- 观测到 shared target 约 7.5 GiB、worktree target 约 5.6 GiB；最低可用磁盘约 60 GiB。
 - 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 测试进程按资源规则中止；本轮没有终止 Cargo/Rustc。
 - 清理的临时目录：无；`cargo clean`：否。
 
