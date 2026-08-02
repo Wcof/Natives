@@ -1,5 +1,5 @@
 use crate::storage::DataStore;
-use agent_core::EngineMessage;
+use agent_core::{AgentMessage, ContentBlock, EngineMessage, ToolResultBlock};
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{AttachmentRef, RunEventKind, RunEventV2};
 use rusqlite::{params, OptionalExtension};
@@ -322,7 +322,8 @@ fn get_messages(params: Value) -> Result<Value, String> {
     let conn = store.conn()?;
     let mut messages: Vec<Value> = if let Some(limit) = page_limit {
         let mut stmt = conn.prepare(
-            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
+            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at,
+                    turn_id, run_id, stop_reason, legacy_marker, truncated
              FROM message WHERE conversation_id = ?1
                AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3))
              ORDER BY created_at DESC, id DESC LIMIT ?4",
@@ -340,6 +341,11 @@ fn get_messages(params: Value) -> Result<Value, String> {
                         "input_tokens": row.get::<_, Option<i64>>(5)?,
                         "output_tokens": row.get::<_, Option<i64>>(6)?,
                         "created_at": row.get::<_, String>(7)?,
+                        "turn_id": row.get::<_, Option<String>>(8)?,
+                        "run_id": row.get::<_, Option<String>>(9)?,
+                        "stop_reason": row.get::<_, Option<String>>(10)?,
+                        "legacy_marker": row.get::<_, Option<String>>(11)?,
+                        "truncated": row.get::<_, i64>(12).unwrap_or(0) != 0,
                     }))
                 },
             )
@@ -349,7 +355,8 @@ fn get_messages(params: Value) -> Result<Value, String> {
         rows
     } else {
         let mut stmt = conn.prepare(
-            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
+            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at,
+                    turn_id, run_id, stop_reason, legacy_marker, truncated
              FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map(params![conversation_id], |row| {
@@ -358,6 +365,9 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 "conversation_id": row.get::<_, String>(2)?, "parent_message_id": row.get::<_, Option<String>>(3)?,
                 "status": row.get::<_, String>(4)?, "input_tokens": row.get::<_, Option<i64>>(5)?,
                 "output_tokens": row.get::<_, Option<i64>>(6)?, "created_at": row.get::<_, String>(7)?,
+                "turn_id": row.get::<_, Option<String>>(8)?, "run_id": row.get::<_, Option<String>>(9)?,
+                "stop_reason": row.get::<_, Option<String>>(10)?, "legacy_marker": row.get::<_, Option<String>>(11)?,
+                "truncated": row.get::<_, i64>(12).unwrap_or(0) != 0,
             }))
         }).map_err(|e| e.to_string())?;
         rows.filter_map(Result::ok).collect()
@@ -632,52 +642,131 @@ pub fn append_assistant_turn_from_events(
 ) -> Result<Option<String>, String> {
     persist_context_snapshots_from_events(run_id, events)?;
     let mut text = String::new();
-    let mut blocks = vec![serde_json::json!({ "type": "run_reference", "run_id": run_id })];
+    let mut thinking = String::new();
+    let mut tool_calls = Vec::new();
+    let mut tool_results = Vec::new();
+    let turn_id = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
+        _ => None,
+    });
+    let assistant_message_id = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::MessageStarted {
+            message_id, role, ..
+        } if role == "assistant" => Some(message_id.clone()),
+        _ => None,
+    });
+    let stop_reason = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::TurnCompleted { stop_reason, .. } => Some(stop_reason.clone()),
+        _ => None,
+    });
     for event in events {
         match &event.payload {
             RunEventKind::TextDelta { text: delta } => text.push_str(delta),
+            RunEventKind::ReasoningDelta { text: delta } => thinking.push_str(delta),
+            RunEventKind::ToolCallRequested { id, name, input } => {
+                tool_calls.push(agent_core::ToolCall {
+                    tool_call_id: id.clone().into(),
+                    name: name.clone(),
+                    arguments_json: input.to_string(),
+                });
+            }
             RunEventKind::ToolCallCompleted {
                 id,
                 name,
                 output,
                 is_error,
                 duration_ms,
-            } => blocks.push(serde_json::json!({
-                "type": "tool_result",
-                "id": id,
-                "name": name,
-                "output": output,
-                "is_error": is_error,
-                "duration_ms": duration_ms,
-            })),
+            } => tool_results.push((
+                id.clone(),
+                name.clone(),
+                output.clone(),
+                *is_error,
+                *duration_ms,
+            )),
             _ => {}
         }
     }
+    let mut content = Vec::new();
+    if !thinking.trim().is_empty() {
+        content.push(agent_core::ContentBlock::Thinking {
+            text: thinking,
+            signature: None,
+        });
+    }
     if !text.trim().is_empty() {
-        blocks.insert(0, serde_json::json!({ "type": "text", "text": text }));
+        content.push(agent_core::ContentBlock::Text { text });
     }
-    if let Some(reasoning) = reasoning_block_from_events(events) {
-        blocks.insert(
-            0,
-            serde_json::json!({
-                "type": "reasoning",
-                "reasoning": reasoning["reasoning"],
-                "duration_ms": reasoning["duration_ms"],
-            }),
-        );
-    }
-    if blocks.len() == 1 {
+    content.extend(
+        tool_calls
+            .into_iter()
+            .map(agent_core::ContentBlock::ToolCall),
+    );
+    if content.is_empty() && tool_results.is_empty() {
         return Ok(None);
     }
-    let appended = append_message(serde_json::json!({
-        "conversation_id": conversation_id,
-        "role": "assistant",
-        "blocks": blocks,
-    }))?;
-    Ok(appended
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string))
+    let typed_turn_id = turn_id.unwrap_or_else(|| format!("legacy-turn:{run_id}"));
+    let assistant_id = assistant_message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    persist_turn_record(run_id, &typed_turn_id, stop_reason.as_deref(), events)?;
+    let assistant = agent_core::AssistantMessage {
+        message_id: assistant_id.into(),
+        content,
+        stop_reason: stop_reason.map(agent_core::StopReason::Provider),
+    };
+    let appended_id = append_agent_message(
+        conversation_id,
+        Some(run_id),
+        Some(&typed_turn_id),
+        &AgentMessage::Assistant(assistant),
+    )?;
+    for (id, name, output, is_error, duration_ms) in tool_results {
+        let result = agent_core::ToolResultMessage {
+            message_id: agent_core::MessageId::new(),
+            tool_call_id: id.into(),
+            tool_name: name,
+            content: vec![ToolResultBlock::Json { value: output }],
+            is_error,
+            code: is_error.then(|| "TOOL_EXECUTION_ERROR".to_string()),
+        };
+        let _ = duration_ms;
+        append_agent_message(
+            conversation_id,
+            Some(run_id),
+            Some(&typed_turn_id),
+            &AgentMessage::ToolResult(result),
+        )?;
+    }
+    Ok(Some(appended_id))
+}
+
+fn persist_turn_record(
+    run_id: &str,
+    turn_id: &str,
+    stop_reason: Option<&str>,
+    events: &[RunEventV2],
+) -> Result<(), String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let sequence = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            RunEventKind::TurnStarted { .. } => Some(event.effective_run_sequence()),
+            _ => None,
+        })
+        .next()
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT OR IGNORE INTO turn (id, run_id, sequence, status, stop_reason, completed_at)
+         VALUES (?1, ?2, ?3, 'committed', ?4, ?5)",
+        params![
+            turn_id,
+            run_id,
+            sequence as i64,
+            stop_reason,
+            chrono::Utc::now().to_rfc3339()
+        ],
+    )
+    .map_err(|e| format!("persist turn: {e}"))?;
+    Ok(())
 }
 
 fn persist_context_snapshots_from_events(
@@ -753,15 +842,28 @@ fn append_message(params: Value) -> Result<Value, String> {
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("complete");
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = params
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let turn_id = params.get("turn_id").and_then(Value::as_str);
+    let run_id = params.get("run_id").and_then(Value::as_str);
+    let legacy_marker = params.get("legacy_marker").and_then(Value::as_str);
+    let stop_reason = params.get("stop_reason").and_then(Value::as_str);
+    let truncated = params
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let now = chrono::Utc::now().to_rfc3339();
     let store = store()?;
     let conn = store.conn()?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute(
-        "INSERT INTO message (id, conversation_id, role, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, conversation_id, role, status, now],
+        "INSERT INTO message (id, conversation_id, role, status, turn_id, run_id, legacy_marker, truncated, stop_reason, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![id, conversation_id, role, status, turn_id, run_id, legacy_marker, if truncated { 1 } else { 0 }, stop_reason, now],
     )
     .map_err(|e| e.to_string())?;
     for (index, block) in blocks.iter().enumerate() {
@@ -775,9 +877,9 @@ fn append_message(params: Value) -> Result<Value, String> {
             block.clone()
         };
         tx.execute(
-            "INSERT INTO message_block (message_id, sort_order, block_type, block_json)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![id, index as i64, block_type, content.to_string()],
+            "INSERT INTO message_block (message_id, sort_order, block_type, block_json, artifact_id, truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, index as i64, block_type, content.to_string(), block.get("artifact_id").and_then(Value::as_str), if block.get("truncated").and_then(Value::as_bool).unwrap_or(false) { 1 } else { 0 }],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -788,6 +890,101 @@ fn append_message(params: Value) -> Result<Value, String> {
     .and_then(|_| tx.commit())
     .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "id": id, "created_at": now }))
+}
+
+/// Persist the typed Core message without passing through an EngineMessage
+/// transcript. The JSON block representation is the durable compatibility
+/// boundary for old renderers; identity and ordering stay typed and stable.
+pub fn append_agent_message(
+    conversation_id: &str,
+    run_id: Option<&str>,
+    turn_id: Option<&str>,
+    message: &AgentMessage,
+) -> Result<String, String> {
+    let (id, role, blocks, stop_reason) = agent_message_parts(message);
+    let mut payload = serde_json::json!({
+        "id": id,
+        "conversation_id": conversation_id,
+        "role": role,
+        "run_id": run_id,
+        "turn_id": turn_id,
+        "blocks": blocks,
+    });
+    if let Some(reason) = stop_reason {
+        payload["stop_reason"] = serde_json::Value::String(reason);
+    }
+    let row = append_message(payload)?;
+    row.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "typed message append returned no id".into())
+}
+
+fn agent_message_parts(
+    message: &AgentMessage,
+) -> (String, &'static str, Vec<Value>, Option<String>) {
+    match message {
+        AgentMessage::User(user) => (
+            user.message_id.0.clone(),
+            "user",
+            content_blocks_to_json(&user.content),
+            None,
+        ),
+        AgentMessage::Assistant(assistant) => (
+            assistant.message_id.0.clone(),
+            "assistant",
+            content_blocks_to_json(&assistant.content),
+            assistant.stop_reason.as_ref().map(ToString::to_string),
+        ),
+        AgentMessage::ToolResult(result) => (
+            result.message_id.0.clone(),
+            "assistant",
+            vec![serde_json::json!({
+                "type": "tool_result",
+                "tool_call_id": result.tool_call_id,
+                "name": result.tool_name,
+                "is_error": result.is_error,
+                "error_code": result.code,
+                "content": result_blocks_to_json(&result.content),
+            })],
+            None,
+        ),
+        AgentMessage::System(system) => (
+            system.message_id.0.clone(),
+            "system",
+            vec![serde_json::json!({ "type": "text", "text": system.text })],
+            None,
+        ),
+        AgentMessage::Custom(custom) => (
+            custom.message_id.0.clone(),
+            "assistant",
+            vec![serde_json::json!({ "type": custom.kind, "payload": custom.payload })],
+            None,
+        ),
+    }
+}
+
+fn content_blocks_to_json(blocks: &[ContentBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ContentBlock::Text { text } => serde_json::json!({ "type": "text", "text": text }),
+            ContentBlock::Thinking { text, signature } => serde_json::json!({ "type": "thinking", "text": text, "signature": signature }),
+            ContentBlock::Image { source } => serde_json::json!({ "type": "image", "source": source }),
+            ContentBlock::ToolCall(call) => serde_json::json!({ "type": "tool_call", "tool_call_id": call.tool_call_id, "name": call.name, "arguments": call.arguments_json }),
+        })
+        .collect()
+}
+
+fn result_blocks_to_json(blocks: &[ToolResultBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ToolResultBlock::Text { text } => serde_json::json!({ "type": "text", "text": text }),
+            ToolResultBlock::Json { value } => serde_json::json!({ "type": "json", "value": value }),
+            ToolResultBlock::Artifact { artifact_id, preview } => serde_json::json!({ "type": "artifact", "artifact_id": artifact_id, "preview": preview }),
+        })
+        .collect()
 }
 
 pub fn append_trigger_message(

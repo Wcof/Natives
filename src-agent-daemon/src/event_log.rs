@@ -86,9 +86,30 @@ impl EventLog {
         stored.set_run_sequence(run_seq);
         let payload = serde_json::to_string(&stored)
             .map_err(|e| format!("Failed to serialize event: {e}"))?;
+        let (turn_id, message_id) = match &stored.payload {
+            RunEventKind::TurnStarted { turn_id } | RunEventKind::TurnCompleted { turn_id, .. } => {
+                (Some(turn_id.clone()), None)
+            }
+            RunEventKind::MessageStarted {
+                turn_id,
+                message_id,
+                ..
+            }
+            | RunEventKind::MessageDelta {
+                turn_id,
+                message_id,
+                ..
+            }
+            | RunEventKind::MessageCompleted {
+                turn_id,
+                message_id,
+                ..
+            } => (Some(turn_id.clone()), Some(message_id.clone())),
+            _ => (None, None),
+        };
         conn.execute(
-            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id, turn_id, message_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 stored.run_id,
                 run_seq as i64,
@@ -96,6 +117,8 @@ impl EventLog {
                 payload,
                 stored.timestamp.to_rfc3339(),
                 event_id,
+                turn_id,
+                message_id,
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;

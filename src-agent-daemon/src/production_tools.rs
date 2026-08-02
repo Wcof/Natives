@@ -8,7 +8,8 @@
 use agent_core::{
     default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime, EventSequencer, HookEvent,
     HookRegistry, HookRequest, PermissionAggregate, PermissionManager, PermissionProfile,
-    SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
+    SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolProgressSink, ToolProgressUpdate,
+    ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
@@ -187,6 +188,25 @@ pub struct PermissionGatedTools {
     /// only target these servers. `None` = legacy behaviour.
     pub selected_mcp_servers: Option<std::collections::HashSet<String>>,
 }
+
+pub struct DaemonToolProgressSink {
+    pub events: EventSequencer,
+}
+
+#[async_trait::async_trait]
+impl ToolProgressSink for DaemonToolProgressSink {
+    async fn publish(&self, update: ToolProgressUpdate) {
+        self.events.append(
+            &update.run_id,
+            RunEventKind::ToolOutputDelta {
+                tool_call_id: update.tool_call_id,
+                stream: update.stream,
+                text: update.text,
+                truncated: false,
+            },
+        );
+    }
+}
 impl PermissionGatedTools {
     fn tool_allowed(&self, name: &str) -> bool {
         // Server whitelist gate first (ADR-0016): with an active MCP selection
@@ -329,6 +349,42 @@ impl EngineToolRuntime for PermissionGatedTools {
             }
         })
         .collect()
+    }
+
+    async fn execute_tool_with_progress(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        progress: &dyn ToolProgressSink,
+    ) -> ToolExecutionResult {
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: name.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: "started".into(),
+                final_update: false,
+            })
+            .await;
+        let result = self.execute_tool(name, input, cancel).await;
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: name.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: if result.is_error {
+                    "failed"
+                } else {
+                    "completed"
+                }
+                .into(),
+                final_update: true,
+            })
+            .await;
+        result
     }
 
     async fn execute_tool(

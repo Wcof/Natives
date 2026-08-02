@@ -99,7 +99,7 @@ pub use crate::production_credentials::{
     install_credential_broker, resolve_credential, resolve_credential_for_run, CredentialBrokerFn,
 };
 pub use crate::production_hooks::{build_production_hooks, build_production_hooks_for_project};
-pub use crate::production_tools::PermissionGatedTools;
+pub use crate::production_tools::{DaemonToolProgressSink, PermissionGatedTools};
 pub use crate::runtime::TaskRecord;
 
 // Hook assembly moved to `production_hooks.rs` (task-01 structure).
@@ -550,6 +550,15 @@ impl ProductionRuntime {
                 .with_cancel_token(cancel.clone())
                 .with_hooks(hooks)
                 .with_session_harness(crate::prompt_queue_store::global_harness())
+                .with_input_receiver(Arc::new(
+                    crate::prompt_queue_store::DurableInputReceiver::new(
+                        conversation_id.clone(),
+                        run_id.clone(),
+                    ),
+                ))
+                .with_progress_sink(Arc::new(DaemonToolProgressSink {
+                    events: self.events.clone(),
+                }))
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
         self.engines

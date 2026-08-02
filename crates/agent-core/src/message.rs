@@ -135,6 +135,19 @@ pub enum StopReason {
     Provider(String),
 }
 
+impl std::fmt::Display for StopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stop => f.write_str("stop"),
+            Self::ToolUse => f.write_str("tool_use"),
+            Self::Length => f.write_str("length"),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::Error => f.write_str("error"),
+            Self::Provider(raw) => write!(f, "provider:{raw}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

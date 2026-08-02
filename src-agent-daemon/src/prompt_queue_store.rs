@@ -11,8 +11,9 @@ use crate::conversation_store;
 use crate::run_manager::global_run_manager;
 use crate::storage::DataStore;
 use agent_core::{
-    CoordinatorAction, HarnessAction, PromptSource, QueueItem, QueueItemStatus, SafePoint,
-    SessionActorSnapshot, SessionCoordinator,
+    CoordinatorAction, DrainMode, EngineInputReceiver, HarnessAction, InputSafePoint, PendingInput,
+    PendingInputKind, PromptSource, QueueItem, QueueItemStatus, SafePoint, SessionActorSnapshot,
+    SessionCoordinator,
 };
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{CancelRunRequest, StartRunRequest};
@@ -33,6 +34,106 @@ pub fn global_harness() -> Arc<SessionCoordinator> {
 /// Alias for clarity at call sites.
 pub fn global_coordinator() -> Arc<SessionCoordinator> {
     global_harness()
+}
+
+/// SQLite-backed input lease used by the engine at safe points.
+pub struct DurableInputReceiver {
+    conversation_id: String,
+    run_id: String,
+}
+
+impl DurableInputReceiver {
+    pub fn new(conversation_id: impl Into<String>, run_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            run_id: run_id.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EngineInputReceiver for DurableInputReceiver {
+    async fn drain(
+        &self,
+        kind: PendingInputKind,
+        mode: DrainMode,
+        _point: InputSafePoint,
+    ) -> Vec<PendingInput> {
+        let kind = match kind {
+            PendingInputKind::Steering => "steering",
+            PendingInputKind::FollowUp => "follow_up",
+        };
+        let limit = match mode {
+            DrainMode::One => 1,
+            DrainMode::All => i64::MAX,
+        };
+        let Ok(store) = store() else {
+            return Vec::new();
+        };
+        let Ok(mut conn) = store.conn() else {
+            return Vec::new();
+        };
+        let Ok(tx) = conn.transaction() else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        let queued = {
+            let Ok(mut stmt) = tx.prepare(
+                "SELECT id, content FROM prompt_queue
+                 WHERE conversation_id = ?1 AND kind = ?2 AND status = 'queued'
+                 ORDER BY position, created_at LIMIT ?3",
+            ) else {
+                return items;
+            };
+            let Ok(rows) = stmt.query_map(params![self.conversation_id, kind, limit], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) else {
+                return items;
+            };
+            rows.flatten().collect::<Vec<_>>()
+        };
+        let leased_at = chrono::Utc::now().to_rfc3339();
+        for row in queued {
+            let token = Uuid::new_v4().to_string();
+            if tx
+                .execute(
+                    "UPDATE prompt_queue SET status = 'leased', lease_token = ?1,
+                    lease_run_id = ?2, leased_at = ?3, updated_at = ?3
+                 WHERE id = ?4 AND status = 'queued'",
+                    params![token, self.run_id, leased_at, row.0],
+                )
+                .is_ok()
+            {
+                items.push(PendingInput {
+                    id: row.0,
+                    kind: if kind == "steering" {
+                        PendingInputKind::Steering
+                    } else {
+                        PendingInputKind::FollowUp
+                    },
+                    content: row.1,
+                });
+            }
+        }
+        let _ = tx.commit();
+        items
+    }
+
+    async fn ack(&self, input_id: &str) {
+        let Ok(store) = store() else { return };
+        let Ok(conn) = store.conn() else { return };
+        let _ = conn.execute(
+            "UPDATE prompt_queue SET status = 'sent', consumed_turn_id = ?1,
+                lease_token = NULL, lease_run_id = NULL, leased_at = NULL,
+                updated_at = ?2 WHERE id = ?3 AND lease_run_id = ?4",
+            params![
+                self.run_id,
+                chrono::Utc::now().to_rfc3339(),
+                input_id,
+                self.run_id
+            ],
+        );
+    }
 }
 
 fn store() -> Result<DataStore, String> {
@@ -286,8 +387,9 @@ pub fn recover_session_actors_on_startup() -> Result<usize, String> {
         }
     }
     let _ = conn.execute(
-        "UPDATE prompt_queue SET status = 'queued', updated_at = ?1
-         WHERE status = 'running'",
+        "UPDATE prompt_queue SET status = 'queued', lease_token = NULL,
+            lease_run_id = NULL, leased_at = NULL, updated_at = ?1
+         WHERE status IN ('running', 'leased')",
         params![chrono::Utc::now().to_rfc3339()],
     );
     let _ = conn.execute(
@@ -378,6 +480,11 @@ fn enqueue(params: Value) -> Result<Value, String> {
         .get("attachments")
         .map(|v| v.to_string())
         .unwrap_or_else(|| "null".into());
+    let kind = if source.eq_ignore_ascii_case("interjection") {
+        "steering"
+    } else {
+        "follow_up"
+    };
 
     ensure_conversation_for_queue(conversation_id, &params)?;
 
@@ -395,8 +502,8 @@ fn enqueue(params: Value) -> Result<Value, String> {
 
     conn.execute(
         "INSERT INTO prompt_queue
-            (id, conversation_id, content, source, attachments, position, client_temp_id, created_at, updated_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 'queued')",
+            (id, conversation_id, content, source, attachments, position, client_temp_id, created_at, updated_at, status, kind, drain_mode)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 'queued', ?9, 'all')",
         params![
             id,
             conversation_id,
@@ -405,7 +512,8 @@ fn enqueue(params: Value) -> Result<Value, String> {
             attachments,
             position,
             client_temp_id,
-            now
+            now,
+            kind
         ],
     )
     .or_else(|e| {
