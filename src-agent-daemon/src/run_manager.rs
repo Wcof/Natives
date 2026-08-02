@@ -1835,6 +1835,12 @@ impl RunManager {
                 gateway: {
                     let mut g = capability_gateway::CapabilityGateway::new();
                     g.register_builtins();
+                    if let Some(root) = request_project_path
+                        .as_deref()
+                        .or(run.project_path.as_deref())
+                    {
+                        g.set_project_root(root.to_string());
+                    }
                     if let Some(ref list) = tool_allowlist {
                         // Restrict fixture gateway surface to allowlist names when present.
                         // Builtins still registered; PermissionGatedTools enforces allowlist.
@@ -1907,6 +1913,7 @@ impl RunManager {
             .runtime
             .start_run(crate::production::RunStartContext {
                 run_id: run.id.clone(),
+                parent_run_id: run.parent_run_id.clone(),
                 conversation_id: run.conversation_id.clone(),
                 provider_id,
                 model_id,

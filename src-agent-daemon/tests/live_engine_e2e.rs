@@ -694,10 +694,12 @@ async fn dual_provider_engine_fixture_subagent() {
     let parent_provider = FixtureProvider {
         mode: FixtureMode::TextOnly,
     };
+    let project_root = std::env::current_dir().expect("fixture project root");
     let tools = PermissionGatedTools {
         gateway: {
             let mut g = capability_gateway::CapabilityGateway::new();
             g.register_builtins();
+            g.set_project_root(project_root.to_string_lossy().into_owned());
             Arc::new(g)
         },
         permissions: rt.permissions.clone(),
@@ -780,7 +782,15 @@ async fn dual_provider_engine_fixture_subagent() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(status, "completed", "fixture child should complete");
+    let child_record = rt.task_output(&task_id).await;
+    let child_run_id = child_record.as_ref().map(|record| record.run_id.clone());
+    let child_events = child_run_id
+        .as_deref()
+        .map(|run_id| rt.events.replay_after(run_id, 0));
+    assert_eq!(
+        status, "completed",
+        "fixture child should complete: record={child_record:?} events={child_events:?}"
+    );
     assert!(rt
         .events
         .replay_after("fixture-parent-run", 0)

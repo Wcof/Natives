@@ -223,6 +223,7 @@ pub(crate) fn compile_effective_prompt(
 /// snapshot; None = legacy behaviour (global skills, file profiles).
 pub struct RunStartContext {
     pub run_id: String,
+    pub parent_run_id: Option<String>,
     pub conversation_id: String,
     pub provider_id: String,
     pub model_id: String,
@@ -271,7 +272,12 @@ impl ProductionRuntime {
         // Wire process supervisor force-kill into cancel tree (task-03).
         rt.execution
             .set_process_cancel_hook(Arc::new(GlobalProcessCancelHook));
-        // Background reaper: idle subagent sessions.
+        // Background reaper: idle subagent sessions. Unit tests construct
+        // runtimes while holding the process-wide environment/store lock; a
+        // reaper spawned there would wait on that lock while the test waits
+        // for runtime shutdown. Integration/production builds keep the real
+        // reaper enabled.
+        #[cfg(not(test))]
         spawn_subagent_reaper();
         rt
     }
@@ -506,6 +512,7 @@ impl ProductionRuntime {
     ) -> Result<agent_core::EngineOutcome, String> {
         let RunStartContext {
             run_id,
+            parent_run_id,
             conversation_id,
             provider_id,
             model_id,
@@ -544,7 +551,9 @@ impl ProductionRuntime {
             profile.as_ref().and_then(|profile| profile.token_budget),
             model_window,
         );
-        let cancel = self.ensure_execution_token(&run_id, None).await?;
+        let cancel = self
+            .ensure_execution_token(&run_id, parent_run_id.as_deref())
+            .await?;
         let engine = Arc::new(
             AgentEngine::new(self.events.clone())
                 .with_cancel_token(cancel.clone())
@@ -2202,6 +2211,7 @@ pub async fn restart_subagent_with_binding(
 /// Background reaper: close idle subagent sessions.
 /// Safe to call without a Tokio runtime (unit tests / sync constructors): no-ops until a
 /// runtime exists; production daemon always constructs under tokio::main.
+#[cfg(not(test))]
 fn spawn_subagent_reaper() {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
@@ -2220,6 +2230,7 @@ fn spawn_subagent_reaper() {
     });
 }
 
+#[cfg(not(test))]
 async fn reaper_tick() -> Result<(), String> {
     let sessions = crate::subagent_store::list_active_for_reaper()?;
     let now = chrono::Utc::now();
