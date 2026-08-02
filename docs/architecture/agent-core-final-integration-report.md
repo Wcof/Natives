@@ -148,3 +148,9 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 旧测试曾要求在只有 `run.list` 终态而缺少权威事件时合成 `failed` 事件，这与 Projection 分型设计冲突。
 - 现在测试验证 `AuthoritativeEventMissing`，并确认 `ProjectionIncomplete(authoritative_event_missing)` 仅写入 Renderer 本地恢复状态，不伪造 Daemon sequence。
 - 精准测试通过；`npm run typecheck`、`npm run lint`、`npm run perf:check` 通过。全量 `npm run test` 的首次退出仍保留为 751/752，未重复全量套件。
+
+## 17. 当前资源与验证记录
+
+- `npm ci --ignore-scripts` 使用 `package-lock.json` 安装 801 个包；`node_modules` 未被 Git 跟踪。
+- 当前共享 Cargo target 约 7.5 GiB，Worktree target 约 5.6 GiB，可用磁盘约 60 GiB；没有遗留 Cargo/Rustc/Node 测试进程。
+- 未执行 `cargo clean`、未删除共享 target、未 push；原始 Worktree 仍保持用户的 dirty 状态。
