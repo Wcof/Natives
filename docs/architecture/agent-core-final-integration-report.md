@@ -140,6 +140,7 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 单元测试构造器不再启动会访问 SQLite/环境锁的 subagent reaper，避免测试 runtime drop 死锁；生产与集成构建仍保留 reaper。
 - Prompt Queue 的 `send_now` 和 terminal drain 只在 `RunManager` 接受新 Run 后删除 durable row；同步启动失败会 requeue actor item 并保留 SQLite 行。`SessionCoordinator::requeue` 对已存在的 claimed item 也恢复为 queued，避免重复或 Running 残留。
 - 新增精准证据：`production_runtime_registers_child_under_parent_token`、`dual_provider_engine_fixture_subagent`、`start_with_seams_loads_daemon_conversation_history`、`send_now_cancels_active_and_starts_new_run`、`requeue_restores_claimed_item_at_front` 均通过；strict `cargo check -Dwarnings`、`cargo fmt --check`、`git diff --check` 通过。
+- `fork_copies_typed_transcript_with_new_message_ids_and_ask_profile` 通过，验证 Fork 的 SQLite typed transcript 复制、消息 ID 重映射和权限 profile 重置。
 
 ## 16. Renderer 投影测试校正（`9c066af5`）
 
