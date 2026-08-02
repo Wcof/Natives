@@ -1807,7 +1807,7 @@ impl PermissionGatedTools {
             HookPermissionGate::Prompt => {}
         }
 
-        let permission_id = self
+        let permission_id = match self
             .permissions
             .request_permission_for_profile(
                 profile,
@@ -1818,7 +1818,22 @@ impl PermissionGatedTools {
                 input.clone(),
             )
             .await
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+        {
+            Ok(id) => id,
+            Err(error) => {
+                return Some(ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                        "error": format!(
+                            "permission request could not be created: {}",
+                            error.technical_message
+                        ),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+            }
+        };
 
         if permission_id == "auto-approved" {
             return None;
@@ -1830,8 +1845,7 @@ impl PermissionGatedTools {
         self.interactions
             .register_permission(&permission_id, &self.parent_run_id, name, tx)
             .await;
-        // Best-effort: persist interaction row for restart recovery.
-        let _ = crate::interaction_store::insert_pending(
+        if let Err(error) = crate::interaction_store::insert_pending(
             &permission_id,
             Some(&self.parent_run_id),
             Some(&self.conversation_id),
@@ -1842,10 +1856,35 @@ impl PermissionGatedTools {
                 "reason": format!("Approve tool `{name}`"),
                 "input": input,
             }),
-        );
+        ) {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission interaction could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        if let Err(error) = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id)
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission actor snapshot could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         if self
             .events
             .append_checked(
@@ -1861,6 +1900,12 @@ impl PermissionGatedTools {
             .is_err()
         {
             let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
             return Some(ToolExecutionResult {
                 output: serde_json::json!({"error": "permission event persistence failed"}),
                 is_error: true,
@@ -1890,20 +1935,34 @@ impl PermissionGatedTools {
         // A timeout/cancellation has no UI RPC response to mark the durable
         // interaction complete. Leaving it pending makes reconnect replay an
         // orphaned approval card after its oneshot waiter has gone away.
-        let _ = crate::interaction_store::mark_resolved(
+        if let Err(error) = crate::interaction_store::mark_resolved(
             &permission_id,
             serde_json::json!({ "approved": approved, "scope": scope }),
-        );
-        if approved {
-            if let Some(rt) = &self.runtime {
-                // Structured grant only — empty write_file pattern no longer means any path.
-                rt.remember_tool_grant_invocation(&inv, &scope).await;
-                let _ = pattern; // kept for legacy audit trails if needed
-            }
+        ) {
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission response could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
         }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, None);
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        if let Err(error) = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id)
+        {
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission actor snapshot could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         if self
             .events
             .append_checked(
@@ -1921,6 +1980,13 @@ impl PermissionGatedTools {
                 is_error: true,
                 duration_ms: 0,
             });
+        }
+        if approved {
+            if let Some(rt) = &self.runtime {
+                // Structured grant only — empty write_file pattern no longer means any path.
+                rt.remember_tool_grant_invocation(&inv, &scope).await;
+                let _ = pattern; // kept for legacy audit trails if needed
+            }
         }
         if !approved {
             let _ = permission_hooks
@@ -2135,7 +2201,7 @@ impl PermissionGatedTools {
                 tx,
             )
             .await;
-        let _ = crate::interaction_store::insert_pending(
+        if crate::interaction_store::insert_pending(
             &permission_id,
             Some(&self.parent_run_id),
             Some(&self.conversation_id),
@@ -2146,10 +2212,22 @@ impl PermissionGatedTools {
                 "reason": reason,
                 "input": card,
             }),
-        );
+        )
+        .is_err()
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            return (false, "persistence_failed".into());
+        }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        if crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id).is_err() {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            return (false, "persistence_failed".into());
+        }
         if self
             .events
             .append_checked(
@@ -2165,6 +2243,12 @@ impl PermissionGatedTools {
             .is_err()
         {
             let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
             return (false, "persistence_failed".into());
         }
 
@@ -2195,13 +2279,21 @@ impl PermissionGatedTools {
             }
         };
 
-        let _ = crate::interaction_store::mark_resolved(
+        if crate::interaction_store::mark_resolved(
             &permission_id,
             serde_json::json!({ "approved": approved, "scope": scope }),
-        );
+        )
+        .is_err()
+        {
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return (false, "persistence_failed".into());
+        }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, None);
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        if crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id).is_err() {
+            return (false, "persistence_failed".into());
+        }
         if self
             .events
             .append_checked(

@@ -659,7 +659,10 @@ impl AgentEngine {
         let Some(receiver) = &self.input_receiver else {
             return Ok(false);
         };
-        let pending = receiver.drain(kind, mode, point).await;
+        let pending = receiver
+            .drain(kind, mode, point)
+            .await
+            .map_err(|error| EngineError::Message(format!("input drain failed: {error}")))?;
         if pending.is_empty() {
             return Ok(false);
         }
@@ -668,18 +671,18 @@ impl AgentEngine {
                 .ack(&input, turn_id)
                 .await
                 .map_err(|error| EngineError::Message(format!("input ack failed: {error}")))?;
+            let label = match input.kind {
+                crate::PendingInputKind::Steering => "steering",
+                crate::PendingInputKind::FollowUp => "follow_up",
+            };
+            let content = if input.content.starts_with(&format!("[{label}]\n")) {
+                input.content.clone()
+            } else {
+                format!("[{label}]\n{}", input.content)
+            };
             messages.push(crate::AgentMessage::User(crate::UserMessage {
                 message_id: crate::MessageId::from(format!("queue:{}", input.id)),
-                content: vec![crate::ContentBlock::Text {
-                    text: format!(
-                        "[{}]\n{}",
-                        match input.kind {
-                            crate::PendingInputKind::Steering => "steering",
-                            crate::PendingInputKind::FollowUp => "follow_up",
-                        },
-                        input.content
-                    ),
-                }],
+                content: vec![crate::ContentBlock::Text { text: content }],
             }));
         }
         Ok(true)
@@ -1393,39 +1396,9 @@ impl AgentEngine {
                         },
                     ),
                 }));
-                let follow_up_consumed = match self
-                    .drain_inputs(
-                        crate::PendingInputKind::FollowUp,
-                        crate::DrainMode::All,
-                        crate::InputSafePoint::BeforeRunEnd,
-                        &mut typed_messages,
-                        Some(turn_id.0.as_str()),
-                    )
-                    .await
-                {
-                    Ok(consumed) => consumed,
-                    Err(error) => {
-                        self.close_failed_turn(
-                            run_id,
-                            &turn_id,
-                            &assistant_message_id,
-                            "error",
-                            &text_acc,
-                            &reasoning_acc,
-                        )?;
-                        return Err(error);
-                    }
-                };
-                if follow_up_consumed {
-                    self.events.append(
-                        run_id,
-                        RunEventKind::Progress {
-                            message: "follow_up_consumed".into(),
-                            percentage: None,
-                        },
-                    );
-                    continue;
-                }
+                // Close the response before consuming a follow-up. The next
+                // provider turn must never begin with an uncommitted prior
+                // MessageStarted/TurnStarted pair.
                 let stop_label = stop_reason_label(stop_reason.as_ref());
                 self.append_critical(
                     run_id,
@@ -1449,6 +1422,29 @@ impl AgentEngine {
                         output_tokens: 0,
                     },
                 )?;
+                let follow_up_consumed = match self
+                    .drain_inputs(
+                        crate::PendingInputKind::FollowUp,
+                        crate::DrainMode::All,
+                        crate::InputSafePoint::BeforeRunEnd,
+                        &mut typed_messages,
+                        Some(turn_id.0.as_str()),
+                    )
+                    .await
+                {
+                    Ok(consumed) => consumed,
+                    Err(error) => return Err(error),
+                };
+                if follow_up_consumed {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::Progress {
+                            message: "follow_up_consumed".into(),
+                            percentage: None,
+                        },
+                    );
+                    continue;
+                }
                 // No tools — complete. Status commit is RunManager's job.
                 let stop = self
                     .hooks
@@ -1641,33 +1637,6 @@ impl AgentEngine {
                 })
             });
 
-            // Safe point: after tool batch completes.
-            self.apply_safe_point(
-                &config.conversation_id,
-                crate::session_coordinator::SafePoint::AfterTool,
-                &mut typed_messages,
-            );
-            if let Err(error) = self
-                .drain_inputs(
-                    crate::PendingInputKind::Steering,
-                    crate::DrainMode::All,
-                    crate::InputSafePoint::AfterToolBatch,
-                    &mut typed_messages,
-                    Some(turn_id.0.as_str()),
-                )
-                .await
-            {
-                self.close_failed_turn(
-                    run_id,
-                    &turn_id,
-                    &assistant_message_id,
-                    "error",
-                    &text_acc,
-                    &reasoning_acc,
-                )?;
-                return Err(error);
-            }
-
             let mut typed_tool_calls = Vec::new();
             let mut typed_tool_results = Vec::new();
             for item in executed {
@@ -1759,6 +1728,27 @@ impl AgentEngine {
                 return Err(EngineError::Message(
                     "critical tool persistence failed; run stopped fail-closed".into(),
                 ));
+            }
+
+            // Safe point: the tool batch and its assistant/tool-result
+            // transcript are fully committed before steering is leased. A
+            // queue failure therefore cannot leave an open turn behind.
+            self.apply_safe_point(
+                &config.conversation_id,
+                crate::session_coordinator::SafePoint::AfterTool,
+                &mut typed_messages,
+            );
+            if let Err(error) = self
+                .drain_inputs(
+                    crate::PendingInputKind::Steering,
+                    crate::DrainMode::All,
+                    crate::InputSafePoint::AfterToolBatch,
+                    &mut typed_messages,
+                    Some(turn_id.0.as_str()),
+                )
+                .await
+            {
+                return Err(error);
             }
 
             // Compact large tool outputs + repair dangling tool_call_ids before
@@ -4969,5 +4959,98 @@ mod tests {
                 EngineProviderEvent::Completed,
             ])))
         }
+    }
+
+    #[tokio::test]
+    async fn follow_up_closes_previous_turn_before_next_provider_call() {
+        struct FollowUpReceiver {
+            offered: AtomicBool,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::EngineInputReceiver for FollowUpReceiver {
+            async fn drain(
+                &self,
+                kind: crate::PendingInputKind,
+                _mode: crate::DrainMode,
+                _point: crate::InputSafePoint,
+            ) -> Result<Vec<crate::PendingInput>, String> {
+                if kind == crate::PendingInputKind::FollowUp
+                    && !self.offered.swap(true, Ordering::SeqCst)
+                {
+                    Ok(vec![crate::PendingInput {
+                        id: "follow-up-1".into(),
+                        kind,
+                        content: "continue with the next step".into(),
+                    }])
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+
+            async fn ack(
+                &self,
+                _input: &crate::PendingInput,
+                _turn_id: Option<&str>,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+        }
+
+        let run_id = format!("follow-up-turn-boundary-{}", uuid::Uuid::new_v4());
+        let engine = AgentEngine::new(EventSequencer::new()).with_input_receiver(Arc::new(
+            FollowUpReceiver {
+                offered: AtomicBool::new(false),
+            },
+        ));
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![
+                    EngineProviderEvent::TextDelta("first answer".into()),
+                    EngineProviderEvent::Completed,
+                ],
+                vec![
+                    EngineProviderEvent::TextDelta("second answer".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "follow-up-conversation".into(),
+                    model: "model".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "start".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+
+        let events = engine.events.replay_after(&run_id, 0);
+        let first_turn_completed = events
+            .iter()
+            .position(|event| matches!(event.payload, RunEventKind::TurnCompleted { .. }))
+            .expect("first turn must be committed");
+        let second_turn_started = events
+            .iter()
+            .skip(first_turn_completed + 1)
+            .position(|event| matches!(event.payload, RunEventKind::TurnStarted { .. }))
+            .map(|offset| first_turn_completed + 1 + offset)
+            .expect("follow-up must begin a new turn");
+        assert!(first_turn_completed < second_turn_started);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.payload, RunEventKind::MessageCompleted { .. }))
+                .count(),
+            2
+        );
     }
 }

@@ -230,3 +230,43 @@
 - 修复后行为：Gateway 暴露单一 `validate_external_input` 校验边界；生产工具先拒绝未知 namespaced MCP，再按 MCP 广告 schema 校验动态参数，之后才进入 permission/transport。
 - 影响：Schema 不再只是模型提示，动态外部工具也必须通过最终校验；generic `mcp_call` 保持既有 envelope 兼容。
 - 测试方式：严格 `cargo check -Dwarnings` 通过；真实 MCP fixture 仍待受控集成验证。
+
+## Follow-up/Steering 在上一 Turn 结算前消费
+
+- 严重等级：P1
+- 所属模块：`crates/agent-core/src/engine.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：Follow-up 在 `MessageCompleted`/`TurnCompleted` 写入前被 ack 并注入内存 transcript；Steering 也在工具结果组装后、当前 Assistant Turn 结算前消费。
+- 修复后行为：两类输入都在当前 Turn 的完整权威结算事实之后消费；ack 失败直接结束当前 Run，不重复补发失败 Turn 事件。
+- 影响：Provider Partial/未结算 Assistant Message 之间不会插入下一条用户输入，Conversation Store 可按事件完整重放。
+- 测试方式：`engine::tests::follow_up_closes_previous_turn_before_next_provider_call` 通过；严格编译通过。
+
+## Permission 持久化错误被吞掉或被随机 ID 替换
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/production_tools.rs`、`interaction_store.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：Permission Broker 错误被替换为随机 UUID；interaction/session actor/响应写入失败仍可继续等待或授予 grant。
+- 修复后行为：Broker、interaction row、actor snapshot、resolved response 或权威 PermissionResponded 任一持久化失败均返回 `PERMISSION_PERSISTENCE_FAILED`/拒绝；grant 在 PermissionResponded 成功后才记录。
+- 影响：没有可恢复权限事实时不会执行副作用工具，也不会留下可误用的权限授权。
+- 测试方式：严格 `cargo check -Dwarnings` 通过；应补充 DataStore fault-injection 精测。
+
+## Resume Plan 在 detached Preparing 阶段被提前结算
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/rpc.rs`、`run_manager.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：Retry/Continue RPC 在 `start_detached` 仅返回 `Preparing` 后立即将 `resume_plan` 标记为 `executed`。
+- 修复后行为：RPC 不再提前结算；RunManager 在 capability/harness/effective prompt 运行计划成功持久化后，进入真实执行前才更新 approved plan。
+- 影响：后台启动失败不会伪装为已恢复；Source Run、New Run 和 Resume Plan 状态可区分。
+- 测试方式：既有 Continue lineage 精测验证 approved/executed 转换；本轮严格编译通过。
+
+## Durable Steering/Follow-up drain 错误被当作空队列
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/prompt_queue_store.rs`、`crates/agent-core/src/input.rs`
+- 修复状态：已修复（当前 Worktree）
+- 原始行为：SQLite store、事务、查询或提交失败时，`DurableInputReceiver::drain` 返回空列表，Core 会继续 Provider 调用并可能静默丢失用户插话。
+- 修复后行为：`drain` 返回 `Result`；任一持久化错误都传播为 Engine 错误，队列不会被伪装成空队列，下一轮 Provider 调用不会继续。
+- 影响：Steering/Follow-up 的 lease/ack 失败保持可审计并 fail closed，避免输入事实丢失。
+- 测试方式：严格 `RUSTFLAGS=-Dwarnings cargo check` 通过；Follow-up Turn 边界精测通过。

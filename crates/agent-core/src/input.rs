@@ -36,7 +36,7 @@ pub trait EngineInputReceiver: Send + Sync {
         kind: PendingInputKind,
         mode: DrainMode,
         point: InputSafePoint,
-    ) -> Vec<PendingInput>;
+    ) -> Result<Vec<PendingInput>, String>;
     /// Persist the consumed input before Core mutates the next Provider
     /// transcript. Failure must stop the run rather than silently losing a
     /// steering/follow-up message.
@@ -53,8 +53,8 @@ impl EngineInputReceiver for NoopInputReceiver {
         _kind: PendingInputKind,
         _mode: DrainMode,
         _point: InputSafePoint,
-    ) -> Vec<PendingInput> {
-        Vec::new()
+    ) -> Result<Vec<PendingInput>, String> {
+        Ok(Vec::new())
     }
     async fn ack(&self, _input: &PendingInput, _turn_id: Option<&str>) -> Result<(), String> {
         Ok(())

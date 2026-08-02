@@ -58,7 +58,7 @@ impl EngineInputReceiver for DurableInputReceiver {
         kind: PendingInputKind,
         mode: DrainMode,
         _point: InputSafePoint,
-    ) -> Vec<PendingInput> {
+    ) -> Result<Vec<PendingInput>, String> {
         let kind = match kind {
             PendingInputKind::Steering => "steering",
             PendingInputKind::FollowUp => "follow_up",
@@ -67,30 +67,25 @@ impl EngineInputReceiver for DurableInputReceiver {
             DrainMode::One => 1,
             DrainMode::All => i64::MAX,
         };
-        let Ok(store) = store() else {
-            return Vec::new();
-        };
-        let Ok(mut conn) = store.conn() else {
-            return Vec::new();
-        };
-        let Ok(tx) = conn.transaction() else {
-            return Vec::new();
-        };
+        let store = store()?;
+        let mut conn = store.conn()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         let queued = {
-            let Ok(mut stmt) = tx.prepare(
-                "SELECT id, content FROM prompt_queue
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, content FROM prompt_queue
                  WHERE conversation_id = ?1 AND kind = ?2 AND status = 'queued'
                  ORDER BY position, created_at LIMIT ?3",
-            ) else {
-                return items;
-            };
-            let Ok(rows) = stmt.query_map(params![self.conversation_id, kind, limit], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            }) else {
-                return items;
-            };
-            rows.flatten().collect::<Vec<_>>()
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![self.conversation_id, kind, limit], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?
         };
         let leased_at = chrono::Utc::now().to_rfc3339();
         for row in queued {
@@ -115,8 +110,8 @@ impl EngineInputReceiver for DurableInputReceiver {
                 });
             }
         }
-        let _ = tx.commit();
-        items
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(items)
     }
 
     async fn ack(&self, input: &PendingInput, turn_id: Option<&str>) -> Result<(), String> {

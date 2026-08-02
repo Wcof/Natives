@@ -1657,6 +1657,11 @@ impl RunManager {
             self.fail_run_if_active(&run.id, error.to_string(), error.code);
             return Err(error.to_string());
         }
+        // A retry/continue plan is only consumed once the detached run has
+        // passed preparation and its immutable execution plan is durable. A
+        // provider/tool failure after this point is a real new-run outcome,
+        // not a reason to revive the source future.
+        self.mark_resume_plan_executed_for_run(&run)?;
         // Keep selected MCP servers warm for the run's lifetime (refcounted;
         // released on every exit path below via this guard).
         for server_id in &capability_snapshot.mcp_servers {
@@ -2291,6 +2296,18 @@ impl RunManager {
             .map_err(|error| error.to_string())?;
         if changed == 0 {
             return Err("approved resume plan not found".into());
+        }
+        Ok(())
+    }
+
+    fn mark_resume_plan_executed_for_run(&self, run: &RunV2) -> Result<(), String> {
+        let source_run_id = run
+            .continued_from_run_id
+            .as_deref()
+            .or(run.resume_of_run_id.as_deref())
+            .or(run.retry_of_run_id.as_deref());
+        if let Some(source_run_id) = source_run_id {
+            self.mark_resume_plan_executed(source_run_id, &run.id)?;
         }
         Ok(())
     }

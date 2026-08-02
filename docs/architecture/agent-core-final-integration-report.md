@@ -167,3 +167,18 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 动态 MCP 工具在进入 permission/transport 前按广告 Schema 校验；未注册的 namespaced MCP 名称返回 `UNKNOWN_TOOL`，不进入 transport。
 - `DaemonToolProgressSink` 与 settled 状态使用同一锁序，保证结算与迟到进度不会交叉产生事件；`ToolOutputDelta` 增加可选 `tool_name`，保留旧协议反序列化兼容。
 - 受控验证：严格 `cargo check -Dwarnings` 通过；`settled_tool_drops_late_progress` 精测通过。此前 workspace/native verifier 和前端全量测试仍按资源上限未重跑，不能宣称全量绿。
+
+## 19. 本轮安全点与恢复计划补充
+
+- Follow-up 现在先提交上一 Assistant Message/Turn 的完整结算事实，再在 `BeforeRunEnd` 消费 durable queue；Steering 也在 ToolCallCompleted、MessageCompleted、TurnCompleted 之后消费，ack 失败不会留下未关闭的 Turn。
+- Permission 请求、interaction row、session actor snapshot 和 PermissionResponded 现在均按 fail-closed 处理；Permission Broker 错误不再被随机 UUID 替换，未持久化的权限结果不会创建 grant。
+- Retry/Continue 的 `resume_plan` 不再由 RPC 在 `Preparing` 返回时提前标记 `executed`；RunManager 在运行计划持久化完成、真正进入执行前结算 approved plan，失败仍保持可审计的未结算状态。
+- 本轮新增精准证据：`engine::tests::follow_up_closes_previous_turn_before_next_provider_call` 通过；严格 `cargo check -Dwarnings` 通过。完整 workspace/native verifier 和真实外部 fixture 仍未重新运行。
+
+## 20. 本轮队列与权限收口补充
+
+- `DurableInputReceiver::drain` 不再把 SQLite store、事务、查询或提交错误折叠为空队列；错误会穿过 `EngineInputReceiver` 传播到 Agent Core，阻止下一次 Provider 调用。
+- Permission interaction、actor snapshot、resolved response 和 PermissionResponded 任一关键持久化失败都会返回 `PERMISSION_PERSISTENCE_FAILED` 或拒绝结果；批准 grant 只在权威响应事件持久化后记录。
+- Retry/Continue 的 `resume_plan` 由 RunManager 在运行计划持久化后结算，RPC 不再在 Preparing 响应阶段提前结算。
+- 最终精确 Follow-up Turn 边界测试通过；因固定测试 Run ID 会读取默认持久化事件日志，本轮将该 fixture 改为 UUID Run ID，避免跨次测试污染。
+- 本轮最终 strict Cargo check、fmt/diff 检查和精确测试均通过；workspace/native verifier、完整前端套件和真实外部 Provider/Shell/MCP fixture 仍未按资源上限重跑。

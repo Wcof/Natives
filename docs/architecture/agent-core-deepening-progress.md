@@ -34,6 +34,14 @@
 - `1d235cd5` 让 Prompt Queue 在 RunManager 同步启动失败时保留 SQLite 行并恢复 actor 队列，补充 requeue 回归测试。
 - `9c066af5` 将 Renderer 旧的“从 run.list 合成终态”测试改为权威事件缺失恢复测试；不改变生产投影的 fail-closed 行为。
 
+## 当前收口状态（当前 Worktree）
+
+- Follow-up/Steering：**已接生产**；上一 Turn 的 `MessageCompleted/TurnCompleted` 先于 queue lease/ack 消费，ack 失败 fail closed；精准 Follow-up Turn 边界测试通过。
+- Permission 持久化：**已接生产**；Broker、interaction、actor snapshot、resolved response 和 PermissionResponded 形成 fail-closed 链路；尚缺 fault-injection 精测。
+- Retry/Continue Resume Plan：**已接生产**；RPC 不再在 `Preparing` 返回时提前标记 `executed`，由 RunManager 在执行计划持久化后结算。
+- Checkpoint/Conversation authority：**已接生产**；Runtime 实例的 EventLog/Checkpoint 共用 DataStore；失败/取消完整 typed turn 会持久化，partial typed turn 跳过。
+- 最终验证：**部分完成**；最新严格 Cargo check、fmt、git diff 和精准 Follow-up/Progress 测试通过；workspace test、native verifier 和真实外部 Provider/Shell/MCP fixture 仍无新的全量证据。
+
 ## 设计偏差
 
 - 新 Worktree 基于 P0 最新提交；本轮新增一个 `run.continue` RPC 方法及 renderer wire 字段，但未改变 RunManager terminal authority、UI 行为或数据库既有列语义。
