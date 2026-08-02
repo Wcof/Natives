@@ -691,10 +691,10 @@ impl ProductionRuntime {
         };
         // The Core owns active-context compaction. Keep the daemon boundary
         // lossless: typed history goes through the typed entry point without
-        // flattening to EngineMessage. Legacy history is used only when the
-        // database predates typed message rows.
-        let legacy_history = crate::conversation_store::engine_history(&conversation_id)
-            .unwrap_or_default();
+        // flattening to EngineMessage. Legacy rows are converted once below
+        // when a database predates typed message rows.
+        let legacy_history =
+            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
         let typed_history = if typed_history.is_empty() && !legacy_history.is_empty() {
             agent_core::engine_messages_to_agent_messages(&legacy_history)
         } else {

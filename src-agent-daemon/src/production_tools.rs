@@ -857,26 +857,6 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: 0,
             };
         }
-        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
-            &self.parent_run_id,
-            &stream_tool_call_id,
-            name,
-            crate::side_effect_ledger::category_for_tool(name),
-            "started",
-            false,
-            turn_id,
-            &input,
-        ) {
-            return ToolExecutionResult {
-                output: serde_json::json!({
-                    "error_code": "PERSISTENCE_FAILED",
-                    "error": format!("tool side-effect ledger could not be started: {error}"),
-                }),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
         if name == "skill" {
             let skill_name = input.get("name").and_then(Value::as_str).unwrap_or("");
             let Some(project_root) = self.gateway.project_root.as_deref() else {
@@ -966,6 +946,26 @@ impl EngineToolRuntime for PermissionGatedTools {
         for rel in &write_paths {
             let _ = crate::checkpoint::global_checkpoint_manager()
                 .capture_before(&self.parent_run_id, rel);
+        }
+
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &stream_tool_call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "started",
+            false,
+            turn_id,
+            &input,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("tool side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
         }
 
         let started = Instant::now();
