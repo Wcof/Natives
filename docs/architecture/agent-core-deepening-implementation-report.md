@@ -111,3 +111,9 @@ Provider stop reason family 映射测试。
 - 生产 `RealProvider`、`RoutedProvider`、`Sub2ApiPoolProvider` 显式实现 `stream_turn`，直接接收 Core 的 `ProviderTurnRequest`。
 - typed transcript 只在 provider-neutral `HistoryMessage` 边界转换；`EngineMessage` 仅保留旧数据库/fixture 兼容路径。
 - 增加 Thinking/Image/ToolCall/ToolResult identity 回归测试，并修正 assistant fallback Thinking 内容。
+
+## 11. 最终受控验收（`0a2542a0`）
+
+- strict `RUSTFLAGS=-Dwarnings cargo check` 覆盖 natives、daemon、protocol、Core、provider-adapters、capability-gateway，通过。
+- legacy delta-only conversation fixture 保留 duration-bearing reasoning compatibility block；带 `MessageCompleted` 的 typed path 只持久化 canonical Thinking。
+- workspace 首次运行中两个旧 tool fixture 因未声明 `ToolUse` stop reason 失败，已改 fixture 并用两个精准测试复验通过；workspace 未因资源策略重复运行。

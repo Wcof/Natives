@@ -123,6 +123,13 @@
 - 当前行为：生产 Core 主循环调用 `stream_turn`，daemon 在 provider-neutral `HistoryMessage` 边界保留 Thinking、Image、ToolCall、ToolResult identity；不再通过 trait 默认实现重建 `EngineMessage`。
 - 验证：`typed_boundary_preserves_blocks_and_tool_identity` 通过；完整 workspace/live provider 验证仍按报告标记未完成。
 
+## Legacy delta-only reasoning compatibility
+
+- 修复状态：已修复兼容回归。
+- 代码证据：`src-agent-daemon/src/conversation_store.rs::append_single_assistant_turn`。
+- 当前行为：没有 `MessageCompleted` 的旧 delta 批次仍保留带 duration 的 `reasoning` block；生产 typed `MessageCompleted` 批次使用 canonical `Thinking`，不会重复写旧块。
+- 验证：`conversation_round_trip_uses_daemon_tables` 通过。
+
 ## Side-effect Ledger 开始/完成事实
 
 - 严重等级：P1
