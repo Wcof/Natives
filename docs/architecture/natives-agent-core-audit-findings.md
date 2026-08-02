@@ -404,3 +404,36 @@
 - 当前行为：transport 前必须写 started；完成/失败/取消写 settle，settle 失败尝试 uncertain 并返回 `PERSISTENCE_FAILED`。
 - 影响：MCP 副作用不会在 ledger 缺口下被报告为成功，也能阻止不安全自动恢复。
 - 测试方式：严格 warning-as-error check 通过；真实 MCP fault-injection 尚待运行。
+
+## Daemon 启动恢复错误被忽略
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/run_manager.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`RunManager::try_new_with_store`、`interrupt_active_sqlite_runs`
+- 原始行为：runs snapshot、Prompt Queue/SessionActor 恢复及 interaction/permission 清理错误可能被 `_` 丢弃，Daemon 仍继续运行。
+- 当前行为：恢复读取、事务更新和 actor hydration 错误直接返回；有 durable store 的构造路径 fail closed。
+- 影响：Daemon 不会在未知恢复状态下接受新 Run 或自动推进队列。
+- 测试方式：严格 warning-as-error check 通过；启动故障注入仍待补充。
+
+## Prompt Queue dispatch 结算写入被忽略
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/prompt_queue_store.rs`、`src-agent-daemon/src/production.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`send_now`、`on_run_terminal`、`ProductionRuntime::start_run`
+- 原始行为：Run 已启动后，queue sent UPDATE/DELETE 或 terminal settlement 错误可能被忽略，造成内存 actor 与 durable row 分叉。
+- 当前行为：UPDATE 必须恰好影响一行，DELETE/actor snapshot/terminal settlement 错误均向上返回。
+- 影响：队列不会在未确认 durable dispatch 的情况下静默丢失或重复推进。
+- 测试方式：`send_now_cancels_active_and_starts_new_run` 通过；SQL fault-injection 尚待补充。
+
+## Retry/Restore 读取错误静默降级
+
+- 严重等级：P1
+- 所属模块：`src-agent-daemon/src/run_manager.rs`、`src-agent-daemon/src/side_effect_ledger.rs`、`src-agent-daemon/src/rpc.rs`
+- 修复状态：已修复（当前 Worktree）
+- 代码证据：`retry` checkpoint lookup、`coverage_for_run`、`workspace.restorePreview`
+- 原始行为：checkpoint/ledger 查询失败可能变成无 checkpoint、`unknown` coverage 或空 history。
+- 当前行为：数据库和 replay 错误传播为失败结果；仅“没有记录”才返回合法的 `unknown` coverage。
+- 影响：恢复决策不再建立在不可见或损坏的副作用事实之上。
+- 测试方式：严格 warning-as-error check 通过；数据库 fault-injection 尚待补充。

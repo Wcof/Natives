@@ -827,8 +827,9 @@ impl ProductionRuntime {
         // RunManager is the sole lifecycle committer after this returns.
         // SessionCoordinator: drain next prompt / cancel-and-send after real terminal.
         // Never re-executes the just-finished run — only starts a *new* queued item.
-        let _ =
-            crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success).await;
+        crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success)
+            .await
+            .map_err(|error| format!("prompt queue terminal settlement failed: {error}"))?;
         Ok(outcome)
     }
 

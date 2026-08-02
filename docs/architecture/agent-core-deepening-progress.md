@@ -68,3 +68,10 @@
 - Prompt Queue 启动恢复、actor snapshot、lease/status 行与 malformed queue item 均改为严格错误传播；RPC/Authority 的 event replay 使用 checked API，不再把坏事件流当成空数组。
 - MCP side-effect ledger 在实际 transport 前记录 `started`，完成/失败/取消后必须 settle；settle 失败尝试 `uncertain` 并返回 `PERSISTENCE_FAILED`。Continue 的 branch parent message 查询也不再 `.ok()` 静默降级。
 - 精确验证：`tool_name_does_not_select_batch_execution`、Gateway schema rejection、Gateway cancellation、`malformed_queue_snapshot_is_rejected`、`context_compression_events_persist_snapshot_and_reenter_history` 通过；受控 `RUSTFLAGS=-Dwarnings cargo check` 与 `cargo fmt` 通过。workspace/native verifier、前端全量套件、真实外部 Provider/Shell/MCP fixture 与 permission fault-injection 仍未按资源规则重复运行。
+
+## 25. 启动恢复与队列结算再收口（当前 Worktree）
+
+- `RunManager::try_new_with_store` 现在传播 runs snapshot 与 SessionCoordinator 恢复错误；启动恢复事务的 active-run、interaction、permission 和 actor 更新也全部严格检查。
+- Prompt Queue 的 send-now、idle start、terminal drain 必须成功更新/删除 durable row，conversation/provider 读取缺失直接失败；生产 `start_run` 不再忽略 terminal queue settlement 错误。
+- Retry checkpoint 查询、restore coverage 读取和 `start_with_seams` 的 history/cancel-token 注册不再静默降级。`coverage_for_run` 现在返回 `Result`，RPC 不会把数据库错误显示为 `unknown`。
+- 精确验证：`send_now_cancels_active_and_starts_new_run` 通过；最新严格 `RUSTFLAGS=-Dwarnings cargo check`、fmt 通过。workspace/native verifier、前端全量套件与真实外部 fixture 仍未运行。

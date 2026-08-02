@@ -206,3 +206,10 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - Queue recovery 与 event replay 的 SQL/JSON 错误向上返回；RPC 以错误响应结束，不再发送空事件数组。MCP ledger settle 失败转为 uncertain/PERSISTENCE_FAILED；child event replay 损坏转为 SubagentFailed。
 - 本轮未扩大 UI、RPC 或数据库 schema surface，也未引入 TurnLoop/Scheduler/Progress Sink 的后续架构重写。
 - 精确测试和受控 strict check 通过；真实外部 fixture 与资源受限的全量命令仍保持未验证状态。
+
+## 24. 启动恢复与队列结算补强
+
+- Daemon 使用 durable store 启动时，runs snapshot、session actor recovery 和 recovery transaction 任一错误都会阻止继续提供服务。
+- Prompt Queue 不再吞掉 sent UPDATE/DELETE 或缺失 conversation/provider；Run terminal settlement 失败会返回到 RunManager 的失败结算路径。
+- Retry/Restore 的 checkpoint 与 side-effect coverage 读取改为错误传播，不再用空/unknown 结果掩盖数据库损坏。
+- `send_now_cancels_active_and_starts_new_run` 和最新 strict check 通过；完整外部与全量验证仍未宣称通过。

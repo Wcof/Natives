@@ -3047,10 +3047,10 @@ fn handle_rewind_rpc(
         }
         "workspace.restorePreview" => {
             let preview = mgr.rewind_preview(run_id, &project_path, paths.as_deref())?;
-            let mut value = serde_json::to_value(preview).unwrap_or_default();
+            let mut value = serde_json::to_value(preview)
+                .map_err(|e| format!("serialize restore preview: {e}"))?;
             if let Some(obj) = value.as_object_mut() {
-                let coverage = crate::side_effect_ledger::coverage_for_run(run_id)
-                    .unwrap_or_else(|| "unknown".into());
+                let coverage = crate::side_effect_ledger::coverage_for_run(run_id)?;
                 obj.insert("coverage".into(), serde_json::json!(coverage));
                 obj.insert("scope".into(), serde_json::json!("workspace_file_only"));
             }

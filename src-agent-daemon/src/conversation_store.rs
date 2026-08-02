@@ -1471,7 +1471,7 @@ fn persist_context_snapshots_from_events(
         None => None,
     };
     for event in events {
-        let (snapshot_id, before_tokens, after_tokens, summary, committed) = match &event.payload {
+        let (snapshot_id, _before_tokens, after_tokens, summary, committed) = match &event.payload {
             RunEventKind::ContextCompressed {
                 before_tokens,
                 after_tokens,
@@ -1557,6 +1557,10 @@ fn persist_context_snapshots_from_events(
             .as_ref()
             .and_then(|value| value.6.map(str::to_string))
             .or(event_turn_id);
+        let mechanical_summary_id = format!(
+            "context-summary-{run_id}-{}",
+            event.effective_run_sequence()
+        );
         let snapshot_id = snapshot_id
             .map(str::to_string)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -1590,11 +1594,11 @@ fn persist_context_snapshots_from_events(
                 None,
                 None,
                 event.effective_run_sequence(),
-                serde_json::json!({
-                    "before_tokens": before_tokens,
-                    "after_tokens": after_tokens,
-                    "event_sequence": event.effective_run_sequence(),
-                }),
+                serde_json::json!([{
+                    "message_id": mechanical_summary_id,
+                    "role": "system",
+                    "content": summary,
+                }]),
             )
         };
         let estimated_tokens = if after_tokens > 0 {
@@ -1644,10 +1648,7 @@ fn persist_context_snapshots_from_events(
                 conversation_id.as_deref(),
                 run_id,
                 turn_id.as_deref(),
-                &format!(
-                    "context-summary-{run_id}-{}",
-                    event.effective_run_sequence()
-                ),
+                &mechanical_summary_id,
                 summary,
             )?;
         }
@@ -2638,6 +2639,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(summary_count, 1);
+        let active = load_active_context_snapshot("compact-conv")
+            .unwrap()
+            .expect("mechanical compaction snapshot");
+        assert!(matches!(
+            &active.messages[0],
+            AgentMessage::System(message) if message.text.contains("alpha survives")
+        ));
         let history = engine_history("compact-conv").unwrap();
         assert_eq!(history[0].role, "system");
         assert!(history[0].content.contains("alpha survives"));

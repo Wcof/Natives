@@ -163,3 +163,10 @@ Provider stop reason family 映射测试。
 ### 未完成验证
 
 - 真实 Provider、Shell、HTTP/SSE MCP 和 permission fault-injection 仍未运行；workspace test、native verifier、前端完整套件按资源上限不重复运行。报告不将这些项目标记为通过。
+
+## 18. 启动恢复与 durable queue 结算边界
+
+- `RunManager::try_new_with_store` 不再忽略 snapshot/queue recovery；恢复事务内部的 active run、interaction、permission 和 actor 更新错误会终止启动。
+- `prompt_queue_store` 的 send-now、idle start、terminal drain 对 sent UPDATE、row DELETE 和 conversation lookup 做严格检查，并在生产 Run 结束时传播 queue settlement 错误。
+- Retry 的 checkpoint lookup、restore preview 的 side-effect coverage、legacy seam 的 history/replay/cancel-token 注册均改为 fail closed。
+- 精确验证：`send_now_cancels_active_and_starts_new_run` 通过；strict warning-as-error check 通过。

@@ -736,7 +736,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
         .ok_or_else(|| "id is required".to_string())?;
 
     let store = store()?;
-    let (conversation_id, content, attachments_raw, provider_id, model_id, project_path) = {
+    let (conversation_id, content, _attachments_raw, provider_id, model_id, project_path) = {
         let conn = store.conn()?;
         conn.query_row(
             "SELECT q.conversation_id, q.content, q.attachments,
@@ -787,11 +787,11 @@ async fn send_now(params: Value) -> Result<Value, String> {
             .map(|r| r.id)
             .collect();
         for run_id in &active_ids {
-            let _ = rm
-                .cancel(CancelRunRequest {
-                    run_id: run_id.clone(),
-                })
-                .await;
+            rm.cancel(CancelRunRequest {
+                run_id: run_id.clone(),
+            })
+            .await
+            .map_err(|error| format!("cancel active run before send_now: {error}"))?;
             for _ in 0..20 {
                 if rm
                     .get_run(run_id)
@@ -842,27 +842,25 @@ async fn send_now(params: Value) -> Result<Value, String> {
                     };
                     let conn = store.conn()?;
                     let now = chrono::Utc::now().to_rfc3339();
-                    let _ = conn.execute(
-                        "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-                        params![now, item.id],
-                    );
-                    let _ =
-                        conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
                     harness.mark_running_item(
                         &conversation_id,
                         &run.id,
                         Some(&item.id),
                         &item.content,
                     );
+                    let changed = conn.execute(
+                        "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                        params![now, item.id],
+                    )
+                    .map_err(|e| format!("mark queued prompt sent: {e}"))?;
+                    if changed != 1 {
+                        return Err("queued prompt was not transitioned to sent".into());
+                    }
+                    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+                        .map_err(|e| format!("remove sent prompt: {e}"))?;
                     persist_actor_snapshot(&conversation_id)?;
-                    return Ok(serde_json::to_value(run).unwrap_or_else(|_| {
-                        json!({
-                            "conversation_id": conversation_id,
-                            "content": item.content,
-                            "started": true,
-                            "queue_item_id": item.id,
-                        })
-                    }));
+                    return serde_json::to_value(run)
+                        .map_err(|e| format!("serialize started run: {e}"));
                 }
             }
         }
@@ -886,10 +884,6 @@ async fn send_now(params: Value) -> Result<Value, String> {
         CoordinatorAction::StartPrompt { item } => item,
         _ => return Err("queue coordinator returned no start action".into()),
     };
-
-    let _ = attachments_raw
-        .as_ref()
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
 
     let start_req = StartRunRequest {
         agent_profile_id: None,
@@ -921,23 +915,21 @@ async fn send_now(params: Value) -> Result<Value, String> {
     };
     let conn = store.conn()?;
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = conn.execute(
-        "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-        params![now, item.id],
-    );
-    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
-        .map_err(|e| e.to_string())?;
     harness.mark_running_item(&conversation_id, &run.id, Some(&item.id), &item.content);
+    let changed = conn
+        .execute(
+            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+            params![now, item.id],
+        )
+        .map_err(|e| format!("mark queued prompt sent: {e}"))?;
+    if changed != 1 {
+        return Err("queued prompt was not transitioned to sent".into());
+    }
+    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+        .map_err(|e| format!("remove sent prompt: {e}"))?;
     persist_actor_snapshot(&conversation_id)?;
 
-    Ok(serde_json::to_value(run).unwrap_or_else(|_| {
-        json!({
-            "conversation_id": conversation_id,
-            "content": content,
-            "started": true,
-            "queue_item_id": id,
-        })
-    }))
+    serde_json::to_value(run).map_err(|e| format!("serialize started run: {e}"))
 }
 
 /// Engine / permission hook: process a safe point for a conversation.
@@ -982,7 +974,7 @@ pub async fn on_run_terminal(
                 )
                 .optional()
                 .map_err(|e| e.to_string())?
-                .unwrap_or_else(|| ("unknown".into(), "unknown".into(), None))
+                .ok_or_else(|| format!("conversation not found: {conversation_id}"))?
             };
 
             let start_req = StartRunRequest {
@@ -1014,12 +1006,18 @@ pub async fn on_run_terminal(
             };
             let conn = store.conn()?;
             let now = chrono::Utc::now().to_rfc3339();
-            let _ = conn.execute(
-                "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-                params![now, item.id],
-            );
-            let _ = conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
             harness.mark_running_item(conversation_id, &run.id, Some(&item.id), &item.content);
+            let changed = conn
+                .execute(
+                    "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                    params![now, item.id],
+                )
+                .map_err(|e| format!("mark queued prompt sent: {e}"))?;
+            if changed != 1 {
+                return Err("queued prompt was not transitioned to sent".into());
+            }
+            conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+                .map_err(|e| format!("remove sent prompt: {e}"))?;
             persist_actor_snapshot(conversation_id)?;
             Ok(Some(run.id))
         }

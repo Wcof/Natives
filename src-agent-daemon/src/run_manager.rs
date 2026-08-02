@@ -106,9 +106,9 @@ impl RunManager {
         };
         // Fail-closed: must not swallow recovery errors (task-04 / Phase 4).
         mgr.interrupt_active_sqlite_runs()?;
-        let _ = mgr.restore_runs_snapshot();
+        mgr.restore_runs_snapshot()?;
         // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
-        let _ = crate::prompt_queue_store::recover_session_actors_on_startup();
+        crate::prompt_queue_store::recover_session_actors_on_startup()?;
         // Expire any in-memory waiters (oneshot futures are never restored).
         // InteractionHub starts empty on new process — no action required.
         Ok(mgr)
@@ -707,7 +707,8 @@ impl RunManager {
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
                 .map_err(|e| e.to_string())?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("PERSISTENCE_FAILED read active runs: {e}"))?
         };
 
         let changed = tx
@@ -728,37 +729,40 @@ impl RunManager {
         // Expire pending interactions for those runs (history retained, listPending hides).
         if !active_ids.is_empty() {
             for rid in &active_ids {
-                let _ = tx.execute(
+                tx.execute(
                     "UPDATE interaction
                      SET status = 'expired',
                          response = ?1,
                          responded_at = ?2
                      WHERE status = 'pending' AND run_id = ?3",
                     rusqlite::params![reason, now, rid],
-                );
-                let _ = tx.execute(
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED expire interaction: {e}"))?;
+                tx.execute(
                     "UPDATE permission_request
                      SET status = 'expired'
                      WHERE status = 'pending' AND run_id = ?1",
                     rusqlite::params![rid],
-                );
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED expire permission request: {e}"))?;
             }
         } else {
             // Still expire any pending interactions whose run is already interrupted/missing.
-            let _ = tx.execute(
+            tx.execute(
                 "UPDATE interaction
                  SET status = 'expired', response = ?1, responded_at = ?2
                  WHERE status = 'pending'
                    AND (run_id IS NULL OR run_id IN (
-                        SELECT id FROM run WHERE status = 'interrupted'
+                   SELECT id FROM run WHERE status = 'interrupted'
                             AND error_code = 'daemon_restarted'
                    ))",
                 rusqlite::params![reason, now],
-            );
+            )
+            .map_err(|e| format!("PERSISTENCE_FAILED expire stale interactions: {e}"))?;
         }
 
         // Clear session actor live pointers (no auto re-exec).
-        let _ = tx.execute(
+        tx.execute(
             "UPDATE session_actor
              SET active_run_id = NULL,
                  running_prompt_id = NULL,
@@ -767,7 +771,8 @@ impl RunManager {
                  cancel_requested = 0,
                  updated_at = ?1",
             rusqlite::params![now],
-        );
+        )
+        .map_err(|e| format!("PERSISTENCE_FAILED clear session actors: {e}"))?;
 
         tx.commit()
             .map_err(|e| format!("PERSISTENCE_FAILED commit recovery tx: {e}"))?;
@@ -2009,7 +2014,7 @@ impl RunManager {
             .runtime
             .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
             .await
-            .unwrap_or_else(|_| CancellationToken::new());
+            .map_err(|error| format!("register run cancellation token: {error}"))?;
         let engine =
             Arc::new(AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel));
         self.runtime.register_engine(&run.id, engine.clone()).await;
@@ -2023,8 +2028,7 @@ impl RunManager {
             conversation_id: run.conversation_id.clone(),
             model: req.model_id.unwrap_or_else(|| run.model_id.clone()),
             system_prompt: None,
-            messages: crate::conversation_store::engine_history(&run.conversation_id)
-                .unwrap_or_default(),
+            messages: crate::conversation_store::engine_history(&run.conversation_id)?,
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
@@ -2041,7 +2045,7 @@ impl RunManager {
             && crate::conversation_store::append_assistant_turn_from_events(
                 &run.conversation_id,
                 &run.id,
-                &self.runtime.events.replay_after(&run.id, 0),
+                &self.runtime.events.replay_after_checked(&run.id, 0)?,
             )
             .is_err()
         {
@@ -2094,13 +2098,15 @@ impl RunManager {
         let content = self
             .last_content
             .lock()
-            .ok()
-            .and_then(|m| m.get(&req.run_id).cloned());
+            .map_err(|e| e.to_string())?
+            .get(&req.run_id)
+            .cloned();
         let project_path = self
             .project_paths
             .lock()
-            .ok()
-            .and_then(|m| m.get(&req.run_id).map(|p| p.to_string_lossy().to_string()));
+            .map_err(|e| e.to_string())?
+            .get(&req.run_id)
+            .map(|p| p.to_string_lossy().to_string());
         let mut new_run = self.create_run(CreateRunRequest {
             capability_selection: None,
             conversation_id: original.conversation_id,
@@ -2126,7 +2132,8 @@ impl RunManager {
                 rusqlite::params![&req.run_id],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             )
-            .ok()
+            .optional()
+            .map_err(|e| format!("load retry checkpoint: {e}"))?
             .map_or((None, None), |(id, turn)| (Some(id), turn))
         } else {
             (None, None)
@@ -2252,12 +2259,15 @@ impl RunManager {
             })?;
             return Err("run has uncertain side effects; continue requires confirmation".into());
         }
-        let content = req.content.or_else(|| {
-            self.last_content
+        let content = match req.content {
+            Some(content) => Some(content),
+            None => self
+                .last_content
                 .lock()
-                .ok()
-                .and_then(|map| map.get(&source.id).cloned())
-        });
+                .map_err(|e| e.to_string())?
+                .get(&source.id)
+                .cloned(),
+        };
         let branch_parent_message_id = conn
             .query_row(
                 "SELECT id FROM message WHERE conversation_id = ?1

@@ -149,19 +149,19 @@ pub fn record_tool_effect_state(
 }
 
 /// Aggregate coverage label for restore preview.
-pub fn coverage_for_run(run_id: &str) -> Option<String> {
-    let store = crate::run_manager::global_run_manager().data_store_ref()?;
-    let conn = store.conn().ok()?;
+pub fn coverage_for_run(run_id: &str) -> Result<String, String> {
+    let store = ledger_store()?;
+    let conn = store.conn()?;
     let mut stmt = conn
         .prepare("SELECT category FROM side_effect_record WHERE run_id = ?1")
-        .ok()?;
+        .map_err(|e| e.to_string())?;
     let cats: Vec<String> = stmt
         .query_map(rusqlite::params![run_id], |r| r.get(0))
-        .ok()?
-        .filter_map(|r| r.ok())
-        .collect();
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     if cats.is_empty() {
-        return Some("unknown".into());
+        return Ok("unknown".into());
     }
     let has_external = cats.iter().any(|c| {
         matches!(
@@ -171,13 +171,13 @@ pub fn coverage_for_run(run_id: &str) -> Option<String> {
     });
     let has_workspace = cats.iter().any(|c| c == "workspace_file");
     if has_external && has_workspace {
-        Some("partial".into())
+        Ok("partial".into())
     } else if has_external {
-        Some("external_only".into())
+        Ok("external_only".into())
     } else if has_workspace {
-        Some("checkpoint".into())
+        Ok("checkpoint".into())
     } else {
-        Some("unknown".into())
+        Ok("unknown".into())
     }
 }
 
