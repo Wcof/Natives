@@ -219,6 +219,10 @@ pub enum RunEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+    /// Durable checkpoint metadata and side-effect cursor were committed.
+    CheckpointCommitted {
+        checkpoint_id: String,
+    },
     CheckpointRewound {
         checkpoint_id: String,
         paths: Vec<String>,
@@ -376,6 +380,7 @@ impl RunEventKind {
             Self::InteractionRequested { .. } => "interaction_requested",
             Self::InteractionResponded { .. } => "interaction_responded",
             Self::CheckpointCreated { .. } => "checkpoint_created",
+            Self::CheckpointCommitted { .. } => "checkpoint_committed",
             Self::CheckpointRewound { .. } => "checkpoint_rewound",
             Self::ContextUsageUpdated { .. } => "context_usage_updated",
             Self::UsageUpdated { .. } => "usage_updated",
@@ -533,6 +538,9 @@ mod tests {
             RunEventKind::CheckpointCreated {
                 checkpoint_id: "cp-1".into(),
                 label: Some("run_start".into()),
+            },
+            RunEventKind::CheckpointCommitted {
+                checkpoint_id: "cp-1".into(),
             },
             RunEventKind::CheckpointRewound {
                 checkpoint_id: "cp-1".into(),

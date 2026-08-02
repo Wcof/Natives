@@ -14,10 +14,10 @@
 |---|---|---|---|---|
 | A. P0 强化验证 | 已完成 | 81aad0f | agent-core 161；provider reason 1 | 复核文档、截断/拒绝回归测试复用 P0 基线并补齐跨 Provider reason 映射 |
 | B. Turn 与类型化消息 | 已完成 | 81aad0f | agent-core 161 | opaque IDs、Turn/Message 事件、ProviderTurnRequest；保留 EngineMessage 兼容转换 |
-| C. Context 与持久历史 | 已接生产（部分） | 工作区变更 | typed roundtrip 1 | typed message 分组持久化；ContextSnapshotCommitted 写入完整 snapshot_json，并提供 replay API；全量重启选择仍待接线 |
+| C. Context 与持久历史 | 已接生产 | 工作区变更 | typed roundtrip 1 | typed message 分组持久化；ContextSnapshotCommitted 写入完整 snapshot_json；生产启动按 input_message_ids 合并 snapshot 与压缩后新消息 |
 | D. Tool Scheduler 与 Progress | 已接生产 | 工作区变更 | cargo check | Gateway side-effect 驱动模式、整批顺序降级、真实 call-id/turn/message progress、settled late-drop/rate-limit 已接线 |
 | E. Steering 与 Next Turn | 已接生产 | 工作区变更 | cargo check | SQLite lease/recovery 与 queue-message 单事务 ack 已接线 |
-| F. Event Fail Closed | 已接生产（关键事实） | 工作区变更 | cargo check | Turn/Message/Tool prepared/started/completed、attempt committed、checkpoint、snapshot 使用 checked；delta 仍可丢弃 |
+| F. Event Fail Closed | 已接生产（关键事实） | 工作区变更 | cargo check | Turn/Message/Tool prepared/started/completed、attempt committed、checkpoint open/commit、snapshot、permission 使用 checked；delta 仍可丢弃 |
 | G. Lineage 与 Resume | 已接生产（部分） | 工作区变更 | side-effect guard | checkpoint cursor/uncertain retry guard/resume_plan retry 记录已接线；continue/fork/replay RPC 未扩展 |
 | H. Projection 与权限清理 | 已接生产 | 工作区变更 | TypeScript source | projection recovery 类型与无伪造终态路径已接入 adapter |
 | I. 最终验证 | 部分完成 | 待提交 | controlled check + precise test + protocol | agent-core compaction 5、gateway 91、daemon typed 1、目标 check、fmt、protocol 通过；workspace/native live/frontend 仍受既有环境限制 |

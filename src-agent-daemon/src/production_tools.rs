@@ -1233,24 +1233,44 @@ impl PermissionGatedTools {
                     "[production] hook auto-approved tool `{name}` on run {} ({reason})",
                     self.parent_run_id
                 );
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::PermissionRequested {
-                        tool_call_id: tool_call_id.clone(),
-                        tool_name: name.to_string(),
-                        reason: format!("Approve tool `{name}`"),
-                        permission_id: permission_id.clone(),
-                        input: input.clone(),
-                    },
-                );
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::PermissionResponded {
-                        permission_id,
-                        approved: true,
-                        scope: HOOK_AUTO_APPROVE_SCOPE.to_string(),
-                    },
-                );
+                if self
+                    .events
+                    .append_checked(
+                        &self.parent_run_id,
+                        RunEventKind::PermissionRequested {
+                            tool_call_id: tool_call_id.clone(),
+                            tool_name: name.to_string(),
+                            reason: format!("Approve tool `{name}`"),
+                            permission_id: permission_id.clone(),
+                            input: input.clone(),
+                        },
+                    )
+                    .is_err()
+                {
+                    return Some(ToolExecutionResult {
+                        output: serde_json::json!({"error": "permission event persistence failed"}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
+                if self
+                    .events
+                    .append_checked(
+                        &self.parent_run_id,
+                        RunEventKind::PermissionResponded {
+                            permission_id,
+                            approved: true,
+                            scope: HOOK_AUTO_APPROVE_SCOPE.to_string(),
+                        },
+                    )
+                    .is_err()
+                {
+                    return Some(ToolExecutionResult {
+                        output: serde_json::json!({"error": "permission event persistence failed"}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
                 return None;
             }
             HookPermissionGate::Prompt => {}
@@ -1295,16 +1315,27 @@ impl PermissionGatedTools {
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
         let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionRequested {
-                tool_call_id: tool_call_id.clone(),
-                tool_name: name.to_string(),
-                reason: format!("Approve tool `{name}`"),
-                permission_id: permission_id.clone(),
-                input: input.clone(),
-            },
-        );
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionRequested {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: name.to_string(),
+                    reason: format!("Approve tool `{name}`"),
+                    permission_id: permission_id.clone(),
+                    input: input.clone(),
+                },
+            )
+            .is_err()
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({"error": "permission event persistence failed"}),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         // Select permission response, timeout, and run cancel token (task-03).
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
@@ -1342,14 +1373,24 @@ impl PermissionGatedTools {
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, None);
         let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionResponded {
-                permission_id,
-                approved,
-                scope: scope.clone(),
-            },
-        );
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionResponded {
+                    permission_id,
+                    approved,
+                    scope: scope.clone(),
+                },
+            )
+            .is_err()
+        {
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({"error": "permission event persistence failed"}),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         if !approved {
             let _ = permission_hooks
                 .dispatch(HookRequest {
@@ -1578,16 +1619,23 @@ impl PermissionGatedTools {
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
         let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionRequested {
-                tool_call_id,
-                tool_name: plan_mode::EXIT_PLAN_MODE_TOOL.to_string(),
-                reason: reason.clone(),
-                permission_id: permission_id.clone(),
-                input: card,
-            },
-        );
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionRequested {
+                    tool_call_id,
+                    tool_name: plan_mode::EXIT_PLAN_MODE_TOOL.to_string(),
+                    reason: reason.clone(),
+                    permission_id: permission_id.clone(),
+                    input: card,
+                },
+            )
+            .is_err()
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            return (false, "persistence_failed".into());
+        }
 
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
@@ -1623,14 +1671,20 @@ impl PermissionGatedTools {
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, None);
         let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionResponded {
-                permission_id,
-                approved,
-                scope: scope.clone(),
-            },
-        );
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionResponded {
+                    permission_id,
+                    approved,
+                    scope: scope.clone(),
+                },
+            )
+            .is_err()
+        {
+            return (false, "persistence_failed".into());
+        }
         (approved, scope)
     }
 

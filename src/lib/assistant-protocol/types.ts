@@ -188,6 +188,7 @@ export interface ContentBlock {
   noticeKind?:
     | 'generation_retry'
     | 'checkpoint_created'
+    | 'checkpoint_committed'
     | 'checkpoint_rewound'
     | 'subagent_created'
     | string;
@@ -289,6 +290,7 @@ export type RunEventType =
   | 'context_usage_updated'
   | 'context_compressed'
   | 'checkpoint_created'
+  | 'checkpoint_committed'
   | 'checkpoint_rewound'
   | 'subagent_created'
   | 'subagent_completed'

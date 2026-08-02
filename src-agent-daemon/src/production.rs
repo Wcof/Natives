@@ -653,6 +653,28 @@ impl ProductionRuntime {
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let typed_history =
             crate::conversation_store::load_agent_messages(&conversation_id).unwrap_or_default();
+        let typed_history =
+            match crate::conversation_store::load_active_context_snapshot(&conversation_id) {
+                Ok(Some(snapshot)) => {
+                    let mut active = snapshot.messages;
+                    active.extend(typed_history.into_iter().filter(|message| {
+                        let id = match message {
+                            agent_core::AgentMessage::User(value) => value.message_id.to_string(),
+                            agent_core::AgentMessage::Assistant(value) => {
+                                value.message_id.to_string()
+                            }
+                            agent_core::AgentMessage::ToolResult(value) => {
+                                value.message_id.to_string()
+                            }
+                            agent_core::AgentMessage::System(value) => value.message_id.to_string(),
+                            agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
+                        };
+                        !snapshot.input_message_ids.contains(&id)
+                    }));
+                    active
+                }
+                _ => typed_history,
+            };
         let raw_history = if typed_history.is_empty() {
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default()
         } else {
@@ -723,9 +745,8 @@ impl ProductionRuntime {
         self.events
             .append_checked(
                 &run_id,
-                RunEventKind::CheckpointCreated {
+                RunEventKind::CheckpointCommitted {
                     checkpoint_id: checkpoint.id,
-                    label: Some("run_complete".into()),
                 },
             )
             .map_err(|error| format!("checkpoint commit event persistence failed: {error}"))?;

@@ -4,6 +4,7 @@ use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{AttachmentRef, RunEventKind, RunEventV2};
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub async fn request(method: &str, params: Value) -> Result<Value, String> {
@@ -695,27 +696,51 @@ pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, S
     Ok(out)
 }
 
+/// Lossless active-context snapshot plus the durable message ids it replaced.
+/// The daemon uses the id set to append messages written after compaction
+/// without deleting or mutating the full transcript.
+#[derive(Debug, Clone)]
+pub struct ActiveContextSnapshot {
+    pub messages: Vec<AgentMessage>,
+    pub input_message_ids: HashSet<String>,
+}
+
 /// Load the newest lossless active-context snapshot when one exists. A missing
 /// or malformed snapshot is a normal cache miss: callers fall back to the
 /// durable full message history.
-pub fn load_active_context_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, String> {
+pub fn load_active_context_snapshot(
+    conversation_id: &str,
+) -> Result<Option<ActiveContextSnapshot>, String> {
     let store = store()?;
     let conn = store.conn()?;
-    let raw: Option<String> = conn
+    let row: Option<(String, String)> = conn
         .query_row(
-            "SELECT snapshot_json FROM context_snapshot
+            "SELECT snapshot_json, input_message_ids FROM context_snapshot
              WHERE conversation_id = ?1 AND snapshot_type = 'compaction'
              ORDER BY sequence DESC LIMIT 1",
             params![conversation_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some(raw) = raw else {
-        return Ok(Vec::new());
+    let Some((raw, input_ids)) = row else {
+        return Ok(None);
     };
     let value = serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string())?;
-    Ok(agent_core::agent_messages_from_json(&value))
+    let ids = serde_json::from_str::<Vec<String>>(&input_ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    Ok(Some(ActiveContextSnapshot {
+        messages: agent_core::agent_messages_from_json(&value),
+        input_message_ids: ids,
+    }))
+}
+
+pub fn load_active_context_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, String> {
+    Ok(load_active_context_snapshot(conversation_id)?
+        .map(|snapshot| snapshot.messages)
+        .unwrap_or_default())
 }
 
 fn parse_content_block(block: &Value) -> Option<ContentBlock> {
