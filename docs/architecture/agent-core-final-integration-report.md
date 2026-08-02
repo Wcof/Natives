@@ -5,7 +5,7 @@
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - 分支：`feat/agent-core-deepening`
 - 起始 Commit：`0aadad5316f844fe6312d70472bff478049f9088`
-- 结束 Commit：`39d6514f`（代码；文档随后更新）
+- 结束 Commit：`5734ef5f`（代码；文档随后更新）
 - Pi 参考 Commit：`583f153d502aa8e958eefdb9af0fbd3344e68f95`
 - 原工作区：`/Users/ldh/Downloads/project/AiNative/Natives` 保持 dirty，未 reset/stash。
 
@@ -90,12 +90,12 @@ Checkpoint 可绑定最近 turn、context snapshot 和 event cursor；run start 
 - 主动终止的卡死进程：前序 turn 的 `start_with_seams_loads_daemon_conversation_history` 精确测试无输出超过两分钟后以 stdin Ctrl-C 中止；本轮无 Cargo 进程被终止。
 - 清理的临时目录：无；`cargo clean`：否。
 
-## 9. 后续闭环提交（`39d6514f`）
+## 9. 后续闭环提交（`5734ef5f`，含 `39d6514f`）
 
 - `EngineInputReceiver::ack` 改为可失败；Daemon 的 SQLite queue ack 先在同一事务写入 typed user message，再标记 queue consumed，并记录真实 `turn_id`。任何持久化失败都停止 Engine，避免“已消费但未进入上下文”。
 - 旧消息行只在入口转换为 typed message；生产执行统一走 `run_with_typed_messages`。Provider context window 进入 snapshot，机械 compaction 记录替换范围。
 - dangling tool call 不再删除 assistant call；按源调用顺序保留真实结果并补 `DANGLING_TOOL_CALL` 错误结果，避免无配对或结果乱序。
-- side-effect ledger 的 `started` 记录在 handler 前必须成功；完成记录失败返回 `PERSISTENCE_FAILED`，Core 在生成配对 Tool Result 后 fail closed。重复状态更新保留原 started 时间。
+- side-effect ledger 的 `started` 记录在实际 Gateway handler 前必须成功；skill/task 等不经过 Gateway 的编排工具不创建孤立 ledger 行；完成记录失败返回 `PERSISTENCE_FAILED`，Core 在生成配对 Tool Result 后 fail closed。重复状态更新保留原 started 时间。
 - MCP HTTP/SSE transport 逐行读取 `data:` 帧，转发 `notifications/progress`，并在 cancel/timeout 时 kill + wait + join reader；不改变 Gateway 的安全边界。
 - Retry/Continue 的 `resume_plan` 从 `approved` 开始，只有 detached run 启动成功后才转为 `executed`。
 

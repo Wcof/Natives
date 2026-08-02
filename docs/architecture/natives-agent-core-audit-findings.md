@@ -112,7 +112,7 @@
 
 - 严重等级：P1
 - 所属模块：`crates/agent-core/src/input.rs`、`src-agent-daemon/src/prompt_queue_store.rs`、`conversation_store.rs`
-- 实现状态：已修复（`39d6514f`）
+- 实现状态：已修复（`5734ef5f`）
 - 代码证据：`EngineInputReceiver::ack` 返回 `Result`；`DurableInputReceiver::ack` 调用 `persist_queued_input_and_ack(..., turn_id)`；`AgentEngine::drain_inputs` 在修改 typed transcript 前等待 ack 成功。
 - 当前行为：queue lease、typed user message 与 consumed 状态在同一事务完成；数据库故障不会静默丢失 steering/follow-up。
 
@@ -120,15 +120,15 @@
 
 - 严重等级：P1
 - 所属模块：`src-agent-daemon/src/production_tools.rs`、`side_effect_ledger.rs`
-- 实现状态：已修复（`39d6514f`）
-- 代码证据：handler 前 `record_tool_effect_state(..., "started", ...)` 失败返回 `PERSISTENCE_FAILED`；完成记录失败也返回同码；Core 仍生成同 ID Tool Result 后停止后续 Provider turn。
+- 实现状态：已修复（`5734ef5f`）
+- 代码证据：实际 Gateway handler 前 `record_tool_effect_state(..., "started", ...)` 失败返回 `PERSISTENCE_FAILED`；不经过 Gateway 的 skill/task 编排路径不写孤立 started 行；完成记录失败也返回同码；Core 仍生成同 ID Tool Result 后停止后续 Provider turn。
 - 当前行为：外部副作用没有 ledger start 事实时不执行；完成事实无法落库时不伪装成功或继续自动恢复。
 
 ## Resume Plan 结算时机
 
 - 严重等级：P1
 - 所属模块：`src-agent-daemon/src/run_manager.rs`、`rpc.rs`
-- 实现状态：已修复（`39d6514f`）
+- 实现状态：已修复（`5734ef5f`）
 - 代码证据：`retry`/`continue_run` 插入 `approved`；`mark_resume_plan_executed` 仅在 detached start 成功后更新 `executed`。
 - 当前行为：计划批准、Run 创建和 Run 真正启动三个事实不再混为一个预先写入的终态。
 
