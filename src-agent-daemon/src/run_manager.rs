@@ -2537,7 +2537,7 @@ mod tests {
     use super::*;
     use agent_core::EngineToolRuntime;
     use assistant_protocol::v2::{
-        CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
+        ContinueRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
     };
     use std::sync::Mutex as StdMutex;
 
@@ -3215,6 +3215,135 @@ mod tests {
             .unwrap();
         assert_ne!(original.id, retried.id);
         assert_eq!(retried.conversation_id, original.conversation_id);
+    }
+
+    #[test]
+    fn continue_creates_lineage_from_durable_checkpoint() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("continue.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('continue-conv', 'agent', 'Continue', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let source = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: "continue-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("continue me".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: Some(dir.path().to_string_lossy().into_owned()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Preparing,
+                TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Running,
+                TransitionMetadata::empty().with_lifecycle_hint("running"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Completed,
+                TransitionMetadata::empty().with_lifecycle_hint("completed"),
+            )
+            .unwrap();
+
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO context_snapshot
+                 (id, run_id, sequence, snapshot_type, token_count, snapshot_json)
+                 VALUES ('snapshot-continue', ?1, 1, 'active_context', 3, ?2)",
+                rusqlite::params![&source.id, serde_json::json!({"messages": []}).to_string()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO checkpoint
+                 (id, run_id, conversation_id, sequence, turn_id,
+                  active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+                 VALUES ('checkpoint-continue', ?1, 'continue-conv', 1, 'turn-1',
+                         'snapshot-continue', 'ledger-1', '{}')",
+                rusqlite::params![&source.id],
+            )
+            .unwrap();
+            drop(conn);
+
+            let continued = rm
+                .continue_run(ContinueRunRequest {
+                    run_id: source.id.clone(),
+                    checkpoint_id: None,
+                    content: Some("resume from checkpoint".into()),
+                })
+                .unwrap();
+            assert_ne!(continued.id, source.id);
+            assert_eq!(
+                continued.continued_from_run_id.as_deref(),
+                Some(source.id.as_str())
+            );
+            assert_eq!(
+                continued.resume_of_run_id.as_deref(),
+                Some(source.id.as_str())
+            );
+            assert_eq!(
+                continued.checkpoint_id.as_deref(),
+                Some("checkpoint-continue")
+            );
+            assert_eq!(continued.retry_of_turn_id.as_deref(), Some("turn-1"));
+
+            let status: String = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM resume_plan WHERE source_run_id = ?1 AND new_run_id = ?2",
+                    rusqlite::params![&source.id, &continued.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, "approved");
+            rm.mark_resume_plan_executed(&source.id, &continued.id)
+                .unwrap();
+            let executed: String = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM resume_plan WHERE source_run_id = ?1 AND new_run_id = ?2",
+                    rusqlite::params![&source.id, &continued.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(executed, "executed");
+        });
     }
 
     #[tokio::test]
