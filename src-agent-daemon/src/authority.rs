@@ -9,8 +9,9 @@
 //! call Provider / Stream / legacy agent_loop directly.
 
 use assistant_protocol::v2::{
-    CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, ResumeRunRequest,
-    RetryRunRequest, RunEventV2, RunV2, StartRunRequest, SubscribeRunRequest,
+    CancelRunRequest, ContinueRunRequest, CreateRunRequest, CreativeLocalAnalyzeRequest,
+    ReplayRunRequest, ResumeRunRequest, RetryRunRequest, RunEventV2, RunV2, StartRunRequest,
+    SubscribeRunRequest,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -232,6 +233,14 @@ impl ExecutionAuthority for EmbeddedAuthority {
                     .unwrap_or(0);
                 let events = self.subscribe_events(run_id, after).await?;
                 Ok(serde_json::json!({ "run_id": run_id, "events": events }))
+            }
+            "creative.local.analyze" => {
+                let req: CreativeLocalAnalyzeRequest = serde_json::from_value(params)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                let resp = crate::creative_ai::analyze_local_creative(req)
+                    .await
+                    .map_err(|e| AuthorityError::Message(format!("{}: {}", e.code, e.message)))?;
+                serde_json::to_value(resp).map_err(|e| AuthorityError::Message(e.to_string()))
             }
             _ => Err(AuthorityError::Message(format!(
                 "{method} requires the UDS Agent Daemon"

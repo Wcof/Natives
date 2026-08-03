@@ -1,29 +1,24 @@
 //! AI launch suggestion + fault diagnosis for local creative apps.
 //!
-//! Reuses existing Provider credentials via provider-adapters.
-//! Never executes AI output directly — all suggestions pass LaunchPlan validation.
+//! P0: the Host must never call a Provider directly. The Host performs the
+//! sanitized scan and builds the payload, then sends a
+//! [`CreativeLocalAnalyzeRequest`] over UDS to the Agent Daemon, which owns
+//! Provider credentials and calls the model. The returned text is parsed and
+//! validated here — suggestions always pass LaunchPlan validation.
 
 use super::plan::validate_launch_plan;
 use super::scan::inspect_local_project;
 use super::store;
 use crate::creative_app::model::*;
-use crate::env_manager;
+use crate::daemon_authority;
 use crate::{Error, Result};
-use provider_adapters::capabilities::{
-    ProviderAdapter, ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderResponseBlock,
-};
-use provider_adapters::providers::{
-    anthropic::AnthropicAdapter, deepseek::DeepSeekAdapter, gemini::GeminiAdapter,
-    ollama::OllamaAdapter, openai::OpenAiAdapter, openai_compatible::OpenAiCompatibleAdapter,
-};
+use assistant_protocol::v2::creative::{CreativeAnalyzeKind, CreativeLocalAnalyzeRequest};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::time::Duration;
 
 const AI_SETTINGS_KEY: &str = "local_creative_ai_settings_json";
 const DEFAULT_TIMEOUT_MS: u64 = 45_000;
-const MAX_RETRIES: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -232,7 +227,7 @@ pub async fn analyze_with_ai(
         return Ok((scan, plan, preview));
     }
 
-    let suggestion = match call_provider_for_launch(conn, &settings, &preview).await {
+    let suggestion = match call_provider_for_launch(&settings, &preview).await {
         Ok(s) => s,
         Err(e) => {
             let mut scan = scan;
@@ -292,7 +287,7 @@ pub async fn diagnose_with_ai(
         "logTail": logs,
     });
 
-    match call_provider_for_diagnosis(conn, &settings, &payload).await {
+    match call_provider_for_diagnosis(&settings, &payload).await {
         Ok(mut d) => {
             d.recovery_actions.retain(|a| {
                 matches!(
@@ -354,7 +349,6 @@ fn suggestion_to_plan(s: &AiLaunchSuggestion) -> LaunchPlan {
 }
 
 async fn call_provider_for_launch(
-    conn: &Connection,
     settings: &LocalAiSettings,
     preview: &serde_json::Value,
 ) -> Result<AiLaunchSuggestion> {
@@ -375,16 +369,11 @@ Return ONLY a JSON object matching:
   "reason": "short"
 }
 Rules: no shell metacharacters, no absolute paths, no secrets, no commands to execute."#;
-    let user = format!(
-        "Project scan (virtual root /project, no absolute paths):\n{}",
-        serde_json::to_string_pretty(preview).unwrap_or_default()
-    );
-    let text = provider_chat(conn, settings, system, &user).await?;
+    let text = daemon_ai_completion(settings, CreativeAnalyzeKind::Launch, system, preview).await?;
     parse_json_object::<AiLaunchSuggestion>(&text)
 }
 
 async fn call_provider_for_diagnosis(
-    conn: &Connection,
     settings: &LocalAiSettings,
     payload: &serde_json::Value,
 ) -> Result<AiDiagnosisResult> {
@@ -397,17 +386,42 @@ Return ONLY JSON:
   "recoveryActions": ["view_logs","stop","restart","install_dependencies","edit_plan","rescan"]
 }
 Do not return shell commands."#;
-    let user = serde_json::to_string_pretty(payload).unwrap_or_default();
-    let text = provider_chat(conn, settings, system, &user).await?;
+    let text =
+        daemon_ai_completion(settings, CreativeAnalyzeKind::Diagnose, system, payload).await?;
     parse_json_object::<AiDiagnosisResult>(&text)
 }
 
-async fn provider_chat(
-    conn: &Connection,
+/// Send a sanitized analysis request to the Agent Daemon (P0). The daemon owns
+/// Provider credentials and calls the model; this function never sees a key or
+/// an absolute project path on the wire.
+async fn daemon_ai_completion(
     settings: &LocalAiSettings,
+    kind: CreativeAnalyzeKind,
     system: &str,
-    user: &str,
+    payload: &serde_json::Value,
 ) -> Result<String> {
+    let request = build_analyze_request(settings, kind, system, payload)?;
+    let params = serde_json::to_value(&request).map_err(|e| Error::Internal(e.to_string()))?;
+    let resp = daemon_authority::request(
+        assistant_protocol::v2::methods::names::CREATIVE_LOCAL_ANALYZE,
+        params,
+    )
+    .await
+    .map_err(|e| Error::Internal(format!("AI analysis via daemon failed: {e}")))?;
+    resp.get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| Error::Internal("AI analysis response missing text".into()))
+}
+
+/// Build the daemon request. Pure so tests can prove the Host never sends
+/// secrets or absolute paths and always names the configured provider/model.
+fn build_analyze_request(
+    settings: &LocalAiSettings,
+    kind: CreativeAnalyzeKind,
+    system: &str,
+    payload: &serde_json::Value,
+) -> Result<CreativeLocalAnalyzeRequest> {
     let provider_id = settings
         .provider_id
         .as_deref()
@@ -416,125 +430,14 @@ async fn provider_chat(
         .model
         .clone()
         .ok_or_else(|| Error::InvalidInput("AI model not configured".into()))?;
-
-    let (base_url, protocol): (String, String) = conn
-        .query_row(
-            "SELECT base_url, api_protocol FROM user_providers WHERE id = ?1",
-            [provider_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| Error::NotFound(format!("provider {provider_id}")))?;
-
-    let key_id: String = conn
-        .query_row(
-            "SELECT id FROM provider_api_keys WHERE provider_id = ?1 AND is_primary = 1 AND is_active = 1 LIMIT 1",
-            [provider_id],
-            |row| row.get(0),
-        )
-        .or_else(|_| {
-            conn.query_row(
-                "SELECT id FROM provider_api_keys WHERE provider_id = ?1 AND is_active = 1 LIMIT 1",
-                [provider_id],
-                |row| row.get(0),
-            )
-        })
-        .map_err(|_| Error::InvalidInput("no active API key for provider".into()))?;
-
-    let api_key = provider_key_plaintext(conn, &key_id)?;
-    let adapter = build_adapter(&protocol, &base_url, &api_key)?;
-    let request = ProviderRequest {
+    Ok(CreativeLocalAnalyzeRequest {
+        kind,
+        provider_id: provider_id.to_string(),
         model,
-        messages: vec![ProviderMessage {
-            role: "user".into(),
-            content: vec![ProviderContentBlock::Text {
-                text: user.to_string(),
-            }],
-        }],
-        system_prompt: Some(system.to_string()),
-        tools: None,
-        max_tokens: Some(1024),
-        temperature: Some(0.1),
-        stream: false,
-        structured_output: None,
-        controls: Default::default(),
-    };
-
-    let mut last_err = String::new();
-    for attempt in 0..=MAX_RETRIES {
-        match adapter.chat(request.clone()).await {
-            Ok(resp) => return Ok(response_text(&resp)),
-            Err(e) => {
-                last_err = e.message.clone();
-                if !e.retryable || attempt == MAX_RETRIES {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(400 * (attempt as u64 + 1))).await;
-            }
-        }
-    }
-    Err(Error::Internal(last_err))
-}
-
-fn build_adapter(
-    protocol: &str,
-    base_url: &str,
-    api_key: &str,
-) -> std::result::Result<Box<dyn ProviderAdapter>, Error> {
-    let p = protocol.to_ascii_lowercase();
-    let base = base_url.trim().to_string();
-    let key = api_key.to_string();
-    if p.contains("anthropic") || p.contains("claude") {
-        // Anthropic adapter currently has fixed base; key only.
-        return Ok(Box::new(AnthropicAdapter::new().with_api_key(key)));
-    }
-    if p.contains("gemini") || p.contains("google") {
-        return Ok(Box::new(
-            GeminiAdapter::new().with_api_key(key).with_base_url(base),
-        ));
-    }
-    if p.contains("ollama") {
-        return Ok(Box::new(OllamaAdapter::new().with_base_url(base)));
-    }
-    if p.contains("deepseek") {
-        return Ok(Box::new(DeepSeekAdapter::new().with_api_key(key)));
-    }
-    if p.contains("openai") && !p.contains("compatible") {
-        return Ok(Box::new(
-            OpenAiAdapter::new().with_api_key(key).with_base_url(base),
-        ));
-    }
-    Ok(Box::new(
-        OpenAiCompatibleAdapter::new()
-            .with_api_key(key)
-            .with_base_url(base),
-    ))
-}
-
-fn response_text(resp: &provider_adapters::capabilities::ProviderResponse) -> String {
-    let mut out = String::new();
-    for b in &resp.content {
-        if let ProviderResponseBlock::Text(t) = b {
-            out.push_str(t);
-        }
-    }
-    out
-}
-
-fn provider_key_plaintext(conn: &Connection, key_id: &str) -> Result<String> {
-    let (encrypted, dek): (String, Option<String>) = conn
-        .query_row(
-            "SELECT api_key_encrypted, dek_encrypted FROM provider_api_keys WHERE id = ?1",
-            [key_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|e| Error::Internal(format!("key load: {e}")))?;
-    if let Some(dek) = dek {
-        if !dek.is_empty() {
-            return crate::provider_key_manager::envelope_decrypt(&encrypted, &dek, conn);
-        }
-    }
-    let enc_key = env_manager::get_encryption_key(conn)?;
-    env_manager::decrypt(&encrypted, &enc_key)
+        system_prompt: system.to_string(),
+        payload: payload.clone(),
+        timeout_ms: settings.timeout_ms,
+    })
 }
 
 fn parse_json_object<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T> {
@@ -569,5 +472,46 @@ mod tests {
         assert_eq!(st.timeout_ms, 5_000);
         st.mode = "nope".into();
         assert!(normalize_settings(&mut st).is_err());
+    }
+
+    /// P0: the Host analysis request is sanitized (no secret / absolute path),
+    /// names the configured provider/model, and fails closed without a provider.
+    #[test]
+    fn host_analysis_request_is_sanitized_and_routes_to_daemon() {
+        let mut settings = LocalAiSettings {
+            enabled: true,
+            provider_id: Some("openai".into()),
+            model: Some("gpt-x".into()),
+            mode: "only_when_uncertain".into(),
+            user_consented: true,
+            timeout_ms: 30_000,
+        };
+        let payload = serde_json::json!({
+            "virtualRoot": "/project",
+            "projectKind": "html",
+            "treeSample": ["/project/index.html"],
+        });
+        let req =
+            build_analyze_request(&settings, CreativeAnalyzeKind::Launch, "sys", &payload).unwrap();
+        assert_eq!(req.provider_id, "openai");
+        assert_eq!(req.model, "gpt-x");
+        assert_eq!(req.kind, CreativeAnalyzeKind::Launch);
+        assert_eq!(req.timeout_ms, 30_000);
+
+        let wire = serde_json::to_string(&req).unwrap();
+        assert!(
+            !wire.contains("apiKey") && !wire.contains("secret"),
+            "request must not carry a credential"
+        );
+        assert!(
+            !wire.contains("/Users/"),
+            "request must not carry an absolute project path"
+        );
+
+        settings.provider_id = None;
+        assert!(
+            build_analyze_request(&settings, CreativeAnalyzeKind::Diagnose, "s", &payload).is_err(),
+            "no provider must fail closed"
+        );
     }
 }

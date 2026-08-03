@@ -14,6 +14,7 @@ use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
 use assistant_protocol::v1::daemon::{
     DaemonHealth, DaemonStatus, HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
 };
+use assistant_protocol::v2::creative::CreativeLocalAnalyzeRequest;
 use assistant_protocol::version::{negotiate, ProtocolVersion};
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
@@ -330,7 +331,9 @@ fn run_manager() -> &'static crate::run_manager::RunManager {
     crate::run_manager::global_run_manager()
 }
 
-fn resolve_provider_adapter(
+/// Resolve a Provider adapter by id. Shared with the daemon's creative AI
+/// module so provider matching lives in exactly one place (R-B3).
+pub(crate) fn resolve_provider_adapter(
     provider_id: &str,
 ) -> Option<Box<dyn provider_adapters::ProviderAdapter>> {
     let needle = provider_id.to_ascii_lowercase();
@@ -1793,6 +1796,61 @@ pub async fn handle_rpc(
                         ),
                     )
                     .await;
+                }
+            }
+        }
+        names::CREATIVE_LOCAL_ANALYZE => {
+            // P0: the Host must not call a Provider directly. This arm is the
+            // daemon-controlled path for local-creative AI analysis; the Host
+            // sends a sanitized request and validates the returned text.
+            let analyze_req: CreativeLocalAnalyzeRequest =
+                match serde_json::from_value(request.params.clone()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        send_error(
+                            writer,
+                            &DaemonError::new(
+                                error_codes::INVALID_INPUT,
+                                ErrorCategory::Validation,
+                                false,
+                                format!("creative.local.analyze: {e}"),
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match crate::creative_ai::analyze_local_creative(analyze_req).await {
+                Ok(resp) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        serde_json::to_value(resp).unwrap_or_default(),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    let category = if e.code == "UNAUTHORIZED" {
+                        ErrorCategory::Auth
+                    } else if e.code == "NOT_FOUND" {
+                        ErrorCategory::NotFound
+                    } else if e.code == "INVALID_INPUT" {
+                        ErrorCategory::Validation
+                    } else {
+                        ErrorCategory::Provider
+                    };
+                    let code = if e.code == "UNAUTHORIZED" {
+                        error_codes::UNAUTHORIZED
+                    } else if e.code == "NOT_FOUND" {
+                        error_codes::NOT_FOUND
+                    } else if e.code == "INVALID_INPUT" {
+                        error_codes::INVALID_INPUT
+                    } else {
+                        "provider_error"
+                    };
+                    send_error(writer, &DaemonError::new(code, category, true, e.message)).await;
                 }
             }
         }
