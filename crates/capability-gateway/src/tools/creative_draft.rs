@@ -735,6 +735,109 @@ impl ToolHandler for LintDraftModuleTool {
     }
 }
 
+pub struct CreateCreativeDraftTool {
+    paths: Option<DraftPaths>,
+}
+
+impl CreateCreativeDraftTool {
+    pub fn new() -> Self {
+        Self { paths: None }
+    }
+    pub fn with_paths(paths: DraftPaths) -> Self {
+        Self { paths: Some(paths) }
+    }
+}
+
+impl Default for CreateCreativeDraftTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Ordinary-assistant handoff (batch 3): create a draft row the creative
+/// surface can continue. The user still publishes via a Host command — the
+/// assistant only ever creates a draft, never an Application.
+#[async_trait::async_trait]
+impl ToolHandler for CreateCreativeDraftTool {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let intent = str_arg(&input, "intent")?.trim().to_string();
+        if intent.is_empty() || intent.chars().count() > 4_000 {
+            return Err(invalid_input(
+                "intent must be 1-4000 characters describing the app idea",
+            ));
+        }
+        let name = input
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "Untitled creation".to_string());
+
+        let paths = self.paths.clone().unwrap_or_else(DraftPaths::from_env);
+        let draft_id = format!("draft-{}", uuid::Uuid::new_v4().simple());
+        validate_draft_id(&draft_id)?;
+
+        let conn = paths.open_db()?;
+        let t = now_rfc3339();
+        conn.execute(
+            "INSERT INTO creative_drafts
+                (draft_id, name, intent, conversation_id, origin_module_id,
+                 current_revision, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, NULL, NULL, 0, 'drafting', ?4, ?4)",
+            rusqlite::params![draft_id, name, intent, t],
+        )
+        .map_err(|e| draft_io_error(format!("create draft row failed: {e}")))?;
+        // Ensure the draft directory exists so creative-session tools can write
+        // revisions without a race.
+        std::fs::create_dir_all(paths.draft_dir(&draft_id)?)
+            .map_err(|e| draft_io_error(format!("create draft dir failed: {e}")))?;
+
+        Ok(ToolOutput {
+            result: serde_json::json!({
+                "draftId": draft_id,
+                "name": name,
+                "status": "draft_created",
+                "message": "Draft created. Continue it in the Personal Creations surface; publishing is a user action, not available to the assistant.",
+                "previewUrl": preview_url(&draft_id),
+            }),
+            truncated: false,
+            duration_ms: 0,
+        })
+    }
+}
+
+/// The ordinary-assistant handoff tool (batch 3). Distinct from the
+/// creative-session surface so a general session can create a draft without
+/// ever gaining the draft-writing tools.
+pub fn creative_handoff_tool() -> Tool {
+    Tool {
+        name: "create_creative_draft",
+        description: "Create a draft of a personal creation (a small web app) from a one-line idea. Returns a draftId the user can continue in the Personal Creations surface. Publishing to the app catalog is a user action, never available to the assistant.",
+        schema: serde_json::json!({
+            "type":"object",
+            "properties":{
+                "intent":{"type":"string","description":"One-line description of the app the user wants"},
+                "name":{"type":"string","description":"Optional suggested app name"}
+            },
+            "required":["intent"]
+        }),
+        side_effect: SideEffect::Write,
+        path_scope: PathScope::Glob("**/.natives/drafts/**".into()),
+        permission_class: PermissionClass::AlwaysAllowed,
+        timeout_ms: 10_000,
+        output_limit: 16_000,
+        cancellable: true,
+        parallel_safe: false,
+        conflict_key: None,
+        handler: Arc::new(CreateCreativeDraftTool::new()),
+    }
+}
+
 /// The creative-session tool surface.
 ///
 /// Deliberately *not* part of [`super::builtin_tools`]: a general session has no
@@ -1294,6 +1397,73 @@ mod tests {
                 "{name} must be opt-in via allowlist only"
             );
         }
+    }
+
+    /// Batch 3: the ordinary assistant surface admits the draft *handoff* tool
+    /// (create only) while the draft-writing tools stay allowlist-only.
+    #[test]
+    fn ordinary_surface_admits_create_draft_handoff_only() {
+        let builtins: Vec<&str> = super::super::builtin_tools()
+            .iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            builtins.contains(&"create_creative_draft"),
+            "ordinary assistants must be able to create a draft"
+        );
+        for name in CREATIVE_DRAFT_TOOL_NAMES {
+            assert!(
+                !builtins.contains(name),
+                "{name} must never reach the ordinary surface"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_creative_draft_creates_row_and_dir() {
+        let fx = Fixture::new();
+        let out = CreateCreativeDraftTool::with_paths(fx.paths.clone())
+            .execute(
+                serde_json::json!({"intent": "A pomodoro timer app", "name": "Pomo"}),
+                &context(),
+            )
+            .await
+            .expect("create succeeds");
+        let draft_id = out
+            .result
+            .get("draftId")
+            .and_then(|v| v.as_str())
+            .expect("draftId")
+            .to_string();
+        let conn = Connection::open(&fx.paths.db_path).expect("open db");
+        let (name, intent, state): (String, String, String) = conn
+            .query_row(
+                "SELECT name, intent, state FROM creative_drafts WHERE draft_id = ?1",
+                [&draft_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("draft row");
+        assert_eq!(name, "Pomo");
+        assert_eq!(intent, "A pomodoro timer app");
+        assert_eq!(state, "drafting");
+        assert_eq!(
+            out.result.get("status").and_then(|v| v.as_str()),
+            Some("draft_created")
+        );
+        assert!(
+            fx.paths.draft_dir(&draft_id).unwrap().is_dir(),
+            "draft dir must exist so the creative session can write revisions"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_creative_draft_rejects_empty_intent() {
+        let fx = Fixture::new();
+        let err = CreateCreativeDraftTool::with_paths(fx.paths.clone())
+            .execute(serde_json::json!({"intent": "   "}), &context())
+            .await
+            .expect_err("empty intent must fail closed");
+        assert_eq!(err.code, "invalid_input");
     }
 
     #[tokio::test]
