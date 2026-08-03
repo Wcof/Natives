@@ -2,17 +2,30 @@
 
 ## 1. 基线
 
+### 最终闭环基线（批次 0 校准）
+
+- Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-pi-final-20260803-211737-19930`
+- Branch：`codex/agent-core-pi-final-20260803-211737-19930`
+- Start HEAD：`7686b20dae28869395e00add051c91afd296ce49`（原报告 Start `1b78e341` 之后的 5 个提交全部落库）
+- 批次 3 End：`01a235b3`（已提交）；批次 4 Start：`7686b20d`（已提交：TS `run.resume` method + reconnect exactly-once 测试）
+- Working Tree：创建时干净；本批仅 docs 改动（本报告校准 + 锚定 Goal 文件）
+- Shared Target：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared` 7.6 GiB（<35 GiB 门槛）
+- Disk：可用 35 GiB（>20 GiB 测试门槛，>15 GiB Cargo 门槛）
+- 已实施：批次 0–3 全部提交（`631da17f`/`ca901dfa`/`5f2d6dc4`/`01a235b3`）；批次 4 已开始（`7686b20d`），未完成。
+
+### 历史基线（实施期间记录，保留）
+
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`
 - Branch：`feat/agent-core-deepening`
 - Start HEAD（批次 0）：`1b78e34104b1a7a5bbd600b689d8bbd1fe33b927`
 - 批次 0 End：`631da17f33c48c5acf5d1220de90bc50639be4c6`（已提交）
 - 批次 1 End：`ca901dfaa362764b87982b81dc32dd686d12a56d`（已提交）
 - 批次 2 End：`5f2d6dc43d736f4b4337874d4fa3d674b32e5dc7`（已提交）
-- 批次 3 Start：`5f2d6dc43d736f4b4337874d4fa3d674b32e5dc7`；批次 3 End：以当前 Worktree `git rev-parse HEAD` 为准（待提交）
-- Working Tree：批次 0/1/2 提交后干净；批次 3 改动未提交（提交后干净）。独立审计生成的三个文档为未跟踪文件，保留不动。
+- 批次 3 Start：`5f2d6dc43d736f4b4337874d4fa3d674b32e5dc7`；批次 3 End：`01a235b3`（已提交）
+- Working Tree：批次 0/1/2/3 提交后干净。独立审计生成的三个文档为未跟踪文件，保留不动。
 - Shared Target：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared` 7.5 GiB（<35 GiB 门槛）
 - Disk：可用 47 GiB（>20 GiB 测试门槛，>15 GiB Cargo 门槛）
-- 已实施：批次 0（最低合并门槛）、批次 1（Typed Message / Turn 主链）、批次 2（持久化与恢复）、批次 3（工具与输入闭环）。批次 4 未开发。
+- 已实施：批次 0（最低合并门槛）、批次 1（Typed Message / Turn 主链）、批次 2（持久化与恢复）、批次 3（工具与输入闭环）。批次 4 已开始（`7686b20d`），未完成。
 
 ## 2. P0/P1/P2 状态
 
@@ -28,7 +41,7 @@
 | P1.4 Subagent route restart scope | 丢失 | **已修复（批次 2）**：migration 029 给 `subagent_session` 加 project_path/project_id/identity/permission/profile/max_steps/allowlist 列；spawn 时 `persist_subagent_scope` 持久化；`restart_subagent_with_binding` 从 durable session 严格恢复 scope，缺 project/permission/max_steps 字段即拒绝，不再写死 ask/max_steps=15 | `subagent_store::persist_subagent_scope`；`production_tools.rs` spawn 后写入；`production.rs` restart 读取并 fail closed | `subagent_scope_persists_and_round_trips`、`create_hidden_child_session_persists_permission_and_project_id` |
 | P1.5 Gateway per-tool mode/conflict key | 仅按 SideEffect 推导（ReadOnly 自动 ParallelSafe），conflict_key 恒 None | **已修复（批次 3）**：`Tool` 增加显式 `parallel_safe`/`conflict_key` 字段；`list_capabilities` 只对显式声明并行安全的工具给 ParallelSafe（read_file/search_files/list_dir/grep），Destructive/Process → Exclusive，其余默认 Sequential；conflict_key 进入 capability 并驱动引擎冲突检测 | `capability-gateway::list_capabilities`；`builtin_tools`/`extra`/`creative_draft`/`plan`/`web_search` 全部显式声明 | `every_tool_has_a_verifiable_mode_and_writes_are_not_parallel`、`parallel_readonly_tools_emit_source_order_results_after_out_of_order_completion`、`sequential_tool_serializes_the_batch` |
 | P1.6 Progress 统一与集成测试 | run_terminal 有 50ms 直接 EventLog forwarder（第二路径） | **已修复（批次 3）**：run_terminal live 输出转投统一 `DaemonToolProgressSink`（8KiB/250ms），不再直接 append；Shell/MCP/Subagent 全部走同一 sink；补多 Run steering lease 排除测试；真实 Shell kill+wait/MCP abort fixture 需外部进程/服务，环境未验证 | `production_tools.rs` live_forwarder 改为 `progress.publish`；`DaemonToolProgressSink` 是唯一 progress 路径 | `progress_flushes_after_batch_window_without_next_update`、`settled_tool_drops_late_progress`（既有回归绿）、`steering_lease_excludes_a_second_run` |
-| P2.1–P2.4 | 收口/文档 | 未开始（批次 2–4 与文档报告） | — | — |
+| P2.1–P2.4 | 收口/文档 | P2.1 本批已修（报告校准）；P2.2–P2.3 列入批次 4；P2.4 批次 5 最终验收 | — | — |
 
 uncertain 守卫：`continue_run` 的 `status = 'uncertain'` 拒绝逻辑（`run_manager.rs`）位于 snapshot 校验之后，本次未触碰；retry/continue 的 blocked resume_plan 落库逻辑保持。
 
@@ -95,8 +108,19 @@ uncertain 守卫：`continue_run` 的 `status = 'uncertain'` 拒绝逻辑（`run
 - 不变量：不重写 Scheduler、不建第二 Registry；Core 仍只读 Gateway capability 元数据，不按工具名推断并发；`conflict_key` 只在并行判定时插入集合；统一 progress sink 后 late-drop（settled）与 batch 窗口语义不变；真实外部 Shell/MCP/permission fixture 需要进程/服务，未在本批运行。
 - 测试：见第 7 节。新增 4 个精准测试全部绿；既有 progress/settled/gateway 全量回归绿。
 
-### 批次 4
-未开始。
+### 批次 4（已开始，未完成）
+
+`7686b20d` 已提交：TS `run.resume` method（`src/lib/assistant-protocol/types.ts` 方法清单 `'run.resume'`）+ reconnect exactly-once 测试（`controller.test.ts`：`reconnect replay settles assistant message and terminal exactly once`）。
+
+剩余工作（见最终闭环 Goal 批次 4）：
+
+1. Rust `run.resume` request/response 与 TS method / protocol check 一致性；
+2. gap replay、terminal missing、reconnect 从旧 sequence 开始时不重复 assistant、Tool、terminal 或 analytics 结算；
+3. `projectionRecoveryByRun` 不写回 Daemon；若当前 UI 完全不可见，复用现有 recovery banner 显示「投影不完整」，不新建页面或持久状态；
+4. 缺权威终态继续抛 `AuthoritativeEventMissing`，禁止 synthetic terminal；
+5. 补 Tool block 和 permission card 重放不重复测试、`run.resume` method contract / protocol generation 测试。
+
+最终全量验收（workspace / protocol / native-engine / typecheck / lint / test / perf:check）由批次 5 在最终 HEAD 统一执行。
 
 ## 4. 生产调用链变化
 
@@ -217,7 +241,7 @@ flowchart TD
 
 ## 8. 未完成与环境阻塞
 
-- 批次 4（Renderer 与最终验收）未开发。
+- 批次 4（Renderer 与最终验收）已开始（`7686b20d`：TS `run.resume` + reconnect exactly-once），未完成；剩余见批次 4 章节，最终全量验收按批次 5 在最终 HEAD 统一执行。
 - P0.3 最终验收门未满足：workspace、native verifier、frontend full suite 未在最终 HEAD 运行（按批次 4 统一执行；资源门槛当前满足：磁盘 47 GiB、Target 7.5 GiB）。
 - 真实 Provider/Shell/MCP/permission fixture 需要外部服务或凭证，环境未验证：本批未触碰 Shell kill+wait、MCP pending abort、真实多 Run FIFO 外部集成（审计要求的外部 fixture 保持「未验证」记录，未伪装为通过）。
 - 既有 daemon 测试缺陷（非本批引入）：`run_manager` 模块 7 个测试失败，根因包括「test store() 拒绝 ~/.natives 默认路径」（测试未设 env）、「no such table: run_event」（测试 DB 未迁移/全局 store 错指）、cancel 时序断言；已在隔离运行与基线 631da17 复现确认与批次 1/2/3 代码无关，留待批次 4 最终验收时如实记录退出码。
@@ -254,7 +278,8 @@ flowchart TD
 - 批次 0：`631da17f`（`fix(agent-core): enforce typed hook inject and exact checkpoint continue`）。未 Push，未开 PR。
 - 批次 1：`ca901dfa`（`fix(agent-core): stabilize tool-result identity and lossless typed codec`）。
 - 批次 2：`5f2d6dc4`（`fix(daemon): close snapshot, resume, and subagent restart recovery`）。
-- 批次 3：一个本地提交（待提交；以当前 Worktree `git rev-parse HEAD` 为准）。
+- 批次 3：`01a235b3`（`fix(gateway): explicit per-tool execution mode and unified progress`）。
+- 批次 4（开始）：`7686b20d`（`feat(protocol): add run.resume method and pin reconnect replay settlement`）。
 
 ## 11. 风险与回滚
 
