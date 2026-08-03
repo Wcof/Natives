@@ -588,6 +588,7 @@ export type AssistantMethod =
   | 'run.cancel'
   | 'run.retry'
   | 'run.continue'
+  | 'run.resume'
   | 'run.subscribe'
   | 'run.replay'
   | 'run.list'
