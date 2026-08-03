@@ -263,7 +263,7 @@ impl LocalRuntimeManager {
         // Append runner-specific host/port flags (Vite vs Vue CLI differ).
         if matches!(
             plan.program,
-            LaunchProgram::Npm | LaunchProgram::Pnpm | LaunchProgram::Yarn
+            crate::creative_app::model::LaunchProgram::Npm | LaunchProgram::Pnpm | LaunchProgram::Yarn
         ) {
             let runner = plan.script_runner.ok_or_else(|| {
                 Error::InvalidInput(
@@ -555,7 +555,7 @@ fn emit_progress(app: &AppHandle, app_id: &str, stage: &str, message: &str) {
 
 fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)> {
     match plan.program {
-        LaunchProgram::Npm => {
+        crate::creative_app::model::LaunchProgram::Npm => {
             let script = plan
                 .script
                 .as_deref()
@@ -865,6 +865,79 @@ pub fn static_open_url(host_http_port: u16, creative_id: &str, open_path: &str) 
     format!("http://127.0.0.1:{host_http_port}/local-projects/{creative_id}{path}")
 }
 
+/// A preview URL candidate with its provenance (batch 6). The runtime probes
+/// candidates in order and picks the first healthy one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewUrlCandidate {
+    pub url: String,
+    pub source: &'static str,
+}
+
+/// Determinable URL candidates in priority order (batch 6):
+/// explicit plan port → framework default. Compose adds an inspect-resolved
+/// candidate at runtime (the actual published host port), which is async and
+/// not computable here.
+pub fn resolve_preview_urls(
+    plan: &LaunchPlan,
+    host_http_port: u16,
+    app_id: &str,
+) -> Vec<PreviewUrlCandidate> {
+    let mut out = Vec::new();
+    let open = |p: u16| -> String {
+        let path = if plan.open_path.starts_with('/') {
+            plan.open_path.clone()
+        } else {
+            format!("/{}", plan.open_path)
+        };
+        format!("http://127.0.0.1:{p}{path}")
+    };
+    match plan.runtime {
+        LocalLaunchRuntime::StaticHttp => {
+            out.push(PreviewUrlCandidate {
+                url: static_open_url(host_http_port, app_id, &plan.open_path),
+                source: "framework_default",
+            });
+        }
+        LocalLaunchRuntime::NodeDevServer => {
+            if let Some(p) = plan.port.value {
+                out.push(PreviewUrlCandidate {
+                    url: open(p),
+                    source: "explicit_plan",
+                });
+            }
+        }
+        LocalLaunchRuntime::DockerCompose => {
+            if let Some(d) = &plan.compose {
+                if let Some(p) = d.host_port {
+                    out.push(PreviewUrlCandidate {
+                        url: open(p),
+                        source: "explicit_plan",
+                    });
+                }
+                // framework default port (8080) as a last-resort candidate;
+                // compose_inspect is appended at runtime.
+                out.push(PreviewUrlCandidate {
+                    url: open(8080),
+                    source: "framework_default",
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Rewrite an `0.0.0.0`-hosted URL to loopback (batch 6) — a server that binds
+/// all interfaces must still be previewed on 127.0.0.1.
+pub fn normalize_loopback(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("http://0.0.0.0") {
+        format!("http://127.0.0.1{rest}")
+    } else if let Some(rest) = url.strip_prefix("https://0.0.0.0") {
+        format!("https://127.0.0.1{rest}")
+    } else {
+        url.to_string()
+    }
+}
+
 pub fn plan_is_static(plan: &LaunchPlan) -> bool {
     matches!(plan.runtime, LocalLaunchRuntime::StaticHttp)
 }
@@ -914,6 +987,57 @@ mod tests {
         assert_eq!(
             compose_project_name("x", ""),
             compose_project_name("x", "compose")
+        );
+    }
+
+    /// Batch 6: URL candidates follow the documented priority (explicit plan
+    /// port first, framework default last) and always target loopback.
+    #[test]
+    fn preview_url_priority_and_loopback() {
+        let mut node = LaunchPlan {
+            schema_version: 1,
+            source: crate::creative_app::model::LaunchPlanSource::Rule,
+            project_kind: crate::creative_app::model::LocalProjectKind::Vite,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: crate::creative_app::model::LaunchProgram::Npm,
+            cwd_relative: ".".into(),
+            script: Some("dev".into()),
+            entry_file: None,
+            script_runner: Some(crate::creative_app::model::ScriptRunner::Vite),
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Fixed,
+                value: Some(5173),
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            auto_open: true,
+            confidence: None,
+            reason: "t".into(),
+            compose: None,
+            trade_approval: None,
+        };
+        let cands = resolve_preview_urls(&node, 1234, "app");
+        assert_eq!(cands[0].source, "explicit_plan");
+        assert_eq!(cands[0].url, "http://127.0.0.1:5173/");
+
+        node.port.value = None;
+        let cands = resolve_preview_urls(&node, 1234, "app");
+        assert!(
+            cands.is_empty(),
+            "no fixed port → no deterministic candidate"
+        );
+
+        // 0.0.0.0 host must normalize to loopback for preview.
+        assert_eq!(
+            normalize_loopback("http://0.0.0.0:8080/api"),
+            "http://127.0.0.1:8080/api"
+        );
+        assert_eq!(
+            normalize_loopback("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080/"
         );
     }
 
