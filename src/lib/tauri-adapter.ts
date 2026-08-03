@@ -327,6 +327,8 @@ export interface LocalProjectScanResult {
   risks: string[];
   blockers: string[];
   rulePlan?: LaunchPlan;
+  /** Non-web manifests detected (docker-compose, dockerfile, python, makefile). */
+  extraManifests: string[];
   treeSample: string[];
   existingId?: string;
 }

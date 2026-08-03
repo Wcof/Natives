@@ -649,6 +649,10 @@ pub struct LocalProjectScanResult {
     pub blockers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_plan: Option<LaunchPlan>,
+    /// Non-web manifests detected (docker-compose, dockerfile, python, makefile).
+    /// Evidence only — these runtimes are not yet available as drivers (batch 4).
+    #[serde(default)]
+    pub extra_manifests: Vec<String>,
     /// Relative tree sample (virtual root /project).
     #[serde(default)]
     pub tree_sample: Vec<String>,

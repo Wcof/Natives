@@ -165,6 +165,7 @@ pub fn build_ai_payload_preview(scan: &LocalProjectScanResult) -> serde_json::Va
         "preferredScript": scan.preferred_script,
         "hasNodeModules": scan.has_node_modules,
         "toolVersions": scan.tool_versions,
+        "extraManifests": scan.extra_manifests,
         "treeSample": scan.tree_sample.iter().take(80).cloned().collect::<Vec<_>>(),
         "risks": scan.risks,
         "blockers": scan.blockers,

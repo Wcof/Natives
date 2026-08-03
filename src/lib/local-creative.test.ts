@@ -21,6 +21,7 @@ const baseScan = (over: Partial<LocalProjectScanResult> = {}): LocalProjectScanR
   toolVersions: {},
   risks: [],
   blockers: [],
+  extraManifests: [],
   treeSample: [],
   ...over,
 });
