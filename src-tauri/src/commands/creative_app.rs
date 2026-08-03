@@ -629,8 +629,8 @@ fn create_local_app(
     }
     tx.commit().map_err(Error::Database)?;
 
-    // startAfterSave is intentionally not auto-started here; UI calls start explicitly.
-    let _ = request.start_after_save;
+    // The dead `start_after_save` flag was removed (batch 7): the UI calls start
+    // explicitly after create; auto-start after save is a product no-op.
 
     // Unified identity + startup plan for the newly registered local app.
     let app_id =

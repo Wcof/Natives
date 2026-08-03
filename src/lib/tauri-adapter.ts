@@ -354,7 +354,6 @@ export interface CreateLocalCreativeRequest {
   env?: Array<{ key: string; value: string }>;
   autoOpen?: boolean;
   startupTimeoutMs?: number;
-  startAfterSave?: boolean;
 }
 
 export interface UpdateLocalCreativeRequest {

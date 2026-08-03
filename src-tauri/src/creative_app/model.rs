@@ -729,9 +729,6 @@ pub struct CreateLocalRequest {
     pub auto_open: Option<bool>,
     #[serde(default)]
     pub startup_timeout_ms: Option<u32>,
-    /// When true, start immediately after save (phase 2 runtime).
-    #[serde(default)]
-    pub start_after_save: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

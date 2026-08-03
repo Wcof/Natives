@@ -35,7 +35,6 @@ export function buildCreateRequest(input: {
   launchMode: 'smart' | 'custom';
   launchPlan?: LaunchPlan | null;
   autoOpen: boolean;
-  startAfterSave: boolean;
   packageManager?: PackageManager;
 }): CreateLocalCreativeRequest {
   const title = input.title.trim() || defaultLocalTitleFromPath(input.projectRoot);
@@ -57,7 +56,6 @@ export function buildCreateRequest(input: {
     launchMode: input.launchMode,
     launchPlan: input.launchMode === 'custom' ? plan : plan,
     autoOpen: input.autoOpen,
-    startAfterSave: input.startAfterSave,
   };
 }
 

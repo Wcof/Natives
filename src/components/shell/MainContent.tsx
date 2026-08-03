@@ -113,7 +113,7 @@ export default function MainContent({
     case 'modules':
     case 'store':
       // Single surface: Personal Creations (install + create + manage)
-      return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage onInstall={() => {}} /></Suspense>;
+      return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage /></Suspense>;
     case 'files':
       return (
         <Suspense fallback={<LazyFallback />}>

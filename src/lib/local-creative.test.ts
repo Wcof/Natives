@@ -74,7 +74,6 @@ describe('local-creative helpers', () => {
       launchMode: 'smart',
       launchPlan: plan,
       autoOpen: true,
-      startAfterSave: false,
       packageManager: 'pnpm',
     });
     assert.equal(req.title, 'demo');
