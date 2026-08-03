@@ -67,7 +67,7 @@ fn test_daemon_crash_recovery() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_corrupted_event_does_not_block_replay() {
+fn test_corrupted_event_fails_replay_closed() {
     let tmp = std::env::temp_dir();
     let db_path = tmp.join(format!("test_corrupt_{}.db", uuid::Uuid::new_v4()));
     let art_dir = tmp.join(format!("test_corrupt_art_{}", uuid::Uuid::new_v4()));
@@ -99,11 +99,13 @@ fn test_corrupted_event_does_not_block_replay() {
     ))
     .unwrap();
 
-    // Replay should skip corrupted events, not fail
-    let events = log.replay_all(&run_id).unwrap();
+    // Replay is fail-closed: a corrupt row must surface an error, not silently
+    // skip and present an incomplete log as authoritative. The daemon and the
+    // Renderer both rely on this (AuthoritativeEventMissing / fail-closed).
+    let events = log.replay_all(&run_id);
     assert!(
-        events.len() >= 2,
-        "Should replay valid events, skipping corrupted ones"
+        events.is_err(),
+        "corrupt event must fail closed instead of being skipped"
     );
 
     let _ = std::fs::remove_file(&db_path);

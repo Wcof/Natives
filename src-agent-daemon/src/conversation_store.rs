@@ -145,13 +145,6 @@ fn store() -> Result<DataStore, String> {
     // still use a single temp file; finally default_assistant_db_path().
     #[cfg(test)]
     let _env_guard = crate::storage::DataStore::env_test_lock();
-    #[cfg(test)]
-    if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        return DataStore::new(&db_path, &artifact_dir);
-    }
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -163,22 +156,25 @@ fn store() -> Result<DataStore, String> {
                 .map(PathBuf::from)
         });
     #[cfg(test)]
-    let db_path = db_path.ok_or_else(|| {
-        "test store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)".to_string()
-    })?;
-    #[cfg(not(test))]
-    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    {
+        let runtime_dir = std::env::var("NATIVES_RUNTIME_DIR").map(PathBuf::from).ok();
+        return crate::storage::resolve_test_store(db_path, runtime_dir);
     }
-    let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join(".natives").join("runtime")
-        })
-        .join("artifacts");
-    DataStore::new(&db_path, &artifact_dir)
+    #[cfg(not(test))]
+    {
+        let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+                PathBuf::from(home).join(".natives").join("runtime")
+            })
+            .join("artifacts");
+        DataStore::new(&db_path, &artifact_dir)
+    }
 }
 
 fn row_to_conversation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
@@ -1341,7 +1337,8 @@ fn append_single_assistant_turn(
     run_id: &str,
     events: &[RunEventV2],
 ) -> Result<Option<String>, String> {
-    persist_context_snapshots_from_events(run_id, events)?;
+    let data_store = store()?;
+    persist_context_snapshots_from_events(&data_store, run_id, events)?;
     let mut text = String::new();
     let mut thinking = String::new();
     let mut tool_calls = Vec::new();
@@ -1547,10 +1544,10 @@ fn persist_turn_record(
 }
 
 fn persist_context_snapshots_from_events(
+    store: &DataStore,
     run_id: &str,
     events: &[RunEventV2],
 ) -> Result<(), String> {
-    let store = store()?;
     let conn = store.conn()?;
     let conversation_id: Option<String> = conn
         .query_row(
@@ -1764,9 +1761,24 @@ fn persist_context_snapshots_from_events(
 /// such an event and idempotently projects any missing rows (the projection is
 /// deduplicated per `run_id` + sequence, and summary messages are identity
 /// checked), so it is safe to run on every daemon start.
+/// Startup crash-gap repair: project `context_snapshot` rows for runs that
+/// committed a `ContextSnapshotCommitted` event but never reached the run-end
+/// projection. Resolves the authority store from env; see
+/// [`backfill_context_snapshots_with_store`] for the explicit-store form.
 pub fn backfill_context_snapshots() -> Result<usize, String> {
+    let store = store()?;
+    backfill_context_snapshots_with_store(&store)
+}
+
+/// Idempotent crash-gap repair against an explicit store.
+///
+/// Fails closed on a corrupted *relevant* committed snapshot event: a
+/// `context_snapshot_committed` row whose payload cannot be decoded must stop
+/// startup, because a run whose snapshot commit is durable but unreadable
+/// cannot be restored safely. Unrelated event types whose payload fails to
+/// decode are ignored — they play no part in the snapshot projection.
+pub fn backfill_context_snapshots_with_store(store: &DataStore) -> Result<usize, String> {
     let run_ids: Vec<String> = {
-        let store = store()?;
         let conn = store.conn()?;
         let mut stmt = conn
             .prepare(
@@ -1784,30 +1796,42 @@ pub fn backfill_context_snapshots() -> Result<usize, String> {
     let mut touched = 0usize;
     for run_id in run_ids {
         let events: Vec<RunEventV2> = {
-            let store = store()?;
             let conn = store.conn()?;
             let mut stmt = conn
                 .prepare(
-                    "SELECT payload FROM run_event
+                    "SELECT event_type, payload FROM run_event
                      WHERE run_id = ?1 ORDER BY sequence ASC",
                 )
                 .map_err(|e| e.to_string())?;
             let mut events = Vec::new();
             {
                 let rows = stmt
-                    .query_map(rusqlite::params![run_id], |row| row.get::<_, String>(0))
+                    .query_map(rusqlite::params![run_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
                     .map_err(|e| e.to_string())?;
-                for payload in rows {
-                    let payload = payload.map_err(|e| e.to_string())?;
-                    if let Ok(event) = serde_json::from_str::<RunEventV2>(&payload) {
+                for row in rows {
+                    let (event_type, payload) = row.map_err(|e| e.to_string())?;
+                    if event_type == "context_snapshot_committed" {
+                        match serde_json::from_str::<RunEventV2>(&payload) {
+                            Ok(event) => events.push(event),
+                            Err(error) => {
+                                return Err(format!(
+                                    "corrupt context_snapshot_committed payload for run {run_id}: {error}"
+                                ))
+                            }
+                        }
+                    } else if let Ok(event) = serde_json::from_str::<RunEventV2>(&payload) {
                         events.push(event);
                     }
+                    // Unrelated event types that fail to decode are not part of
+                    // the snapshot projection and are skipped.
                 }
             }
             events
         };
         if !events.is_empty() {
-            persist_context_snapshots_from_events(&run_id, &events)?;
+            persist_context_snapshots_from_events(store, &run_id, &events)?;
             touched += 1;
         }
     }
@@ -3331,6 +3355,136 @@ mod tests {
             )
             .unwrap();
         assert_eq!(final_count, 1, "backfill must be idempotent");
+    }
+
+    #[test]
+    fn backfill_with_store_fails_closed_on_corrupt_committed_snapshot_payload() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("corrupt-snap.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("corrupt-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('corrupt-run', 'corrupt-conv', 'completed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        // A relevant committed-snapshot event whose payload cannot be decoded
+        // must abort recovery — the backfill returns Err instead of silently
+        // skipping the corrupted projection.
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+                 VALUES ('corrupt-run', 1, 'context_snapshot_committed', '{not-json', datetime('now'))",
+                [],
+            )
+            .unwrap();
+        let err = backfill_context_snapshots_with_store(&store).unwrap_err();
+        assert!(err.contains("corrupt context_snapshot_committed"), "{err}");
+        assert!(err.contains("corrupt-run"), "{err}");
+    }
+
+    #[test]
+    fn backfill_ignores_corrupt_unrelated_event_payload() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("unrelated-corrupt.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("unrelated-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('unrelated-run', 'unrelated-conv', 'completed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        let event = RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: "unrelated-run".into(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ContextSnapshotCommitted {
+                snapshot_id: "snapshot-ok".into(),
+                turn_id: Some("turn-ok".into()),
+                source_revision: 1,
+                input_message_ids: vec![],
+                summary_message_id: None,
+                replaced_range: None,
+                algorithm_version: "compaction-v1".into(),
+                provider_context_window: None,
+                artifact_reference: None,
+                snapshot_json: serde_json::json!([{
+                    "role": "system",
+                    "message_id": "summary-ok",
+                    "content": "compacted"
+                }]),
+            },
+        };
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+                 VALUES ('unrelated-run', 1, 'context_snapshot_committed', ?1, datetime('now'))",
+                rusqlite::params![serde_json::to_string(&event).unwrap()],
+            )
+            .unwrap();
+        // A corrupt *unrelated* event (text_delta) must not block the projection
+        // of the valid committed snapshot event.
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+                 VALUES ('unrelated-run', 2, 'text_delta', '{not-json', datetime('now'))",
+                [],
+            )
+            .unwrap();
+        let touched = backfill_context_snapshots_with_store(&store).unwrap();
+        assert_eq!(touched, 1, "valid snapshot event must still be backfilled");
+        let after: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'unrelated-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, 1,
+            "corrupt unrelated event must not block projection"
+        );
     }
 
     #[test]

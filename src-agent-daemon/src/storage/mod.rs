@@ -100,6 +100,75 @@ pub fn test_db_override() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     Some((db, art))
 }
 
+/// Per-process paths for an isolated test store. Tests that touch the daemon's
+/// global `store()` accessors without a per-test override resolve here instead
+/// of erroring on missing env or falling through to `~/.natives`.
+#[cfg(test)]
+pub fn test_global_store_paths() -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::sync::OnceLock;
+    static PATHS: OnceLock<(std::path::PathBuf, std::path::PathBuf)> = OnceLock::new();
+    PATHS
+        .get_or_init(|| {
+            let db =
+                std::env::temp_dir().join(format!("natives-daemon-test-{}.db", std::process::id()));
+            (db.clone(), db.with_extension("artifacts"))
+        })
+        .clone()
+}
+
+/// cfg(test) store resolution shared by the daemon's global `store()` accessors:
+/// per-test thread-local override → explicit env path → per-process isolated
+/// test store. Never opens `~/.natives`, and never fails for a test that
+/// legitimately touches the store.
+#[cfg(test)]
+pub fn resolve_test_store(
+    explicit_env: Option<std::path::PathBuf>,
+    runtime_dir: Option<std::path::PathBuf>,
+) -> Result<DataStore, String> {
+    if let Some((db_path, artifact_dir)) = test_db_override() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
+    if let Some(db_path) = explicit_env {
+        let artifact_dir = runtime_dir.unwrap_or_else(|| {
+            db_path
+                .parent()
+                .map(|p| p.join("artifacts"))
+                .unwrap_or_else(std::env::temp_dir)
+        });
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
+    let (db, artifacts) = test_global_store_paths();
+    DataStore::new(&db, &artifacts)
+}
+
+/// Open the store that the daemon's global `store()` accessors would resolve to
+/// in the current test thread (per-test override, explicit env, or the shared
+/// per-process test store). Test fixtures use this to seed rows (conversation /
+/// run) that FK-bound inserts require.
+#[cfg(test)]
+pub(crate) fn open_resolved_store() -> Result<DataStore, String> {
+    let explicit = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("NATIVES_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(std::path::PathBuf::from)
+        });
+    let runtime = std::env::var("NATIVES_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .ok();
+    resolve_test_store(explicit, runtime)
+}
+
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
     conn: Mutex<Connection>,

@@ -432,9 +432,13 @@ impl ProductionRuntime {
             return Err("request_id required".into());
         }
         let scope = normalize_permission_scope(scope.unwrap_or("once"));
-        // Persist the response before touching the in-memory waiter. If the
-        // durable interaction is unavailable, leave the waiter untouched so
-        // the Engine remains fail-closed and the RPC reports the failure.
+        // Verify ownership before persisting: a respond from the wrong run must
+        // never consume the durable interaction, so the owning run can still
+        // answer. The fail-closed persistence ordering (persist before waking
+        // the in-memory waiter) is preserved for the correct owner.
+        self.interactions
+            .verify_permission_owner(request_id, run_id)
+            .await?;
         crate::interaction_store::mark_resolved(
             request_id,
             serde_json::json!({ "approved": approved, "scope": scope }),
@@ -1911,6 +1915,31 @@ mod permission_bind_tests {
         let rt = ProductionRuntime::new();
         let (tx, _rx) = oneshot::channel();
         rt.insert_permission_waiter("p1", "run-a", "tool", tx).await;
+        // The waiter is in-memory only; persist the pending interaction row so
+        // respond_permission's durable mark_resolved step has a row to settle.
+        crate::conversation_store::ensure_conversation_stub(
+            "conv-a", "openai", "gpt-4o", None, None,
+        )
+        .unwrap();
+        // interaction.run_id references run(id); seed the run row in the same
+        // resolved store before inserting the pending interaction.
+        if let Ok(store) = crate::storage::open_resolved_store() {
+            if let Ok(conn) = store.conn() {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO run (id, conversation_id, status, provider_id, model_id)
+                     VALUES ('run-a', 'conv-a', 'queued', 'openai', 'gpt-4o')",
+                    [],
+                );
+            }
+        }
+        crate::interaction_store::insert_pending(
+            "p1",
+            Some("run-a"),
+            Some("conv-a"),
+            "tool_permission",
+            serde_json::json!({ "tool_name": "tool" }),
+        )
+        .unwrap();
         let err = rt
             .respond_permission("p1", true, Some("run-b"), Some("once"))
             .await
@@ -1921,7 +1950,7 @@ mod permission_bind_tests {
         let ok = rt
             .respond_permission("p1", false, Some("run-a"), Some("once"))
             .await;
-        assert!(ok.is_ok());
+        assert!(ok.is_ok(), "{ok:?}");
         assert!(!rt.interactions.has_permission("p1").await);
     }
 

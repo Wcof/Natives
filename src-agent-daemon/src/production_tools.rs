@@ -4058,6 +4058,33 @@ mod plan_mode_runtime_tests {
 
     fn tools_for(run_id: &str, profile: &str, root: &std::path::Path) -> PermissionGatedTools {
         let rt = ProductionRuntime::new();
+        let conversation_id = format!("conv-{run_id}");
+        // The permission / plan-approval paths persist rows in the resolved
+        // store; make sure the conversation and run exist there so interaction
+        // inserts (FK to conversation + run) succeed instead of failing closed.
+        let _ = crate::conversation_store::ensure_conversation_stub(
+            &conversation_id,
+            "test",
+            "test-model",
+            None,
+            None,
+        );
+        if let Ok(store) = crate::storage::open_resolved_store() {
+            if let Ok(conn) = store.conn() {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO run (id, conversation_id, status, provider_id, model_id)
+                     VALUES (?1, ?2, 'queued', 'test', 'test-model')",
+                    rusqlite::params![run_id, &conversation_id],
+                );
+            }
+        }
+        // write tools capture checkpoint before-images keyed by run; begin the
+        // run's live checkpoint so they resolve.
+        let _ = crate::checkpoint::global_checkpoint_manager().begin_run(
+            run_id,
+            &conversation_id,
+            root,
+        );
         let mut gateway = CapabilityGateway::new();
         gateway.set_project_root(root.to_string_lossy().to_string());
         gateway.register_builtins();
@@ -4073,7 +4100,7 @@ mod plan_mode_runtime_tests {
             provider_id: "test".into(),
             key_id: None,
             parent_run_id: run_id.to_string(),
-            conversation_id: format!("conv-{run_id}"),
+            conversation_id,
             model_id: "test-model".into(),
             permission_profile: profile.to_string(),
             tool_allowlist: None,
