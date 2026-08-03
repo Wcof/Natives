@@ -7,17 +7,19 @@
 
 use agent_core::{
     default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime, EventSequencer, HookEvent,
-    HookRegistry, HookRequest, PermissionAggregate, PermissionManager, PermissionProfile,
-    SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
+    HookRegistry, HookRequest, NoopToolProgressSink, PermissionAggregate, PermissionManager,
+    PermissionProfile, SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolProgressSink,
+    ToolProgressUpdate, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
 use capability_gateway::{CapabilityGateway, SideEffect};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
@@ -187,7 +189,153 @@ pub struct PermissionGatedTools {
     /// only target these servers. `None` = legacy behaviour.
     pub selected_mcp_servers: Option<std::collections::HashSet<String>>,
 }
+
+pub struct DaemonToolProgressSink {
+    pub events: EventSequencer,
+    settled: Arc<Mutex<HashSet<String>>>,
+    pending: Arc<Mutex<HashMap<String, (Instant, ToolProgressUpdate)>>>,
+    scheduled_flushes: Arc<Mutex<HashSet<String>>>,
+    sequence: Arc<AtomicU64>,
+}
+
+impl DaemonToolProgressSink {
+    pub fn new(events: EventSequencer) -> Self {
+        Self {
+            events,
+            settled: Arc::new(Mutex::new(HashSet::new())),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            scheduled_flushes: Arc::new(Mutex::new(HashSet::new())),
+            sequence: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    fn schedule_flush(&self, call_id: String) {
+        let pending = self.pending.clone();
+        let settled = self.settled.clone();
+        let scheduled_flushes = self.scheduled_flushes.clone();
+        let events = self.events.clone();
+        let sequence = self.sequence.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let update = {
+                let mut pending = pending.lock().await;
+                let settled = settled.lock().await;
+                let update = if settled.contains(&call_id) {
+                    pending.remove(&call_id).map(|(_, value)| value)
+                } else {
+                    pending.remove(&call_id).map(|(_, mut value)| {
+                        value.final_update = false;
+                        value
+                    })
+                };
+                // Keep the same pending → settled → scheduled lock order as
+                // publish/mark_tool_call_settled. This closes the race where a
+                // new update arrives while the timer is flushing the old batch.
+                let mut scheduled = scheduled_flushes.lock().await;
+                scheduled.remove(&call_id);
+                update
+            };
+            if let Some(update) = update {
+                let progress_sequence = sequence.fetch_add(1, AtomicOrdering::Relaxed);
+                events.append(
+                    &update.run_id,
+                    RunEventKind::ToolOutputDelta {
+                        tool_call_id: update.tool_call_id,
+                        tool_name: Some(update.tool_name),
+                        stream: update.stream,
+                        text: update.text,
+                        truncated: false,
+                        turn_id: update.turn_id,
+                        message_id: update.message_id,
+                        progress_sequence: Some(progress_sequence),
+                    },
+                );
+            }
+        });
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolProgressSink for DaemonToolProgressSink {
+    async fn publish(&self, update: ToolProgressUpdate) {
+        const MAX_BATCH_BYTES: usize = 8 * 1024;
+        const MAX_BATCH_AGE: Duration = Duration::from_millis(250);
+        let now = Instant::now();
+        let call_id = update.tool_call_id.clone();
+        let (emit, schedule) = {
+            let mut pending = self.pending.lock().await;
+            let settled = self.settled.lock().await;
+            if settled.contains(&call_id) {
+                return;
+            }
+            if update.final_update {
+                let mut final_update = pending.remove(&call_id).map(|(_, mut value)| {
+                    value.text.push_str(&update.text);
+                    value.final_update = true;
+                    value
+                });
+                if final_update.is_none() {
+                    final_update = Some(update);
+                }
+                (final_update, false)
+            } else {
+                let flush = pending
+                    .get_mut(&call_id)
+                    .map(|(started, buffered)| {
+                        buffered.text.push_str(&update.text);
+                        buffered.text.len() >= MAX_BATCH_BYTES
+                            || now.duration_since(*started) >= MAX_BATCH_AGE
+                    })
+                    .unwrap_or(false);
+                if flush {
+                    (pending.remove(&call_id).map(|(_, value)| value), false)
+                } else if pending.contains_key(&call_id) {
+                    (None, false)
+                } else {
+                    pending.insert(call_id.clone(), (now, update));
+                    let mut scheduled = self.scheduled_flushes.lock().await;
+                    (None, scheduled.insert(call_id.clone()))
+                }
+            }
+        };
+        if schedule {
+            self.schedule_flush(call_id);
+        }
+        if let Some(update) = emit {
+            let progress_sequence = self.sequence.fetch_add(1, AtomicOrdering::Relaxed);
+            self.events.append(
+                &update.run_id,
+                RunEventKind::ToolOutputDelta {
+                    tool_call_id: update.tool_call_id,
+                    tool_name: Some(update.tool_name),
+                    stream: update.stream,
+                    text: update.text,
+                    truncated: false,
+                    turn_id: update.turn_id,
+                    message_id: update.message_id,
+                    progress_sequence: Some(progress_sequence),
+                },
+            );
+        }
+    }
+
+    async fn mark_tool_call_settled(&self, tool_call_id: &str) {
+        // Keep the same lock order as `publish`: either the event is appended
+        // before settlement, or settlement wins and the late update is dropped.
+        let mut pending = self.pending.lock().await;
+        let mut settled = self.settled.lock().await;
+        settled.insert(tool_call_id.to_string());
+        pending.remove(tool_call_id);
+    }
+}
 impl PermissionGatedTools {
+    fn checkpoint_manager(&self) -> &crate::checkpoint::CheckpointManager {
+        match self.runtime.as_deref() {
+            Some(runtime) => runtime.checkpoint_manager(),
+            None => crate::checkpoint::global_checkpoint_manager(),
+        }
+    }
+
     fn tool_allowed(&self, name: &str) -> bool {
         // Server whitelist gate first (ADR-0016): with an active MCP selection
         // a namespaced tool outside the selected servers is invisible/denied,
@@ -297,11 +445,234 @@ impl EngineToolRuntime for PermissionGatedTools {
         )
     }
 
+    async fn list_tool_capabilities(&self) -> Vec<agent_core::ToolCapability> {
+        self.ensure_plan_latch();
+        let gateway_capabilities = self.gateway.list_capabilities();
+        model_visible_tool_schemas(
+            &self.gateway,
+            self.tool_allowlist.as_deref(),
+            &self.mcp_tool_schemas,
+            self.selected_mcp_servers.as_ref(),
+            plan_mode::is_active(&self.parent_run_id),
+        )
+        .into_iter()
+        .map(|schema| {
+            let gateway_capability = gateway_capabilities
+                .iter()
+                .find(|capability| capability.name == schema.name);
+            let mode = match gateway_capability.map(|capability| capability.execution_mode) {
+                Some(capability_gateway::ExecutionMode::ParallelSafe) => {
+                    agent_core::ToolExecutionMode::ParallelSafe
+                }
+                Some(capability_gateway::ExecutionMode::Exclusive) => {
+                    agent_core::ToolExecutionMode::Exclusive
+                }
+                Some(capability_gateway::ExecutionMode::Sequential) | None => {
+                    agent_core::ToolExecutionMode::Sequential
+                }
+            };
+            let side_effect = match gateway_capability.map(|capability| capability.side_effect) {
+                Some(capability_gateway::SideEffect::ReadOnly) => {
+                    agent_core::ToolSideEffect::ReadOnly
+                }
+                Some(capability_gateway::SideEffect::Write) => agent_core::ToolSideEffect::Write,
+                Some(capability_gateway::SideEffect::Destructive) => {
+                    agent_core::ToolSideEffect::Destructive
+                }
+                Some(capability_gateway::SideEffect::Network) => {
+                    agent_core::ToolSideEffect::Network
+                }
+                Some(capability_gateway::SideEffect::Process) => {
+                    agent_core::ToolSideEffect::Process
+                }
+                None => agent_core::ToolSideEffect::Destructive,
+            };
+            agent_core::ToolCapability {
+                name: schema.name,
+                schema: schema.input_schema,
+                execution_mode: mode,
+                side_effect,
+                conflict_key: gateway_capability
+                    .and_then(|capability| capability.conflict_key.clone()),
+            }
+        })
+        .collect()
+    }
+
+    async fn mark_tool_call_uncertain(
+        &self,
+        call_id: &str,
+        name: &str,
+        turn_id: Option<&str>,
+        input: &Value,
+    ) {
+        let _ = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "uncertain",
+            false,
+            turn_id,
+            input,
+        );
+    }
+
+    async fn execute_tool_with_progress(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        progress: &dyn ToolProgressSink,
+    ) -> ToolExecutionResult {
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: name.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: "started".into(),
+                final_update: false,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: 0,
+            })
+            .await;
+        let result = self
+            .execute_tool_with_call_id(name, input, cancel, None)
+            .await;
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: name.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: if result.is_error {
+                    "failed"
+                } else {
+                    "completed"
+                }
+                .into(),
+                final_update: true,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: 0,
+            })
+            .await;
+        result
+    }
+
+    async fn execute_tool_with_progress_for_call(
+        &self,
+        call_id: &str,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        progress: Arc<dyn ToolProgressSink>,
+    ) -> ToolExecutionResult {
+        progress
+            .publish(ToolProgressUpdate {
+                run_id: self.parent_run_id.clone(),
+                tool_call_id: call_id.to_string(),
+                tool_name: name.to_string(),
+                stream: "status".into(),
+                text: "started".into(),
+                final_update: false,
+                turn_id: turn_id.map(str::to_string),
+                message_id: message_id.map(str::to_string),
+                progress_sequence: 0,
+            })
+            .await;
+        let result = self
+            .execute_tool_with_call_id_and_progress(
+                name,
+                input,
+                cancel,
+                Some(call_id),
+                turn_id,
+                message_id,
+                progress.clone(),
+            )
+            .await;
+        let child_run_id = result
+            .output
+            .get("run_id")
+            .and_then(Value::as_str)
+            .filter(|_| result.output.get("status").and_then(Value::as_str) == Some("running"))
+            .map(str::to_string);
+        if let Some(child_run_id) = child_run_id {
+            spawn_subagent_progress(
+                self.events.clone(),
+                self.parent_run_id.clone(),
+                call_id.to_string(),
+                child_run_id,
+                progress.clone(),
+                turn_id.map(str::to_string),
+                message_id.map(str::to_string),
+            );
+        } else {
+            progress
+                .publish(ToolProgressUpdate {
+                    run_id: self.parent_run_id.clone(),
+                    tool_call_id: call_id.to_string(),
+                    tool_name: name.to_string(),
+                    stream: "status".into(),
+                    text: if result.is_error {
+                        "failed"
+                    } else {
+                        "completed"
+                    }
+                    .into(),
+                    final_update: true,
+                    turn_id: turn_id.map(str::to_string),
+                    message_id: message_id.map(str::to_string),
+                    progress_sequence: 0,
+                })
+                .await;
+        }
+        result
+    }
+
     async fn execute_tool(
         &self,
         name: &str,
         input: Value,
         cancel: &CancellationToken,
+    ) -> ToolExecutionResult {
+        self.execute_tool_with_call_id(name, input, cancel, None)
+            .await
+    }
+
+    async fn execute_tool_with_call_id(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        call_id: Option<&str>,
+    ) -> ToolExecutionResult {
+        self.execute_tool_with_call_id_and_progress(
+            name,
+            input,
+            cancel,
+            call_id,
+            None,
+            None,
+            Arc::new(NoopToolProgressSink),
+        )
+        .await
+    }
+
+    async fn execute_tool_with_call_id_and_progress(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+        call_id: Option<&str>,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
+        progress: Arc<dyn ToolProgressSink>,
     ) -> ToolExecutionResult {
         if cancel.is_cancelled() {
             return ToolExecutionResult {
@@ -310,6 +681,10 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: 0,
             };
         }
+        let stream_tool_call_id = call_id
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Hard allowlist gate before permission / orchestration (Phase 0).
         if !self.tool_allowed(name) {
@@ -411,6 +786,86 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: 0,
             };
         }
+        if name.starts_with("mcp__")
+            && !self
+                .mcp_tool_schemas
+                .iter()
+                .any(|schema| schema.name == name)
+        {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "UNKNOWN_TOOL",
+                    "error": format!("unknown advertised MCP tool: {name}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
+        if let Some(tool) = tool {
+            if let Err(error) = CapabilityGateway::validate_external_input(&tool.schema, &input) {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "SCHEMA_INVALID",
+                        "error": error.message,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
+        // Dynamic MCP tools are not local Gateway handlers, but their
+        // advertised schemas are still an execution trust boundary. Validate
+        // the actual tool arguments before permission or transport dispatch;
+        // generic `mcp_call` unwraps its nested `arguments` object first.
+        if is_mcp {
+            let schema_name = if name == "mcp_call" {
+                let server = input
+                    .get("server")
+                    .or_else(|| input.get("server_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let tool_name = input
+                    .get("tool")
+                    .or_else(|| input.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                (!server.is_empty() && !tool_name.is_empty())
+                    .then(|| format!("mcp__{server}__{tool_name}"))
+            } else {
+                Some(name.to_string())
+            };
+            if let Some(schema_name) = schema_name {
+                if let Some(schema) = self
+                    .mcp_tool_schemas
+                    .iter()
+                    .find(|schema| schema.name == schema_name)
+                {
+                    let schema_input = if name == "mcp_call" {
+                        input
+                            .get("arguments")
+                            .or_else(|| input.get("input"))
+                            .unwrap_or(&Value::Null)
+                    } else {
+                        &input
+                    };
+                    if let Err(error) = CapabilityGateway::validate_external_input(
+                        &schema.input_schema,
+                        schema_input,
+                    ) {
+                        return ToolExecutionResult {
+                            output: serde_json::json!({
+                                "error_code": "SCHEMA_INVALID",
+                                "error": error.message,
+                            }),
+                            is_error: true,
+                            duration_ms: 0,
+                        };
+                    }
+                }
+            }
+        }
 
         // Permission gate: PermissionClass + SideEffect (G5).
         // Orchestration tools always go through this gate (never early-return around it).
@@ -477,13 +932,36 @@ impl EngineToolRuntime for PermissionGatedTools {
                 capability_gateway::policy::PolicyResult::NeedsApproval(_)
             ) && profile_str != "readonly";
             if let Some(denied) = self
-                .await_tool_permission(name, &input, auto_approve_allowed)
+                .await_tool_permission(&stream_tool_call_id, name, &input, auto_approve_allowed)
                 .await
             {
                 return denied;
             }
         }
 
+        // This is the first event that authorizes handler execution. It is
+        // emitted only after allowlist, project identity and permission gates;
+        // rejected calls never receive a started fact.
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::ToolCallStarted {
+                    id: stream_tool_call_id.clone(),
+                    name: name.to_string(),
+                },
+            )
+            .is_err()
+        {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": "tool start event could not be persisted"
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
         if name == "skill" {
             let skill_name = input.get("name").and_then(Value::as_str).unwrap_or("");
             let Some(project_root) = self.gateway.project_root.as_deref() else {
@@ -535,7 +1013,17 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
         // MCP tools: always after permission gate (ExternalWrite / Network).
         if name == "mcp_call" || name.starts_with("mcp__") {
-            return self.execute_mcp_call(name, input).await;
+            return self
+                .execute_mcp_call(
+                    name,
+                    input,
+                    Some(&stream_tool_call_id),
+                    turn_id,
+                    message_id,
+                    cancel,
+                    progress.clone(),
+                )
+                .await;
         }
 
         let Some(_tool) = tool else {
@@ -561,67 +1049,190 @@ impl EngineToolRuntime for PermissionGatedTools {
         // Phase 3: lazy before-image for write tools (write_file / apply_patch).
         let write_paths = extract_write_paths(name, &input);
         for rel in &write_paths {
-            let _ = crate::checkpoint::global_checkpoint_manager()
-                .capture_before(&self.parent_run_id, rel);
+            if let Err(error) = self
+                .checkpoint_manager()
+                .capture_before(&self.parent_run_id, rel)
+            {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("checkpoint before-image could not be persisted: {error}"),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &stream_tool_call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "started",
+            false,
+            turn_id,
+            &input,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("tool side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
         }
 
         let started = Instant::now();
-        // Stable id for tool_output_delta correlation (engine also emits its own
-        // tool_call_* ids; UI merges by tool_call_id when present on deltas).
-        let stream_tool_call_id = uuid::Uuid::new_v4().to_string();
-
         // Create tool call context
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
                 .await
-                .unwrap_or_else(CancellationToken::new)
+                .unwrap_or_else(|| cancel.clone())
         } else {
-            CancellationToken::new()
+            cancel.clone()
         };
+        let live_settled = Arc::new(AtomicBool::new(false));
+        let live_forwarder = if name == "run_terminal" {
+            let (tx, mut rx) =
+                tokio::sync::mpsc::unbounded_channel::<capability_gateway::ToolProgressChunk>();
+            let run_id = self.parent_run_id.clone();
+            let call_id = stream_tool_call_id.clone();
+            let turn_id = turn_id.map(str::to_string);
+            let message_id = message_id.map(str::to_string);
+            let settled = live_settled.clone();
+            // Terminal live output goes through the SAME batched progress sink
+            // as every other tool (8KiB/250ms) — there is no second direct
+            // EventLog path for run_terminal. The handler drains supervisor
+            // chunks into this channel; the sink batches and late-drops after
+            // the call settles, just like MCP/Subagent progress.
+            let progress = progress.clone();
+            let forwarder = tokio::spawn(async move {
+                while let Some(chunk) = rx.recv().await {
+                    if settled.load(AtomicOrdering::Acquire) {
+                        break;
+                    }
+                    progress
+                        .publish(agent_core::ToolProgressUpdate {
+                            run_id: run_id.clone(),
+                            tool_call_id: call_id.clone(),
+                            tool_name: "run_terminal".into(),
+                            stream: chunk.stream,
+                            text: chunk.text,
+                            final_update: false,
+                            turn_id: turn_id.clone(),
+                            message_id: message_id.clone(),
+                            progress_sequence: 0,
+                        })
+                        .await;
+                }
+            });
+            Some((tx, forwarder))
+        } else {
+            None
+        };
+        let progress_tx = live_forwarder.as_ref().map(|(tx, _)| tx.clone());
         let tool_context = self
-            .build_tool_call_context(stream_tool_call_id.clone(), cancel)
+            .build_tool_call_context(
+                stream_tool_call_id.clone(),
+                cancel.clone(),
+                progress_tx,
+                turn_id.map(str::to_string),
+                message_id.map(str::to_string),
+            )
             .await;
 
-        match self
+        let result = match self
             .gateway
             .execute(name, input.clone(), &tool_context)
             .await
         {
             Ok(out) => {
+                let mut output = out.result;
+                attach_tool_output_artifact(&self.parent_run_id, &stream_tool_call_id, &mut output);
+                let mut checkpoint_error = None;
+                for rel in &write_paths {
+                    if let Err(error) = self
+                        .checkpoint_manager()
+                        .capture_after(&self.parent_run_id, rel)
+                    {
+                        checkpoint_error = Some(error);
+                        break;
+                    }
+                }
+                let checkpoint_failed = checkpoint_error.is_some();
                 // Side-effect ledger for restore coverage honesty.
                 let cat = crate::side_effect_ledger::category_for_tool(name);
                 let reversible = cat == "workspace_file";
-                let _ = crate::side_effect_ledger::record_tool_effect(
-                    &self.parent_run_id,
-                    name,
-                    cat,
-                    &input,
-                    reversible,
-                    None,
-                );
-                if name == "run_terminal" {
+                let ledger_result = if checkpoint_failed {
+                    crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        name,
+                        cat,
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &input,
+                    )
+                } else {
+                    crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        name,
+                        cat,
+                        "completed",
+                        reversible,
+                        turn_id,
+                        &input,
+                    )
+                };
+                if let Some(error) = checkpoint_error.as_deref() {
+                    output = serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("checkpoint after-image could not be persisted: {error}"),
+                    });
+                }
+                if let Err(error) = ledger_result {
+                    // The handler already ran, so a failed completion write is
+                    // an unknown side effect. Keep the ledger conservative even
+                    // when the first completion update failed.
+                    let _ = crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        name,
+                        cat,
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &input,
+                    );
+                    output = serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("tool side-effect ledger could not be completed: {error}"),
+                    });
+                }
+                if name == "run_terminal" && live_forwarder.is_none() {
                     emit_terminal_output_deltas(
                         &self.events,
                         &self.parent_run_id,
                         &stream_tool_call_id,
-                        &out.result,
+                        &output,
                     );
                     // Background shell tasks: surface on Activity task list.
-                    if out
-                        .result
+                    if output
                         .get("background")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
                     {
-                        let task_id = out
-                            .result
+                        let task_id = output
                             .get("task_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or(&stream_tool_call_id)
                             .to_string();
-                        let label = out
-                            .result
+                        let label = output
                             .get("display_command")
                             .and_then(|v| v.as_str())
                             .unwrap_or("terminal")
@@ -640,8 +1251,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                                 TaskRecord {
                                     run_id: self.parent_run_id.clone(),
                                     status: "running".into(),
-                                    output: out
-                                        .result
+                                    output: output
                                         .get("output")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string()),
@@ -650,30 +1260,31 @@ impl EngineToolRuntime for PermissionGatedTools {
                         }
                     }
                 }
-                for rel in &write_paths {
-                    let _ = crate::checkpoint::global_checkpoint_manager()
-                        .capture_after(&self.parent_run_id, rel);
-                    // Best-effort FileChanged with before/after from checkpoint live map.
-                    if let Ok(preview) = crate::checkpoint::global_checkpoint_manager()
-                        .checkpoint_for_run_public(&self.parent_run_id)
-                    {
-                        if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
-                            self.events.append(
-                                &self.parent_run_id,
-                                RunEventKind::FileChanged {
-                                    path: rel.clone(),
-                                    change_type: if !snap.existed_before {
-                                        "created".into()
-                                    } else {
-                                        "modified".into()
+                if !checkpoint_failed {
+                    for rel in &write_paths {
+                        // Best-effort FileChanged with before/after from checkpoint live map.
+                        if let Ok(preview) = self
+                            .checkpoint_manager()
+                            .checkpoint_for_run_public(&self.parent_run_id)
+                        {
+                            if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
+                                self.events.append(
+                                    &self.parent_run_id,
+                                    RunEventKind::FileChanged {
+                                        path: rel.clone(),
+                                        change_type: if !snap.existed_before {
+                                            "created".into()
+                                        } else {
+                                            "modified".into()
+                                        },
+                                        before: snap.before_content.clone(),
+                                        after: snap.after_content.clone(),
+                                        before_hash: snap.before_hash.clone(),
+                                        after_hash: snap.after_hash.clone(),
+                                        diff_artifact_id: None,
                                     },
-                                    before: snap.before_content.clone(),
-                                    after: snap.after_content.clone(),
-                                    before_hash: snap.before_hash.clone(),
-                                    after_hash: snap.after_hash.clone(),
-                                    diff_artifact_id: None,
-                                },
-                            );
+                                );
+                            }
                         }
                     }
                 }
@@ -692,25 +1303,171 @@ impl EngineToolRuntime for PermissionGatedTools {
                             tool_name: Some(name.to_string()),
                             input: serde_json::json!({
                                 "input": input,
-                                "output": out.result.clone(),
+                                "output": output.clone(),
                             }),
                         })
                         .await;
                 }
+                let is_error =
+                    output.get("error_code").and_then(Value::as_str) == Some("PERSISTENCE_FAILED");
                 ToolExecutionResult {
-                    output: out.result,
-                    is_error: false,
+                    output,
+                    is_error,
                     duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
                 }
             }
-            Err(err) => ToolExecutionResult {
-                output: serde_json::json!({"error": err.message, "code": err.code}),
-                is_error: true,
-                duration_ms: started.elapsed().as_millis() as u64,
-            },
+            Err(err) => {
+                let status = if err.code == "cancelled" {
+                    "cancelled"
+                } else if err.code == "timeout" {
+                    "uncertain"
+                } else {
+                    "failed"
+                };
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
+                    &self.parent_run_id,
+                    &stream_tool_call_id,
+                    name,
+                    crate::side_effect_ledger::category_for_tool(name),
+                    status,
+                    false,
+                    turn_id,
+                    &input,
+                );
+                let output = match ledger_result {
+                    Ok(()) => serde_json::json!({"error": err.message, "code": err.code}),
+                    Err(ledger_error) => serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("tool side-effect ledger could not be settled: {ledger_error}"),
+                    }),
+                };
+                ToolExecutionResult {
+                    output,
+                    is_error: true,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                }
+            }
+        };
+        live_settled.store(true, AtomicOrdering::Release);
+        drop(tool_context);
+        if let Some((tx, forwarder)) = live_forwarder {
+            drop(tx);
+            forwarder.abort();
         }
+        result
     }
 }
+
+fn spawn_subagent_progress(
+    events: EventSequencer,
+    parent_run_id: String,
+    tool_call_id: String,
+    child_run_id: String,
+    progress: Arc<dyn ToolProgressSink>,
+    turn_id: Option<String>,
+    message_id: Option<String>,
+) {
+    tokio::spawn(async move {
+        let mut cursor = 0u64;
+        let mut pending = String::new();
+        let mut last_emit = Instant::now() - Duration::from_millis(50);
+        for _ in 0..3_600 {
+            let child_events = match events.replay_after_checked(&child_run_id, cursor) {
+                Ok(events) => events,
+                Err(_) => break,
+            };
+            for event in child_events {
+                cursor = cursor.max(event.effective_run_sequence());
+                match event.payload {
+                    RunEventKind::TextDelta { text } | RunEventKind::ReasoningDelta { text } => {
+                        pending.push_str(&text)
+                    }
+                    RunEventKind::Progress { message, .. } => {
+                        pending.push_str(&message);
+                    }
+                    _ => {}
+                }
+            }
+            if !pending.is_empty() && last_emit.elapsed() >= Duration::from_millis(50) {
+                let text = std::mem::take(&mut pending);
+                progress
+                    .publish(ToolProgressUpdate {
+                        run_id: parent_run_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: "task".into(),
+                        stream: "subagent".into(),
+                        text,
+                        final_update: false,
+                        turn_id: turn_id.clone(),
+                        message_id: message_id.clone(),
+                        progress_sequence: 0,
+                    })
+                    .await;
+                last_emit = Instant::now();
+            }
+            let Some(run) = crate::global_run_manager().get_run(&child_run_id) else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            if run.status.is_terminal() {
+                if !pending.is_empty() {
+                    progress
+                        .publish(ToolProgressUpdate {
+                            run_id: parent_run_id.clone(),
+                            tool_call_id: tool_call_id.clone(),
+                            tool_name: "task".into(),
+                            stream: "subagent".into(),
+                            text: std::mem::take(&mut pending),
+                            final_update: false,
+                            turn_id: turn_id.clone(),
+                            message_id: message_id.clone(),
+                            progress_sequence: 0,
+                        })
+                        .await;
+                }
+                progress
+                    .publish(ToolProgressUpdate {
+                        run_id: parent_run_id,
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: "task".into(),
+                        stream: "subagent".into(),
+                        text: run.status.as_str().to_string(),
+                        final_update: true,
+                        turn_id,
+                        message_id,
+                        progress_sequence: 0,
+                    })
+                    .await;
+                progress.mark_tool_call_settled(&tool_call_id).await;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+}
+
+fn attach_tool_output_artifact(run_id: &str, call_id: &str, output: &mut Value) {
+    const ARTIFACT_THRESHOLD: usize = 16 * 1024;
+    let serialized = output.to_string();
+    if serialized.len() < ARTIFACT_THRESHOLD {
+        return;
+    }
+    let preview: String = serialized.chars().take(4_000).collect();
+    if let Ok(meta) = crate::artifact_store::global_artifacts().put(
+        run_id,
+        &format!("tool-{call_id}.json"),
+        serialized.as_bytes(),
+        Some("application/json".into()),
+    ) {
+        *output = serde_json::json!({
+            "artifact_id": meta.id,
+            "preview": preview,
+            "truncated": true,
+            "bytes": serialized.len(),
+        });
+    }
+}
+
 /// Emit batched terminal stdout/stderr as ToolOutputDelta (≤8KB chunks, ≤1MB total).
 fn emit_terminal_output_deltas(
     events: &EventSequencer,
@@ -739,9 +1496,13 @@ fn emit_terminal_output_deltas(
                     run_id,
                     RunEventKind::ToolOutputDelta {
                         tool_call_id: tool_call_id.to_string(),
+                        tool_name: Some("run_terminal".into()),
                         stream: stream.into(),
                         text: String::new(),
                         truncated: true,
+                        turn_id: None,
+                        message_id: None,
+                        progress_sequence: None,
                     },
                 );
                 return;
@@ -755,9 +1516,13 @@ fn emit_terminal_output_deltas(
                 run_id,
                 RunEventKind::ToolOutputDelta {
                     tool_call_id: tool_call_id.to_string(),
+                    tool_name: Some("run_terminal".into()),
                     stream: stream.into(),
                     text: chunk,
                     truncated: persisted >= MAX_PERSIST || end < bytes.len() && take < CHUNK,
+                    turn_id: None,
+                    message_id: None,
+                    progress_sequence: None,
                 },
             );
             offset = end;
@@ -892,18 +1657,26 @@ impl PermissionGatedTools {
         &self,
         tool_call_id: String,
         cancel: CancellationToken,
+        progress: Option<UnboundedSender<capability_gateway::ToolProgressChunk>>,
+        turn_id: Option<String>,
+        message_id: Option<String>,
     ) -> capability_gateway::ToolCallContext {
         if let Some(identity) = self.verified_project_identity().await {
-            return capability_gateway::ToolCallContext::from_verified_identity_with_cancel(
-                identity.project_id.clone(),
-                identity.identity_version,
-                std::path::PathBuf::from(&identity.canonical_path),
-                self.parent_run_id.clone(),
-                self.conversation_id.clone(),
-                tool_call_id,
-                self.permission_profile.clone(),
-                cancel,
-            );
+            let mut context =
+                capability_gateway::ToolCallContext::from_verified_identity_with_cancel(
+                    identity.project_id.clone(),
+                    identity.identity_version,
+                    std::path::PathBuf::from(&identity.canonical_path),
+                    self.parent_run_id.clone(),
+                    self.conversation_id.clone(),
+                    tool_call_id,
+                    self.permission_profile.clone(),
+                    cancel,
+                );
+            context.progress = progress;
+            context.turn_id = turn_id;
+            context.message_id = message_id;
+            return context;
         }
         let project_root = self
             .gateway
@@ -911,14 +1684,18 @@ impl PermissionGatedTools {
             .as_ref()
             .map(|s| std::path::PathBuf::from(s))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        capability_gateway::ToolCallContext::with_cancel(
+        let mut context = capability_gateway::ToolCallContext::with_cancel(
             project_root,
             self.parent_run_id.clone(),
             self.conversation_id.clone(),
             tool_call_id,
             self.permission_profile.clone(),
             cancel,
-        )
+        );
+        context.progress = progress;
+        context.turn_id = turn_id;
+        context.message_id = message_id;
+        context
     }
 
     /// Run the permission gate for one tool call.
@@ -930,6 +1707,7 @@ impl PermissionGatedTools {
     /// skip the prompt. Hooks never widen it.
     async fn await_tool_permission(
         &self,
+        tool_call_id: &str,
         name: &str,
         input: &Value,
         auto_approve_allowed: bool,
@@ -968,7 +1746,6 @@ impl PermissionGatedTools {
             "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
             _ => PermissionProfile::ConfirmEach,
         };
-        let tool_call_id = uuid::Uuid::new_v4().to_string();
         match hook_permission_gate(
             HookRegistry::aggregate_permission(&hook_outcomes),
             profile,
@@ -996,30 +1773,50 @@ impl PermissionGatedTools {
                     "[production] hook auto-approved tool `{name}` on run {} ({reason})",
                     self.parent_run_id
                 );
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::PermissionRequested {
-                        tool_call_id: tool_call_id.clone(),
-                        tool_name: name.to_string(),
-                        reason: format!("Approve tool `{name}`"),
-                        permission_id: permission_id.clone(),
-                        input: input.clone(),
-                    },
-                );
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::PermissionResponded {
-                        permission_id,
-                        approved: true,
-                        scope: HOOK_AUTO_APPROVE_SCOPE.to_string(),
-                    },
-                );
+                if self
+                    .events
+                    .append_checked(
+                        &self.parent_run_id,
+                        RunEventKind::PermissionRequested {
+                            tool_call_id: tool_call_id.to_string(),
+                            tool_name: name.to_string(),
+                            reason: format!("Approve tool `{name}`"),
+                            permission_id: permission_id.clone(),
+                            input: input.clone(),
+                        },
+                    )
+                    .is_err()
+                {
+                    return Some(ToolExecutionResult {
+                        output: serde_json::json!({"error": "permission event persistence failed"}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
+                if self
+                    .events
+                    .append_checked(
+                        &self.parent_run_id,
+                        RunEventKind::PermissionResponded {
+                            permission_id,
+                            approved: true,
+                            scope: HOOK_AUTO_APPROVE_SCOPE.to_string(),
+                        },
+                    )
+                    .is_err()
+                {
+                    return Some(ToolExecutionResult {
+                        output: serde_json::json!({"error": "permission event persistence failed"}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
                 return None;
             }
             HookPermissionGate::Prompt => {}
         }
 
-        let permission_id = self
+        let permission_id = match self
             .permissions
             .request_permission_for_profile(
                 profile,
@@ -1030,7 +1827,22 @@ impl PermissionGatedTools {
                 input.clone(),
             )
             .await
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+        {
+            Ok(id) => id,
+            Err(error) => {
+                return Some(ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                        "error": format!(
+                            "permission request could not be created: {}",
+                            error.technical_message
+                        ),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+            }
+        };
 
         if permission_id == "auto-approved" {
             return None;
@@ -1042,8 +1854,7 @@ impl PermissionGatedTools {
         self.interactions
             .register_permission(&permission_id, &self.parent_run_id, name, tx)
             .await;
-        // Best-effort: persist interaction row for restart recovery.
-        let _ = crate::interaction_store::insert_pending(
+        if let Err(error) = crate::interaction_store::insert_pending(
             &permission_id,
             Some(&self.parent_run_id),
             Some(&self.conversation_id),
@@ -1054,20 +1865,62 @@ impl PermissionGatedTools {
                 "reason": format!("Approve tool `{name}`"),
                 "input": input,
             }),
-        );
+        ) {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission interaction could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionRequested {
-                tool_call_id: tool_call_id.clone(),
-                tool_name: name.to_string(),
-                reason: format!("Approve tool `{name}`"),
-                permission_id: permission_id.clone(),
-                input: input.clone(),
-            },
-        );
+        if let Err(error) = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id)
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission actor snapshot could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionRequested {
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: name.to_string(),
+                    reason: format!("Approve tool `{name}`"),
+                    permission_id: permission_id.clone(),
+                    input: input.clone(),
+                },
+            )
+            .is_err()
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({"error": "permission event persistence failed"}),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         // Select permission response, timeout, and run cancel token (task-03).
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
@@ -1091,10 +1944,52 @@ impl PermissionGatedTools {
         // A timeout/cancellation has no UI RPC response to mark the durable
         // interaction complete. Leaving it pending makes reconnect replay an
         // orphaned approval card after its oneshot waiter has gone away.
-        let _ = crate::interaction_store::mark_resolved(
+        if let Err(error) = crate::interaction_store::mark_resolved(
             &permission_id,
             serde_json::json!({ "approved": approved, "scope": scope }),
-        );
+        ) {
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission response could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
+        crate::prompt_queue_store::global_harness()
+            .set_pending_interaction(&self.conversation_id, None);
+        if let Err(error) = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id)
+        {
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERMISSION_PERSISTENCE_FAILED",
+                    "error": format!("permission actor snapshot could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionResponded {
+                    permission_id,
+                    approved,
+                    scope: scope.clone(),
+                },
+            )
+            .is_err()
+        {
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({"error": "permission event persistence failed"}),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         if approved {
             if let Some(rt) = &self.runtime {
                 // Structured grant only — empty write_file pattern no longer means any path.
@@ -1102,17 +1997,6 @@ impl PermissionGatedTools {
                 let _ = pattern; // kept for legacy audit trails if needed
             }
         }
-        crate::prompt_queue_store::global_harness()
-            .set_pending_interaction(&self.conversation_id, None);
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionResponded {
-                permission_id,
-                approved,
-                scope: scope.clone(),
-            },
-        );
         if !approved {
             let _ = permission_hooks
                 .dispatch(HookRequest {
@@ -1128,15 +2012,36 @@ impl PermissionGatedTools {
         // push into provider history here. Call the harness so the seam is live,
         // then re-queue any interjection so Engine's AfterTool/ProviderBatch can
         // inject it into messages (on_safe_point consumes pending).
-        match crate::prompt_queue_store::on_safe_point(
+        match crate::prompt_queue_store::on_safe_point_checked(
             &self.conversation_id,
             agent_core::SafePoint::AfterPermissionResolved,
         ) {
-            agent_core::HarnessAction::InjectInterjection { content } => {
-                crate::prompt_queue_store::global_harness()
-                    .interject(&self.conversation_id, content);
+            Ok(agent_core::HarnessAction::InjectInterjection { content }) => {
+                if let Err(error) = crate::prompt_queue_store::restore_interjection_checked(
+                    &self.conversation_id,
+                    content,
+                ) {
+                    return Some(ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "QUEUE_PERSISTENCE_FAILED",
+                            "error": format!("safe-point interjection restore failed: {error}"),
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                }
             }
-            _ => {}
+            Ok(_) => {}
+            Err(error) => {
+                return Some(ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "QUEUE_PERSISTENCE_FAILED",
+                        "error": format!("safe-point state could not be persisted: {error}"),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+            }
         }
         if approved {
             None
@@ -1166,7 +2071,7 @@ impl PermissionGatedTools {
             CancellationToken::new()
         };
         let context = self
-            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel)
+            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel, None, None, None)
             .await;
         match self
             .gateway
@@ -1326,7 +2231,7 @@ impl PermissionGatedTools {
                 tx,
             )
             .await;
-        let _ = crate::interaction_store::insert_pending(
+        if crate::interaction_store::insert_pending(
             &permission_id,
             Some(&self.parent_run_id),
             Some(&self.conversation_id),
@@ -1337,20 +2242,45 @@ impl PermissionGatedTools {
                 "reason": reason,
                 "input": card,
             }),
-        );
+        )
+        .is_err()
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            return (false, "persistence_failed".into());
+        }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionRequested {
-                tool_call_id,
-                tool_name: plan_mode::EXIT_PLAN_MODE_TOOL.to_string(),
-                reason: reason.clone(),
-                permission_id: permission_id.clone(),
-                input: card,
-            },
-        );
+        if crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id).is_err() {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            return (false, "persistence_failed".into());
+        }
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionRequested {
+                    tool_call_id,
+                    tool_name: plan_mode::EXIT_PLAN_MODE_TOOL.to_string(),
+                    reason: reason.clone(),
+                    permission_id: permission_id.clone(),
+                    input: card,
+                },
+            )
+            .is_err()
+        {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "persistence_failed"}),
+            );
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return (false, "persistence_failed".into());
+        }
 
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
@@ -1379,21 +2309,35 @@ impl PermissionGatedTools {
             }
         };
 
-        let _ = crate::interaction_store::mark_resolved(
+        if crate::interaction_store::mark_resolved(
             &permission_id,
             serde_json::json!({ "approved": approved, "scope": scope }),
-        );
+        )
+        .is_err()
+        {
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return (false, "persistence_failed".into());
+        }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, None);
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionResponded {
-                permission_id,
-                approved,
-                scope: scope.clone(),
-            },
-        );
+        if crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id).is_err() {
+            return (false, "persistence_failed".into());
+        }
+        if self
+            .events
+            .append_checked(
+                &self.parent_run_id,
+                RunEventKind::PermissionResponded {
+                    permission_id,
+                    approved,
+                    scope: scope.clone(),
+                },
+            )
+            .is_err()
+        {
+            return (false, "persistence_failed".into());
+        }
         (approved, scope)
     }
 
@@ -1459,7 +2403,16 @@ impl PermissionGatedTools {
     }
 
     /// Route `mcp_call` / namespaced `mcp__server__tool` through daemon MCP runtime.
-    async fn execute_mcp_call(&self, name: &str, input: Value) -> ToolExecutionResult {
+    async fn execute_mcp_call(
+        &self,
+        name: &str,
+        input: Value,
+        core_call_id: Option<&str>,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
+        parent_cancel: &CancellationToken,
+        progress: Arc<dyn ToolProgressSink>,
+    ) -> ToolExecutionResult {
         let started = Instant::now();
         let (server_id, tool_name, arguments) = if name == "mcp_call" {
             let server = input
@@ -1498,54 +2451,125 @@ impl PermissionGatedTools {
                 duration_ms: started.elapsed().as_millis() as u64,
             };
         }
-        let call_id = format!("mcp-{server_id}-{tool_name}");
-        let display_name = format!("mcp_call:{server_id}/{tool_name}");
-        // Structured audit event (permission already passed).
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::ToolCallStarted {
-                id: call_id.clone(),
-                name: display_name.clone(),
-            },
-        );
+        let call_id = core_call_id
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("mcp-{server_id}-{tool_name}"));
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
                 .await
-                .unwrap_or_else(CancellationToken::new)
+                .unwrap_or_else(|| parent_cancel.clone())
         } else {
-            CancellationToken::new()
+            parent_cancel.clone()
         };
-        match crate::runtime::mcp_invocation::invoke_mcp_tool(
+        let ledger_summary = serde_json::json!({
+            "server": server_id.clone(),
+            "tool": tool_name.clone(),
+        });
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &call_id,
+            "mcp_call",
+            "mcp",
+            "started",
+            false,
+            turn_id,
+            &ledger_summary,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("MCP side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+            };
+        }
+        let progress_callback: Arc<dyn Fn(Value) + Send + Sync> = {
+            let progress = progress.clone();
+            let run_id = self.parent_run_id.clone();
+            let call_id = call_id.clone();
+            let turn_id = turn_id.map(str::to_string);
+            let message_id = message_id.map(str::to_string);
+            Arc::new(move |frame: Value| {
+                let text = frame
+                    .get("params")
+                    .and_then(|params| params.get("message").or_else(|| params.get("progress")))
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| value.to_string())
+                    })
+                    .unwrap_or_else(|| frame.to_string());
+                let progress = progress.clone();
+                let run_id = run_id.clone();
+                let call_id = call_id.clone();
+                let turn_id = turn_id.clone();
+                let message_id = message_id.clone();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        progress
+                            .publish(ToolProgressUpdate {
+                                run_id,
+                                tool_call_id: call_id,
+                                tool_name: "mcp_call".into(),
+                                stream: "mcp".into(),
+                                text,
+                                final_update: false,
+                                turn_id,
+                                message_id,
+                                progress_sequence: 0,
+                            })
+                            .await;
+                    });
+                }
+            })
+        };
+        match crate::runtime::mcp_invocation::invoke_mcp_tool_with_progress(
             &server_id,
             &tool_name,
             arguments,
             &cancel,
             Some(&self.parent_run_id),
+            Some(progress_callback),
         )
         .await
         {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: call_id,
-                        name: display_name,
-                        output: result.clone(),
-                        is_error: false,
-                        duration_ms,
-                    },
-                );
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
-                let _ = crate::side_effect_ledger::record_tool_effect(
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
+                    &call_id,
                     "mcp_call",
                     "mcp",
-                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
+                    "completed",
                     false,
-                    None,
+                    turn_id,
+                    &ledger_summary,
                 );
+                if let Err(error) = ledger_result {
+                    let _ = crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &call_id,
+                        "mcp_call",
+                        "mcp",
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &ledger_summary,
+                    );
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "PERSISTENCE_FAILED",
+                            "error": format!("MCP side-effect ledger could not be completed: {error}"),
+                        }),
+                        is_error: true,
+                        duration_ms,
+                    };
+                }
                 ToolExecutionResult {
                     output: serde_json::json!({
                         "server": server_id,
@@ -1559,16 +2583,40 @@ impl PermissionGatedTools {
             }
             Err(e) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
-                self.events.append(
+                let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: call_id,
-                        name: display_name,
-                        output: serde_json::json!({"error": e}),
+                    &call_id,
+                    "mcp_call",
+                    "mcp",
+                    if cancel.is_cancelled() {
+                        "uncertain"
+                    } else {
+                        "failed"
+                    },
+                    false,
+                    turn_id,
+                    &ledger_summary,
+                );
+                if let Err(error) = ledger_result {
+                    let _ = crate::side_effect_ledger::record_tool_effect_state(
+                        &self.parent_run_id,
+                        &call_id,
+                        "mcp_call",
+                        "mcp",
+                        "uncertain",
+                        false,
+                        turn_id,
+                        &ledger_summary,
+                    );
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "PERSISTENCE_FAILED",
+                            "error": format!("MCP side-effect ledger could not be settled: {error}"),
+                        }),
                         is_error: true,
                         duration_ms,
-                    },
-                );
+                    };
+                }
                 ToolExecutionResult {
                     output: serde_json::json!({
                         "server": server_id,
@@ -1869,6 +2917,22 @@ impl PermissionGatedTools {
                     }
                 }
             };
+        // Persist the child scope so a route restart restores it exactly
+        // (migration 029). Without this the durable session only carries
+        // provider/key/model and a restart would guess ask/max_steps=15 and
+        // drop project identity, profile, and allowlist.
+        let _ = crate::subagent_store::persist_subagent_scope(
+            &session_id,
+            &crate::subagent_store::SubagentScope {
+                project_path: self.gateway.project_root.clone(),
+                project_id: self.gateway.project_root.clone(),
+                project_identity_version: None,
+                permission_profile: Some(child_perm.clone()),
+                agent_profile_id: child_profile_id.clone(),
+                max_steps: Some(child_max_steps as i64),
+                tool_allowlist: child_allowlist.clone(),
+            },
+        );
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
         let project_path = self.gateway.project_root.clone();
@@ -1997,14 +3061,30 @@ impl PermissionGatedTools {
                 .await;
         }
 
-        self.events.append(
+        if let Err(error) = self.events.append_checked(
             &self.parent_run_id,
             RunEventKind::SubagentCreated {
                 sub_run_id: child_run_id.clone(),
                 agent_profile_id: child_profile_id.clone(),
                 task: prompt.clone(),
             },
-        );
+        ) {
+            let _ = crate::global_run_manager()
+                .cancel(assistant_protocol::v2::CancelRunRequest {
+                    run_id: child_run_id.clone(),
+                })
+                .await;
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&error));
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("subagent creation event could not be persisted: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
 
         let task_id = session_id.clone();
         self.task_outputs.lock().await.insert(
@@ -2098,26 +3178,55 @@ impl PermissionGatedTools {
                 if !run.status.is_terminal() {
                     continue;
                 }
-                let text = events
-                    .replay_after(&child_run_id_bg, 0)
-                    .into_iter()
-                    .filter_map(|e| match e.payload {
-                        RunEventKind::TextDelta { text } => Some(text),
+                let child_events = match events.replay_after_checked(&child_run_id_bg, 0) {
+                    Ok(events) => events,
+                    Err(error) => {
+                        let message = format!("child event replay failed: {error}");
+                        let _ = subagents
+                            .update_status(&mem_task_id_bg, SubAgentStatus::Failed(message.clone()))
+                            .await;
+                        let _ = crate::subagent_store::close_subagent_session(
+                            &session_id_bg,
+                            "failed",
+                            Some(&message),
+                        );
+                        let _ = events.append_checked(
+                            &parent_run_id,
+                            RunEventKind::SubagentFailed {
+                                sub_run_id: child_run_id_bg.clone(),
+                                error: message.clone(),
+                            },
+                        );
+                        task_outputs.lock().await.insert(
+                            task_id_bg,
+                            TaskRecord {
+                                run_id: child_run_id_bg.clone(),
+                                status: "failed".into(),
+                                output: Some(message),
+                            },
+                        );
+                        break;
+                    }
+                };
+                let text = child_events
+                    .iter()
+                    .filter_map(|e| match &e.payload {
+                        RunEventKind::TextDelta { text } => Some(text.clone()),
                         _ => None,
                     })
                     .collect::<String>();
                 let mut task_output = text.clone();
+                let mut final_status = status.clone();
                 if status == "completed" {
                     // Best-effort token settle from usage events + text estimate.
-                    let usage_tokens: u64 = events
-                        .replay_after(&child_run_id_bg, 0)
-                        .into_iter()
-                        .filter_map(|e| match e.payload {
+                    let usage_tokens: u64 = child_events
+                        .iter()
+                        .filter_map(|e| match &e.payload {
                             RunEventKind::UsageUpdated {
                                 input_tokens,
                                 output_tokens,
                                 ..
-                            } => Some(input_tokens.saturating_add(output_tokens)),
+                            } => Some((*input_tokens).saturating_add(*output_tokens)),
                             _ => None,
                         })
                         .max()
@@ -2133,13 +3242,28 @@ impl PermissionGatedTools {
                         "completed",
                         None,
                     );
-                    events.append(
+                    if let Err(error) = events.append_checked(
                         &parent_run_id,
                         RunEventKind::SubagentCompleted {
                             sub_run_id: child_run_id_bg.clone(),
                             result: text.clone(),
                         },
-                    );
+                    ) {
+                        final_status = "failed".into();
+                        task_output =
+                            format!("PERSISTENCE_FAILED: subagent completion event: {error}");
+                        let _ = subagents
+                            .update_status(
+                                &mem_task_id_bg,
+                                SubAgentStatus::Failed(task_output.clone()),
+                            )
+                            .await;
+                        let _ = crate::subagent_store::close_subagent_session(
+                            &session_id_bg,
+                            "failed",
+                            Some(&task_output),
+                        );
+                    }
                 } else {
                     let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
                     if task_output.is_empty() {
@@ -2157,13 +3281,16 @@ impl PermissionGatedTools {
                         },
                         Some(&err_msg),
                     );
-                    events.append(
+                    if let Err(error) = events.append_checked(
                         &parent_run_id,
                         RunEventKind::SubagentFailed {
                             sub_run_id: child_run_id_bg.clone(),
                             error: err_msg,
                         },
-                    );
+                    ) {
+                        task_output =
+                            format!("PERSISTENCE_FAILED: subagent failure event: {error}");
+                    }
                 }
                 // SubagentStop fires for every terminal outcome, not just
                 // success — a hook watching for children that died is exactly
@@ -2180,7 +3307,7 @@ impl PermissionGatedTools {
                     tool_name: Some("task".into()),
                     input: serde_json::json!({
                         "sub_run_id": child_run_id_bg.clone(),
-                        "status": status.clone(),
+                        "status": final_status.clone(),
                         "output": text.clone(),
                     }),
                 })
@@ -2188,7 +3315,7 @@ impl PermissionGatedTools {
 
                 let rec = TaskRecord {
                     run_id: child_run_id_bg.clone(),
-                    status,
+                    status: final_status,
                     output: if task_output.is_empty() {
                         None
                     } else {
@@ -2652,6 +3779,96 @@ fn use_fixture_flag(input: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct CapturedEvents(std::sync::Mutex<Vec<assistant_protocol::v2::RunEventV2>>);
+
+    impl agent_core::EventPersistence for CapturedEvents {
+        fn append(&self, event: &assistant_protocol::v2::RunEventV2) -> Result<(), String> {
+            self.0.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+
+        fn replay_after(
+            &self,
+            run_id: &str,
+            after_sequence: u64,
+        ) -> Result<Vec<assistant_protocol::v2::RunEventV2>, String> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.run_id == run_id && event.effective_run_sequence() > after_sequence
+                })
+                .cloned()
+                .collect())
+        }
+
+        fn last_sequence(&self, run_id: &str) -> Result<u64, String> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| event.run_id == run_id)
+                .map(|event| event.effective_run_sequence())
+                .max()
+                .unwrap_or(0))
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_tool_drops_late_progress() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        let update = ToolProgressUpdate {
+            run_id: "progress-run".into(),
+            tool_call_id: "progress-call".into(),
+            tool_name: "run_terminal".into(),
+            stream: "stdout".into(),
+            text: "before settlement".into(),
+            final_update: true,
+            turn_id: Some("turn-1".into()),
+            message_id: Some("message-1".into()),
+            progress_sequence: 0,
+        };
+        sink.publish(update.clone()).await;
+        sink.mark_tool_call_settled(&update.tool_call_id).await;
+        sink.publish(update).await;
+
+        let events = captured.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].payload,
+            RunEventKind::ToolOutputDelta { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn progress_flushes_after_batch_window_without_next_update() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        sink.publish(ToolProgressUpdate {
+            run_id: "progress-timer-run".into(),
+            tool_call_id: "progress-timer-call".into(),
+            tool_name: "run_terminal".into(),
+            stream: "stdout".into(),
+            text: "idle batch".into(),
+            final_update: false,
+            turn_id: Some("turn-1".into()),
+            message_id: Some("message-1".into()),
+            progress_sequence: 0,
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let events = captured.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.payload,
+            RunEventKind::ToolOutputDelta { ref text, .. } if text == "idle batch"
+        )));
+    }
 
     #[test]
     fn model_visible_tool_limit_fails_closed_without_truncation() {

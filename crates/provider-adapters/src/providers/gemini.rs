@@ -382,10 +382,15 @@ impl ProviderAdapter for GeminiAdapter {
                             if let Some(data) = sse_data_payload(&line) {
                                 if data == "[DONE]" {
                                     saw_completed = true;
-                                    yield ProviderEvent::Completed;
+                                    yield ProviderEvent::Completed {
+                                        reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
+                                    };
                                     continue;
                                 }
                                 for event in parse_gemini_chunk(data) {
+                                    if matches!(event, ProviderEvent::Completed { .. }) {
+                                        saw_completed = true;
+                                    }
                                     yield event;
                                 }
                             }
@@ -404,7 +409,9 @@ impl ProviderAdapter for GeminiAdapter {
                 }
             }
             if !saw_completed {
-                yield ProviderEvent::Completed;
+                yield ProviderEvent::Completed {
+                    reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
+                };
             }
         };
         Ok(Box::pin(stream))

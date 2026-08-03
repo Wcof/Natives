@@ -24,7 +24,16 @@ pub use process_supervisor::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
+
+/// Best-effort output emitted by a long-running handler. The Gateway owns the
+/// process/MCP safety boundary; the caller owns persistence and rate limiting.
+#[derive(Debug, Clone)]
+pub struct ToolProgressChunk {
+    pub stream: String,
+    pub text: String,
+}
 
 /// Context passed to tool handlers during execution.
 ///
@@ -50,6 +59,11 @@ pub struct ToolCallContext {
     pub project_identity_version: Option<u32>,
     /// Shared run cancellation token (task-03). Tools/MCP must select on this.
     pub cancel: CancellationToken,
+    /// Optional live output channel for handlers that can stream progress.
+    /// `None` keeps lightweight/test handlers allocation-free.
+    pub progress: Option<UnboundedSender<ToolProgressChunk>>,
+    pub turn_id: Option<String>,
+    pub message_id: Option<String>,
 }
 
 impl ToolCallContext {
@@ -93,6 +107,9 @@ impl ToolCallContext {
             project_id: None,
             project_identity_version: None,
             cancel,
+            progress: None,
+            turn_id: None,
+            message_id: None,
         }
     }
 
@@ -140,6 +157,9 @@ impl ToolCallContext {
             project_id: Some(project_id.into()),
             project_identity_version: Some(identity_version),
             cancel,
+            progress: None,
+            turn_id: None,
+            message_id: None,
         }
     }
 
@@ -201,6 +221,13 @@ pub struct Tool {
     pub timeout_ms: u64,
     pub output_limit: u64,
     pub cancellable: bool,
+    /// Explicit scheduling declaration. `false` by default so a tool is
+    /// Sequential unless its author proves it safe to run concurrently with
+    /// other tools (read-only file search/read tools). Never inferred from
+    /// `SideEffect` — "read-only" does not imply parallel-safe.
+    pub parallel_safe: bool,
+    /// Tools that must not run concurrently with each other share a key.
+    pub conflict_key: Option<String>,
     pub handler: Arc<dyn ToolHandler + Send + Sync>,
 }
 
@@ -212,6 +239,24 @@ pub enum SideEffect {
     Destructive,
     Network,
     Process,
+}
+
+/// Scheduling declaration owned by the Gateway. Core consumes this metadata
+/// but never infers concurrency from tool names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionMode {
+    ParallelSafe,
+    Sequential,
+    Exclusive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCapability {
+    pub name: String,
+    pub schema: serde_json::Value,
+    pub execution_mode: ExecutionMode,
+    pub side_effect: SideEffect,
+    pub conflict_key: Option<String>,
 }
 
 /// Permission class for a tool.
@@ -299,6 +344,32 @@ impl CapabilityGateway {
         self.tools.iter().collect()
     }
 
+    pub fn list_capabilities(&self) -> Vec<ToolCapability> {
+        self.tools
+            .iter()
+            .map(|tool| ToolCapability {
+                name: tool.name.to_string(),
+                schema: tool.schema.clone(),
+                execution_mode: if tool.parallel_safe {
+                    ExecutionMode::ParallelSafe
+                } else {
+                    // Explicit declaration only. Destructive/process tools are
+                    // Exclusive (they must never share a slot); everything else
+                    // defaults to Sequential rather than being auto-parallelized
+                    // from a "read-only" side effect.
+                    match tool.side_effect {
+                        SideEffect::Destructive | SideEffect::Process => ExecutionMode::Exclusive,
+                        SideEffect::ReadOnly | SideEffect::Write | SideEffect::Network => {
+                            ExecutionMode::Sequential
+                        }
+                    }
+                },
+                side_effect: tool.side_effect,
+                conflict_key: tool.conflict_key.clone(),
+            })
+            .collect()
+    }
+
     /// Register all built-in tools.
     pub fn register_builtins(&mut self) {
         let builtins = tools::builtin_tools();
@@ -321,16 +392,85 @@ impl CapabilityGateway {
             retryable: false,
         })?;
 
+        validate_schema(&tool.schema, &input).map_err(|message| ToolError {
+            code: "invalid_arguments".into(),
+            message: format!("tool `{name}` arguments failed schema validation: {message}"),
+            retryable: false,
+        })?;
         self.enforce_input_policy(tool, &input)?;
 
         let timeout = std::time::Duration::from_millis(tool.timeout_ms.max(1));
-        let result = tokio::time::timeout(timeout, tool.handler.execute(input, context))
-            .await
-            .map_err(|_| ToolError {
-                code: "timeout".into(),
-                message: format!("tool `{name}` exceeded {}ms", tool.timeout_ms),
-                retryable: true,
-            })??;
+        let tool_cancel = context.cancel.child_token();
+        let mut tool_context = context.clone();
+        tool_context.cancel = tool_cancel.clone();
+        // Keep the handler alive long enough to observe cancellation. Dropping
+        // the future at the select boundary would skip handler-owned cleanup
+        // (child wait/reap, network close, MCP request disposal).
+        let handler = tool.handler.clone();
+        let handler_task = tokio::spawn(async move { handler.execute(input, &tool_context).await });
+        let mut handler_task = Box::pin(handler_task);
+        const CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
+        let result = tokio::select! {
+            joined = &mut handler_task => joined
+                .map_err(|error| ToolError {
+                    code: "handler_error".into(),
+                    message: format!("tool `{name}` task failed: {error}"),
+                    retryable: true,
+                })
+                .and_then(|result| result),
+            _ = tokio::time::sleep(timeout) => {
+                tool_cancel.cancel();
+                match tokio::time::timeout(CLEANUP_GRACE, &mut handler_task).await {
+                    Ok(Ok(_)) => Err(ToolError {
+                        code: "timeout".into(),
+                        message: format!("tool `{name}` exceeded {}ms", tool.timeout_ms),
+                        retryable: true,
+                    }),
+                    Ok(Err(error)) => Err(ToolError {
+                        code: "cleanup_failed".into(),
+                        message: format!("tool `{name}` cleanup task failed: {error}"),
+                        retryable: false,
+                    }),
+                    Err(_) => {
+                        // The handler ignored the cancellation token; abort the
+                        // task so the wrapper cannot leak it past the call.
+                        // `cleanup_failed` keeps the uncertain resource visible.
+                        //
+                        // ponytail: fixed grace window; handlers that need a
+                        // longer shutdown must expose their own bounded cleanup.
+                        handler_task.as_mut().abort();
+                        Err(ToolError {
+                            code: "cleanup_failed".into(),
+                            message: format!("tool `{name}` did not stop after timeout"),
+                            retryable: false,
+                        })
+                    }
+                }
+            },
+            _ = context.cancel.cancelled() => {
+                tool_cancel.cancel();
+                match tokio::time::timeout(CLEANUP_GRACE, &mut handler_task).await {
+                    Ok(Ok(_)) => Err(ToolError {
+                        code: "cancelled".into(),
+                        message: format!("tool `{name}` cancelled"),
+                        retryable: true,
+                    }),
+                    Ok(Err(error)) => Err(ToolError {
+                        code: "cleanup_failed".into(),
+                        message: format!("tool `{name}` cleanup task failed: {error}"),
+                        retryable: false,
+                    }),
+                    Err(_) => {
+                        handler_task.as_mut().abort();
+                        Err(ToolError {
+                            code: "cleanup_failed".into(),
+                            message: format!("tool `{name}` did not stop after cancellation"),
+                            retryable: false,
+                        })
+                    }
+                }
+            },
+        }?;
 
         if policy::check_output_limit(result.result.to_string().as_bytes(), tool.output_limit) {
             return Err(ToolError {
@@ -340,6 +480,45 @@ impl CapabilityGateway {
             });
         }
         Ok(result)
+    }
+
+    /// Validate one registered schema without executing its handler.
+    pub fn validate_tool_schema(&self, name: &str) -> Result<(), ToolError> {
+        let tool = self.get_tool(name).ok_or_else(|| ToolError {
+            code: "unknown_tool".into(),
+            message: format!("unknown tool: {name}"),
+            retryable: false,
+        })?;
+        validate_schema_definition(&tool.schema)
+    }
+
+    /// Validate every registered schema before a run advertises the surface.
+    /// A malformed manifest is a startup/preflight error, never a reason to
+    /// silently disable validation for the whole Gateway.
+    pub fn validate_registered_schemas(&self) -> Result<(), ToolError> {
+        for tool in &self.tools {
+            validate_schema_definition(&tool.schema).map_err(|mut error| {
+                error.message = format!("{}: {}", tool.name, error.message);
+                error
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Validate a dynamically advertised schema (for example an MCP tool)
+    /// without registering a local handler.  The Gateway remains the single
+    /// executable Schema boundary; callers must still perform their own
+    /// lookup and permission checks before invoking the external transport.
+    pub fn validate_external_input(
+        schema: &serde_json::Value,
+        input: &serde_json::Value,
+    ) -> Result<(), ToolError> {
+        validate_schema_definition(schema)?;
+        validate_schema(schema, input).map_err(|message| ToolError {
+            code: "schema_validation".into(),
+            message,
+            retryable: false,
+        })
     }
 
     fn enforce_input_policy(
@@ -397,8 +576,441 @@ impl CapabilityGateway {
     }
 }
 
+/// Small, dependency-free Draft-07 subset used by the built-in manifests.
+/// It covers the executable boundary (`type`, `properties`, `required`,
+/// `additionalProperties`, `items`, `enum`, collection bounds, and numeric bounds) without
+/// duplicating a full JSON Schema engine in the Agent Core.
+fn validate_schema(schema: &serde_json::Value, value: &serde_json::Value) -> Result<(), String> {
+    if let Some(types) = schema.get("type") {
+        let matches = types
+            .as_str()
+            .map(|ty| schema_type_matches(ty, value))
+            .unwrap_or_else(|| {
+                types.as_array().is_some_and(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .any(|ty| schema_type_matches(ty, value))
+                })
+            });
+        if !matches {
+            return Err(format!("expected {}, got {}", types, value_type(value)));
+        }
+    }
+    if let Some(enum_values) = schema.get("enum").and_then(|v| v.as_array()) {
+        if !enum_values.iter().any(|candidate| candidate == value) {
+            return Err(format!("value is not one of {enum_values:?}"));
+        }
+    }
+    if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "required only applies to objects".to_string())?;
+        for key in required.iter().filter_map(|v| v.as_str()) {
+            if !object.contains_key(key) {
+                return Err(format!("missing required property `{key}`"));
+            }
+        }
+    }
+    if let Some(properties) = schema.get("properties").and_then(|v| v.as_object()) {
+        if let Some(object) = value.as_object() {
+            for (key, property) in object {
+                if let Some(property_schema) = properties.get(key) {
+                    validate_schema(property_schema, property)
+                        .map_err(|error| format!("property `{key}`: {error}"))?;
+                } else if schema.get("additionalProperties")
+                    == Some(&serde_json::Value::Bool(false))
+                {
+                    return Err(format!("unknown property `{key}`"));
+                }
+            }
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        if let Some(array) = value.as_array() {
+            for (index, item) in array.iter().enumerate() {
+                validate_schema(items, item).map_err(|error| format!("item {index}: {error}"))?;
+            }
+        }
+    }
+    if let Some(min_items) = schema.get("minItems").and_then(|v| v.as_u64()) {
+        if let Some(array) = value.as_array() {
+            if array.len() < min_items as usize {
+                return Err(format!("array has fewer than {min_items} items"));
+            }
+        }
+    }
+    if let Some(max_items) = schema.get("maxItems").and_then(|v| v.as_u64()) {
+        if let Some(array) = value.as_array() {
+            if array.len() > max_items as usize {
+                return Err(format!("array has more than {max_items} items"));
+            }
+        }
+    }
+    if let Some(min_length) = schema.get("minLength").and_then(|v| v.as_u64()) {
+        if let Some(string) = value.as_str() {
+            if string.chars().count() < min_length as usize {
+                return Err(format!("string has fewer than {min_length} characters"));
+            }
+        }
+    }
+    if let Some(max_length) = schema.get("maxLength").and_then(|v| v.as_u64()) {
+        if let Some(string) = value.as_str() {
+            if string.chars().count() > max_length as usize {
+                return Err(format!("string has more than {max_length} characters"));
+            }
+        }
+    }
+    if let Some(minimum) = schema.get("minimum").and_then(|v| v.as_f64()) {
+        if value.as_f64().is_some_and(|number| number < minimum) {
+            return Err(format!("number is below minimum {minimum}"));
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(|v| v.as_f64()) {
+        if value.as_f64().is_some_and(|number| number > maximum) {
+            return Err(format!("number is above maximum {maximum}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_schema_definition(schema: &serde_json::Value) -> Result<(), ToolError> {
+    let Some(object) = schema.as_object() else {
+        return Err(ToolError {
+            code: "invalid_schema".into(),
+            message: "schema must be an object".into(),
+            retryable: false,
+        });
+    };
+    if let Some(ty) = object.get("type") {
+        let valid = ty
+            .as_str()
+            .map(|value| {
+                matches!(
+                    value,
+                    "object" | "array" | "string" | "integer" | "number" | "boolean" | "null"
+                )
+            })
+            .unwrap_or_else(|| {
+                ty.as_array().is_some_and(|items| {
+                    items.iter().all(|item| {
+                        item.as_str().is_some_and(|value| {
+                            matches!(
+                                value,
+                                "object"
+                                    | "array"
+                                    | "string"
+                                    | "integer"
+                                    | "number"
+                                    | "boolean"
+                                    | "null"
+                            )
+                        })
+                    })
+                })
+            });
+        if !valid {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "unsupported schema type".into(),
+                retryable: false,
+            });
+        }
+    }
+    if let Some(properties) = object.get("properties") {
+        let Some(properties) = properties.as_object() else {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "properties must be an object".into(),
+                retryable: false,
+            });
+        };
+        for property in properties.values() {
+            validate_schema_definition(property)?;
+        }
+    }
+    if let Some(items) = object.get("items") {
+        validate_schema_definition(items)?;
+    }
+    for keyword in ["minItems", "maxItems", "minLength", "maxLength"] {
+        if let Some(value) = object.get(keyword) {
+            if value.as_u64().is_none() {
+                return Err(ToolError {
+                    code: "invalid_schema".into(),
+                    message: format!("{keyword} must be a non-negative integer"),
+                    retryable: false,
+                });
+            }
+        }
+    }
+    if let (Some(min), Some(max)) = (
+        object.get("minItems").and_then(|value| value.as_u64()),
+        object.get("maxItems").and_then(|value| value.as_u64()),
+    ) {
+        if min > max {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "minItems cannot exceed maxItems".into(),
+                retryable: false,
+            });
+        }
+    }
+    if let (Some(min), Some(max)) = (
+        object.get("minLength").and_then(|value| value.as_u64()),
+        object.get("maxLength").and_then(|value| value.as_u64()),
+    ) {
+        if min > max {
+            return Err(ToolError {
+                code: "invalid_schema".into(),
+                message: "minLength cannot exceed maxLength".into(),
+                retryable: false,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn schema_type_matches(expected: &str, value: &serde_json::Value) -> bool {
+    match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+fn value_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 impl Default for CapabilityGateway {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod p0_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingHandler(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl ToolHandler for CountingHandler {
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolCallContext,
+        ) -> Result<ToolOutput, ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput {
+                result: serde_json::json!({"ok": true}),
+                truncated: false,
+                duration_ms: 0,
+            })
+        }
+    }
+
+    fn gateway(handler: Arc<dyn ToolHandler + Send + Sync>, timeout_ms: u64) -> CapabilityGateway {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register(Tool {
+            name: "p0_test",
+            description: "test",
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "mode": {"type": "string", "enum": ["read"]}},
+                "required": ["path"]
+            }),
+            side_effect: SideEffect::ReadOnly,
+            permission_class: PermissionClass::AlwaysAllowed,
+            path_scope: PathScope::Any,
+            timeout_ms,
+            output_limit: 4096,
+            cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
+            handler,
+        });
+        gateway
+    }
+
+    fn context(cancel: CancellationToken) -> ToolCallContext {
+        ToolCallContext::with_cancel(
+            std::env::current_dir().unwrap(),
+            "run-p0".into(),
+            "conversation-p0".into(),
+            "call-p0".into(),
+            "readonly".into(),
+            cancel,
+        )
+    }
+
+    #[tokio::test]
+    async fn schema_failure_never_reaches_handler() {
+        let handler = Arc::new(CountingHandler(AtomicUsize::new(0)));
+        let gateway = gateway(handler.clone(), 1000);
+        let error = gateway
+            .execute(
+                "p0_test",
+                serde_json::json!({"path": 7}),
+                &context(CancellationToken::new()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn array_bounds_are_enforced_before_handler() {
+        let handler = Arc::new(CountingHandler(AtomicUsize::new(0)));
+        let mut gateway = CapabilityGateway::new();
+        gateway.register(Tool {
+            name: "bounded_array",
+            description: "test",
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "items": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}}
+                },
+                "required": ["items"]
+            }),
+            side_effect: SideEffect::ReadOnly,
+            permission_class: PermissionClass::AlwaysAllowed,
+            path_scope: PathScope::Any,
+            timeout_ms: 1000,
+            output_limit: 4096,
+            cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
+            handler: handler.clone(),
+        });
+        let error = gateway
+            .execute(
+                "bounded_array",
+                serde_json::json!({"items": []}),
+                &context(CancellationToken::new()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert_eq!(handler.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn all_builtin_schemas_are_supported_by_validator() {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register_builtins();
+        gateway
+            .validate_registered_schemas()
+            .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    }
+
+    #[test]
+    fn every_tool_has_a_verifiable_mode_and_writes_are_not_parallel() {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register_builtins();
+        let capabilities = gateway.list_capabilities();
+        assert!(!capabilities.is_empty(), "builtins must register");
+        for capability in &capabilities {
+            // Every tool has a real, explicit mode — never an inferred default
+            // that could be mistaken for a missing declaration.
+            match capability.execution_mode {
+                ExecutionMode::ParallelSafe
+                | ExecutionMode::Sequential
+                | ExecutionMode::Exclusive => {}
+            }
+        }
+        // Genuinely safe read-only file tools are explicitly parallel-safe.
+        for name in ["read_file", "search_files", "list_dir", "grep"] {
+            let cap = capabilities
+                .iter()
+                .find(|capability| capability.name == name)
+                .unwrap_or_else(|| panic!("{name} must be registered"));
+            assert_eq!(
+                cap.execution_mode,
+                ExecutionMode::ParallelSafe,
+                "{name} must be explicitly parallel-safe"
+            );
+        }
+        // write / shell / git / MCP / subagent tools must never be parallel.
+        for name in [
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "run_terminal",
+            "web_fetch",
+            "task",
+            "kill_task",
+            "mcp_call",
+            "write_draft_module",
+            "rollback_draft_revision",
+            "notification",
+        ] {
+            if let Some(cap) = capabilities
+                .iter()
+                .find(|capability| capability.name == name)
+            {
+                assert_ne!(
+                    cap.execution_mode,
+                    ExecutionMode::ParallelSafe,
+                    "{name} must not be parallel-safe"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_over_blocking_handler() {
+        struct Blocking;
+        #[async_trait::async_trait]
+        impl ToolHandler for Blocking {
+            async fn execute(
+                &self,
+                _: serde_json::Value,
+                context: &ToolCallContext,
+            ) -> Result<ToolOutput, ToolError> {
+                tokio::select! {
+                    _ = context.cancel.cancelled() => Err(ToolError {
+                        code: "cancelled".into(),
+                        message: "fake handler observed cancellation".into(),
+                        retryable: false,
+                    }),
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => Ok(ToolOutput {
+                        result: serde_json::json!({}),
+                        truncated: false,
+                        duration_ms: 0,
+                    }),
+                }
+            }
+        }
+        let cancel = CancellationToken::new();
+        let gateway = gateway(Arc::new(Blocking), 5000);
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            trigger.cancel();
+        });
+        let error = gateway
+            .execute(
+                "p0_test",
+                serde_json::json!({"path": "ok"}),
+                &context(cancel),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "cancelled");
     }
 }

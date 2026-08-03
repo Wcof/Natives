@@ -375,7 +375,7 @@ async fn test_provider_model(
     while let Some(event) = stream.next().await {
         match event {
             ProviderEvent::TextDelta(delta) => text.push_str(&delta),
-            ProviderEvent::Completed => {
+            ProviderEvent::Completed { .. } => {
                 break;
             }
             ProviderEvent::Error(err) => return Err(err),
@@ -464,7 +464,8 @@ pub async fn handle_rpc(
 ) {
     use assistant_protocol::v2::methods::names;
     use assistant_protocol::v2::{
-        CancelRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
+        CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, ResumeRunRequest,
+        RetryRunRequest, StartRunRequest,
     };
     match request.method.as_str() {
         names::DAEMON_GET_STATUS => {
@@ -992,6 +993,161 @@ pub async fn handle_rpc(
                 }
             }
         }
+        names::RUN_CONTINUE => {
+            match serde_json::from_value::<ContinueRunRequest>(request.params.clone()) {
+                Ok(req) => match run_manager().continue_run(req) {
+                    Ok(new_run) => {
+                        let start_req = StartRunRequest {
+                            agent_profile_id: new_run.agent_profile_id.clone(),
+                            capability_selection: None,
+                            run_id: Some(new_run.id.clone()),
+                            conversation_id: Some(new_run.conversation_id.clone()),
+                            provider_id: Some(new_run.provider_id.clone()),
+                            model_id: Some(new_run.model_id.clone()),
+                            key_id: new_run.key_id.clone(),
+                            content: None,
+                            attachments: None,
+                            trigger_message_id: None,
+                            permission_profile: Some(new_run.permission_profile.clone()),
+                            max_steps: Some(new_run.max_steps),
+                            project_path: new_run.project_path.clone(),
+                            idempotency_key: None,
+                            effort: new_run.effort.clone(),
+                            runtime_id: new_run.runtime_id.clone(),
+                        };
+                        match crate::run_manager::RunManager::start_detached_global(start_req) {
+                            Ok(run) => {
+                                send_success(
+                                    writer,
+                                    &request.request_id,
+                                    &request.client_id,
+                                    &request.session_token,
+                                    serde_json::to_value(run).unwrap_or_default(),
+                                )
+                                .await
+                            }
+                            Err(e) => {
+                                send_error(
+                                    writer,
+                                    &DaemonError::new(
+                                        "run_continue_start_failed",
+                                        ErrorCategory::Internal,
+                                        true,
+                                        e,
+                                    ),
+                                )
+                                .await
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        send_error(
+                            writer,
+                            &DaemonError::new(
+                                "run_continue_failed",
+                                ErrorCategory::Conflict,
+                                false,
+                                e,
+                            ),
+                        )
+                        .await
+                    }
+                },
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e.to_string(),
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
+        names::RUN_RESUME => {
+            match serde_json::from_value::<ResumeRunRequest>(request.params.clone()) {
+                Ok(req) => match run_manager().resume_run(req) {
+                    Ok(response) => {
+                        let new_run_id = response.new_run_id.clone();
+                        if let Some(new_run_id) = new_run_id {
+                            if let Some(new_run) = run_manager().get_run(&new_run_id) {
+                                let start_req = StartRunRequest {
+                                    agent_profile_id: None,
+                                    capability_selection: None,
+                                    run_id: Some(new_run.id.clone()),
+                                    conversation_id: Some(new_run.conversation_id.clone()),
+                                    provider_id: Some(new_run.provider_id.clone()),
+                                    model_id: Some(new_run.model_id.clone()),
+                                    key_id: new_run.key_id.clone(),
+                                    content: None,
+                                    attachments: None,
+                                    trigger_message_id: None,
+                                    permission_profile: Some(new_run.permission_profile.clone()),
+                                    max_steps: Some(new_run.max_steps),
+                                    project_path: new_run.project_path.clone(),
+                                    idempotency_key: None,
+                                    effort: new_run.effort.clone(),
+                                    runtime_id: new_run.runtime_id.clone(),
+                                };
+                                match crate::run_manager::RunManager::start_detached_global(
+                                    start_req,
+                                ) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        send_error(
+                                            writer,
+                                            &DaemonError::new(
+                                                "run_resume_start_failed",
+                                                ErrorCategory::Internal,
+                                                true,
+                                                e,
+                                            ),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        send_success(
+                            writer,
+                            &request.request_id,
+                            &request.client_id,
+                            &request.session_token,
+                            serde_json::to_value(response).unwrap_or_default(),
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        send_error(
+                            writer,
+                            &DaemonError::new(
+                                "run_resume_failed",
+                                ErrorCategory::Conflict,
+                                false,
+                                e,
+                            ),
+                        )
+                        .await
+                    }
+                },
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e.to_string(),
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
         names::RUN_REPLAY | names::RUN_GET_EVENTS => {
             // Non-blocking event batch (array payload for UI/Tauri poll compatibility).
             let after = request
@@ -1004,18 +1160,51 @@ pub async fn handle_rpc(
                 .get("run_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let events = run_manager().replay(ReplayRunRequest {
+            match run_manager().replay_checked(ReplayRunRequest {
                 run_id: run_id.to_string(),
                 after_sequence: after,
-            });
-            send_success(
-                writer,
-                &request.request_id,
-                &request.client_id,
-                &request.session_token,
-                serde_json::to_value(events).unwrap_or_default(),
-            )
-            .await;
+            }) {
+                Ok(events) => {
+                    let payload = match serde_json::to_value(events) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            send_error(
+                                writer,
+                                &DaemonError::new(
+                                    error_codes::INTERNAL_ERROR,
+                                    ErrorCategory::Internal,
+                                    false,
+                                    format!("serialize replay response failed: {error}"),
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        payload,
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INTERNAL_ERROR,
+                            ErrorCategory::Internal,
+                            false,
+                            format!("authoritative event replay failed: {error}"),
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            }
         }
         names::RUN_SUBSCRIBE => {
             // Hybrid subscribe:
@@ -1049,10 +1238,25 @@ pub async fn handle_rpc(
                 .unwrap_or(false)
                 || wait_ms > 0;
 
-            let mut events = run_manager().replay(ReplayRunRequest {
+            let mut events = match run_manager().replay_checked(ReplayRunRequest {
                 run_id: run_id.clone(),
                 after_sequence: after,
-            });
+            }) {
+                Ok(events) => events,
+                Err(error) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INTERNAL_ERROR,
+                            ErrorCategory::Internal,
+                            false,
+                            format!("authoritative event replay failed: {error}"),
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
             let mut mode = "subscribe_poll";
             if want_push && events.is_empty() {
                 let timeout = std::time::Duration::from_millis(wait_ms.clamp(1, 30_000));
@@ -1077,10 +1281,25 @@ pub async fn handle_rpc(
                         }
                         Ok(Ok(_)) => continue,
                         Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                            events = run_manager().replay(ReplayRunRequest {
+                            events = match run_manager().replay_checked(ReplayRunRequest {
                                 run_id: run_id.clone(),
                                 after_sequence: after,
-                            });
+                            }) {
+                                Ok(events) => events,
+                                Err(error) => {
+                                    send_error(
+                                        writer,
+                                        &DaemonError::new(
+                                            error_codes::INTERNAL_ERROR,
+                                            ErrorCategory::Internal,
+                                            false,
+                                            format!("authoritative event replay failed: {error}"),
+                                        ),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            };
                             break;
                         }
                         Ok(Err(_)) | Err(_) => break,
@@ -2841,7 +3060,6 @@ fn handle_rewind_rpc(
     method: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    use crate::checkpoint::global_checkpoint_manager;
     let run_id = params
         .get("run_id")
         .and_then(|v| v.as_str())
@@ -2887,7 +3105,11 @@ fn handle_rewind_rpc(
                 .collect()
         })
     });
-    let mgr = global_checkpoint_manager();
+    // Rewind must use the same CheckpointManager/SQLite authority that owns
+    // this Run's events and ledger, not a process-global default database.
+    let mgr = crate::run_manager::global_run_manager()
+        .runtime
+        .checkpoint_manager();
     match method {
         "run.rewindPreview" | "run.rewind" => {
             // Deprecated: ambiguous "whole run rewind". Prefer workspace.restore*.
@@ -2906,10 +3128,10 @@ fn handle_rewind_rpc(
         }
         "workspace.restorePreview" => {
             let preview = mgr.rewind_preview(run_id, &project_path, paths.as_deref())?;
-            let mut value = serde_json::to_value(preview).unwrap_or_default();
+            let mut value = serde_json::to_value(preview)
+                .map_err(|e| format!("serialize restore preview: {e}"))?;
             if let Some(obj) = value.as_object_mut() {
-                let coverage = crate::side_effect_ledger::coverage_for_run(run_id)
-                    .unwrap_or_else(|| "unknown".into());
+                let coverage = crate::side_effect_ledger::coverage_for_run(run_id)?;
                 obj.insert("coverage".into(), serde_json::json!(coverage));
                 obj.insert("scope".into(), serde_json::json!("workspace_file_only"));
             }
@@ -3195,7 +3417,9 @@ mod tests {
         let adapter = StaticStreamAdapter {
             events: vec![
                 ProviderEvent::TextDelta("ok".into()),
-                ProviderEvent::Completed,
+                ProviderEvent::Completed {
+                    reason: provider_adapters::stream::ProviderStopReason::Stop,
+                },
             ],
         };
         let result = test_provider_model(
@@ -3219,7 +3443,9 @@ mod tests {
     #[tokio::test]
     async fn provider_model_test_empty_stream_is_structured_error() {
         let adapter = StaticStreamAdapter {
-            events: vec![ProviderEvent::Completed],
+            events: vec![ProviderEvent::Completed {
+                reason: provider_adapters::stream::ProviderStopReason::Stop,
+            }],
         };
         let error = test_provider_model(
             &adapter,

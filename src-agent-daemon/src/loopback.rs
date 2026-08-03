@@ -606,10 +606,14 @@ fn event_frame(path: &str, event: EngineProviderEvent) -> Result<String, String>
             "event: response.function_call_arguments.delta\ndata: {}\n\n",
             json!({"type":"response.function_call_arguments.delta","output_index":index,"call_id":id,"name":name,"delta":arguments_delta})
         )),
-        (_, EngineProviderEvent::Completed) if path == "/v1/messages" => {
+        (_, EngineProviderEvent::Completed | EngineProviderEvent::CompletedWithReason { .. })
+            if path == "/v1/messages" =>
+        {
             Ok("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".into())
         }
-        (_, EngineProviderEvent::Completed) if path == "/v1/responses" => {
+        (_, EngineProviderEvent::Completed | EngineProviderEvent::CompletedWithReason { .. })
+            if path == "/v1/responses" =>
+        {
             Ok("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n".into())
         }
         (_, EngineProviderEvent::Error { message, .. }) => Ok(format!(

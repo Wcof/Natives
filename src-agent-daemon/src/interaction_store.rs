@@ -97,8 +97,9 @@ pub fn insert_pending(
     Ok(())
 }
 
-/// Best-effort mark an interaction as resolved (e.g. from permission.respond path).
-/// No-op when the row is missing or already non-pending.
+/// Mark an interaction as resolved.  An already-resolved row is idempotent;
+/// storage failures and missing pending rows remain errors so permission
+/// callers cannot continue without a durable response fact.
 pub fn mark_resolved(id: &str, response: Value) -> Result<(), String> {
     let id = id.trim();
     if id.is_empty() {
@@ -106,20 +107,31 @@ pub fn mark_resolved(id: &str, response: Value) -> Result<(), String> {
     }
     let response_str = serde_json::to_string(&response).unwrap_or_else(|_| "null".into());
     let now = chrono::Utc::now().to_rfc3339();
-    let store = match store() {
-        Ok(s) => s,
-        Err(_) => return Ok(()),
-    };
-    let conn = match store.conn() {
-        Ok(c) => c,
-        Err(_) => return Ok(()),
-    };
-    let _ = conn.execute(
-        "UPDATE interaction
+    let store = store()?;
+    let conn = store.conn()?;
+    let changed = conn
+        .execute(
+            "UPDATE interaction
          SET status = 'resolved', response = ?1, responded_at = ?2
          WHERE id = ?3 AND status = 'pending'",
-        params![response_str, now, id],
-    );
+            params![response_str, now, id],
+        )
+        .map_err(|e| format!("resolve interaction failed: {e}"))?;
+    if changed == 0 {
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM interaction WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("check interaction status failed: {e}"))?;
+        match status.as_deref() {
+            Some("resolved") => {}
+            Some(other) => return Err(format!("interaction {id} is not pending ({other})")),
+            None => return Err(format!("interaction not found: {id}")),
+        }
+    }
     Ok(())
 }
 

@@ -1,9 +1,10 @@
 use crate::storage::DataStore;
-use agent_core::EngineMessage;
+use agent_core::{AgentMessage, ContentBlock, EngineMessage, ToolResultBlock};
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{AttachmentRef, RunEventKind, RunEventV2};
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub async fn request(method: &str, params: Value) -> Result<Value, String> {
@@ -28,6 +29,114 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
 /// Public wrapper for internal message append (used by subagent_store).
 pub fn append_message_public(params: Value) -> Result<Value, String> {
     append_message(params)
+}
+
+/// Atomically persist a leased steering/follow-up input and acknowledge the
+/// queue row. A crash before commit leaves the lease recoverable; a crash after
+/// commit cannot duplicate the user message because its id is queue-derived.
+pub fn persist_queued_input_and_ack(
+    conversation_id: &str,
+    run_id: &str,
+    input_id: &str,
+    content: &str,
+    turn_id: Option<&str>,
+    lease_token: Option<&str>,
+) -> Result<(), String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let message_id = format!("queue:{input_id}");
+    let expected_marker = format!("prompt_queue:{input_id}");
+    let existing: Option<(String, String, String, Option<String>, Option<String>)> = tx
+        .query_row(
+            "SELECT conversation_id, role, status, run_id, turn_id
+             FROM message WHERE id = ?1",
+            params![message_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some((existing_conversation, role, status, existing_run, existing_turn)) = existing {
+        if existing_conversation != conversation_id
+            || role != "user"
+            || status != "complete"
+            || existing_run.as_deref() != Some(run_id)
+            || existing_turn.as_deref() != turn_id
+        {
+            return Err(format!("queue message identity collision: {message_id}"));
+        }
+        let stored: String = tx
+            .query_row(
+                "SELECT block_json FROM message_block
+                 WHERE message_id = ?1 AND sort_order = 0 AND block_type = 'text'",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("load queued message block: {e}"))?;
+        let expected = serde_json::json!({ "text": content }).to_string();
+        if stored != expected {
+            return Err(format!("queue message content collision: {message_id}"));
+        }
+    } else {
+        tx.execute(
+            "INSERT INTO message
+             (id, conversation_id, role, status, run_id, turn_id, legacy_marker, created_at)
+             VALUES (?1, ?2, 'user', 'complete', ?3, ?4, ?5, ?6)",
+            params![
+                message_id,
+                conversation_id,
+                run_id,
+                turn_id,
+                expected_marker,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO message_block
+             (message_id, sort_order, block_type, block_json)
+             VALUES (?1, 0, 'text', ?2)",
+            params![
+                message_id,
+                serde_json::json!({ "text": content }).to_string()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let changed = tx
+        .execute(
+            "UPDATE prompt_queue SET status = 'sent', consumed_turn_id = ?1,
+             lease_token = NULL, lease_run_id = NULL, leased_at = NULL, updated_at = ?2
+             WHERE id = ?3 AND conversation_id = ?4 AND lease_run_id = ?5
+               AND lease_token = ?6 AND status = 'leased'",
+            params![
+                turn_id.unwrap_or(run_id),
+                now,
+                input_id,
+                conversation_id,
+                run_id,
+                lease_token
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed != 1 {
+        return Err("queue lease was lost before message commit".into());
+    }
+    tx.execute(
+        "UPDATE conversation SET updated_at = ?1 WHERE id = ?2",
+        params![now, conversation_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 fn store() -> Result<DataStore, String> {
@@ -304,7 +413,178 @@ fn fork(params: Value) -> Result<Value, String> {
             .and_then(Value::as_str)
             .unwrap_or("Conversation")
     ));
-    create(params)
+    // A fork inherits transcript metadata only; permissions/credentials are
+    // re-resolved for the new branch and never copy a pending grant.
+    params["permission_profile_id"] = serde_json::json!("ask");
+    let forked = create(params)?;
+    let fork_id = required_str(&forked, "id")?;
+    let branch_id = uuid::Uuid::new_v4().to_string();
+    let parent_message_id = {
+        let store = store()?;
+        let conn = store.conn()?;
+        conn.query_row(
+            "SELECT id FROM message WHERE conversation_id = ?1
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            rusqlite::params![source_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+    };
+    let store = store()?;
+    let conn = store.conn()?;
+    copy_transcript(&conn, source_id, fork_id)?;
+    conn.execute(
+        "UPDATE conversation
+         SET branch_id = ?1, parent_conversation_id = ?2,
+             branch_parent_message_id = ?3
+         WHERE id = ?4",
+        rusqlite::params![branch_id, source_id, parent_message_id, fork_id],
+    )
+    .map_err(|e| e.to_string())?;
+    let mut forked = forked;
+    forked["branch_id"] = serde_json::json!(branch_id);
+    forked["parent_conversation_id"] = serde_json::json!(source_id);
+    forked["branch_parent_message_id"] = serde_json::json!(parent_message_id);
+    Ok(forked)
+}
+
+/// Copy the durable typed transcript into a fork with new message identities.
+/// Parent links are remapped so the fork is independent while tool-call IDs
+/// inside content blocks remain stable for replay and audit correlation.
+fn copy_transcript(
+    conn: &rusqlite::Connection,
+    source_conversation_id: &str,
+    fork_conversation_id: &str,
+) -> Result<(), String> {
+    let mut messages = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, parent_message_id, role, status, input_tokens, output_tokens,
+                        reasoning_tokens, cost_usd, created_at, turn_id, run_id, stop_reason,
+                        legacy_marker, truncated
+                 FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![source_conversation_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<f64>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, i64>(13)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            messages.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+    let mut id_map = std::collections::HashMap::new();
+    for (old_id, ..) in &messages {
+        id_map.insert(
+            old_id.clone(),
+            format!("fork:{fork_conversation_id}:{old_id}"),
+        );
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for (
+        old_id,
+        parent_id,
+        role,
+        status,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        cost_usd,
+        created_at,
+        _turn_id,
+        _run_id,
+        stop_reason,
+        legacy_marker,
+        truncated,
+    ) in messages
+    {
+        let new_id = id_map
+            .get(&old_id)
+            .ok_or_else(|| "fork message identity missing".to_string())?;
+        let new_parent = parent_id.as_deref().and_then(|id| id_map.get(id));
+        tx.execute(
+            "INSERT INTO message
+             (id, conversation_id, parent_message_id, role, status, input_tokens, output_tokens,
+              reasoning_tokens, cost_usd, created_at, turn_id, run_id, stop_reason, legacy_marker, truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                new_id,
+                fork_conversation_id,
+                new_parent,
+                role,
+                status,
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                cost_usd,
+                created_at,
+                // Runs/turns belong to the source execution lineage; the
+                // fork starts a fresh run while retaining the transcript.
+                Option::<String>::None,
+                Option::<String>::None,
+                stop_reason,
+                legacy_marker,
+                truncated,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        let block_rows = {
+            let mut blocks = tx
+                .prepare(
+                    "SELECT sort_order, block_type, block_json, artifact_id, truncated
+                     FROM message_block WHERE message_id = ?1 ORDER BY sort_order ASC, id ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = blocks
+                .query_map(params![old_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        for (sort_order, block_type, block_json, artifact_id, block_truncated) in block_rows {
+            tx.execute(
+                "INSERT INTO message_block
+                 (message_id, sort_order, block_type, block_json, artifact_id, truncated)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    new_id,
+                    sort_order,
+                    block_type,
+                    block_json,
+                    artifact_id,
+                    block_truncated,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 fn get_messages(params: Value) -> Result<Value, String> {
@@ -322,7 +602,8 @@ fn get_messages(params: Value) -> Result<Value, String> {
     let conn = store.conn()?;
     let mut messages: Vec<Value> = if let Some(limit) = page_limit {
         let mut stmt = conn.prepare(
-            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
+            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at,
+                    turn_id, run_id, stop_reason, legacy_marker, truncated
              FROM message WHERE conversation_id = ?1
                AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3))
              ORDER BY created_at DESC, id DESC LIMIT ?4",
@@ -340,16 +621,24 @@ fn get_messages(params: Value) -> Result<Value, String> {
                         "input_tokens": row.get::<_, Option<i64>>(5)?,
                         "output_tokens": row.get::<_, Option<i64>>(6)?,
                         "created_at": row.get::<_, String>(7)?,
+                        "turn_id": row.get::<_, Option<String>>(8)?,
+                        "run_id": row.get::<_, Option<String>>(9)?,
+                        "stop_reason": row.get::<_, Option<String>>(10)?,
+                        "legacy_marker": row.get::<_, Option<String>>(11)?,
+                        "truncated": row.get::<_, i64>(12).unwrap_or(0) != 0,
                     }))
                 },
             )
             .map_err(|e| e.to_string())?;
-        let mut rows: Vec<Value> = rows.filter_map(Result::ok).collect();
+        let mut rows: Vec<Value> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         rows.reverse();
         rows
     } else {
         let mut stmt = conn.prepare(
-            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
+            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at,
+                    turn_id, run_id, stop_reason, legacy_marker, truncated
              FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map(params![conversation_id], |row| {
@@ -358,9 +647,13 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 "conversation_id": row.get::<_, String>(2)?, "parent_message_id": row.get::<_, Option<String>>(3)?,
                 "status": row.get::<_, String>(4)?, "input_tokens": row.get::<_, Option<i64>>(5)?,
                 "output_tokens": row.get::<_, Option<i64>>(6)?, "created_at": row.get::<_, String>(7)?,
+                "turn_id": row.get::<_, Option<String>>(8)?, "run_id": row.get::<_, Option<String>>(9)?,
+                "stop_reason": row.get::<_, Option<String>>(10)?, "legacy_marker": row.get::<_, Option<String>>(11)?,
+                "truncated": row.get::<_, i64>(12).unwrap_or(0) != 0,
             }))
         }).map_err(|e| e.to_string())?;
-        rows.filter_map(Result::ok).collect()
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
     };
 
     let mut blocks = conn
@@ -382,14 +675,19 @@ fn get_messages(params: Value) -> Result<Value, String> {
         })
         .map_err(|e| e.to_string())?;
     let mut by_message = std::collections::HashMap::<String, Vec<Value>>::new();
-    for (message_id, block_type, index, json) in block_rows.filter_map(Result::ok) {
+    for (message_id, block_type, index, json) in block_rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
+    {
+        let content = serde_json::from_str::<Value>(&json)
+            .map_err(|e| format!("invalid message block JSON: {e}"))?;
         by_message
             .entry(message_id)
             .or_default()
             .push(serde_json::json!({
                 "type": block_type,
                 "index": index,
-                "content": serde_json::from_str::<Value>(&json).unwrap_or_else(|_| serde_json::json!({ "text": json })),
+                "content": content,
             }));
     }
     for message in &mut messages {
@@ -409,19 +707,24 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 .iter()
                 .any(|block| block.get("type").and_then(Value::as_str) == Some("reasoning"))
             {
-                let event_payloads = conn
+                let mut event_stmt = conn
                     .prepare(
                         "SELECT payload FROM run_event WHERE run_id = ?1 ORDER BY sequence ASC",
                     )
-                    .and_then(|mut stmt| {
-                        stmt.query_map(params![run_id], |row| row.get::<_, String>(0))
-                            .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
-                    })
-                    .unwrap_or_default();
+                    .map_err(|e| e.to_string())?;
+                let event_rows = event_stmt
+                    .query_map(params![run_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                let event_payloads = event_rows
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
                 let events = event_payloads
                     .iter()
-                    .filter_map(|payload| serde_json::from_str::<RunEventV2>(payload).ok())
-                    .collect::<Vec<_>>();
+                    .map(|payload| {
+                        serde_json::from_str::<RunEventV2>(payload)
+                            .map_err(|e| format!("invalid run event for message history: {e}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 if let Some(reasoning) = reasoning_block_from_events(&events) {
                     content_blocks.insert(
                         0,
@@ -474,7 +777,7 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
     let Some(rows) = messages.as_array() else {
         return Ok(Vec::new());
     };
-    let mut history: Vec<_> = rows
+    let raw_history: Vec<_> = rows
         .iter()
         .filter_map(|message| {
             let role = message.get("role")?.as_str()?.to_string();
@@ -505,10 +808,370 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
             })
         })
         .collect();
+    // Legacy EngineMessage consumers expect the tool result summary adjacent
+    // to the assistant call. Typed persistence keeps it as its own message;
+    // this adapter only folds the display text at the compatibility edge.
+    let mut history: Vec<EngineMessage> = Vec::with_capacity(raw_history.len());
+    for message in raw_history {
+        if message.role == "assistant" && message.content.contains("[tool result:") {
+            if let Some(previous) = history.last_mut() {
+                if previous.role == "assistant" {
+                    if !previous.content.is_empty() {
+                        previous.content.push('\n');
+                    }
+                    previous.content.push_str(&message.content);
+                    continue;
+                }
+            }
+        }
+        history.push(message);
+    }
     if let Some(summary) = latest_context_summary(conversation_id)? {
         history.insert(0, EngineMessage::text("system", summary));
     }
     Ok(history)
+}
+
+/// Load the durable typed transcript used by Core replay.  The older
+/// `engine_history` helper intentionally remains for RPC/fixture compatibility;
+/// production callers should prefer this lossless representation.
+pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, String> {
+    let raw = get_messages(serde_json::json!({ "conversation_id": conversation_id }))?;
+    let Some(rows) = raw.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "message id missing".to_string())?;
+        let role = row
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("message {id} role missing"))?;
+        let blocks = row
+            .get("content_blocks")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| format!("message {id} content_blocks missing"))?;
+        let stop_reason =
+            row.get("stop_reason")
+                .and_then(Value::as_str)
+                .map(|reason| match reason {
+                    "stop" => agent_core::StopReason::Stop,
+                    "tool_use" => agent_core::StopReason::ToolUse,
+                    "length" => agent_core::StopReason::Length,
+                    "cancelled" => agent_core::StopReason::Cancelled,
+                    "error" => agent_core::StopReason::Error,
+                    other => agent_core::StopReason::Provider(other.to_string()),
+                });
+        if let Some(tool_block) = blocks
+            .iter()
+            .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        {
+            let payload = tool_block.get("content").unwrap_or(tool_block);
+            let content = payload
+                .get("content")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("tool result {id} content blocks missing"))
+                .and_then(|blocks| parse_tool_result_blocks(blocks))?;
+            let tool_call_id = payload
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("legacy-missing-tool-call:{id}"));
+            let tool_name = tool_block
+                .get("content")
+                .and_then(|v| v.get("name"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("legacy-tool")
+                .to_string();
+            out.push(AgentMessage::ToolResult(agent_core::ToolResultMessage {
+                message_id: agent_core::MessageId::from(id),
+                tool_call_id: agent_core::ToolCallId::from(tool_call_id),
+                tool_name,
+                content,
+                is_error: payload
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    || payload.get("tool_call_id").is_none(),
+                code: payload
+                    .get("error_code")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        payload
+                            .get("tool_call_id")
+                            .is_none()
+                            .then_some("LEGACY_TOOL_RESULT_ID_MISSING".into())
+                    }),
+            }));
+            continue;
+        }
+        // Custom messages carry a single `custom` block; reloading them restores
+        // the kind + payload exactly, unlike the old free-form block type which
+        // parse_content_block could not round-trip.
+        if let Some(custom_block) = blocks
+            .iter()
+            .find(|block| block.get("type").and_then(Value::as_str) == Some("custom"))
+        {
+            let content = custom_block.get("content").unwrap_or(custom_block);
+            out.push(AgentMessage::Custom(agent_core::CustomMessage {
+                message_id: agent_core::MessageId::from(id),
+                kind: content
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .filter(|kind| !kind.trim().is_empty())
+                    .unwrap_or("custom")
+                    .to_string(),
+                payload: content.get("payload").cloned().unwrap_or(Value::Null),
+            }));
+            continue;
+        }
+        let content = blocks
+            .iter()
+            // run_reference is provenance metadata appended to assistant
+            // messages; it is not part of the typed content and must not reach
+            // parse_content_block.
+            .filter(|block| block.get("type").and_then(Value::as_str) != Some("run_reference"))
+            .enumerate()
+            .map(|(index, block)| {
+                parse_content_block(block).map_err(|error| {
+                    format!("message {id} content block {index} is malformed: {error}")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        match role {
+            "user" => out.push(AgentMessage::User(agent_core::UserMessage {
+                message_id: agent_core::MessageId::from(id),
+                content,
+            })),
+            "system" => out.push(AgentMessage::System(agent_core::SystemMessage {
+                message_id: agent_core::MessageId::from(id),
+                text: content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            })),
+            _ => out.push(AgentMessage::Assistant(agent_core::AssistantMessage {
+                message_id: agent_core::MessageId::from(id),
+                content,
+                stop_reason,
+            })),
+        }
+    }
+    Ok(out)
+}
+
+/// Lossless active-context snapshot plus the durable message ids it replaced.
+/// The daemon uses the id set to append messages written after compaction
+/// without deleting or mutating the full transcript.
+#[derive(Debug, Clone)]
+pub struct ActiveContextSnapshot {
+    pub messages: Vec<AgentMessage>,
+    pub input_message_ids: HashSet<String>,
+}
+
+/// Load the newest lossless active-context snapshot when one exists. A missing
+/// or malformed snapshot is a normal cache miss: callers fall back to the
+/// durable full message history.
+pub fn load_active_context_snapshot(
+    conversation_id: &str,
+) -> Result<Option<ActiveContextSnapshot>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT snapshot_json, input_message_ids FROM context_snapshot
+             WHERE conversation_id = ?1 AND snapshot_type = 'compaction'
+             ORDER BY sequence DESC LIMIT 1",
+            params![conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((raw, input_ids)) = row else {
+        return Ok(None);
+    };
+    let value = serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string())?;
+    let ids = serde_json::from_str::<Vec<String>>(&input_ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    Ok(Some(ActiveContextSnapshot {
+        messages: agent_core::try_agent_messages_from_json(&value)?,
+        input_message_ids: ids,
+    }))
+}
+
+/// Load the snapshot explicitly attached to a checkpoint. Continue/Resume
+/// must not silently jump to a newer conversation snapshot.
+pub fn load_active_context_snapshot_for_checkpoint(
+    conversation_id: &str,
+    checkpoint_id: &str,
+) -> Result<Option<ActiveContextSnapshot>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT cs.snapshot_json, cs.input_message_ids
+             FROM checkpoint cp
+             JOIN context_snapshot cs ON cs.id = cp.active_context_snapshot_id
+             WHERE cp.id = ?1 AND cp.conversation_id = ?2
+             LIMIT 1",
+            params![checkpoint_id, conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((raw, input_ids)) = row else {
+        return Ok(None);
+    };
+    let value = serde_json::from_str::<Value>(&raw).map_err(|e| e.to_string())?;
+    let ids = serde_json::from_str::<Vec<String>>(&input_ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    Ok(Some(ActiveContextSnapshot {
+        messages: agent_core::try_agent_messages_from_json(&value)?,
+        input_message_ids: ids,
+    }))
+}
+
+pub fn load_active_context_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, String> {
+    Ok(load_active_context_snapshot(conversation_id)?
+        .map(|snapshot| snapshot.messages)
+        .unwrap_or_default())
+}
+
+fn parse_content_block(block: &Value) -> Result<ContentBlock, String> {
+    let kind = block
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "block type is required".to_string())?;
+    let content = block.get("content").unwrap_or(block);
+    match kind {
+        "text" => Ok(ContentBlock::Text {
+            text: content
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "text block has no text".to_string())?
+                .to_string(),
+        }),
+        "thinking" | "reasoning" => Ok(ContentBlock::Thinking {
+            text: content
+                .get("text")
+                .or_else(|| content.get("reasoning"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| "thinking block has no text".to_string())?
+                .to_string(),
+            signature: content
+                .get("signature")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        "tool_call" => {
+            let name = content
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "tool call has no name".to_string())?;
+            let tool_call_id = content
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "tool call has no tool_call_id".to_string())?;
+            let arguments_json = content
+                .get("arguments")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "tool call has no arguments".to_string())?;
+            serde_json::from_str::<Value>(arguments_json)
+                .map_err(|error| format!("tool call arguments are invalid JSON: {error}"))?;
+            Ok(ContentBlock::ToolCall(agent_core::ToolCall {
+                tool_call_id: agent_core::ToolCallId::from(tool_call_id),
+                name: name.to_string(),
+                arguments_json: arguments_json.to_string(),
+            }))
+        }
+        "image" => {
+            let source = serde_json::from_value::<agent_core::ImageSource>(
+                content
+                    .get("source")
+                    .cloned()
+                    .unwrap_or_else(|| content.clone()),
+            )
+            .map_err(|error| format!("invalid image source: {error}"))?;
+            if source.url.trim().is_empty() {
+                return Err("image source url is empty".into());
+            }
+            Ok(ContentBlock::Image { source })
+        }
+        "file_reference" => {
+            let path = content
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "file reference has no path".to_string())?;
+            let name = content
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(path);
+            Ok(ContentBlock::Text {
+                text: format!("[attachment: {name} at {path}]"),
+            })
+        }
+        other => Err(format!("unsupported block type {other}")),
+    }
+}
+
+fn parse_tool_result_blocks(blocks: &[Value]) -> Result<Vec<ToolResultBlock>, String> {
+    blocks
+        .iter()
+        .enumerate()
+        .map(
+            |(index, block)| match block.get("type").and_then(Value::as_str) {
+                Some("text") => Ok(ToolResultBlock::Text {
+                    text: block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| format!("tool result block {index} text missing"))?
+                        .to_string(),
+                }),
+                Some("json") => Ok(ToolResultBlock::Json {
+                    value: block
+                        .get("value")
+                        .cloned()
+                        .ok_or_else(|| format!("tool result block {index} value missing"))?,
+                }),
+                Some("artifact") => Ok(ToolResultBlock::Artifact {
+                    artifact_id: block
+                        .get("artifact_id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.trim().is_empty())
+                        .ok_or_else(|| format!("tool result block {index} artifact_id missing"))?
+                        .to_string(),
+                    preview: block
+                        .get("preview")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                }),
+                Some(other) => Err(format!(
+                    "tool result block {index} type {other} unsupported"
+                )),
+                None => Err(format!("tool result block {index} type missing")),
+            },
+        )
+        .collect()
 }
 
 fn latest_context_summary(conversation_id: &str) -> Result<Option<String>, String> {
@@ -572,12 +1235,19 @@ fn block_text(block: &Value) -> Option<String> {
             Some(format!("[attachment: {name} at {path}]"))
         }
         "tool_result" => {
-            let content = block.get("content").unwrap_or(block);
-            let name = content
+            let metadata = block
+                .get("content")
+                .filter(|value| value.is_object())
+                .unwrap_or(block);
+            let name = metadata
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("tool");
-            let output = content.get("output").cloned().unwrap_or(Value::Null);
+            let output = metadata
+                .get("output")
+                .cloned()
+                .or_else(|| metadata.get("content").cloned())
+                .unwrap_or(Value::Null);
             Some(format!("[tool result: {name} => {output}]"))
         }
         _ => None,
@@ -630,54 +1300,250 @@ pub fn append_assistant_turn_from_events(
     run_id: &str,
     events: &[RunEventV2],
 ) -> Result<Option<String>, String> {
+    let mut groups: Vec<Vec<RunEventV2>> = Vec::new();
+    let mut current = Vec::new();
+    for event in events {
+        if matches!(&event.payload, RunEventKind::TurnStarted { .. }) && !current.is_empty() {
+            groups.push(std::mem::take(&mut current));
+        }
+        current.push(event.clone());
+        if matches!(&event.payload, RunEventKind::TurnCompleted { .. }) {
+            groups.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    let mut last_id = None;
+    for group in groups {
+        // A typed turn is committed only after the Core emitted its terminal
+        // TurnCompleted fact.  Keep the older delta-only event batches
+        // compatible, but never turn a crashed/partial typed turn into a
+        // durable assistant message.
+        let has_turn_start = group
+            .iter()
+            .any(|event| matches!(&event.payload, RunEventKind::TurnStarted { .. }));
+        let has_turn_completed = group
+            .iter()
+            .any(|event| matches!(&event.payload, RunEventKind::TurnCompleted { .. }));
+        if has_turn_start && !has_turn_completed {
+            continue;
+        }
+        if let Some(id) = append_single_assistant_turn(conversation_id, run_id, &group)? {
+            last_id = Some(id);
+        }
+    }
+    Ok(last_id)
+}
+
+fn append_single_assistant_turn(
+    conversation_id: &str,
+    run_id: &str,
+    events: &[RunEventV2],
+) -> Result<Option<String>, String> {
     persist_context_snapshots_from_events(run_id, events)?;
     let mut text = String::new();
-    let mut blocks = vec![serde_json::json!({ "type": "run_reference", "run_id": run_id })];
+    let mut thinking = String::new();
+    let mut tool_calls = Vec::new();
+    let mut tool_results = Vec::new();
+    let mut committed_content: Option<Vec<agent_core::ContentBlock>> = None;
+    let turn_id = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
+        _ => None,
+    });
+    let assistant_message_id = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::MessageStarted {
+            message_id, role, ..
+        } if role == "assistant" => Some(message_id.clone()),
+        _ => None,
+    });
+    let stop_reason = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::TurnCompleted { stop_reason, .. } => Some(stop_reason.clone()),
+        _ => None,
+    });
     for event in events {
         match &event.payload {
             RunEventKind::TextDelta { text: delta } => text.push_str(delta),
+            RunEventKind::ReasoningDelta { text: delta } => thinking.push_str(delta),
+            RunEventKind::ToolCallRequested { id, name, input } => {
+                tool_calls.push(agent_core::ToolCall {
+                    tool_call_id: id.clone().into(),
+                    name: name.clone(),
+                    arguments_json: input.to_string(),
+                });
+            }
             RunEventKind::ToolCallCompleted {
                 id,
                 name,
                 output,
                 is_error,
                 duration_ms,
-            } => blocks.push(serde_json::json!({
-                "type": "tool_result",
-                "id": id,
-                "name": name,
-                "output": output,
-                "is_error": is_error,
-                "duration_ms": duration_ms,
-            })),
+                result_message_id,
+            } => tool_results.push((
+                id.clone(),
+                name.clone(),
+                output.clone(),
+                *is_error,
+                *duration_ms,
+                result_message_id.clone(),
+            )),
+            RunEventKind::MessageCompleted { content, .. } => {
+                if let Some(content) = content {
+                    let blocks = content
+                        .get("content")
+                        .ok_or_else(|| "message completed content missing blocks".to_string())?;
+                    committed_content = Some(
+                        serde_json::from_value(blocks.clone())
+                            .map_err(|e| format!("invalid message completed content: {e}"))?,
+                    );
+                }
+            }
             _ => {}
         }
     }
-    if !text.trim().is_empty() {
-        blocks.insert(0, serde_json::json!({ "type": "text", "text": text }));
-    }
-    if let Some(reasoning) = reasoning_block_from_events(events) {
-        blocks.insert(
-            0,
-            serde_json::json!({
-                "type": "reasoning",
-                "reasoning": reasoning["reasoning"],
-                "duration_ms": reasoning["duration_ms"],
-            }),
+    let has_committed_content = committed_content.is_some();
+    let content = committed_content.unwrap_or_else(|| {
+        let mut content = Vec::new();
+        if !thinking.trim().is_empty() {
+            content.push(agent_core::ContentBlock::Thinking {
+                text: thinking,
+                signature: None,
+            });
+        }
+        if !text.trim().is_empty() {
+            content.push(agent_core::ContentBlock::Text { text });
+        }
+        content.extend(
+            tool_calls
+                .into_iter()
+                .map(agent_core::ContentBlock::ToolCall),
         );
-    }
-    if blocks.len() == 1 {
+        content
+    });
+    if content.is_empty() && tool_results.is_empty() {
         return Ok(None);
     }
-    let appended = append_message(serde_json::json!({
-        "conversation_id": conversation_id,
-        "role": "assistant",
-        "blocks": blocks,
-    }))?;
-    Ok(appended
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string))
+    let typed_turn_id = turn_id.unwrap_or_else(|| format!("legacy-turn:{run_id}"));
+    let assistant_id = assistant_message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    persist_turn_record(run_id, &typed_turn_id, stop_reason.as_deref(), events)?;
+    let assistant = agent_core::AssistantMessage {
+        message_id: assistant_id.into(),
+        content,
+        stop_reason: stop_reason.as_deref().map(parse_stop_reason),
+    };
+    let appended_id = append_agent_message(
+        conversation_id,
+        Some(run_id),
+        Some(&typed_turn_id),
+        &AgentMessage::Assistant(assistant),
+    )?;
+    // Legacy event batches may only contain deltas and have no committed typed
+    // payload. Keep their duration-bearing reasoning block for old renderers;
+    // production MessageCompleted batches already carry canonical Thinking.
+    if !has_committed_content {
+        if let Some(reasoning) = reasoning_block_from_events(events) {
+            let db = store()?;
+            let conn = db.conn()?;
+            conn.execute(
+            "INSERT OR IGNORE INTO message_block (message_id, sort_order, block_type, block_json)
+             VALUES (?1, -1, 'reasoning', ?2)",
+            params![appended_id, reasoning.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+        }
+    }
+    for (id, name, output, is_error, duration_ms, result_message_id) in tool_results {
+        let code = output
+            .get("error_code")
+            .or_else(|| output.get("code"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let content = output
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .map(|artifact_id| {
+                vec![ToolResultBlock::Artifact {
+                    artifact_id: artifact_id.to_string(),
+                    preview: output
+                        .get("preview")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                }]
+            })
+            .unwrap_or_else(|| vec![ToolResultBlock::Json { value: output }]);
+        let result = agent_core::ToolResultMessage {
+            // Reuse the identity the Core committed in ToolCallCompleted; only
+            // legacy events predating the additive field invent a fresh id.
+            message_id: result_message_id
+                .map(agent_core::MessageId::from)
+                .unwrap_or_else(agent_core::MessageId::new),
+            tool_call_id: id.into(),
+            tool_name: name,
+            content,
+            is_error,
+            code,
+        };
+        let _ = duration_ms;
+        append_agent_message(
+            conversation_id,
+            Some(run_id),
+            Some(&typed_turn_id),
+            &AgentMessage::ToolResult(result),
+        )?;
+    }
+    Ok(Some(appended_id))
+}
+
+fn parse_stop_reason(value: &str) -> agent_core::StopReason {
+    match value {
+        "stop" => agent_core::StopReason::Stop,
+        "tool_use" => agent_core::StopReason::ToolUse,
+        "length" => agent_core::StopReason::Length,
+        "cancelled" => agent_core::StopReason::Cancelled,
+        "error" => agent_core::StopReason::Error,
+        other => agent_core::StopReason::Provider(other.to_string()),
+    }
+}
+
+fn persist_turn_record(
+    run_id: &str,
+    turn_id: &str,
+    stop_reason: Option<&str>,
+    events: &[RunEventV2],
+) -> Result<(), String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    let run_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM run WHERE id = ?1)",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("check turn run: {e}"))?;
+    if !run_exists {
+        return Ok(());
+    }
+    let sequence = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            RunEventKind::TurnStarted { .. } => Some(event.effective_run_sequence()),
+            _ => None,
+        })
+        .next()
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT OR IGNORE INTO turn (id, run_id, sequence, status, stop_reason, completed_at)
+         VALUES (?1, ?2, ?3, 'committed', ?4, ?5)",
+        params![
+            turn_id,
+            run_id,
+            sequence as i64,
+            stop_reason,
+            chrono::Utc::now().to_rfc3339()
+        ],
+    )
+    .map_err(|e| format!("persist turn: {e}"))?;
+    Ok(())
 }
 
 fn persist_context_snapshots_from_events(
@@ -686,14 +1552,60 @@ fn persist_context_snapshots_from_events(
 ) -> Result<(), String> {
     let store = store()?;
     let conn = store.conn()?;
+    let conversation_id: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM run WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let branch_id: Option<String> = match conversation_id.as_deref() {
+        Some(conversation_id) => conn
+            .query_row(
+                "SELECT branch_id FROM conversation WHERE id = ?1",
+                params![conversation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map_err(|e| e.to_string())?,
+        None => None,
+    };
     for event in events {
-        let RunEventKind::ContextCompressed {
-            before_tokens,
-            after_tokens,
-            summary,
-        } = &event.payload
-        else {
-            continue;
+        let (snapshot_id, _before_tokens, after_tokens, summary, committed) = match &event.payload {
+            RunEventKind::ContextCompressed {
+                before_tokens,
+                after_tokens,
+                summary,
+            } => (None, *before_tokens, *after_tokens, summary.as_str(), None),
+            RunEventKind::ContextSnapshotCommitted {
+                snapshot_id,
+                input_message_ids,
+                summary_message_id,
+                replaced_range,
+                algorithm_version,
+                provider_context_window,
+                artifact_reference,
+                turn_id,
+                source_revision,
+                snapshot_json,
+            } => (
+                Some(snapshot_id.as_str()),
+                0,
+                0,
+                "",
+                Some((
+                    input_message_ids,
+                    summary_message_id.as_deref(),
+                    replaced_range.as_deref(),
+                    algorithm_version.as_str(),
+                    *provider_context_window,
+                    artifact_reference.as_deref(),
+                    turn_id.as_deref(),
+                    *source_revision,
+                    snapshot_json,
+                )),
+            ),
+            _ => continue,
         };
         let exists: i64 = conn
             .query_row(
@@ -704,29 +1616,318 @@ fn persist_context_snapshots_from_events(
             )
             .map_err(|e| e.to_string())?;
         if exists > 0 {
+            if let Some(committed) = committed.as_ref() {
+                persist_summary_message(
+                    &conn,
+                    conversation_id.as_deref(),
+                    run_id,
+                    committed.6,
+                    committed.1,
+                    committed.8,
+                )?;
+            } else if !summary.trim().is_empty() {
+                persist_summary_text_message(
+                    &conn,
+                    conversation_id.as_deref(),
+                    run_id,
+                    None,
+                    &format!(
+                        "context-summary-{run_id}-{}",
+                        event.effective_run_sequence()
+                    ),
+                    summary,
+                )?;
+            }
             continue;
         }
+        let event_turn_id = events[..events
+            .iter()
+            .position(|candidate| {
+                candidate.effective_run_sequence() == event.effective_run_sequence()
+            })
+            .unwrap_or(0)]
+            .iter()
+            .rev()
+            .find_map(|candidate| match &candidate.payload {
+                RunEventKind::TurnCompleted { turn_id, .. }
+                | RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
+                _ => None,
+            });
+        let turn_id = committed
+            .as_ref()
+            .and_then(|value| value.6.map(str::to_string))
+            .or(event_turn_id);
+        let mechanical_summary_id = format!(
+            "context-summary-{run_id}-{}",
+            event.effective_run_sequence()
+        );
+        let snapshot_id = snapshot_id
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let (
+            input_message_ids,
+            summary_message_id,
+            replaced_range,
+            algorithm_version,
+            provider_context_window,
+            artifact_reference,
+            source_revision,
+            snapshot_json,
+        ) = if let Some(value) = committed.as_ref() {
+            (
+                serde_json::to_string(value.0)
+                    .map_err(|e| format!("serialize snapshot input ids: {e}"))?,
+                value.1.map(str::to_string),
+                value.2.map(str::to_string),
+                value.3.to_string(),
+                value.4,
+                value.5.map(str::to_string),
+                value.7,
+                value.8.clone(),
+            )
+        } else {
+            (
+                "[]".into(),
+                None,
+                None,
+                "mechanical-v1".into(),
+                None,
+                None,
+                event.effective_run_sequence(),
+                serde_json::json!([{
+                    "message_id": mechanical_summary_id,
+                    "role": "system",
+                    "content": summary,
+                }]),
+            )
+        };
+        let estimated_tokens = if after_tokens > 0 {
+            after_tokens as i64
+        } else {
+            (snapshot_json.to_string().len() as i64 / 4).max(1)
+        };
         conn.execute(
             "INSERT INTO context_snapshot (
-                id, run_id, sequence, snapshot_type, token_count, summary, snapshot_json
+                id, run_id, conversation_id, branch_id, turn_id, sequence, snapshot_type, token_count, summary,
+                source_revision, input_message_ids, summary_message_id, replaced_range,
+                algorithm_version, provider_context_window, artifact_reference, snapshot_json
              )
-             VALUES (?1, ?2, ?3, 'compaction', ?4, ?5, ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'compaction', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
-                uuid::Uuid::new_v4().to_string(),
+                snapshot_id,
                 run_id,
+                conversation_id,
+                branch_id,
+                turn_id,
                 event.effective_run_sequence() as i64,
-                *after_tokens as i64,
+                estimated_tokens,
                 summary,
-                serde_json::json!({
-                    "before_tokens": before_tokens,
-                    "after_tokens": after_tokens,
-                    "event_sequence": event.effective_run_sequence()
-                })
-                .to_string()
+                source_revision as i64,
+                input_message_ids,
+                summary_message_id,
+                replaced_range,
+                algorithm_version,
+                provider_context_window.map(|value| value as i64),
+                artifact_reference,
+                snapshot_json.to_string()
             ],
         )
         .map_err(|e| e.to_string())?;
+        if let Some(committed) = committed.as_ref() {
+            persist_summary_message(
+                &conn,
+                conversation_id.as_deref(),
+                run_id,
+                turn_id.as_deref(),
+                committed.1,
+                committed.8,
+            )?;
+        } else if !summary.trim().is_empty() {
+            persist_summary_text_message(
+                &conn,
+                conversation_id.as_deref(),
+                run_id,
+                turn_id.as_deref(),
+                &mechanical_summary_id,
+                summary,
+            )?;
+        }
     }
+    Ok(())
+}
+
+/// Daemon-startup repair for the crash gap between a committed
+/// `ContextSnapshotCommitted` event and its run-end `context_snapshot` row
+/// projection. When the engine commits the event but the process dies before
+/// `append_assistant_turn_from_events` materializes the row, a restart leaves
+/// an event without a queryable snapshot. This scans every run that committed
+/// such an event and idempotently projects any missing rows (the projection is
+/// deduplicated per `run_id` + sequence, and summary messages are identity
+/// checked), so it is safe to run on every daemon start.
+pub fn backfill_context_snapshots() -> Result<usize, String> {
+    let run_ids: Vec<String> = {
+        let store = store()?;
+        let conn = store.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT run_id FROM run_event
+                 WHERE event_type = 'context_snapshot_committed'",
+            )
+            .map_err(|e| e.to_string())?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        ids
+    };
+    let mut touched = 0usize;
+    for run_id in run_ids {
+        let events: Vec<RunEventV2> = {
+            let store = store()?;
+            let conn = store.conn()?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT payload FROM run_event
+                     WHERE run_id = ?1 ORDER BY sequence ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let mut events = Vec::new();
+            {
+                let rows = stmt
+                    .query_map(rusqlite::params![run_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for payload in rows {
+                    let payload = payload.map_err(|e| e.to_string())?;
+                    if let Ok(event) = serde_json::from_str::<RunEventV2>(&payload) {
+                        events.push(event);
+                    }
+                }
+            }
+            events
+        };
+        if !events.is_empty() {
+            persist_context_snapshots_from_events(&run_id, &events)?;
+            touched += 1;
+        }
+    }
+    Ok(touched)
+}
+
+/// Keep a model-written compaction summary as a first-class system message.
+/// The active snapshot still carries the complete provider-valid view, but a
+/// durable conversation must be able to reload and audit the summary without
+/// depending on the snapshot JSON alone.
+fn persist_summary_message(
+    conn: &rusqlite::Connection,
+    conversation_id: Option<&str>,
+    run_id: &str,
+    turn_id: Option<&str>,
+    summary_message_id: Option<&str>,
+    snapshot_json: &Value,
+) -> Result<(), String> {
+    let Some(conversation_id) = conversation_id else {
+        return Ok(());
+    };
+    let Some(summary_message_id) = summary_message_id else {
+        return Ok(());
+    };
+    let summary = snapshot_json
+        .as_array()
+        .and_then(|messages| {
+            messages.iter().find(|message| {
+                message.get("message_id").and_then(Value::as_str) == Some(summary_message_id)
+                    && message.get("role").and_then(Value::as_str) == Some("system")
+            })
+        })
+        .and_then(|message| message.get("content").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| {
+            format!("context snapshot references missing summary message {summary_message_id}")
+        })?;
+    persist_summary_text_message(
+        conn,
+        Some(conversation_id),
+        run_id,
+        turn_id,
+        summary_message_id,
+        summary,
+    )
+}
+
+fn persist_summary_text_message(
+    conn: &rusqlite::Connection,
+    conversation_id: Option<&str>,
+    run_id: &str,
+    turn_id: Option<&str>,
+    summary_message_id: &str,
+    summary: &str,
+) -> Result<(), String> {
+    let Some(conversation_id) = conversation_id else {
+        return Ok(());
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let existing: Option<(String, String, String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT conversation_id, role, status, run_id, turn_id
+             FROM message WHERE id = ?1",
+            rusqlite::params![summary_message_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("load summary message: {e}"))?;
+    if let Some((existing_conversation, role, status, existing_run, existing_turn)) = existing {
+        if existing_conversation != conversation_id
+            || role != "system"
+            || status != "complete"
+            || existing_run.as_deref() != Some(run_id)
+            || existing_turn.as_deref() != turn_id
+        {
+            return Err(format!(
+                "summary message identity collision: {summary_message_id}"
+            ));
+        }
+        let stored: String = conn
+            .query_row(
+                "SELECT block_json FROM message_block
+                 WHERE message_id = ?1 AND sort_order = 0 AND block_type = 'text'",
+                rusqlite::params![summary_message_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("load summary block: {e}"))?;
+        let expected = serde_json::json!({"text": summary}).to_string();
+        if stored != expected {
+            return Err(format!(
+                "summary message content collision: {summary_message_id}"
+            ));
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO message
+         (id, conversation_id, role, status, run_id, turn_id, legacy_marker, created_at)
+         VALUES (?1, ?2, 'system', 'complete', ?3, ?4, 'context_summary', ?5)",
+        rusqlite::params![summary_message_id, conversation_id, run_id, turn_id, now],
+    )
+    .map_err(|e| format!("persist summary message: {e}"))?;
+    conn.execute(
+        "INSERT INTO message_block
+         (message_id, sort_order, block_type, block_json)
+         VALUES (?1, 0, 'text', ?2)",
+        rusqlite::params![
+            summary_message_id,
+            serde_json::json!({"text": summary}).to_string()
+        ],
+    )
+    .map_err(|e| format!("persist summary block: {e}"))?;
     Ok(())
 }
 
@@ -753,15 +1954,28 @@ fn append_message(params: Value) -> Result<Value, String> {
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("complete");
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = params
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let turn_id = params.get("turn_id").and_then(Value::as_str);
+    let run_id = params.get("run_id").and_then(Value::as_str);
+    let legacy_marker = params.get("legacy_marker").and_then(Value::as_str);
+    let stop_reason = params.get("stop_reason").and_then(Value::as_str);
+    let truncated = params
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let now = chrono::Utc::now().to_rfc3339();
     let store = store()?;
     let conn = store.conn()?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute(
-        "INSERT INTO message (id, conversation_id, role, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, conversation_id, role, status, now],
+        "INSERT INTO message (id, conversation_id, role, status, turn_id, run_id, legacy_marker, truncated, stop_reason, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![id, conversation_id, role, status, turn_id, run_id, legacy_marker, if truncated { 1 } else { 0 }, stop_reason, now],
     )
     .map_err(|e| e.to_string())?;
     for (index, block) in blocks.iter().enumerate() {
@@ -775,9 +1989,9 @@ fn append_message(params: Value) -> Result<Value, String> {
             block.clone()
         };
         tx.execute(
-            "INSERT INTO message_block (message_id, sort_order, block_type, block_json)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![id, index as i64, block_type, content.to_string()],
+            "INSERT INTO message_block (message_id, sort_order, block_type, block_json, artifact_id, truncated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, index as i64, block_type, content.to_string(), block.get("artifact_id").and_then(Value::as_str), if block.get("truncated").and_then(Value::as_bool).unwrap_or(false) { 1 } else { 0 }],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -788,6 +2002,125 @@ fn append_message(params: Value) -> Result<Value, String> {
     .and_then(|_| tx.commit())
     .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "id": id, "created_at": now }))
+}
+
+/// Persist the typed Core message without passing through an EngineMessage
+/// transcript. The JSON block representation is the durable compatibility
+/// boundary for old renderers; identity and ordering stay typed and stable.
+pub fn append_agent_message(
+    conversation_id: &str,
+    run_id: Option<&str>,
+    turn_id: Option<&str>,
+    message: &AgentMessage,
+) -> Result<String, String> {
+    // Legacy fixtures use symbolic ids without corresponding FK rows. Real
+    // daemon runs are UUIDs and keep the binding; the compatibility marker is
+    // still written below for symbolic test/replay events.
+    let durable_run_id = run_id.filter(|value| !value.starts_with("run-"));
+    let durable_turn_id =
+        turn_id.filter(|value| !value.starts_with("turn-") && !value.starts_with("legacy-turn:"));
+    let (id, role, blocks, stop_reason) = agent_message_parts(message);
+    let mut payload = serde_json::json!({
+        "id": id,
+        "conversation_id": conversation_id,
+        "role": role,
+        "run_id": durable_run_id,
+        "turn_id": durable_turn_id,
+        "blocks": blocks,
+    });
+    if role == "assistant" {
+        if let Some(run_id) = run_id {
+            payload["blocks"]
+                .as_array_mut()
+                .expect("typed message blocks are an array")
+                .push(serde_json::json!({
+                    "type": "run_reference",
+                    "run_id": run_id,
+                }));
+        }
+    }
+    if let Some(reason) = stop_reason {
+        payload["stop_reason"] = serde_json::Value::String(reason);
+    }
+    if turn_id.is_some_and(|value| value.starts_with("legacy-turn:")) {
+        payload["legacy_marker"] = serde_json::Value::String("legacy_turn_unknown".into());
+    }
+    let row = append_message(payload)?;
+    row.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "typed message append returned no id".into())
+}
+
+fn agent_message_parts(
+    message: &AgentMessage,
+) -> (String, &'static str, Vec<Value>, Option<String>) {
+    match message {
+        AgentMessage::User(user) => (
+            user.message_id.0.clone(),
+            "user",
+            content_blocks_to_json(&user.content),
+            None,
+        ),
+        AgentMessage::Assistant(assistant) => (
+            assistant.message_id.0.clone(),
+            "assistant",
+            content_blocks_to_json(&assistant.content),
+            assistant.stop_reason.as_ref().map(ToString::to_string),
+        ),
+        AgentMessage::ToolResult(result) => (
+            result.message_id.0.clone(),
+            "assistant",
+            vec![serde_json::json!({
+                "type": "tool_result",
+                "tool_call_id": result.tool_call_id,
+                "name": result.tool_name,
+                "is_error": result.is_error,
+                "error_code": result.code,
+                "content": result_blocks_to_json(&result.content),
+            })],
+            None,
+        ),
+        AgentMessage::System(system) => (
+            system.message_id.0.clone(),
+            "system",
+            vec![serde_json::json!({ "type": "text", "text": system.text })],
+            None,
+        ),
+        AgentMessage::Custom(custom) => (
+            custom.message_id.0.clone(),
+            "assistant",
+            vec![serde_json::json!({
+                "type": "custom",
+                "kind": custom.kind,
+                "payload": custom.payload,
+            })],
+            None,
+        ),
+    }
+}
+
+fn content_blocks_to_json(blocks: &[ContentBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ContentBlock::Text { text } => serde_json::json!({ "type": "text", "text": text }),
+            ContentBlock::Thinking { text, signature } => serde_json::json!({ "type": "thinking", "text": text, "signature": signature }),
+            ContentBlock::Image { source } => serde_json::json!({ "type": "image", "source": source }),
+            ContentBlock::ToolCall(call) => serde_json::json!({ "type": "tool_call", "tool_call_id": call.tool_call_id, "name": call.name, "arguments": call.arguments_json }),
+        })
+        .collect()
+}
+
+fn result_blocks_to_json(blocks: &[ToolResultBlock]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ToolResultBlock::Text { text } => serde_json::json!({ "type": "text", "text": text }),
+            ToolResultBlock::Json { value } => serde_json::json!({ "type": "json", "value": value }),
+            ToolResultBlock::Artifact { artifact_id, preview } => serde_json::json!({ "type": "artifact", "artifact_id": artifact_id, "preview": preview }),
+        })
+        .collect()
 }
 
 pub fn append_trigger_message(
@@ -840,48 +2173,44 @@ pub fn append_trigger_message_idempotent(
     run_id: Option<&str>,
 ) -> Result<Option<String>, String> {
     if let Some(run_id) = run_id.filter(|s| !s.trim().is_empty()) {
-        if let Ok(store) = store() {
-            if let Ok(conn) = store.conn() {
-                if let Ok(Some(existing)) = conn
-                    .query_row(
-                        "SELECT trigger_message_id FROM run WHERE id = ?1 AND trigger_message_id IS NOT NULL",
-                        params![run_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                {
-                    return Ok(Some(existing));
-                }
-            }
+        let store = store()?;
+        let conn = store.conn()?;
+        if let Some(existing) = conn
+            .query_row(
+                "SELECT trigger_message_id FROM run WHERE id = ?1 AND trigger_message_id IS NOT NULL",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(existing));
         }
     }
 
     // If the latest user message already has the same text, reuse it (duplicate start).
     if let Some(text) = content.filter(|s| !s.trim().is_empty()) {
-        if let Ok(messages) =
-            get_messages(serde_json::json!({ "conversation_id": conversation_id }))
-        {
-            if let Some(rows) = messages.as_array() {
-                if let Some(last) = rows
-                    .iter()
-                    .rev()
-                    .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
-                {
-                    let last_text = last
-                        .get("content_blocks")
-                        .and_then(Value::as_array)
-                        .map(|blocks| {
-                            blocks
-                                .iter()
-                                .filter_map(block_text)
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default();
-                    if last_text.trim() == text.trim() {
-                        if let Some(id) = last.get("id").and_then(Value::as_str) {
-                            return Ok(Some(id.to_string()));
-                        }
+        let messages = get_messages(serde_json::json!({ "conversation_id": conversation_id }))?;
+        if let Some(rows) = messages.as_array() {
+            if let Some(last) = rows
+                .iter()
+                .rev()
+                .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+            {
+                let last_text = last
+                    .get("content_blocks")
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(block_text)
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                if last_text.trim() == text.trim() {
+                    if let Some(id) = last.get("id").and_then(Value::as_str) {
+                        return Ok(Some(id.to_string()));
                     }
                 }
             }
@@ -1172,6 +2501,26 @@ mod tests {
         .is_none());
     }
 
+    #[test]
+    fn typed_loader_handles_attachments_and_rejects_malformed_tool_calls() {
+        let attachment = parse_content_block(&serde_json::json!({
+            "type": "file_reference",
+            "content": {"path": "/tmp/example.png", "name": "example.png"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            attachment,
+            ContentBlock::Text { text } if text == "[attachment: example.png at /tmp/example.png]"
+        ));
+
+        let malformed = parse_content_block(&serde_json::json!({
+            "type": "tool_call",
+            "content": {"name": "read_file", "arguments": "{}"}
+        }))
+        .unwrap_err();
+        assert!(malformed.contains("tool_call_id"));
+    }
+
     #[tokio::test]
     async fn conversation_create_requires_project_id() {
         let error = request(
@@ -1186,6 +2535,82 @@ mod tests {
         .await
         .expect_err("conversation without a project must be rejected");
         assert_eq!(error, "project_id is required");
+    }
+
+    #[test]
+    fn fork_copies_typed_transcript_with_new_message_ids_and_ask_profile() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("fork.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+
+        let source = create(serde_json::json!({
+            "mode": "agent",
+            "title": "Source",
+            "provider_id": "openai",
+            "model_id": "gpt-4o",
+            "project_id": "project-1",
+            "permission_profile_id": "full_access"
+        }))
+        .unwrap();
+        let source_id = source["id"].as_str().unwrap();
+        append_agent_message(
+            source_id,
+            None,
+            None,
+            &AgentMessage::User(agent_core::UserMessage {
+                message_id: agent_core::MessageId::from("source-user"),
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+            }),
+        )
+        .unwrap();
+
+        let forked = fork(serde_json::json!({ "conversation_id": source_id })).unwrap();
+        let fork_id = forked["id"].as_str().unwrap();
+        assert_ne!(fork_id, source_id);
+        assert_eq!(forked["permission_profile_id"], "ask");
+        assert_eq!(forked["parent_conversation_id"], source_id);
+        assert!(forked["branch_id"].as_str().is_some());
+
+        let source_message_ids: Vec<String> = load_agent_messages(source_id)
+            .unwrap()
+            .into_iter()
+            .map(|message| match message {
+                AgentMessage::User(message) => message.message_id.to_string(),
+                AgentMessage::Assistant(message) => message.message_id.to_string(),
+                AgentMessage::ToolResult(message) => message.message_id.to_string(),
+                AgentMessage::System(message) => message.message_id.to_string(),
+                AgentMessage::Custom(message) => message.message_id.to_string(),
+            })
+            .collect();
+        let fork_messages = load_agent_messages(fork_id).unwrap();
+        assert_eq!(fork_messages.len(), 1);
+        assert!(
+            !source_message_ids.iter().any(|id| match &fork_messages[0] {
+                AgentMessage::User(message) => id == &message.message_id.to_string(),
+                AgentMessage::Assistant(message) => id == &message.message_id.to_string(),
+                AgentMessage::ToolResult(message) => id == &message.message_id.to_string(),
+                AgentMessage::System(message) => id == &message.message_id.to_string(),
+                AgentMessage::Custom(message) => id == &message.message_id.to_string(),
+            })
+        );
+        assert!(matches!(
+            &fork_messages[0],
+            AgentMessage::User(message)
+                if matches!(&message.content[0], ContentBlock::Text { text } if text == "hello")
+        ));
     }
 
     struct ClearTestDb;
@@ -1316,6 +2741,7 @@ mod tests {
                         output: serde_json::json!({"ok": true}),
                         is_error: false,
                         duration_ms: 1,
+                        result_message_id: None,
                     },
                 },
             ],
@@ -1429,6 +2855,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+        let summary_count: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM message
+                 WHERE conversation_id = 'compact-conv' AND legacy_marker = 'context_summary'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary_count, 1);
+        let active = load_active_context_snapshot("compact-conv")
+            .unwrap()
+            .expect("mechanical compaction snapshot");
+        assert!(matches!(
+            &active.messages[0],
+            AgentMessage::System(message) if message.text.contains("alpha survives")
+        ));
         let history = engine_history("compact-conv").unwrap();
         assert_eq!(history[0].role, "system");
         assert!(history[0].content.contains("alpha survives"));
@@ -1567,5 +3011,414 @@ mod tests {
             usage_in >= 100,
             "usage_stats should retain folded tokens, got {usage_in}"
         );
+    }
+
+    #[test]
+    fn typed_message_round_trip_preserves_tool_call_identity() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("typed-roundtrip.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("typed-conv", "openai", "gpt-4o", None, None).unwrap();
+        let message = AgentMessage::ToolResult(agent_core::ToolResultMessage {
+            message_id: agent_core::MessageId::from("message-1"),
+            tool_call_id: agent_core::ToolCallId::from("call-1"),
+            tool_name: "read_file".into(),
+            content: vec![ToolResultBlock::Json {
+                value: serde_json::json!({"ok": true}),
+            }],
+            is_error: false,
+            code: None,
+        });
+        append_agent_message("typed-conv", None, None, &message).unwrap();
+        let loaded = load_agent_messages("typed-conv").unwrap();
+        assert_eq!(loaded, vec![message]);
+    }
+
+    #[test]
+    fn custom_message_round_trips_through_sqlite() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("custom-roundtrip.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("custom-conv", "openai", "gpt-4o", None, None).unwrap();
+        let message = AgentMessage::Custom(agent_core::CustomMessage {
+            message_id: agent_core::MessageId::from("custom-1"),
+            kind: "recipe".into(),
+            payload: serde_json::json!({"steps": 3, "tag": "chef"}),
+        });
+        append_agent_message("custom-conv", None, None, &message).unwrap();
+        let loaded = load_agent_messages("custom-conv").unwrap();
+        assert_eq!(
+            loaded,
+            vec![message],
+            "Custom kind + payload must round-trip"
+        );
+    }
+
+    #[test]
+    fn typed_turn_event_replay_preserves_tool_result_message_id() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("turn-replay-id.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("replay-id-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('replay-id-run', 'replay-id-conv', 'completed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        let event = |seq: u64, payload: RunEventKind| RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: seq,
+            run_id: "replay-id-run".into(),
+            sequence: seq,
+            timestamp: chrono::Utc::now(),
+            payload,
+        };
+        let events = vec![
+            event(
+                1,
+                RunEventKind::TurnStarted {
+                    turn_id: "turn-replay-id".into(),
+                },
+            ),
+            event(
+                2,
+                RunEventKind::MessageStarted {
+                    turn_id: "turn-replay-id".into(),
+                    message_id: "assistant-replay-id".into(),
+                    role: "assistant".into(),
+                },
+            ),
+            event(
+                3,
+                RunEventKind::ToolCallCompleted {
+                    id: "call-replay-id".into(),
+                    name: "read_file".into(),
+                    output: serde_json::json!({"ok": true}),
+                    is_error: false,
+                    duration_ms: 1,
+                    result_message_id: Some("result-replay-id".into()),
+                },
+            ),
+            event(
+                4,
+                RunEventKind::MessageCompleted {
+                    turn_id: "turn-replay-id".into(),
+                    message_id: "assistant-replay-id".into(),
+                    role: "assistant".into(),
+                    content: Some(serde_json::json!({
+                        "message_id": "assistant-replay-id",
+                        "role": "assistant",
+                        "content": [{
+                            "ToolCall": {
+                                "tool_call_id": "call-replay-id",
+                                "name": "read_file",
+                                "arguments_json": "{}"
+                            }
+                        }]
+                    })),
+                },
+            ),
+            event(
+                5,
+                RunEventKind::TurnCompleted {
+                    turn_id: "turn-replay-id".into(),
+                    stop_reason: "tool_use".into(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            ),
+        ];
+        append_assistant_turn_from_events("replay-id-conv", "replay-id-run", &events).unwrap();
+        let loaded = load_agent_messages("replay-id-conv").unwrap();
+        let tool_results: Vec<_> = loaded
+            .iter()
+            .filter_map(|message| match message {
+                AgentMessage::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_results.len(), 1);
+        assert_eq!(
+            tool_results[0].message_id.to_string(),
+            "result-replay-id",
+            "event→SQLite→reload must keep the committed ToolResult message id"
+        );
+    }
+
+    #[test]
+    fn file_reference_degrades_to_explicit_text_marker_at_single_boundary() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("attachment-boundary.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("attach-conv", "openai", "gpt-4o", None, None).unwrap();
+        append_trigger_message(
+            "attach-conv",
+            Some("look at this"),
+            Some(&[AttachmentRef {
+                path: "/tmp/a.txt".into(),
+                name: Some("a.txt".into()),
+                mime_type: None,
+                size: None,
+            }]),
+        )
+        .unwrap();
+        let loaded = load_agent_messages("attach-conv").unwrap();
+        // parse_content_block is the single conversion boundary for attachments:
+        // a file_reference block becomes this explicit text marker, never a
+        // silently dropped or re-invented structure. The test pins the boundary.
+        assert!(matches!(
+            &loaded[0],
+            AgentMessage::User(user)
+                if user.content.iter().any(|block| matches!(
+                    block,
+                    ContentBlock::Text { text } if text.contains("[attachment: a.txt at /tmp/a.txt]")
+                ))
+        ));
+    }
+
+    #[test]
+    fn backfill_context_snapshots_materializes_missing_row_from_committed_event() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("backfill-snapshot.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("backfill-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('backfill-run', 'backfill-conv', 'running', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        // Simulate the crash gap: the ContextSnapshotCommitted event is durable
+        // but the run-end projection never materialized the context_snapshot row.
+        let event = RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: "backfill-run".into(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ContextSnapshotCommitted {
+                snapshot_id: "snapshot-backfill".into(),
+                turn_id: Some("turn-backfill".into()),
+                source_revision: 1,
+                input_message_ids: vec![],
+                summary_message_id: None,
+                replaced_range: None,
+                algorithm_version: "compaction-v1".into(),
+                provider_context_window: None,
+                artifact_reference: None,
+                snapshot_json: serde_json::json!([{
+                    "role": "system",
+                    "message_id": "summary-backfill",
+                    "content": "compacted"
+                }]),
+            },
+        };
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+                 VALUES ('backfill-run', 1, 'context_snapshot_committed', ?1, datetime('now'))",
+                rusqlite::params![serde_json::to_string(&event).unwrap()],
+            )
+            .unwrap();
+        let before: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'backfill-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            before, 0,
+            "crash gap: the event is durable but no row exists"
+        );
+
+        let touched = backfill_context_snapshots().unwrap();
+        assert_eq!(
+            touched, 1,
+            "one run with a snapshot event must be backfilled"
+        );
+        let after: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'backfill-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, 1,
+            "startup backfill must materialize the missing context_snapshot row"
+        );
+        // Idempotent: a second backfill does not duplicate the row.
+        let touched_again = backfill_context_snapshots().unwrap();
+        assert_eq!(touched_again, 1);
+        let final_count: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'backfill-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(final_count, 1, "backfill must be idempotent");
+    }
+
+    #[test]
+    fn incomplete_typed_turn_is_not_committed_to_conversation() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("incomplete-turn.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("incomplete-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('incomplete-run', 'incomplete-conv', 'failed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+
+        append_assistant_turn_from_events(
+            "incomplete-conv",
+            "incomplete-run",
+            &[
+                RunEventV2 {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 1,
+                    run_id: "incomplete-run".into(),
+                    sequence: 1,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::TurnStarted {
+                        turn_id: "turn-incomplete".into(),
+                    },
+                },
+                RunEventV2 {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 2,
+                    run_id: "incomplete-run".into(),
+                    sequence: 2,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::MessageStarted {
+                        turn_id: "turn-incomplete".into(),
+                        message_id: "message-incomplete".into(),
+                        role: "assistant".into(),
+                    },
+                },
+                RunEventV2 {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 3,
+                    run_id: "incomplete-run".into(),
+                    sequence: 3,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::TextDelta {
+                        text: "partial".into(),
+                    },
+                },
+            ],
+        )
+        .unwrap();
+
+        let conn = store.conn().unwrap();
+        let message_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE conversation_id = 'incomplete-conv'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let turn_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM turn WHERE run_id = 'incomplete-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(message_count, 0);
+        assert_eq!(turn_count, 0);
     }
 }

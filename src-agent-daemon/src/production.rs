@@ -5,9 +5,10 @@
 
 use agent_core::assemble_context;
 use agent_core::{
-    AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderEvent,
-    EngineProviderEventStream, EngineRunConfig, EventSequencer, PermissionManager,
-    PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus, ToolSchema,
+    AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderContext,
+    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer,
+    PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
+    ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::CapabilityGateway;
@@ -61,6 +62,8 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
 /// rather than reaching into maps when possible.
 pub struct ProductionRuntime {
     pub events: EventSequencer,
+    /// Checkpoint authority paired with this runtime's Run/Event store.
+    pub(crate) checkpoints: Arc<crate::checkpoint::CheckpointManager>,
     pub permissions: Arc<PermissionManager>,
     pub subagents: Arc<SubAgentManager>,
     // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
@@ -98,7 +101,7 @@ pub use crate::production_credentials::{
     install_credential_broker, resolve_credential, resolve_credential_for_run, CredentialBrokerFn,
 };
 pub use crate::production_hooks::{build_production_hooks, build_production_hooks_for_project};
-pub use crate::production_tools::PermissionGatedTools;
+pub use crate::production_tools::{DaemonToolProgressSink, PermissionGatedTools};
 pub use crate::runtime::TaskRecord;
 
 // Hook assembly moved to `production_hooks.rs` (task-01 structure).
@@ -222,6 +225,7 @@ pub(crate) fn compile_effective_prompt(
 /// snapshot; None = legacy behaviour (global skills, file profiles).
 pub struct RunStartContext {
     pub run_id: String,
+    pub parent_run_id: Option<String>,
     pub conversation_id: String,
     pub provider_id: String,
     pub model_id: String,
@@ -239,18 +243,28 @@ pub struct RunStartContext {
 
 impl ProductionRuntime {
     pub fn new() -> Self {
-        Self::new_with_events(EventSequencer::new())
+        Self::new_with_events_and_checkpoint(
+            EventSequencer::new(),
+            Arc::new(crate::checkpoint::CheckpointManager::new()),
+        )
     }
 
     pub fn new_with_event_store(data_store: Arc<crate::storage::DataStore>) -> Self {
-        Self::new_with_events(EventSequencer::with_persistence(Arc::new(
-            crate::event_log::EventLog::new(data_store),
-        )))
+        Self::new_with_events_and_checkpoint(
+            EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new(
+                data_store.clone(),
+            ))),
+            Arc::new(crate::checkpoint::CheckpointManager::with_store(data_store)),
+        )
     }
 
-    fn new_with_events(events: EventSequencer) -> Self {
+    fn new_with_events_and_checkpoint(
+        events: EventSequencer,
+        checkpoints: Arc<crate::checkpoint::CheckpointManager>,
+    ) -> Self {
         let rt = Self {
             events,
+            checkpoints,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
             interactions: Arc::new(crate::runtime::InteractionHub::new()),
@@ -270,9 +284,18 @@ impl ProductionRuntime {
         // Wire process supervisor force-kill into cancel tree (task-03).
         rt.execution
             .set_process_cancel_hook(Arc::new(GlobalProcessCancelHook));
-        // Background reaper: idle subagent sessions.
+        // Background reaper: idle subagent sessions. Unit tests construct
+        // runtimes while holding the process-wide environment/store lock; a
+        // reaper spawned there would wait on that lock while the test waits
+        // for runtime shutdown. Integration/production builds keep the real
+        // reaper enabled.
+        #[cfg(not(test))]
         spawn_subagent_reaper();
         rt
+    }
+
+    pub(crate) fn checkpoint_manager(&self) -> &crate::checkpoint::CheckpointManager {
+        &self.checkpoints
     }
 
     /// Register a hard tool allowlist for a run that will be started via RunManager.
@@ -390,13 +413,12 @@ impl ProductionRuntime {
         self.interactions.assignment_inflight_arc()
     }
 
+    /// Legacy fixture compatibility. Production runs use the immutable profile
+    /// captured in `RunStartContext`; this method intentionally does not mutate
+    /// the shared PermissionManager profile.
+    #[deprecated(note = "run profiles are bound in RunStartContext")]
     pub async fn set_permission_profile(&self, profile: &str) {
-        let p = match profile {
-            "readonly" | "read_only" => PermissionProfile::ReadOnly,
-            "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
-            _ => PermissionProfile::ConfirmEach,
-        };
-        self.permissions.set_profile(p).await;
+        let _ = profile;
     }
 
     pub async fn respond_permission(
@@ -410,16 +432,19 @@ impl ProductionRuntime {
             return Err("request_id required".into());
         }
         let scope = normalize_permission_scope(scope.unwrap_or("once"));
+        // Persist the response before touching the in-memory waiter. If the
+        // durable interaction is unavailable, leave the waiter untouched so
+        // the Engine remains fail-closed and the RPC reports the failure.
+        crate::interaction_store::mark_resolved(
+            request_id,
+            serde_json::json!({ "approved": approved, "scope": scope }),
+        )?;
         let (_bound_run, _tool_name, tx) = self
             .interactions
             .resolve_permission_for_run(request_id, run_id)
             .await?;
-        let _ = tx.send((approved, scope.clone()));
-        // Best-effort: resolve any matching interaction row for restart recovery.
-        let _ = crate::interaction_store::mark_resolved(
-            request_id,
-            serde_json::json!({ "approved": approved, "scope": scope }),
-        );
+        tx.send((approved, scope))
+            .map_err(|_| "permission waiter was closed before response delivery".to_string())?;
         Ok(())
     }
 
@@ -506,6 +531,7 @@ impl ProductionRuntime {
     ) -> Result<agent_core::EngineOutcome, String> {
         let RunStartContext {
             run_id,
+            parent_run_id,
             conversation_id,
             provider_id,
             model_id,
@@ -544,42 +570,54 @@ impl ProductionRuntime {
             profile.as_ref().and_then(|profile| profile.token_budget),
             model_window,
         );
-        let cancel = self.ensure_execution_token(&run_id, None).await?;
+        let cancel = self
+            .ensure_execution_token(&run_id, parent_run_id.as_deref())
+            .await?;
         let engine = Arc::new(
             AgentEngine::new(self.events.clone())
                 .with_cancel_token(cancel.clone())
                 .with_hooks(hooks)
                 .with_session_harness(crate::prompt_queue_store::global_harness())
+                .with_safe_point_receiver(Arc::new(
+                    crate::prompt_queue_store::DurableSafePointReceiver::new(
+                        conversation_id.clone(),
+                    ),
+                ))
+                .with_input_receiver(Arc::new(
+                    crate::prompt_queue_store::DurableInputReceiver::new(
+                        conversation_id.clone(),
+                        run_id.clone(),
+                    ),
+                ))
+                .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.events.clone())))
+                .with_provider_context_window(model_window)
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
-        self.engines
-            .lock()
-            .await
-            .insert(run_id.clone(), engine.clone());
-
         // Phase 3: logical checkpoint at run start (lazy before-images on writes).
-        if let Ok(cp_id) = crate::checkpoint::global_checkpoint_manager().begin_run(
-            &run_id,
-            &conversation_id,
-            &project_root,
-        ) {
-            self.events.append(
+        let checkpoint_id = self
+            .checkpoint_manager()
+            .begin_run(&run_id, &conversation_id, &project_root)
+            .map_err(|error| format!("checkpoint begin failed: {error}"))?;
+        crate::global_run_manager()
+            .set_run_checkpoint_id(&run_id, &checkpoint_id)
+            .map_err(|error| format!("checkpoint lineage bind failed: {error}"))?;
+        self.events
+            .append_checked(
                 &run_id,
                 RunEventKind::CheckpointCreated {
-                    checkpoint_id: cp_id,
+                    checkpoint_id,
                     label: Some("run_start".into()),
                 },
-            );
-        }
+            )
+            .map_err(|error| format!("checkpoint event persistence failed: {error}"))?;
         // Mark coordinator running so terminal drain / cancel-and-send are scoped.
         crate::prompt_queue_store::global_harness().mark_running(
             &conversation_id,
             &run_id,
             &user_content,
         );
-        if let Err(e) = crate::prompt_queue_store::persist_actor_snapshot(&conversation_id) {
-            eprintln!("[production] persist_actor_snapshot on run start: {e}");
-        }
+        crate::prompt_queue_store::persist_actor_snapshot(&conversation_id)
+            .map_err(|error| format!("persist actor snapshot on run start failed: {error}"))?;
 
         let run_effort = crate::global_run_manager()
             .get_run(&run_id)
@@ -616,6 +654,8 @@ impl ProductionRuntime {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root(project_root.to_string_lossy().to_string());
                 register_tools_for_surface(&mut g, tool_allowlist.as_deref());
+                g.validate_registered_schemas()
+                    .map_err(|error| format!("tool schema validation failed: {}", error.message))?;
                 Arc::new(g)
             },
             permissions: self.permissions.clone(),
@@ -645,28 +685,67 @@ impl ProductionRuntime {
         };
 
         // Compact history against resolved token budget (chars/4 fallback estimate).
-        let raw_history =
-            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
-        let history_pairs: Vec<(String, String)> = raw_history
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect();
-        let (compacted, _) = agent_core::compact_messages(&history_pairs, budget.token_budget);
-        // Map compacted (role, content) back to EngineMessage, preserving tool fields
-        // for messages still present (match by role+content).
-        let messages: Vec<EngineMessage> = compacted
-            .into_iter()
-            .map(|(role, content)| {
-                if let Some(orig) = raw_history
-                    .iter()
-                    .find(|m| m.role == role && m.content == content)
-                {
-                    orig.clone()
-                } else {
-                    EngineMessage::text(role, content)
-                }
+        let typed_history = crate::conversation_store::load_agent_messages(&conversation_id)?;
+        let bound_run = crate::global_run_manager().get_run(&run_id);
+        // A Continue/Resume run is bound to the checkpoint snapshot its plan was
+        // approved against. Loading a newer conversation snapshot would change
+        // the resumed context, so those runs restore exactly and fail closed
+        // when their checkpoint has no committed snapshot.
+        let exact_checkpoint_restore = bound_run.as_ref().is_some_and(|run| {
+            run.resume_of_run_id.is_some() || run.continued_from_run_id.is_some()
+        });
+        let checkpoint_snapshot = bound_run
+            .and_then(|run| run.checkpoint_id)
+            .and_then(|checkpoint_id| {
+                crate::conversation_store::load_active_context_snapshot_for_checkpoint(
+                    &conversation_id,
+                    &checkpoint_id,
+                )
+                .transpose()
             })
-            .collect();
+            .transpose()?;
+        let active_snapshot = resolve_active_snapshot_for_start(
+            exact_checkpoint_restore,
+            checkpoint_snapshot,
+            || crate::conversation_store::load_active_context_snapshot(&conversation_id),
+        )?;
+        let typed_history = match active_snapshot {
+            Some(snapshot) => {
+                let mut active = snapshot.messages;
+                let snapshot_message_ids: std::collections::HashSet<String> = active
+                    .iter()
+                    .map(|message| match message {
+                        agent_core::AgentMessage::User(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Assistant(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::ToolResult(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::System(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
+                    })
+                    .collect();
+                active.extend(typed_history.into_iter().filter(|message| {
+                    let id = match message {
+                        agent_core::AgentMessage::User(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Assistant(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::ToolResult(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::System(value) => value.message_id.to_string(),
+                        agent_core::AgentMessage::Custom(value) => value.message_id.to_string(),
+                    };
+                    !snapshot.input_message_ids.contains(&id) && !snapshot_message_ids.contains(&id)
+                }));
+                active
+            }
+            None => typed_history,
+        };
+        // The Core owns active-context compaction. Keep the daemon boundary
+        // lossless: typed history goes through the typed entry point without
+        // flattening to EngineMessage. Legacy rows are converted once below
+        // when a database predates typed message rows.
+        let legacy_history = crate::conversation_store::engine_history(&conversation_id)?;
+        let typed_history = if typed_history.is_empty() && !legacy_history.is_empty() {
+            agent_core::engine_messages_to_agent_messages(&legacy_history)
+        } else {
+            typed_history
+        };
         let config = EngineRunConfig {
             run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
@@ -676,39 +755,98 @@ impl ProductionRuntime {
             } else {
                 Some(effective_prompt.effective_full_text)
             },
-            messages,
+            messages: legacy_history,
             user_content,
             max_steps,
         };
 
         crate::production_tools::validate_tool_limit(frozen_tool_schemas.len())?;
+        // Register only once all preflight persistence and context loads have
+        // succeeded; an early error must not leave a cancellable stale handle.
+        self.engines
+            .lock()
+            .await
+            .insert(run_id.clone(), engine.clone());
         let outcome = match engine
-            .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
+            .run_with_typed_messages(
+                config,
+                &provider,
+                &tools,
+                frozen_tool_schemas,
+                typed_history,
+            )
             .await
         {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
-        // Finalize checkpoint — failure closes related side effects (no silent half-state).
-        if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
-            eprintln!("[production] checkpoint finalize_run failed: {e}");
+        // The provider/tool future is finished before durable post-processing;
+        // do not retain a stale engine handle if history/checkpoint persistence
+        // below fails.
+        self.engines.lock().await.remove(&run_id);
+        let run_events = self
+            .events
+            .replay_after_checked(&run_id, 0)
+            .map_err(|error| format!("run event replay failed: {error}"))?;
+        if let Some(turn_id) = run_events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.payload {
+                assistant_protocol::v2::RunEventKind::TurnCompleted { turn_id, .. } => {
+                    Some(turn_id.as_str())
+                }
+                _ => None,
+            })
+        {
+            let snapshot_id = run_events
+                .iter()
+                .rev()
+                .find_map(|event| match &event.payload {
+                    assistant_protocol::v2::RunEventKind::ContextSnapshotCommitted {
+                        snapshot_id,
+                        ..
+                    } => Some(snapshot_id.as_str()),
+                    _ => None,
+                });
+            let event_cursor = run_events
+                .last()
+                .map(|e| e.effective_run_sequence())
+                .unwrap_or(0)
+                .to_string();
+            self.checkpoint_manager()
+                .set_run_metadata(&run_id, Some(turn_id), snapshot_id, Some(&event_cursor))
+                .map_err(|error| format!("checkpoint metadata persistence failed: {error}"))?;
         }
         let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
-        if success {
-            crate::conversation_store::append_assistant_turn_from_events(
-                &conversation_id,
+        // Persist every complete typed turn, including cancelled/provider-error
+        // outcomes.  The store itself rejects only genuinely partial typed
+        // turns, so a failed Run cannot silently lose an already committed
+        // assistant message while still keeping incomplete streams out.
+        crate::conversation_store::append_assistant_turn_from_events(
+            &conversation_id,
+            &run_id,
+            &run_events,
+        )?;
+        // Finalize checkpoint — failure closes related side effects (no silent half-state).
+        let checkpoint = self
+            .checkpoint_manager()
+            .finalize_run(&run_id)
+            .map_err(|error| format!("checkpoint finalize_run failed: {error}"))?;
+        self.events
+            .append_checked(
                 &run_id,
-                &self.events.replay_after(&run_id, 0),
-            )?;
-        }
+                RunEventKind::CheckpointCommitted {
+                    checkpoint_id: checkpoint.id,
+                },
+            )
+            .map_err(|error| format!("checkpoint commit event persistence failed: {error}"))?;
         // Do NOT commit_outcome or append terminal lifecycle events here.
         // RunManager is the sole lifecycle committer after this returns.
-        self.engines.lock().await.remove(&run_id);
-
         // SessionCoordinator: drain next prompt / cancel-and-send after real terminal.
         // Never re-executes the just-finished run — only starts a *new* queued item.
-        let _ =
-            crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success).await;
+        crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success)
+            .await
+            .map_err(|error| format!("prompt queue terminal settlement failed: {error}"))?;
         Ok(outcome)
     }
 
@@ -1038,6 +1176,89 @@ impl Default for ProductionRuntime {
     }
 }
 
+/// Choose the active-context source for a run's Provider request.
+///
+/// A Continue/Resume run is bound to the snapshot its checkpoint committed and
+/// must never fall back to a newer conversation snapshot: doing so would change
+/// the context the continuation was approved against. Fresh and Retry runs may
+/// use the newest committed snapshot as a cache, so that fallback stays lazy
+/// and is only consulted when no checkpoint snapshot is bound.
+fn resolve_active_snapshot_for_start(
+    exact_checkpoint_restore: bool,
+    checkpoint_snapshot: Option<crate::conversation_store::ActiveContextSnapshot>,
+    latest_snapshot: impl FnOnce() -> Result<
+        Option<crate::conversation_store::ActiveContextSnapshot>,
+        String,
+    >,
+) -> Result<Option<crate::conversation_store::ActiveContextSnapshot>, String> {
+    match checkpoint_snapshot {
+        Some(snapshot) => Ok(Some(snapshot)),
+        None if exact_checkpoint_restore => Err(
+            "continue run is bound to a checkpoint without a committed active context snapshot; exact restore is impossible"
+                .to_string(),
+        ),
+        None => latest_snapshot(),
+    }
+}
+
+#[cfg(test)]
+mod active_snapshot_resolution_tests {
+    use super::*;
+
+    fn snapshot(text: &str) -> crate::conversation_store::ActiveContextSnapshot {
+        crate::conversation_store::ActiveContextSnapshot {
+            messages: vec![agent_core::AgentMessage::System(
+                agent_core::SystemMessage {
+                    message_id: agent_core::MessageId::new(),
+                    text: text.to_string(),
+                },
+            )],
+            input_message_ids: Default::default(),
+        }
+    }
+
+    fn system_text(snapshot: &crate::conversation_store::ActiveContextSnapshot) -> String {
+        match &snapshot.messages[0] {
+            agent_core::AgentMessage::System(system) => system.text.clone(),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn checkpoint_snapshot_wins_over_latest_without_consulting_it() {
+        let mut consulted = false;
+        let resolved =
+            resolve_active_snapshot_for_start(true, Some(snapshot("checkpoint")), || {
+                consulted = true;
+                Ok(Some(snapshot("latest")))
+            })
+            .unwrap();
+        assert!(
+            !consulted,
+            "latest snapshot must not be read when a checkpoint snapshot exists"
+        );
+        assert_eq!(system_text(&resolved.unwrap()), "checkpoint");
+    }
+
+    #[test]
+    fn continue_without_checkpoint_snapshot_fails_closed_even_with_latest() {
+        let error = resolve_active_snapshot_for_start(true, None, || Ok(Some(snapshot("latest"))))
+            .unwrap_err();
+        assert!(
+            error.contains("active context snapshot"),
+            "stable fail-closed error expected, got: {error}"
+        );
+    }
+
+    #[test]
+    fn fresh_run_falls_back_to_latest_conversation_snapshot() {
+        let resolved =
+            resolve_active_snapshot_for_start(false, None, || Ok(Some(snapshot("latest"))))
+                .unwrap();
+        assert_eq!(system_text(&resolved.unwrap()), "latest");
+    }
+}
+
 /// Request-side controls for one run.
 ///
 /// `run.start`'s `effort` is the only control with a producer today: the client
@@ -1138,6 +1359,44 @@ impl EngineProvider for RealProvider {
         )
         .await
     }
+
+    async fn stream_with_context(
+        &self,
+        context: EngineProviderContext,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_context_controls(
+            &context,
+            &RequestControls::default(),
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    async fn stream_turn(
+        &self,
+        request: agent_core::ProviderTurnRequest,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_typed_context_controls(
+            &request.context,
+            &RequestControls::default(),
+            &request.model,
+            request.messages,
+            &request.tools,
+            request.system_prompt.as_deref(),
+            cancel,
+        )
+        .await
+    }
 }
 
 impl RealProvider {
@@ -1151,12 +1410,83 @@ impl RealProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
-        let credential = resolve_credential_for_run(
-            &self.provider_id,
-            self.key_id.as_deref(),
-            "provider-stream",
+        self.stream_with_context_controls(
+            &EngineProviderContext {
+                run_id: "legacy-unbound".into(),
+                attempt: 0,
+            },
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
         )
-        .map_err(EngineError::Message)?;
+        .await
+    }
+
+    pub async fn stream_with_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages
+            .into_iter()
+            .map(engine_message_to_history)
+            .collect();
+        self.stream_with_history_context_controls(
+            context,
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    pub async fn stream_with_typed_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<agent_core::AgentMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages.into_iter().map(agent_message_to_history).collect();
+        self.stream_with_history_context_controls(
+            context,
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    pub(crate) async fn stream_with_history_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<HistoryMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let credential =
+            resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), &context.run_id)
+                .map_err(EngineError::Message)?;
         let protocol = credential
             .provider_type
             .clone()
@@ -1181,7 +1511,6 @@ impl RealProvider {
 
         let provider_messages: Vec<_> = messages
             .into_iter()
-            .map(engine_message_to_history)
             .map(history_message_to_provider)
             .collect();
         let provider_tools: Vec<ProviderTool> = tools
@@ -1298,7 +1627,16 @@ impl RealProvider {
                                     cache_creation_tokens: u.cache_creation_tokens,
                                     cache_read_tokens: u.cache_read_tokens,
                                 },
-                                ProviderEvent::Completed => EngineProviderEvent::Completed,
+                                ProviderEvent::Completed { reason } => EngineProviderEvent::CompletedWithReason {
+                                    reason: match reason {
+                                        provider_adapters::stream::ProviderStopReason::Stop => agent_core::ProviderStopReason::Stop,
+                                        provider_adapters::stream::ProviderStopReason::ToolUse => agent_core::ProviderStopReason::ToolUse,
+                                        provider_adapters::stream::ProviderStopReason::Length => agent_core::ProviderStopReason::Length,
+                                        provider_adapters::stream::ProviderStopReason::Cancelled => agent_core::ProviderStopReason::Cancelled,
+                                        provider_adapters::stream::ProviderStopReason::Error => agent_core::ProviderStopReason::Error,
+                                        provider_adapters::stream::ProviderStopReason::Unknown(value) => agent_core::ProviderStopReason::Unknown(value),
+                                    },
+                                },
                                 ProviderEvent::Error(e) => EngineProviderEvent::Error {
                                         message: provider_error_message(&e, &provider_id, &protocol, &model, key_id.as_deref(), base_url.as_deref()),
                                         code: e.code,
@@ -1369,6 +1707,156 @@ pub(crate) fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
     }
 }
 
+/// Convert the Core-owned typed transcript directly to the provider adapter's
+/// neutral history shape. Production never needs to rebuild an `EngineMessage`
+/// just to cross the provider boundary; the old conversion above remains only
+/// for legacy callers and fixtures.
+pub(crate) fn agent_message_to_history(message: agent_core::AgentMessage) -> HistoryMessage {
+    fn content_parts(
+        blocks: &[agent_core::ContentBlock],
+    ) -> (String, Vec<ImageSource>, Option<Vec<HistoryToolCall>>) {
+        let mut text = String::new();
+        let mut images = Vec::new();
+        let mut calls = Vec::new();
+        for block in blocks {
+            match block {
+                agent_core::ContentBlock::Text { text: value }
+                | agent_core::ContentBlock::Thinking { text: value, .. } => text.push_str(value),
+                agent_core::ContentBlock::Image { source } => images.push(ImageSource {
+                    url: source.url.clone(),
+                    detail: source.detail.clone(),
+                    media_type: source.media_type.clone(),
+                }),
+                agent_core::ContentBlock::ToolCall(call) => calls.push(HistoryToolCall {
+                    id: call.tool_call_id.to_string(),
+                    name: call.name.clone(),
+                    arguments: call.arguments_json.clone(),
+                }),
+            }
+        }
+        (text, images, (!calls.is_empty()).then_some(calls))
+    }
+
+    fn result_text(blocks: &[agent_core::ToolResultBlock]) -> String {
+        blocks
+            .iter()
+            .map(|block| match block {
+                agent_core::ToolResultBlock::Text { text } => text.clone(),
+                agent_core::ToolResultBlock::Json { value } => value.to_string(),
+                agent_core::ToolResultBlock::Artifact {
+                    artifact_id,
+                    preview,
+                } => preview.clone().unwrap_or_else(|| artifact_id.clone()),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    match message {
+        agent_core::AgentMessage::User(message) => {
+            let (content, images, tool_calls) = content_parts(&message.content);
+            HistoryMessage {
+                role: "user".into(),
+                content,
+                images,
+                tool_calls,
+                ..Default::default()
+            }
+        }
+        agent_core::AgentMessage::Assistant(message) => {
+            let (content, images, tool_calls) = content_parts(&message.content);
+            HistoryMessage {
+                role: "assistant".into(),
+                content,
+                images,
+                tool_calls,
+                ..Default::default()
+            }
+        }
+        agent_core::AgentMessage::ToolResult(message) => HistoryMessage {
+            role: "tool".into(),
+            content: result_text(&message.content),
+            tool_call_id: Some(message.tool_call_id.to_string()),
+            tool_name: Some(message.tool_name),
+            ..Default::default()
+        },
+        agent_core::AgentMessage::System(message) => HistoryMessage {
+            role: "system".into(),
+            content: message.text,
+            ..Default::default()
+        },
+        agent_core::AgentMessage::Custom(message) => HistoryMessage {
+            role: message.kind,
+            content: message.payload.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+#[cfg(test)]
+mod typed_provider_history_tests {
+    use super::*;
+
+    #[test]
+    fn typed_boundary_preserves_blocks_and_tool_identity() {
+        let history = agent_message_to_history(agent_core::AgentMessage::Assistant(
+            agent_core::AssistantMessage {
+                message_id: agent_core::MessageId::from("message-1"),
+                content: vec![
+                    agent_core::ContentBlock::Thinking {
+                        text: "plan".into(),
+                        signature: Some("sig".into()),
+                    },
+                    agent_core::ContentBlock::Text {
+                        text: "calling".into(),
+                    },
+                    agent_core::ContentBlock::Image {
+                        source: agent_core::ImageSource {
+                            url: "data:image/png;base64,x".into(),
+                            media_type: Some("image/png".into()),
+                            detail: Some("high".into()),
+                        },
+                    },
+                    agent_core::ContentBlock::ToolCall(agent_core::ToolCall {
+                        tool_call_id: agent_core::ToolCallId::from("call-1"),
+                        name: "read_file".into(),
+                        arguments_json: r#"{"path":"a.txt"}"#.into(),
+                    }),
+                ],
+                stop_reason: Some(agent_core::StopReason::ToolUse),
+            },
+        ));
+
+        assert_eq!(history.role, "assistant");
+        assert_eq!(history.content, "plancalling");
+        assert_eq!(history.images.len(), 1);
+        let calls = history
+            .tool_calls
+            .expect("tool call must remain structured");
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments, r#"{"path":"a.txt"}"#);
+
+        let result = agent_message_to_history(agent_core::AgentMessage::ToolResult(
+            agent_core::ToolResultMessage {
+                message_id: agent_core::MessageId::from("result-1"),
+                tool_call_id: agent_core::ToolCallId::from("call-1"),
+                tool_name: "read_file".into(),
+                content: vec![agent_core::ToolResultBlock::Artifact {
+                    artifact_id: "artifact-1".into(),
+                    preview: Some("preview".into()),
+                }],
+                is_error: false,
+                code: None,
+            },
+        ));
+        assert_eq!(result.role, "tool");
+        assert_eq!(result.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(result.tool_name.as_deref(), Some("read_file"));
+        assert_eq!(result.content, "preview");
+    }
+}
+
 fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
     let lower = provider_id.to_ascii_lowercase();
     if lower.contains("anthropic") || lower.contains("claude") {
@@ -1382,9 +1870,10 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
     } else if lower.contains("compatible") || lower.contains("chat_completions") {
         Box::new(provider_adapters::providers::openai_compatible::OpenAiCompatibleAdapter::new())
     } else if lower.contains("responses") {
-        // Force Responses API path via env for this adapter instance.
-        std::env::set_var("NATIVES_OPENAI_API", "responses");
-        Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+        Box::new(
+            provider_adapters::providers::openai::OpenAiAdapter::new()
+                .with_api_mode(provider_adapters::providers::openai::OpenAiApiMode::Responses),
+        )
     } else {
         Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
     }
@@ -1398,12 +1887,12 @@ mod permission_bind_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn runtime_profile_maps_readonly_ask_and_full_access() {
+    async fn legacy_runtime_profile_setter_cannot_mutate_shared_profile() {
         let rt = ProductionRuntime::new();
         rt.set_permission_profile("readonly").await;
         assert_eq!(
             rt.permissions.get_profile().await,
-            PermissionProfile::ReadOnly
+            PermissionProfile::ConfirmEach
         );
         rt.set_permission_profile("ask").await;
         assert_eq!(
@@ -1413,7 +1902,7 @@ mod permission_bind_tests {
         rt.set_permission_profile("full_access").await;
         assert_eq!(
             rt.permissions.get_profile().await,
-            PermissionProfile::Autonomous
+            PermissionProfile::ConfirmEach
         );
     }
 
@@ -1792,26 +2281,51 @@ pub async fn restart_subagent_with_binding(
         sess.task.clone()
     };
     let rm = crate::global_run_manager();
+    // Restore the exact child scope persisted at spawn (migration 029). A route
+    // restart must never guess defaults: missing project identity, permission
+    // ceiling, profile, or step budget fails closed instead of narrowing or
+    // widening the child's authority.
+    let project_path = sess.project_path.clone().ok_or_else(|| {
+        "subagent session has no persisted project path; route restart requires exact project identity"
+            .to_string()
+    })?;
+    let permission_profile = sess.permission_profile.clone().ok_or_else(|| {
+        "subagent session has no persisted permission ceiling; route restart requires exact scope"
+            .to_string()
+    })?;
+    let max_steps = sess
+        .max_steps
+        .map(|steps| steps.clamp(1, u32::MAX as i64) as u32)
+        .ok_or_else(|| {
+            "subagent session has no persisted step budget; route restart requires exact scope"
+                .to_string()
+        })?;
     let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
         capability_selection: None,
         conversation_id: sess.child_conversation_id.clone(),
         provider_id: binding.provider_id.clone(),
         model_id: binding.model_id.clone(),
         key_id: Some(binding.key_id.clone()),
-        agent_profile_id: None,
-        permission_profile: Some("ask".into()),
+        agent_profile_id: sess.agent_profile_id.clone(),
+        permission_profile: Some(permission_profile.clone()),
         content: Some(prompt.clone()),
         attachments: None,
-        max_steps: Some(15),
+        max_steps: Some(max_steps),
         parent_run_id: sess.parent_run_id.clone(),
-        project_path: None,
+        project_path: Some(project_path.clone()),
         idempotency_key: None,
         effort: None,
         runtime_id: Some("native".into()),
     })?;
+    if !sess.tool_allowlist.is_empty() {
+        crate::global_run_manager()
+            .runtime
+            .set_run_tool_allowlist(&created.id, sess.tool_allowlist.clone())
+            .await;
+    }
     let run = crate::run_manager::RunManager::start_detached_global(
         assistant_protocol::v2::StartRunRequest {
-            agent_profile_id: None,
+            agent_profile_id: sess.agent_profile_id.clone(),
             capability_selection: None,
             run_id: Some(created.id.clone()),
             conversation_id: Some(sess.child_conversation_id.clone()),
@@ -1821,9 +2335,9 @@ pub async fn restart_subagent_with_binding(
             content: Some(prompt),
             attachments: None,
             trigger_message_id: None,
-            permission_profile: Some("ask".into()),
-            max_steps: Some(15),
-            project_path: None,
+            permission_profile: Some(permission_profile),
+            max_steps: Some(max_steps),
+            project_path: Some(project_path),
             idempotency_key: None,
             effort: None,
             runtime_id: Some("native".into()),
@@ -1853,6 +2367,7 @@ pub async fn restart_subagent_with_binding(
 /// Background reaper: close idle subagent sessions.
 /// Safe to call without a Tokio runtime (unit tests / sync constructors): no-ops until a
 /// runtime exists; production daemon always constructs under tokio::main.
+#[cfg(not(test))]
 fn spawn_subagent_reaper() {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
@@ -1871,6 +2386,7 @@ fn spawn_subagent_reaper() {
     });
 }
 
+#[cfg(not(test))]
 async fn reaper_tick() -> Result<(), String> {
     let sessions = crate::subagent_store::list_active_for_reaper()?;
     let now = chrono::Utc::now();
@@ -2042,7 +2558,9 @@ impl EngineProvider for FixtureProvider {
                     name: Some("read_file".into()),
                     arguments_delta: r#"{"path":"Cargo.toml"}"#.into(),
                 },
-                EngineProviderEvent::Completed,
+                EngineProviderEvent::CompletedWithReason {
+                    reason: agent_core::ProviderStopReason::ToolUse,
+                },
             ],
             // Side-effecting tool so PermissionManager ConfirmEach emits permission_requested.
             FixtureMode::RequestPermissionPath => vec![
@@ -2053,7 +2571,9 @@ impl EngineProvider for FixtureProvider {
                     arguments_delta: r#"{"path":"/tmp/natives-perm-test.txt","content":"x"}"#
                         .into(),
                 },
-                EngineProviderEvent::Completed,
+                EngineProviderEvent::CompletedWithReason {
+                    reason: agent_core::ProviderStopReason::ToolUse,
+                },
             ],
         };
         Ok(Box::pin(futures_util::stream::iter(events)))

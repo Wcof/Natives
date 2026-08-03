@@ -1313,6 +1313,15 @@ export function workspaceReducer(
       };
     }
 
+    case 'projection/recovery':
+      return {
+        ...state,
+        projectionRecoveryByRun: {
+          ...state.projectionRecoveryByRun,
+          [action.runId]: action.recovery,
+        },
+      };
+
     case 'interaction/upsert': {
       const id = action.interaction.id;
       return {

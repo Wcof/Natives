@@ -84,6 +84,23 @@ pub struct SubagentSession {
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Child scope persisted at spawn (migration 029) so a route restart can
+    /// restore it exactly instead of guessing. `None` marks sessions created
+    /// before the columns existed; a route restart on those must fail closed.
+    #[serde(default)]
+    pub project_path: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_identity_version: Option<i64>,
+    #[serde(default)]
+    pub permission_profile: Option<String>,
+    #[serde(default)]
+    pub agent_profile_id: Option<String>,
+    #[serde(default)]
+    pub max_steps: Option<i64>,
+    #[serde(default)]
+    pub tool_allowlist: Vec<String>,
 }
 
 fn derive_subagent_name(name: &str, task: &str) -> String {
@@ -298,8 +315,10 @@ pub fn create_hidden_child_session(
         "INSERT INTO subagent_session (
             id, parent_conversation_id, child_conversation_id, parent_run_id, task_call_id,
             name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
-            last_activity_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9, ?10, ?11, ?12, ?12, ?12)",
+            last_activity_at, created_at, updated_at,
+            project_id, permission_profile
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9, ?10, ?11, ?12, ?12, ?12,
+                   ?13, ?14)",
         params![
             session_id,
             parent,
@@ -313,6 +332,8 @@ pub fn create_hidden_child_session(
             binding.model_id,
             attempted_json,
             now,
+            project_id,
+            permission_profile,
         ],
     )
     .map_err(|e| format!("insert subagent_session failed: {e}"))?;
@@ -340,8 +361,11 @@ pub fn insert_subagent_session(session: &SubagentSession) -> Result<(), String> 
         "INSERT INTO subagent_session (
             id, parent_conversation_id, child_conversation_id, parent_run_id, task_call_id,
             name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
-            last_activity_at, closed_at, error, created_at, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            last_activity_at, closed_at, error, created_at, updated_at,
+            project_path, project_id, project_identity_version, permission_profile,
+            agent_profile_id, max_steps, tool_allowlist_json
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
+                   ?18,?19,?20,?21,?22,?23,?24)",
         params![
             session.id,
             session.parent_conversation_id,
@@ -360,9 +384,60 @@ pub fn insert_subagent_session(session: &SubagentSession) -> Result<(), String> 
             session.error,
             session.created_at,
             session.updated_at,
+            session.project_path,
+            session.project_id,
+            session.project_identity_version,
+            session.permission_profile,
+            session.agent_profile_id,
+            session.max_steps,
+            serde_json::to_string(&session.tool_allowlist).unwrap_or_else(|_| "[]".into()),
         ],
     )
     .map_err(|e| format!("insert_subagent_session failed: {e}"))?;
+    Ok(())
+}
+
+/// Child scope persisted on a subagent session (migration 029) so a route
+/// restart restores the original project identity, permission ceiling, profile,
+/// step budget, and tool allowlist instead of guessing defaults.
+#[derive(Debug, Clone, Default)]
+pub struct SubagentScope {
+    pub project_path: Option<String>,
+    pub project_id: Option<String>,
+    pub project_identity_version: Option<i64>,
+    pub permission_profile: Option<String>,
+    pub agent_profile_id: Option<String>,
+    pub max_steps: Option<i64>,
+    pub tool_allowlist: Vec<String>,
+}
+
+/// Persist the child scope on an existing session after its initial spawn.
+/// Called once at child creation; a route restart reads it back and fails
+/// closed when the required scope fields are missing.
+pub fn persist_subagent_scope(session_id: &str, scope: &SubagentScope) -> Result<(), String> {
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    let allowlist_json = serde_json::to_string(&scope.tool_allowlist)
+        .map_err(|e| format!("allowlist serialize: {e}"))?;
+    conn.execute(
+        "UPDATE subagent_session
+         SET project_path = ?1, project_id = ?2, project_identity_version = ?3,
+             permission_profile = ?4, agent_profile_id = ?5, max_steps = ?6,
+             tool_allowlist_json = ?7, updated_at = ?8
+         WHERE id = ?9",
+        params![
+            scope.project_path,
+            scope.project_id,
+            scope.project_identity_version,
+            scope.permission_profile,
+            scope.agent_profile_id,
+            scope.max_steps,
+            allowlist_json,
+            chrono::Utc::now().to_rfc3339(),
+            session_id,
+        ],
+    )
+    .map_err(|e| format!("persist_subagent_scope failed: {e}"))?;
     Ok(())
 }
 
@@ -480,13 +555,26 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SubagentSession> 
         error: row.get(14)?,
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
+        project_path: row.get(17)?,
+        project_id: row.get(18)?,
+        project_identity_version: row.get(19)?,
+        permission_profile: row.get(20)?,
+        agent_profile_id: row.get(21)?,
+        max_steps: row.get(22)?,
+        tool_allowlist: row
+            .get::<_, String>(23)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default(),
     })
 }
 
 const SESSION_SELECT: &str =
     "SELECT id, parent_conversation_id, child_conversation_id, parent_run_id,
     task_call_id, name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
-    last_activity_at, closed_at, error, created_at, updated_at
+    last_activity_at, closed_at, error, created_at, updated_at,
+    project_path, project_id, project_identity_version, permission_profile, agent_profile_id,
+    max_steps, tool_allowlist_json
  FROM subagent_session";
 
 pub fn get_subagent_session(id: &str) -> Result<Option<SubagentSession>, String> {
@@ -884,6 +972,74 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(has_col, 1);
+        });
+    }
+
+    #[test]
+    fn subagent_scope_persists_and_round_trips() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "key-1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _child) = create_hidden_child_session(
+                "parent-1",
+                Some("parent-run"),
+                Some("task-call-1"),
+                "sub",
+                "do the thing",
+                &binding,
+                Some("readonly"),
+                Some("proj-id-1"),
+            )
+            .unwrap();
+            let scope = SubagentScope {
+                project_path: Some("/tmp/project".into()),
+                project_id: Some("proj-id-1".into()),
+                project_identity_version: Some(1),
+                permission_profile: Some("readonly".into()),
+                agent_profile_id: Some("prof-1".into()),
+                max_steps: Some(20),
+                tool_allowlist: vec!["read_file".into(), "grep".into()],
+            };
+            persist_subagent_scope(&sid, &scope).unwrap();
+            let loaded = get_subagent_session(&sid).unwrap().expect("session");
+            assert_eq!(loaded.project_path.as_deref(), Some("/tmp/project"));
+            assert_eq!(loaded.project_id.as_deref(), Some("proj-id-1"));
+            assert_eq!(loaded.project_identity_version, Some(1));
+            assert_eq!(loaded.permission_profile.as_deref(), Some("readonly"));
+            assert_eq!(loaded.agent_profile_id.as_deref(), Some("prof-1"));
+            assert_eq!(loaded.max_steps, Some(20));
+            assert_eq!(
+                loaded.tool_allowlist,
+                vec!["read_file".to_string(), "grep".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn create_hidden_child_session_persists_permission_and_project_id() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "key-1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _child) = create_hidden_child_session(
+                "parent-1",
+                None,
+                None,
+                "sub",
+                "task",
+                &binding,
+                Some("ask"),
+                Some("proj-path-as-id"),
+            )
+            .unwrap();
+            let loaded = get_subagent_session(&sid).unwrap().expect("session");
+            assert_eq!(loaded.permission_profile.as_deref(), Some("ask"));
+            assert_eq!(loaded.project_id.as_deref(), Some("proj-path-as-id"));
         });
     }
 

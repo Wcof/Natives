@@ -7,6 +7,29 @@ use crate::capabilities::{ProviderError, ProviderErrorCategory, ProviderUsage};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderStopReason {
+    Stop,
+    ToolUse,
+    Length,
+    Cancelled,
+    Error,
+    Unknown(String),
+}
+
+impl ProviderStopReason {
+    pub fn from_raw(reason: impl AsRef<str>) -> Self {
+        match reason.as_ref().to_ascii_lowercase().as_str() {
+            "stop" | "end_turn" | "end" | "completed" => Self::Stop,
+            "tool_use" | "tool_calls" | "function_call" => Self::ToolUse,
+            "length" | "max_tokens" | "max_output_tokens" | "incomplete" => Self::Length,
+            "cancelled" | "canceled" | "aborted" => Self::Cancelled,
+            "error" | "failed" => Self::Error,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
 /// Unified provider stream event (Protocol / Adapter boundary).
 #[derive(Debug, Clone)]
 pub enum ProviderEvent {
@@ -19,7 +42,9 @@ pub enum ProviderEvent {
         arguments_delta: String,
     },
     Usage(ProviderUsage),
-    Completed,
+    Completed {
+        reason: ProviderStopReason,
+    },
     Error(ProviderError),
 }
 
@@ -134,6 +159,7 @@ pub struct OpenAiSseParser {
     /// tool_call index → (id, name, arguments)
     tool_acc: BTreeMap<usize, (String, String, String)>,
     finished: bool,
+    finish_reason: Option<ProviderStopReason>,
 }
 
 impl OpenAiSseParser {
@@ -150,7 +176,12 @@ impl OpenAiSseParser {
         }
         if data == "[DONE]" {
             self.finished = true;
-            return vec![ProviderEvent::Completed];
+            return vec![ProviderEvent::Completed {
+                reason: self
+                    .finish_reason
+                    .clone()
+                    .unwrap_or_else(|| ProviderStopReason::Unknown("missing_reason".into())),
+            }];
         }
 
         let chunk: ChatChunk = match serde_json::from_str(data) {
@@ -252,7 +283,8 @@ impl OpenAiSseParser {
                     }
                 }
             }
-            if choice.finish_reason.is_some() {
+            if let Some(reason) = choice.finish_reason {
+                self.finish_reason = Some(ProviderStopReason::from_raw(reason));
                 // Stream may still send usage after finish_reason; Completed
                 // is emitted on [DONE] or by the caller after the body ends.
             }
@@ -331,7 +363,7 @@ mod tests {
         ));
 
         let done = parser.push_data_line("[DONE]");
-        assert!(matches!(done.as_slice(), [ProviderEvent::Completed]));
+        assert!(matches!(done.as_slice(), [ProviderEvent::Completed { .. }]));
     }
 
     #[test]
@@ -342,6 +374,49 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [ProviderEvent::ReasoningDelta(t)] if t == "plan step"
+        ));
+    }
+
+    #[test]
+    fn preserves_length_stop_reason_until_done() {
+        let mut parser = OpenAiSseParser::new();
+        let _ = parser.push_data_line(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]},"finish_reason":"length"}]}"#,
+        );
+        let done = parser.push_data_line("[DONE]");
+        assert!(matches!(
+            done.as_slice(),
+            [ProviderEvent::Completed {
+                reason: ProviderStopReason::Length
+            }]
+        ));
+    }
+
+    #[test]
+    fn normalizes_all_provider_stop_reason_families() {
+        assert_eq!(
+            ProviderStopReason::from_raw("tool_calls"),
+            ProviderStopReason::ToolUse
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("max_tokens"),
+            ProviderStopReason::Length
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("cancelled"),
+            ProviderStopReason::Cancelled
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("failed"),
+            ProviderStopReason::Error
+        );
+        assert_eq!(
+            ProviderStopReason::from_raw("end_turn"),
+            ProviderStopReason::Stop
+        );
+        assert!(matches!(
+            ProviderStopReason::from_raw("vendor_new_reason"),
+            ProviderStopReason::Unknown(_)
         ));
     }
 

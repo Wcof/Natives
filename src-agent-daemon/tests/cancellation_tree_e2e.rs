@@ -57,6 +57,20 @@ async fn parent_child_grandchild_all_cancel() {
 }
 
 #[tokio::test]
+async fn production_runtime_registers_child_under_parent_token() {
+    let rt = ProductionRuntime::new();
+    rt.ensure_execution_token("parent-run", None).await.unwrap();
+    rt.ensure_execution_token("child-run", Some("parent-run"))
+        .await
+        .unwrap();
+    let child = rt.execution.token("child-run").await.unwrap();
+    assert!(!child.is_cancelled());
+
+    rt.cancel_run("parent-run").await;
+    assert!(child.is_cancelled());
+}
+
+#[tokio::test]
 async fn cancel_all_execution_roots_quiet() {
     let reg = ExecutionRegistry::with_grace_ms(20);
     reg.register_root("a").await.unwrap();

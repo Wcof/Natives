@@ -106,16 +106,59 @@ impl CheckpointManager {
         );
         // Persist skeleton row
         if let Some(store) = &self.store {
-            let conn = store.conn()?;
+            let conn = match store.conn() {
+                Ok(conn) => conn,
+                Err(error) => {
+                    map.remove(run_id);
+                    return Err(error);
+                }
+            };
             let snap = serde_json::json!({ "files": [] });
-            conn.execute(
+            if let Err(error) = conn.execute(
                 "INSERT INTO checkpoint (id, run_id, conversation_id, sequence, label, snapshot_json)
                  VALUES (?1, ?2, ?3, 0, 'run_start', ?4)",
                 params![id, run_id, conversation_id, snap.to_string()],
-            )
-            .map_err(|e| e.to_string())?;
+            ) {
+                map.remove(run_id);
+                return Err(error.to_string());
+            }
         }
         Ok(id)
+    }
+
+    /// Attach the durable Core cursor to the workspace checkpoint.  Keeping
+    /// this additive lets old callers continue to create file-only checkpoints
+    /// while resume code can refuse to guess a turn or ledger position.
+    pub fn set_run_metadata(
+        &self,
+        run_id: &str,
+        turn_id: Option<&str>,
+        active_context_snapshot_id: Option<&str>,
+        side_effect_ledger_cursor: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        let conn = store.conn()?;
+        let changed = conn
+            .execute(
+                "UPDATE checkpoint
+             SET turn_id = COALESCE(?1, turn_id),
+                 active_context_snapshot_id = COALESCE(?2, active_context_snapshot_id),
+                 side_effect_ledger_cursor = COALESCE(?3, side_effect_ledger_cursor)
+             WHERE run_id = ?4",
+                params![
+                    turn_id,
+                    active_context_snapshot_id,
+                    side_effect_ledger_cursor,
+                    run_id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err(format!("checkpoint metadata row missing for run {run_id}"));
+        }
+        Ok(())
     }
 
     /// Lazy capture before-image the first time a relative path is touched.
@@ -209,7 +252,7 @@ impl CheckpointManager {
             let conn = store.conn()?;
             // Persist full file snapshots so rewind works after process restart.
             let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
-                .unwrap_or_else(|_| "{}".into());
+                .map_err(|e| format!("serialize checkpoint snapshot: {e}"))?;
             let updated = conn
                 .execute(
                     "UPDATE checkpoint SET snapshot_json = ?1, label = 'run_complete' WHERE id = ?2",
@@ -250,12 +293,16 @@ impl CheckpointManager {
         let conn = store.conn()?;
         let files: Vec<FileSnapshot> = live.files.values().cloned().collect();
         let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
-            .unwrap_or_else(|_| "{}".into());
-        conn.execute(
-            "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
-            params![snap, live.id],
-        )
-        .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("serialize checkpoint snapshot: {e}"))?;
+        let changed = conn
+            .execute(
+                "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
+                params![snap, live.id],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err(format!("checkpoint row missing for run {run_id}"));
+        }
         Ok(())
     }
 
@@ -308,7 +355,7 @@ impl CheckpointManager {
                 },
             )
             .map_err(|e| format!("checkpoint not found: {e}"))?;
-        let files = parse_files_json(&snap);
+        let files = parse_files_json(&snap)?;
         Ok(CheckpointRecord {
             id,
             run_id,
@@ -588,15 +635,15 @@ fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn parse_files_json(snap: &str) -> Vec<FileSnapshot> {
-    let v: Value = serde_json::from_str(snap).unwrap_or(Value::Null);
+fn parse_files_json(snap: &str) -> Result<Vec<FileSnapshot>, String> {
+    let v: Value = serde_json::from_str(snap).map_err(|e| e.to_string())?;
     let arr = v
         .get("files")
         .and_then(|f| f.as_array())
         .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| "checkpoint snapshot files must be an array".to_string())?;
     arr.into_iter()
-        .filter_map(|item| serde_json::from_value(item).ok())
+        .map(|item| serde_json::from_value(item).map_err(|e| e.to_string()))
         .collect()
 }
 

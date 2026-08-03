@@ -16,6 +16,7 @@ import type {
   Run,
   RunEvent,
 } from '@/lib/assistant-protocol';
+import type { ProjectionRecovery } from '@/lib/assistant-protocol';
 
 export interface ComposerDraft {
   text: string;
@@ -68,6 +69,8 @@ export interface AssistantWorkspaceState {
   lastSequenceByRun: Record<string, number>;
   /** Runs currently recovering from sequence gap */
   recoveringRuns: Record<string, boolean>;
+  /** Renderer-local projection status; never persisted as a daemon event. */
+  projectionRecoveryByRun: Record<string, ProjectionRecovery>;
 
   interactions: Record<string, InteractionRequest>;
   /** Ordered interaction ids waiting for user */
@@ -106,6 +109,7 @@ export function createInitialWorkspaceState(): AssistantWorkspaceState {
     eventsByRun: {},
     lastSequenceByRun: {},
     recoveringRuns: {},
+    projectionRecoveryByRun: {},
     interactions: {},
     interactionOrder: [],
     promptQueues: {},
@@ -144,6 +148,7 @@ export type WorkspaceAction =
   | { type: 'event/applyBatch'; events: RunEvent[] }
   | { type: 'event/replay'; runId: string; events: RunEvent[] }
   | { type: 'recovering/set'; runId: string; recovering: boolean }
+  | { type: 'projection/recovery'; runId: string; recovery: ProjectionRecovery }
   | { type: 'interaction/upsert'; interaction: InteractionRequest }
   | { type: 'interaction/remove'; id: string }
   | { type: 'promptQueue/set'; conversationId: string; items: PromptQueueItem[] }

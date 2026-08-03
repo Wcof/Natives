@@ -17,8 +17,9 @@
 //! project `.claude|grok|natives/hooks.json` command hooks.
 
 use agent_core::{
-    AllowAllHook, CommandHook, EngineMessage, EngineProvider, EngineProviderEvent, HookDecision,
-    HookHandler, HookOutcome, HookRegistry, HookRequest, HookResponse, HttpHook,
+    AgentMessage, AllowAllHook, CommandHook, ContentBlock, EngineProvider, EngineProviderContext,
+    EngineProviderEvent, HookDecision, HookHandler, HookOutcome, HookRegistry, HookRequest,
+    HookResponse, HttpHook, MessageId, ProviderTurnRequest, UserMessage,
 };
 use assistant_protocol::v2::RunEventKind;
 use futures_util::StreamExt;
@@ -436,11 +437,20 @@ impl HookHandler for NativePromptHook {
         };
         let deadline =
             tokio::time::Instant::now() + std::time::Duration::from_millis(self.timeout_ms);
-        let stream = provider.stream(
-            model,
-            vec![EngineMessage::text("user", input)],
-            &[],
-            Some(&self.template),
+        let stream = provider.stream_turn(
+            ProviderTurnRequest {
+                context: EngineProviderContext {
+                    run_id: request.run_id.clone(),
+                    attempt: 0,
+                },
+                model: model.to_string(),
+                system_prompt: Some(self.template.clone()),
+                messages: vec![AgentMessage::User(UserMessage {
+                    message_id: MessageId::new(),
+                    content: vec![ContentBlock::Text { text: input }],
+                })],
+                tools: Vec::new(),
+            },
             cancel,
         );
         let Ok(Ok(mut events)) = tokio::time::timeout_at(deadline, stream).await else {
@@ -462,7 +472,8 @@ impl HookHandler for NativePromptHook {
                 EngineProviderEvent::Error { message, .. } => {
                     return HookOutcome::Failed { reason: message }
                 }
-                EngineProviderEvent::Completed => break,
+                EngineProviderEvent::Completed
+                | EngineProviderEvent::CompletedWithReason { .. } => break,
                 _ => {}
             }
         }

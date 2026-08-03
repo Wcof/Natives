@@ -188,6 +188,7 @@ export interface ContentBlock {
   noticeKind?:
     | 'generation_retry'
     | 'checkpoint_created'
+    | 'checkpoint_committed'
     | 'checkpoint_rewound'
     | 'subagent_created'
     | string;
@@ -256,6 +257,13 @@ export interface Run {
   maxSteps?: number;
   projectPath?: string | null;
   retryCount?: number;
+  retryOfRunId?: string | null;
+  retryOfTurnId?: string | null;
+  continuedFromRunId?: string | null;
+  branchId?: string | null;
+  branchParentMessageId?: string | null;
+  checkpointId?: string | null;
+  resumeOfRunId?: string | null;
   createdAt?: string | null;
   lastEventSequence?: number;
   idempotencyKey?: string | null;
@@ -272,6 +280,8 @@ export type RunEventType =
   | 'text_delta'
   | 'reasoning_delta'
   | 'tool_call_requested'
+  | 'tool_call_prepared'
+  | 'context_snapshot_committed'
   | 'tool_call_started'
   | 'tool_call_delta'
   | 'tool_call_completed'
@@ -287,6 +297,7 @@ export type RunEventType =
   | 'context_usage_updated'
   | 'context_compressed'
   | 'checkpoint_created'
+  | 'checkpoint_committed'
   | 'checkpoint_rewound'
   | 'subagent_created'
   | 'subagent_completed'
@@ -576,6 +587,8 @@ export type AssistantMethod =
   | 'run.start'
   | 'run.cancel'
   | 'run.retry'
+  | 'run.continue'
+  | 'run.resume'
   | 'run.subscribe'
   | 'run.replay'
   | 'run.list'

@@ -11,8 +11,9 @@ use crate::conversation_store;
 use crate::run_manager::global_run_manager;
 use crate::storage::DataStore;
 use agent_core::{
-    CoordinatorAction, HarnessAction, PromptSource, QueueItem, QueueItemStatus, SafePoint,
-    SessionActorSnapshot, SessionCoordinator,
+    CoordinatorAction, DrainMode, EngineInputReceiver, EngineSafePointReceiver, HarnessAction,
+    InputSafePoint, PendingInput, PendingInputKind, PromptSource, QueueItem, QueueItemStatus,
+    SafePoint, SessionActorSnapshot, SessionCoordinator,
 };
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{CancelRunRequest, StartRunRequest};
@@ -33,6 +34,167 @@ pub fn global_harness() -> Arc<SessionCoordinator> {
 /// Alias for clarity at call sites.
 pub fn global_coordinator() -> Arc<SessionCoordinator> {
     global_harness()
+}
+
+/// SQLite-backed input lease used by the engine at safe points.
+pub struct DurableInputReceiver {
+    conversation_id: String,
+    run_id: String,
+}
+
+impl DurableInputReceiver {
+    pub fn new(conversation_id: impl Into<String>, run_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            run_id: run_id.into(),
+        }
+    }
+}
+
+/// Durable safe-point bridge used by the production AgentEngine. The engine
+/// must not mutate the in-memory actor directly: a claimed interjection is
+/// restored when its post-claim snapshot cannot be persisted.
+pub struct DurableSafePointReceiver {
+    conversation_id: String,
+}
+
+impl DurableSafePointReceiver {
+    pub fn new(conversation_id: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EngineSafePointReceiver for DurableSafePointReceiver {
+    async fn on_safe_point(&self, point: InputSafePoint) -> Result<Option<String>, String> {
+        let point = match point {
+            InputSafePoint::AfterToolBatch => SafePoint::AfterTool,
+            InputSafePoint::BeforeProvider => SafePoint::ProviderBatchBoundary,
+            InputSafePoint::BeforeRunEnd => SafePoint::ProviderBatchBoundary,
+        };
+        match on_safe_point_checked(&self.conversation_id, point)? {
+            CoordinatorAction::InjectInterjection { content } => Ok(Some(content)),
+            _ => Ok(None),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EngineInputReceiver for DurableInputReceiver {
+    async fn drain(
+        &self,
+        kind: PendingInputKind,
+        mode: DrainMode,
+        _point: InputSafePoint,
+    ) -> Result<Vec<PendingInput>, String> {
+        let kind = match kind {
+            PendingInputKind::Steering => "steering",
+            PendingInputKind::FollowUp => "follow_up",
+        };
+        let limit = match mode {
+            DrainMode::One => 1,
+            DrainMode::All => i64::MAX,
+        };
+        let store = store()?;
+        let mut conn = store.conn()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut items = Vec::new();
+        let mut queued = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, content, COALESCE(drain_mode, 'all') FROM prompt_queue
+                 WHERE conversation_id = ?1 AND kind = ?2 AND status = 'queued'
+                 ORDER BY position, created_at LIMIT ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![self.conversation_id, kind, limit], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?
+        };
+        if matches!(mode, DrainMode::All)
+            && queued
+                .first()
+                .is_some_and(|(_, _, drain_mode)| drain_mode == "one")
+        {
+            queued.truncate(1);
+        }
+        let leased_at = chrono::Utc::now().to_rfc3339();
+        for row in queued {
+            let token = Uuid::new_v4().to_string();
+            let changed = tx
+                .execute(
+                    "UPDATE prompt_queue SET status = 'leased', lease_token = ?1,
+                    lease_run_id = ?2, leased_at = ?3, updated_at = ?3
+                 WHERE id = ?4 AND status = 'queued'",
+                    params![token, self.run_id, leased_at, row.0],
+                )
+                .map_err(|e| format!("lease prompt input failed: {e}"))?;
+            if changed != 1 {
+                return Err(format!("prompt input {} was no longer queued", row.0));
+            }
+            items.push(PendingInput {
+                id: row.0,
+                kind: if kind == "steering" {
+                    PendingInputKind::Steering
+                } else {
+                    PendingInputKind::FollowUp
+                },
+                content: row.1,
+                lease_token: Some(token),
+            });
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(items)
+    }
+
+    async fn ack(&self, input: &PendingInput, turn_id: Option<&str>) -> Result<(), String> {
+        let input_id = &input.id;
+        let store = store()?;
+        let conn = store.conn()?;
+        let content = conn
+            .query_row(
+                "SELECT content, lease_token FROM prompt_queue
+                 WHERE id = ?1 AND conversation_id = ?2 AND lease_run_id = ?3 AND status = 'leased'",
+                params![input_id, self.conversation_id, self.run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            );
+        drop(conn);
+        let (queued_content, lease_token) =
+            content.map_err(|error| format!("load queued input for ack: {error}"))?;
+        if input.lease_token.as_deref() != lease_token.as_deref() {
+            return Err("prompt input lease token mismatch".into());
+        }
+        let content = format!(
+            "[{}]\n{}",
+            match input.kind {
+                PendingInputKind::Steering => "steering",
+                PendingInputKind::FollowUp => "follow_up",
+            },
+            queued_content
+        );
+        conversation_store::persist_queued_input_and_ack(
+            &self.conversation_id,
+            &self.run_id,
+            input_id,
+            &content,
+            turn_id,
+            input.lease_token.as_deref(),
+        )?;
+        // SQLite is authoritative, but the live actor must not retain an
+        // already-acked item that terminal queue draining could start again.
+        let _ = global_harness().remove(&self.conversation_id, input_id);
+        persist_actor_snapshot(&self.conversation_id)
+    }
 }
 
 fn store() -> Result<DataStore, String> {
@@ -106,20 +268,34 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
-fn value_to_queue_item(item: &Value) -> Option<QueueItem> {
-    let id = item.get("id")?.as_str()?.to_string();
-    let conversation_id = item.get("conversation_id")?.as_str()?.to_string();
-    let content = item.get("content")?.as_str()?.to_string();
+fn value_to_queue_item(item: &Value) -> Result<QueueItem, String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "prompt queue row missing id".to_string())?
+        .to_string();
+    let conversation_id = item
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("prompt queue row {id} missing conversation_id"))?
+        .to_string();
+    let content = item
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("prompt queue row {id} missing content"))?
+        .to_string();
     let source = item
         .get("source")
         .and_then(Value::as_str)
         .map(PromptSource::parse)
-        .unwrap_or(PromptSource::User);
+        .ok_or_else(|| format!("prompt queue row {id} missing source"))?;
     let position = item
         .get("position")
         .or_else(|| item.get("order"))
         .and_then(Value::as_i64)
-        .unwrap_or(0);
+        .ok_or_else(|| format!("prompt queue row {id} missing position"))?;
     let client_temp_id = item
         .get("client_temp_id")
         .and_then(Value::as_str)
@@ -127,14 +303,14 @@ fn value_to_queue_item(item: &Value) -> Option<QueueItem> {
     let created_at = item
         .get("created_at")
         .and_then(Value::as_str)
-        .unwrap_or("")
+        .ok_or_else(|| format!("prompt queue row {id} missing created_at"))?
         .to_string();
     let status = item
         .get("status")
         .and_then(Value::as_str)
         .map(QueueItemStatus::parse)
-        .unwrap_or(QueueItemStatus::Queued);
-    Some(QueueItem {
+        .ok_or_else(|| format!("prompt queue row {id} missing status"))?;
+    Ok(QueueItem {
         id,
         conversation_id,
         content,
@@ -186,16 +362,9 @@ pub fn persist_actor_snapshot(conversation_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Best-effort wrapper for non-critical paths that historically ignored errors.
-fn persist_actor_snapshot_best_effort(conversation_id: &str) {
-    if let Err(e) = persist_actor_snapshot(conversation_id) {
-        eprintln!("[prompt_queue] persist_actor_snapshot: {e}");
-    }
-}
-
-fn load_actor_snapshot(conversation_id: &str) -> Option<SessionActorSnapshot> {
-    let store = store().ok()?;
-    let conn = store.conn().ok()?;
+fn load_actor_snapshot(conversation_id: &str) -> Result<Option<SessionActorSnapshot>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
     conn.query_row(
         "SELECT conversation_id, active_run_id, running_prompt_id, pending_interjection,
                 pending_interaction_id, cancel_and_send_id, cancel_requested, drain_on_finish,
@@ -210,15 +379,14 @@ fn load_actor_snapshot(conversation_id: &str) -> Option<SessionActorSnapshot> {
                 pending_interjection: row.get(3)?,
                 pending_interaction_id: row.get(4)?,
                 cancel_and_send_id: row.get(5)?,
-                cancel_requested: row.get::<_, i64>(6).unwrap_or(0) != 0,
-                drain_on_finish: row.get::<_, i64>(7).unwrap_or(1) != 0,
-                version: row.get::<_, i64>(8).unwrap_or(0) as u64,
+                cancel_requested: row.get::<_, i64>(6)? != 0,
+                drain_on_finish: row.get::<_, i64>(7)? != 0,
+                version: row.get::<_, i64>(8)? as u64,
             })
         },
     )
     .optional()
-    .ok()
-    .flatten()
+    .map_err(|e| e.to_string())
 }
 
 /// Rebuild in-memory coordinator for a conversation from SQLite (queue + actor).
@@ -243,14 +411,13 @@ pub fn hydrate_conversation(conversation_id: &str) -> Result<(), String> {
     let rows = stmt
         .query_map(params![conversation_id], row_to_item)
         .map_err(|e| e.to_string())?;
-    for row in rows.flatten() {
-        if let Some(item) = value_to_queue_item(&row) {
-            items.push(item);
-        }
+    for row in rows {
+        let row = row.map_err(|e| e.to_string())?;
+        items.push(value_to_queue_item(&row)?);
     }
     let harness = global_harness();
     harness.reload_queue(conversation_id, items);
-    if let Some(snap) = load_actor_snapshot(conversation_id) {
+    if let Some(snap) = load_actor_snapshot(conversation_id)? {
         harness.restore_snapshot(snap);
     }
     Ok(())
@@ -262,42 +429,53 @@ pub fn recover_session_actors_on_startup() -> Result<usize, String> {
     let store = store()?;
     let conn = store.conn()?;
     let mut ids: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT DISTINCT conversation_id FROM prompt_queue
-         WHERE COALESCE(status, 'queued') IN ('queued', 'running')",
-    ) {
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0));
-        if let Ok(rows) = rows {
-            for id in rows.flatten() {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT conversation_id FROM prompt_queue
+                 WHERE COALESCE(status, 'queued') IN ('queued', 'running', 'leased')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for id in rows {
+            let id = id.map_err(|e| e.to_string())?;
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
     }
-    if let Ok(mut stmt) = conn.prepare("SELECT conversation_id FROM session_actor") {
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0));
-        if let Ok(rows) = rows {
-            for id in rows.flatten() {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
+    {
+        let mut stmt = conn
+            .prepare("SELECT conversation_id FROM session_actor")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for id in rows {
+            let id = id.map_err(|e| e.to_string())?;
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
     }
-    let _ = conn.execute(
-        "UPDATE prompt_queue SET status = 'queued', updated_at = ?1
-         WHERE status = 'running'",
+    conn.execute(
+        "UPDATE prompt_queue SET status = 'queued', lease_token = NULL,
+            lease_run_id = NULL, leased_at = NULL, updated_at = ?1
+         WHERE status IN ('running', 'leased')",
         params![chrono::Utc::now().to_rfc3339()],
-    );
-    let _ = conn.execute(
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
         "UPDATE session_actor SET active_run_id = NULL, running_prompt_id = NULL,
             cancel_requested = 0, updated_at = ?1",
         params![chrono::Utc::now().to_rfc3339()],
-    );
+    )
+    .map_err(|e| e.to_string())?;
     let n = ids.len();
     for id in ids {
-        let _ = hydrate_conversation(&id);
+        hydrate_conversation(&id)?;
     }
     Ok(n)
 }
@@ -341,13 +519,18 @@ fn list(params: Value) -> Result<Value, String> {
     let rows = stmt
         .query_map(params![conversation_id], row_to_item)
         .map_err(|e| e.to_string())?;
-    let items: Vec<Value> = rows.filter_map(Result::ok).collect();
+    let items: Vec<Value> = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
 
     // SQLite is source of truth — always rehydrate coordinator from durable rows.
-    let q_items: Vec<QueueItem> = items.iter().filter_map(value_to_queue_item).collect();
+    let q_items: Vec<QueueItem> = items
+        .iter()
+        .map(value_to_queue_item)
+        .collect::<Result<Vec<_>, _>>()?;
     let harness = global_harness();
     harness.reload_queue(conversation_id, q_items);
-    if let Some(snap) = load_actor_snapshot(conversation_id) {
+    if let Some(snap) = load_actor_snapshot(conversation_id)? {
         harness.restore_snapshot(snap);
     }
 
@@ -364,7 +547,8 @@ fn enqueue(params: Value) -> Result<Value, String> {
         .get("content")
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "content is required".to_string())?;
+        .ok_or_else(|| "content is required".to_string())?
+        .to_string();
     let source = params
         .get("source")
         .and_then(Value::as_str)
@@ -378,6 +562,19 @@ fn enqueue(params: Value) -> Result<Value, String> {
         .get("attachments")
         .map(|v| v.to_string())
         .unwrap_or_else(|| "null".into());
+    let kind = if source.eq_ignore_ascii_case("interjection") {
+        "steering"
+    } else {
+        "follow_up"
+    };
+    let drain_mode = params
+        .get("drain_mode")
+        .or_else(|| params.get("drainMode"))
+        .and_then(Value::as_str)
+        .unwrap_or("all");
+    if !matches!(drain_mode, "one" | "all") {
+        return Err("drain_mode must be one or all".into());
+    }
 
     ensure_conversation_for_queue(conversation_id, &params)?;
 
@@ -395,8 +592,8 @@ fn enqueue(params: Value) -> Result<Value, String> {
 
     conn.execute(
         "INSERT INTO prompt_queue
-            (id, conversation_id, content, source, attachments, position, client_temp_id, created_at, updated_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 'queued')",
+            (id, conversation_id, content, source, attachments, position, client_temp_id, created_at, updated_at, status, kind, drain_mode)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 'queued', ?9, ?10)",
         params![
             id,
             conversation_id,
@@ -405,7 +602,9 @@ fn enqueue(params: Value) -> Result<Value, String> {
             attachments,
             position,
             client_temp_id,
-            now
+            now,
+            kind,
+            drain_mode
         ],
     )
     .or_else(|e| {
@@ -433,7 +632,7 @@ fn enqueue(params: Value) -> Result<Value, String> {
 
     let item = global_harness().enqueue(
         conversation_id,
-        content,
+        content.clone(),
         PromptSource::parse(source),
         client_temp_id.clone(),
         Some(id.clone()),
@@ -559,22 +758,28 @@ fn interject(params: Value) -> Result<Value, String> {
         .get("conversation_id")
         .or_else(|| params.get("conversationId"))
         .and_then(Value::as_str)
-        .ok_or_else(|| "conversation_id is required".to_string())?;
+        .ok_or_else(|| "conversation_id is required".to_string())?
+        .to_string();
     let content = params
         .get("content")
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "content is required".to_string())?;
+        .ok_or_else(|| "content is required".to_string())?
+        .to_string();
 
-    ensure_conversation_for_queue(conversation_id, &params)?;
-    global_harness().interject(conversation_id, content);
-    // Durable: session_actor.pending_interjection (latest wins across restart).
-    persist_actor_snapshot(conversation_id)?;
+    let mut queued = params;
+    if let Some(object) = queued.as_object_mut() {
+        object.insert("source".into(), Value::String("interjection".into()));
+        object.insert("drain_mode".into(), Value::String("all".into()));
+    }
+    let result = enqueue(queued)?;
     Ok(json!({
         "conversation_id": conversation_id,
         "interjected": true,
         "content": content,
-        "note": "pending until next SafePoint (provider batch / tool / permission); durable in session_actor",
+        "id": result.get("id"),
+        "status": "queued",
+        "note": "leased and acknowledged by the AgentEngine at a safe point",
     }))
 }
 
@@ -585,7 +790,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
         .ok_or_else(|| "id is required".to_string())?;
 
     let store = store()?;
-    let (conversation_id, content, attachments_raw, provider_id, model_id, project_path) = {
+    let (conversation_id, content, _attachments_raw, provider_id, model_id, project_path) = {
         let conn = store.conn()?;
         conn.query_row(
             "SELECT q.conversation_id, q.content, q.attachments,
@@ -627,7 +832,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
 
     // Cancel active runs when needed. Only the winner of finish_run(expected_run_id)
     // may start the next prompt — either us (after cancel settles) or on_run_terminal.
-    if matches!(action, CoordinatorAction::CancelThenStart { .. }) {
+    if matches!(&action, CoordinatorAction::CancelThenStart { .. }) {
         let rm = global_run_manager();
         let active_ids: Vec<String> = rm
             .list_runs(Some(&conversation_id))
@@ -636,11 +841,11 @@ async fn send_now(params: Value) -> Result<Value, String> {
             .map(|r| r.id)
             .collect();
         for run_id in &active_ids {
-            let _ = rm
-                .cancel(CancelRunRequest {
-                    run_id: run_id.clone(),
-                })
-                .await;
+            rm.cancel(CancelRunRequest {
+                run_id: run_id.clone(),
+            })
+            .await
+            .map_err(|error| format!("cancel active run before send_now: {error}"))?;
             for _ in 0..20 {
                 if rm
                     .get_run(run_id)
@@ -662,16 +867,6 @@ async fn send_now(params: Value) -> Result<Value, String> {
         if let Some(expected_run_id) = expected {
             if let Some(next) = harness.finish_run(&conversation_id, &expected_run_id, false) {
                 if let CoordinatorAction::StartPrompt { item } = next {
-                    {
-                        let conn = store.conn()?;
-                        let now = chrono::Utc::now().to_rfc3339();
-                        let _ = conn.execute(
-                            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-                            params![now, item.id],
-                        );
-                        let _ = conn
-                            .execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
-                    }
                     let start_req = StartRunRequest {
                         agent_profile_id: None,
                         capability_selection: None,
@@ -690,22 +885,36 @@ async fn send_now(params: Value) -> Result<Value, String> {
                         effort: None,
                         runtime_id: None,
                     };
-                    let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
+                    let run = match crate::run_manager::RunManager::start_detached_global(start_req)
+                    {
+                        Ok(run) => run,
+                        Err(error) => {
+                            harness.requeue(&conversation_id, item.clone());
+                            persist_actor_snapshot(&conversation_id)?;
+                            return Err(error);
+                        }
+                    };
+                    let conn = store.conn()?;
+                    let now = chrono::Utc::now().to_rfc3339();
                     harness.mark_running_item(
                         &conversation_id,
                         &run.id,
                         Some(&item.id),
                         &item.content,
                     );
+                    let changed = conn.execute(
+                        "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                        params![now, item.id],
+                    )
+                    .map_err(|e| format!("mark queued prompt sent: {e}"))?;
+                    if changed != 1 {
+                        return Err("queued prompt was not transitioned to sent".into());
+                    }
+                    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+                        .map_err(|e| format!("remove sent prompt: {e}"))?;
                     persist_actor_snapshot(&conversation_id)?;
-                    return Ok(serde_json::to_value(run).unwrap_or_else(|_| {
-                        json!({
-                            "conversation_id": conversation_id,
-                            "content": item.content,
-                            "started": true,
-                            "queue_item_id": item.id,
-                        })
-                    }));
+                    return serde_json::to_value(run)
+                        .map_err(|e| format!("serialize started run: {e}"));
                 }
             }
         }
@@ -722,21 +931,13 @@ async fn send_now(params: Value) -> Result<Value, String> {
         }));
     }
 
-    // Idle path: StartPrompt immediately.
-    {
-        let conn = store.conn()?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let _ = conn.execute(
-            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-            params![now, id],
-        );
-        conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
-    }
-
-    let _ = attachments_raw
-        .as_ref()
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+    // Idle path: StartPrompt immediately. Keep the durable row until the
+    // RunManager accepts the new run so a synchronous start failure can be
+    // retried instead of silently dropping the prompt.
+    let item = match action {
+        CoordinatorAction::StartPrompt { item } => item,
+        _ => return Err("queue coordinator returned no start action".into()),
+    };
 
     let start_req = StartRunRequest {
         agent_profile_id: None,
@@ -746,39 +947,77 @@ async fn send_now(params: Value) -> Result<Value, String> {
         provider_id: Some(provider_id),
         model_id: Some(model_id),
         key_id: None,
-        content: Some(content.clone()),
+        content: Some(item.content.clone()),
         attachments: None,
         trigger_message_id: None,
         permission_profile: None,
         max_steps: None,
         project_path,
         // Unified queue idempotency key (also used by drain / cancel-and-send).
-        idempotency_key: Some(format!("prompt-queue:{id}")),
+        idempotency_key: Some(format!("prompt-queue:{}", item.id)),
         effort: None,
         runtime_id: None,
     };
 
-    let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
-    harness.mark_running_item(&conversation_id, &run.id, Some(id), &content);
+    let run = match crate::run_manager::RunManager::start_detached_global(start_req) {
+        Ok(run) => run,
+        Err(error) => {
+            harness.requeue(&conversation_id, item.clone());
+            persist_actor_snapshot(&conversation_id)?;
+            return Err(error);
+        }
+    };
+    let conn = store.conn()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    harness.mark_running_item(&conversation_id, &run.id, Some(&item.id), &item.content);
+    let changed = conn
+        .execute(
+            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+            params![now, item.id],
+        )
+        .map_err(|e| format!("mark queued prompt sent: {e}"))?;
+    if changed != 1 {
+        return Err("queued prompt was not transitioned to sent".into());
+    }
+    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+        .map_err(|e| format!("remove sent prompt: {e}"))?;
     persist_actor_snapshot(&conversation_id)?;
 
-    Ok(serde_json::to_value(run).unwrap_or_else(|_| {
-        json!({
-            "conversation_id": conversation_id,
-            "content": content,
-            "started": true,
-            "queue_item_id": id,
-        })
-    }))
+    serde_json::to_value(run).map_err(|e| format!("serialize started run: {e}"))
 }
 
 /// Engine / permission hook: process a safe point for a conversation.
-pub fn on_safe_point(conversation_id: &str, point: SafePoint) -> HarnessAction {
+pub fn on_safe_point_checked(
+    conversation_id: &str,
+    point: SafePoint,
+) -> Result<HarnessAction, String> {
     let action = global_harness().on_safe_point(conversation_id, point);
-    if !matches!(action, CoordinatorAction::None) {
-        persist_actor_snapshot_best_effort(conversation_id);
+    if let CoordinatorAction::InjectInterjection { content } = &action {
+        if let Err(error) = persist_actor_snapshot(conversation_id) {
+            global_harness().restore_interjection(conversation_id, content.clone());
+            return Err(error);
+        }
+    } else if !matches!(action, CoordinatorAction::None) {
+        persist_actor_snapshot(conversation_id)?;
     }
-    action
+    Ok(action)
+}
+
+/// Compatibility wrapper for non-engine harness callers. Production Core
+/// paths use `on_safe_point_checked` so persistence errors stop the run.
+pub fn on_safe_point(conversation_id: &str, point: SafePoint) -> HarnessAction {
+    match on_safe_point_checked(conversation_id, point) {
+        Ok(action) => action,
+        Err(error) => {
+            eprintln!("[prompt_queue] safe-point persistence failed: {error}");
+            CoordinatorAction::None
+        }
+    }
+}
+
+pub fn restore_interjection_checked(conversation_id: &str, content: String) -> Result<(), String> {
+    global_harness().restore_interjection(conversation_id, content);
+    persist_actor_snapshot(conversation_id)
 }
 
 /// Called when a run reaches a real terminal state.
@@ -814,18 +1053,8 @@ pub async fn on_run_terminal(
                 )
                 .optional()
                 .map_err(|e| e.to_string())?
-                .unwrap_or_else(|| ("unknown".into(), "unknown".into(), None))
+                .ok_or_else(|| format!("conversation not found: {conversation_id}"))?
             };
-
-            {
-                let conn = store.conn()?;
-                let now = chrono::Utc::now().to_rfc3339();
-                let _ = conn.execute(
-                    "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
-                    params![now, item.id],
-                );
-                let _ = conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
-            }
 
             let start_req = StartRunRequest {
                 agent_profile_id: None,
@@ -846,8 +1075,28 @@ pub async fn on_run_terminal(
                 effort: None,
                 runtime_id: None,
             };
-            let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
+            let run = match crate::run_manager::RunManager::start_detached_global(start_req) {
+                Ok(run) => run,
+                Err(error) => {
+                    harness.requeue(conversation_id, item.clone());
+                    persist_actor_snapshot(conversation_id)?;
+                    return Err(error);
+                }
+            };
+            let conn = store.conn()?;
+            let now = chrono::Utc::now().to_rfc3339();
             harness.mark_running_item(conversation_id, &run.id, Some(&item.id), &item.content);
+            let changed = conn
+                .execute(
+                    "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                    params![now, item.id],
+                )
+                .map_err(|e| format!("mark queued prompt sent: {e}"))?;
+            if changed != 1 {
+                return Err("queued prompt was not transitioned to sent".into());
+            }
+            conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+                .map_err(|e| format!("remove sent prompt: {e}"))?;
             persist_actor_snapshot(conversation_id)?;
             Ok(Some(run.id))
         }
@@ -956,6 +1205,19 @@ mod tests {
     }
 
     #[test]
+    fn malformed_queue_snapshot_is_rejected() {
+        assert!(value_to_queue_item(&json!({
+            "id": "q1",
+            "conversation_id": "c1",
+            "content": "prompt",
+            "source": "user",
+            "position": 0,
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .is_err());
+    }
+
+    #[test]
     fn db_update_remove_reorder() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
@@ -982,28 +1244,39 @@ mod tests {
     }
 
     #[test]
-    fn interject_marks_harness_pending() {
+    fn interject_is_a_durable_steering_queue_item() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
-            interject(json!({
+            let result = interject(json!({
                 "conversation_id": cid,
                 "content": "inject me",
             }))
             .unwrap();
-            assert_eq!(
-                global_harness().pending_interjection(&cid).as_deref(),
-                Some("inject me")
-            );
-            let action = on_safe_point(&cid, SafePoint::AfterPermissionResolved);
-            assert!(matches!(
-                action,
-                HarnessAction::InjectInterjection { content } if content == "inject me"
-            ));
+            assert_eq!(result["status"], "queued");
+            assert!(global_harness().pending_interjection(&cid).is_none());
+            let queued = global_harness().list(&cid);
+            assert_eq!(queued.len(), 1);
+            assert_eq!(queued[0].source, PromptSource::Interjection);
         });
     }
 
     #[test]
-    fn interject_survives_coordinator_rehydrate() {
+    fn steering_queue_survives_coordinator_rehydrate() {
+        with_temp_db(|| {
+            let cid = format!("pq-{}", Uuid::new_v4());
+            interject(json!({
+                "conversation_id": cid,
+                "content": "consume durably",
+            }))
+            .unwrap();
+            global_harness().clear_conversation(&cid);
+            hydrate_conversation(&cid).unwrap();
+            assert_eq!(global_harness().list(&cid).len(), 1);
+        });
+    }
+
+    #[test]
+    fn interject_does_not_use_legacy_pending_slot() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
             interject(json!({
@@ -1011,14 +1284,98 @@ mod tests {
                 "content": "durable inject",
             }))
             .unwrap();
-            // Simulate process restart: clear memory then hydrate from SQLite.
-            global_harness().clear_conversation(&cid);
             assert!(global_harness().pending_interjection(&cid).is_none());
-            hydrate_conversation(&cid).unwrap();
-            assert_eq!(
-                global_harness().pending_interjection(&cid).as_deref(),
-                Some("durable inject")
-            );
+        });
+    }
+
+    #[test]
+    fn durable_steering_ack_removes_live_queue_item() {
+        with_temp_db(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let cid = format!("pq-{}", Uuid::new_v4());
+                let run_id = format!("run-{}", Uuid::new_v4());
+                interject(json!({
+                    "conversation_id": cid,
+                    "content": "ack me",
+                }))
+                .unwrap();
+                let receiver = DurableInputReceiver::new(&cid, &run_id);
+                store()
+                    .unwrap()
+                    .conn()
+                    .unwrap()
+                    .execute(
+                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                         VALUES (?1, ?2, 'running', 'test', 'test')",
+                        params![run_id, cid],
+                    )
+                    .unwrap();
+                let mut inputs = receiver
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(inputs.len(), 1);
+                let input = inputs.pop().unwrap();
+                receiver.ack(&input, None).await.unwrap();
+                assert!(global_harness().list(&cid).is_empty());
+            });
+        });
+    }
+
+    #[test]
+    fn steering_lease_excludes_a_second_run() {
+        with_temp_db(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let cid = format!("pq-{}", Uuid::new_v4());
+                let run1 = format!("run-{}", Uuid::new_v4());
+                let run2 = format!("run-{}", Uuid::new_v4());
+                interject(json!({
+                    "conversation_id": cid,
+                    "content": "single lease",
+                }))
+                .unwrap();
+                let s = store().unwrap();
+                let conn = s.conn().unwrap();
+                for run_id in [&run1, &run2] {
+                    conn.execute(
+                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                         VALUES (?1, ?2, 'running', 'test', 'test')",
+                        params![run_id, cid],
+                    )
+                    .unwrap();
+                }
+                drop(conn);
+                let first = DurableInputReceiver::new(&cid, &run1);
+                let second = DurableInputReceiver::new(&cid, &run2);
+                let leased = first
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(leased.len(), 1, "first run leases the steering input");
+                let second_attempt = second
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    second_attempt.len(),
+                    0,
+                    "a second run must not lease an already-leased steering input"
+                );
+            });
         });
     }
 

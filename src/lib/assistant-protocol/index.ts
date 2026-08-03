@@ -9,3 +9,4 @@ export {
   mapWireArtifactList,
   unwrapArtifactListPayload,
 } from './wire';
+export * from './projection';

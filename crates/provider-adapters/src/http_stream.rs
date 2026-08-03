@@ -375,7 +375,7 @@ pub async fn stream_chat_completions(
                     for line in split_sse_lines(&mut buffer) {
                         if let Some(data) = sse_data_payload(&line) {
                             for event in parser.push_data_line(data) {
-                                if matches!(event, ProviderEvent::Completed) {
+                                if matches!(event, ProviderEvent::Completed { .. }) {
                                     saw_completed = true;
                                 }
                                 yield event;
@@ -401,7 +401,9 @@ pub async fn stream_chat_completions(
                 // Final delta with empty args already streamed; nothing extra.
                 let _ = (id, name, args);
             }
-            yield ProviderEvent::Completed;
+            yield ProviderEvent::Completed {
+                reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
+            };
         }
     };
 
@@ -487,7 +489,7 @@ pub async fn stream_responses_with_headers(
                     for line in split_sse_lines(&mut buffer) {
                         if let Some(data) = sse_data_payload(&line) {
                             for event in parse_responses_event(data) {
-                                if matches!(event, ProviderEvent::Completed) {
+                                if matches!(event, ProviderEvent::Completed { .. }) {
                                     saw_completed = true;
                                 }
                                 yield event;
@@ -508,7 +510,9 @@ pub async fn stream_responses_with_headers(
             }
         }
         if !saw_completed {
-            yield ProviderEvent::Completed;
+            yield ProviderEvent::Completed {
+                reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
+            };
         }
     };
 

@@ -1001,7 +1001,11 @@ pub trait ProviderAdapter: Send + Sync {
             ProviderStreamEvent::Error(err) => ProviderEvent::Error(err),
         });
         // Append Completed after legacy Done for engine compatibility.
-        let completed = futures_util::stream::once(async { ProviderEvent::Completed });
+        let completed = futures_util::stream::once(async {
+            ProviderEvent::Completed {
+                reason: crate::stream::ProviderStopReason::Unknown("legacy_done".into()),
+            }
+        });
         Ok(Box::pin(mapped.chain(completed)))
     }
 

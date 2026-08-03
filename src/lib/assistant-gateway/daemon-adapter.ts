@@ -16,6 +16,9 @@ import {
   mapWireMessage,
   mapWireRun,
   mapWireRunEvent,
+  AuthoritativeEventMissing,
+  applyProjectionEvent,
+  createProjectionState,
 } from '@/lib/assistant-protocol';
 import type { AssistantGateway } from './gateway';
 
@@ -48,6 +51,10 @@ export class DaemonAssistantAdapter implements AssistantGateway {
   private connected = false;
   private pollIntervalMs: number;
   private abortControllers = new Map<string, AbortController>();
+  private projectionRecovery = new Map<
+    string,
+    ReturnType<typeof createProjectionState>['recovery']
+  >();
 
   constructor(options: DaemonAdapterOptions = {}) {
     this.requestFn = options.requestFn ?? null;
@@ -77,6 +84,10 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     this.connected = false;
   }
 
+  getProjectionRecovery(runId: string) {
+    return this.projectionRecovery.get(runId);
+  }
+
   async getCapabilities(): Promise<DaemonCapabilities | null> {
     try {
       const raw = (await this.resolveRequest()('daemon.getCapabilities', {})) as Record<string, unknown>;
@@ -94,6 +105,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     const controller = new AbortController();
     this.abortControllers.set(runId, controller);
     let seq = afterSequence;
+    let projection = createProjectionState(runId, afterSequence);
     try {
       while (!controller.signal.aborted) {
         let events: RunEvent[] = [];
@@ -127,6 +139,8 @@ export class DaemonAssistantAdapter implements AssistantGateway {
         for (const event of events) {
           if (event.sequence <= seq) continue;
           seq = event.sequence;
+          projection = applyProjectionEvent(projection, event);
+          this.projectionRecovery.set(runId, projection.recovery);
           yield event;
           if (isTerminalEventType(event.type)) {
             sawTerminalEvent = true;
@@ -144,26 +158,21 @@ export class DaemonAssistantAdapter implements AssistantGateway {
         if (terminal) {
           const recovered = await this.recoverTerminalEvent(runId, seq);
           if (recovered) {
-            // If the terminal event's sequence is already covered, re-stamp it
-            // as next so the reducer will accept it (it drops seq <= last).
-            const event =
-              recovered.sequence > seq
-                ? recovered
-                : {
-                    ...recovered,
-                    sequence: seq + 1,
-                    payload: { ...recovered.payload, replayed: true },
-                  };
-            yield event;
+            projection = applyProjectionEvent(projection, recovered);
+            this.projectionRecovery.set(runId, projection.recovery);
+            if (recovered.sequence <= seq) throw new AuthoritativeEventMissing(runId);
+            seq = recovered.sequence;
+            yield recovered;
             return;
           }
-          // Run is terminal on the server with no recoverable event: synthesize
-          // a terminal from run.get so the UI can leave the live bubble.
-          const synthesized = await this.synthesizeTerminalFromRun(runId, seq);
-          if (synthesized) {
-            yield synthesized;
-          }
-          return;
+          // A terminal DB status without its authoritative event is an
+          // incomplete projection, not permission to fabricate a sequence.
+          this.projectionRecovery.set(runId, {
+            kind: 'incomplete',
+            lastSequence: seq,
+            reason: 'authoritative_event_missing',
+          });
+          throw new AuthoritativeEventMissing(runId);
         }
 
         // Still active: keep polling. Do not exit after N empty rounds — long
@@ -240,61 +249,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       if (terminals.length > 0) return terminals[terminals.length - 1]!;
       // If afterSequence already past the terminal, still surface the last terminal
       // so the controller can apply it (reducer ignores seq <= last unless restamped).
-      const anyTerminal = events.filter((e) => isTerminalEventType(e.type));
-      return anyTerminal.length > 0 ? anyTerminal[anyTerminal.length - 1]! : null;
-    } catch {
       return null;
-    }
-  }
-
-  private async synthesizeTerminalFromRun(
-    runId: string,
-    afterSequence: number,
-  ): Promise<RunEvent | null> {
-    try {
-      const listed = (await this.resolveRequest()('run.list', {
-        run_id: runId,
-        limit: 50,
-      })) as unknown;
-      const runs = Array.isArray(listed)
-        ? listed
-        : Array.isArray((listed as { runs?: unknown[] } | null)?.runs)
-          ? (listed as { runs: unknown[] }).runs
-          : [];
-      const raw = runs.find((r) => {
-        const rec = (r ?? {}) as Record<string, unknown>;
-        return String(rec.id ?? '') === runId;
-      }) as Record<string, unknown> | undefined;
-      if (!raw) return null;
-      const status = String(raw.status ?? '');
-      if (
-        status !== 'completed' &&
-        status !== 'failed' &&
-        status !== 'cancelled' &&
-        status !== 'interrupted'
-      ) {
-        return null;
-      }
-      const type =
-        status === 'completed'
-          ? 'completed'
-          : status === 'cancelled'
-            ? 'cancelled'
-            : status === 'interrupted'
-              ? 'interrupted'
-              : 'failed';
-      return {
-        runId,
-        sequence: afterSequence + 1,
-        timestamp: String(raw.finished_at ?? raw.finishedAt ?? new Date().toISOString()),
-        type,
-        payload: {
-          reason: status,
-          code: raw.error_code ?? raw.errorCode ?? (type === 'failed' ? 'RUN_TERMINAL' : undefined),
-          error: raw.error_message ?? raw.errorMessage ?? undefined,
-          source: 'run.list',
-        },
-      };
     } catch {
       return null;
     }

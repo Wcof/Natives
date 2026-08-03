@@ -4,7 +4,11 @@
  */
 import type { AssistantGateway } from '@/lib/assistant-gateway';
 import type { AttachmentRef, CapabilitySelection, Run, RunEvent } from '@/lib/assistant-protocol';
-import { isActiveRunStatus, mapWireRun } from '@/lib/assistant-protocol';
+import {
+  AuthoritativeEventMissing,
+  isActiveRunStatus,
+  mapWireRun,
+} from '@/lib/assistant-protocol';
 import { getConversationCapabilities } from './capability-admin';
 import type { AssistantWorkspaceState, WorkspaceAction } from './state';
 
@@ -188,6 +192,11 @@ export async function subscribeRun(
         // Sequence gap: run-level recovering only. Do not leave the global
         // assistant connection on "recovering" (banner would look like a disconnect).
         dispatch({ type: 'recovering/set', runId, recovering: true });
+        dispatch({
+          type: 'projection/recovery',
+          runId,
+          recovery: { kind: 'incomplete', lastSequence: prevLast, reason: 'gap' },
+        });
         if (getState().connection === 'recovering') {
           dispatch({
             type: 'connection/set',
@@ -259,6 +268,16 @@ export async function subscribeRun(
     }
   } catch (err) {
     flush();
+    if (err instanceof AuthoritativeEventMissing) {
+      const recovery = gateway.getProjectionRecovery?.(runId) ?? {
+        kind: 'incomplete' as const,
+        lastSequence: last,
+        reason: 'authoritative_event_missing' as const,
+      };
+      dispatch({ type: 'projection/recovery', runId, recovery });
+      dispatch({ type: 'recovering/set', runId, recovering: false });
+      return;
+    }
     const run = getState().runs[runId];
     if (run && isActiveRunStatus(run.status)) {
       // Run-level recovering only; global reconnecting is set below for transport errors.

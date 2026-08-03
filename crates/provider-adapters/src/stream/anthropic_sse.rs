@@ -1,7 +1,7 @@
 //! Anthropic Messages API SSE parser → ProviderEvent.
 
 use crate::capabilities::{ProviderError, ProviderErrorCategory, ProviderUsage};
-use crate::stream::ProviderEvent;
+use crate::stream::{ProviderEvent, ProviderStopReason};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -81,6 +81,7 @@ pub struct AnthropicSseParser {
     /// complete.
     usage: ProviderUsage,
     finished: bool,
+    stop_reason: Option<ProviderStopReason>,
 }
 
 impl AnthropicSseParser {
@@ -182,13 +183,8 @@ impl AnthropicSseParser {
                     self.usage.merge_from(&usage.to_provider());
                     out.push(ProviderEvent::Usage(self.usage.clone()));
                 }
-                if event
-                    .delta
-                    .as_ref()
-                    .and_then(|d| d.stop_reason.as_ref())
-                    .is_some()
-                {
-                    // terminal handled on message_stop
+                if let Some(reason) = event.delta.as_ref().and_then(|d| d.stop_reason.as_deref()) {
+                    self.stop_reason = Some(ProviderStopReason::from_raw(reason));
                 }
             }
             "message_start" => {
@@ -201,7 +197,12 @@ impl AnthropicSseParser {
             }
             "message_stop" => {
                 self.finished = true;
-                out.push(ProviderEvent::Completed);
+                out.push(ProviderEvent::Completed {
+                    reason: self
+                        .stop_reason
+                        .clone()
+                        .unwrap_or_else(|| ProviderStopReason::Unknown("missing_reason".into())),
+                });
             }
             "error" => {
                 let message = data.chars().take(300).collect::<String>();
@@ -253,7 +254,7 @@ mod tests {
                 if n == "read_file" && arguments_delta == "{\"p\":"
         ));
         let done = p.push_data_line(r#"{"type":"message_stop"}"#);
-        assert!(matches!(done.as_slice(), [ProviderEvent::Completed]));
+        assert!(matches!(done.as_slice(), [ProviderEvent::Completed { .. }]));
     }
 
     fn usage_of(events: &[ProviderEvent]) -> ProviderUsage {

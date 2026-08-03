@@ -162,6 +162,23 @@ pub struct RunV2 {
     /// Audit-facing: ids and schema names only, never secrets or config bodies.
     #[serde(default)]
     pub capability_snapshot: Option<serde_json::Value>,
+    /// Lineage for retry/continue/fork/resume operations. These are additive
+    /// and intentionally nullable: legacy runs remain valid and never inherit
+    /// a credential lease or an unfinished future.
+    #[serde(default)]
+    pub retry_of_run_id: Option<String>,
+    #[serde(default)]
+    pub retry_of_turn_id: Option<String>,
+    #[serde(default)]
+    pub continued_from_run_id: Option<String>,
+    #[serde(default)]
+    pub branch_id: Option<String>,
+    #[serde(default)]
+    pub branch_parent_message_id: Option<String>,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub resume_of_run_id: Option<String>,
 }
 
 /// Capability selection for a run: which library-managed skills, MCP servers
@@ -278,6 +295,59 @@ pub struct CancelRunRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryRunRequest {
     pub run_id: String,
+}
+
+/// Continue a run from a durable checkpoint/context snapshot. The new run is
+/// always independent; no provider/tool future from the source is revived.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContinueRunRequest {
+    pub run_id: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
+/// Resume decision for `run.resume`. The builder reads the source run's
+/// checkpoint, active context snapshot, and side-effect ledger and classifies
+/// the restore before any run is created.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeDecision {
+    /// The restore is safe to proceed; a new independent run is created.
+    SafeToContinue,
+    /// Uncertain side effects exist and the caller has not confirmed them.
+    /// No run is created and no provider/tool invocation happens until the
+    /// caller re-invokes `run.resume` with `confirmed: true`.
+    ConfirmationRequired,
+    /// A hard blocker: the ledger contains an uncertain side effect that is not
+    /// replay-safe, so resuming would re-run an effect whose outcome is unknown.
+    /// No run is created; the blocker cannot be waived by confirmation.
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResumeRunRequest {
+    pub run_id: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    /// When `true` the caller has explicitly accepted any uncertain side
+    /// effects that are replay-safe; never set this automatically.
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResumeRunResponse {
+    pub decision: ResumeDecision,
+    pub reason: String,
+    #[serde(default)]
+    pub unresolved_effects: Vec<serde_json::Value>,
+    /// Present only when a new independent run was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

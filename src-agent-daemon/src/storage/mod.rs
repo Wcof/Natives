@@ -317,6 +317,13 @@ impl DataStore {
             "ALTER TABLE run ADD COLUMN project_path TEXT",
             "ALTER TABLE run ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE run ADD COLUMN idempotency_key TEXT",
+            "ALTER TABLE run ADD COLUMN retry_of_run_id TEXT",
+            "ALTER TABLE run ADD COLUMN retry_of_turn_id TEXT",
+            "ALTER TABLE run ADD COLUMN continued_from_run_id TEXT",
+            "ALTER TABLE run ADD COLUMN branch_id TEXT",
+            "ALTER TABLE run ADD COLUMN branch_parent_message_id TEXT",
+            "ALTER TABLE run ADD COLUMN checkpoint_id TEXT",
+            "ALTER TABLE run ADD COLUMN resume_of_run_id TEXT",
         ];
         for sql in alters {
             if let Err(e) = conn.execute_batch(sql) {
@@ -333,6 +340,38 @@ impl DataStore {
         let _ = conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);",
         );
+        for sql in [
+            "ALTER TABLE conversation ADD COLUMN branch_id TEXT",
+            "ALTER TABLE conversation ADD COLUMN parent_conversation_id TEXT",
+            "ALTER TABLE conversation ADD COLUMN branch_parent_message_id TEXT",
+        ] {
+            if let Err(e) = conn.execute_batch(sql) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                    return Err(format!("ensure conversation lineage column failed: {e}"));
+                }
+            }
+        }
+        for sql in [
+            "ALTER TABLE side_effect_record ADD COLUMN resource TEXT",
+            "ALTER TABLE side_effect_record ADD COLUMN started_at TEXT",
+            "ALTER TABLE side_effect_record ADD COLUMN completed_at TEXT",
+        ] {
+            if let Err(e) = conn.execute_batch(sql) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                    return Err(format!("ensure side effect lineage column failed: {e}"));
+                }
+            }
+        }
+        if let Err(e) = conn.execute_batch(
+            "ALTER TABLE resume_plan ADD COLUMN decision TEXT NOT NULL DEFAULT 'RequiresUserConfirmation'",
+        ) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                return Err(format!("ensure resume decision column failed: {e}"));
+            }
+        }
         Ok(())
     }
 

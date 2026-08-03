@@ -160,7 +160,7 @@ test('subscribe recovers terminal when server marks terminal without new events'
   assert.ok(subCalls >= 1);
 });
 
-test('subscribe synthesizes terminal from run.list when events missing', async () => {
+test('subscribe rejects terminal status without an authoritative event', async () => {
   const adapter = new DaemonAssistantAdapter({
     pollIntervalMs: 5,
     requestFn: async (method) => {
@@ -185,13 +185,19 @@ test('subscribe synthesizes terminal from run.list when events missing', async (
     },
   });
   await adapter.connect();
-  const events = [];
-  for await (const e of adapter.subscribe('r-syn', 0)) {
-    events.push(e);
-  }
-  assert.equal(events.length, 1);
-  assert.equal(events[0]?.type, 'failed');
-  assert.equal(events[0]?.payload.code, 'NO_CREDENTIALS');
+  await assert.rejects(
+    async () => {
+      for await (const _event of adapter.subscribe('r-syn', 0)) {
+        // A terminal DB row is not a substitute for an authoritative event.
+      }
+    },
+    /authoritative terminal event missing for run r-syn/,
+  );
+  assert.deepEqual(adapter.getProjectionRecovery('r-syn'), {
+    kind: 'incomplete',
+    lastSequence: 0,
+    reason: 'authoritative_event_missing',
+  });
 });
 
 test('request never invents streamChat path — only injected methods', async () => {

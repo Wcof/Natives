@@ -322,6 +322,13 @@ mod tests {
 
     fn run(status: RunStatusV2) -> RunV2 {
         RunV2 {
+            retry_of_run_id: None,
+            retry_of_turn_id: None,
+            continued_from_run_id: None,
+            branch_id: None,
+            branch_parent_message_id: None,
+            checkpoint_id: None,
+            resume_of_run_id: None,
             id: "real-run-id".to_string(),
             conversation_id: "job-daily-review".to_string(),
             status,

@@ -7,9 +7,11 @@ use agent_core::{
     RunLifecycleAuthority, TransitionMetadata,
 };
 use assistant_protocol::v2::{
-    CancelRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest, RetryRunRequest,
-    RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
+    CancelRunRequest, ContinueRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest,
+    ResumeDecision, ResumeRunRequest, ResumeRunResponse, RetryRunRequest, RunEventKind, RunEventV2,
+    RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
+use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -38,6 +40,85 @@ pub struct RunManager {
     snapshot_path_override: Option<std::path::PathBuf>,
     data_store: Option<Arc<DataStore>>,
     pub runtime: Arc<ProductionRuntime>,
+}
+
+/// Load a checkpoint and verify it carries the committed snapshot, turn, and
+/// ledger watermarks a resumable restore needs. Returns
+/// `(id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor)`.
+fn load_resumable_checkpoint(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    checkpoint_id: Option<&str>,
+) -> Result<(String, Option<String>, Option<String>, Option<String>), String> {
+    let checkpoint = if let Some(checkpoint_id) = checkpoint_id {
+        conn.query_row(
+            "SELECT id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor
+             FROM checkpoint WHERE id = ?1 AND run_id = ?2",
+            rusqlite::params![checkpoint_id, run_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(|_| "checkpoint not found for source run".to_string())?
+    } else {
+        conn.query_row(
+            "SELECT id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor
+             FROM checkpoint WHERE run_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![run_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(|_| "source run has no durable checkpoint".to_string())?
+    };
+    // Exact restore requires the checkpoint to name a committed active context
+    // snapshot. A NULL snapshot would make the resumed run fall back to a newer
+    // conversation snapshot and silently change the context being restored.
+    let snapshot_id = checkpoint.2.as_deref().ok_or_else(|| {
+        "checkpoint has no active context snapshot; restore requires an exact committed snapshot"
+            .to_string()
+    })?;
+    let exists: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM context_snapshot WHERE id = ?1)",
+            rusqlite::params![snapshot_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if exists == 0 {
+        return Err("checkpoint references a missing context snapshot".into());
+    }
+    // A resumable checkpoint must also carry the turn it committed and the
+    // side-effect ledger watermark it was captured at; without them the restore
+    // has no defined point in the run's history.
+    if checkpoint
+        .1
+        .as_deref()
+        .is_none_or(|turn| turn.trim().is_empty())
+    {
+        return Err("checkpoint has no committed turn; restore requires a turn watermark".into());
+    }
+    if checkpoint
+        .3
+        .as_deref()
+        .is_none_or(|cursor| cursor.trim().is_empty())
+    {
+        return Err(
+            "checkpoint has no side-effect ledger cursor; restore requires a ledger watermark"
+                .into(),
+        );
+    }
+    Ok(checkpoint)
 }
 
 /// Process-wide Run Authority for the **current process only**.
@@ -105,9 +186,16 @@ impl RunManager {
         };
         // Fail-closed: must not swallow recovery errors (task-04 / Phase 4).
         mgr.interrupt_active_sqlite_runs()?;
-        let _ = mgr.restore_runs_snapshot();
+        mgr.restore_runs_snapshot()?;
         // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
-        let _ = crate::prompt_queue_store::recover_session_actors_on_startup();
+        crate::prompt_queue_store::recover_session_actors_on_startup()?;
+        // Idempotent crash-gap repair: project context_snapshot rows for runs
+        // that committed a ContextSnapshotCommitted event but never reached the
+        // run-end projection. Best-effort — the loaders already fail closed on
+        // a missing snapshot, so a repair failure must not block daemon start.
+        if let Err(error) = crate::conversation_store::backfill_context_snapshots() {
+            eprintln!("[run_manager] context snapshot backfill failed: {error}");
+        }
         // Expire any in-memory waiters (oneshot futures are never restored).
         // InteractionHub starts empty on new process — no action required.
         Ok(mgr)
@@ -292,11 +380,13 @@ impl RunManager {
                 started_at, finished_at, error_code, step_count, max_steps,
                 token_budget, total_input_tokens, total_output_tokens, created_at,
                 parent_run_id, agent_profile_id, key_id, permission_profile,
-                project_path, retry_count, idempotency_key, revision, capability_snapshot_json
+                project_path, retry_count, idempotency_key, revision, capability_snapshot_json,
+                retry_of_run_id, retry_of_turn_id, continued_from_run_id, branch_id,
+                branch_parent_message_id, checkpoint_id, resume_of_run_id
              )
              VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12,
-                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
              )
              ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
@@ -316,7 +406,14 @@ impl RunManager {
                 retry_count = excluded.retry_count,
                 idempotency_key = excluded.idempotency_key,
                 revision = excluded.revision,
-                capability_snapshot_json = excluded.capability_snapshot_json",
+                capability_snapshot_json = excluded.capability_snapshot_json,
+                retry_of_run_id = excluded.retry_of_run_id,
+                retry_of_turn_id = excluded.retry_of_turn_id,
+                continued_from_run_id = excluded.continued_from_run_id,
+                branch_id = excluded.branch_id,
+                branch_parent_message_id = excluded.branch_parent_message_id,
+                checkpoint_id = excluded.checkpoint_id,
+                resume_of_run_id = excluded.resume_of_run_id",
             rusqlite::params![
                 run.id,
                 run.conversation_id,
@@ -338,7 +435,14 @@ impl RunManager {
                 run.retry_count as i64,
                 run.idempotency_key,
                 run.revision as i64,
-                run.capability_snapshot.as_ref().map(|v| v.to_string())
+                run.capability_snapshot.as_ref().map(|v| v.to_string()),
+                run.retry_of_run_id,
+                run.retry_of_turn_id,
+                run.continued_from_run_id,
+                run.branch_id,
+                run.branch_parent_message_id,
+                run.checkpoint_id,
+                run.resume_of_run_id,
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
@@ -359,7 +463,9 @@ impl RunManager {
                         provider_id, key_id, model_id, permission_profile,
                         trigger_message_id, started_at, finished_at, error_code,
                         step_count, max_steps, project_path, retry_count,
-                        created_at, idempotency_key, COALESCE(revision, 0)
+                        created_at, idempotency_key, COALESCE(revision, 0),
+                        retry_of_run_id, retry_of_turn_id, continued_from_run_id,
+                        branch_id, branch_parent_message_id, checkpoint_id, resume_of_run_id
                  FROM run WHERE idempotency_key = ?1 OR id = ?1 LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
@@ -405,6 +511,13 @@ impl RunManager {
             revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
             project_id: None,
             project_identity_version: None,
+            retry_of_run_id: row.get(20).map_err(|e| e.to_string())?,
+            retry_of_turn_id: row.get(21).map_err(|e| e.to_string())?,
+            continued_from_run_id: row.get(22).map_err(|e| e.to_string())?,
+            branch_id: row.get(23).map_err(|e| e.to_string())?,
+            branch_parent_message_id: row.get(24).map_err(|e| e.to_string())?,
+            checkpoint_id: row.get(25).map_err(|e| e.to_string())?,
+            resume_of_run_id: row.get(26).map_err(|e| e.to_string())?,
         }))
     }
 
@@ -631,22 +744,22 @@ impl RunManager {
             return Ok(());
         }
         if status == RunStatusV2::Queued {
-            let _ = self.commit_status(
+            self.commit_status(
                 run_id,
                 RunStatusV2::Preparing,
                 TransitionMetadata::empty().with_lifecycle_hint("preparing"),
-            );
+            )?;
         }
         let status = self
             .get_run(run_id)
             .map(|r| r.status)
             .unwrap_or(RunStatusV2::Preparing);
         if status == RunStatusV2::Preparing {
-            let _ = self.commit_status(
+            self.commit_status(
                 run_id,
                 RunStatusV2::Running,
                 TransitionMetadata::empty().with_lifecycle_hint("started"),
-            );
+            )?;
         }
         Ok(())
     }
@@ -681,7 +794,8 @@ impl RunManager {
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
                 .map_err(|e| e.to_string())?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("PERSISTENCE_FAILED read active runs: {e}"))?
         };
 
         let changed = tx
@@ -702,37 +816,40 @@ impl RunManager {
         // Expire pending interactions for those runs (history retained, listPending hides).
         if !active_ids.is_empty() {
             for rid in &active_ids {
-                let _ = tx.execute(
+                tx.execute(
                     "UPDATE interaction
                      SET status = 'expired',
                          response = ?1,
                          responded_at = ?2
                      WHERE status = 'pending' AND run_id = ?3",
                     rusqlite::params![reason, now, rid],
-                );
-                let _ = tx.execute(
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED expire interaction: {e}"))?;
+                tx.execute(
                     "UPDATE permission_request
                      SET status = 'expired'
                      WHERE status = 'pending' AND run_id = ?1",
                     rusqlite::params![rid],
-                );
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED expire permission request: {e}"))?;
             }
         } else {
             // Still expire any pending interactions whose run is already interrupted/missing.
-            let _ = tx.execute(
+            tx.execute(
                 "UPDATE interaction
                  SET status = 'expired', response = ?1, responded_at = ?2
                  WHERE status = 'pending'
                    AND (run_id IS NULL OR run_id IN (
-                        SELECT id FROM run WHERE status = 'interrupted'
+                   SELECT id FROM run WHERE status = 'interrupted'
                             AND error_code = 'daemon_restarted'
                    ))",
                 rusqlite::params![reason, now],
-            );
+            )
+            .map_err(|e| format!("PERSISTENCE_FAILED expire stale interactions: {e}"))?;
         }
 
         // Clear session actor live pointers (no auto re-exec).
-        let _ = tx.execute(
+        tx.execute(
             "UPDATE session_actor
              SET active_run_id = NULL,
                  running_prompt_id = NULL,
@@ -741,7 +858,8 @@ impl RunManager {
                  cancel_requested = 0,
                  updated_at = ?1",
             rusqlite::params![now],
-        );
+        )
+        .map_err(|e| format!("PERSISTENCE_FAILED clear session actors: {e}"))?;
 
         tx.commit()
             .map_err(|e| format!("PERSISTENCE_FAILED commit recovery tx: {e}"))?;
@@ -799,6 +917,19 @@ impl RunManager {
         let runs = self.runs.lock().map_err(|e| e.to_string())?;
         let raw = serde_json::to_string_pretty(&*runs).map_err(|e| e.to_string())?;
         std::fs::write(path, raw).map_err(|e| e.to_string())
+    }
+
+    /// Bind the workspace checkpoint to the run before execution begins.
+    pub fn set_run_checkpoint_id(&self, run_id: &str, checkpoint_id: &str) -> Result<(), String> {
+        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+        let run = runs
+            .get_mut(run_id)
+            .ok_or_else(|| format!("run not found: {run_id}"))?;
+        run.checkpoint_id = Some(checkpoint_id.to_string());
+        let snapshot = run.clone();
+        drop(runs);
+        self.persist_run_row(&snapshot)?;
+        self.persist_runs_snapshot()
     }
 
     /// Load non-terminal runs from disk; mark interrupted activity for safe resume UX.
@@ -914,6 +1045,13 @@ impl RunManager {
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let run = RunV2 {
             capability_snapshot: None,
+            retry_of_run_id: None,
+            retry_of_turn_id: None,
+            continued_from_run_id: None,
+            branch_id: None,
+            branch_parent_message_id: None,
+            checkpoint_id: None,
+            resume_of_run_id: None,
             id: id.clone(),
             conversation_id: req.conversation_id,
             status: RunStatusV2::Queued,
@@ -1020,6 +1158,15 @@ impl RunManager {
         self.runtime
             .events
             .replay_after(&req.run_id, req.after_sequence)
+    }
+
+    /// Checked replay for authoritative consumers. A corrupt event stream is
+    /// an error, not an empty replay that could make a renderer or recovery
+    /// path conclude that no facts exist.
+    pub fn replay_checked(&self, req: ReplayRunRequest) -> Result<Vec<RunEventV2>, String> {
+        self.runtime
+            .events
+            .replay_after_checked(&req.run_id, req.after_sequence)
     }
 
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {
@@ -1431,11 +1578,11 @@ impl RunManager {
             .map_err(|e| e.to_string())?
             .insert(run.id.clone(), content.clone());
 
-        let _ = self.commit_status(
+        self.commit_status(
             &run.id,
             RunStatusV2::Preparing,
             TransitionMetadata::empty().with_lifecycle_hint("preparing"),
-        );
+        )?;
 
         let request_project_path = req.project_path.clone();
         let provider_id = req.provider_id.unwrap_or_else(|| run.provider_id.clone());
@@ -1533,6 +1680,14 @@ impl RunManager {
             let mut gateway = capability_gateway::CapabilityGateway::new();
             gateway.set_project_root(project_root.to_string_lossy().to_string());
             crate::production::register_tools_for_surface(&mut gateway, allowlist.as_deref());
+            if let Err(error) = gateway.validate_registered_schemas() {
+                self.fail_run_if_active(
+                    &run.id,
+                    format!("tool schema validation failed: {}", error.message),
+                    "TOOL_SCHEMA_INVALID",
+                );
+                return Err(format!("tool schema validation failed: {}", error.message));
+            }
             let selected_mcp_servers = capability_snapshot
                 .selection_active
                 .then(|| capability_snapshot.mcp_servers.iter().cloned().collect());
@@ -1612,6 +1767,11 @@ impl RunManager {
             self.fail_run_if_active(&run.id, error.to_string(), error.code);
             return Err(error.to_string());
         }
+        // A retry/continue plan is only consumed once the detached run has
+        // passed preparation and its immutable execution plan is durable. A
+        // provider/tool failure after this point is a real new-run outcome,
+        // not a reason to revive the source future.
+        self.mark_resume_plan_executed_for_run(&run)?;
         // Keep selected MCP servers warm for the run's lifetime (refcounted;
         // released on every exit path below via this guard).
         for server_id in &capability_snapshot.mcp_servers {
@@ -1646,14 +1806,14 @@ impl RunManager {
                 Err(e) => e,
             };
             self.runtime.execution.mark_finished(&run.id).await;
-            let _ = self.commit_status(
+            self.commit_status(
                 &run.id,
                 RunStatusV2::Failed,
                 TransitionMetadata::empty()
                     .with_error_code("CODEX_UNAVAILABLE")
                     .with_reason(err.clone())
                     .with_lifecycle_hint("failed"),
-            );
+            )?;
             return Err(if err.contains("unavailable") {
                 err
             } else {
@@ -1672,11 +1832,11 @@ impl RunManager {
                 .await?;
             // Commit Running before the turn: Preparing→{Completed,Cancelled} are not
             // legal edges, but Running→terminal are. CLI is actively running here.
-            let _ = self.commit_status(
+            self.commit_status(
                 &run.id,
                 RunStatusV2::Running,
                 TransitionMetadata::empty().with_lifecycle_hint("running"),
-            );
+            )?;
             let project = request_project_path
                 .as_deref()
                 .or(run.project_path.as_deref())
@@ -1701,7 +1861,7 @@ impl RunManager {
                         .with_error_code("CLI_RUNTIME")
                         .with_reason(e)
                         .with_lifecycle_hint("failed");
-                    let _ = self.commit_status(&run.id, RunStatusV2::Failed, meta);
+                    self.commit_status(&run.id, RunStatusV2::Failed, meta)?;
                     return self
                         .get_run(&run.id)
                         .ok_or_else(|| "run missing after cli turn".to_string());
@@ -1726,7 +1886,7 @@ impl RunManager {
                     .with_lifecycle_hint("interrupted"),
                 _ => TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str()),
             };
-            let _ = self.commit_status(&run.id, final_status, meta);
+            self.commit_status(&run.id, final_status, meta)?;
             return self
                 .get_run(&run.id)
                 .ok_or_else(|| "run missing after cli turn".to_string());
@@ -1779,7 +1939,12 @@ impl RunManager {
             let engine = Arc::new(
                 AgentEngine::new(self.runtime.events.clone())
                     .with_cancel_token(cancel)
-                    .with_hooks(hooks),
+                    .with_hooks(hooks)
+                    .with_progress_sink(Arc::new(
+                        crate::production_tools::DaemonToolProgressSink::new(
+                            self.runtime.events.clone(),
+                        ),
+                    )),
             );
             self.runtime.register_engine(&run.id, engine.clone()).await;
             let provider = FixtureProvider {
@@ -1790,6 +1955,12 @@ impl RunManager {
                 gateway: {
                     let mut g = capability_gateway::CapabilityGateway::new();
                     g.register_builtins();
+                    if let Some(root) = request_project_path
+                        .as_deref()
+                        .or(run.project_path.as_deref())
+                    {
+                        g.set_project_root(root.to_string());
+                    }
                     if let Some(ref list) = tool_allowlist {
                         // Restrict fixture gateway surface to allowlist names when present.
                         // Builtins still registered; PermissionGatedTools enforces allowlist.
@@ -1815,14 +1986,21 @@ impl RunManager {
                 mcp_tool_schemas: Vec::new(),
                 selected_mcp_servers: None,
             };
+            let legacy_history = crate::conversation_store::engine_history(&run.conversation_id)?;
+            let typed_history =
+                crate::conversation_store::load_agent_messages(&run.conversation_id)?;
+            let typed_history = if typed_history.is_empty() && !legacy_history.is_empty() {
+                agent_core::engine_messages_to_agent_messages(&legacy_history)
+            } else {
+                typed_history
+            };
             let config = EngineRunConfig {
                 run_id: run.id.clone(),
                 conversation_id: run.conversation_id.clone(),
                 model: model_id.clone(),
                 system_prompt: (!effective_prompt.effective_full_text.is_empty())
                     .then(|| effective_prompt.effective_full_text.clone()),
-                messages: crate::conversation_store::engine_history(&run.conversation_id)
-                    .unwrap_or_default(),
+                messages: legacy_history,
                 user_content: content,
                 max_steps,
             };
@@ -1833,20 +2011,24 @@ impl RunManager {
                 return Err(error);
             }
             let outcome = match engine
-                .run_with_tool_schemas(config, &provider, &tools, frozen_tool_schemas)
+                .run_with_typed_messages(
+                    config,
+                    &provider,
+                    &tools,
+                    frozen_tool_schemas,
+                    typed_history,
+                )
                 .await
             {
                 Ok(o) => o,
                 Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
             };
-            if matches!(outcome, EngineOutcome::Completed { .. }) {
-                let _ = crate::conversation_store::append_assistant_turn_from_events(
-                    &run.conversation_id,
-                    &run.id,
-                    &self.runtime.events.replay_after(&run.id, 0),
-                );
-            }
             self.runtime.remove_engine(&run.id).await;
+            crate::conversation_store::append_assistant_turn_from_events(
+                &run.conversation_id,
+                &run.id,
+                &self.runtime.events.replay_after_checked(&run.id, 0)?,
+            )?;
             return self.commit_outcome(&run.id, &outcome);
         }
 
@@ -1862,6 +2044,7 @@ impl RunManager {
             .runtime
             .start_run(crate::production::RunStartContext {
                 run_id: run.id.clone(),
+                parent_run_id: run.parent_run_id.clone(),
                 conversation_id: run.conversation_id.clone(),
                 provider_id,
                 model_id,
@@ -1926,7 +2109,7 @@ impl RunManager {
             .runtime
             .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
             .await
-            .unwrap_or_else(|_| CancellationToken::new());
+            .map_err(|error| format!("register run cancellation token: {error}"))?;
         let engine =
             Arc::new(AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel));
         self.runtime.register_engine(&run.id, engine.clone()).await;
@@ -1940,8 +2123,7 @@ impl RunManager {
             conversation_id: run.conversation_id.clone(),
             model: req.model_id.unwrap_or_else(|| run.model_id.clone()),
             system_prompt: None,
-            messages: crate::conversation_store::engine_history(&run.conversation_id)
-                .unwrap_or_default(),
+            messages: crate::conversation_store::engine_history(&run.conversation_id)?,
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
@@ -1958,7 +2140,7 @@ impl RunManager {
             && crate::conversation_store::append_assistant_turn_from_events(
                 &run.conversation_id,
                 &run.id,
-                &self.runtime.events.replay_after(&run.id, 0),
+                &self.runtime.events.replay_after_checked(&run.id, 0)?,
             )
             .is_err()
         {
@@ -1978,17 +2160,52 @@ impl RunManager {
         let original = self
             .get_run(&req.run_id)
             .ok_or_else(|| "run not found".to_string())?;
+        if original.status.is_active() {
+            return Err("active run cannot be retried; cancel it first".into());
+        }
+        if let Some(store) = &self.data_store {
+            let conn = store.conn()?;
+            let uncertain: i64 = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM side_effect_record WHERE run_id = ?1 AND status = 'uncertain')",
+                    rusqlite::params![&req.run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if uncertain != 0 {
+                store.conn()?.execute(
+                    "INSERT INTO resume_plan
+                     (id, source_run_id, action, status, decision, unresolved_effects_json)
+                     VALUES (?1, ?2, 'retry', 'blocked', 'Blocked', ?3)",
+                    rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        &req.run_id,
+                        serde_json::json!({"reason": "uncertain_side_effect"}).to_string()
+                    ],
+                )
+                .map_err(|error| {
+                    format!(
+                        "run has uncertain side effects and blocked resume plan could not be persisted: {error}"
+                    )
+                })?;
+                return Err(
+                    "run has uncertain side effects; inspect or compensate before retrying".into(),
+                );
+            }
+        }
         let content = self
             .last_content
             .lock()
-            .ok()
-            .and_then(|m| m.get(&req.run_id).cloned());
+            .map_err(|e| e.to_string())?
+            .get(&req.run_id)
+            .cloned();
         let project_path = self
             .project_paths
             .lock()
-            .ok()
-            .and_then(|m| m.get(&req.run_id).map(|p| p.to_string_lossy().to_string()));
-        let new_run = self.create_run(CreateRunRequest {
+            .map_err(|e| e.to_string())?
+            .get(&req.run_id)
+            .map(|p| p.to_string_lossy().to_string());
+        let mut new_run = self.create_run(CreateRunRequest {
             capability_selection: None,
             conversation_id: original.conversation_id,
             provider_id: original.provider_id,
@@ -2005,6 +2222,50 @@ impl RunManager {
             effort: original.effort.clone(),
             runtime_id: original.runtime_id.clone(),
         })?;
+        let (checkpoint_id, retry_of_turn_id) = if let Some(store) = &self.data_store {
+            let conn = store.conn()?;
+            conn.query_row(
+                "SELECT id, turn_id FROM checkpoint WHERE run_id = ?1
+                 ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![&req.run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("load retry checkpoint: {e}"))?
+            .map_or((None, None), |(id, turn)| (Some(id), turn))
+        } else {
+            (None, None)
+        };
+        new_run.retry_of_run_id = Some(req.run_id.clone());
+        new_run.retry_of_turn_id = retry_of_turn_id;
+        new_run.checkpoint_id = checkpoint_id.clone();
+        self.persist_run_row(&new_run)?;
+        self.runs
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(new_run.id.clone(), new_run.clone());
+        if let Some(store) = &self.data_store {
+            if let Err(error) = store.conn()?.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
+                 VALUES (?1, ?2, ?3, 'retry',
+                         ?4,
+                         'approved', 'SafeToContinue')",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    &req.run_id,
+                    &new_run.id,
+                    checkpoint_id,
+                ],
+            ) {
+                self.fail_run_if_active(
+                    &new_run.id,
+                    error.to_string(),
+                    "RESUME_PLAN_PERSISTENCE_FAILED",
+                );
+                return Err(format!("persist retry resume plan failed: {error}"));
+            }
+        }
         if let Some(c) = content {
             self.last_content
                 .lock()
@@ -2012,6 +2273,308 @@ impl RunManager {
                 .insert(new_run.id.clone(), c);
         }
         Ok(new_run)
+    }
+
+    /// Create an independent run from a durable checkpoint. This is a
+    /// planning operation: the caller starts the returned run separately, so
+    /// no source Future, permission waiter, or credential lease is revived.
+    pub fn continue_run(&self, req: ContinueRunRequest) -> Result<RunV2, String> {
+        let source = self
+            .get_run(&req.run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        if !source.status.is_terminal() {
+            return Err("run must be terminal before continue".into());
+        }
+        let Some(store) = &self.data_store else {
+            return Err("continue requires durable daemon storage".into());
+        };
+        let conn = store.conn()?;
+        let checkpoint =
+            load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
+        let uncertain: i64 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM side_effect_record
+                 WHERE run_id = ?1 AND status = 'uncertain')",
+                rusqlite::params![&source.id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if uncertain != 0 {
+            conn.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
+                 VALUES (?1, ?2, 'continue', ?3, 'blocked', 'Blocked', ?4)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    &source.id,
+                    &checkpoint.0,
+                    serde_json::json!({"reason": "uncertain_side_effect"}).to_string(),
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "run has uncertain side effects and blocked resume plan could not be persisted: {error}"
+                )
+            })?;
+            return Err("run has uncertain side effects; continue requires confirmation".into());
+        }
+        drop(conn);
+        let content = match req.content {
+            Some(content) => Some(content),
+            None => self
+                .last_content
+                .lock()
+                .map_err(|e| e.to_string())?
+                .get(&source.id)
+                .cloned(),
+        };
+        let new_run = self.create_continued_run(&source, &checkpoint, content.clone())?;
+        let conn = store.conn()?;
+        if let Err(error) = conn.execute(
+            "INSERT INTO resume_plan
+             (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
+             VALUES (?1, ?2, ?3, 'continue', ?4, 'approved', 'SafeToContinue')",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                &source.id,
+                &new_run.id,
+                &checkpoint.0,
+            ],
+        ) {
+            self.fail_run_if_active(
+                &new_run.id,
+                error.to_string(),
+                "RESUME_PLAN_PERSISTENCE_FAILED",
+            );
+            return Err(format!("persist continue resume plan failed: {error}"));
+        }
+        Ok(new_run)
+    }
+
+    /// Create an independent run from a durable checkpoint. This is a
+    /// planning operation: the caller starts the returned run separately, so
+    /// no source Future, permission waiter, or credential lease is revived.
+    pub fn resume_run(&self, req: ResumeRunRequest) -> Result<ResumeRunResponse, String> {
+        let source = self
+            .get_run(&req.run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        if !source.status.is_terminal() {
+            return Err("run must be terminal before resume".into());
+        }
+        let Some(store) = &self.data_store else {
+            return Err("resume requires durable daemon storage".into());
+        };
+        let conn = store.conn()?;
+        let checkpoint =
+            load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
+        // Scan the side-effect ledger for uncertain effects. A restore is only
+        // SafeToContinue when nothing is uncertain; uncertain effects that are
+        // not replay-safe hard-block resume (Blocked), while replay-safe ones
+        // require an explicit caller confirmation (ConfirmationRequired). No
+        // provider or tool is invoked until that confirmation arrives.
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, tool_call_id, category, replay_safe
+                 FROM side_effect_record
+                 WHERE run_id = ?1 AND status = 'uncertain'",
+            )
+            .map_err(|e| e.to_string())?;
+        let uncertain_effects: Vec<serde_json::Value> = stmt
+            .query_map(rusqlite::params![&source.id], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "tool_call_id": row.get::<_, Option<String>>(1)?,
+                    "category": row.get::<_, String>(2)?,
+                    "replay_safe": row.get::<_, i64>(3)? != 0,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let has_uncertain = !uncertain_effects.is_empty();
+        let hard_blocked = has_uncertain
+            && uncertain_effects.iter().any(|effect| {
+                effect
+                    .get("replay_safe")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+            });
+        if hard_blocked {
+            let _ = conn.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
+                 VALUES (?1, ?2, 'resume', ?3, 'blocked', 'Blocked', ?4)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    &source.id,
+                    &checkpoint.0,
+                    serde_json::to_string(&uncertain_effects).unwrap_or_default(),
+                ],
+            );
+            return Ok(ResumeRunResponse {
+                decision: ResumeDecision::Blocked,
+                reason: "side-effect ledger has uncertain effects that are not replay-safe; resume is not possible".into(),
+                unresolved_effects: uncertain_effects,
+                new_run_id: None,
+            });
+        }
+        if has_uncertain && !req.confirmed {
+            let _ = conn.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
+                 VALUES (?1, ?2, 'resume', ?3, 'blocked', 'ConfirmationRequired', ?4)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    &source.id,
+                    &checkpoint.0,
+                    serde_json::to_string(&uncertain_effects).unwrap_or_default(),
+                ],
+            );
+            return Ok(ResumeRunResponse {
+                decision: ResumeDecision::ConfirmationRequired,
+                reason: "run has uncertain side effects; confirm before resume".into(),
+                unresolved_effects: uncertain_effects,
+                new_run_id: None,
+            });
+        }
+        drop(stmt);
+        drop(conn);
+        // Safe or explicitly confirmed: create a fresh independent run. This
+        // revives no old Future, permission waiter, or credential lease.
+        let content = match req.content {
+            Some(content) => Some(content),
+            None => self
+                .last_content
+                .lock()
+                .map_err(|e| e.to_string())?
+                .get(&source.id)
+                .cloned(),
+        };
+        let new_run = self.create_continued_run(&source, &checkpoint, content.clone())?;
+        let conn = store.conn()?;
+        if let Err(error) = conn.execute(
+            "INSERT INTO resume_plan
+             (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
+             VALUES (?1, ?2, ?3, 'resume', ?4, 'approved', 'SafeToContinue')",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                &source.id,
+                &new_run.id,
+                &checkpoint.0,
+            ],
+        ) {
+            self.fail_run_if_active(
+                &new_run.id,
+                error.to_string(),
+                "RESUME_PLAN_PERSISTENCE_FAILED",
+            );
+            return Err(format!("persist resume resume plan failed: {error}"));
+        }
+        Ok(ResumeRunResponse {
+            decision: ResumeDecision::SafeToContinue,
+            reason: "resume approved".into(),
+            unresolved_effects: Vec::new(),
+            new_run_id: Some(new_run.id),
+        })
+    }
+
+    /// Create a fresh independent continuation run bound to a resumable
+    /// checkpoint. Shared by `continue_run` and `resume_run` so there is a
+    /// single run-creation path; the new run always has its own identity and
+    /// never revives a source Future, permission waiter, or credential lease.
+    fn create_continued_run(
+        &self,
+        source: &RunV2,
+        checkpoint: &(String, Option<String>, Option<String>, Option<String>),
+        content: Option<String>,
+    ) -> Result<RunV2, String> {
+        let Some(store) = &self.data_store else {
+            return Err("continue requires durable daemon storage".into());
+        };
+        let conn = store.conn()?;
+        let branch_parent_message_id = conn
+            .query_row(
+                "SELECT id FROM message WHERE conversation_id = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                rusqlite::params![&source.conversation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("load branch parent message: {error}"))?;
+        drop(conn);
+        let mut new_run = self.create_run(CreateRunRequest {
+            capability_selection: None,
+            conversation_id: source.conversation_id.clone(),
+            provider_id: source.provider_id.clone(),
+            model_id: source.model_id.clone(),
+            key_id: source.key_id.clone(),
+            agent_profile_id: source.agent_profile_id.clone(),
+            permission_profile: Some(source.permission_profile.clone()),
+            content: content.clone(),
+            attachments: None,
+            max_steps: Some(source.max_steps),
+            parent_run_id: None,
+            project_path: source.project_path.clone(),
+            idempotency_key: None,
+            effort: source.effort.clone(),
+            runtime_id: source.runtime_id.clone(),
+        })?;
+        new_run.continued_from_run_id = Some(source.id.clone());
+        new_run.resume_of_run_id = Some(source.id.clone());
+        new_run.checkpoint_id = Some(checkpoint.0.clone());
+        new_run.retry_of_turn_id = checkpoint.1.clone();
+        new_run.branch_id = source
+            .branch_id
+            .clone()
+            .or_else(|| Some(source.conversation_id.clone()));
+        new_run.branch_parent_message_id = branch_parent_message_id;
+        self.persist_run_row(&new_run)?;
+        self.runs
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(new_run.id.clone(), new_run.clone());
+        if let Some(content) = content {
+            self.last_content
+                .lock()
+                .map_err(|e| e.to_string())?
+                .insert(new_run.id.clone(), content);
+        }
+        Ok(new_run)
+    }
+
+    pub fn mark_resume_plan_executed(
+        &self,
+        source_run_id: &str,
+        new_run_id: &str,
+    ) -> Result<(), String> {
+        let Some(store) = &self.data_store else {
+            return Ok(());
+        };
+        let changed = store
+            .conn()?
+            .execute(
+                "UPDATE resume_plan
+             SET status = 'executed', resolved_at = datetime('now')
+             WHERE source_run_id = ?1 AND new_run_id = ?2 AND status = 'approved'",
+                rusqlite::params![source_run_id, new_run_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 0 {
+            return Err("approved resume plan not found".into());
+        }
+        Ok(())
+    }
+
+    fn mark_resume_plan_executed_for_run(&self, run: &RunV2) -> Result<(), String> {
+        let source_run_id = run
+            .continued_from_run_id
+            .as_deref()
+            .or(run.resume_of_run_id.as_deref())
+            .or(run.retry_of_run_id.as_deref());
+        if let Some(source_run_id) = source_run_id {
+            self.mark_resume_plan_executed(source_run_id, &run.id)?;
+        }
+        Ok(())
     }
 
     pub async fn respond_permission(&self, request_id: &str, approved: bool) -> Result<(), String> {
@@ -2256,7 +2819,7 @@ mod tests {
     use super::*;
     use agent_core::EngineToolRuntime;
     use assistant_protocol::v2::{
-        CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
+        ContinueRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
     };
     use std::sync::Mutex as StdMutex;
 
@@ -2934,6 +3497,554 @@ mod tests {
             .unwrap();
         assert_ne!(original.id, retried.id);
         assert_eq!(retried.conversation_id, original.conversation_id);
+    }
+
+    #[test]
+    fn retry_rejects_active_run() {
+        let rm = RunManager::new();
+        let original = rm
+            .create_run(CreateRunRequest {
+                capability_selection: None,
+                conversation_id: "active-retry".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: None,
+                content: Some("do not duplicate".into()),
+                attachments: None,
+                max_steps: None,
+                parent_run_id: None,
+                project_path: None,
+                idempotency_key: None,
+                effort: None,
+                runtime_id: None,
+            })
+            .unwrap();
+        rm.commit_status(
+            &original.id,
+            RunStatusV2::Preparing,
+            TransitionMetadata::empty(),
+        )
+        .unwrap();
+        let error = rm
+            .retry(RetryRunRequest {
+                run_id: original.id,
+            })
+            .unwrap_err();
+        assert!(error.contains("active run cannot be retried"));
+    }
+
+    #[test]
+    fn continue_creates_lineage_from_durable_checkpoint() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("continue.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('continue-conv', 'agent', 'Continue', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let source = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: "continue-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("continue me".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: Some(dir.path().to_string_lossy().into_owned()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Preparing,
+                TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Running,
+                TransitionMetadata::empty().with_lifecycle_hint("running"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Completed,
+                TransitionMetadata::empty().with_lifecycle_hint("completed"),
+            )
+            .unwrap();
+
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO context_snapshot
+                 (id, run_id, sequence, snapshot_type, token_count, snapshot_json)
+                 VALUES ('snapshot-continue', ?1, 1, 'active_context', 3, ?2)",
+                rusqlite::params![&source.id, serde_json::json!({"messages": []}).to_string()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO checkpoint
+                 (id, run_id, conversation_id, sequence, turn_id,
+                  active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+                 VALUES ('checkpoint-continue', ?1, 'continue-conv', 1, 'turn-1',
+                         'snapshot-continue', 'ledger-1', '{}')",
+                rusqlite::params![&source.id],
+            )
+            .unwrap();
+            drop(conn);
+
+            let continued = rm
+                .continue_run(ContinueRunRequest {
+                    run_id: source.id.clone(),
+                    checkpoint_id: None,
+                    content: Some("resume from checkpoint".into()),
+                })
+                .unwrap();
+            assert_ne!(continued.id, source.id);
+            assert_eq!(
+                continued.continued_from_run_id.as_deref(),
+                Some(source.id.as_str())
+            );
+            assert_eq!(
+                continued.resume_of_run_id.as_deref(),
+                Some(source.id.as_str())
+            );
+            assert_eq!(
+                continued.checkpoint_id.as_deref(),
+                Some("checkpoint-continue")
+            );
+            assert_eq!(continued.retry_of_turn_id.as_deref(), Some("turn-1"));
+
+            let status: String = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM resume_plan WHERE source_run_id = ?1 AND new_run_id = ?2",
+                    rusqlite::params![&source.id, &continued.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, "approved");
+            rm.mark_resume_plan_executed(&source.id, &continued.id)
+                .unwrap();
+            let executed: String = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM resume_plan WHERE source_run_id = ?1 AND new_run_id = ?2",
+                    rusqlite::params![&source.id, &continued.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(executed, "executed");
+        });
+    }
+
+    #[test]
+    fn continue_rejects_checkpoint_without_active_snapshot() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("continue-nosnapshot.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('continue-nosnap-conv', 'agent', 'Continue', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let source = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: "continue-nosnap-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("continue me".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: Some(dir.path().to_string_lossy().into_owned()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Preparing,
+                TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Running,
+                TransitionMetadata::empty().with_lifecycle_hint("running"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Completed,
+                TransitionMetadata::empty().with_lifecycle_hint("completed"),
+            )
+            .unwrap();
+
+            // Checkpoint with NO committed active context snapshot: exact
+            // continue must fail closed instead of approving and later falling
+            // back to a newer conversation snapshot.
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO checkpoint
+                 (id, run_id, conversation_id, sequence, turn_id,
+                  active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+                 VALUES ('checkpoint-nosnapshot', ?1, 'continue-nosnap-conv', 1, 'turn-1',
+                         NULL, 'ledger-1', '{}')",
+                rusqlite::params![&source.id],
+            )
+            .unwrap();
+            drop(conn);
+
+            let error = rm
+                .continue_run(ContinueRunRequest {
+                    run_id: source.id.clone(),
+                    checkpoint_id: None,
+                    content: Some("resume from checkpoint".into()),
+                })
+                .expect_err("checkpoint without a snapshot must be rejected");
+
+            assert!(
+                error.contains("active context snapshot"),
+                "stable fail-closed error expected, got: {error}"
+            );
+            // No run must be created and no approved resume plan may exist.
+            let approved: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM resume_plan
+                     WHERE source_run_id = ?1 AND action = 'continue' AND status = 'approved'",
+                    rusqlite::params![&source.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(approved, 0, "no approved continue plan may be created");
+        });
+    }
+
+    /// Build a terminal source run with a fully watermarked checkpoint and a
+    /// fresh store, under `with_env_lock`. Returns `(store, source_run_id)`.
+    fn resume_fixture() -> (std::sync::Arc<crate::storage::DataStore>, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("resume.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_DB_PATH", &db_path);
+        crate::storage::set_test_db_override(
+            Some(db_path.clone()),
+            Some(dir.path().join("artifacts")),
+        );
+        let store = std::sync::Arc::new(
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+        );
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('resume-conv', 'agent', 'Resume', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        let rm = RunManager::new_with_store(store.clone());
+        let source = rm
+            .create_run(CreateRunRequest {
+                capability_selection: None,
+                conversation_id: "resume-conv".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("resume me".into()),
+                attachments: None,
+                max_steps: Some(5),
+                parent_run_id: None,
+                project_path: Some(dir.path().to_string_lossy().into_owned()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            })
+            .unwrap();
+        for (status, hint) in [
+            (RunStatusV2::Preparing, "preparing"),
+            (RunStatusV2::Running, "running"),
+            (RunStatusV2::Completed, "completed"),
+        ] {
+            rm.commit_status(
+                &source.id,
+                status,
+                TransitionMetadata::empty().with_lifecycle_hint(hint),
+            )
+            .unwrap();
+        }
+        let conn = store.conn().unwrap();
+        conn.execute(
+            "INSERT INTO context_snapshot
+             (id, run_id, sequence, snapshot_type, token_count, snapshot_json)
+             VALUES ('snapshot-resume', ?1, 1, 'active_context', 3, ?2)",
+            rusqlite::params![&source.id, serde_json::json!({"messages": []}).to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO checkpoint
+             (id, run_id, conversation_id, sequence, turn_id,
+              active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+             VALUES ('checkpoint-resume', ?1, 'resume-conv', 1, 'turn-1',
+                     'snapshot-resume', 'ledger-1', '{}')",
+            rusqlite::params![&source.id],
+        )
+        .unwrap();
+        drop(conn);
+        (store, source.id)
+    }
+
+    #[test]
+    fn continue_rejects_checkpoint_without_ledger_watermark() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("continue-noledger.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
+            let store = std::sync::Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('noledger-conv', 'agent', 'Continue', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let source = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: "noledger-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("continue me".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: Some(dir.path().to_string_lossy().into_owned()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            for (status, hint) in [
+                (RunStatusV2::Preparing, "preparing"),
+                (RunStatusV2::Running, "running"),
+                (RunStatusV2::Completed, "completed"),
+            ] {
+                rm.commit_status(
+                    &source.id,
+                    status,
+                    TransitionMetadata::empty().with_lifecycle_hint(hint),
+                )
+                .unwrap();
+            }
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO context_snapshot
+                 (id, run_id, sequence, snapshot_type, token_count, snapshot_json)
+                 VALUES ('snapshot-noledger', ?1, 1, 'active_context', 3, ?2)",
+                rusqlite::params![&source.id, serde_json::json!({"messages": []}).to_string()],
+            )
+            .unwrap();
+            // Snapshot + turn present, ledger cursor NULL: not resumable.
+            conn.execute(
+                "INSERT INTO checkpoint
+                 (id, run_id, conversation_id, sequence, turn_id,
+                  active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+                 VALUES ('checkpoint-noledger', ?1, 'noledger-conv', 1, 'turn-1',
+                         'snapshot-noledger', NULL, '{}')",
+                rusqlite::params![&source.id],
+            )
+            .unwrap();
+            drop(conn);
+            let error = rm
+                .continue_run(ContinueRunRequest {
+                    run_id: source.id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                })
+                .expect_err("checkpoint without a ledger watermark must be rejected");
+            assert!(
+                error.contains("ledger watermark"),
+                "stable fail-closed error expected, got: {error}"
+            );
+        });
+    }
+
+    #[test]
+    fn resume_uncertain_returns_confirmation_required_without_creating_run() {
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-uncertain', ?1, 'process', 'uncertain', 1)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(response.decision, ResumeDecision::ConfirmationRequired);
+            assert!(
+                response.new_run_id.is_none(),
+                "no run may be created before confirmation"
+            );
+            let approved: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM resume_plan
+                     WHERE source_run_id = ?1 AND action = 'resume' AND status = 'approved'",
+                    rusqlite::params![&source_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(approved, 0, "no approved resume plan before confirmation");
+        });
+    }
+
+    #[test]
+    fn resume_confirmed_creates_independent_run() {
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-confirmed', ?1, 'process', 'uncertain', 1)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: true,
+                })
+                .unwrap();
+            assert_eq!(response.decision, ResumeDecision::SafeToContinue);
+            let new_run_id = response
+                .new_run_id
+                .expect("confirmed resume must create a run");
+            assert_ne!(
+                new_run_id, source_id,
+                "resume must create a fresh independent run"
+            );
+            let resumed = rm.get_run(&new_run_id).expect("new run must exist");
+            assert_eq!(
+                resumed.continued_from_run_id.as_deref(),
+                Some(source_id.as_str())
+            );
+            assert_eq!(resumed.checkpoint_id.as_deref(), Some("checkpoint-resume"));
+        });
+    }
+
+    #[test]
+    fn resume_blocked_on_non_replay_safe_uncertain() {
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-nonreplay', ?1, 'process', 'uncertain', 0)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: true,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::Blocked,
+                "non-replay-safe uncertain effect hard-blocks resume"
+            );
+            assert!(
+                response.new_run_id.is_none(),
+                "Blocked resume must not create a run"
+            );
+        });
     }
 
     #[tokio::test]
@@ -3712,7 +4823,9 @@ mod tests {
                             name: Some("read_file".into()),
                             arguments_delta: r#"{"path":"x"}"#.into(),
                         },
-                        agent_core::EngineProviderEvent::Completed,
+                        agent_core::EngineProviderEvent::CompletedWithReason {
+                            reason: agent_core::ProviderStopReason::ToolUse,
+                        },
                     ])))
                 }
             }

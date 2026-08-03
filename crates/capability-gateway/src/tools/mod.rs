@@ -18,6 +18,7 @@ use crate::{
     ToolHandler, ToolOutput,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Read a file from the filesystem (offset/limit, binary-safe metadata).
 pub struct ReadFileTool;
@@ -574,12 +575,55 @@ impl ToolHandler for RunTerminalTool {
             timeout_ms,
             background,
         };
+        use crate::ProcessState;
+
+        // Keep the handler's live output path independent from the final tool
+        // result. The supervisor owns child lifetime; this task only drains
+        // already-buffered chunks and exits when the process reaches a terminal
+        // state or the caller drops the channel.
+        let progress_task = context.progress.as_ref().map(|tx| {
+            let tx = tx.clone();
+            let task_id = task_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                for _ in 0..12_000 {
+                    for chunk in supervisor.drain_output(&task_id).await {
+                        if tx
+                            .send(crate::ToolProgressChunk {
+                                stream: chunk.stream.to_string(),
+                                text: chunk.text,
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    match supervisor.poll(&task_id).await {
+                        Ok(snapshot)
+                            if matches!(
+                                snapshot.state,
+                                ProcessState::Completed
+                                    | ProcessState::Failed
+                                    | ProcessState::Cancelled
+                            ) =>
+                        {
+                            break
+                        }
+                        Ok(_) | Err(_) => {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    }
+                }
+            })
+        });
 
         // Race spawn against run cancel; if cancelled mid-foreground, force kill.
         let spawn_fut = supervisor.spawn(spec);
         let snap = tokio::select! {
             biased;
             _ = context.cancel.cancelled() => {
+                if let Some(task) = &progress_task { task.abort(); }
+                let _ = supervisor.cancel(&task_id).await;
                 return Err(ToolError {
                     code: "cancelled".into(),
                     message: "run cancelled during terminal spawn".into(),
@@ -593,7 +637,6 @@ impl ToolHandler for RunTerminalTool {
             })?,
         };
 
-        use crate::ProcessState;
         match snap.state {
             ProcessState::Completed | ProcessState::Failed => Ok(terminal_result(
                 display,
@@ -794,6 +837,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(ReadFileTool),
         },
         Tool {
@@ -806,6 +851,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 30000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(SearchFilesTool),
         },
         Tool {
@@ -818,6 +865,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(WriteFileTool),
         },
         Tool {
@@ -830,6 +879,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(ListDirTool),
         },
         Tool {
@@ -842,6 +893,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 30000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(GrepTool),
         },
         Tool {
@@ -854,6 +907,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(EditFileTool),
         },
         Tool {
@@ -877,6 +932,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 300_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(RunTerminalTool),
         },
         Tool {
@@ -889,6 +946,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 20000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(WebFetchTool),
         },
         Tool {
@@ -901,6 +960,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 5000,
             output_limit: 16_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(TodoWriteTool),
         },
     ]

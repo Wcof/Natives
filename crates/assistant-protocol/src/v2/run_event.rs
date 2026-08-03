@@ -90,6 +90,14 @@ pub enum RunEventKind {
         name: String,
         input: serde_json::Value,
     },
+    /// Prepared after JSON/schema/hook checks and before permission/handler.
+    ToolCallPrepared {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+        execution_mode: String,
+        side_effect: String,
+    },
     ToolCallStarted {
         id: String,
         name: String,
@@ -107,13 +115,26 @@ pub enum RunEventKind {
         output: serde_json::Value,
         is_error: bool,
         duration_ms: u64,
+        /// Stable Core ToolResult message id so event→SQLite replay keeps the
+        /// same identity the transcript committed. `None` only for events
+        /// stored before this additive field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_message_id: Option<String>,
     },
     /// Incremental tool/process output (terminal stdout/stderr). Batched ~250ms / 8KB.
     ToolOutputDelta {
         tool_call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
         stream: String,
         text: String,
         truncated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        progress_sequence: Option<u64>,
     },
     PermissionRequested {
         tool_call_id: String,
@@ -205,6 +226,10 @@ pub enum RunEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+    /// Durable checkpoint metadata and side-effect cursor were committed.
+    CheckpointCommitted {
+        checkpoint_id: String,
+    },
     CheckpointRewound {
         checkpoint_id: String,
         paths: Vec<String>,
@@ -236,6 +261,20 @@ pub enum RunEventKind {
         before_tokens: u64,
         after_tokens: u64,
         summary: String,
+    },
+    /// Durable active-context snapshot committed after compaction.
+    ContextSnapshotCommitted {
+        snapshot_id: String,
+        turn_id: Option<String>,
+        source_revision: u64,
+        input_message_ids: Vec<String>,
+        summary_message_id: Option<String>,
+        replaced_range: Option<String>,
+        algorithm_version: String,
+        provider_context_window: Option<u64>,
+        artifact_reference: Option<String>,
+        #[serde(default)]
+        snapshot_json: serde_json::Value,
     },
     SubagentCreated {
         sub_run_id: String,
@@ -277,6 +316,36 @@ pub enum RunEventKind {
     GenerationAttemptCommitted {
         attempt: u32,
     },
+    /// Additive execution lifecycle facts. These are deliberately distinct
+    /// from Run terminal events so a replay can reconstruct provider turns.
+    TurnStarted {
+        turn_id: String,
+    },
+    TurnCompleted {
+        turn_id: String,
+        stop_reason: String,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    MessageStarted {
+        turn_id: String,
+        message_id: String,
+        role: String,
+    },
+    MessageDelta {
+        turn_id: String,
+        message_id: String,
+        text: String,
+    },
+    MessageCompleted {
+        turn_id: String,
+        message_id: String,
+        role: String,
+        /// Complete provider-neutral content so a dropped delta stream does
+        /// not make the committed message unrecoverable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<serde_json::Value>,
+    },
     Completed {
         reason: String,
     },
@@ -307,6 +376,7 @@ impl RunEventKind {
             Self::TextDelta { .. } => "text_delta",
             Self::ReasoningDelta { .. } => "reasoning_delta",
             Self::ToolCallRequested { .. } => "tool_call_requested",
+            Self::ToolCallPrepared { .. } => "tool_call_prepared",
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallDelta { .. } => "tool_call_delta",
             Self::ToolCallCompleted { .. } => "tool_call_completed",
@@ -321,10 +391,12 @@ impl RunEventKind {
             Self::InteractionRequested { .. } => "interaction_requested",
             Self::InteractionResponded { .. } => "interaction_responded",
             Self::CheckpointCreated { .. } => "checkpoint_created",
+            Self::CheckpointCommitted { .. } => "checkpoint_committed",
             Self::CheckpointRewound { .. } => "checkpoint_rewound",
             Self::ContextUsageUpdated { .. } => "context_usage_updated",
             Self::UsageUpdated { .. } => "usage_updated",
             Self::ContextCompressed { .. } => "context_compressed",
+            Self::ContextSnapshotCommitted { .. } => "context_snapshot_committed",
             Self::SubagentCreated { .. } => "subagent_created",
             Self::SubagentCompleted { .. } => "subagent_completed",
             Self::SubagentFailed { .. } => "subagent_failed",
@@ -333,6 +405,11 @@ impl RunEventKind {
             Self::GenerationAttemptFailed { .. } => "generation_attempt_failed",
             Self::GenerationAttemptDiscarded { .. } => "generation_attempt_discarded",
             Self::GenerationAttemptCommitted { .. } => "generation_attempt_committed",
+            Self::TurnStarted { .. } => "turn_started",
+            Self::TurnCompleted { .. } => "turn_completed",
+            Self::MessageStarted { .. } => "message_started",
+            Self::MessageDelta { .. } => "message_delta",
+            Self::MessageCompleted { .. } => "message_completed",
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Cancelled { .. } => "cancelled",
@@ -472,6 +549,9 @@ mod tests {
             RunEventKind::CheckpointCreated {
                 checkpoint_id: "cp-1".into(),
                 label: Some("run_start".into()),
+            },
+            RunEventKind::CheckpointCommitted {
+                checkpoint_id: "cp-1".into(),
             },
             RunEventKind::CheckpointRewound {
                 checkpoint_id: "cp-1".into(),

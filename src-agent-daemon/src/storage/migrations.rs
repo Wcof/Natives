@@ -43,6 +43,8 @@ pub const ALL: &[(i64, &str)] = &[
     (25, MIGRATION_025),
     (26, MIGRATION_026),
     (27, MIGRATION_027),
+    (28, MIGRATION_028),
+    (29, MIGRATION_029),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1009,6 +1011,100 @@ BEGIN
     DELETE FROM harness_notice
      WHERE cursor <= (SELECT COALESCE(MAX(cursor), 0) - 1000 FROM harness_notice);
 END;
+";
+
+/// Migration 028: durable Agent Core turn/message/context and recovery seams.
+///
+/// All additions are nullable or have defaults so old daemon databases remain
+/// readable. The existing conversation/message/event tables remain the single
+/// authority; these columns make the typed runtime identity recoverable rather
+/// than keeping it only in memory.
+const MIGRATION_028: &str = "
+CREATE TABLE IF NOT EXISTS turn (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'committed'
+        CHECK(status IN ('started','committed','failed','cancelled','abandoned')),
+    stop_reason TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    UNIQUE(run_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_run_sequence ON turn(run_id, sequence);
+
+ALTER TABLE message ADD COLUMN turn_id TEXT REFERENCES turn(id) ON DELETE SET NULL;
+ALTER TABLE message ADD COLUMN run_id TEXT REFERENCES run(id) ON DELETE SET NULL;
+ALTER TABLE message ADD COLUMN legacy_marker TEXT;
+ALTER TABLE message ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE message ADD COLUMN stop_reason TEXT;
+ALTER TABLE message_block ADD COLUMN artifact_id TEXT;
+ALTER TABLE message_block ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE run_event ADD COLUMN turn_id TEXT;
+ALTER TABLE run_event ADD COLUMN message_id TEXT;
+ALTER TABLE context_snapshot ADD COLUMN conversation_id TEXT;
+ALTER TABLE context_snapshot ADD COLUMN branch_id TEXT;
+ALTER TABLE context_snapshot ADD COLUMN turn_id TEXT;
+ALTER TABLE context_snapshot ADD COLUMN source_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE context_snapshot ADD COLUMN input_message_ids TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE context_snapshot ADD COLUMN summary_message_id TEXT;
+ALTER TABLE context_snapshot ADD COLUMN replaced_range TEXT;
+ALTER TABLE context_snapshot ADD COLUMN algorithm_version TEXT NOT NULL DEFAULT 'mechanical-v1';
+ALTER TABLE context_snapshot ADD COLUMN provider_context_window INTEGER;
+ALTER TABLE context_snapshot ADD COLUMN artifact_reference TEXT;
+
+ALTER TABLE prompt_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'follow_up';
+ALTER TABLE prompt_queue ADD COLUMN drain_mode TEXT NOT NULL DEFAULT 'all';
+ALTER TABLE prompt_queue ADD COLUMN lease_token TEXT;
+ALTER TABLE prompt_queue ADD COLUMN lease_run_id TEXT;
+ALTER TABLE prompt_queue ADD COLUMN leased_at TEXT;
+ALTER TABLE prompt_queue ADD COLUMN consumed_turn_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_prompt_queue_lease
+    ON prompt_queue(conversation_id, status, lease_run_id, position);
+
+ALTER TABLE checkpoint ADD COLUMN turn_id TEXT;
+ALTER TABLE checkpoint ADD COLUMN active_context_snapshot_id TEXT;
+ALTER TABLE checkpoint ADD COLUMN side_effect_ledger_cursor TEXT;
+ALTER TABLE side_effect_record ADD COLUMN turn_id TEXT;
+ALTER TABLE side_effect_record ADD COLUMN side_effect_class TEXT;
+ALTER TABLE side_effect_record ADD COLUMN status TEXT NOT NULL DEFAULT 'planned'
+    CHECK(status IN ('planned','started','completed','failed','cancelled','uncertain'));
+ALTER TABLE side_effect_record ADD COLUMN replay_safe INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE side_effect_record ADD COLUMN idempotency_key TEXT;
+ALTER TABLE side_effect_record ADD COLUMN external_reference TEXT;
+CREATE INDEX IF NOT EXISTS idx_side_effect_run_status
+    ON side_effect_record(run_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS resume_plan (
+    id TEXT PRIMARY KEY,
+    source_run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+    new_run_id TEXT REFERENCES run(id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    checkpoint_id TEXT,
+    status TEXT NOT NULL DEFAULT 'planned'
+        CHECK(status IN ('planned','approved','blocked','executed')),
+    unresolved_effects_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_resume_plan_source ON resume_plan(source_run_id, created_at DESC);
+";
+
+const MIGRATION_029: &str = "
+-- Subagent route-restart scope: the durable session must carry the original
+-- child scope (project identity, permission ceiling, profile, step budget,
+-- tool allowlist) so a route switch restores them exactly instead of guessing
+-- ask / max_steps=15 and dropping project identity.
+ALTER TABLE subagent_session ADD COLUMN project_path TEXT;
+ALTER TABLE subagent_session ADD COLUMN project_id TEXT;
+ALTER TABLE subagent_session ADD COLUMN project_identity_version INTEGER;
+ALTER TABLE subagent_session ADD COLUMN permission_profile TEXT;
+ALTER TABLE subagent_session ADD COLUMN agent_profile_id TEXT;
+ALTER TABLE subagent_session ADD COLUMN max_steps INTEGER;
+ALTER TABLE subagent_session ADD COLUMN tool_allowlist_json TEXT;
 ";
 
 #[cfg(test)]

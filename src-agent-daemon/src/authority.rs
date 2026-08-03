@@ -9,8 +9,8 @@
 //! call Provider / Stream / legacy agent_loop directly.
 
 use assistant_protocol::v2::{
-    CancelRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest, RunEventV2, RunV2,
-    StartRunRequest, SubscribeRunRequest,
+    CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, ResumeRunRequest,
+    RetryRunRequest, RunEventV2, RunV2, StartRunRequest, SubscribeRunRequest,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -146,6 +146,65 @@ impl ExecutionAuthority for EmbeddedAuthority {
                 serde_json::to_value(self.retry_run(run_id).await?)
                     .map_err(|e| AuthorityError::Message(e.to_string()))
             }
+            "run.continue" => {
+                let req: ContinueRunRequest = serde_json::from_value(params)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                let new_run = global_run_manager()
+                    .continue_run(req)
+                    .map_err(AuthorityError::from)?;
+                serde_json::to_value(RunManager::start_detached_global(StartRunRequest {
+                    agent_profile_id: None,
+                    capability_selection: None,
+                    run_id: Some(new_run.id.clone()),
+                    conversation_id: Some(new_run.conversation_id.clone()),
+                    provider_id: Some(new_run.provider_id.clone()),
+                    model_id: Some(new_run.model_id.clone()),
+                    key_id: new_run.key_id.clone(),
+                    content: None,
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: Some(new_run.permission_profile.clone()),
+                    max_steps: Some(new_run.max_steps),
+                    project_path: new_run.project_path.clone(),
+                    idempotency_key: None,
+                    effort: new_run.effort.clone(),
+                    runtime_id: new_run.runtime_id.clone(),
+                })?)
+                .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.resume" => {
+                let req: ResumeRunRequest = serde_json::from_value(params)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                let response = global_run_manager()
+                    .resume_run(req)
+                    .map_err(AuthorityError::from)?;
+                let new_run_id = response.new_run_id.clone();
+                if let Some(new_run_id) = new_run_id {
+                    // SafeToContinue: start the fresh independent run.
+                    if let Some(new_run) = global_run_manager().get_run(&new_run_id) {
+                        RunManager::start_detached_global(StartRunRequest {
+                            agent_profile_id: None,
+                            capability_selection: None,
+                            run_id: Some(new_run.id.clone()),
+                            conversation_id: Some(new_run.conversation_id.clone()),
+                            provider_id: Some(new_run.provider_id.clone()),
+                            model_id: Some(new_run.model_id.clone()),
+                            key_id: new_run.key_id.clone(),
+                            content: None,
+                            attachments: None,
+                            trigger_message_id: None,
+                            permission_profile: Some(new_run.permission_profile.clone()),
+                            max_steps: Some(new_run.max_steps),
+                            project_path: new_run.project_path.clone(),
+                            idempotency_key: None,
+                            effort: new_run.effort.clone(),
+                            runtime_id: new_run.runtime_id.clone(),
+                        })
+                        .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                    }
+                }
+                serde_json::to_value(response).map_err(|e| AuthorityError::Message(e.to_string()))
+            }
             "run.list" => {
                 let conversation_id = params.get("conversation_id").and_then(Value::as_str);
                 Ok(serde_json::json!({ "runs": self.list_runs(conversation_id).await? }))
@@ -245,10 +304,12 @@ impl ExecutionAuthority for EmbeddedAuthority {
         after_sequence: u64,
     ) -> Result<Vec<RunEventV2>, AuthorityError> {
         self.install_broker();
-        Ok(global_run_manager().replay(ReplayRunRequest {
-            run_id: run_id.to_string(),
-            after_sequence,
-        }))
+        global_run_manager()
+            .replay_checked(ReplayRunRequest {
+                run_id: run_id.to_string(),
+                after_sequence,
+            })
+            .map_err(Into::into)
     }
 
     async fn subscribe_events(
@@ -262,10 +323,12 @@ impl ExecutionAuthority for EmbeddedAuthority {
             run_id: run_id.to_string(),
             after_sequence,
         };
-        Ok(global_run_manager().replay(ReplayRunRequest {
-            run_id: run_id.to_string(),
-            after_sequence,
-        }))
+        global_run_manager()
+            .replay_checked(ReplayRunRequest {
+                run_id: run_id.to_string(),
+                after_sequence,
+            })
+            .map_err(Into::into)
     }
 
     async fn respond_permission(

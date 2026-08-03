@@ -322,6 +322,37 @@ impl SessionCoordinator {
         })
     }
 
+    /// Put a claimed prompt back at the front when RunManager could not
+    /// create its replacement run. The durable queue row is intentionally
+    /// retained by the daemon until start succeeds; this only restores the
+    /// in-process actor after a failed start attempt.
+    pub fn requeue(&self, conversation_id: &str, mut item: QueueItem) {
+        self.with_actor(conversation_id, |actor| {
+            if let Some(existing) = actor
+                .prompt_queue
+                .iter_mut()
+                .find(|queued| queued.id == item.id)
+            {
+                existing.status = QueueItemStatus::Queued;
+                existing.position = 0;
+            } else {
+                item.status = QueueItemStatus::Queued;
+                item.position = 0;
+                actor.prompt_queue.push_front(item);
+            }
+            actor.running_prompt = None;
+            actor.running_run_id = None;
+            actor.running_prompt_id = None;
+            actor.pending_after_cancel = None;
+            actor.cancel_requested = false;
+            for (position, queued) in actor.prompt_queue.iter_mut().enumerate() {
+                queued.position = position as i64;
+            }
+            actor.drain_on_finish = true;
+            actor.version = actor.version.saturating_add(1);
+        });
+    }
+
     pub fn reorder(&self, conversation_id: &str, ids: &[String]) -> Result<Vec<QueueItem>, String> {
         self.with_actor(conversation_id, |actor| {
             let mut by_id: HashMap<String, QueueItem> = actor
@@ -556,6 +587,18 @@ impl SessionCoordinator {
 
     pub fn pending_interjection(&self, conversation_id: &str) -> Option<String> {
         self.with_actor(conversation_id, |a| a.pending_interjection.clone())
+    }
+
+    /// Restore an interjection when a host-side safe-point persistence step
+    /// fails after the coordinator claimed it. A newer pending interjection
+    /// wins, preserving the actor's latest-wins semantics.
+    pub fn restore_interjection(&self, conversation_id: &str, content: String) {
+        self.with_actor(conversation_id, |actor| {
+            if actor.pending_interjection.is_none() {
+                actor.pending_interjection = Some(content);
+                actor.version = actor.version.saturating_add(1);
+            }
+        });
     }
 
     pub fn queue_len(&self, conversation_id: &str) -> usize {
@@ -839,5 +882,29 @@ mod tests {
         }
         // Second terminal (duplicate) must be stale even if run id matches a ghost.
         assert!(h.finish_run("c1", "run-old", false).is_none());
+    }
+
+    #[test]
+    fn requeue_restores_claimed_item_at_front() {
+        let h = SessionCoordinator::new();
+        let first = h.enqueue("c1", "first", PromptSource::User, None, Some("q1".into()));
+        let second = h.enqueue("c1", "second", PromptSource::User, None, Some("q2".into()));
+        h.mark_running_item("c1", "run-1", Some(&first.id), &first.content);
+
+        h.requeue("c1", first);
+
+        let items = h.list("c1");
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["q1", "q2"]
+        );
+        assert_eq!(items[0].status, QueueItemStatus::Queued);
+        assert_eq!(items[0].position, 0);
+        assert_eq!(items[1].position, 1);
+        assert!(!h.is_running("c1"));
+        assert!(h.list("c1").iter().any(|item| item.id == second.id));
     }
 }

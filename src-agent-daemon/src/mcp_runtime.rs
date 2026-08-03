@@ -68,10 +68,10 @@ use agent_core::{
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Per-server cap on buffered change notifications. Oldest are dropped.
@@ -238,6 +238,11 @@ pub struct McpRuntime {
     /// server_id → instant it lost its last run reference (reaper input).
     idle_since: Mutex<HashMap<String, std::time::Instant>>,
 }
+
+/// Synchronous callback used by stdio transports for MCP
+/// `notifications/progress` frames. The caller owns async delivery.
+pub type McpProgressCallback = Arc<dyn Fn(Value) + Send + Sync>;
+pub type McpCancelCallback = Arc<dyn Fn() -> bool + Send + Sync>;
 
 impl Default for McpRuntime {
     fn default() -> Self {
@@ -539,6 +544,7 @@ impl McpRuntime {
                 "clientInfo": { "name": "natives-agent-daemon", "version": "0.1.0" }
             }),
             Duration::from_secs(5),
+            None,
         )?;
         let caps = McpServerCapabilities::from_initialize(
             server_id,
@@ -575,6 +581,7 @@ impl McpRuntime {
                 "tools/list",
                 json!({}),
                 Duration::from_secs(5),
+                None,
             )?
         } else {
             json!({})
@@ -852,6 +859,27 @@ impl McpRuntime {
         tool_name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
+        self.call_tool_with_progress(server_id, tool_name, arguments, None)
+    }
+
+    pub fn call_tool_with_progress(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        arguments: Value,
+        progress: Option<McpProgressCallback>,
+    ) -> Result<Value, String> {
+        self.call_tool_with_progress_and_cancel(server_id, tool_name, arguments, progress, None)
+    }
+
+    pub fn call_tool_with_progress_and_cancel(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        arguments: Value,
+        progress: Option<McpProgressCallback>,
+        cancel: Option<McpCancelCallback>,
+    ) -> Result<Value, String> {
         let bare = strip_mcp_namespace(server_id, tool_name);
         // Ensure tool is registered for this server (permission surface).
         let known = self
@@ -864,10 +892,14 @@ impl McpRuntime {
 
         let config = self.server_config(server_id)?;
         match config.transport {
-            McpTransport::Stdio => self.call_stdio_tool(server_id, &bare, arguments),
-            McpTransport::Http | McpTransport::Sse => {
-                self.call_http_tool(&config, &bare, arguments)
-            }
+            McpTransport::Stdio => self.call_stdio_tool(server_id, &bare, arguments, progress),
+            McpTransport::Http | McpTransport::Sse => self.call_http_tool(
+                &config,
+                &bare,
+                arguments,
+                progress.as_ref(),
+                cancel.as_ref(),
+            ),
         }
     }
 
@@ -876,12 +908,14 @@ impl McpRuntime {
         server_id: &str,
         tool_name: &str,
         arguments: Value,
+        progress: Option<McpProgressCallback>,
     ) -> Result<Value, String> {
         let resp = self.stdio_request(
             server_id,
             "tools/call",
             json!({ "name": tool_name, "arguments": arguments }),
             Duration::from_secs(30),
+            progress,
         )?;
         if let Some(err) = resp.get("error") {
             return Err(format!("mcp tools/call error: {err}"));
@@ -901,6 +935,7 @@ impl McpRuntime {
         method: &str,
         params: Value,
         timeout: Duration,
+        progress: Option<McpProgressCallback>,
     ) -> Result<Value, String> {
         // Resolve roots before taking the session lock: answering `roots/list`
         // mid-exchange must not need a second lock we already hold.
@@ -915,7 +950,15 @@ impl McpRuntime {
             session.next_id += 1;
             let StdioSession { stdin, reader, .. } = session;
             stdio_roundtrip(
-                stdin, reader, &roots, &mut notes, id, method, params, timeout,
+                stdin,
+                reader,
+                &roots,
+                &mut notes,
+                id,
+                method,
+                params,
+                timeout,
+                progress.as_ref(),
             )
         };
         self.record_notifications(server_id, notes);
@@ -927,12 +970,16 @@ impl McpRuntime {
         config: &McpServerConfig,
         tool_name: &str,
         arguments: Value,
+        progress: Option<&McpProgressCallback>,
+        cancel: Option<&McpCancelCallback>,
     ) -> Result<Value, String> {
         self.http_rpc(
             config,
             "tools/call",
             json!({ "name": tool_name, "arguments": arguments }),
             30,
+            progress,
+            cancel,
         )
     }
 
@@ -945,8 +992,10 @@ impl McpRuntime {
         method: &str,
         params: Value,
         max_time_secs: u64,
+        progress: Option<&McpProgressCallback>,
+        cancel: Option<&McpCancelCallback>,
     ) -> Result<Value, String> {
-        let frame = self.http_rpc_frame(config, method, params, max_time_secs)?;
+        let frame = self.http_rpc_frame(config, method, params, max_time_secs, progress, cancel)?;
         if let Some(err) = frame.get("error") {
             return Err(format!("mcp {method} error: {err}"));
         }
@@ -964,6 +1013,8 @@ impl McpRuntime {
         method: &str,
         params: Value,
         max_time_secs: u64,
+        progress: Option<&McpProgressCallback>,
+        cancel: Option<&McpCancelCallback>,
     ) -> Result<Value, String> {
         let url = config
             .url
@@ -998,33 +1049,101 @@ impl McpRuntime {
         args.push("-d".into());
         args.push(body.to_string());
         args.push(endpoint);
-        let output = Command::new("curl")
+        let mut child = Command::new("curl")
             .args(&args)
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("curl not available for mcp call: {e}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "http mcp {method} failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        let text = String::from_utf8_lossy(&output.stdout).to_string();
-        // Accept bare JSON or SSE data: frame.
-        if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            return Ok(v);
-        }
-        for line in text.lines() {
-            if let Some(data) = line.trim().strip_prefix("data:") {
-                let data = data.trim();
-                if data.is_empty() || data == "[DONE]" {
-                    continue;
-                }
-                if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    return Ok(v);
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "http mcp stdout unavailable".to_string())?;
+        let (line_tx, line_rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        let reader_thread = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let line = line.map_err(|error| format!("http mcp stdout read failed: {error}"));
+                if line_tx.send(line).is_err() {
+                    break;
                 }
             }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(max_time_secs.max(1));
+        let mut response: Option<Value> = None;
+        let mut child_finished = false;
+        loop {
+            if cancel.is_some_and(|callback| callback()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader_thread.join();
+                return Err("mcp call cancelled".into());
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader_thread.join();
+                return Err(format!("http mcp {method} timeout"));
+            }
+            match line_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(Ok(line)) => {
+                    let data = line
+                        .trim()
+                        .strip_prefix("data:")
+                        .map(str::trim)
+                        .unwrap_or_else(|| line.trim());
+                    if data.is_empty() || data == "[DONE]" {
+                        continue;
+                    }
+                    let Ok(frame) = serde_json::from_str::<Value>(data) else {
+                        continue;
+                    };
+                    let is_progress = frame.get("method").and_then(Value::as_str)
+                        == Some("notifications/progress");
+                    if is_progress {
+                        if let Some(callback) = progress {
+                            callback(frame);
+                        }
+                        continue;
+                    }
+                    response = Some(frame.clone());
+                    if frame.get("result").is_some() || frame.get("error").is_some() {
+                        break;
+                    }
+                }
+                Ok(Err(error)) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = reader_thread.join();
+                    return Err(error);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if child
+                        .try_wait()
+                        .map_err(|e| format!("http mcp wait failed: {e}"))?
+                        .is_some()
+                    {
+                        child_finished = true;
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
         }
-        Err(format!("mcp {method}: unparseable response"))
+        if !child_finished {
+            let _ = child.kill();
+        }
+        let status = child
+            .wait()
+            .map_err(|e| format!("http mcp wait failed: {e}"))?;
+        let _ = reader_thread.join();
+        if !status.success() {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            return Err(format!("http mcp {method} failed: {}", stderr));
+        }
+        response.ok_or_else(|| format!("mcp {method}: unparseable response"))
     }
 
     /// HTTP/SSE discovery probe: GET `{url}/tools` or bare url JSON list.
@@ -1188,7 +1307,7 @@ impl McpRuntime {
             "capabilities": { "roots": { "listChanged": false } },
             "clientInfo": { "name": "natives-agent-daemon", "version": "0.1.0" }
         });
-        if let Ok(result) = self.http_rpc(config, "initialize", params, 10) {
+        if let Ok(result) = self.http_rpc(config, "initialize", params, 10, None, None) {
             let caps = McpServerCapabilities::from_initialize(&config.id, &result);
             if let Ok(mut map) = self.capabilities.lock() {
                 map.insert(config.id.clone(), caps);
@@ -1225,7 +1344,7 @@ impl McpRuntime {
         match config.transport {
             McpTransport::Stdio => {
                 let frame = self
-                    .stdio_request(server_id, method, params, timeout)
+                    .stdio_request(server_id, method, params, timeout, None)
                     .map_err(McpError::Transport)?;
                 if let Some(err) = frame.get("error") {
                     return Err(map_jsonrpc_error(server_id, method, err));
@@ -1237,7 +1356,14 @@ impl McpRuntime {
             // network fault, and must not read as retryable.
             McpTransport::Http | McpTransport::Sse => {
                 let frame = self
-                    .http_rpc_frame(&config, method, params, timeout.as_secs().max(1))
+                    .http_rpc_frame(
+                        &config,
+                        method,
+                        params,
+                        timeout.as_secs().max(1),
+                        None,
+                        None,
+                    )
                     .map_err(McpError::Transport)?;
                 if let Some(err) = frame.get("error") {
                     return Err(map_jsonrpc_error(server_id, method, err));
@@ -1781,6 +1907,7 @@ fn stdio_roundtrip(
     method: &str,
     params: Value,
     timeout: Duration,
+    progress: Option<&McpProgressCallback>,
 ) -> Result<Value, String> {
     let req = json!({
         "jsonrpc": "2.0",
@@ -1808,7 +1935,14 @@ fn stdio_roundtrip(
                 writeln!(stdin, "{response}").map_err(|e| e.to_string())?;
                 stdin.flush().map_err(|e| e.to_string())?;
             }
-            (Some(_), None) => notes.push(frame),
+            (Some(server_method), None) => {
+                if server_method == "notifications/progress" {
+                    if let Some(callback) = progress {
+                        callback(frame.clone());
+                    }
+                }
+                notes.push(frame);
+            }
             (None, Some(request_id)) => {
                 if request_id.as_u64() == Some(id) {
                     return Ok(frame);

@@ -12,7 +12,7 @@ import { FixtureAssistantAdapter } from '../assistant-gateway/fixture-adapter';
 import type { AssistantGateway } from '../assistant-gateway/gateway';
 import type { AssistantMethod } from '../assistant-protocol';
 import { goldenPermission, goldenTextStream } from '../assistant-fixtures/golden';
-import { isActiveRunStatus } from '../assistant-protocol';
+import { isActiveRunStatus, isTerminalRunStatus } from '../assistant-protocol';
 import { createInitialWorkspaceState, workspaceReducer } from './reducer';
 
 test('resolveProjectPath prefers explicit then conversation then null without window', async () => {
@@ -793,4 +793,86 @@ test('subscribeRun sequence gap marks recoveringRuns only (global stays connecte
   // recovering may flash briefly via recovering/set side-effect then be cleared.
   assert.equal(state.recoveringRuns[runId], undefined);
   assert.ok((state.lastSequenceByRun[runId] ?? 0) >= 3);
+});
+
+test('reconnect replay settles assistant message and terminal exactly once', async () => {
+  const runId = 'run-reconnect-1';
+  const adapter = new FixtureAssistantAdapter({
+    id: 'reconnect',
+    eventsByRun: {
+      [runId]: [
+        {
+          runId,
+          sequence: 1,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'started',
+          payload: {},
+        },
+        {
+          runId,
+          sequence: 2,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'text_delta',
+          payload: { text: 'hello' },
+        },
+        {
+          runId,
+          sequence: 3,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'completed',
+          payload: { reason: 'ok' },
+        },
+      ],
+    },
+  });
+  await adapter.connect();
+  let state = createInitialWorkspaceState();
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+  };
+  state = workspaceReducer(state, {
+    type: 'conversations/upsert',
+    conversation: {
+      id: 'conv-1',
+      mode: 'agent',
+      title: 'reconnect',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      projectId: '/tmp/p',
+      createdAt: 't',
+      updatedAt: 't',
+    },
+  });
+  state = workspaceReducer(state, {
+    type: 'run/upsert',
+    run: {
+      id: runId,
+      conversationId: 'conv-1',
+      status: 'running',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      permissionProfile: 'ask',
+      startedAt: 't',
+      lastEventSequence: 0,
+    },
+  });
+  // First subscribe consumes the run to terminal.
+  await subscribeRun(adapter, dispatch, () => state, runId, 0);
+  const first = state.messagesByConversation['conv-1'] ?? [];
+  assert.equal(first.length, 1, 'terminal run promotes exactly one assistant message');
+  const promotedId = first[0];
+  assert.ok(promotedId, 'promoted message id must be defined');
+  assert.ok(isTerminalRunStatus(state.runs[runId]!.status), 'run reaches terminal');
+  // Reconnect: replay from sequence 0. The reducer dedups by
+  // lastSequenceByRun, so the assistant message and terminal bookkeeping must
+  // not settle a second time and no sequence is invented.
+  await subscribeRun(adapter, dispatch, () => state, runId, 0);
+  const second = state.messagesByConversation['conv-1'] ?? [];
+  assert.equal(second.length, 1, 'reconnect replay must not double-settle the assistant message');
+  assert.equal(second[0], promotedId, 'the promoted message id must stay stable across replay');
+  const textBlocks = (state.messages[promotedId]?.contentBlocks ?? []).filter(
+    (b) => b.type === 'text',
+  );
+  assert.equal(textBlocks.length, 1, 'the assistant text block must not duplicate on replay');
+  assert.ok(isTerminalRunStatus(state.runs[runId]!.status), 'terminal stays settled once');
 });
