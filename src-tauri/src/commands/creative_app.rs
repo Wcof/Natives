@@ -10,6 +10,7 @@ use crate::creative_app::docker;
 use crate::creative_app::install;
 use crate::creative_app::local::{self, LocalRuntimeHandle};
 use crate::creative_app::model::*;
+use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
 use crate::db::DbPool;
@@ -177,7 +178,17 @@ pub async fn creative_app_install_github(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(install::install_github(&c, &handle, request))
+        let summary = rt.block_on(install::install_github(&c, &handle, request))?;
+        // Unified identity + startup plan for the newly installed external app.
+        let app_id = runtime_store::find_or_create_application(
+            &c,
+            CreativeAppSource::ExternalGithub,
+            &summary.id,
+        )?;
+        if let Ok(Some(rec)) = store::get_app(&c, &summary.id) {
+            let _ = runtime_store::upsert_active_plan(&c, &app_id, &rec.runtime_config_json);
+        }
+        runtime_store::attach_identity(&c, summary)
     })
     .await
     .map_err(|e| Error::Internal(format!("install join: {e}")))?
@@ -562,9 +573,15 @@ fn create_local_app(
     // startAfterSave is intentionally not auto-started here; UI calls start explicitly.
     let _ = request.start_after_save;
 
-    Ok(local::summary_from_local(
+    // Unified identity + startup plan for the newly registered local app.
+    let app_id =
+        runtime_store::find_or_create_application(conn, CreativeAppSource::LocalProject, &id)?;
+    let plan_json = plan.to_json().map_err(|e| Error::Internal(e.to_string()))?;
+    let _ = runtime_store::upsert_active_plan(conn, &app_id, &plan_json);
+    let summary = local::summary_from_local(
         &local::get_app(conn, &id)?.ok_or_else(|| Error::Internal("insert vanished".into()))?,
-    ))
+    );
+    Ok(runtime_store::attach_identity(conn, summary)?)
 }
 
 fn update_local_app(
@@ -644,7 +661,14 @@ fn update_local_app(
     rec.updated_at = chrono::Utc::now().to_rfc3339();
     local::update_app(&tx, &rec)?;
     tx.commit().map_err(Error::Database)?;
-    Ok(local::summary_from_local(&rec))
+    // Refresh the active startup plan + unified identity for the app.
+    let app_id =
+        runtime_store::find_or_create_application(conn, CreativeAppSource::LocalProject, &rec.id)?;
+    let _ = runtime_store::upsert_active_plan(conn, &app_id, &rec.launch_plan_json);
+    Ok(runtime_store::attach_identity(
+        conn,
+        local::summary_from_local(&rec),
+    )?)
 }
 
 #[tauri::command]
@@ -665,14 +689,15 @@ pub async fn creative_app_resolve_orphan(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(local::resolve_orphan(
+        let summary = rt.block_on(local::resolve_orphan(
             &c,
             &handle,
             local_runtime.as_ref(),
             host_port,
             &id,
             restart,
-        ))
+        ))?;
+        runtime_store::attach_identity(&c, summary)
     })
     .await
     .map_err(|e| Error::Internal(format!("resolve_orphan join: {e}")))?
@@ -715,7 +740,8 @@ pub async fn creative_app_install_local_dependencies(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(local::deps::install_dependencies(&c, &handle, &logs, &id))
+        let summary = rt.block_on(local::deps::install_dependencies(&c, &handle, &logs, &id))?;
+        runtime_store::attach_identity(&c, summary)
     })
     .await
     .map_err(|e| Error::Internal(format!("install deps join: {e}")))?
@@ -821,7 +847,9 @@ pub fn creative_app_get_local_config(
     state: State<'_, AppState>,
 ) -> Result<LocalCreativeConfig> {
     let c = conn(&state.db)?;
-    local::lifecycle::get_local_config(&c, &id)
+    let mut cfg = local::lifecycle::get_local_config(&c, &id)?;
+    cfg.summary = runtime_store::attach_identity(&c, cfg.summary)?;
+    Ok(cfg)
 }
 
 #[tauri::command]

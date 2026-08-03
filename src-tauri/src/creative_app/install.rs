@@ -941,6 +941,8 @@ pub async fn reconcile_all(conn: &Connection, app: Option<&AppHandle>) -> Result
 pub fn summary_from_external(rec: &ExternalCreativeAppRecord) -> CreativeAppSummary {
     CreativeAppSummary {
         id: rec.id.clone(),
+        application_id: String::new(),
+        runtime_instance_id: None,
         source: CreativeAppSource::ExternalGithub,
         runtime: rec.runtime,
         title: rec.title.clone(),
@@ -972,6 +974,8 @@ pub fn summary_from_internal(
     };
     CreativeAppSummary {
         id: id.to_string(),
+        application_id: String::new(),
+        runtime_instance_id: None,
         source: CreativeAppSource::Internal,
         runtime: CreativeAppRuntime::WorkshopStatic,
         title: name.to_string(),

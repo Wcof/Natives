@@ -272,18 +272,17 @@ fn disabled_internal_cannot_open() {
 
 #[test]
 fn external_restart_propagates_stop_failure_contract() {
-    // Contract: adapters::restart for ExternalGithub must call stop then start,
-    // and stop Err must not be swallowed (see adapters/mod.rs). We assert the
-    // source code seam rather than spinning Docker: stop uses `?` before start.
+    // Contract: adapters::restart must stop before start, and stop Err must not
+    // be swallowed. Batch 1 routes restart through the unified stop()/start()
+    // wrappers (which own the instance CAS); stop still uses `?` before start.
     let src = include_str!("mod.rs");
     assert!(
-        src.contains("external::stop(conn, &ctx.app, id).await?")
-            || src.contains("external::stop(conn, &ctx.app, id).await ?"),
-        "external restart must propagate stop failure with `?` before start"
+        src.contains("stop(conn, ctx, id).await?;"),
+        "restart must propagate stop failure with `?` before start"
     );
     assert!(
-        !src.contains("let _ = external::stop"),
-        "external restart must not ignore stop errors"
+        !src.contains("let _ = stop(") && !src.contains("let _ = external::stop"),
+        "restart must not ignore stop errors"
     );
     let install = include_str!("../install.rs");
     assert!(

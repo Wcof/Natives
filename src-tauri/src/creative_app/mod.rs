@@ -14,6 +14,7 @@ pub mod local;
 pub mod model;
 pub mod paths;
 pub mod probe;
+pub mod runtime_store;
 pub mod service;
 pub mod state_machine;
 pub mod store;

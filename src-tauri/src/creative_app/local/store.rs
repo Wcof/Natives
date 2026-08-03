@@ -320,6 +320,8 @@ pub fn summary_from_local(rec: &LocalCreativeAppRecord) -> CreativeAppSummary {
 
     CreativeAppSummary {
         id: rec.id.clone(),
+        application_id: String::new(),
+        runtime_instance_id: None,
         source: CreativeAppSource::LocalProject,
         runtime,
         title: rec.title.clone(),

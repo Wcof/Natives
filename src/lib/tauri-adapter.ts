@@ -110,6 +110,10 @@ export interface CreativeAppActions {
 
 export interface CreativeAppSummary {
   id: string;
+  /** Unified identity across Catalog / assistant card / detail / preview. */
+  applicationId: string;
+  /** Active runtime instance id, when the app currently has one. */
+  runtimeInstanceId?: string;
   source: CreativeAppSource;
   runtime: CreativeAppRuntime;
   title: string;

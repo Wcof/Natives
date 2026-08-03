@@ -58,6 +58,7 @@ describe('creative-app sort and badge', () => {
     const apps: CreativeAppSummary[] = [
       {
         id: 'a',
+        applicationId: 'app-a',
         source: 'internal',
         runtime: 'workshop_static',
         title: 'B',
@@ -67,6 +68,7 @@ describe('creative-app sort and badge', () => {
       },
       {
         id: 'b',
+        applicationId: 'app-b',
         source: 'external_github',
         runtime: 'docker_run',
         title: 'A',
@@ -89,6 +91,7 @@ function summary(
   partial: Partial<CreativeAppSummary> & Pick<CreativeAppSummary, 'id' | 'source' | 'state'>,
 ): CreativeAppSummary {
   return {
+    applicationId: partial.applicationId ?? `app-${partial.id}`,
     runtime: partial.source === 'internal' ? 'workshop_static' : 'local_static',
     title: partial.id,
     version: '1',

@@ -29,6 +29,8 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
       }>;
       return modules.map((m) => ({
         id: m.id,
+        // Matches the Host backfill id convention for internal modules.
+        applicationId: `app-internal-${m.id}`,
         source: 'internal' as const,
         runtime: 'workshop_static' as const,
         title: m.name,

@@ -7,6 +7,14 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct CreativeAppSummary {
     pub id: String,
+    /// Unified identity shared across Catalog / assistant card / detail /
+    /// preview for the same app, regardless of source (batch 1).
+    #[serde(default)]
+    pub application_id: String,
+    /// Active runtime instance id, when the app currently has one (empty when
+    /// not running). Buttons that operate on the runtime carry this id.
+    #[serde(default)]
+    pub runtime_instance_id: Option<String>,
     pub source: CreativeAppSource,
     pub runtime: CreativeAppRuntime,
     pub title: String,
@@ -222,6 +230,52 @@ impl CreativeAppActions {
                 },
             },
         }
+    }
+}
+
+// ── Runtime instance (batch 1: unified runtime ownership record) ──────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeInstanceStatus {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    CleanupFailed,
+    Orphaned,
+}
+
+impl RuntimeInstanceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::CleanupFailed => "cleanup_failed",
+            Self::Orphaned => "orphaned",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "stopping" => Self::Stopping,
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            "cleanup_failed" => Self::CleanupFailed,
+            "orphaned" => Self::Orphaned,
+            _ => return None,
+        })
+    }
+
+    /// Non-terminal statuses that must be unique per application (CAS).
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Starting | Self::Running | Self::Stopping)
     }
 }
 
