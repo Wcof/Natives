@@ -36,7 +36,6 @@ async fn live_engine_text_turn() {
     let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
     let rt = Arc::new(ProductionRuntime::new());
-    rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let provider = RealProvider {
         provider_id: provider_id.clone(),
@@ -133,7 +132,6 @@ async fn live_engine_tool_loop() {
     let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
     let rt = Arc::new(ProductionRuntime::new());
-    rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let provider = RealProvider {
         provider_id: provider_id.clone(),
@@ -255,7 +253,6 @@ async fn live_subagent_task_completes() {
     let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
     let rt = Arc::new(ProductionRuntime::new());
-    rt.set_permission_profile("full_access").await;
     let tools = PermissionGatedTools {
         gateway: {
             let mut g = capability_gateway::CapabilityGateway::new();
@@ -424,7 +421,6 @@ async fn live_engine_cancel_stream() {
     let conversation_id = format!("live-c-cancel-{}", uuid::Uuid::new_v4());
 
     let rt = Arc::new(ProductionRuntime::new());
-    rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let cancel = engine.cancel_token();
     let events = engine.events.clone();
@@ -546,7 +542,6 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
         .expect("NATIVES_TEST_ANTHROPIC_MODEL required for cross-provider live subagent");
 
     let rt = Arc::new(ProductionRuntime::new());
-    rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let parent_provider = RealProvider {
         provider_id: "openai_compatible".into(),
@@ -689,7 +684,6 @@ async fn dual_provider_engine_fixture_subagent() {
     std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
     std::env::set_var("NATIVES_DAEMON_FIXTURE_HONOR_TASK_CREDS", "1");
     let rt = Arc::new(ProductionRuntime::new());
-    rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let parent_provider = FixtureProvider {
         mode: FixtureMode::TextOnly,

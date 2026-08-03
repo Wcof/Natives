@@ -5287,8 +5287,6 @@ mod tests {
                 let provider = FixtureProvider {
                     mode: FixtureMode::RequestPermissionPath,
                 };
-                // Ensure ConfirmEach profile so side-effect tools ask.
-                rm.runtime.set_permission_profile("ask").await;
 
                 let rm_bg = rm.clone();
                 let rid = run.id.clone();
@@ -5818,8 +5816,8 @@ mod tests {
     async fn subagent_task_spawns_independent_identity() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rt = crate::production::ProductionRuntime::new();
-        // Task is Process/ProjectWrite — under ConfirmEach it asks; use autonomous for identity unit test.
-        rt.set_permission_profile("full_access").await;
+        // Task is Process/ProjectWrite — runs under full_access so the identity
+        // unit test never waits on a confirmation prompt.
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
@@ -5947,7 +5945,6 @@ mod tests {
             rt.block_on(async {
                 let parent_id = format!("parent-dual-{}", uuid::Uuid::new_v4());
                 let prt = crate::production::ProductionRuntime::new();
-                prt.set_permission_profile("full_access").await;
                 let tools = crate::production::PermissionGatedTools {
                     gateway: {
                         let mut g = capability_gateway::CapabilityGateway::new();

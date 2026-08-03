@@ -413,14 +413,6 @@ impl ProductionRuntime {
         self.interactions.assignment_inflight_arc()
     }
 
-    /// Legacy fixture compatibility. Production runs use the immutable profile
-    /// captured in `RunStartContext`; this method intentionally does not mutate
-    /// the shared PermissionManager profile.
-    #[deprecated(note = "run profiles are bound in RunStartContext")]
-    pub async fn set_permission_profile(&self, profile: &str) {
-        let _ = profile;
-    }
-
     pub async fn respond_permission(
         &self,
         request_id: &str,
@@ -1889,26 +1881,6 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
 mod permission_bind_tests {
     use super::*;
     use tokio::sync::oneshot;
-
-    #[tokio::test]
-    async fn legacy_runtime_profile_setter_cannot_mutate_shared_profile() {
-        let rt = ProductionRuntime::new();
-        rt.set_permission_profile("readonly").await;
-        assert_eq!(
-            rt.permissions.get_profile().await,
-            PermissionProfile::ConfirmEach
-        );
-        rt.set_permission_profile("ask").await;
-        assert_eq!(
-            rt.permissions.get_profile().await,
-            PermissionProfile::ConfirmEach
-        );
-        rt.set_permission_profile("full_access").await;
-        assert_eq!(
-            rt.permissions.get_profile().await,
-            PermissionProfile::ConfirmEach
-        );
-    }
 
     #[tokio::test]
     async fn rejects_mismatched_run_id() {
