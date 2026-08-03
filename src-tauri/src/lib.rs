@@ -18,7 +18,7 @@ pub mod creative_draft;
 pub mod credential_broker;
 pub mod daemon;
 pub mod daemon_authority;
-mod db;
+pub mod db;
 mod disk_usage;
 mod env_manager;
 mod error;
