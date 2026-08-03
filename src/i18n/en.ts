@@ -361,6 +361,10 @@ export const en = {
     importExisting: 'Import existing app',
     unavailable: 'Drafts are unavailable — restart the app and try again',
     closeDraft: 'Close draft',
+    draftCreatedTitle: 'App draft created',
+    draftCreatedName: 'Name',
+    draftCreatedId: 'Draft ID',
+    draftCreatedHint: 'Continue in Personal Creations; publishing is your action',
     session: {
       noModel: 'No model configured — add a provider in settings first',
     },

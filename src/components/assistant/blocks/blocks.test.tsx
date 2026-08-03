@@ -4,6 +4,7 @@
 // keyboard accessibility, safe Markdown rendering, and large code blocks.
 
 import { describe, it, assert } from '@/lib/test-utils';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { renderBlock, renderBlocks, type ContentBlock } from './index';
 
 describe('ContentBlockRenderers', () => {
@@ -51,6 +52,28 @@ describe('ContentBlockRenderers', () => {
     };
     const result = renderBlock(block, 0);
     assert.ok(result !== null, 'Tool result block should render');
+  });
+
+  it('should render a structured card for create_creative_draft (batch 3)', () => {
+    const block: ContentBlock = {
+      type: 'tool_result',
+      toolName: 'create_creative_draft',
+      toolOutput: {
+        draftId: 'draft-abc123',
+        name: 'Pomodoro',
+        status: 'draft_created',
+        previewUrl: '/drafts/draft-abc123/',
+      },
+      isError: false,
+    };
+    const result = renderBlock(block, 0);
+    assert.ok(result !== null, 'Draft card should render');
+    const html = renderToStaticMarkup(result);
+    assert.ok(
+      html.includes('draft-abc123'),
+      'Draft card should surface the draft id instead of a raw JSON dump',
+    );
+    assert.ok(!html.includes('"toolOutput"'), 'Draft card must not render raw JSON');
   });
 
   it('should render citation block', () => {
