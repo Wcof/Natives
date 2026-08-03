@@ -876,3 +876,110 @@ test('reconnect replay settles assistant message and terminal exactly once', asy
   assert.equal(textBlocks.length, 1, 'the assistant text block must not duplicate on replay');
   assert.ok(isTerminalRunStatus(state.runs[runId]!.status), 'terminal stays settled once');
 });
+
+test('reconnect replay does not duplicate tool blocks or permission cards', async () => {
+  const runId = 'run-replay-tools';
+  const adapter = new FixtureAssistantAdapter({
+    id: 'replay-tools',
+    eventsByRun: {
+      [runId]: [
+        { runId, sequence: 1, timestamp: 't', type: 'started', payload: {} },
+        {
+          runId,
+          sequence: 2,
+          timestamp: 't',
+          type: 'tool_call_requested',
+          payload: { id: 'tool-1', name: 'read_file', input: { path: 'a' } },
+        },
+        {
+          runId,
+          sequence: 3,
+          timestamp: 't',
+          type: 'tool_call_started',
+          payload: { id: 'tool-1', name: 'read_file', input: { path: 'a' } },
+        },
+        {
+          runId,
+          sequence: 4,
+          timestamp: 't',
+          type: 'permission_requested',
+          payload: { permission_id: 'perm-1', tool_call_id: 'tool-1', tool_name: 'read_file', reason: 'r' },
+        },
+        {
+          runId,
+          sequence: 5,
+          timestamp: 't',
+          type: 'permission_responded',
+          payload: { permission_id: 'perm-1', approved: true, scope: 'once' },
+        },
+        {
+          runId,
+          sequence: 6,
+          timestamp: 't',
+          type: 'usage_updated',
+          payload: { input_tokens: 10, output_tokens: 5, max_tokens: 128000 },
+        },
+        {
+          runId,
+          sequence: 7,
+          timestamp: 't',
+          type: 'tool_call_completed',
+          payload: { id: 'tool-1', name: 'read_file', output: { ok: true }, is_error: false },
+        },
+        { runId, sequence: 8, timestamp: 't', type: 'completed', payload: { reason: 'ok' } },
+      ],
+    },
+  });
+  await adapter.connect();
+  let state = createInitialWorkspaceState();
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+  };
+  state = workspaceReducer(state, {
+    type: 'connection/set',
+    connection: 'connected',
+    error: null,
+    reconnectAttempts: 0,
+  });
+  state = workspaceReducer(state, {
+    type: 'run/upsert',
+    run: {
+      id: runId,
+      conversationId: 'conv-1',
+      status: 'running',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      permissionProfile: 'ask',
+      startedAt: 't',
+      lastEventSequence: 0,
+    },
+  });
+  await subscribeRun(adapter, dispatch, () => state, runId, 0);
+  const firstEvents = state.eventsByRun[runId] ?? [];
+  const firstPerms = Object.values(state.interactions).filter((i) => i.kind === 'permission');
+  const firstUsage = state.contextUsageByConversation['conv-1']?.usedTokens;
+  // Reconnect replay from sequence 0 — every event is <= lastSequence and must
+  // be dropped by the reducer, so neither blocks, cards, nor analytics duplicate.
+  await subscribeRun(adapter, dispatch, () => state, runId, 0);
+  const secondEvents = state.eventsByRun[runId] ?? [];
+  assert.equal(
+    secondEvents.length,
+    firstEvents.length,
+    'replayed events must not grow the run event projection',
+  );
+  assert.equal(
+    Object.values(state.interactions).filter((i) => i.kind === 'permission').length,
+    firstPerms.length,
+    'permission cards must not duplicate on reconnect replay',
+  );
+  assert.equal(
+    state.contextUsageByConversation['conv-1']?.usedTokens,
+    firstUsage,
+    'usage/analytics must not be double-settled on reconnect replay',
+  );
+  assert.ok(
+    state.lastSequenceByRun[runId]! >= 8,
+    'projection must still be settled at the terminal sequence',
+  );
+});
+
