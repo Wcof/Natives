@@ -60,6 +60,9 @@ struct ExecutedToolCall {
     name: String,
     args: String,
     result: Option<ToolExecutionResult>,
+    /// Stable ToolResult message id committed in `ToolCallCompleted` so the
+    /// daemon's event→SQLite replay reuses it instead of inventing a new one.
+    result_message_id: Option<String>,
 }
 
 fn is_long_running_tool_result(result: &ToolExecutionResult) -> bool {
@@ -1710,7 +1713,10 @@ impl AgentEngine {
                         .unwrap_or(crate::ToolResultBlock::Json { value: output });
                     typed_tool_results.push(crate::AgentMessage::ToolResult(
                         crate::ToolResultMessage {
-                            message_id: crate::MessageId::new(),
+                            message_id: item
+                                .result_message_id
+                                .map(crate::MessageId::from)
+                                .unwrap_or_else(crate::MessageId::new),
                             tool_call_id: crate::ToolCallId::from(item.id),
                             tool_name: item.name,
                             content: vec![result_block],
@@ -1853,11 +1859,13 @@ impl AgentEngine {
         while i < prepared.len() {
             if let Some(result) = prepared[i].rejected.clone() {
                 let keeps_progress = is_long_running_tool_result(&result);
+                let result_message_id = crate::MessageId::new().to_string();
                 out.push(ExecutedToolCall {
                     id: prepared[i].id.clone(),
                     name: prepared[i].name.clone(),
                     args: prepared[i].args.clone(),
                     result: Some(result.clone()),
+                    result_message_id: Some(result_message_id.clone()),
                 });
                 if let Err(error) = self.append_critical(
                     run_id,
@@ -1867,6 +1875,7 @@ impl AgentEngine {
                         output: result.output,
                         is_error: true,
                         duration_ms: 0,
+                        result_message_id: Some(result_message_id),
                     },
                 ) {
                     self.cancel.cancel();
@@ -1947,6 +1956,7 @@ impl AgentEngine {
                             input: json!({ "input": call.input, "output": result.output }),
                         })
                         .await;
+                    let result_message_id = crate::MessageId::new().to_string();
                     if let Err(error) = self.append_critical(
                         run_id,
                         RunEventKind::ToolCallCompleted {
@@ -1955,6 +1965,7 @@ impl AgentEngine {
                             output: result.output.clone(),
                             is_error: result.is_error,
                             duration_ms: result.duration_ms,
+                            result_message_id: Some(result_message_id.clone()),
                         },
                     ) {
                         tools
@@ -1977,6 +1988,7 @@ impl AgentEngine {
                         name: call.name,
                         args: call.args,
                         result: Some(result),
+                        result_message_id: Some(result_message_id),
                     });
                 }
                 continue;
@@ -2009,6 +2021,7 @@ impl AgentEngine {
                     input: json!({ "input": call.input, "output": result.output }),
                 })
                 .await;
+            let result_message_id = crate::MessageId::new().to_string();
             if let Err(error) = self.append_critical(
                 run_id,
                 RunEventKind::ToolCallCompleted {
@@ -2017,6 +2030,7 @@ impl AgentEngine {
                     output: result.output.clone(),
                     is_error: result.is_error,
                     duration_ms: result.duration_ms,
+                    result_message_id: Some(result_message_id.clone()),
                 },
             ) {
                 tools
@@ -2034,6 +2048,7 @@ impl AgentEngine {
                 name: call.name.clone(),
                 args: call.args.clone(),
                 result: Some(result),
+                result_message_id: Some(result_message_id),
             });
             i += 1;
         }
@@ -2515,9 +2530,10 @@ fn agent_messages_to_values(messages: &[crate::AgentMessage]) -> Vec<Value> {
                 "content": message.text,
             }),
             crate::AgentMessage::Custom(message) => json!({
-                "role": message.kind,
+                "role": "custom",
                 "message_id": message.message_id,
-                "content": message.payload.to_string(),
+                "kind": message.kind,
+                "payload": message.payload,
             }),
         })
         .collect()
@@ -2656,6 +2672,15 @@ fn values_to_agent_messages(values: &[Value]) -> Vec<crate::AgentMessage> {
                                 .unwrap_or_default()
                         }),
                 })),
+                "custom" => Some(crate::AgentMessage::Custom(crate::CustomMessage {
+                    message_id,
+                    kind: value
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("custom")
+                        .to_string(),
+                    payload: value.get("payload").cloned().unwrap_or(Value::Null),
+                })),
                 kind => Some(crate::AgentMessage::Custom(crate::CustomMessage {
                     message_id,
                     kind: kind.to_string(),
@@ -2733,6 +2758,18 @@ pub fn try_agent_messages_from_json(value: &Value) -> Result<Vec<crate::AgentMes
                     validate_snapshot_tool_result_blocks(call_id, blocks)?;
                 } else if object.get("content").and_then(Value::as_str).is_none() {
                     return Err(format!("snapshot tool {call_id} has no content"));
+                }
+            }
+            "custom" => {
+                if object
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .is_none_or(|kind| kind.trim().is_empty())
+                {
+                    return Err(format!("snapshot custom {message_id} is missing kind"));
+                }
+                if object.get("payload").is_none() {
+                    return Err(format!("snapshot custom {message_id} has no payload"));
                 }
             }
             other => {
@@ -3403,11 +3440,12 @@ mod tests {
         hooks.register(HookEvent::SessionStart, Box::new(InjectingHook));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let provider = RecordingTurnProvider(seen.clone());
+        let run_id = format!("hook-inject-typed-{}", uuid::Uuid::new_v4());
         AgentEngine::new(EventSequencer::new())
             .with_hooks(hooks)
             .run_with_typed_messages(
                 EngineRunConfig {
-                    run_id: "hook-inject-typed".into(),
+                    run_id: run_id.clone(),
                     conversation_id: "conversation-hook-inject".into(),
                     model: "model".into(),
                     system_prompt: None,
@@ -3601,9 +3639,8 @@ mod tests {
             "{status:?}"
         );
         let events = engine.events.replay_after("r1", 0);
-        assert!(events
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Started)));
+        // `Started` is a RunManager lifecycle event, not an engine domain event;
+        // this assertion only ever passed by reading a stale on-disk r1.jsonl.
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })));
@@ -3943,6 +3980,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_turn_then_text_turn_are_distinct_turns() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-distinct-turns-{}", uuid::Uuid::new_v4());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some("t1".into()),
+                        name: Some("echo".into()),
+                        arguments_delta: r#"{"x":1}"#.into(),
+                    },
+                    EngineProviderEvent::CompletedWithReason {
+                        reason: ProviderStopReason::ToolUse,
+                    },
+                ],
+                vec![
+                    EngineProviderEvent::TextDelta("after tool".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "use tool".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        let events = engine.events.replay_after(&run_id, 0);
+        let turn_ids: Vec<&String> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                RunEventKind::TurnStarted { turn_id } => Some(turn_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            turn_ids.len(),
+            2,
+            "tool turn + following text turn must each create a Turn"
+        );
+        assert_ne!(
+            turn_ids[0], turn_ids[1],
+            "the next provider request is a new Turn, not a retry of the first"
+        );
+        let completed_turns = events
+            .iter()
+            .filter(|event| matches!(&event.payload, RunEventKind::TurnCompleted { .. }))
+            .count();
+        assert_eq!(completed_turns, 2);
+        // The committed tool result id rides on ToolCallCompleted so the daemon
+        // can reload the same identity instead of inventing a new one.
+        assert!(events.iter().any(|event| matches!(
+            &event.payload,
+            RunEventKind::ToolCallCompleted {
+                result_message_id: Some(_),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn custom_snapshot_round_trips_losslessly() {
+        let messages = vec![
+            crate::AgentMessage::Custom(crate::CustomMessage {
+                message_id: crate::MessageId::from("custom-snap-1"),
+                kind: "recipe".into(),
+                payload: serde_json::json!({"steps": 3, "tag": "chef"}),
+            }),
+            crate::AgentMessage::ToolResult(crate::ToolResultMessage {
+                message_id: crate::MessageId::from("tool-result-snap-1"),
+                tool_call_id: crate::ToolCallId::from("call-snap-1"),
+                tool_name: "read_file".into(),
+                content: vec![crate::ToolResultBlock::Json {
+                    value: serde_json::json!({"ok": true}),
+                }],
+                is_error: false,
+                code: None,
+            }),
+        ];
+        let values = agent_messages_to_values(&messages);
+        let decoded = try_agent_messages_from_json(&Value::Array(values))
+            .expect("strict snapshot decode must accept custom + tool results");
+        assert_eq!(
+            decoded, messages,
+            "snapshot Custom kind/payload and ToolResult identity must be lossless"
+        );
+    }
+
+    #[tokio::test]
     async fn emits_text_delta_before_provider_stream_completes() {
         struct DelayedCompletionProvider;
         #[async_trait::async_trait]
@@ -4217,6 +4354,19 @@ mod tests {
                 RunEventKind::GenerationAttemptCommitted { attempt: 3 }
             )
         }));
+        let turn_starts = events
+            .iter()
+            .filter(|e| matches!(&e.payload, RunEventKind::TurnStarted { .. }))
+            .count();
+        assert_eq!(
+            turn_starts, 1,
+            "provider retries must stay within one Turn, not start new ones"
+        );
+        let turn_completed = events
+            .iter()
+            .filter(|e| matches!(&e.payload, RunEventKind::TurnCompleted { .. }))
+            .count();
+        assert_eq!(turn_completed, 1);
     }
 
     #[tokio::test]

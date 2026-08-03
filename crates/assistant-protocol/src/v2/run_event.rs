@@ -115,6 +115,11 @@ pub enum RunEventKind {
         output: serde_json::Value,
         is_error: bool,
         duration_ms: u64,
+        /// Stable Core ToolResult message id so event→SQLite replay keeps the
+        /// same identity the transcript committed. `None` only for events
+        /// stored before this additive field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_message_id: Option<String>,
     },
     /// Incremental tool/process output (terminal stdout/stderr). Batched ~250ms / 8KB.
     ToolOutputDelta {

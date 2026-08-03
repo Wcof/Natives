@@ -277,6 +277,7 @@ pub fn translate_cli_line(line: &str) -> TranslatedLine {
                             output,
                             is_error,
                             duration_ms: 0,
+                            result_message_id: None,
                         });
                     }
                 }
@@ -297,6 +298,7 @@ pub fn translate_cli_line(line: &str) -> TranslatedLine {
                     output,
                     is_error,
                     duration_ms: 0,
+                    result_message_id: None,
                 });
             }
             out

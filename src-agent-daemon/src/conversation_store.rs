@@ -912,8 +912,32 @@ pub fn load_agent_messages(conversation_id: &str) -> Result<Vec<AgentMessage>, S
             }));
             continue;
         }
+        // Custom messages carry a single `custom` block; reloading them restores
+        // the kind + payload exactly, unlike the old free-form block type which
+        // parse_content_block could not round-trip.
+        if let Some(custom_block) = blocks
+            .iter()
+            .find(|block| block.get("type").and_then(Value::as_str) == Some("custom"))
+        {
+            let content = custom_block.get("content").unwrap_or(custom_block);
+            out.push(AgentMessage::Custom(agent_core::CustomMessage {
+                message_id: agent_core::MessageId::from(id),
+                kind: content
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .filter(|kind| !kind.trim().is_empty())
+                    .unwrap_or("custom")
+                    .to_string(),
+                payload: content.get("payload").cloned().unwrap_or(Value::Null),
+            }));
+            continue;
+        }
         let content = blocks
             .iter()
+            // run_reference is provenance metadata appended to assistant
+            // messages; it is not part of the typed content and must not reach
+            // parse_content_block.
+            .filter(|block| block.get("type").and_then(Value::as_str) != Some("run_reference"))
             .enumerate()
             .map(|(index, block)| {
                 parse_content_block(block).map_err(|error| {
@@ -1354,12 +1378,14 @@ fn append_single_assistant_turn(
                 output,
                 is_error,
                 duration_ms,
+                result_message_id,
             } => tool_results.push((
                 id.clone(),
                 name.clone(),
                 output.clone(),
                 *is_error,
                 *duration_ms,
+                result_message_id.clone(),
             )),
             RunEventKind::MessageCompleted { content, .. } => {
                 if let Some(content) = content {
@@ -1426,7 +1452,7 @@ fn append_single_assistant_turn(
         .map_err(|e| e.to_string())?;
         }
     }
-    for (id, name, output, is_error, duration_ms) in tool_results {
+    for (id, name, output, is_error, duration_ms, result_message_id) in tool_results {
         let code = output
             .get("error_code")
             .or_else(|| output.get("code"))
@@ -1446,7 +1472,11 @@ fn append_single_assistant_turn(
             })
             .unwrap_or_else(|| vec![ToolResultBlock::Json { value: output }]);
         let result = agent_core::ToolResultMessage {
-            message_id: agent_core::MessageId::new(),
+            // Reuse the identity the Core committed in ToolCallCompleted; only
+            // legacy events predating the additive field invent a fresh id.
+            message_id: result_message_id
+                .map(agent_core::MessageId::from)
+                .unwrap_or_else(agent_core::MessageId::new),
             tool_call_id: id.into(),
             tool_name: name,
             content,
@@ -2002,7 +2032,11 @@ fn agent_message_parts(
         AgentMessage::Custom(custom) => (
             custom.message_id.0.clone(),
             "assistant",
-            vec![serde_json::json!({ "type": custom.kind, "payload": custom.payload })],
+            vec![serde_json::json!({
+                "type": "custom",
+                "kind": custom.kind,
+                "payload": custom.payload,
+            })],
             None,
         ),
     }
@@ -2649,6 +2683,7 @@ mod tests {
                         output: serde_json::json!({"ok": true}),
                         is_error: false,
                         duration_ms: 1,
+                        result_message_id: None,
                     },
                 },
             ],
@@ -2950,6 +2985,186 @@ mod tests {
         append_agent_message("typed-conv", None, None, &message).unwrap();
         let loaded = load_agent_messages("typed-conv").unwrap();
         assert_eq!(loaded, vec![message]);
+    }
+
+    #[test]
+    fn custom_message_round_trips_through_sqlite() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("custom-roundtrip.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("custom-conv", "openai", "gpt-4o", None, None).unwrap();
+        let message = AgentMessage::Custom(agent_core::CustomMessage {
+            message_id: agent_core::MessageId::from("custom-1"),
+            kind: "recipe".into(),
+            payload: serde_json::json!({"steps": 3, "tag": "chef"}),
+        });
+        append_agent_message("custom-conv", None, None, &message).unwrap();
+        let loaded = load_agent_messages("custom-conv").unwrap();
+        assert_eq!(
+            loaded,
+            vec![message],
+            "Custom kind + payload must round-trip"
+        );
+    }
+
+    #[test]
+    fn typed_turn_event_replay_preserves_tool_result_message_id() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("turn-replay-id.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("replay-id-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('replay-id-run', 'replay-id-conv', 'completed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        let event = |seq: u64, payload: RunEventKind| RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: seq,
+            run_id: "replay-id-run".into(),
+            sequence: seq,
+            timestamp: chrono::Utc::now(),
+            payload,
+        };
+        let events = vec![
+            event(
+                1,
+                RunEventKind::TurnStarted {
+                    turn_id: "turn-replay-id".into(),
+                },
+            ),
+            event(
+                2,
+                RunEventKind::MessageStarted {
+                    turn_id: "turn-replay-id".into(),
+                    message_id: "assistant-replay-id".into(),
+                    role: "assistant".into(),
+                },
+            ),
+            event(
+                3,
+                RunEventKind::ToolCallCompleted {
+                    id: "call-replay-id".into(),
+                    name: "read_file".into(),
+                    output: serde_json::json!({"ok": true}),
+                    is_error: false,
+                    duration_ms: 1,
+                    result_message_id: Some("result-replay-id".into()),
+                },
+            ),
+            event(
+                4,
+                RunEventKind::MessageCompleted {
+                    turn_id: "turn-replay-id".into(),
+                    message_id: "assistant-replay-id".into(),
+                    role: "assistant".into(),
+                    content: Some(serde_json::json!({
+                        "message_id": "assistant-replay-id",
+                        "role": "assistant",
+                        "content": [{
+                            "ToolCall": {
+                                "tool_call_id": "call-replay-id",
+                                "name": "read_file",
+                                "arguments_json": "{}"
+                            }
+                        }]
+                    })),
+                },
+            ),
+            event(
+                5,
+                RunEventKind::TurnCompleted {
+                    turn_id: "turn-replay-id".into(),
+                    stop_reason: "tool_use".into(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            ),
+        ];
+        append_assistant_turn_from_events("replay-id-conv", "replay-id-run", &events).unwrap();
+        let loaded = load_agent_messages("replay-id-conv").unwrap();
+        let tool_results: Vec<_> = loaded
+            .iter()
+            .filter_map(|message| match message {
+                AgentMessage::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_results.len(), 1);
+        assert_eq!(
+            tool_results[0].message_id.to_string(),
+            "result-replay-id",
+            "event→SQLite→reload must keep the committed ToolResult message id"
+        );
+    }
+
+    #[test]
+    fn file_reference_degrades_to_explicit_text_marker_at_single_boundary() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("attachment-boundary.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("attach-conv", "openai", "gpt-4o", None, None).unwrap();
+        append_trigger_message(
+            "attach-conv",
+            Some("look at this"),
+            Some(&[AttachmentRef {
+                path: "/tmp/a.txt".into(),
+                name: Some("a.txt".into()),
+                mime_type: None,
+                size: None,
+            }]),
+        )
+        .unwrap();
+        let loaded = load_agent_messages("attach-conv").unwrap();
+        // parse_content_block is the single conversion boundary for attachments:
+        // a file_reference block becomes this explicit text marker, never a
+        // silently dropped or re-invented structure. The test pins the boundary.
+        assert!(matches!(
+            &loaded[0],
+            AgentMessage::User(user)
+                if user.content.iter().any(|block| matches!(
+                    block,
+                    ContentBlock::Text { text } if text.contains("[attachment: a.txt at /tmp/a.txt]")
+                ))
+        ));
     }
 
     #[test]
