@@ -332,7 +332,25 @@ pub fn creative_app_browser_show(
     bounds: BrowserBounds,
     app_handle: tauri::AppHandle,
     browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
 ) -> Result<()> {
+    // Bind the preview to the app's active runtime instance (batch 6).
+    if let Ok(c) = conn(&state.db) {
+        if let Ok(app_identity) =
+            runtime_store::find_or_create_application(&c, CreativeAppSource::LocalProject, &app_id)
+                .or_else(|_| {
+                    runtime_store::find_or_create_application(
+                        &c,
+                        CreativeAppSource::ExternalGithub,
+                        &app_id,
+                    )
+                })
+        {
+            if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
+                let _ = runtime_store::upsert_preview_target(&c, &iid, &url, "child_webview");
+            }
+        }
+    }
     browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)
 }
 
@@ -368,7 +386,32 @@ pub fn creative_app_browser_hide(app_handle: tauri::AppHandle) -> Result<()> {
 pub fn creative_app_browser_close(
     app_handle: tauri::AppHandle,
     browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
 ) -> Result<()> {
+    // Clear the preview target for the app being closed (batch 6).
+    let closed_app = browser::browser_current(&browser)
+        .ok()
+        .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
+    if let Some(app_id) = closed_app {
+        if let Ok(c) = conn(&state.db) {
+            if let Ok(app_identity) = runtime_store::find_or_create_application(
+                &c,
+                CreativeAppSource::LocalProject,
+                &app_id,
+            )
+            .or_else(|_| {
+                runtime_store::find_or_create_application(
+                    &c,
+                    CreativeAppSource::ExternalGithub,
+                    &app_id,
+                )
+            }) {
+                if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
+                    let _ = runtime_store::clear_preview_targets(&c, &iid);
+                }
+            }
+        }
+    }
     browser::browser_close(&app_handle, &browser)
 }
 

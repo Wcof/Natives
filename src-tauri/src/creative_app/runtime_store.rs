@@ -247,6 +247,61 @@ pub fn settle_instance(
     Ok(())
 }
 
+/// Bind a preview target to a runtime instance (batch 6). Replaces the previous
+/// selected target so a runtime has at most one live preview.
+pub fn upsert_preview_target(
+    conn: &Connection,
+    runtime_instance_id: &str,
+    url: &str,
+    kind: &str,
+) -> Result<String> {
+    let id = Uuid::new_v4().to_string();
+    let t = now();
+    conn.execute(
+        "DELETE FROM preview_targets WHERE runtime_instance_id = ?1",
+        params![runtime_instance_id],
+    )
+    .map_err(Error::Database)?;
+    conn.execute(
+        "INSERT INTO preview_targets (id, runtime_instance_id, url, kind, selected, created_at)
+         VALUES (?1, ?2, ?3, ?4, 1, ?5)",
+        params![id, runtime_instance_id, url, kind, t],
+    )
+    .map_err(Error::Database)?;
+    Ok(id)
+}
+
+/// Active preview target for a source row, if the app has one.
+pub fn active_preview_target(
+    conn: &Connection,
+    source: CreativeAppSource,
+    source_id: &str,
+) -> Result<Option<(String, String)>> {
+    let Some(app_id) = lookup_application(conn, source_str(source), source_id)? else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT pt.id, pt.url FROM preview_targets pt
+         JOIN runtime_instances ri ON ri.id = pt.runtime_instance_id
+         WHERE ri.application_id = ?1 AND ri.status = 'running' AND pt.selected = 1
+         LIMIT 1",
+        params![app_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(Error::Database)
+}
+
+/// Clear preview targets for a runtime instance (webview closed).
+pub fn clear_preview_targets(conn: &Connection, runtime_instance_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM preview_targets WHERE runtime_instance_id = ?1",
+        params![runtime_instance_id],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 pub fn mark_stopping(conn: &Connection, instance_id: &str) -> Result<()> {
     conn.execute(
         "UPDATE runtime_instances SET status = 'stopping', updated_at = ?2 WHERE id = ?1",
@@ -540,6 +595,63 @@ mod tests {
         assert_eq!(status, "stopped");
         assert_eq!(code, Some(3));
         assert!(active_instance_id(&conn, &app).unwrap().is_none());
+    }
+
+    /// Batch 6: a preview target binds to the running instance and clears on close.
+    #[test]
+    fn preview_target_binds_to_running_instance() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let iid = create_instance(&conn, &app, None, "host_http").unwrap();
+        // Not running yet → no preview target is active.
+        assert!(
+            active_preview_target(&conn, CreativeAppSource::LocalProject, "loc1")
+                .unwrap()
+                .is_none()
+        );
+
+        mark_running(
+            &conn,
+            &iid,
+            &["http://127.0.0.1:5173/".into()],
+            Some(5173),
+            None,
+            None,
+        )
+        .unwrap();
+        let tid =
+            upsert_preview_target(&conn, &iid, "http://127.0.0.1:5173/", "child_webview").unwrap();
+        let active = active_preview_target(&conn, CreativeAppSource::LocalProject, "loc1")
+            .unwrap()
+            .expect("running app has a preview");
+        assert_eq!(active.0, tid);
+        assert_eq!(active.1, "http://127.0.0.1:5173/");
+
+        // A new preview replaces the old one (at most one live preview).
+        let tid2 = upsert_preview_target(
+            &conn,
+            &iid,
+            "http://127.0.0.1:5173/#/other",
+            "child_webview",
+        )
+        .unwrap();
+        assert_ne!(tid, tid2);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM preview_targets WHERE runtime_instance_id = ?1",
+                params![iid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        clear_preview_targets(&conn, &iid).unwrap();
+        assert!(
+            active_preview_target(&conn, CreativeAppSource::LocalProject, "loc1")
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
