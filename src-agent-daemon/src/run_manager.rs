@@ -8,7 +8,8 @@ use agent_core::{
 };
 use assistant_protocol::v2::{
     CancelRunRequest, ContinueRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest,
-    RetryRunRequest, RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
+    ResumeDecision, ResumeRunRequest, ResumeRunResponse, RetryRunRequest, RunEventKind, RunEventV2,
+    RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
 use rusqlite::OptionalExtension;
 use std::collections::HashMap;
@@ -39,6 +40,85 @@ pub struct RunManager {
     snapshot_path_override: Option<std::path::PathBuf>,
     data_store: Option<Arc<DataStore>>,
     pub runtime: Arc<ProductionRuntime>,
+}
+
+/// Load a checkpoint and verify it carries the committed snapshot, turn, and
+/// ledger watermarks a resumable restore needs. Returns
+/// `(id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor)`.
+fn load_resumable_checkpoint(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    checkpoint_id: Option<&str>,
+) -> Result<(String, Option<String>, Option<String>, Option<String>), String> {
+    let checkpoint = if let Some(checkpoint_id) = checkpoint_id {
+        conn.query_row(
+            "SELECT id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor
+             FROM checkpoint WHERE id = ?1 AND run_id = ?2",
+            rusqlite::params![checkpoint_id, run_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(|_| "checkpoint not found for source run".to_string())?
+    } else {
+        conn.query_row(
+            "SELECT id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor
+             FROM checkpoint WHERE run_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![run_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(|_| "source run has no durable checkpoint".to_string())?
+    };
+    // Exact restore requires the checkpoint to name a committed active context
+    // snapshot. A NULL snapshot would make the resumed run fall back to a newer
+    // conversation snapshot and silently change the context being restored.
+    let snapshot_id = checkpoint.2.as_deref().ok_or_else(|| {
+        "checkpoint has no active context snapshot; restore requires an exact committed snapshot"
+            .to_string()
+    })?;
+    let exists: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM context_snapshot WHERE id = ?1)",
+            rusqlite::params![snapshot_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if exists == 0 {
+        return Err("checkpoint references a missing context snapshot".into());
+    }
+    // A resumable checkpoint must also carry the turn it committed and the
+    // side-effect ledger watermark it was captured at; without them the restore
+    // has no defined point in the run's history.
+    if checkpoint
+        .1
+        .as_deref()
+        .is_none_or(|turn| turn.trim().is_empty())
+    {
+        return Err("checkpoint has no committed turn; restore requires a turn watermark".into());
+    }
+    if checkpoint
+        .3
+        .as_deref()
+        .is_none_or(|cursor| cursor.trim().is_empty())
+    {
+        return Err(
+            "checkpoint has no side-effect ledger cursor; restore requires a ledger watermark"
+                .into(),
+        );
+    }
+    Ok(checkpoint)
 }
 
 /// Process-wide Run Authority for the **current process only**.
@@ -109,6 +189,13 @@ impl RunManager {
         mgr.restore_runs_snapshot()?;
         // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
         crate::prompt_queue_store::recover_session_actors_on_startup()?;
+        // Idempotent crash-gap repair: project context_snapshot rows for runs
+        // that committed a ContextSnapshotCommitted event but never reached the
+        // run-end projection. Best-effort — the loaders already fail closed on
+        // a missing snapshot, so a repair failure must not block daemon start.
+        if let Err(error) = crate::conversation_store::backfill_context_snapshots() {
+            eprintln!("[run_manager] context snapshot backfill failed: {error}");
+        }
         // Expire any in-memory waiters (oneshot futures are never restored).
         // InteractionHub starts empty on new process — no action required.
         Ok(mgr)
@@ -2202,53 +2289,8 @@ impl RunManager {
             return Err("continue requires durable daemon storage".into());
         };
         let conn = store.conn()?;
-        let checkpoint = if let Some(checkpoint_id) = req.checkpoint_id.as_deref() {
-            conn.query_row(
-                "SELECT id, turn_id, active_context_snapshot_id
-                 FROM checkpoint WHERE id = ?1 AND run_id = ?2",
-                rusqlite::params![checkpoint_id, &source.id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )
-            .map_err(|_| "checkpoint not found for source run".to_string())?
-        } else {
-            conn.query_row(
-                "SELECT id, turn_id, active_context_snapshot_id
-                 FROM checkpoint WHERE run_id = ?1 ORDER BY created_at DESC LIMIT 1",
-                rusqlite::params![&source.id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )
-            .map_err(|_| "source run has no durable checkpoint".to_string())?
-        };
-        // Exact continue requires the checkpoint to name a committed active
-        // context snapshot. Approving a checkpoint with a NULL snapshot would
-        // make the resumed run fall back to a newer conversation snapshot and
-        // silently change the context the continuation was approved against.
-        let snapshot_id = checkpoint.2.as_deref().ok_or_else(|| {
-            "checkpoint has no active context snapshot; continue requires an exact committed snapshot"
-                .to_string()
-        })?;
-        let exists: i64 = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM context_snapshot WHERE id = ?1)",
-                rusqlite::params![snapshot_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if exists == 0 {
-            return Err("checkpoint references a missing context snapshot".into());
-        }
+        let checkpoint =
+            load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
         let uncertain: i64 = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM side_effect_record
@@ -2276,6 +2318,7 @@ impl RunManager {
             })?;
             return Err("run has uncertain side effects; continue requires confirmation".into());
         }
+        drop(conn);
         let content = match req.content {
             Some(content) => Some(content),
             None => self
@@ -2285,6 +2328,170 @@ impl RunManager {
                 .get(&source.id)
                 .cloned(),
         };
+        let new_run = self.create_continued_run(&source, &checkpoint, content.clone())?;
+        let conn = store.conn()?;
+        if let Err(error) = conn.execute(
+            "INSERT INTO resume_plan
+             (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
+             VALUES (?1, ?2, ?3, 'continue', ?4, 'approved', 'SafeToContinue')",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                &source.id,
+                &new_run.id,
+                &checkpoint.0,
+            ],
+        ) {
+            self.fail_run_if_active(
+                &new_run.id,
+                error.to_string(),
+                "RESUME_PLAN_PERSISTENCE_FAILED",
+            );
+            return Err(format!("persist continue resume plan failed: {error}"));
+        }
+        Ok(new_run)
+    }
+
+    /// Create an independent run from a durable checkpoint. This is a
+    /// planning operation: the caller starts the returned run separately, so
+    /// no source Future, permission waiter, or credential lease is revived.
+    pub fn resume_run(&self, req: ResumeRunRequest) -> Result<ResumeRunResponse, String> {
+        let source = self
+            .get_run(&req.run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        if !source.status.is_terminal() {
+            return Err("run must be terminal before resume".into());
+        }
+        let Some(store) = &self.data_store else {
+            return Err("resume requires durable daemon storage".into());
+        };
+        let conn = store.conn()?;
+        let checkpoint =
+            load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
+        // Scan the side-effect ledger for uncertain effects. A restore is only
+        // SafeToContinue when nothing is uncertain; uncertain effects that are
+        // not replay-safe hard-block resume (Blocked), while replay-safe ones
+        // require an explicit caller confirmation (ConfirmationRequired). No
+        // provider or tool is invoked until that confirmation arrives.
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, tool_call_id, category, replay_safe
+                 FROM side_effect_record
+                 WHERE run_id = ?1 AND status = 'uncertain'",
+            )
+            .map_err(|e| e.to_string())?;
+        let uncertain_effects: Vec<serde_json::Value> = stmt
+            .query_map(rusqlite::params![&source.id], |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "tool_call_id": row.get::<_, Option<String>>(1)?,
+                    "category": row.get::<_, String>(2)?,
+                    "replay_safe": row.get::<_, i64>(3)? != 0,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let has_uncertain = !uncertain_effects.is_empty();
+        let hard_blocked = has_uncertain
+            && uncertain_effects.iter().any(|effect| {
+                effect
+                    .get("replay_safe")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+            });
+        if hard_blocked {
+            let _ = conn.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
+                 VALUES (?1, ?2, 'resume', ?3, 'blocked', 'Blocked', ?4)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    &source.id,
+                    &checkpoint.0,
+                    serde_json::to_string(&uncertain_effects).unwrap_or_default(),
+                ],
+            );
+            return Ok(ResumeRunResponse {
+                decision: ResumeDecision::Blocked,
+                reason: "side-effect ledger has uncertain effects that are not replay-safe; resume is not possible".into(),
+                unresolved_effects: uncertain_effects,
+                new_run_id: None,
+            });
+        }
+        if has_uncertain && !req.confirmed {
+            let _ = conn.execute(
+                "INSERT INTO resume_plan
+                 (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
+                 VALUES (?1, ?2, 'resume', ?3, 'blocked', 'ConfirmationRequired', ?4)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    &source.id,
+                    &checkpoint.0,
+                    serde_json::to_string(&uncertain_effects).unwrap_or_default(),
+                ],
+            );
+            return Ok(ResumeRunResponse {
+                decision: ResumeDecision::ConfirmationRequired,
+                reason: "run has uncertain side effects; confirm before resume".into(),
+                unresolved_effects: uncertain_effects,
+                new_run_id: None,
+            });
+        }
+        drop(stmt);
+        drop(conn);
+        // Safe or explicitly confirmed: create a fresh independent run. This
+        // revives no old Future, permission waiter, or credential lease.
+        let content = match req.content {
+            Some(content) => Some(content),
+            None => self
+                .last_content
+                .lock()
+                .map_err(|e| e.to_string())?
+                .get(&source.id)
+                .cloned(),
+        };
+        let new_run = self.create_continued_run(&source, &checkpoint, content.clone())?;
+        let conn = store.conn()?;
+        if let Err(error) = conn.execute(
+            "INSERT INTO resume_plan
+             (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
+             VALUES (?1, ?2, ?3, 'resume', ?4, 'approved', 'SafeToContinue')",
+            rusqlite::params![
+                Uuid::new_v4().to_string(),
+                &source.id,
+                &new_run.id,
+                &checkpoint.0,
+            ],
+        ) {
+            self.fail_run_if_active(
+                &new_run.id,
+                error.to_string(),
+                "RESUME_PLAN_PERSISTENCE_FAILED",
+            );
+            return Err(format!("persist resume resume plan failed: {error}"));
+        }
+        Ok(ResumeRunResponse {
+            decision: ResumeDecision::SafeToContinue,
+            reason: "resume approved".into(),
+            unresolved_effects: Vec::new(),
+            new_run_id: Some(new_run.id),
+        })
+    }
+
+    /// Create a fresh independent continuation run bound to a resumable
+    /// checkpoint. Shared by `continue_run` and `resume_run` so there is a
+    /// single run-creation path; the new run always has its own identity and
+    /// never revives a source Future, permission waiter, or credential lease.
+    fn create_continued_run(
+        &self,
+        source: &RunV2,
+        checkpoint: &(String, Option<String>, Option<String>, Option<String>),
+        content: Option<String>,
+    ) -> Result<RunV2, String> {
+        let Some(store) = &self.data_store else {
+            return Err("continue requires durable daemon storage".into());
+        };
+        let conn = store.conn()?;
         let branch_parent_message_id = conn
             .query_row(
                 "SELECT id FROM message WHERE conversation_id = ?1
@@ -2331,25 +2538,6 @@ impl RunManager {
                 .lock()
                 .map_err(|e| e.to_string())?
                 .insert(new_run.id.clone(), content);
-        }
-        let conn = store.conn()?;
-        if let Err(error) = conn.execute(
-            "INSERT INTO resume_plan
-             (id, source_run_id, new_run_id, action, checkpoint_id, status, decision)
-             VALUES (?1, ?2, ?3, 'continue', ?4, 'approved', 'SafeToContinue')",
-            rusqlite::params![
-                Uuid::new_v4().to_string(),
-                &source.id,
-                &new_run.id,
-                &checkpoint.0,
-            ],
-        ) {
-            self.fail_run_if_active(
-                &new_run.id,
-                error.to_string(),
-                "RESUME_PLAN_PERSISTENCE_FAILED",
-            );
-            return Err(format!("persist continue resume plan failed: {error}"));
         }
         Ok(new_run)
     }
@@ -3578,6 +3766,284 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(approved, 0, "no approved continue plan may be created");
+        });
+    }
+
+    /// Build a terminal source run with a fully watermarked checkpoint and a
+    /// fresh store, under `with_env_lock`. Returns `(store, source_run_id)`.
+    fn resume_fixture() -> (std::sync::Arc<crate::storage::DataStore>, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("resume.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_DB_PATH", &db_path);
+        crate::storage::set_test_db_override(
+            Some(db_path.clone()),
+            Some(dir.path().join("artifacts")),
+        );
+        let store = std::sync::Arc::new(
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+        );
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('resume-conv', 'agent', 'Resume', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        let rm = RunManager::new_with_store(store.clone());
+        let source = rm
+            .create_run(CreateRunRequest {
+                capability_selection: None,
+                conversation_id: "resume-conv".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("resume me".into()),
+                attachments: None,
+                max_steps: Some(5),
+                parent_run_id: None,
+                project_path: Some(dir.path().to_string_lossy().into_owned()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            })
+            .unwrap();
+        for (status, hint) in [
+            (RunStatusV2::Preparing, "preparing"),
+            (RunStatusV2::Running, "running"),
+            (RunStatusV2::Completed, "completed"),
+        ] {
+            rm.commit_status(
+                &source.id,
+                status,
+                TransitionMetadata::empty().with_lifecycle_hint(hint),
+            )
+            .unwrap();
+        }
+        let conn = store.conn().unwrap();
+        conn.execute(
+            "INSERT INTO context_snapshot
+             (id, run_id, sequence, snapshot_type, token_count, snapshot_json)
+             VALUES ('snapshot-resume', ?1, 1, 'active_context', 3, ?2)",
+            rusqlite::params![&source.id, serde_json::json!({"messages": []}).to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO checkpoint
+             (id, run_id, conversation_id, sequence, turn_id,
+              active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+             VALUES ('checkpoint-resume', ?1, 'resume-conv', 1, 'turn-1',
+                     'snapshot-resume', 'ledger-1', '{}')",
+            rusqlite::params![&source.id],
+        )
+        .unwrap();
+        drop(conn);
+        (store, source.id)
+    }
+
+    #[test]
+    fn continue_rejects_checkpoint_without_ledger_watermark() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("continue-noledger.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
+            let store = std::sync::Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('noledger-conv', 'agent', 'Continue', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let source = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: "noledger-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("continue me".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: Some(dir.path().to_string_lossy().into_owned()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            for (status, hint) in [
+                (RunStatusV2::Preparing, "preparing"),
+                (RunStatusV2::Running, "running"),
+                (RunStatusV2::Completed, "completed"),
+            ] {
+                rm.commit_status(
+                    &source.id,
+                    status,
+                    TransitionMetadata::empty().with_lifecycle_hint(hint),
+                )
+                .unwrap();
+            }
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO context_snapshot
+                 (id, run_id, sequence, snapshot_type, token_count, snapshot_json)
+                 VALUES ('snapshot-noledger', ?1, 1, 'active_context', 3, ?2)",
+                rusqlite::params![&source.id, serde_json::json!({"messages": []}).to_string()],
+            )
+            .unwrap();
+            // Snapshot + turn present, ledger cursor NULL: not resumable.
+            conn.execute(
+                "INSERT INTO checkpoint
+                 (id, run_id, conversation_id, sequence, turn_id,
+                  active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+                 VALUES ('checkpoint-noledger', ?1, 'noledger-conv', 1, 'turn-1',
+                         'snapshot-noledger', NULL, '{}')",
+                rusqlite::params![&source.id],
+            )
+            .unwrap();
+            drop(conn);
+            let error = rm
+                .continue_run(ContinueRunRequest {
+                    run_id: source.id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                })
+                .expect_err("checkpoint without a ledger watermark must be rejected");
+            assert!(
+                error.contains("ledger watermark"),
+                "stable fail-closed error expected, got: {error}"
+            );
+        });
+    }
+
+    #[test]
+    fn resume_uncertain_returns_confirmation_required_without_creating_run() {
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-uncertain', ?1, 'process', 'uncertain', 1)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(response.decision, ResumeDecision::ConfirmationRequired);
+            assert!(
+                response.new_run_id.is_none(),
+                "no run may be created before confirmation"
+            );
+            let approved: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM resume_plan
+                     WHERE source_run_id = ?1 AND action = 'resume' AND status = 'approved'",
+                    rusqlite::params![&source_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(approved, 0, "no approved resume plan before confirmation");
+        });
+    }
+
+    #[test]
+    fn resume_confirmed_creates_independent_run() {
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-confirmed', ?1, 'process', 'uncertain', 1)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: true,
+                })
+                .unwrap();
+            assert_eq!(response.decision, ResumeDecision::SafeToContinue);
+            let new_run_id = response
+                .new_run_id
+                .expect("confirmed resume must create a run");
+            assert_ne!(
+                new_run_id, source_id,
+                "resume must create a fresh independent run"
+            );
+            let resumed = rm.get_run(&new_run_id).expect("new run must exist");
+            assert_eq!(
+                resumed.continued_from_run_id.as_deref(),
+                Some(source_id.as_str())
+            );
+            assert_eq!(resumed.checkpoint_id.as_deref(), Some("checkpoint-resume"));
+        });
+    }
+
+    #[test]
+    fn resume_blocked_on_non_replay_safe_uncertain() {
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-nonreplay', ?1, 'process', 'uncertain', 0)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: true,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::Blocked,
+                "non-replay-safe uncertain effect hard-blocks resume"
+            );
+            assert!(
+                response.new_run_id.is_none(),
+                "Blocked resume must not create a run"
+            );
         });
     }
 

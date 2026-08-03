@@ -2281,26 +2281,51 @@ pub async fn restart_subagent_with_binding(
         sess.task.clone()
     };
     let rm = crate::global_run_manager();
+    // Restore the exact child scope persisted at spawn (migration 029). A route
+    // restart must never guess defaults: missing project identity, permission
+    // ceiling, profile, or step budget fails closed instead of narrowing or
+    // widening the child's authority.
+    let project_path = sess.project_path.clone().ok_or_else(|| {
+        "subagent session has no persisted project path; route restart requires exact project identity"
+            .to_string()
+    })?;
+    let permission_profile = sess.permission_profile.clone().ok_or_else(|| {
+        "subagent session has no persisted permission ceiling; route restart requires exact scope"
+            .to_string()
+    })?;
+    let max_steps = sess
+        .max_steps
+        .map(|steps| steps.clamp(1, u32::MAX as i64) as u32)
+        .ok_or_else(|| {
+            "subagent session has no persisted step budget; route restart requires exact scope"
+                .to_string()
+        })?;
     let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
         capability_selection: None,
         conversation_id: sess.child_conversation_id.clone(),
         provider_id: binding.provider_id.clone(),
         model_id: binding.model_id.clone(),
         key_id: Some(binding.key_id.clone()),
-        agent_profile_id: None,
-        permission_profile: Some("ask".into()),
+        agent_profile_id: sess.agent_profile_id.clone(),
+        permission_profile: Some(permission_profile.clone()),
         content: Some(prompt.clone()),
         attachments: None,
-        max_steps: Some(15),
+        max_steps: Some(max_steps),
         parent_run_id: sess.parent_run_id.clone(),
-        project_path: None,
+        project_path: Some(project_path.clone()),
         idempotency_key: None,
         effort: None,
         runtime_id: Some("native".into()),
     })?;
+    if !sess.tool_allowlist.is_empty() {
+        crate::global_run_manager()
+            .runtime
+            .set_run_tool_allowlist(&created.id, sess.tool_allowlist.clone())
+            .await;
+    }
     let run = crate::run_manager::RunManager::start_detached_global(
         assistant_protocol::v2::StartRunRequest {
-            agent_profile_id: None,
+            agent_profile_id: sess.agent_profile_id.clone(),
             capability_selection: None,
             run_id: Some(created.id.clone()),
             conversation_id: Some(sess.child_conversation_id.clone()),
@@ -2310,9 +2335,9 @@ pub async fn restart_subagent_with_binding(
             content: Some(prompt),
             attachments: None,
             trigger_message_id: None,
-            permission_profile: Some("ask".into()),
-            max_steps: Some(15),
-            project_path: None,
+            permission_profile: Some(permission_profile),
+            max_steps: Some(max_steps),
+            project_path: Some(project_path),
             idempotency_key: None,
             effort: None,
             runtime_id: Some("native".into()),

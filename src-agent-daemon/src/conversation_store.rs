@@ -1756,6 +1756,64 @@ fn persist_context_snapshots_from_events(
     Ok(())
 }
 
+/// Daemon-startup repair for the crash gap between a committed
+/// `ContextSnapshotCommitted` event and its run-end `context_snapshot` row
+/// projection. When the engine commits the event but the process dies before
+/// `append_assistant_turn_from_events` materializes the row, a restart leaves
+/// an event without a queryable snapshot. This scans every run that committed
+/// such an event and idempotently projects any missing rows (the projection is
+/// deduplicated per `run_id` + sequence, and summary messages are identity
+/// checked), so it is safe to run on every daemon start.
+pub fn backfill_context_snapshots() -> Result<usize, String> {
+    let run_ids: Vec<String> = {
+        let store = store()?;
+        let conn = store.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT run_id FROM run_event
+                 WHERE event_type = 'context_snapshot_committed'",
+            )
+            .map_err(|e| e.to_string())?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        ids
+    };
+    let mut touched = 0usize;
+    for run_id in run_ids {
+        let events: Vec<RunEventV2> = {
+            let store = store()?;
+            let conn = store.conn()?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT payload FROM run_event
+                     WHERE run_id = ?1 ORDER BY sequence ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let mut events = Vec::new();
+            {
+                let rows = stmt
+                    .query_map(rusqlite::params![run_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for payload in rows {
+                    let payload = payload.map_err(|e| e.to_string())?;
+                    if let Ok(event) = serde_json::from_str::<RunEventV2>(&payload) {
+                        events.push(event);
+                    }
+                }
+            }
+            events
+        };
+        if !events.is_empty() {
+            persist_context_snapshots_from_events(&run_id, &events)?;
+            touched += 1;
+        }
+    }
+    Ok(touched)
+}
+
 /// Keep a model-written compaction summary as a first-class system message.
 /// The active snapshot still carries the complete provider-valid view, but a
 /// durable conversation must be able to reload and audit the summary without
@@ -3165,6 +3223,114 @@ mod tests {
                     ContentBlock::Text { text } if text.contains("[attachment: a.txt at /tmp/a.txt]")
                 ))
         ));
+    }
+
+    #[test]
+    fn backfill_context_snapshots_materializes_missing_row_from_committed_event() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("backfill-snapshot.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        ensure_conversation_stub("backfill-conv", "openai", "gpt-4o", None, None).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('backfill-run', 'backfill-conv', 'running', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        // Simulate the crash gap: the ContextSnapshotCommitted event is durable
+        // but the run-end projection never materialized the context_snapshot row.
+        let event = RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: "backfill-run".into(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ContextSnapshotCommitted {
+                snapshot_id: "snapshot-backfill".into(),
+                turn_id: Some("turn-backfill".into()),
+                source_revision: 1,
+                input_message_ids: vec![],
+                summary_message_id: None,
+                replaced_range: None,
+                algorithm_version: "compaction-v1".into(),
+                provider_context_window: None,
+                artifact_reference: None,
+                snapshot_json: serde_json::json!([{
+                    "role": "system",
+                    "message_id": "summary-backfill",
+                    "content": "compacted"
+                }]),
+            },
+        };
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+                 VALUES ('backfill-run', 1, 'context_snapshot_committed', ?1, datetime('now'))",
+                rusqlite::params![serde_json::to_string(&event).unwrap()],
+            )
+            .unwrap();
+        let before: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'backfill-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            before, 0,
+            "crash gap: the event is durable but no row exists"
+        );
+
+        let touched = backfill_context_snapshots().unwrap();
+        assert_eq!(
+            touched, 1,
+            "one run with a snapshot event must be backfilled"
+        );
+        let after: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'backfill-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, 1,
+            "startup backfill must materialize the missing context_snapshot row"
+        );
+        // Idempotent: a second backfill does not duplicate the row.
+        let touched_again = backfill_context_snapshots().unwrap();
+        assert_eq!(touched_again, 1);
+        let final_count: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'backfill-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(final_count, 1, "backfill must be idempotent");
     }
 
     #[test]

@@ -44,6 +44,7 @@ pub const ALL: &[(i64, &str)] = &[
     (26, MIGRATION_026),
     (27, MIGRATION_027),
     (28, MIGRATION_028),
+    (29, MIGRATION_029),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1090,6 +1091,20 @@ CREATE TABLE IF NOT EXISTS resume_plan (
     resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_resume_plan_source ON resume_plan(source_run_id, created_at DESC);
+";
+
+const MIGRATION_029: &str = "
+-- Subagent route-restart scope: the durable session must carry the original
+-- child scope (project identity, permission ceiling, profile, step budget,
+-- tool allowlist) so a route switch restores them exactly instead of guessing
+-- ask / max_steps=15 and dropping project identity.
+ALTER TABLE subagent_session ADD COLUMN project_path TEXT;
+ALTER TABLE subagent_session ADD COLUMN project_id TEXT;
+ALTER TABLE subagent_session ADD COLUMN project_identity_version INTEGER;
+ALTER TABLE subagent_session ADD COLUMN permission_profile TEXT;
+ALTER TABLE subagent_session ADD COLUMN agent_profile_id TEXT;
+ALTER TABLE subagent_session ADD COLUMN max_steps INTEGER;
+ALTER TABLE subagent_session ADD COLUMN tool_allowlist_json TEXT;
 ";
 
 #[cfg(test)]

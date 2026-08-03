@@ -464,8 +464,8 @@ pub async fn handle_rpc(
 ) {
     use assistant_protocol::v2::methods::names;
     use assistant_protocol::v2::{
-        CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, RetryRunRequest,
-        StartRunRequest,
+        CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, ResumeRunRequest,
+        RetryRunRequest, StartRunRequest,
     };
     match request.method.as_str() {
         names::DAEMON_GET_STATUS => {
@@ -1045,6 +1045,87 @@ pub async fn handle_rpc(
                             writer,
                             &DaemonError::new(
                                 "run_continue_failed",
+                                ErrorCategory::Conflict,
+                                false,
+                                e,
+                            ),
+                        )
+                        .await
+                    }
+                },
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e.to_string(),
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
+        names::RUN_RESUME => {
+            match serde_json::from_value::<ResumeRunRequest>(request.params.clone()) {
+                Ok(req) => match run_manager().resume_run(req) {
+                    Ok(response) => {
+                        let new_run_id = response.new_run_id.clone();
+                        if let Some(new_run_id) = new_run_id {
+                            if let Some(new_run) = run_manager().get_run(&new_run_id) {
+                                let start_req = StartRunRequest {
+                                    agent_profile_id: None,
+                                    capability_selection: None,
+                                    run_id: Some(new_run.id.clone()),
+                                    conversation_id: Some(new_run.conversation_id.clone()),
+                                    provider_id: Some(new_run.provider_id.clone()),
+                                    model_id: Some(new_run.model_id.clone()),
+                                    key_id: new_run.key_id.clone(),
+                                    content: None,
+                                    attachments: None,
+                                    trigger_message_id: None,
+                                    permission_profile: Some(new_run.permission_profile.clone()),
+                                    max_steps: Some(new_run.max_steps),
+                                    project_path: new_run.project_path.clone(),
+                                    idempotency_key: None,
+                                    effort: new_run.effort.clone(),
+                                    runtime_id: new_run.runtime_id.clone(),
+                                };
+                                match crate::run_manager::RunManager::start_detached_global(
+                                    start_req,
+                                ) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        send_error(
+                                            writer,
+                                            &DaemonError::new(
+                                                "run_resume_start_failed",
+                                                ErrorCategory::Internal,
+                                                true,
+                                                e,
+                                            ),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        send_success(
+                            writer,
+                            &request.request_id,
+                            &request.client_id,
+                            &request.session_token,
+                            serde_json::to_value(response).unwrap_or_default(),
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        send_error(
+                            writer,
+                            &DaemonError::new(
+                                "run_resume_failed",
                                 ErrorCategory::Conflict,
                                 false,
                                 e,

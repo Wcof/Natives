@@ -28,6 +28,7 @@ pub const ALL_METHODS: &[&str] = &[
     "run.cancel",
     "run.retry",
     "run.continue",
+    "run.resume",
     "run.subscribe",
     "run.replay",
     "run.list",
@@ -190,6 +191,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "run.cancel",
     "run.retry",
     "run.continue",
+    "run.resume",
     "run.subscribe",
     "run.replay",
     "run.list",
@@ -385,6 +387,7 @@ pub mod names {
     pub const RUN_CANCEL: &str = "run.cancel";
     pub const RUN_RETRY: &str = "run.retry";
     pub const RUN_CONTINUE: &str = "run.continue";
+    pub const RUN_RESUME: &str = "run.resume";
     pub const RUN_SUBSCRIBE: &str = "run.subscribe";
     pub const RUN_REPLAY: &str = "run.replay";
     pub const RUN_LIST: &str = "run.list";
@@ -610,6 +613,7 @@ mod tests {
             "run.cancel",
             "run.retry",
             "run.continue",
+            "run.resume",
             "run.subscribe",
             "run.replay",
             "permission.respond",

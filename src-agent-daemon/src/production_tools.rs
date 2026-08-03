@@ -2919,6 +2919,22 @@ impl PermissionGatedTools {
                     }
                 }
             };
+        // Persist the child scope so a route restart restores it exactly
+        // (migration 029). Without this the durable session only carries
+        // provider/key/model and a restart would guess ask/max_steps=15 and
+        // drop project identity, profile, and allowlist.
+        let _ = crate::subagent_store::persist_subagent_scope(
+            &session_id,
+            &crate::subagent_store::SubagentScope {
+                project_path: self.gateway.project_root.clone(),
+                project_id: self.gateway.project_root.clone(),
+                project_identity_version: None,
+                permission_profile: Some(child_perm.clone()),
+                agent_profile_id: child_profile_id.clone(),
+                max_steps: Some(child_max_steps as i64),
+                tool_allowlist: child_allowlist.clone(),
+            },
+        );
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
         let project_path = self.gateway.project_root.clone();
