@@ -140,7 +140,15 @@ async fn begin_instance(conn: &Connection, source: ResolvedSource, id: &str) -> 
     super::runtime_store::create_instance(conn, &app_id, plan_id.as_deref(), owner_kind)
 }
 
-pub async fn start(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<CreativeAppSummary> {
+/// Phase 1 of start (caller holds the mutation lock): create the runtime
+/// instance and spawn the runtime. Fast for local (spawn only); external /
+/// internal finish entirely here. Returns the summary in its current state with
+/// `runtime_instance_id` bound, so phase 2 knows which instance to settle.
+pub async fn spawn_start(
+    conn: &Connection,
+    ctx: &LifecycleCtx,
+    id: &str,
+) -> Result<CreativeAppSummary> {
     let source = resolve(conn, id)?;
     if source == ResolvedSource::Internal {
         let summary = internal::start(conn, &ctx.app, id)?;
@@ -156,23 +164,69 @@ pub async fn start(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cr
         ResolvedSource::Internal => unreachable!(),
     };
     match result {
-        Ok(summary) => {
-            let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
-            let hint = match source {
-                ResolvedSource::LocalProject => super::runtime_store::local_instance_hint(conn, id)
-                    .unwrap_or((None, None, None)),
-                ResolvedSource::ExternalGithub => {
-                    super::runtime_store::external_instance_hint(conn, id)
-                        .unwrap_or((None, None, None))
-                }
-                ResolvedSource::Internal => (None, None, None),
-            };
-            super::runtime_store::mark_running(conn, &instance_id, &urls, hint.0, hint.1, hint.2)?;
+        Ok(mut summary) => {
+            summary.runtime_instance_id = Some(instance_id.clone());
+            if source == ResolvedSource::ExternalGithub {
+                // External start includes its own health pass; settle the instance now.
+                let hint = super::runtime_store::external_instance_hint(conn, id)
+                    .unwrap_or((None, None, None));
+                let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
+                let _ = super::runtime_store::mark_running(
+                    conn,
+                    &instance_id,
+                    &urls,
+                    hint.0,
+                    hint.1,
+                    hint.2,
+                );
+            }
             Ok(super::runtime_store::attach_identity(conn, summary)?)
         }
         Err(e) => {
             let _ = super::runtime_store::mark_failed(conn, &instance_id, &e.to_string());
             Err(e)
+        }
+    }
+}
+
+/// Phase 2 of start (NO mutation lock): settle the local health wait. External /
+/// internal are already settled by phase 1. A concurrent stop cancels the wait;
+/// the instance then stays owned by the stop path.
+pub async fn await_ready(
+    conn: &Connection,
+    ctx: &LifecycleCtx,
+    id: &str,
+    spawned: &CreativeAppSummary,
+) -> Result<CreativeAppSummary> {
+    match resolve(conn, id)? {
+        ResolvedSource::Internal | ResolvedSource::ExternalGithub => Ok(spawned.clone()),
+        ResolvedSource::LocalProject => {
+            let rt = ctx.require_local_runtime()?;
+            let result = local::await_start_ready(conn, &ctx.app, rt, id).await;
+            let instance_id = spawned.runtime_instance_id.clone();
+            match result {
+                Ok(summary) => {
+                    if summary.state == CreativeAppState::Running {
+                        if let Some(iid) = &instance_id {
+                            let hint = super::runtime_store::local_instance_hint(conn, id)
+                                .unwrap_or((None, None, None));
+                            let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
+                            let _ = super::runtime_store::mark_running(
+                                conn, iid, &urls, hint.0, hint.1, hint.2,
+                            );
+                        }
+                    }
+                    // Not running here means stop preempted the start; the instance
+                    // is owned by the stop path and is left untouched.
+                    Ok(super::runtime_store::attach_identity(conn, summary)?)
+                }
+                Err(e) => {
+                    if let Some(iid) = &instance_id {
+                        let _ = super::runtime_store::mark_failed(conn, iid, &e.to_string());
+                    }
+                    Err(e)
+                }
+            }
         }
     }
 }
@@ -255,7 +309,8 @@ pub async fn restart(
             // Stop must fully release (mark old instance stopped) before start
             // creates a new instance — the instance CAS enforces this.
             stop(conn, ctx, id).await?;
-            start(conn, ctx, id).await
+            let spawned = spawn_start(conn, ctx, id).await?;
+            await_ready(conn, ctx, id, &spawned).await
         }
     }
 }

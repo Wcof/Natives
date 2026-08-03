@@ -153,7 +153,8 @@ pub async fn start_app(
         return Ok(store::summary_from_local(&rec));
     }
 
-    // node_dev_server
+    // node_dev_server — spawn phase only (under the caller's mutation lock).
+    // Health is awaited later without the lock so stop can preempt a long start.
     let env = store::get_env_map(conn, id)?;
     match runtime
         .start_node_dev(
@@ -168,52 +169,16 @@ pub async fn start_app(
         .await
     {
         Ok((port, open_url, identity)) => {
-            match runtime
-                .wait_healthy(app, id, &plan.health_path, rec.startup_timeout_ms)
-                .await
-            {
-                Ok(()) => {
-                    rec = store::get_app(conn, id)?.unwrap();
-                    rec.state = CreativeAppState::Running;
-                    rec.open_url = Some(open_url);
-                    rec.current_port = Some(port);
-                    rec.last_started_at = Some(now());
-                    rec.last_error = None;
-                    rec.status_detail_json = None;
-                    rec.process_identity_json =
-                        Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
-                    rec.updated_at = now();
-                    store::update_app(conn, &rec)?;
-                    broadcast(app, "started", id);
-                    Ok(store::summary_from_local(&rec))
-                }
-                Err(e) => {
-                    let detail = CreativeAppStatusDetail {
-                        code: LocalCreativeIssueCode::StartUnhealthy,
-                        message: e.to_string(),
-                        recovery_actions: vec!["view_logs".into(), "stop".into(), "restart".into()],
-                    };
-                    // Keep process for log inspection; mark start_failed / unhealthy.
-                    set_status_detail(
-                        conn,
-                        id,
-                        CreativeAppState::StartFailed,
-                        Some(&detail),
-                        Some(&detail.message),
-                    )?;
-                    // still persist port/url/identity so stop works
-                    if let Ok(Some(mut r)) = store::get_app(conn, id) {
-                        r.open_url = Some(open_url);
-                        r.current_port = Some(port);
-                        r.process_identity_json =
-                            Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
-                        r.updated_at = now();
-                        let _ = store::update_app(conn, &r);
-                    }
-                    broadcast(app, "start_unhealthy", id);
-                    Err(e)
-                }
-            }
+            let mut rec = store::get_app(conn, id)?.unwrap();
+            rec.open_url = Some(open_url);
+            rec.current_port = Some(port);
+            rec.process_identity_json =
+                Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
+            rec.last_error = None;
+            rec.updated_at = now();
+            store::update_app(conn, &rec)?;
+            broadcast(app, "starting", id);
+            Ok(store::summary_from_local(&rec))
         }
         Err(e) => {
             let msg = e.to_string();
@@ -242,6 +207,58 @@ pub async fn start_app(
                 Some(&msg),
             )?;
             broadcast(app, "start_failed", id);
+            Err(e)
+        }
+    }
+}
+
+/// Await the spawned node dev server's health and settle the DB state. Runs
+/// WITHOUT the global mutation lock so a concurrent stop can cancel the wait.
+pub async fn await_start_ready(
+    conn: &Connection,
+    app: &AppHandle,
+    runtime: &LocalRuntimeManager,
+    id: &str,
+) -> Result<CreativeAppSummary> {
+    let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
+    let plan = parse_plan(&rec)?;
+    match runtime
+        .wait_healthy(app, id, &plan.health_path, rec.startup_timeout_ms)
+        .await
+    {
+        Ok(()) => {
+            let mut rec = store::get_app(conn, id)?.unwrap();
+            rec.state = CreativeAppState::Running;
+            rec.open_url = rec.open_url.clone();
+            rec.last_error = None;
+            rec.status_detail_json = None;
+            rec.last_started_at = Some(now());
+            rec.updated_at = now();
+            store::update_app(conn, &rec)?;
+            broadcast(app, "started", id);
+            Ok(store::summary_from_local(&rec))
+        }
+        Err(Error::Cancelled(_)) => {
+            // Stop preempted the start; return the stop-owned current state.
+            Ok(store::summary_from_local(
+                &store::get_app(conn, id)?.unwrap(),
+            ))
+        }
+        Err(e) => {
+            let detail = CreativeAppStatusDetail {
+                code: LocalCreativeIssueCode::StartUnhealthy,
+                message: e.to_string(),
+                recovery_actions: vec!["view_logs".into(), "stop".into(), "restart".into()],
+            };
+            // Keep the process for log inspection; mark start_failed / unhealthy.
+            set_status_detail(
+                conn,
+                id,
+                CreativeAppState::StartFailed,
+                Some(&detail),
+                Some(&detail.message),
+            )?;
+            broadcast(app, "start_unhealthy", id);
             Err(e)
         }
     }
@@ -483,6 +500,17 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
             }
             next.updated_at = now();
             store::update_app(conn, &next)?;
+            // Mirror the reconciled outcome onto the runtime instance (crash recovery).
+            let _ = crate::creative_app::runtime_store::settle_instance(
+                conn,
+                CreativeAppSource::LocalProject,
+                &next.id,
+                match target {
+                    CreativeAppState::Orphaned => "orphaned",
+                    CreativeAppState::InstalledStopped => "stopped",
+                    _ => "failed",
+                },
+            );
             n += 1;
             if let Some(a) = app {
                 broadcast(a, "reconcile", &next.id);
@@ -622,6 +650,13 @@ pub fn mark_process_exited(
     rec.status_detail_json = None;
     rec.updated_at = now();
     store::update_app(conn, &rec)?;
+    // Mirror the natural exit onto the runtime instance ledger.
+    let _ = crate::creative_app::runtime_store::mark_exited_for_source(
+        conn,
+        CreativeAppSource::LocalProject,
+        id,
+        exit_code,
+    );
     if let Some(a) = app {
         broadcast(a, "process_exited", id);
     }
@@ -639,6 +674,20 @@ pub async fn poll_and_reconcile_exits(
     for (id, code) in exited {
         mark_process_exited(conn, app, &id, code)?;
         n += 1;
+    }
+    // Refresh heartbeats for still-running local instances so the ledger never
+    // looks stale while the process is alive.
+    for rec in store::list_apps(conn)? {
+        if matches!(
+            rec.state,
+            CreativeAppState::Running | CreativeAppState::Starting
+        ) {
+            let _ = crate::creative_app::runtime_store::heartbeat_for_source(
+                conn,
+                CreativeAppSource::LocalProject,
+                &rec.id,
+            );
+        }
     }
     Ok(n)
 }

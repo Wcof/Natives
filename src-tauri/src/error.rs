@@ -25,6 +25,10 @@ pub enum Error {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    /// An in-flight operation was cancelled (e.g. start preempted by stop).
+    #[error("Cancelled: {0}")]
+    Cancelled(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 

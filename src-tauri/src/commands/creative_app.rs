@@ -60,15 +60,31 @@ pub async fn creative_app_start(
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
+    // Phase 1 (spawn) holds the mutation lock so installs/lifecycle stay serial;
+    // it is fast. Phase 2 (health) runs WITHOUT the lock so a concurrent stop can
+    // cancel a long start (batch 2).
+    let pool_spawn = pool.clone();
+    let id_spawn = id.clone();
+    let spawned = {
+        let _guard = lock.lock().await;
+        let ctx2 = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_spawn)?;
+            rt.block_on(adapters::spawn_start(&c, &ctx2, &id_spawn))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("start join: {e}")))?
+    }?;
+    let ctx3 = ctx;
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(adapters::start(&c, &ctx, &id))
+        rt.block_on(adapters::await_ready(&c, &ctx3, &id, &spawned))
     })
     .await
-    .map_err(|e| Error::Internal(format!("start join: {e}")))?
+    .map_err(|e| Error::Internal(format!("start health join: {e}")))?
 }
 
 #[tauri::command]

@@ -8,12 +8,14 @@ use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, 
 use crate::{Error, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 const GRACEFUL_WAIT_MS: u64 = 5_000;
 
@@ -46,11 +48,17 @@ struct LiveLocalProcess {
     program: String,
     cwd: PathBuf,
     log: Arc<LocalLogStore>,
+    /// Set when the instance is being stopped. Reader / health tasks observe it
+    /// so stop can preempt an in-flight start (P0 / batch 2).
+    cancelled: Arc<AtomicBool>,
 }
 
 pub struct LocalRuntimeManager {
     procs: Mutex<HashMap<String, LiveLocalProcess>>,
     logs: LogRegistry,
+    /// Tasks spawned on behalf of an instance (log readers, health wait). Kept
+    /// so stop can end them deterministically instead of relying on pipe EOF.
+    task_handles: Mutex<HashMap<String, Vec<JoinHandle<()>>>>,
 }
 
 impl Default for LocalRuntimeManager {
@@ -64,6 +72,7 @@ impl LocalRuntimeManager {
         Self {
             procs: Mutex::new(HashMap::new()),
             logs: LogRegistry::new(),
+            task_handles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -71,6 +80,7 @@ impl LocalRuntimeManager {
         &self.logs
     }
 
+    /// True while a managed child is still alive.
     pub async fn is_running(&self, app_id: &str) -> bool {
         let mut map = self.procs.lock().await;
         if let Some(p) = map.get_mut(app_id) {
@@ -86,6 +96,24 @@ impl LocalRuntimeManager {
             }
         }
         false
+    }
+
+    /// Register a task owned by an instance so stop can end it.
+    async fn track_task(&self, app_id: &str, handle: JoinHandle<()>) {
+        let mut map = self.task_handles.lock().await;
+        map.entry(app_id.to_string()).or_default().push(handle);
+    }
+
+    /// Abort all tracked tasks for an app (log readers / health). Called after
+    /// the process tree is gone so a reader can never linger on a dead pipe.
+    async fn end_tracked_tasks(&self, app_id: &str) {
+        let handles = {
+            let mut map = self.task_handles.lock().await;
+            map.remove(app_id).unwrap_or_default()
+        };
+        for h in handles {
+            h.abort();
+        }
     }
 
     pub async fn current_port(&self, app_id: &str) -> Option<u16> {
@@ -122,10 +150,15 @@ impl LocalRuntimeManager {
     pub async fn stop(&self, app_id: &str, app: Option<&AppHandle>) -> Result<()> {
         let mut map = self.procs.lock().await;
         let Some(mut live) = map.remove(app_id) else {
+            // Nothing live to stop; make sure no tracked tasks linger either.
+            drop(map);
+            self.end_tracked_tasks(app_id).await;
             return Ok(());
         };
         let pgid = live.identity.process_group_id;
         let port = live.port;
+        // Signal readers / health first so stop preempts an in-flight start.
+        live.cancelled.store(true, Ordering::SeqCst);
         live.log.append(LogStream::System, "stopping process tree…");
         let mut problems: Vec<String> = Vec::new();
 
@@ -150,6 +183,9 @@ impl LocalRuntimeManager {
                 ));
             }
         }
+
+        drop(map);
+        self.end_tracked_tasks(app_id).await;
 
         if !problems.is_empty() {
             live.log.append(
@@ -309,6 +345,7 @@ impl LocalRuntimeManager {
         };
 
         // Pipe readers
+        let cancelled = Arc::new(AtomicBool::new(false));
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let app_handle = app.clone();
@@ -316,7 +353,7 @@ impl LocalRuntimeManager {
         let log_out = log.clone();
         let stdout_secrets = secret_values.clone();
         if let Some(out) = stdout {
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let entry = append_with_secrets(
@@ -328,13 +365,14 @@ impl LocalRuntimeManager {
                     emit_log(&app_handle, &app_id_out, &entry);
                 }
             });
+            self.track_task(app_id, handle).await;
         }
         let app_handle = app.clone();
         let app_id_err = app_id.to_string();
         let log_err = log.clone();
         let stderr_secrets = secret_values;
         if let Some(err) = stderr {
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let entry = append_with_secrets(
@@ -346,6 +384,7 @@ impl LocalRuntimeManager {
                     emit_log(&app_handle, &app_id_err, &entry);
                 }
             });
+            self.track_task(app_id, handle).await;
         }
 
         let open_path = if plan.open_path.starts_with('/') {
@@ -369,6 +408,7 @@ impl LocalRuntimeManager {
                     program: executable,
                     cwd: cwd.clone(),
                     log: log.clone(),
+                    cancelled,
                 },
             );
         }
@@ -425,7 +465,8 @@ impl LocalRuntimeManager {
     }
 
     /// Wait until health check passes or timeout. On failure leaves process running
-    /// (caller may stop or mark start_unhealthy).
+    /// (caller may stop or mark start_unhealthy). Cancellable: a stop preempts the
+    /// wait via the instance's cancelled flag (batch 2).
     pub async fn wait_healthy(
         &self,
         app: &AppHandle,
@@ -439,9 +480,20 @@ impl LocalRuntimeManager {
         } else {
             format!("/{health_path}")
         };
+        let cancelled = {
+            let map = self.procs.lock().await;
+            map.get(app_id).map(|p| p.cancelled.clone())
+        };
         emit_progress(app, app_id, "health_check", "waiting for server");
 
         loop {
+            if cancelled
+                .as_ref()
+                .map(|c| c.load(Ordering::SeqCst))
+                .unwrap_or(false)
+            {
+                return Err(Error::Cancelled("start cancelled by stop".into()));
+            }
             if !self.is_running(app_id).await {
                 return Err(Error::Internal("process exited before healthy".into()));
             }
@@ -893,6 +945,52 @@ mod tests {
         assert!(
             wait_port_released(port, Duration::from_secs(2)),
             "port {port} still accepting connections after kill"
+        );
+    }
+
+    /// Batch 2: stop must set the cancel flag (preempting health/readers) and
+    /// drain the instance's tracked tasks instead of leaving them running.
+    #[tokio::test]
+    async fn stop_sets_cancel_flag_and_drains_tasks() {
+        use std::future::pending;
+
+        let mgr = LocalRuntimeManager::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let task_handle = tokio::spawn(async move {
+            let _ = pending::<()>().await;
+        });
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert(
+                "a".into(),
+                LiveLocalProcess {
+                    child: None,
+                    identity: ProcessIdentity::default(),
+                    plan_fingerprint: String::new(),
+                    started_at: Instant::now(),
+                    port: None,
+                    open_url: None,
+                    program: "x".into(),
+                    cwd: PathBuf::from("/"),
+                    log: mgr.logs.get_or_open("a"),
+                    cancelled: cancelled.clone(),
+                },
+            );
+            mgr.task_handles
+                .lock()
+                .await
+                .insert("a".into(), vec![task_handle]);
+        }
+
+        mgr.stop("a", None).await.expect("stop succeeds");
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "stop must set the cancel flag before reaping"
+        );
+        let handles = mgr.task_handles.lock().await;
+        assert!(
+            !handles.contains_key("a"),
+            "stop must drain tracked reader/health tasks"
         );
     }
 }

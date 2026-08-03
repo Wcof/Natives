@@ -8,7 +8,6 @@
 //! - Workshop Bridge surface is never selected for external/local
 
 use super::*;
-use crate::creative_app::model::*;
 use crate::db::{apply_migrations, create_tables};
 use crate::env_manager;
 use rusqlite::Connection;

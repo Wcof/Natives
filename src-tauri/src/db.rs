@@ -1028,6 +1028,58 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     // runtime instances. Extracted so tests can prove idempotency.
     backfill_creative_identity(conn)?;
 
+    // Migration v12→v13: runtime instance bookkeeping columns (batch 2).
+    // last_heartbeat / owner_pid / exit_code / resource_ledger_json give the
+    // instance row enough to answer "who owns it, is it alive, what leaked".
+    // Column adds are guarded by PRAGMA so re-running is safe (repair path).
+    if current_version < 13 {
+        let mut cols = std::collections::HashSet::new();
+        {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(runtime_instances)")
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(Error::Database)?;
+            for r in rows {
+                cols.insert(r.map_err(Error::Database)?);
+            }
+        }
+        if !cols.contains("last_heartbeat") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN last_heartbeat TEXT",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        if !cols.contains("owner_pid") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN owner_pid INTEGER",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        if !cols.contains("exit_code") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN exit_code INTEGER",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        if !cols.contains("resource_ledger_json") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN resource_ledger_json TEXT",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '13')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "

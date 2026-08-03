@@ -155,14 +155,95 @@ pub fn mark_running(
     } else {
         Some(serde_json::json!(urls).to_string())
     };
+    let ledger = serde_json::json!({
+        "pgid": pgid,
+        "pid": pid,
+        "port": port,
+        "urls": urls,
+    });
+    let ledger_json = serde_json::to_string(&ledger).unwrap_or_default();
+    // Guard on `starting`: if a stop already moved the instance to stopping /
+    // stopped, the start must not resurrect it (batch 2 start/stop race).
     conn.execute(
         "UPDATE runtime_instances
          SET status = 'running', cleanup_status = NULL, resolved_urls_json = ?2,
-             current_port = ?3, pgid = ?4, pid = ?5, failure = NULL, updated_at = ?6
-         WHERE id = ?1",
-        params![instance_id, urls_json, port, pgid, pid, now()],
+             current_port = ?3, pgid = ?4, pid = ?5, owner_pid = ?5,
+             last_heartbeat = ?6, resource_ledger_json = ?7, failure = NULL, updated_at = ?6
+         WHERE id = ?1 AND status = 'starting'",
+        params![instance_id, urls_json, port, pgid, pid, now(), ledger_json],
     )
     .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Refresh the instance heartbeat while its runtime is alive.
+pub fn heartbeat(conn: &Connection, instance_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE runtime_instances SET last_heartbeat = ?2, updated_at = ?2 WHERE id = ?1",
+        params![instance_id, now()],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Record a natural process exit on the instance.
+pub fn mark_exited(conn: &Connection, instance_id: &str, exit_code: i32) -> Result<()> {
+    conn.execute(
+        "UPDATE runtime_instances
+         SET status = 'stopped', cleanup_status = 'completed', exit_code = ?2, updated_at = ?3
+         WHERE id = ?1 AND status IN ('running','starting')",
+        params![instance_id, exit_code, now()],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Heartbeat the active instance of a source row (called from lifecycle poll).
+pub fn heartbeat_for_source(
+    conn: &Connection,
+    source: CreativeAppSource,
+    source_id: &str,
+) -> Result<()> {
+    if let Some(app_id) = lookup_application(conn, source_str(source), source_id)? {
+        if let Some(iid) = active_instance_id(conn, &app_id)? {
+            heartbeat(conn, &iid)?;
+        }
+    }
+    Ok(())
+}
+
+/// Mark the active instance of a source row exited (natural process exit).
+pub fn mark_exited_for_source(
+    conn: &Connection,
+    source: CreativeAppSource,
+    source_id: &str,
+    exit_code: i32,
+) -> Result<()> {
+    if let Some(app_id) = lookup_application(conn, source_str(source), source_id)? {
+        if let Some(iid) = active_instance_id(conn, &app_id)? {
+            mark_exited(conn, &iid, exit_code)?;
+        }
+    }
+    Ok(())
+}
+
+/// Settle the active instance of a source row to a status string during
+/// reconcile (crash recovery: orphaned / stopped / failed mirror the app row).
+pub fn settle_instance(
+    conn: &Connection,
+    source: CreativeAppSource,
+    source_id: &str,
+    status: &str,
+) -> Result<()> {
+    if let Some(app_id) = lookup_application(conn, source_str(source), source_id)? {
+        if let Some(iid) = active_instance_id(conn, &app_id)? {
+            conn.execute(
+                "UPDATE runtime_instances SET status = ?2, updated_at = ?3 WHERE id = ?1",
+                params![iid, status, now()],
+            )
+            .map_err(Error::Database)?;
+        }
+    }
     Ok(())
 }
 
@@ -190,7 +271,7 @@ pub fn mark_failed(conn: &Connection, instance_id: &str, failure: &str) -> Resul
     conn.execute(
         "UPDATE runtime_instances
          SET status = 'failed', cleanup_status = 'failed', failure = ?2, updated_at = ?3
-         WHERE id = ?1",
+         WHERE id = ?1 AND status = 'starting'",
         params![instance_id, failure, now()],
     )
     .map_err(Error::Database)?;
@@ -392,6 +473,73 @@ mod tests {
         let iid = create_instance(&conn, &app, None, "host_http").unwrap();
         let bound2 = attach_identity(&conn, summary).unwrap();
         assert_eq!(bound2.runtime_instance_id.as_deref(), Some(iid.as_str()));
+    }
+
+    /// Batch 2 race guard: a start must never resurrect an instance that a
+    /// concurrent stop already settled to stopped.
+    #[test]
+    fn mark_running_does_not_resurrect_stopped_instance() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let iid = create_instance(&conn, &app, None, "local_process").unwrap();
+        // Stop wins the race: instance is stopping then stopped.
+        mark_stopping(&conn, &iid).unwrap();
+        mark_stopped(&conn, &iid).unwrap();
+
+        // Late start health pass must NOT flip it back to running.
+        mark_running(
+            &conn,
+            &iid,
+            &["http://127.0.0.1:5173/".into()],
+            Some(5173),
+            None,
+            None,
+        )
+        .unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM runtime_instances WHERE id = ?1",
+                params![iid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "stopped",
+            "mark_running must be guarded on starting"
+        );
+    }
+
+    /// Natural process exit settles the instance with its exit code.
+    #[test]
+    fn mark_exited_records_natural_exit() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let iid = create_instance(&conn, &app, None, "local_process").unwrap();
+        mark_running(&conn, &iid, &[], None, Some(7), Some(42)).unwrap();
+
+        let (pid, owner_pid): (Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT pid, owner_pid FROM runtime_instances WHERE id = ?1",
+                params![iid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(pid, Some(42));
+        assert_eq!(owner_pid, Some(42));
+
+        mark_exited(&conn, &iid, 3).unwrap();
+        let (status, code): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT status, exit_code FROM runtime_instances WHERE id = ?1",
+                params![iid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "stopped");
+        assert_eq!(code, Some(3));
+        assert!(active_instance_id(&conn, &app).unwrap().is_none());
     }
 }
 

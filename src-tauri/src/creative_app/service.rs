@@ -30,8 +30,12 @@ impl CreativeAppService {
         lock: &MutationLock,
         id: &str,
     ) -> Result<CreativeAppSummary> {
-        let _guard = lock.lock().await;
-        adapters::start(conn, ctx, id).await
+        // Spawn under the lock; health wait without it (batch 2 preemption).
+        let spawned = {
+            let _guard = lock.lock().await;
+            adapters::spawn_start(conn, ctx, id).await
+        }?;
+        adapters::await_ready(conn, ctx, id, &spawned).await
     }
 
     pub async fn stop(
