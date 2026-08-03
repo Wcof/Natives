@@ -686,8 +686,15 @@ impl ProductionRuntime {
 
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let typed_history = crate::conversation_store::load_agent_messages(&conversation_id)?;
-        let checkpoint_snapshot = crate::global_run_manager()
-            .get_run(&run_id)
+        let bound_run = crate::global_run_manager().get_run(&run_id);
+        // A Continue/Resume run is bound to the checkpoint snapshot its plan was
+        // approved against. Loading a newer conversation snapshot would change
+        // the resumed context, so those runs restore exactly and fail closed
+        // when their checkpoint has no committed snapshot.
+        let exact_checkpoint_restore = bound_run.as_ref().is_some_and(|run| {
+            run.resume_of_run_id.is_some() || run.continued_from_run_id.is_some()
+        });
+        let checkpoint_snapshot = bound_run
             .and_then(|run| run.checkpoint_id)
             .and_then(|checkpoint_id| {
                 crate::conversation_store::load_active_context_snapshot_for_checkpoint(
@@ -695,11 +702,14 @@ impl ProductionRuntime {
                     &checkpoint_id,
                 )
                 .transpose()
-            });
-        let checkpoint_snapshot = checkpoint_snapshot.transpose()?;
-        let typed_history = match checkpoint_snapshot.or(
-            crate::conversation_store::load_active_context_snapshot(&conversation_id)?,
-        ) {
+            })
+            .transpose()?;
+        let active_snapshot = resolve_active_snapshot_for_start(
+            exact_checkpoint_restore,
+            checkpoint_snapshot,
+            || crate::conversation_store::load_active_context_snapshot(&conversation_id),
+        )?;
+        let typed_history = match active_snapshot {
             Some(snapshot) => {
                 let mut active = snapshot.messages;
                 let snapshot_message_ids: std::collections::HashSet<String> = active
@@ -724,7 +734,7 @@ impl ProductionRuntime {
                 }));
                 active
             }
-            _ => typed_history,
+            None => typed_history,
         };
         // The Core owns active-context compaction. Keep the daemon boundary
         // lossless: typed history goes through the typed entry point without
@@ -1163,6 +1173,89 @@ mod tool_grant_tests {
 impl Default for ProductionRuntime {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Choose the active-context source for a run's Provider request.
+///
+/// A Continue/Resume run is bound to the snapshot its checkpoint committed and
+/// must never fall back to a newer conversation snapshot: doing so would change
+/// the context the continuation was approved against. Fresh and Retry runs may
+/// use the newest committed snapshot as a cache, so that fallback stays lazy
+/// and is only consulted when no checkpoint snapshot is bound.
+fn resolve_active_snapshot_for_start(
+    exact_checkpoint_restore: bool,
+    checkpoint_snapshot: Option<crate::conversation_store::ActiveContextSnapshot>,
+    latest_snapshot: impl FnOnce() -> Result<
+        Option<crate::conversation_store::ActiveContextSnapshot>,
+        String,
+    >,
+) -> Result<Option<crate::conversation_store::ActiveContextSnapshot>, String> {
+    match checkpoint_snapshot {
+        Some(snapshot) => Ok(Some(snapshot)),
+        None if exact_checkpoint_restore => Err(
+            "continue run is bound to a checkpoint without a committed active context snapshot; exact restore is impossible"
+                .to_string(),
+        ),
+        None => latest_snapshot(),
+    }
+}
+
+#[cfg(test)]
+mod active_snapshot_resolution_tests {
+    use super::*;
+
+    fn snapshot(text: &str) -> crate::conversation_store::ActiveContextSnapshot {
+        crate::conversation_store::ActiveContextSnapshot {
+            messages: vec![agent_core::AgentMessage::System(
+                agent_core::SystemMessage {
+                    message_id: agent_core::MessageId::new(),
+                    text: text.to_string(),
+                },
+            )],
+            input_message_ids: Default::default(),
+        }
+    }
+
+    fn system_text(snapshot: &crate::conversation_store::ActiveContextSnapshot) -> String {
+        match &snapshot.messages[0] {
+            agent_core::AgentMessage::System(system) => system.text.clone(),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn checkpoint_snapshot_wins_over_latest_without_consulting_it() {
+        let mut consulted = false;
+        let resolved =
+            resolve_active_snapshot_for_start(true, Some(snapshot("checkpoint")), || {
+                consulted = true;
+                Ok(Some(snapshot("latest")))
+            })
+            .unwrap();
+        assert!(
+            !consulted,
+            "latest snapshot must not be read when a checkpoint snapshot exists"
+        );
+        assert_eq!(system_text(&resolved.unwrap()), "checkpoint");
+    }
+
+    #[test]
+    fn continue_without_checkpoint_snapshot_fails_closed_even_with_latest() {
+        let error = resolve_active_snapshot_for_start(true, None, || Ok(Some(snapshot("latest"))))
+            .unwrap_err();
+        assert!(
+            error.contains("active context snapshot"),
+            "stable fail-closed error expected, got: {error}"
+        );
+    }
+
+    #[test]
+    fn fresh_run_falls_back_to_latest_conversation_snapshot() {
+        let resolved =
+            resolve_active_snapshot_for_start(false, None, || Ok(Some(snapshot("latest"))))
+                .unwrap();
+        assert_eq!(system_text(&resolved.unwrap()), "latest");
     }
 }
 

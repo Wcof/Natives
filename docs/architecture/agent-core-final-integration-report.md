@@ -1,5 +1,7 @@
 # Agent Core 最终生产集成报告
 
+> **状态纠正（独立审计后）**：本报告表格中的「已接生产」声明由 `agent-core-sol-independent-audit.md` 复核，总体 54/100，不能按"Goal 已完成"合并。逐项修正：Typed Message/Turn→部分完成（Hook Inject 曾被旧 transcript 吞掉，批次 0 已修）；Context Snapshot「可解释重放」→部分完成（snapshot row 延迟到 run end 投影）；Capability Scheduler→部分完成（仅按 SideEffect 推导，conflict key 未生效）；Progress→部分完成（run_terminal 另有 50ms forwarder，真实外部 fixture 未跑）；Steering/Follow-up→部分完成（缺 daemon kill/restart 与多 Run E2E）；Critical Events→部分完成（snapshot/typed projection 非事务闭环）；Retry/Resume「已接生产」→Resume 仅骨架；Renderer Projection→部分完成（完整套件未在最终 HEAD 重跑）；「最终验证完成」→未完成。批次 0 已修复：typed Hook Inject 进入 `ProviderTurnRequest`；Continue 要求 checkpoint 绑定 committed snapshot，启动禁止回退 latest。本报告保留原始命令与失败事实，不重写。
+
 ## 1. 基线
 
 - Worktree：`/Users/ldh/Downloads/project/AiNative/Natives-agent-core-deepening`

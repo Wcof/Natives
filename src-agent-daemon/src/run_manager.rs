@@ -2231,17 +2231,23 @@ impl RunManager {
             )
             .map_err(|_| "source run has no durable checkpoint".to_string())?
         };
-        if let Some(snapshot_id) = checkpoint.2.as_deref() {
-            let exists: i64 = conn
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM context_snapshot WHERE id = ?1)",
-                    rusqlite::params![snapshot_id],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if exists == 0 {
-                return Err("checkpoint references a missing context snapshot".into());
-            }
+        // Exact continue requires the checkpoint to name a committed active
+        // context snapshot. Approving a checkpoint with a NULL snapshot would
+        // make the resumed run fall back to a newer conversation snapshot and
+        // silently change the context the continuation was approved against.
+        let snapshot_id = checkpoint.2.as_deref().ok_or_else(|| {
+            "checkpoint has no active context snapshot; continue requires an exact committed snapshot"
+                .to_string()
+        })?;
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM context_snapshot WHERE id = ?1)",
+                rusqlite::params![snapshot_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exists == 0 {
+            return Err("checkpoint references a missing context snapshot".into());
         }
         let uncertain: i64 = conn
             .query_row(
@@ -3467,6 +3473,111 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(executed, "executed");
+        });
+    }
+
+    #[test]
+    fn continue_rejects_checkpoint_without_active_snapshot() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("continue-nosnapshot.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('continue-nosnap-conv', 'agent', 'Continue', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let source = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: "continue-nosnap-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("continue me".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: Some(dir.path().to_string_lossy().into_owned()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Preparing,
+                TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Running,
+                TransitionMetadata::empty().with_lifecycle_hint("running"),
+            )
+            .unwrap();
+            rm.commit_status(
+                &source.id,
+                RunStatusV2::Completed,
+                TransitionMetadata::empty().with_lifecycle_hint("completed"),
+            )
+            .unwrap();
+
+            // Checkpoint with NO committed active context snapshot: exact
+            // continue must fail closed instead of approving and later falling
+            // back to a newer conversation snapshot.
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO checkpoint
+                 (id, run_id, conversation_id, sequence, turn_id,
+                  active_context_snapshot_id, side_effect_ledger_cursor, snapshot_json)
+                 VALUES ('checkpoint-nosnapshot', ?1, 'continue-nosnap-conv', 1, 'turn-1',
+                         NULL, 'ledger-1', '{}')",
+                rusqlite::params![&source.id],
+            )
+            .unwrap();
+            drop(conn);
+
+            let error = rm
+                .continue_run(ContinueRunRequest {
+                    run_id: source.id.clone(),
+                    checkpoint_id: None,
+                    content: Some("resume from checkpoint".into()),
+                })
+                .expect_err("checkpoint without a snapshot must be rejected");
+
+            assert!(
+                error.contains("active context snapshot"),
+                "stable fail-closed error expected, got: {error}"
+            );
+            // No run must be created and no approved resume plan may exist.
+            let approved: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM resume_plan
+                     WHERE source_run_id = ?1 AND action = 'continue' AND status = 'approved'",
+                    rusqlite::params![&source.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(approved, 0, "no approved continue plan may be created");
         });
     }
 

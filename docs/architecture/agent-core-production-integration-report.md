@@ -1,5 +1,7 @@
 # Agent Core 生产接线实施报告
 
+> **状态纠正（独立审计后）**：本报告完成度声明由 `agent-core-sol-independent-audit.md` 复核，总体 54/100，不能按"Goal 已完成"合并。本报告大部分声明本身诚实（Active Context 无损、Checkpoint Resume、外部 fixture 均标注"未宣称完成/未运行"），但「已接生产」的表述仍按审计收窄为部分完成：typed 主链生产成立，Custom/附件/ToolResult MessageId 有损；Resume 仅骨架；最终全量验证未在最终 HEAD 形成绿色退出。批次 0 已修复：typed Hook Inject 进入 `ProviderTurnRequest`；Continue 要求 checkpoint 绑定 committed snapshot，启动禁止回退 latest。本报告保留原始命令与失败事实，不重写。
+
 ## 1. 基线
 
 - 分支：`feat/agent-core-deepening`

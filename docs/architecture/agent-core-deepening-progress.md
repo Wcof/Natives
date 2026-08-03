@@ -1,5 +1,7 @@
 # Agent Core 深化开发进度
 
+> **状态纠正（独立审计后）**：本进度表的完成度声明由 `agent-core-sol-independent-audit.md` 复核，总体 54/100，不能按"Goal 已完成"合并。B–I 行的「已完成/已接生产」应降级为部分完成：typed 主链生产成立，但 Custom/附件/ToolResult MessageId 有损；Context Snapshot row 延迟投影；Gateway conflict key 未生效；Progress/Steering 缺外部 fixture 与 daemon restart E2E；Resume 仅骨架；最终全量验证未在最终 HEAD 形成绿色退出。批次 0 已修复：typed Hook Inject 进入 `ProviderTurnRequest`；Continue 要求 checkpoint 绑定 committed snapshot，启动禁止回退 latest。本进度表保留原始命令与失败事实，不重写。
+
 ## 开发基线
 
 - 分支：feat/agent-core-deepening

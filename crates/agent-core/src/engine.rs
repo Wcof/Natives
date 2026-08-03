@@ -918,7 +918,7 @@ impl AgentEngine {
                 input: serde_json::json!({ "conversation_id": config.conversation_id }),
             })
             .await;
-        apply_prompt_hook_responses(&mut config, session_start)?;
+        let mut injected_hook_messages = apply_prompt_hook_responses(&mut config, session_start)?;
         let prompt_submit = self
             .hooks
             .dispatch(HookRequest {
@@ -928,7 +928,7 @@ impl AgentEngine {
                 input: serde_json::json!({ "content": config.user_content }),
             })
             .await;
-        apply_prompt_hook_responses(&mut config, prompt_submit)?;
+        injected_hook_messages.extend(apply_prompt_hook_responses(&mut config, prompt_submit)?);
 
         // History is prior turns; always ensure the current user prompt appears
         // exactly once. Production supplies typed history directly. Legacy
@@ -982,6 +982,21 @@ impl AgentEngine {
                     text: config.user_content.clone(),
                 }],
             }));
+        }
+        // Hook Inject must reach the typed transcript (and therefore the next
+        // ProviderTurnRequest), not a side-channel EngineMessage list. Injected
+        // content becomes leading system context: deterministic position, safe
+        // for safety instructions, and identical for legacy and typed callers.
+        if !injected_hook_messages.is_empty() {
+            typed_messages.splice(
+                0..0,
+                injected_hook_messages.into_iter().map(|text| {
+                    crate::AgentMessage::System(crate::SystemMessage {
+                        message_id: crate::MessageId::new(),
+                        text,
+                    })
+                }),
+            );
         }
         let mut doom = DoomLoopDetector::new();
         let mut step = 0u32;
@@ -2271,10 +2286,17 @@ impl AgentEngine {
     }
 }
 
+/// Apply SessionStart/UserPromptSubmit hook decisions.
+///
+/// Returns the messages a hook asked to inject. The engine places them in the
+/// typed transcript (see [`AgentEngine::run_inner`]) so they reach the
+/// `ProviderTurnRequest`; the legacy `config.messages` list is not a channel
+/// for hook context and nothing injects into it any more.
 fn apply_prompt_hook_responses(
     config: &mut EngineRunConfig,
     responses: Vec<crate::hooks::HookResponse>,
-) -> Result<(), EngineError> {
+) -> Result<Vec<String>, EngineError> {
+    let mut injected = Vec::new();
     for response in responses {
         match response.decision {
             HookDecision::Deny { reason } => {
@@ -2286,21 +2308,12 @@ fn apply_prompt_hook_responses(
                 }
             }
             HookDecision::Inject { messages } => {
-                config
-                    .messages
-                    .extend(messages.into_iter().map(|content| EngineMessage {
-                        role: "system".into(),
-                        content,
-                        tool_call_id: None,
-                        tool_name: None,
-                        tool_calls: None,
-                        images: Vec::new(),
-                    }));
+                injected.extend(messages);
             }
             HookDecision::Allow | HookDecision::Rewake => {}
         }
     }
-    Ok(())
+    Ok(injected)
 }
 
 /// Leading characters of a tool's arguments kept verbatim in its doom-loop key.
@@ -3341,6 +3354,91 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![HookEvent::SessionEnd]);
+    }
+
+    #[tokio::test]
+    async fn typed_hook_inject_reaches_provider_turn_request() {
+        struct InjectingHook;
+
+        #[async_trait::async_trait]
+        impl crate::hooks::HookHandler for InjectingHook {
+            async fn handle(&self, _: HookRequest) -> crate::hooks::HookResponse {
+                crate::hooks::HookResponse {
+                    decision: HookDecision::Inject {
+                        messages: vec!["SYSTEM-GUARD-INJECTED".into()],
+                    },
+                }
+            }
+        }
+
+        struct RecordingTurnProvider(Arc<Mutex<Vec<Vec<crate::AgentMessage>>>>);
+
+        #[async_trait::async_trait]
+        impl EngineProvider for RecordingTurnProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                unreachable!("typed production path must go through stream_turn")
+            }
+
+            async fn stream_turn(
+                &self,
+                request: ProviderTurnRequest,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                self.0.lock().unwrap().push(request.messages);
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ])))
+            }
+        }
+
+        let mut hooks = HookRegistry::new();
+        hooks.register(HookEvent::SessionStart, Box::new(InjectingHook));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = RecordingTurnProvider(seen.clone());
+        AgentEngine::new(EventSequencer::new())
+            .with_hooks(hooks)
+            .run_with_typed_messages(
+                EngineRunConfig {
+                    run_id: "hook-inject-typed".into(),
+                    conversation_id: "conversation-hook-inject".into(),
+                    model: "model".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "hello".into(),
+                    max_steps: 1,
+                },
+                &provider,
+                &FakeTools,
+                Vec::new(),
+                vec![crate::AgentMessage::User(crate::UserMessage {
+                    message_id: crate::MessageId::new(),
+                    content: vec![crate::ContentBlock::Text {
+                        text: "hello".into(),
+                    }],
+                })],
+            )
+            .await
+            .unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "one provider turn expected");
+        assert!(
+            seen[0].iter().any(|message| matches!(
+                message,
+                crate::AgentMessage::System(system)
+                    if system.text == "SYSTEM-GUARD-INJECTED"
+            )),
+            "hook Inject must reach the typed ProviderTurnRequest: {:?}",
+            seen[0]
+        );
     }
 
     #[tokio::test]

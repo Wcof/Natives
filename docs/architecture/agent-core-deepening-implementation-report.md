@@ -1,5 +1,7 @@
 # Agent Core 深化实施报告
 
+> **状态纠正（独立审计后）**：本报告完成度声明由 `agent-core-sol-independent-audit.md` 复核，总体 54/100，不能按"Goal 已完成"合并。以下声明以审计为准修正：Typed Message/Turn「已接生产」→部分完成；Typed Conversation「无损」→部分完成（Custom/附件/ToolResult MessageId 有损）；Context Snapshot「可解释重放」→部分完成（snapshot row 延迟投影）；Gateway「调度元数据完整」→部分完成（conflict key 未生效）；Progress/Steering/Follow-up「已接生产」→部分完成（缺外部 fixture 与 restart E2E）；Retry/Resume「已接生产」→Resume 仅骨架；「最终全量验证完成」→未完成。批次 0 已修复：typed Hook Inject 进入 `ProviderTurnRequest`；Continue 要求 checkpoint 绑定 committed snapshot，启动禁止回退 latest。本报告保留原始历史与命令失败事实，不重写。
+
 ## 1. 开发基线
 
 - 分支：`feat/agent-core-deepening`
