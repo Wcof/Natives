@@ -113,15 +113,58 @@ impl LocalRuntimeManager {
         }
     }
 
+    /// Stop the managed process tree and verify release (P0).
+    ///
+    /// Returns `Err` when the process group still has members or the app port is
+    /// still accepting connections after TERM→grace→KILL→reap. Callers must NOT
+    /// write `stopped` on `Err` — the identity/port must be preserved so a retry
+    /// stop stays possible.
     pub async fn stop(&self, app_id: &str, app: Option<&AppHandle>) -> Result<()> {
         let mut map = self.procs.lock().await;
         let Some(mut live) = map.remove(app_id) else {
             return Ok(());
         };
+        let pgid = live.identity.process_group_id;
+        let port = live.port;
         live.log.append(LogStream::System, "stopping process tree…");
+        let mut problems: Vec<String> = Vec::new();
+
         if let Some(mut child) = live.child.take() {
-            terminate_tree(&mut child, live.identity.process_group_id).await;
+            terminate_tree(&mut child, pgid).await;
+            // Reap the direct child — a reaped child must be waited, never left
+            // behind as a zombie. tokio caches the status, so a second wait here
+            // is safe when terminate_tree already reaped it.
+            if let Err(e) = child.wait().await {
+                problems.push(format!("child wait failed: {e}"));
+            }
         }
+        if let Some(pgid) = pgid {
+            if process_group_exists(pgid) {
+                problems.push(format!("process group {pgid} still has members after kill"));
+            }
+        }
+        if let Some(port) = port {
+            if !wait_port_released(port, Duration::from_secs(3)) {
+                problems.push(format!(
+                    "port {port} still accepting connections after stop"
+                ));
+            }
+        }
+
+        if !problems.is_empty() {
+            live.log.append(
+                LogStream::System,
+                &format!("stop incomplete: {}", problems.join("; ")),
+            );
+            if let Some(app) = app {
+                emit_progress(app, app_id, "stop_failed", &problems.join("; "));
+            }
+            return Err(Error::Internal(format!(
+                "stop incomplete: {}",
+                problems.join("; ")
+            )));
+        }
+
         live.log.append(LogStream::System, "stopped");
         if let Some(app) = app {
             emit_progress(app, app_id, "stopped", "process stopped");
@@ -173,6 +216,14 @@ impl LocalRuntimeManager {
         };
 
         let (program, mut args) = build_command(plan, port)?;
+        // P0: never spawn a command that can place real trades without explicit
+        // authorization. The plan validator already gates registration; this is
+        // defense-in-depth at the spawn point.
+        if super::risk::classify_command(&program, &args) == super::risk::CommandRisk::Block {
+            return Err(Error::InvalidInput(
+                "start blocked: command may place real trades; refusing to auto-start".into(),
+            ));
+        }
         // Append runner-specific host/port flags (Vite vs Vue CLI differ).
         if matches!(
             plan.program,
@@ -640,6 +691,33 @@ pub fn port_listening(port: u16) -> bool {
     .is_ok()
 }
 
+/// True when at least one process still exists in the given process group.
+/// POSIX: `kill(-pgid, 0)` returns 0 if any member is alive, -1/ESRCH if none.
+#[cfg(unix)]
+pub fn process_group_exists(pgid: i32) -> bool {
+    unsafe { libc::kill(-pgid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn process_group_exists(_pgid: i32) -> bool {
+    false
+}
+
+/// Poll until the port stops accepting TCP connections or `timeout` elapses.
+/// A port that was never bound reports released immediately.
+pub fn wait_port_released(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !port_listening(port) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 async fn http_reachable(url: &str) -> bool {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -658,6 +736,10 @@ async fn http_reachable(url: &str) -> bool {
 }
 
 async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
+    terminate_tree_with_grace(child, pgid, Duration::from_millis(GRACEFUL_WAIT_MS)).await;
+}
+
+async fn terminate_tree_with_grace(child: &mut Child, pgid: Option<i32>, grace: Duration) {
     // Graceful
     #[cfg(unix)]
     {
@@ -674,10 +756,10 @@ async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
         let _ = child.kill().await;
     }
 
-    let deadline = Instant::now() + Duration::from_millis(GRACEFUL_WAIT_MS);
+    let deadline = Instant::now() + grace;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
+            Ok(Some(_)) => break,
             Ok(None) if Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -685,12 +767,15 @@ async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
         }
     }
 
-    // Force
+    // Force: kill any remaining group members even when the direct child already
+    // exited gracefully (a detached grandchild keeps the group + port alive).
     #[cfg(unix)]
     {
         if let Some(pgid) = pgid {
-            unsafe {
-                let _ = libc::kill(-pgid, libc::SIGKILL);
+            if process_group_exists(pgid) {
+                unsafe {
+                    let _ = libc::kill(-pgid, libc::SIGKILL);
+                }
             }
         } else {
             let _ = child.start_kill();
@@ -714,6 +799,7 @@ async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
     {
         let _ = child.start_kill();
     }
+    // Always reap the direct child so it never becomes a zombie.
     let _ = child.wait().await;
 }
 
@@ -745,5 +831,68 @@ mod tests {
     fn static_url_shape() {
         let u = static_open_url(1234, "abc", "/");
         assert_eq!(u, "http://127.0.0.1:1234/local-projects/abc/");
+    }
+
+    /// P0: a process that ignores SIGTERM must still be killed (KILL follows the
+    /// grace window), its process group verified gone, its port verified released,
+    /// and the direct child reaped — never left as a zombie.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn term_timeout_kills_group_and_releases_port() {
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let Ok(_v) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available; cannot verify group kill");
+            return;
+        };
+
+        let port = pick_free_port();
+        let js = format!(
+            "process.on('SIGTERM', () => {{}}); \
+             require('http').createServer((_q,s)=>s.end('ok')).listen({port}, '127.0.0.1');"
+        );
+
+        let mut cmd = Command::new("node");
+        cmd.arg("-e")
+            .arg(&js)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: pre_exec runs in the forked child before exec; setpgid is the
+        // only libc call and its use here is the standard new-process-group pattern.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn node");
+
+        let pid = child.id().expect("node pid") as i32;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !port_listening(port) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node never bound port {port}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // node ignores SIGTERM, so the grace window must end in SIGKILL.
+        terminate_tree_with_grace(&mut child, Some(pid), Duration::from_millis(300)).await;
+
+        // Direct child must be reaped.
+        let _status = child.wait().await.expect("reap node child");
+
+        assert!(
+            !process_group_exists(pid),
+            "process group {pid} still has members after kill"
+        );
+        assert!(
+            wait_port_released(port, Duration::from_secs(2)),
+            "port {port} still accepting connections after kill"
+        );
     }
 }

@@ -235,6 +235,8 @@ export const zh = {
     stateStartFailed: '启动失败',
     stateDeleting: '删除中',
     stateDeleteFailed: '删除失败',
+    stateCleanupFailed: '停止清理失败',
+    stateOrphaned: '残留进程',
     actionOpen: '打开',
     actionStart: '启动',
     actionStop: '关闭',

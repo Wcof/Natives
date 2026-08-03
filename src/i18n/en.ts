@@ -242,6 +242,8 @@ export const en = {
     stateStartFailed: 'Start failed',
     stateDeleting: 'Deleting',
     stateDeleteFailed: 'Delete failed',
+    stateCleanupFailed: 'Stop cleanup failed',
+    stateOrphaned: 'Orphaned process',
     actionOpen: 'Open',
     actionStart: 'Start',
     actionStop: 'Stop',

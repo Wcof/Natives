@@ -62,6 +62,12 @@ pub enum CreativeAppState {
     StartFailed,
     Deleting,
     DeleteFailed,
+    /// Stop could not verify that resources (process group / port) were released.
+    /// Process identity, port and URL are preserved so a retry stop stays possible.
+    CleanupFailed,
+    /// A live process was found after restart / crash that the supervisor does not
+    /// own. Identity is preserved; the user must resolve it (stop or restart).
+    Orphaned,
 }
 
 impl CreativeAppState {
@@ -79,6 +85,8 @@ impl CreativeAppState {
             Self::StartFailed => "start_failed",
             Self::Deleting => "deleting",
             Self::DeleteFailed => "delete_failed",
+            Self::CleanupFailed => "cleanup_failed",
+            Self::Orphaned => "orphaned",
         }
     }
 
@@ -96,6 +104,8 @@ impl CreativeAppState {
             "start_failed" => Self::StartFailed,
             "deleting" => Self::Deleting,
             "delete_failed" => Self::DeleteFailed,
+            "cleanup_failed" => Self::CleanupFailed,
+            "orphaned" => Self::Orphaned,
             _ => return None,
         })
     }
@@ -190,6 +200,16 @@ impl CreativeAppActions {
                     can_open: false,
                     can_start: false,
                     can_stop: false,
+                    can_delete: true,
+                    can_retry: true,
+                },
+                // Stop failed to verify resource release, or a live process was found
+                // after crash. Resources may still exist — keep stop + retry open, and
+                // never offer "open" until resources are confirmed released.
+                CreativeAppState::CleanupFailed | CreativeAppState::Orphaned => Self {
+                    can_open: false,
+                    can_start: true,
+                    can_stop: true,
                     can_delete: true,
                     can_retry: true,
                 },
@@ -305,6 +325,8 @@ pub enum LocalCreativeIssueCode {
     AiError,
     StartUnhealthy,
     OrphanedProcess,
+    /// Stop could not verify resource release (process group / port still present).
+    StopFailed,
 }
 
 impl LocalCreativeIssueCode {
@@ -318,6 +340,7 @@ impl LocalCreativeIssueCode {
             Self::AiError => "ai_error",
             Self::StartUnhealthy => "start_unhealthy",
             Self::OrphanedProcess => "orphaned_process",
+            Self::StopFailed => "stop_failed",
         }
     }
 
@@ -331,6 +354,7 @@ impl LocalCreativeIssueCode {
             "ai_error" => Self::AiError,
             "start_unhealthy" => Self::StartUnhealthy,
             "orphaned_process" => Self::OrphanedProcess,
+            "stop_failed" => Self::StopFailed,
             _ => return None,
         })
     }
@@ -963,6 +987,8 @@ mod tests {
             CreativeAppState::Available,
             CreativeAppState::InstallFailed,
             CreativeAppState::RuntimeUnavailable,
+            CreativeAppState::CleanupFailed,
+            CreativeAppState::Orphaned,
         ] {
             assert_eq!(CreativeAppState::parse(s.as_str()), Some(s));
         }
@@ -1039,6 +1065,10 @@ mod tests {
         assert_eq!(
             LocalCreativeIssueCode::OrphanedProcess.as_str(),
             "orphaned_process"
+        );
+        assert_eq!(
+            LocalCreativeIssueCode::parse("stop_failed"),
+            Some(LocalCreativeIssueCode::StopFailed)
         );
     }
 }

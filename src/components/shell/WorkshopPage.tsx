@@ -85,6 +85,8 @@ function stateLabel(locale: Locale, state: CreativeAppSummary['state']): string 
     start_failed: 'workshop.stateStartFailed',
     deleting: 'workshop.stateDeleting',
     delete_failed: 'workshop.stateDeleteFailed',
+    cleanup_failed: 'workshop.stateCleanupFailed',
+    orphaned: 'workshop.stateOrphaned',
   }[state];
   return t(locale, key);
 }
@@ -114,6 +116,8 @@ function renderStatusDot(state: CreativeAppSummary['state']) {
     case 'install_failed':
     case 'start_failed':
     case 'delete_failed':
+    case 'cleanup_failed':
+    case 'orphaned':
     case 'runtime_unavailable':
       return <span className="h-2 w-2 rounded-full bg-rose-500 shrink-0" />;
     default:

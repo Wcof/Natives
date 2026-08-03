@@ -80,7 +80,7 @@ pub async fn start_app(
     };
 
     // Orphan recovery gate: if DB says running but supervisor has no live child,
-    // surface orphaned_process when identity is present.
+    // surface orphaned when identity is present.
     if matches!(rec.state, CreativeAppState::Running) && !runtime.is_running(id).await {
         if let Some(ident_json) = &rec.process_identity_json {
             if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
@@ -98,7 +98,7 @@ pub async fn start_app(
                     set_status_detail(
                         conn,
                         id,
-                        CreativeAppState::StartFailed,
+                        CreativeAppState::Orphaned,
                         Some(&detail),
                         Some(&detail.message),
                     )?;
@@ -247,6 +247,44 @@ pub async fn start_app(
     }
 }
 
+/// Apply a stop outcome to the local record. On failure the record keeps its
+/// identity/port/URL and moves to `CleanupFailed` — it must NEVER claim stopped
+/// when resources were not verified released.
+fn record_stop_outcome(
+    mut rec: LocalCreativeAppRecord,
+    released: bool,
+    error: Option<String>,
+) -> LocalCreativeAppRecord {
+    if released {
+        rec.state = CreativeAppState::InstalledStopped;
+        rec.open_url = None;
+        rec.current_port = None;
+        rec.process_identity_json = None;
+        rec.status_detail_json = None;
+        rec.last_error = None;
+        rec.last_exit_reason = Some("stopped_by_user".into());
+    } else {
+        let msg = error.unwrap_or_else(|| "stop did not verify resource release".to_string());
+        let detail = CreativeAppStatusDetail {
+            code: LocalCreativeIssueCode::StopFailed,
+            message: msg.clone(),
+            recovery_actions: vec![
+                "stop".into(),
+                "view_logs".into(),
+                "open_terminal".into(),
+                "open_folder".into(),
+            ],
+        };
+        rec.state = CreativeAppState::CleanupFailed;
+        rec.last_error = Some(msg);
+        rec.status_detail_json = Some(serde_json::to_string(&detail).unwrap_or_default());
+        rec.last_exit_reason = None;
+        // identity / port / url are intentionally preserved for a retry stop.
+    }
+    rec.updated_at = now();
+    rec
+}
+
 pub async fn stop_app(
     conn: &Connection,
     app: &AppHandle,
@@ -260,19 +298,23 @@ pub async fn stop_app(
     broadcast(app, "stopping", id);
 
     let plan = parse_plan(&rec).ok();
-    let mut warnings: Vec<String> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
     if plan.as_ref().map(runtime::plan_is_static).unwrap_or(false) {
-        // no process
+        // static apps keep no process; nothing to verify
     } else {
         // Prefer live child; if missing, only kill when persisted identity fully matches.
         if runtime.is_running(id).await {
-            let _ = runtime.stop(id, Some(app)).await;
+            if let Err(e) = runtime.stop(id, Some(app)).await {
+                failures.push(e.to_string());
+            }
         } else if let Some(ident_json) = &rec.process_identity_json {
             if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
                 if identity_matches_live(&ident) {
-                    force_kill_identity(&ident);
+                    if let Err(e) = force_kill_identity(&ident).await {
+                        failures.push(e.to_string());
+                    }
                 } else if ident.pid.is_some() {
-                    warnings.push(
+                    failures.push(
                         "a process with this PID is alive but identity does not match; not killed"
                             .into(),
                     );
@@ -282,27 +324,15 @@ pub async fn stop_app(
     }
 
     let mut rec = store::get_app(conn, id)?.unwrap();
-    rec.state = CreativeAppState::InstalledStopped;
-    rec.open_url = None;
-    rec.current_port = None;
-    rec.process_identity_json = None;
-    rec.status_detail_json = if warnings.is_empty() {
+    let released = failures.is_empty();
+    let error = if released {
         None
     } else {
-        Some(
-            serde_json::to_string(&CreativeAppStatusDetail {
-                code: LocalCreativeIssueCode::OrphanedProcess,
-                message: warnings.join("; "),
-                recovery_actions: vec!["open_terminal".into(), "open_folder".into()],
-            })
-            .unwrap_or_default(),
-        )
+        Some(failures.join("; "))
     };
-    rec.last_error = warnings.first().cloned();
-    rec.last_exit_reason = Some("stopped_by_user".into());
-    rec.updated_at = now();
+    rec = record_stop_outcome(rec, released, error);
     store::update_app(conn, &rec)?;
-    broadcast(app, "stopped", id);
+    broadcast(app, if released { "stopped" } else { "stop_failed" }, id);
     Ok(store::summary_from_local(&rec))
 }
 
@@ -326,12 +356,14 @@ pub async fn delete_app(
 ) -> Result<DeleteResult> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
 
+    // A delete must never orphan a live process: propagate stop failures and keep
+    // the record (with identity) so the user can stop it first.
     if runtime.is_running(id).await {
-        let _ = runtime.stop(id, Some(app)).await;
+        runtime.stop(id, Some(app)).await?;
     } else if let Some(ident_json) = &rec.process_identity_json {
         if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
             if identity_matches_live(&ident) {
-                force_kill_identity(&ident);
+                force_kill_identity(&ident).await?;
             } else if pid_is_alive(ident.pid) {
                 return Err(Error::InvalidInput(
                     "cannot delete: a process is alive with this PID but identity does not match; stop it manually first".into(),
@@ -358,14 +390,41 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
         let mut orphan = false;
 
         if rec.state.is_transient() {
-            target = match rec.state {
-                CreativeAppState::Starting => CreativeAppState::StartFailed,
-                CreativeAppState::Stopping | CreativeAppState::Deleting => {
-                    CreativeAppState::InstalledStopped
+            match rec.state {
+                CreativeAppState::Starting => {
+                    target = CreativeAppState::StartFailed;
+                    clear_runtime = true;
                 }
-                other => other,
-            };
-            clear_runtime = true;
+                CreativeAppState::Stopping => {
+                    // The Host died mid-stop. If a live process still matches the
+                    // persisted identity it is orphaned — do NOT claim stopped.
+                    if let Some(ident_json) = &rec.process_identity_json {
+                        if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
+                            if identity_matches_live(&ident) {
+                                target = CreativeAppState::Orphaned;
+                                orphan = true;
+                                clear_runtime = false;
+                            } else {
+                                target = CreativeAppState::InstalledStopped;
+                                clear_runtime = true;
+                            }
+                        } else {
+                            target = CreativeAppState::InstalledStopped;
+                            clear_runtime = true;
+                        }
+                    } else {
+                        target = CreativeAppState::InstalledStopped;
+                        clear_runtime = true;
+                    }
+                }
+                CreativeAppState::Deleting => {
+                    target = CreativeAppState::InstalledStopped;
+                    clear_runtime = true;
+                }
+                other => {
+                    target = other;
+                }
+            }
         } else if matches!(rec.state, CreativeAppState::Running) {
             let plan_static = parse_plan(&rec)
                 .map(|p| runtime::plan_is_static(&p))
@@ -377,8 +436,8 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
             } else if let Some(ident_json) = &rec.process_identity_json {
                 if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
                     if identity_matches_live(&ident) {
-                        // Live leftover — do not auto-takeover pipes; mark orphan.
-                        target = CreativeAppState::StartFailed;
+                        // Live leftover — do not auto-takeover pipes; mark orphaned.
+                        target = CreativeAppState::Orphaned;
                         orphan = true;
                         clear_runtime = false;
                     } else {
@@ -457,7 +516,8 @@ pub async fn resolve_orphan(
         if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
             // Only kill if identity still matches (pid + executable + cwd fingerprint).
             if identity_matches_live(&ident) {
-                force_kill_identity(&ident);
+                // On failure keep the orphaned identity so a retry stays possible.
+                force_kill_identity(&ident).await?;
                 let _ = runtime
                     .logs()
                     .get_or_open(id)
@@ -489,7 +549,7 @@ fn identity_matches_live(ident: &ProcessIdentity) -> bool {
     super::runtime::identity_matches_live_strict(ident)
 }
 
-fn force_kill_identity(ident: &ProcessIdentity) {
+async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
     #[cfg(unix)]
     {
         if let Some(pgid) = ident.process_group_id {
@@ -500,7 +560,17 @@ fn force_kill_identity(ident: &ProcessIdentity) {
             unsafe {
                 let _ = libc::kill(-pgid, libc::SIGKILL);
             }
-            return;
+            // Verify the group is really gone before claiming success.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while super::runtime::process_group_exists(pgid) {
+                if std::time::Instant::now() >= deadline {
+                    return Err(Error::Internal(format!(
+                        "process group {pgid} still has members after kill"
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            return Ok(());
         }
         if let Some(pid) = ident.pid {
             unsafe {
@@ -522,6 +592,7 @@ fn force_kill_identity(ident: &ProcessIdentity) {
                 .status();
         }
     }
+    Ok(())
 }
 
 /// Apply exited process cleanup to DB (call after poll_exits).
@@ -618,9 +689,73 @@ pub fn new_runtime_manager() -> LocalRuntimeHandle {
 mod tests {
     use super::*;
 
+    fn sample_rec() -> LocalCreativeAppRecord {
+        let t = now();
+        LocalCreativeAppRecord {
+            id: "loc1".into(),
+            title: "Local".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: "/tmp/proj".into(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Vite,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: "{}".into(),
+            plan_fingerprint: "fp".into(),
+            state: CreativeAppState::Running,
+            status_detail_json: None,
+            open_url: Some("http://127.0.0.1:5173/".into()),
+            current_port: Some(5173),
+            process_identity_json: Some(r#"{"pid":123,"processGroupId":123}"#.into()),
+            auto_open: true,
+            startup_timeout_ms: 60_000,
+            last_started_at: Some(t.clone()),
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        }
+    }
+
     #[test]
     fn identity_without_pid_not_orphan() {
         let id = ProcessIdentity::default();
         assert!(!identity_matches_live(&id));
+    }
+
+    /// P0: a failed stop must never write installed_stopped and must preserve the
+    /// identity/port/url so a retry stop stays possible.
+    #[test]
+    fn stop_failure_keeps_identity_and_non_stopped_state() {
+        let rec = sample_rec();
+        let failed = record_stop_outcome(rec, false, Some("process group 123 still alive".into()));
+        assert_eq!(failed.state, CreativeAppState::CleanupFailed);
+        assert_ne!(failed.state.as_str(), "installed_stopped");
+        assert!(
+            failed.process_identity_json.is_some(),
+            "identity must be preserved on stop failure"
+        );
+        assert_eq!(failed.current_port, Some(5173), "port must be preserved");
+        assert_eq!(
+            failed.open_url.as_deref(),
+            Some("http://127.0.0.1:5173/"),
+            "url must be preserved"
+        );
+        assert!(failed.last_error.is_some());
+        let detail: CreativeAppStatusDetail =
+            serde_json::from_str(failed.status_detail_json.as_deref().unwrap()).unwrap();
+        assert_eq!(detail.code, LocalCreativeIssueCode::StopFailed);
+    }
+
+    #[test]
+    fn stop_success_clears_runtime_fields() {
+        let rec = sample_rec();
+        let ok = record_stop_outcome(rec, true, None);
+        assert_eq!(ok.state, CreativeAppState::InstalledStopped);
+        assert!(ok.process_identity_json.is_none());
+        assert!(ok.current_port.is_none());
+        assert!(ok.open_url.is_none());
+        assert_eq!(ok.last_exit_reason.as_deref(), Some("stopped_by_user"));
     }
 }

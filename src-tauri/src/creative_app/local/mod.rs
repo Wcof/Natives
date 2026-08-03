@@ -9,6 +9,7 @@ pub mod lifecycle;
 pub mod logs;
 pub mod path;
 pub mod plan;
+pub mod risk;
 pub mod runtime;
 pub mod scan;
 pub mod store;

@@ -166,6 +166,15 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
         plan.reason = "validated".into();
     }
 
+    // P0 dangerous-command gate: a plan whose effective command can place real
+    // trades is blocked by default. Only an explicit user authorization (added
+    // with the Compose plan in later batches) may relax this — never auto-start.
+    if super::risk::plan_command_risk(&plan) == super::risk::CommandRisk::Block {
+        return Err(Error::InvalidInput(
+            "launch plan blocked: command may place real trades; refusing to auto-start".into(),
+        ));
+    }
+
     Ok(plan)
 }
 

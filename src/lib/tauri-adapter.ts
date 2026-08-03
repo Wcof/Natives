@@ -58,7 +58,9 @@ export type CreativeAppState =
   | 'install_failed'
   | 'start_failed'
   | 'deleting'
-  | 'delete_failed';
+  | 'delete_failed'
+  | 'cleanup_failed'
+  | 'orphaned';
 
 export type LocalProjectKind =
   | 'html'

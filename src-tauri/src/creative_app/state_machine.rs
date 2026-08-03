@@ -56,7 +56,20 @@ fn is_allowed(from: CreativeAppState, to: CreativeAppState) -> bool {
         (Stopping, InstalledStopped)
         | (Stopping, RuntimeUnavailable)
         | (Stopping, Deleting)
-        | (Stopping, StartFailed) => true,
+        | (Stopping, StartFailed)
+        | (Stopping, CleanupFailed)
+        | (Stopping, Orphaned) => true,
+
+        // Stop could not verify release / live orphan — the user must retry stop or
+        // restart; resources are never assumed gone.
+        (CleanupFailed, Stopping)
+        | (CleanupFailed, InstalledStopped)
+        | (CleanupFailed, Starting)
+        | (CleanupFailed, Deleting) => true,
+        (Orphaned, Stopping)
+        | (Orphaned, InstalledStopped)
+        | (Orphaned, Starting)
+        | (Orphaned, Deleting) => true,
 
         (RuntimeUnavailable, Starting)
         | (RuntimeUnavailable, InstalledStopped)
@@ -123,5 +136,20 @@ mod tests {
         assert_eq!(converge_orphan(Stopping), InstalledStopped);
         assert_eq!(converge_orphan(Deleting), DeleteFailed);
         assert_eq!(converge_orphan(Running), Running);
+    }
+
+    #[test]
+    fn cleanup_failed_and_orphaned_are_stable_and_retryable() {
+        // Stop-failure states are not transient and can be retried from.
+        assert!(!CleanupFailed.is_transient());
+        assert!(!Orphaned.is_transient());
+        assert!(transition(Stopping, CleanupFailed).is_ok());
+        assert!(transition(Stopping, Orphaned).is_ok());
+        assert!(transition(CleanupFailed, Stopping).is_ok());
+        assert!(transition(Orphaned, Stopping).is_ok());
+        assert!(transition(Orphaned, Starting).is_ok());
+        // Orphan is stable under converge — it is not a transient to auto-clear.
+        assert_eq!(converge_orphan(Orphaned), Orphaned);
+        assert_eq!(converge_orphan(CleanupFailed), CleanupFailed);
     }
 }
