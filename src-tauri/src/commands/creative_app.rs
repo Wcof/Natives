@@ -606,6 +606,7 @@ fn create_local_app(
         open_url: None,
         current_port: None,
         process_identity_json: None,
+        volume_identity: local::volume_identity(&root),
         auto_open,
         startup_timeout_ms: timeout,
         last_started_at: None,

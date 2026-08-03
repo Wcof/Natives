@@ -74,6 +74,7 @@ fn sample_local(id: &str, root: &str, auto_open: bool) -> LocalCreativeAppRecord
         open_url: None,
         current_port: None,
         process_identity_json: None,
+        volume_identity: String::new(),
         auto_open,
         startup_timeout_ms: 60_000,
         last_started_at: None,
@@ -269,6 +270,34 @@ fn disabled_internal_cannot_open() {
     assert!(!s.actions.can_open);
     assert!(s.actions.can_start);
     assert!(open_target(&conn, "mod-off").is_err());
+}
+
+/// Batch 3: after a user publishes a module, every catalog read returns the SAME
+/// application_id — the assistant card and the Personal Creations list agree on
+/// one identity (no per-read UUID churn).
+#[test]
+fn published_module_application_id_is_stable_across_catalog_reads() {
+    let conn = mem();
+    insert_module(&conn, "mod-1", 1);
+    let l1 = list_all(&conn).unwrap();
+    let l2 = list_all(&conn).unwrap();
+    let a1 = l1.iter().find(|a| a.id == "mod-1").expect("module in list");
+    let a2 = l2.iter().find(|a| a.id == "mod-1").expect("module in list");
+    assert!(
+        !a1.application_id.is_empty(),
+        "published module must carry a unified application_id"
+    );
+    assert_eq!(
+        a1.application_id, a2.application_id,
+        "application_id must be stable across catalog reads"
+    );
+    let resolved = crate::creative_app::runtime_store::find_or_create_application(
+        &conn,
+        CreativeAppSource::Internal,
+        "mod-1",
+    )
+    .unwrap();
+    assert_eq!(a1.application_id, resolved);
 }
 
 #[test]

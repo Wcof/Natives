@@ -18,7 +18,7 @@ pub use lifecycle::{
     await_start_ready, delete_app as delete_running_app, new_runtime_manager, resolve_orphan,
     restart_app, shutdown_all, start_app, stop_app, LocalRuntimeHandle,
 };
-pub use path::{canonical_project_root, device_id, device_name};
+pub use path::{canonical_project_root, device_id, device_name, volume_identity};
 pub use plan::{fingerprint_plan, validate_launch_plan};
 pub use runtime::LocalRuntimeManager;
 pub use scan::inspect_local_project;

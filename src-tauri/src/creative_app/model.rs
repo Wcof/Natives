@@ -660,6 +660,9 @@ pub struct LocalCreativeAppRecord {
     pub open_url: Option<String>,
     pub current_port: Option<u16>,
     pub process_identity_json: Option<String>,
+    /// Stable volume identity (mount point) for the project root (batch 4).
+    #[serde(default)]
+    pub volume_identity: String,
     pub auto_open: bool,
     pub startup_timeout_ms: u32,
     pub last_started_at: Option<String>,

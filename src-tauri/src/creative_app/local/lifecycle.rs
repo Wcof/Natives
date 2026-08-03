@@ -972,6 +972,7 @@ mod tests {
             open_url: Some("http://127.0.0.1:5173/".into()),
             current_port: Some(5173),
             process_identity_json: Some(r#"{"pid":123,"processGroupId":123}"#.into()),
+            volume_identity: String::new(),
             auto_open: true,
             startup_timeout_ms: 60_000,
             last_started_at: Some(t.clone()),

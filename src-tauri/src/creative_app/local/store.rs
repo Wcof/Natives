@@ -18,8 +18,8 @@ pub fn insert_app(conn: &Connection, rec: &LocalCreativeAppRecord) -> Result<()>
             project_kind, launch_mode, launch_plan_json, plan_fingerprint, state,
             status_detail_json, open_url, current_port, process_identity_json,
             auto_open, startup_timeout_ms, last_started_at, last_exit_reason, last_error,
-            created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+            created_at, updated_at, volume_identity
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
         params![
             rec.id,
             rec.title,
@@ -44,6 +44,7 @@ pub fn insert_app(conn: &Connection, rec: &LocalCreativeAppRecord) -> Result<()>
             rec.last_error,
             rec.created_at,
             rec.updated_at,
+            rec.volume_identity,
         ],
     )
     .map_err(Error::Database)?;
@@ -58,7 +59,8 @@ pub fn update_app(conn: &Connection, rec: &LocalCreativeAppRecord) -> Result<()>
             launch_plan_json=?10, plan_fingerprint=?11, state=?12,
             status_detail_json=?13, open_url=?14, current_port=?15,
             process_identity_json=?16, auto_open=?17, startup_timeout_ms=?18,
-            last_started_at=?19, last_exit_reason=?20, last_error=?21, updated_at=?22
+            last_started_at=?19, last_exit_reason=?20, last_error=?21, updated_at=?22,
+            volume_identity=?23
          WHERE id=?1",
         params![
             rec.id,
@@ -83,6 +85,7 @@ pub fn update_app(conn: &Connection, rec: &LocalCreativeAppRecord) -> Result<()>
             rec.last_exit_reason,
             rec.last_error,
             rec.updated_at,
+            rec.volume_identity,
         ],
     )
     .map_err(Error::Database)?;
@@ -119,7 +122,7 @@ pub fn get_app(conn: &Connection, id: &str) -> Result<Option<LocalCreativeAppRec
                     project_kind, launch_mode, launch_plan_json, plan_fingerprint, state,
                     status_detail_json, open_url, current_port, process_identity_json,
                     auto_open, startup_timeout_ms, last_started_at, last_exit_reason, last_error,
-                    created_at, updated_at
+                    created_at, updated_at, volume_identity
              FROM local_creative_apps WHERE id = ?1",
         )
         .map_err(Error::Database)?;
@@ -140,7 +143,7 @@ pub fn get_app_by_root(
                     project_kind, launch_mode, launch_plan_json, plan_fingerprint, state,
                     status_detail_json, open_url, current_port, process_identity_json,
                     auto_open, startup_timeout_ms, last_started_at, last_exit_reason, last_error,
-                    created_at, updated_at
+                    created_at, updated_at, volume_identity
              FROM local_creative_apps WHERE canonical_project_root = ?1",
         )
         .map_err(Error::Database)?;
@@ -158,7 +161,7 @@ pub fn list_apps(conn: &Connection) -> Result<Vec<LocalCreativeAppRecord>> {
                     project_kind, launch_mode, launch_plan_json, plan_fingerprint, state,
                     status_detail_json, open_url, current_port, process_identity_json,
                     auto_open, startup_timeout_ms, last_started_at, last_exit_reason, last_error,
-                    created_at, updated_at
+                    created_at, updated_at, volume_identity
              FROM local_creative_apps ORDER BY updated_at DESC",
         )
         .map_err(Error::Database)?;
@@ -201,6 +204,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalCreativeAppRecord> 
         last_error: row.get(20)?,
         created_at: row.get(21)?,
         updated_at: row.get(22)?,
+        volume_identity: row.get(23)?,
     })
 }
 
@@ -410,6 +414,7 @@ mod tests {
             open_url: None,
             current_port: None,
             process_identity_json: None,
+            volume_identity: String::new(),
             auto_open: true,
             startup_timeout_ms: 60_000,
             last_started_at: None,

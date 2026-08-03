@@ -263,7 +263,9 @@ impl LocalRuntimeManager {
         // Append runner-specific host/port flags (Vite vs Vue CLI differ).
         if matches!(
             plan.program,
-            crate::creative_app::model::LaunchProgram::Npm | LaunchProgram::Pnpm | LaunchProgram::Yarn
+            crate::creative_app::model::LaunchProgram::Npm
+                | LaunchProgram::Pnpm
+                | LaunchProgram::Yarn
         ) {
             let runner = plan.script_runner.ok_or_else(|| {
                 Error::InvalidInput(
