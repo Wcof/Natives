@@ -31,6 +31,7 @@ import { t, useLocale, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import Modal from '@/components/ui/Modal';
+import AppLogsPanel from '@/components/creative/AppLogsPanel';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import CreativeHome from '@/components/creative/CreativeHome';
@@ -1211,104 +1212,19 @@ export default function WorkshopPage() {
         </Modal>
       )}
 
-      {logsFor && (
-        <Modal isOpen onClose={() => setLogsFor(null)} title={t(locale, 'workshop.logsTitle')} width={720}>
-          <div className="py-1 flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
-                <input
-                  type="checkbox"
-                  checked={logAutoScroll}
-                  onChange={(e) => setLogAutoScroll(e.target.checked)}
-                />
-                {t(locale, 'workshop.logsAutoScroll')}
-              </label>
-              <input
-                value={logFilter}
-                onChange={(e) => setLogFilter(e.target.value)}
-                placeholder={t(locale, 'workshop.logsFilter')}
-                className="h-7 px-2 text-[11px] rounded border border-[var(--border)] bg-[var(--surface-subtle)] min-w-[160px]"
-              />
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  type="button"
-                  className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
-                  onClick={async () => {
-                    try {
-                      await window.nativesAPI?.clipboard?.write?.(logsText || '');
-                      showToast(t(locale, 'workshop.copied'));
-                    } catch (err) {
-                      showToast(classifyError(err).userMessage);
-                    }
-                  }}
-                >
-                  {t(locale, 'workshop.logsCopy')}
-                </button>
-                <button
-                  type="button"
-                  className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
-                  onClick={() => setLogsText('')}
-                >
-                  {t(locale, 'workshop.logsClearView')}
-                </button>
-                <button
-                  type="button"
-                  className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
-                  onClick={() => void openLogs(logsFor)}
-                >
-                  {t(locale, 'common.refresh')}
-                </button>
-                {logsFor.source === 'local_project' && (
-                  <button
-                    type="button"
-                    className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
-                    onClick={async () => {
-                      try {
-                        const d = await window.nativesAPI?.creativeApp?.diagnoseLocalWithAi?.(
-                          logsFor.id,
-                        );
-                        if (d) {
-                          showToast(`${d.issueCode}: ${d.summary}`);
-                        }
-                      } catch (err) {
-                        showToast(classifyError(err).userMessage);
-                      }
-                    }}
-                  >
-                    {t(locale, 'workshop.localAiDiagnose')}
-                  </button>
-                )}
-              </div>
-            </div>
-            <pre
-              ref={logPreRef}
-              className="max-h-96 overflow-auto text-[11px] font-mono bg-zinc-950 p-4 rounded-xl border border-zinc-800 leading-relaxed whitespace-pre-wrap"
-            >
-              {(logFilter
-                ? logsText
-                    .split('\n')
-                    .filter((line) => line.toLowerCase().includes(logFilter.toLowerCase()))
-                    .join('\n')
-                : logsText
-              )
-                .split('\n')
-                .map((line, i) => {
-                  const color = line.includes('[stderr]')
-                    ? 'text-rose-300'
-                    : line.includes('[system]')
-                      ? 'text-amber-200'
-                      : 'text-zinc-200';
-                  return (
-                    <div key={i} className={color}>
-                      {line}
-                    </div>
-                  );
-                })}
-            </pre>
-          </div>
-        </Modal>
-      )}
-
+      <AppLogsPanel
+        app={logsFor}
+        logsText={logsText}
+        logFilter={logFilter}
+        logAutoScroll={logAutoScroll}
+        preRef={logPreRef}
+        onClose={() => setLogsFor(null)}
+        onSetFilter={setLogFilter}
+        onSetAutoScroll={setLogAutoScroll}
+        onClear={() => setLogsText('')}
+        onRefresh={() => { if (logsFor) void openLogs(logsFor); }}
+        onToast={setToast}
+      />
       {localWizardOpen && (
         <Modal
           isOpen

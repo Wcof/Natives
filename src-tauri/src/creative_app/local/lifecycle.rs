@@ -946,6 +946,13 @@ pub fn new_runtime_manager() -> LocalRuntimeHandle {
 mod tests {
     use super::*;
 
+    fn mem() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+        conn
+    }
+
     fn sample_rec() -> LocalCreativeAppRecord {
         let t = now();
         LocalCreativeAppRecord {
@@ -1014,5 +1021,124 @@ mod tests {
         assert!(ok.current_port.is_none());
         assert!(ok.open_url.is_none());
         assert_eq!(ok.last_exit_reason.as_deref(), Some("stopped_by_user"));
+    }
+
+    /// Batch 9, scenario 9 (Host/Daemon crash): a Running record whose live
+    /// process survived must reconcile to orphaned — never to a false stopped —
+    /// and the runtime instance settles to orphaned.
+    #[tokio::test]
+    async fn reconcile_marks_live_leftover_as_orphaned() {
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+
+        let conn = mem();
+        let cwd = std::env::temp_dir().join(format!("natives-orphan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("package.json"), "{}").unwrap();
+
+        let port = super::runtime::pick_free_port();
+        let js =
+            format!("require('http').createServer((q,s)=>s.end('ok')).listen({port},'127.0.0.1');");
+        let mut cmd = Command::new("node");
+        cmd.arg("-e")
+            .arg(&js)
+            .current_dir(&cwd)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn node");
+        let pid = child.id().expect("pid");
+        // Wait until the port is bound so the identity is unquestionably live.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !super::runtime::port_listening(port) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node never bound port"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let mut rec = sample_rec();
+        rec.canonical_project_root = cwd.to_string_lossy().to_string();
+        rec.current_port = Some(port);
+        rec.open_url = Some(format!("http://127.0.0.1:{port}/"));
+        rec.process_identity_json =
+            Some(serde_json::to_string(&build_live_identity(pid, &cwd, "fp")).unwrap());
+        store::insert_app(&conn, &rec).unwrap();
+        // Unified identity + a running instance so settle_instance can mirror.
+        let app = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc1",
+        )
+        .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&conn, &app, None, "local_process")
+                .unwrap();
+        crate::creative_app::runtime_store::mark_running(
+            &conn,
+            &iid,
+            &[rec.open_url.clone().unwrap()],
+            Some(port),
+            Some(pid as i32),
+            Some(pid),
+        )
+        .unwrap();
+
+        // The Host "crashed": reconcile sees a Running record with a live process.
+        reconcile_local_apps(&conn, None).unwrap();
+
+        let got = store::get_app(&conn, "loc1").unwrap().unwrap();
+        assert_eq!(
+            got.state,
+            CreativeAppState::Orphaned,
+            "a live leftover must be orphaned, never a false stopped"
+        );
+        assert!(
+            got.process_identity_json.is_some(),
+            "identity must be preserved for a retry stop"
+        );
+        let inst_status: String = conn
+            .query_row(
+                "SELECT status FROM runtime_instances WHERE id = ?1",
+                [&iid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(inst_status, "orphaned", "instance must settle to orphaned");
+
+        // The node server is still serving — kill the group then reap.
+        unsafe {
+            let _ = libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        let _ = child.wait().await;
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    fn build_live_identity(pid: u32, cwd: &std::path::Path, fp: &str) -> ProcessIdentity {
+        use sysinfo::{Pid, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        let p = sys.process(Pid::from_u32(pid)).expect("live process");
+        ProcessIdentity {
+            pid: Some(pid),
+            started_at_unix: Some(p.start_time() as i64),
+            executable: p.exe().map(|e| e.to_string_lossy().to_string()),
+            cwd: Some(cwd.to_string_lossy().to_string()),
+            plan_fingerprint: Some(fp.to_string()),
+            process_group_id: Some(pid as i32),
+        }
     }
 }
