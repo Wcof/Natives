@@ -6,7 +6,7 @@
 //! name — so a future Compose runner inherits the same gate without hardcoding
 //! any trading application.
 
-use crate::creative_app::model::{LaunchPlan, LocalLaunchRuntime, ScriptRunner};
+use crate::creative_app::model::{LaunchPlan, LocalLaunchRuntime, ScriptRunner, TradeApproval};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRisk {
@@ -129,11 +129,31 @@ pub fn plan_command_risk(plan: &LaunchPlan) -> CommandRisk {
     if plan.runtime == LocalLaunchRuntime::DockerCompose {
         if let Some(c) = &plan.compose {
             if !c.command.is_empty() {
-                // An explicit override is directly classifiable.
-                return classify_command("", &c.command);
+                let risk = classify_command("", &c.command);
+                if risk == CommandRisk::Block {
+                    // An approval only relaxes the gate when the command actually
+                    // matches the approved safe mode — a "webserver" approval can
+                    // never run `trade`.
+                    match plan.trade_approval {
+                        Some(TradeApproval::Webserver)
+                            if c.command.first().map(|t| t.as_str()) == Some("webserver") =>
+                        {
+                            return CommandRisk::Warn;
+                        }
+                        Some(TradeApproval::DryRun)
+                            if c.command
+                                .iter()
+                                .any(|t| matches!(t.as_str(), "dry-run" | "dry_run" | "paper")) =>
+                        {
+                            return CommandRisk::Warn;
+                        }
+                        _ => return CommandRisk::Block,
+                    }
+                }
+                return risk;
             }
             // No override: the compose default was already risk-checked at scan
-            // time. The start preflight re-checks via `docker compose config`.
+            // time. The start preflight re-checks via the compose file.
             return CommandRisk::Warn;
         }
         return CommandRisk::Safe;

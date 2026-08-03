@@ -471,6 +471,21 @@ pub struct LaunchPlan {
     /// Compose detail when `runtime` is `docker_compose` (batch 5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compose: Option<ComposePlanDetail>,
+    /// Explicit user authorization to run a compose default that the P0 risk
+    /// classifier would otherwise block (batch 8). The assistant can never set
+    /// this — only a user action on a Host plan. Never stores user config content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trade_approval: Option<TradeApproval>,
+}
+
+/// The only modes that may relax the trade gate, both non-real-funds.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeApproval {
+    /// Run the engine's non-trading webserver mode.
+    Webserver,
+    /// Run dry-run — only allowed after the config projection proves dry_run.
+    DryRun,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1135,6 +1150,7 @@ mod tests {
             confidence: Some(0.9),
             reason: "index.html present".into(),
             compose: None,
+            trade_approval: None,
         };
         let j = plan.to_json().unwrap();
         let back = LaunchPlan::from_json(&j).unwrap();

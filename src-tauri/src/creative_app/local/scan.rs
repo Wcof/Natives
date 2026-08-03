@@ -355,6 +355,32 @@ pub fn inspect_local_project(
     })
 }
 
+/// Prove the project config has `dry_run: true` (batch 8). Reads only the
+/// dry_run projection from common config locations — never logs or returns
+/// config content or secrets.
+pub fn config_proves_dry_run(root: &Path) -> bool {
+    for cand in [
+        root.join("user_data/config.json"),
+        root.join("config.json"),
+        root.join("config/config.json"),
+    ] {
+        if let Ok(meta) = fs::metadata(&cand) {
+            if meta.len() > MAX_CONFIG_BYTES {
+                continue;
+            }
+        }
+        let Ok(data) = fs::read_to_string(&cand) else {
+            continue;
+        };
+        if let Ok(v) = serde_json::from_str::<Value>(&data) {
+            if v.get("dry_run").and_then(|x| x.as_bool()) == Some(true) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Inspect a Compose file's `command:` lines and block any that can place real
 /// trades (P0 dangerous-command gate). Only the inline form is parsed here; the
 /// Compose runtime batch parses full service topology.
@@ -463,6 +489,7 @@ fn build_compose_plan(root: &Path, compose_files: &[PathBuf]) -> Option<LaunchPl
             health_path: "/".into(),
             host_port: None,
         }),
+        trade_approval: None,
     };
     validate_launch_plan(root, plan).ok()
 }
@@ -533,6 +560,7 @@ fn build_rule_plan(
                 confidence: Some(0.95),
                 reason: "root index.html detected".into(),
                 compose: None,
+                trade_approval: None,
             };
             validate_launch_plan(root, plan).ok()
         }
@@ -578,6 +606,7 @@ fn build_rule_plan(
                 confidence: Some(0.8),
                 reason: format!("rule: {} run {script}", pm.as_str()),
                 compose: None,
+                trade_approval: None,
             };
             match validate_launch_plan(root, plan) {
                 Ok(p) => Some(p),
@@ -916,6 +945,32 @@ mod tests {
             );
         }
         assert!(r.rule_plan.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Batch 8: dry-run is proven from the config projection, never returned.
+    #[test]
+    fn dry_run_projection_proves_safe_mode() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("user_data")).unwrap();
+        fs::write(
+            dir.join("user_data/config.json"),
+            r#"{"dry_run": true, "api_server": {"enabled": true}}"#,
+        )
+        .unwrap();
+        assert!(
+            config_proves_dry_run(&dir),
+            "dry_run:true must prove safe mode"
+        );
+        fs::write(
+            dir.join("user_data/config.json"),
+            r#"{"dry_run": false, "exchange": {"key": "SECRET"}}"#,
+        )
+        .unwrap();
+        assert!(
+            !config_proves_dry_run(&dir),
+            "dry_run:false must not prove safe mode"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

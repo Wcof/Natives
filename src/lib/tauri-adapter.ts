@@ -307,6 +307,8 @@ export interface LaunchPlan {
   reason: string;
   /** Compose detail when runtime is docker_compose (batch 5). */
   compose?: ComposePlanDetail;
+  /** Explicit user authorization to run a blocked compose default (batch 8). */
+  tradeApproval?: 'webserver' | 'dry_run';
 }
 
 export interface ComposePlanDetail {

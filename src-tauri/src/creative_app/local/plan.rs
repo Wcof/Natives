@@ -596,6 +596,7 @@ mod tests {
             confidence: Some(1.0),
             reason: "test".into(),
             compose: None,
+            trade_approval: None,
         }
     }
 
@@ -700,6 +701,41 @@ mod tests {
         let dir = temp_dir();
         let plan = compose_plan("nope.yml", vec![]);
         assert!(validate_launch_plan(&dir, plan).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Batch 8: an explicit webserver approval relaxes the gate only when the
+    /// command is a webserver command; a mismatch stays blocked.
+    #[test]
+    fn trade_approval_only_relaxes_matching_safe_mode() {
+        let dir = temp_dir();
+        fs::write(
+            dir.join("docker-compose.yml"),
+            "services:\n  bot:\n    image: t\n",
+        )
+        .unwrap();
+
+        // A trade command override with a webserver approval must STILL block.
+        let mut mismatch = compose_plan(
+            "docker-compose.yml",
+            vec!["trade".into(), "--config".into()],
+        );
+        mismatch.trade_approval = Some(TradeApproval::Webserver);
+        assert!(
+            validate_launch_plan(&dir, mismatch).is_err(),
+            "a webserver approval can never run trade"
+        );
+
+        // A webserver command with a webserver approval validates.
+        let mut ok = compose_plan(
+            "docker-compose.yml",
+            vec!["webserver".into(), "--config".into()],
+        );
+        ok.trade_approval = Some(TradeApproval::Webserver);
+        assert!(
+            validate_launch_plan(&dir, ok).is_ok(),
+            "matching webserver approval must validate"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

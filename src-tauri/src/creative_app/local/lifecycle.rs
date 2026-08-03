@@ -204,27 +204,64 @@ pub async fn start_app(
         };
         let project = runtime::compose_project_name(id, &detail.project_seed);
         let env = store::get_env_map(conn, id)?;
-        // P0 preflight: never start a compose command that can place real trades.
+        // P0 preflight: never start a compose command that can place real trades
+        // without explicit user approval (batch 8). The assistant can never set
+        // trade_approval — only a user action on the plan can.
         if let Some(msg) = crate::creative_app::local::scan::compose_command_risk(&compose_file_abs)
         {
-            let detail = CreativeAppStatusDetail {
-                code: LocalCreativeIssueCode::ConfigInvalid,
-                message: msg.clone(),
-                recovery_actions: vec!["edit_plan".into(), "open_folder".into()],
+            let approved = match plan.trade_approval {
+                Some(TradeApproval::Webserver) => {
+                    // The user pre-approved the non-trading webserver override:
+                    // the effective command must actually be a webserver command.
+                    detail.command.first().map(|t| t.as_str()) == Some("webserver")
+                }
+                Some(TradeApproval::DryRun) => {
+                    // Proven dry-run projection; the command may stay default.
+                    crate::creative_app::local::scan::config_proves_dry_run(&root)
+                }
+                None => false,
             };
-            set_status_detail(
-                conn,
-                id,
-                CreativeAppState::StartFailed,
-                Some(&detail),
-                Some(&msg),
-            )?;
-            broadcast(app, "start_failed", id);
-            return Err(Error::InvalidInput(msg));
+            if !approved {
+                let detail = CreativeAppStatusDetail {
+                    code: LocalCreativeIssueCode::ConfigInvalid,
+                    message: format!("{msg}; no explicit user approval"),
+                    recovery_actions: vec!["edit_plan".into(), "open_folder".into()],
+                };
+                set_status_detail(
+                    conn,
+                    id,
+                    CreativeAppState::StartFailed,
+                    Some(&detail),
+                    Some(&msg),
+                )?;
+                broadcast(app, "start_failed", id);
+                return Err(Error::InvalidInput(detail.message));
+            }
         }
-        if let Err(e) =
-            crate::creative_app::docker::compose_up(&project, &compose_file_abs, &env).await
-        {
+        let up_result = match (plan.trade_approval, detail.command.as_slice()) {
+            (Some(TradeApproval::Webserver), cmd) if !cmd.is_empty() => {
+                let service = detail.service.clone().ok_or_else(|| {
+                    Error::InvalidInput("webserver override requires a compose service".into())
+                })?;
+                let override_dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".natives")
+                    .join("creative-apps")
+                    .join(id)
+                    .join("runtime");
+                crate::creative_app::docker::compose_up_override(
+                    &project,
+                    &compose_file_abs,
+                    &service,
+                    cmd,
+                    &env,
+                    &override_dir,
+                )
+                .await
+            }
+            _ => crate::creative_app::docker::compose_up(&project, &compose_file_abs, &env).await,
+        };
+        if let Err(e) = up_result {
             let detail = CreativeAppStatusDetail {
                 code: LocalCreativeIssueCode::ConfigInvalid,
                 message: e.to_string(),
