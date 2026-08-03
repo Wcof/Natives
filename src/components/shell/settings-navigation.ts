@@ -9,7 +9,7 @@ export const SETTINGS_SECTIONS = [
 
 export type SettingsSection = typeof SETTINGS_SECTIONS[number];
 
-export const DEFAULT_SETTINGS_VIEW = 'settings:general' as const;
+export const DEFAULT_SETTINGS_VIEW = 'settings:personal' as const;
 
 const SETTINGS_SECTION_SET = new Set<string>(SETTINGS_SECTIONS);
 
@@ -18,15 +18,18 @@ export function isSettingsView(view?: string): boolean {
 }
 
 export function getSettingsSection(view?: string): SettingsSection {
-  if (!view?.startsWith('settings:')) return 'general';
+  if (!view?.startsWith('settings:')) return 'personal';
 
   const section = view.slice('settings:'.length);
   if (section === 'engineering' || section === 'engine') {
     return 'runtime';
   }
+  if (section === 'overview') {
+    return 'personal';
+  }
   return SETTINGS_SECTION_SET.has(section)
     ? (section as SettingsSection)
-    : 'general';
+    : 'personal';
 }
 
 export function normalizeSettingsTarget(

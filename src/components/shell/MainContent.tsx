@@ -55,6 +55,7 @@ export interface MainContentProps {
   iframeReloadKey: number;
   terminalSessionId: string | null;
   onFileSelect: (file: FileEntry) => void;
+  onNavigate: (view: string) => void;
   children: React.ReactNode;
   iframeContainerRef: React.RefObject<HTMLDivElement | null>;
 }
@@ -70,6 +71,7 @@ export default function MainContent({
   iframeReloadKey,
   terminalSessionId,
   onFileSelect,
+  onNavigate,
   children,
   iframeContainerRef,
 }: MainContentProps) {
@@ -103,7 +105,7 @@ export default function MainContent({
 
   // Settings routing — handle all settings: prefixed views
   if (isSettingsView(activeView)) {
-    return <Suspense fallback={<LazyFallback />}><LazySettingsPage activeSection={getSettingsSection(activeView)} locale={locale} /></Suspense>;
+    return <Suspense fallback={<LazyFallback />}><LazySettingsPage activeSection={getSettingsSection(activeView)} locale={locale} onNavigate={onNavigate} /></Suspense>;
   }
 
   switch (activeView) {

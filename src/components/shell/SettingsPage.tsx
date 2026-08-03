@@ -12,7 +12,7 @@ import ProviderDetail from '@/components/settings/ProviderDetail';
 import { ProviderSettingsWorkspace } from '@/components/settings/provider-routing/ProviderSettingsWorkspace';
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
-import { UsageDashboard } from '@/components/dashboard/UsageDashboard';
+import PersonalOverview from '@/components/settings/PersonalOverview';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
@@ -353,11 +353,13 @@ function InlineLoadError({
 }
 
 export default function SettingsPage({
-  activeSection = 'general',
+  activeSection = 'personal',
   locale: externalLocale,
+  onNavigate,
 }: {
   activeSection?: SettingsSection;
   locale?: Locale;
+  onNavigate?: (view: string) => void;
 }) {
   const { toast: globalToast } = useToast();
   const [locale, setLocaleState] = useState<Locale>(externalLocale ?? 'zh');
@@ -782,7 +784,7 @@ export default function SettingsPage({
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'personal':
-        return <UsageDashboard />;
+        return <PersonalOverview locale={locale} onNavigate={onNavigate} />;
       case 'general':
         return renderGeneral();
       case 'appearance':

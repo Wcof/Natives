@@ -8,7 +8,7 @@ import {
   normalizeSettingsTarget,
 } from './settings-navigation';
 
-test('settings exposes one execution-engine entry and redirects legacy links', () => {
+test('settings starts with personal overview and exposes one execution-engine entry', () => {
   assert.deepEqual(SETTINGS_SECTIONS, [
     'personal',
     'general',
@@ -22,14 +22,19 @@ test('settings exposes one execution-engine entry and redirects legacy links', (
   assert.equal(getSettingsSection('settings:engineering'), 'runtime');
 });
 
-test('settings entry points normalize to general', () => {
+test('settings entry points normalize to the personal overview', () => {
   assert.equal(normalizeSettingsTarget('__settings__'), DEFAULT_SETTINGS_VIEW);
   assert.equal(normalizeSettingsTarget('settings'), DEFAULT_SETTINGS_VIEW);
+  assert.equal(DEFAULT_SETTINGS_VIEW, 'settings:personal');
 });
 
-test('valid settings targets are preserved', () => {
+test('valid settings targets are preserved and overview alias is redirected', () => {
   assert.equal(
     normalizeSettingsTarget('settings:personal'),
+    'settings:personal',
+  );
+  assert.equal(
+    normalizeSettingsTarget('settings:overview'),
     'settings:personal',
   );
   assert.equal(
@@ -39,7 +44,7 @@ test('valid settings targets are preserved', () => {
   assert.equal(getSettingsSection('settings:runtime'), 'runtime');
 });
 
-test('invalid and removed settings targets fall back to general', () => {
+test('invalid and removed settings targets fall back to personal overview', () => {
   assert.equal(normalizeSettingsTarget('settings:env'), DEFAULT_SETTINGS_VIEW);
   assert.equal(normalizeSettingsTarget('settings:unknown'), DEFAULT_SETTINGS_VIEW);
 });
