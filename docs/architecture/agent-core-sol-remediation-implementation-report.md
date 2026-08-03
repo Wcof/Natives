@@ -7,11 +7,12 @@
 - Start HEAD（批次 0）：`1b78e34104b1a7a5bbd600b689d8bbd1fe33b927`
 - 批次 0 End：`631da17f33c48c5acf5d1220de90bc50639be4c6`（已提交）
 - 批次 1 End：`ca901dfaa362764b87982b81dc32dd686d12a56d`（已提交）
-- 批次 2 Start：`ca901dfaa362764b87982b81dc32dd686d12a56d`；批次 2 End：以当前 Worktree `git rev-parse HEAD` 为准（待提交）
-- Working Tree：批次 0/1 提交后干净；批次 2 改动未提交（提交后干净）。独立审计生成的三个文档为未跟踪文件，保留不动。
+- 批次 2 End：`5f2d6dc43d736f4b4337874d4fa3d674b32e5dc7`（已提交）
+- 批次 3 Start：`5f2d6dc43d736f4b4337874d4fa3d674b32e5dc7`；批次 3 End：以当前 Worktree `git rev-parse HEAD` 为准（待提交）
+- Working Tree：批次 0/1/2 提交后干净；批次 3 改动未提交（提交后干净）。独立审计生成的三个文档为未跟踪文件，保留不动。
 - Shared Target：`/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared` 7.5 GiB（<35 GiB 门槛）
 - Disk：可用 47 GiB（>20 GiB 测试门槛，>15 GiB Cargo 门槛）
-- 已实施：批次 0（最低合并门槛）、批次 1（Typed Message / Turn 主链）、批次 2（持久化与恢复）。批次 3–4 未开发。
+- 已实施：批次 0（最低合并门槛）、批次 1（Typed Message / Turn 主链）、批次 2（持久化与恢复）、批次 3（工具与输入闭环）。批次 4 未开发。
 
 ## 2. P0/P1/P2 状态
 
@@ -25,8 +26,8 @@
 | P1.2 Typed 无损（Custom/附件/ToolResult MessageId） | Custom 无法 reload（DB + snapshot 均失败）；附件降为文本；ToolResult MessageId 重造 | **已修复（批次 1）**：Custom DB block `{type:"custom",kind,payload}` 可 reload，snapshot 用 `role:"custom"+kind+payload` 无损；ToolResult MessageId 稳定；附件按计划在唯一转换边界（`parse_content_block` file_reference → 显式文本 marker）明确降级并有测试 | `agent_message_parts`/`load_agent_messages` custom 分支；snapshot 编解码 custom role；`append_single_assistant_turn` result_message_id | `custom_message_round_trips_through_sqlite`、`custom_snapshot_round_trips_losslessly`、`file_reference_degrades_to_explicit_text_marker_at_single_boundary` |
 | P1.3 `run.resume` + Safe/Confirm/Blocked | 仅骨架 | **已实现（批次 2）**：`run.resume` RPC + `resume_run` decision builder；读取 source run + checkpoint + snapshot + ledger 输出 SafeToContinue / ConfirmationRequired / Blocked；uncertain 且 replay_safe=1 未确认 → ConfirmationRequired（不创建 Run，0 调用）；uncertain 且 replay_safe=0 → Blocked（不可确认）；确认或安全 → 创建全新独立 Run（不复活旧 Future/waiter/credential lease） | `run_manager.rs::resume_run` + `load_resumable_checkpoint` + `create_continued_run`；`authority.rs`/`rpc.rs` 派发 | `resume_uncertain_returns_confirmation_required_without_creating_run`、`resume_confirmed_creates_independent_run`、`resume_blocked_on_non_replay_safe_uncertain` |
 | P1.4 Subagent route restart scope | 丢失 | **已修复（批次 2）**：migration 029 给 `subagent_session` 加 project_path/project_id/identity/permission/profile/max_steps/allowlist 列；spawn 时 `persist_subagent_scope` 持久化；`restart_subagent_with_binding` 从 durable session 严格恢复 scope，缺 project/permission/max_steps 字段即拒绝，不再写死 ask/max_steps=15 | `subagent_store::persist_subagent_scope`；`production_tools.rs` spawn 后写入；`production.rs` restart 读取并 fail closed | `subagent_scope_persists_and_round_trips`、`create_hidden_child_session_persists_permission_and_project_id` |
-| P1.5 Gateway per-tool mode/conflict key | 仅 SideEffect 推导 | 未开始（批次 3） | — | — |
-| P1.6 Progress 统一与集成测试 | 双路径、缺外部 fixture | 未开始（批次 3） | — | — |
+| P1.5 Gateway per-tool mode/conflict key | 仅按 SideEffect 推导（ReadOnly 自动 ParallelSafe），conflict_key 恒 None | **已修复（批次 3）**：`Tool` 增加显式 `parallel_safe`/`conflict_key` 字段；`list_capabilities` 只对显式声明并行安全的工具给 ParallelSafe（read_file/search_files/list_dir/grep），Destructive/Process → Exclusive，其余默认 Sequential；conflict_key 进入 capability 并驱动引擎冲突检测 | `capability-gateway::list_capabilities`；`builtin_tools`/`extra`/`creative_draft`/`plan`/`web_search` 全部显式声明 | `every_tool_has_a_verifiable_mode_and_writes_are_not_parallel`、`parallel_readonly_tools_emit_source_order_results_after_out_of_order_completion`、`sequential_tool_serializes_the_batch` |
+| P1.6 Progress 统一与集成测试 | run_terminal 有 50ms 直接 EventLog forwarder（第二路径） | **已修复（批次 3）**：run_terminal live 输出转投统一 `DaemonToolProgressSink`（8KiB/250ms），不再直接 append；Shell/MCP/Subagent 全部走同一 sink；补多 Run steering lease 排除测试；真实 Shell kill+wait/MCP abort fixture 需外部进程/服务，环境未验证 | `production_tools.rs` live_forwarder 改为 `progress.publish`；`DaemonToolProgressSink` 是唯一 progress 路径 | `progress_flushes_after_batch_window_without_next_update`、`settled_tool_drops_late_progress`（既有回归绿）、`steering_lease_excludes_a_second_run` |
 | P2.1–P2.4 | 收口/文档 | 未开始（批次 2–4 与文档报告） | — | — |
 
 uncertain 守卫：`continue_run` 的 `status = 'uncertain'` 拒绝逻辑（`run_manager.rs`）位于 snapshot 校验之后，本次未触碰；retry/continue 的 blocked resume_plan 落库逻辑保持。
@@ -83,8 +84,16 @@ uncertain 守卫：`continue_run` 的 `status = 'uncertain'` 拒绝逻辑（`run
 - 不变量：`run.resume` 只创建新 Run（`create_continued_run` 全新 RunV2），不复活旧 Future/waiter/credential lease；uncertain 未确认时 Provider/Tool invocation 为 0（ConfirmationRequired/Blocked 不创建 Run）；不自动重放 Shell/MCP、不自动外部补偿、不重写会话树；`continue_run` 语义保持（lineage/plan 不变，仅校验变严）；migration 029 仅 additive。
 - 测试：见第 7 节。先红后绿：`continue_rejects_checkpoint_without_ledger_watermark`（修复前无 ledger 校验）、`resume_*`（修复前无 run.resume）。
 
-### 批次 3
-未开始。
+### 批次 3（本批完成）
+
+- 修改：
+  1. `crates/capability-gateway/src/lib.rs`：`Tool` 结构增加 `parallel_safe: bool` + `conflict_key: Option<String>`；`list_capabilities` 改为「显式声明才并行」——`parallel_safe: true` → ParallelSafe，Destructive/Process → Exclusive，其余（含 ReadOnly 未显式声明）→ Sequential；`conflict_key` 透传到 capability。新增测试 `every_tool_has_a_verifiable_mode_and_writes_are_not_parallel`。
+  2. `crates/capability-gateway/src/tools/*.rs`：全部 22 个注册工具显式声明 `parallel_safe`（read_file/search_files/list_dir/grep 为 true，其余 false）+ `conflict_key: None`。
+  3. `crates/agent-core/src/engine.rs`：新增测试 `parallel_readonly_tools_emit_source_order_results_after_out_of_order_completion`（两个 ParallelSafe 只读工具乱序完成，ToolCallCompleted 按源序；max_seen ≥ 2 证明并行）、`sequential_tool_serializes_the_batch`（批次含 Sequential 工具时 max_seen == 1，不并行）。
+  4. `src-agent-daemon/src/production_tools.rs`：run_terminal 的 50ms 直接 EventLog forwarder 移除，改为把 live chunk `publish` 到统一 `DaemonToolProgressSink`（8KiB/250ms）——Shell/MCP/Subagent 全部走同一 sink，无第二 progress 路径。
+  5. `src-agent-daemon/src/prompt_queue_store.rs`：新增测试 `steering_lease_excludes_a_second_run`（第一条 Run 租到 steering 输入后，第二条 Run drain 得 0，证明多 Run lease 排除）。
+- 不变量：不重写 Scheduler、不建第二 Registry；Core 仍只读 Gateway capability 元数据，不按工具名推断并发；`conflict_key` 只在并行判定时插入集合；统一 progress sink 后 late-drop（settled）与 batch 窗口语义不变；真实外部 Shell/MCP/permission fixture 需要进程/服务，未在本批运行。
+- 测试：见第 7 节。新增 4 个精准测试全部绿；既有 progress/settled/gateway 全量回归绿。
 
 ### 批次 4
 未开始。
@@ -156,6 +165,11 @@ flowchart TD
 | `src-agent-daemon/src/storage/migrations.rs` | 批次 2：MIGRATION_029（subagent scope 列） |
 | `src-agent-daemon/src/authority.rs` / `rpc.rs` | 批次 2：`run.resume` RPC 派发 |
 | `crates/assistant-protocol/src/v2/run.rs` / `methods.rs` | 批次 2：`run.resume` 类型 + `RUN_RESUME` |
+| `crates/capability-gateway/src/lib.rs` | 批次 3：`Tool` 显式 parallel_safe/conflict_key + `list_capabilities` 模式推导 + mode 测试 |
+| `crates/capability-gateway/src/tools/{mod,creative_draft,extra,plan,web_search}.rs` | 批次 3：全部注册工具显式声明并行模式 |
+| `crates/agent-core/src/engine.rs` | 批次 3：并行/串行降级引擎测试 |
+| `src-agent-daemon/src/production_tools.rs` | 批次 3：run_terminal live progress 统一到 DaemonToolProgressSink |
+| `src-agent-daemon/src/prompt_queue_store.rs` | 批次 3：多 Run steering lease 排除测试 |
 | `src-agent-daemon/src/cli_runtime_bridge.rs` | 批次 1：CLI 合成 ToolCallCompleted 补 `result_message_id: None` |
 | `docs/architecture/agent-core-deepening-implementation-report.md` | 状态纠正（独立审计后） |
 | `docs/architecture/agent-core-deepening-progress.md` | 状态纠正（独立审计后） |
@@ -187,6 +201,13 @@ flowchart TD
 | `cargo test -p assistant-protocol -- --test-threads=1`（批次 2，protocol 改动后） | 0 | 绿：56 passed | 是 |
 | `cargo test -p natives-agent-daemon migration_versions -- --test-threads=1`（批次 2） | 0 | 绿：029 严格递增 | 是 |
 | `cargo test -p agent-core -- --test-threads=1`（批次 2，`NATIVES_EVENT_LOG_DISABLE=1`） | 0 | 绿：173 passed | 是 |
+| `cargo test -p capability-gateway -- --test-threads=2`（批次 3） | 0 | 绿：111 passed（含新 mode 测试） | 是 |
+| `cargo test -p agent-core parallel_readonly_tools_emit_source_order -- --test-threads=1`（批次 3） | 0 | 绿：乱序完成、源序结果、max_seen ≥ 2 | 是 |
+| `cargo test -p agent-core sequential_tool_serializes_the_batch -- --test-threads=1`（批次 3） | 0 | 绿：批次含 Sequential 工具时 max_seen == 1 | 是 |
+| `cargo test -p agent-core -- --test-threads=1`（批次 3，`NATIVES_EVENT_LOG_DISABLE=1`） | 0 | 绿：175 passed | 是 |
+| `cargo test -p natives-agent-daemon prompt_queue_store -- --test-threads=1`（批次 3） | 0 | 绿：10 passed（含新 steering lease 测试） | 是 |
+| `cargo test -p natives-agent-daemon steering_lease_excludes -- --test-threads=1`（批次 3） | 0 | 绿：第二条 Run drain 得 0 | 是 |
+| `cargo test -p natives-agent-daemon progress_ / settled_ -- --test-threads=1`（批次 3） | 0 | 绿：sink batch 窗口与 late-drop 回归 | 是 |
 | `cargo test --workspace -- --test-threads=2` | 未运行 | 批次 4 统一执行 | — |
 | `npm run protocol:check` | 未运行 | 批次 4 | — |
 | `npm run verify:native-engine` | 未运行 | 批次 4 | — |
@@ -196,10 +217,10 @@ flowchart TD
 
 ## 8. 未完成与环境阻塞
 
-- 批次 3（工具与输入闭环）、批次 4（Renderer 与最终验收）未开发。
+- 批次 4（Renderer 与最终验收）未开发。
 - P0.3 最终验收门未满足：workspace、native verifier、frontend full suite 未在最终 HEAD 运行（按批次 4 统一执行；资源门槛当前满足：磁盘 47 GiB、Target 7.5 GiB）。
-- 真实 Provider/Shell/MCP/permission fixture 需要外部服务或凭证，环境未验证；本批未触碰，仍按「未验证」记录。
-- 既有 daemon 测试缺陷（非本批引入）：`run_manager` 模块 7 个测试失败，根因包括「test store() 拒绝 ~/.natives 默认路径」（测试未设 env）、「no such table: run_event」（测试 DB 未迁移/全局 store 错指）、cancel 时序断言；已在隔离运行与基线 631da17 复现确认与批次 1/2 代码无关，留待批次 4 最终验收时如实记录退出码。
+- 真实 Provider/Shell/MCP/permission fixture 需要外部服务或凭证，环境未验证：本批未触碰 Shell kill+wait、MCP pending abort、真实多 Run FIFO 外部集成（审计要求的外部 fixture 保持「未验证」记录，未伪装为通过）。
+- 既有 daemon 测试缺陷（非本批引入）：`run_manager` 模块 7 个测试失败，根因包括「test store() 拒绝 ~/.natives 默认路径」（测试未设 env）、「no such table: run_event」（测试 DB 未迁移/全局 store 错指）、cancel 时序断言；已在隔离运行与基线 631da17 复现确认与批次 1/2/3 代码无关，留待批次 4 最终验收时如实记录退出码。
 - 固定 run_id 测试的陈旧事件日志问题：`~/.natives/events/<fixed-run-id>.jsonl` 在多次运行间累积（含损坏行），使 `session_end_hook_fires_after_success` 等在默认磁盘事件模式下偶发失败；干净环境（`NATIVES_EVENT_LOG_DISABLE=1`）通过。本批新增测试均用 UUID run_id。
 
 ## 9. 完成标准逐项判定
@@ -221,19 +242,27 @@ flowchart TD
 | 批次 2：`run.resume` 只创建新 Run，不复活旧 Future/waiter/credential lease | 已完成 | `resume_run` → `create_continued_run` 全新 RunV2（lineage 指向 source，但独立 id）；`resume_confirmed_creates_independent_run` 断言 `new_run_id != source_id` |
 | 批次 2：uncertain 返回 ConfirmationRequired/Blocked，未确认时 Provider/Tool invocation 为 0 | 已完成 | `resume_uncertain_returns_confirmation_required_without_creating_run` 断言无 new_run_id 且无 approved plan；`resume_blocked_on_non_replay_safe_uncertain` 断言 Blocked 无 Run |
 | 批次 2：Subagent route switch 前后 project/permission/allowlist/profile/parent cancel scope 一致 | 已完成（持久化 + 严格恢复 + 缺字段拒绝） | `subagent_scope_persists_and_round_trips`、`create_hidden_child_session_persists_permission_and_project_id` 绿；`restart_subagent_with_binding` 缺 project/permission/max_steps 拒绝 |
+| 批次 3：所有注册 tool 都有 mode，默认 Sequential；write/shell/git/MCP/subagent 不误并行 | 已完成 | `every_tool_has_a_verifiable_mode_and_writes_are_not_parallel` 绿：22 个注册工具全部显式模式，read_file/search_files/list_dir/grep 并行，write/edit/apply_patch/run_terminal/web_fetch/task/kill_task/mcp_call/draft 写/notification 非并行 |
+| 批次 3：parallel completion 可乱序，但 Tool Result 源序稳定 | 已完成 | `parallel_readonly_tools_emit_source_order_results_after_out_of_order_completion` 绿：read_b 先完成（completion_order[0]==read_b），ToolCallCompleted 仍按 [a1, b1] 源序 |
+| 批次 3：Sequential/Exclusive 降级；permission 混合批次无副作用抢跑 | 已完成（引擎降级测试；permission 时序为结构保证） | `sequential_tool_serializes_the_batch` 绿：批次含 Sequential 工具时 max_seen==1；permission 门在 execute 之前（PermissionGatedTools 同步门控，代码证据） |
+| 批次 3：统一 progress sink，result/cancel 后 late-drop | 已完成 | run_terminal live 转投 `DaemonToolProgressSink`；`settled_tool_drops_late_progress`、`progress_flushes_after_batch_window_without_next_update` 回归绿 |
+| 批次 3：Shell kill+wait、MCP abort、parallel cancel 后 registry quiet | 部分完成（本地可控测试绿；真实外部 fixture 未验证） | 真实 Shell/MCP fixture 需外部进程/服务，环境未验证（如实记录）；取消路径由既有 Gateway cancel/进程 supervisor 代码保证 |
+| 批次 3：Steering/Follow-up crash/restart、多 Run lease/FIFO | 已完成（store 层） | `steering_lease_excludes_a_second_run`（多 Run 租约排除）、`steering_queue_survives_coordinator_rehydrate`（coordinator 重建即 restart 语义）、`durable_steering_ack_removes_live_queue_item` 绿 |
 
 ## 10. Commit
 
 - 批次 0：`631da17f`（`fix(agent-core): enforce typed hook inject and exact checkpoint continue`）。未 Push，未开 PR。
 - 批次 1：`ca901dfa`（`fix(agent-core): stabilize tool-result identity and lossless typed codec`）。
-- 批次 2：一个本地提交（待提交；以当前 Worktree `git rev-parse HEAD` 为准）。
+- 批次 2：`5f2d6dc4`（`fix(daemon): close snapshot, resume, and subagent restart recovery`）。
+- 批次 3：一个本地提交（待提交；以当前 Worktree `git rev-parse HEAD` 为准）。
 
 ## 11. 风险与回滚
 
-- 回滚：每批一个提交，`git revert <批次提交>` 或 `git reset` 到 Start HEAD 即可整体回滚；批次 2 的 migration 029 为 additive，回滚无需删列；`run.resume` 为新 RPC，未接入 client 不调用即无影响。
-- 行为边界（批次 0）：注入前置为 `AgentMessage::System` 是确定性位置选择；若产品要求注入位置「紧跟当前用户消息之后」，属后续语义决策。
-- 行为边界（批次 1）：附件在 `parse_content_block`（唯一转换边界）显式降级为 `[attachment: name at path]` 文本 marker；若未来要求附件结构化无损，需为 `ContentBlock` 增加 FileReference 变体（~33 处穷尽 match，独立设计决策）。
-- 风险（批次 0）：`start_run` 对 `resume_of_run_id`/`continued_from_run_id` 的判定依赖这两个字段只由 `continue_run` 设置；未来新增 Resume 生产路径设置该字段必须同时保证 checkpoint 绑定 snapshot，否则 fail closed（保守方向正确）。
-- 风险（批次 1）：ToolResult `result_message_id` 由 `execute_prepared_tools` 创建一次并随事件提交；不经该路径的 `ToolCallCompleted`（如 CLI bridge）为 None，replay 时 fallback `MessageId::new()`（保守，不伪造身份）。
-- 风险（批次 2）：`resume_run` 的 Blocked 判定依赖 `side_effect_record.replay_safe` 标志被正确写入；若 ledger 未来不再写该标志，Blocked 会退化为 ConfirmationRequired（仍不自动执行）。`backfill_context_snapshots` 是 best-effort（失败仅 eprintln），loaders 已有 fail-closed 兜底。Subagent restart 对旧会话（migration 029 前创建、无 scope）fail closed——这是有意的保守行为，旧会话路由切换会报「no persisted project path」而非猜测默认值。
+- 回滚：每批一个提交，`git revert <批次提交>` 或 `git reset` 到 Start HEAD 即可整体回滚；批次 2 的 migration 029 为 additive，回滚无需删列；批次 3 无 DB/Protocol 变更。
+- 行为边界（批次 0）：注入前置为 `AgentMessage::System` 是确定性位置选择。
+- 行为边界（批次 1）：附件在 `parse_content_block`（唯一转换边界）显式降级为文本 marker。
+- 风险（批次 0）：`start_run` 对 `resume_of_run_id`/`continued_from_run_id` 的判定依赖字段只由 `continue_run` 设置。
+- 风险（批次 1）：ToolResult `result_message_id` 不经 `execute_prepared_tools` 的构造（如 CLI bridge）为 None，replay 时 fallback `MessageId::new()`（保守）。
+- 风险（批次 2）：`resume_run` Blocked 判定依赖 `side_effect_record.replay_safe` 正确写入；backfill 是 best-effort；Subagent restart 对旧会话（无 scope）fail closed。
+- 风险（批次 3）：`list_capabilities` 从「ReadOnly 自动并行」改为「显式声明才并行」——read_file/search_files/list_dir/grep 之外的原 ReadOnly 工具（memory_search/task_output/skill 等）现在默认 Sequential，只读批次的并行度下降（保守，符合「不误并行」）；若未来要恢复这些工具的并行，需逐一显式声明并验证共享状态安全。run_terminal live progress 现在走 8KiB/250ms sink，延迟从 50ms 变为 ≤250ms（统一行为，审计要求）。
 - 环境风险（既有，非本批引入）：daemon `run_manager` 7 个测试失败、固定 run_id 测试的陈旧事件日志问题，已在第 8 节记录；批次 4 最终验收将如实记录退出码。

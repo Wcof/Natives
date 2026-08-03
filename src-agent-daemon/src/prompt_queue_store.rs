@@ -1328,6 +1328,58 @@ mod tests {
     }
 
     #[test]
+    fn steering_lease_excludes_a_second_run() {
+        with_temp_db(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let cid = format!("pq-{}", Uuid::new_v4());
+                let run1 = format!("run-{}", Uuid::new_v4());
+                let run2 = format!("run-{}", Uuid::new_v4());
+                interject(json!({
+                    "conversation_id": cid,
+                    "content": "single lease",
+                }))
+                .unwrap();
+                let s = store().unwrap();
+                let conn = s.conn().unwrap();
+                for run_id in [&run1, &run2] {
+                    conn.execute(
+                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                         VALUES (?1, ?2, 'running', 'test', 'test')",
+                        params![run_id, cid],
+                    )
+                    .unwrap();
+                }
+                drop(conn);
+                let first = DurableInputReceiver::new(&cid, &run1);
+                let second = DurableInputReceiver::new(&cid, &run2);
+                let leased = first
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(leased.len(), 1, "first run leases the steering input");
+                let second_attempt = second
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    second_attempt.len(),
+                    0,
+                    "a second run must not lease an already-leased steering input"
+                );
+            });
+        });
+    }
+
+    #[test]
     fn migration_012_session_actor_table_exists() {
         with_temp_db(|| {
             let s = store().unwrap();

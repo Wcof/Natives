@@ -1098,37 +1098,35 @@ impl EngineToolRuntime for PermissionGatedTools {
         let live_forwarder = if name == "run_terminal" {
             let (tx, mut rx) =
                 tokio::sync::mpsc::unbounded_channel::<capability_gateway::ToolProgressChunk>();
-            let events = self.events.clone();
             let run_id = self.parent_run_id.clone();
             let call_id = stream_tool_call_id.clone();
             let turn_id = turn_id.map(str::to_string);
             let message_id = message_id.map(str::to_string);
             let settled = live_settled.clone();
+            // Terminal live output goes through the SAME batched progress sink
+            // as every other tool (8KiB/250ms) — there is no second direct
+            // EventLog path for run_terminal. The handler drains supervisor
+            // chunks into this channel; the sink batches and late-drops after
+            // the call settles, just like MCP/Subagent progress.
+            let progress = progress.clone();
             let forwarder = tokio::spawn(async move {
-                let mut last_emit = Instant::now() - Duration::from_millis(50);
-                static NEXT_PROGRESS_SEQUENCE: AtomicU64 = AtomicU64::new(1);
                 while let Some(chunk) = rx.recv().await {
                     if settled.load(AtomicOrdering::Acquire) {
                         break;
                     }
-                    if last_emit.elapsed() < Duration::from_millis(50) {
-                        continue;
-                    }
-                    last_emit = Instant::now();
-                    let sequence = NEXT_PROGRESS_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
-                    events.append(
-                        &run_id,
-                        RunEventKind::ToolOutputDelta {
+                    progress
+                        .publish(agent_core::ToolProgressUpdate {
+                            run_id: run_id.clone(),
                             tool_call_id: call_id.clone(),
-                            tool_name: Some("run_terminal".into()),
+                            tool_name: "run_terminal".into(),
                             stream: chunk.stream,
                             text: chunk.text,
-                            truncated: false,
+                            final_update: false,
                             turn_id: turn_id.clone(),
                             message_id: message_id.clone(),
-                            progress_sequence: Some(sequence),
-                        },
-                    );
+                            progress_sequence: 0,
+                        })
+                        .await;
                 }
             });
             Some((tx, forwarder))

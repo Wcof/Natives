@@ -588,6 +588,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 15_000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(ApplyPatchTool),
         },
         Tool {
@@ -600,6 +602,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 5_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(MemoryTool),
         },
         Tool {
@@ -612,6 +616,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 5_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(MemoryTool),
         },
         Tool {
@@ -638,6 +644,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 60_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(TaskTool),
         },
         Tool {
@@ -650,6 +658,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 10_000,
             output_limit: 256_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(TaskOutputTool),
         },
         Tool {
@@ -662,6 +672,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 5_000,
             output_limit: 8_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(KillTaskTool),
         },
         Tool {
@@ -680,6 +692,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 5_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(SkillTool),
         },
         Tool {
@@ -692,6 +706,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 30_000,
             output_limit: 256_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(McpCallTool),
         },
         Tool {
@@ -704,6 +720,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             timeout_ms: 2_000,
             output_limit: 4_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(NotificationTool),
         },
     ]

@@ -221,6 +221,13 @@ pub struct Tool {
     pub timeout_ms: u64,
     pub output_limit: u64,
     pub cancellable: bool,
+    /// Explicit scheduling declaration. `false` by default so a tool is
+    /// Sequential unless its author proves it safe to run concurrently with
+    /// other tools (read-only file search/read tools). Never inferred from
+    /// `SideEffect` — "read-only" does not imply parallel-safe.
+    pub parallel_safe: bool,
+    /// Tools that must not run concurrently with each other share a key.
+    pub conflict_key: Option<String>,
     pub handler: Arc<dyn ToolHandler + Send + Sync>,
 }
 
@@ -343,13 +350,22 @@ impl CapabilityGateway {
             .map(|tool| ToolCapability {
                 name: tool.name.to_string(),
                 schema: tool.schema.clone(),
-                execution_mode: match tool.side_effect {
-                    SideEffect::ReadOnly => ExecutionMode::ParallelSafe,
-                    SideEffect::Destructive | SideEffect::Process => ExecutionMode::Exclusive,
-                    SideEffect::Write | SideEffect::Network => ExecutionMode::Sequential,
+                execution_mode: if tool.parallel_safe {
+                    ExecutionMode::ParallelSafe
+                } else {
+                    // Explicit declaration only. Destructive/process tools are
+                    // Exclusive (they must never share a slot); everything else
+                    // defaults to Sequential rather than being auto-parallelized
+                    // from a "read-only" side effect.
+                    match tool.side_effect {
+                        SideEffect::Destructive | SideEffect::Process => ExecutionMode::Exclusive,
+                        SideEffect::ReadOnly | SideEffect::Write | SideEffect::Network => {
+                            ExecutionMode::Sequential
+                        }
+                    }
                 },
                 side_effect: tool.side_effect,
-                conflict_key: None,
+                conflict_key: tool.conflict_key.clone(),
             })
             .collect()
     }
@@ -823,6 +839,8 @@ mod p0_tests {
             timeout_ms,
             output_limit: 4096,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler,
         });
         gateway
@@ -875,6 +893,8 @@ mod p0_tests {
             timeout_ms: 1000,
             output_limit: 4096,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: handler.clone(),
         });
         let error = gateway
@@ -896,6 +916,60 @@ mod p0_tests {
         gateway
             .validate_registered_schemas()
             .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    }
+
+    #[test]
+    fn every_tool_has_a_verifiable_mode_and_writes_are_not_parallel() {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register_builtins();
+        let capabilities = gateway.list_capabilities();
+        assert!(!capabilities.is_empty(), "builtins must register");
+        for capability in &capabilities {
+            // Every tool has a real, explicit mode — never an inferred default
+            // that could be mistaken for a missing declaration.
+            match capability.execution_mode {
+                ExecutionMode::ParallelSafe
+                | ExecutionMode::Sequential
+                | ExecutionMode::Exclusive => {}
+            }
+        }
+        // Genuinely safe read-only file tools are explicitly parallel-safe.
+        for name in ["read_file", "search_files", "list_dir", "grep"] {
+            let cap = capabilities
+                .iter()
+                .find(|capability| capability.name == name)
+                .unwrap_or_else(|| panic!("{name} must be registered"));
+            assert_eq!(
+                cap.execution_mode,
+                ExecutionMode::ParallelSafe,
+                "{name} must be explicitly parallel-safe"
+            );
+        }
+        // write / shell / git / MCP / subagent tools must never be parallel.
+        for name in [
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "run_terminal",
+            "web_fetch",
+            "task",
+            "kill_task",
+            "mcp_call",
+            "write_draft_module",
+            "rollback_draft_revision",
+            "notification",
+        ] {
+            if let Some(cap) = capabilities
+                .iter()
+                .find(|capability| capability.name == name)
+            {
+                assert_ne!(
+                    cap.execution_mode,
+                    ExecutionMode::ParallelSafe,
+                    "{name} must not be parallel-safe"
+                );
+            }
+        }
     }
 
     #[tokio::test]

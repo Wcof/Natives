@@ -147,6 +147,8 @@ pub fn plan_mode_tools() -> Vec<Tool> {
             timeout_ms: 5_000,
             output_limit: 16_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(EnterPlanModeTool),
         },
         Tool {
@@ -168,6 +170,8 @@ pub fn plan_mode_tools() -> Vec<Tool> {
             timeout_ms: 130_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(ExitPlanModeTool),
         },
     ]

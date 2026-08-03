@@ -445,6 +445,8 @@ pub fn web_search_tool() -> Tool {
         timeout_ms: 25_000,
         output_limit: 64_000,
         cancellable: true,
+        parallel_safe: false,
+        conflict_key: None,
         handler: Arc::new(WebSearchTool),
     }
 }

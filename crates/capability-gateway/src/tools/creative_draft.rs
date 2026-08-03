@@ -767,6 +767,8 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             timeout_ms: 15_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(WriteDraftModuleTool::new()),
         },
         Tool {
@@ -784,6 +786,8 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             // One revision may be up to 5 MiB; JSON escaping needs headroom.
             output_limit: 8_388_608,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(ReadDraftModuleTool::new()),
         },
         Tool {
@@ -800,6 +804,8 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             timeout_ms: 10_000,
             output_limit: 16_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(RollbackDraftRevisionTool::new()),
         },
         Tool {
@@ -817,6 +823,8 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             timeout_ms: 5_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(LintDraftModuleTool),
         },
     ]

@@ -3610,6 +3610,247 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parallel_readonly_tools_emit_source_order_results_after_out_of_order_completion() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        struct ParallelRuntime {
+            completion_order: Arc<Mutex<Vec<String>>>,
+            current: Arc<AtomicUsize>,
+            max_seen: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl EngineToolRuntime for ParallelRuntime {
+            async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+                vec![
+                    ToolSchema {
+                        name: "read_a".into(),
+                        description: "a".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                    ToolSchema {
+                        name: "read_b".into(),
+                        description: "b".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                ]
+            }
+            async fn list_tool_capabilities(&self) -> Vec<ToolCapability> {
+                vec![
+                    ToolCapability {
+                        name: "read_a".into(),
+                        schema: serde_json::json!({"type":"object"}),
+                        execution_mode: ToolExecutionMode::ParallelSafe,
+                        side_effect: ToolSideEffect::ReadOnly,
+                        conflict_key: None,
+                    },
+                    ToolCapability {
+                        name: "read_b".into(),
+                        schema: serde_json::json!({"type":"object"}),
+                        execution_mode: ToolExecutionMode::ParallelSafe,
+                        side_effect: ToolSideEffect::ReadOnly,
+                        conflict_key: None,
+                    },
+                ]
+            }
+            async fn execute_tool(
+                &self,
+                name: &str,
+                _input: Value,
+                _cancel: &CancellationToken,
+            ) -> ToolExecutionResult {
+                let running = self.current.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                self.max_seen.fetch_max(running, AtomicOrdering::SeqCst);
+                if name == "read_a" {
+                    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                }
+                self.completion_order.lock().unwrap().push(name.to_string());
+                self.current.fetch_sub(1, AtomicOrdering::SeqCst);
+                ToolExecutionResult {
+                    output: serde_json::json!({"tool": name}),
+                    is_error: false,
+                    duration_ms: 0,
+                }
+            }
+        }
+
+        let runtime = ParallelRuntime {
+            completion_order: Arc::new(Mutex::new(Vec::new())),
+            current: Arc::new(AtomicUsize::new(0)),
+            max_seen: Arc::new(AtomicUsize::new(0)),
+        };
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-parallel-{}", uuid::Uuid::new_v4());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![vec![
+                EngineProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("a1".into()),
+                    name: Some("read_a".into()),
+                    arguments_delta: r#"{}"#.into(),
+                },
+                EngineProviderEvent::ToolCallDelta {
+                    index: 1,
+                    id: Some("b1".into()),
+                    name: Some("read_b".into()),
+                    arguments_delta: r#"{}"#.into(),
+                },
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::ToolUse,
+                },
+            ]]),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "read both".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &runtime,
+            )
+            .await
+            .unwrap();
+        // Both read-only tools ran concurrently (max > 1) and the slower one
+        // (read_a) finished last, but the emitted ToolCallCompleted events stay
+        // in source order.
+        assert!(
+            runtime.max_seen.load(AtomicOrdering::SeqCst) >= 2,
+            "parallel-safe read-only tools must overlap, got max_seen={}",
+            runtime.max_seen.load(AtomicOrdering::SeqCst)
+        );
+        let order = runtime.completion_order.lock().unwrap();
+        assert_eq!(order.len(), 2);
+        assert_eq!(
+            order[0], "read_b",
+            "read_b must finish before the delayed read_a"
+        );
+        assert_eq!(order[1], "read_a");
+        let events = engine.events.replay_after(&run_id, 0);
+        let completed: Vec<String> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                RunEventKind::ToolCallCompleted { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completed, vec!["a1".to_string(), "b1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn sequential_tool_serializes_the_batch() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        struct MixedRuntime {
+            current: Arc<AtomicUsize>,
+            max_seen: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl EngineToolRuntime for MixedRuntime {
+            async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+                vec![
+                    ToolSchema {
+                        name: "read_a".into(),
+                        description: "a".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                    ToolSchema {
+                        name: "write_b".into(),
+                        description: "b".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                ]
+            }
+            async fn list_tool_capabilities(&self) -> Vec<ToolCapability> {
+                vec![
+                    ToolCapability {
+                        name: "read_a".into(),
+                        schema: serde_json::json!({"type":"object"}),
+                        execution_mode: ToolExecutionMode::ParallelSafe,
+                        side_effect: ToolSideEffect::ReadOnly,
+                        conflict_key: None,
+                    },
+                    ToolCapability {
+                        name: "write_b".into(),
+                        schema: serde_json::json!({"type":"object"}),
+                        execution_mode: ToolExecutionMode::Sequential,
+                        side_effect: ToolSideEffect::Write,
+                        conflict_key: None,
+                    },
+                ]
+            }
+            async fn execute_tool(
+                &self,
+                _name: &str,
+                _input: Value,
+                _cancel: &CancellationToken,
+            ) -> ToolExecutionResult {
+                let running = self.current.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                self.max_seen.fetch_max(running, AtomicOrdering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                self.current.fetch_sub(1, AtomicOrdering::SeqCst);
+                ToolExecutionResult {
+                    output: serde_json::json!({"ok": true}),
+                    is_error: false,
+                    duration_ms: 0,
+                }
+            }
+        }
+
+        let runtime = MixedRuntime {
+            current: Arc::new(AtomicUsize::new(0)),
+            max_seen: Arc::new(AtomicUsize::new(0)),
+        };
+        let engine = AgentEngine::new(EventSequencer::new());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![vec![
+                EngineProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("a1".into()),
+                    name: Some("read_a".into()),
+                    arguments_delta: r#"{}"#.into(),
+                },
+                EngineProviderEvent::ToolCallDelta {
+                    index: 1,
+                    id: Some("b1".into()),
+                    name: Some("write_b".into()),
+                    arguments_delta: r#"{}"#.into(),
+                },
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::ToolUse,
+                },
+            ]]),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("r-serial-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "mixed".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &runtime,
+            )
+            .await
+            .unwrap();
+        // A batch containing a Sequential tool must never run tools in
+        // parallel — the read-only tool is demoted to serial execution.
+        assert_eq!(
+            runtime.max_seen.load(AtomicOrdering::SeqCst),
+            1,
+            "a Sequential tool in the batch must serialize execution"
+        );
+    }
+
+    #[tokio::test]
     async fn completes_simple_text_turn() {
         let engine = AgentEngine::new(EventSequencer::new());
         let provider = FakeProvider {

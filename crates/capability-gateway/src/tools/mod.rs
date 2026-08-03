@@ -837,6 +837,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(ReadFileTool),
         },
         Tool {
@@ -849,6 +851,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 30000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(SearchFilesTool),
         },
         Tool {
@@ -861,6 +865,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(WriteFileTool),
         },
         Tool {
@@ -873,6 +879,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(ListDirTool),
         },
         Tool {
@@ -885,6 +893,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 30000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: true,
+            conflict_key: None,
             handler: Arc::new(GrepTool),
         },
         Tool {
@@ -897,6 +907,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 10000,
             output_limit: 1_048_576,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(EditFileTool),
         },
         Tool {
@@ -920,6 +932,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 300_000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(RunTerminalTool),
         },
         Tool {
@@ -932,6 +946,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 20000,
             output_limit: 64_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(WebFetchTool),
         },
         Tool {
@@ -944,6 +960,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             timeout_ms: 5000,
             output_limit: 16_000,
             cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
             handler: Arc::new(TodoWriteTool),
         },
     ]
