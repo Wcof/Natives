@@ -6,24 +6,18 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Code2,
-  ExternalLink,
   Folder,
   Github,
   HelpCircle,
   Loader,
   Package,
-  Pause,
   Play,
   Plus,
   RefreshCw,
-  RotateCcw,
   ScrollText,
   Terminal,
   Trash2,
-  X,
   XCircle,
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
@@ -32,6 +26,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import Modal from '@/components/ui/Modal';
 import AppLogsPanel from '@/components/creative/AppLogsPanel';
+import AppBrowserPanel from '@/components/creative/AppBrowserPanel';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import CreativeHome from '@/components/creative/CreativeHome';
@@ -878,99 +873,15 @@ export default function WorkshopPage() {
 
   if (browserApp) {
     return (
-      <div className="flex flex-col h-full bg-[var(--background)]">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
-          <button
-            type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
-            onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.()}
-            title={t(locale, 'workshop.browserBack')}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <button
-            type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
-            onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.()}
-            title={t(locale, 'workshop.browserForward')}
-          >
-            <ChevronRight size={14} />
-          </button>
-          <button
-            type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
-            onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.()}
-            title={t(locale, 'workshop.browserReload')}
-          >
-            <RefreshCw size={14} />
-          </button>
-          {browserApp.source !== 'internal' && (
-            <>
-              <button
-                type="button"
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                onClick={() => void handleStop(browserApp)}
-                title={t(locale, 'workshop.actionStop')}
-              >
-                <Pause size={14} />
-              </button>
-              <button
-                type="button"
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                onClick={() => void handleRestart(browserApp)}
-                title={t(locale, 'workshop.actionRestart')}
-              >
-                <RotateCcw size={14} />
-              </button>
-            </>
-          )}
-          <div
-            className="flex-1 text-xs font-mono text-[var(--text-secondary)] px-3 py-1.5 border border-[var(--border)] rounded-lg bg-[var(--surface-subtle)] truncate"
-            title={browserUrl}
-          >
-            {browserUrl || t(locale, 'workshop.browserAddress')}
-          </div>
-          <button
-            type="button"
-            className="flex h-8 items-center gap-1.5 px-2 rounded-lg border border-[var(--border)] text-xs"
-            onClick={async () => {
-              try {
-                await window.nativesAPI?.clipboard?.write?.(browserUrl);
-                showToast(t(locale, 'workshop.copied'));
-              } catch (err) {
-                showToast(classifyError(err).userMessage);
-              }
-            }}
-            title={t(locale, 'workshop.copyUrl')}
-          >
-            {t(locale, 'workshop.copyUrl')}
-          </button>
-          <button
-            type="button"
-            className="flex h-8 items-center gap-1.5 px-2 rounded-lg border border-[var(--border)] text-xs"
-            onClick={async () => {
-              if (!browserUrl) return;
-              try {
-                await window.nativesAPI?.shell?.openPath?.(browserUrl);
-              } catch (err) {
-                showToast(classifyError(err).userMessage);
-              }
-            }}
-            title={t(locale, 'workshop.openSystemBrowser')}
-          >
-            <ExternalLink size={13} />
-          </button>
-          <button
-            type="button"
-            className="flex h-8 items-center gap-1.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
-            onClick={() => void closeBrowser()}
-          >
-            <X size={14} />
-            {t(locale, 'workshop.browserBackToList')}
-          </button>
-        </div>
-        <div ref={browserHostRef} className="flex-1 min-h-0 bg-[var(--background)]" />
-      </div>
+      <AppBrowserPanel
+        app={browserApp}
+        url={browserUrl}
+        hostRef={browserHostRef}
+        onStop={(a) => void handleStop(a)}
+        onRestart={(a) => void handleRestart(a)}
+        onClose={() => void closeBrowser()}
+        onToast={setToast}
+      />
     );
   }
 
