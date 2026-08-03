@@ -468,6 +468,9 @@ pub struct LaunchPlan {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     pub reason: String,
+    /// Compose detail when `runtime` is `docker_compose` (batch 5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose: Option<ComposePlanDetail>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -478,11 +481,37 @@ pub enum LaunchPlanSource {
     Ai,
 }
 
+/// Docker Compose plan detail (batch 5). Paths are project-relative; absolute
+/// resolution happens at start against the canonical project root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposePlanDetail {
+    /// Relative compose file (e.g. `docker-compose.yml`).
+    pub compose_file: String,
+    /// Seed for the unique Compose project name (`natives-{seed}-{suffix}`).
+    pub project_seed: String,
+    /// Optional service filter — only this service is started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// Effective command override, when the compose default is not acceptable.
+    #[serde(default)]
+    pub command: Vec<String>,
+    /// Health URL path on the resolved host port.
+    pub health_path: String,
+    /// Optional explicit host port override (else derived from inspect).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalLaunchRuntime {
     StaticHttp,
     NodeDevServer,
+    /// Docker Compose project (batch 5). The compose file is resolved relative to
+    /// the project root at start; the actual Compose project name is derived from
+    /// `project_seed` + a unique suffix so two Natives apps never share a project.
+    DockerCompose,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -573,6 +602,7 @@ impl LaunchPlan {
         match self.runtime {
             LocalLaunchRuntime::StaticHttp => CreativeAppRuntime::LocalStatic,
             LocalLaunchRuntime::NodeDevServer => CreativeAppRuntime::NodeDevServer,
+            LocalLaunchRuntime::DockerCompose => CreativeAppRuntime::DockerCompose,
         }
     }
 }
@@ -1107,6 +1137,7 @@ mod tests {
             auto_open: true,
             confidence: Some(0.9),
             reason: "index.html present".into(),
+            compose: None,
         };
         let j = plan.to_json().unwrap();
         let back = LaunchPlan::from_json(&j).unwrap();

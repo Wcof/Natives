@@ -869,6 +869,23 @@ pub fn plan_is_static(plan: &LaunchPlan) -> bool {
     matches!(plan.runtime, LocalLaunchRuntime::StaticHttp)
 }
 
+/// Stable, unique Compose project name for a local creative app (batch 5).
+/// `natives-{seed}-{id-suffix}` — two Natives apps never share a project, and
+/// the name is deterministic across restarts so stop/down find the same project.
+pub fn compose_project_name(app_id: &str, seed: &str) -> String {
+    let seed = if seed.trim().is_empty() {
+        "compose"
+    } else {
+        seed
+    };
+    // First 8 hex chars of the app id as a collision-resistant suffix.
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    app_id.hash(&mut h);
+    let suffix = format!("{:08x}", h.finish());
+    format!("natives-{seed}-{suffix}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -883,6 +900,21 @@ mod tests {
     fn static_url_shape() {
         let u = static_open_url(1234, "abc", "/");
         assert_eq!(u, "http://127.0.0.1:1234/local-projects/abc/");
+    }
+
+    /// Batch 5: the Compose project name is stable per app and unique across apps.
+    #[test]
+    fn compose_project_name_is_stable_and_unique() {
+        let a = compose_project_name("app-1", "freq");
+        let a2 = compose_project_name("app-1", "freq");
+        let b = compose_project_name("app-2", "freq");
+        assert_eq!(a, a2, "same app + seed must derive the same project");
+        assert_ne!(a, b, "different apps must never share a compose project");
+        assert!(a.starts_with("natives-freq-"), "unexpected prefix: {a}");
+        assert_eq!(
+            compose_project_name("x", ""),
+            compose_project_name("x", "compose")
+        );
     }
 
     /// P0: a process that ignores SIGTERM must still be killed (KILL follows the

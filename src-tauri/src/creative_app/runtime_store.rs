@@ -578,10 +578,10 @@ pub fn local_owner_kind(conn: &Connection, source_id: &str) -> Result<&'static s
                 .and_then(|r| r.as_str())
                 .map(str::to_string)
         });
-    Ok(if runtime.as_deref() == Some("static_http") {
-        "host_http"
-    } else {
-        "local_process"
+    Ok(match runtime.as_deref() {
+        Some("static_http") => "host_http",
+        Some("docker_compose") => "docker_compose",
+        _ => "local_process",
     })
 }
 

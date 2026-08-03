@@ -211,6 +211,37 @@ pub async fn compose_ps_running(project: &str, compose_file: &Path) -> Result<bo
     Ok(!stdout.trim().is_empty())
 }
 
+/// Resolve the host port a Compose project actually published on 127.0.0.1
+/// (batch 5). Parses `docker ps` Ports output like `127.0.0.1:8080->8080/tcp`.
+pub async fn compose_host_port(project: &str, compose_file: &Path) -> Result<Option<u16>> {
+    let file = compose_file.to_string_lossy();
+    let filter = format!("com.docker.compose.project={project}");
+    let args = ["ps", "--filter", &filter, "--format", "{{.Ports}}"];
+    let (code, stdout, _) = run_capture("docker", &args, &[]).await?;
+    if code != 0 {
+        return Ok(None);
+    }
+    for line in stdout.lines() {
+        for part in line.split(',') {
+            let part = part.trim();
+            if let Some(idx) = part.find("->") {
+                let left = &part[..idx];
+                if let Some(colon) = left.rfind(':') {
+                    if let Ok(p) = left[colon + 1..].parse::<u16>() {
+                        return Ok(Some(p));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Verify a Compose project has no running containers (post-stop check).
+pub async fn compose_has_running(project: &str, compose_file: &Path) -> Result<bool> {
+    Ok(compose_ps_running(project, compose_file).await?)
+}
+
 // ── Docker Run ─────────────────────────────────────────────────
 
 pub async fn docker_pull(image: &str) -> Result<()> {

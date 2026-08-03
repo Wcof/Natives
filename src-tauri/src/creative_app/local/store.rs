@@ -389,6 +389,7 @@ mod tests {
             auto_open: true,
             confidence: Some(1.0),
             reason: "test".into(),
+            compose: None,
         };
         let now = chrono::Utc::now().to_rfc3339();
         LocalCreativeAppRecord {

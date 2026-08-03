@@ -346,6 +346,7 @@ fn suggestion_to_plan(s: &AiLaunchSuggestion) -> LaunchPlan {
         auto_open: true,
         confidence: Some(s.confidence),
         reason: s.reason.clone(),
+        compose: None,
     }
 }
 

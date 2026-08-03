@@ -126,6 +126,18 @@ pub fn plan_command_risk(plan: &LaunchPlan) -> CommandRisk {
     if plan.runtime == LocalLaunchRuntime::StaticHttp {
         return CommandRisk::Safe;
     }
+    if plan.runtime == LocalLaunchRuntime::DockerCompose {
+        if let Some(c) = &plan.compose {
+            if !c.command.is_empty() {
+                // An explicit override is directly classifiable.
+                return classify_command("", &c.command);
+            }
+            // No override: the compose default was already risk-checked at scan
+            // time. The start preflight re-checks via `docker compose config`.
+            return CommandRisk::Warn;
+        }
+        return CommandRisk::Safe;
+    }
     // Package-manager scripts were validated to a safe runner body (vite /
     // vue-cli / node); classify the resolved runner, not `npm run <name>`.
     if let Some(runner) = plan.script_runner {

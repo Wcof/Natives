@@ -53,6 +53,7 @@ fn sample_local(id: &str, root: &str, auto_open: bool) -> LocalCreativeAppRecord
         auto_open,
         confidence: None,
         reason: "test".into(),
+        compose: None,
     };
     let now = chrono::Utc::now().to_rfc3339();
     LocalCreativeAppRecord {

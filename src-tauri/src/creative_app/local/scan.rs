@@ -294,6 +294,13 @@ pub fn inspect_local_project(
         has_index_html,
         &mut risks,
     );
+    // A Compose-only project gets a Docker Compose plan (batch 5) unless its
+    // default command is trade-blocked.
+    let rule_plan = match rule_plan {
+        Some(p) => Some(p),
+        None if has_compose => build_compose_plan(&root, &compose_files),
+        None => None,
+    };
 
     // existing registration note
     if existing_id.is_some() {
@@ -351,7 +358,7 @@ pub fn inspect_local_project(
 /// Inspect a Compose file's `command:` lines and block any that can place real
 /// trades (P0 dangerous-command gate). Only the inline form is parsed here; the
 /// Compose runtime batch parses full service topology.
-fn compose_command_risk(path: &Path) -> Option<String> {
+pub fn compose_command_risk(path: &Path) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     if meta.len() > MAX_CONFIG_BYTES {
         return None;
@@ -397,6 +404,67 @@ fn compose_command_risk(path: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Build a Docker Compose rule plan for a Compose-only project (batch 5).
+/// Returns None when the compose default command can place real trades — the
+/// scan already recorded that as a blocker, so no plan is offered.
+fn build_compose_plan(root: &Path, compose_files: &[PathBuf]) -> Option<LaunchPlan> {
+    let file = compose_files
+        .iter()
+        .find(|f| f.parent() == Some(root))
+        .or_else(|| compose_files.first())?;
+    if compose_command_risk(file).is_some() {
+        return None;
+    }
+    let rel = file
+        .strip_prefix(root)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let seed = root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| {
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .take(32)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "compose".into());
+    let plan = LaunchPlan {
+        schema_version: 1,
+        source: LaunchPlanSource::Rule,
+        project_kind: LocalProjectKind::Unknown,
+        runtime: LocalLaunchRuntime::DockerCompose,
+        program: LaunchProgram::Internal,
+        cwd_relative: ".".into(),
+        script: None,
+        entry_file: None,
+        script_runner: None,
+        args: vec![],
+        environment_keys: vec![],
+        port: LaunchPort {
+            mode: LaunchPortMode::Auto,
+            value: None,
+        },
+        open_path: "/".into(),
+        health_path: "/".into(),
+        startup_timeout_ms: 120_000,
+        auto_open: true,
+        confidence: Some(0.7),
+        reason: "docker compose detected".into(),
+        compose: Some(ComposePlanDetail {
+            compose_file: rel,
+            project_seed: seed,
+            service: None,
+            command: vec![],
+            health_path: "/".into(),
+            host_port: None,
+        }),
+    };
+    validate_launch_plan(root, plan).ok()
 }
 
 fn classify_kind(
@@ -464,6 +532,7 @@ fn build_rule_plan(
                 auto_open: true,
                 confidence: Some(0.95),
                 reason: "root index.html detected".into(),
+                compose: None,
             };
             validate_launch_plan(root, plan).ok()
         }
@@ -508,6 +577,7 @@ fn build_rule_plan(
                 auto_open: true,
                 confidence: Some(0.8),
                 reason: format!("rule: {} run {script}", pm.as_str()),
+                compose: None,
             };
             match validate_launch_plan(root, plan) {
                 Ok(p) => Some(p),
@@ -818,6 +888,10 @@ mod tests {
             "webserver must not block: {:?}",
             r.blockers
         );
+        // Batch 5: a safe Compose project is plan-able with a Docker Compose plan.
+        let plan = r.rule_plan.as_ref().expect("webserver compose gets a plan");
+        assert_eq!(plan.runtime, LocalLaunchRuntime::DockerCompose);
+        assert!(plan.compose.is_some());
         let _ = fs::remove_dir_all(&dir);
     }
 

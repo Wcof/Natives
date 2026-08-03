@@ -290,7 +290,7 @@ export interface LaunchPlan {
   schemaVersion: 1;
   source: 'rule' | 'user' | 'ai';
   projectKind: LocalProjectKind;
-  runtime: 'static_http' | 'node_dev_server';
+  runtime: 'static_http' | 'node_dev_server' | 'docker_compose';
   program: 'internal' | 'npm' | 'pnpm' | 'yarn' | 'node';
   cwdRelative: string;
   script?: string;
@@ -305,6 +305,17 @@ export interface LaunchPlan {
   autoOpen: boolean;
   confidence?: number;
   reason: string;
+  /** Compose detail when runtime is docker_compose (batch 5). */
+  compose?: ComposePlanDetail;
+}
+
+export interface ComposePlanDetail {
+  composeFile: string;
+  projectSeed: string;
+  service?: string;
+  command: string[];
+  healthPath: string;
+  hostPort?: number;
 }
 
 export interface LocalToolVersions {

@@ -10,10 +10,49 @@ use crate::{emit_db_state_changed, Error, Result};
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::AppHandle;
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Resolve the base loopback URL for a Compose project (batch 5): explicit host
+/// port wins, else the port the project actually published on 127.0.0.1.
+async fn resolve_compose_url(
+    project: &str,
+    compose_file: &std::path::Path,
+    detail: &ComposePlanDetail,
+) -> Result<String> {
+    let port = match detail.host_port {
+        Some(p) => p,
+        None => crate::creative_app::docker::compose_host_port(project, compose_file)
+            .await?
+            .unwrap_or(0),
+    };
+    if port == 0 {
+        return Err(Error::Internal(
+            "could not determine compose host port".into(),
+        ));
+    }
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+/// Absolute compose file path for a record + compose detail (batch 5).
+fn compose_abs_path(
+    rec: &LocalCreativeAppRecord,
+    detail: &ComposePlanDetail,
+) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(&rec.canonical_project_root);
+    let cwd = LaunchPlan::from_json(&rec.launch_plan_json)
+        .ok()
+        .map(|p| p.cwd_relative)
+        .unwrap_or_else(|| ".".into());
+    if cwd == "." {
+        root.join(&detail.compose_file)
+    } else {
+        root.join(&cwd).join(&detail.compose_file)
+    }
 }
 
 fn broadcast(app: &AppHandle, action: &str, id: &str) {
@@ -153,51 +192,25 @@ pub async fn start_app(
         return Ok(store::summary_from_local(&rec));
     }
 
-    // node_dev_server — spawn phase only (under the caller's mutation lock).
-    // Health is awaited later without the lock so stop can preempt a long start.
-    let env = store::get_env_map(conn, id)?;
-    match runtime
-        .start_node_dev(
-            app,
-            id,
-            &root,
-            &plan,
-            &rec.plan_fingerprint,
-            &env,
-            plan.port.value,
-        )
-        .await
-    {
-        Ok((port, open_url, identity)) => {
-            let mut rec = store::get_app(conn, id)?.unwrap();
-            rec.open_url = Some(open_url);
-            rec.current_port = Some(port);
-            rec.process_identity_json =
-                Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
-            rec.last_error = None;
-            rec.updated_at = now();
-            store::update_app(conn, &rec)?;
-            broadcast(app, "starting", id);
-            Ok(store::summary_from_local(&rec))
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            let code = if msg.contains("port") {
-                LocalCreativeIssueCode::PortConflict
-            } else if msg.to_lowercase().contains("node")
-                || msg.to_lowercase().contains("npm")
-                || msg.to_lowercase().contains("pnpm")
-                || msg.to_lowercase().contains("yarn")
-                || msg.to_lowercase().contains("spawn")
-            {
-                LocalCreativeIssueCode::EnvironmentMissing
-            } else {
-                LocalCreativeIssueCode::ConfigInvalid
-            };
+    // docker_compose (batch 5): up with a stable unique project, then health.
+    if plan.runtime == LocalLaunchRuntime::DockerCompose {
+        let detail = plan
+            .compose
+            .ok_or_else(|| Error::InvalidInput("compose plan missing detail".into()))?;
+        let compose_file_abs = if plan.cwd_relative == "." {
+            root.join(&detail.compose_file)
+        } else {
+            root.join(&plan.cwd_relative).join(&detail.compose_file)
+        };
+        let project = runtime::compose_project_name(id, &detail.project_seed);
+        let env = store::get_env_map(conn, id)?;
+        // P0 preflight: never start a compose command that can place real trades.
+        if let Some(msg) = crate::creative_app::local::scan::compose_command_risk(&compose_file_abs)
+        {
             let detail = CreativeAppStatusDetail {
-                code,
+                code: LocalCreativeIssueCode::ConfigInvalid,
                 message: msg.clone(),
-                recovery_actions: vec!["view_logs".into(), "edit_plan".into()],
+                recovery_actions: vec!["edit_plan".into(), "open_folder".into()],
             };
             set_status_detail(
                 conn,
@@ -207,7 +220,125 @@ pub async fn start_app(
                 Some(&msg),
             )?;
             broadcast(app, "start_failed", id);
-            Err(e)
+            return Err(Error::InvalidInput(msg));
+        }
+        if let Err(e) =
+            crate::creative_app::docker::compose_up(&project, &compose_file_abs, &env).await
+        {
+            let detail = CreativeAppStatusDetail {
+                code: LocalCreativeIssueCode::ConfigInvalid,
+                message: e.to_string(),
+                recovery_actions: vec!["view_logs".into(), "edit_plan".into()],
+            };
+            set_status_detail(
+                conn,
+                id,
+                CreativeAppState::StartFailed,
+                Some(&detail),
+                Some(&detail.message),
+            )?;
+            broadcast(app, "start_failed", id);
+            return Err(e);
+        }
+        // Resolve the host URL + health (explicit port → inspect fallback).
+        let url = resolve_compose_url(&project, &compose_file_abs, &detail).await?;
+        let health_url = format!("{}{}", url.trim_end_matches('/'), detail.health_path);
+        let timeout = Duration::from_millis(rec.startup_timeout_ms as u64);
+        match crate::creative_app::docker::wait_ready(&health_url, timeout).await {
+            Ok(()) => {
+                let mut rec = store::get_app(conn, id)?.unwrap();
+                rec.state = CreativeAppState::Running;
+                rec.open_url = Some(url.clone());
+                rec.current_port = Some(
+                    crate::creative_app::docker::compose_host_port(&project, &compose_file_abs)
+                        .await
+                        .ok()
+                        .flatten()
+                        .or(detail.host_port)
+                        .unwrap_or(0),
+                );
+                rec.last_error = None;
+                rec.status_detail_json = None;
+                rec.last_started_at = Some(now());
+                rec.updated_at = now();
+                store::update_app(conn, &rec)?;
+                broadcast(app, "started", id);
+                Ok(store::summary_from_local(&rec))
+            }
+            Err(e) => {
+                let detail = CreativeAppStatusDetail {
+                    code: LocalCreativeIssueCode::StartUnhealthy,
+                    message: e.to_string(),
+                    recovery_actions: vec!["view_logs".into(), "stop".into(), "restart".into()],
+                };
+                set_status_detail(
+                    conn,
+                    id,
+                    CreativeAppState::StartFailed,
+                    Some(&detail),
+                    Some(&detail.message),
+                )?;
+                broadcast(app, "start_unhealthy", id);
+                Err(e)
+            }
+        }
+    } else {
+        // node_dev_server — spawn phase only (under the caller's mutation lock).
+        // Health is awaited later without the lock so stop can preempt a long start.
+        let env = store::get_env_map(conn, id)?;
+        match runtime
+            .start_node_dev(
+                app,
+                id,
+                &root,
+                &plan,
+                &rec.plan_fingerprint,
+                &env,
+                plan.port.value,
+            )
+            .await
+        {
+            Ok((port, open_url, identity)) => {
+                let mut rec = store::get_app(conn, id)?.unwrap();
+                rec.open_url = Some(open_url);
+                rec.current_port = Some(port);
+                rec.process_identity_json =
+                    Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
+                rec.last_error = None;
+                rec.updated_at = now();
+                store::update_app(conn, &rec)?;
+                broadcast(app, "starting", id);
+                Ok(store::summary_from_local(&rec))
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let code = if msg.contains("port") {
+                    LocalCreativeIssueCode::PortConflict
+                } else if msg.to_lowercase().contains("node")
+                    || msg.to_lowercase().contains("npm")
+                    || msg.to_lowercase().contains("pnpm")
+                    || msg.to_lowercase().contains("yarn")
+                    || msg.to_lowercase().contains("spawn")
+                {
+                    LocalCreativeIssueCode::EnvironmentMissing
+                } else {
+                    LocalCreativeIssueCode::ConfigInvalid
+                };
+                let detail = CreativeAppStatusDetail {
+                    code,
+                    message: msg.clone(),
+                    recovery_actions: vec!["view_logs".into(), "edit_plan".into()],
+                };
+                set_status_detail(
+                    conn,
+                    id,
+                    CreativeAppState::StartFailed,
+                    Some(&detail),
+                    Some(&msg),
+                )?;
+                broadcast(app, "start_failed", id);
+                Err(e)
+            }
         }
     }
 }
@@ -222,6 +353,11 @@ pub async fn await_start_ready(
 ) -> Result<CreativeAppSummary> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
+    // Compose start is fully synchronous in start_app (up + health + Running),
+    // so the health phase is a no-op for it (batch 5).
+    if plan.runtime == LocalLaunchRuntime::DockerCompose {
+        return Ok(store::summary_from_local(&rec));
+    }
     match runtime
         .wait_healthy(app, id, &plan.health_path, rec.startup_timeout_ms)
         .await
@@ -318,6 +454,29 @@ pub async fn stop_app(
     let mut failures: Vec<String> = Vec::new();
     if plan.as_ref().map(runtime::plan_is_static).unwrap_or(false) {
         // static apps keep no process; nothing to verify
+    } else if matches!(
+        plan.as_ref().map(|p| p.runtime),
+        Some(LocalLaunchRuntime::DockerCompose)
+    ) {
+        // Compose stop: stop the unique project (volumes retained), then verify
+        // no container of this project is still running.
+        let detail = plan
+            .as_ref()
+            .and_then(|p| p.compose.clone())
+            .ok_or_else(|| Error::Internal("compose plan missing detail".into()))?;
+        let compose_file_abs = compose_abs_path(&rec, &detail);
+        let project = runtime::compose_project_name(id, &detail.project_seed);
+        if let Err(e) = crate::creative_app::docker::compose_stop(&project, &compose_file_abs).await
+        {
+            failures.push(e.to_string());
+        }
+        if let Ok(running) =
+            crate::creative_app::docker::compose_ps_running(&project, &compose_file_abs).await
+        {
+            if running {
+                failures.push("compose project still has running containers after stop".into());
+            }
+        }
     } else {
         // Prefer live child; if missing, only kill when persisted identity fully matches.
         if runtime.is_running(id).await {
@@ -375,7 +534,19 @@ pub async fn delete_app(
 
     // A delete must never orphan a live process: propagate stop failures and keep
     // the record (with identity) so the user can stop it first.
-    if runtime.is_running(id).await {
+    let plan = parse_plan(&rec).ok();
+    if matches!(
+        plan.as_ref().map(|p| p.runtime),
+        Some(LocalLaunchRuntime::DockerCompose)
+    ) {
+        // Compose delete: down the unique project, volumes retained (never `-v`).
+        if let Some(detail) = plan.and_then(|p| p.compose) {
+            let compose_file_abs = compose_abs_path(&rec, &detail);
+            let project = runtime::compose_project_name(id, &detail.project_seed);
+            crate::creative_app::docker::compose_down(&project, &compose_file_abs, false, false)
+                .await?;
+        }
+    } else if runtime.is_running(id).await {
         runtime.stop(id, Some(app)).await?;
     } else if let Some(ident_json) = &rec.process_identity_json {
         if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
