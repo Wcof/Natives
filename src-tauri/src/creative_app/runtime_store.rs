@@ -449,35 +449,6 @@ pub fn mark_exited(conn: &Connection, instance_id: &str, exit_code: i32) -> Resu
     expect_transition(n, instance_id, &["running", "starting"], "stopped")
 }
 
-/// Heartbeat the active instance of a source row (called from lifecycle poll).
-pub fn heartbeat_for_source(
-    conn: &Connection,
-    source: CreativeAppSource,
-    source_id: &str,
-) -> Result<()> {
-    if let Some(app_id) = lookup_application(conn, source_str(source), source_id)? {
-        if let Some(iid) = active_instance_id(conn, &app_id)? {
-            heartbeat(conn, &iid)?;
-        }
-    }
-    Ok(())
-}
-
-/// Mark the active instance of a source row exited (natural process exit).
-pub fn mark_exited_for_source(
-    conn: &Connection,
-    source: CreativeAppSource,
-    source_id: &str,
-    exit_code: i32,
-) -> Result<()> {
-    if let Some(app_id) = lookup_application(conn, source_str(source), source_id)? {
-        if let Some(iid) = active_instance_id(conn, &app_id)? {
-            mark_exited(conn, &iid, exit_code)?;
-        }
-    }
-    Ok(())
-}
-
 /// Settle the active instance of a source row to a status string during
 /// reconcile (crash recovery: orphaned / stopped / failed mirror the app row).
 pub fn settle_instance(

@@ -1251,4 +1251,134 @@ mod tests {
         assert_eq!(mgr.live_runtime_ids().await, vec!["run-2".to_string()]);
         mgr.purge_app_logs("app-iso");
     }
+
+    /// CR-302: stop must return Err (never claim released) when the port stays
+    /// bound after the tree is gone. The caller preserves the identity so a retry
+    /// stop stays possible and never writes stopped.
+    #[tokio::test]
+    async fn stop_fails_when_port_not_released() {
+        let mgr = LocalRuntimeManager::new();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert(
+                "run-1".into(),
+                LiveLocalProcess {
+                    runtime_id: "run-1".into(),
+                    app_id: "app-p".into(),
+                    child: None,
+                    identity: ProcessIdentity::default(),
+                    plan_fingerprint: String::new(),
+                    started_at: Instant::now(),
+                    port: Some(port),
+                    open_url: None,
+                    program: "x".into(),
+                    cwd: PathBuf::from("/"),
+                    log: mgr.logs.get_or_open("app-p", "run-1"),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        }
+        let err = mgr.stop("run-1", None).await.unwrap_err();
+        assert!(err.to_string().contains("stop incomplete"), "{err}");
+        assert!(err.to_string().contains("port"), "{err}");
+        drop(listener);
+        mgr.purge_app_logs("app-p");
+    }
+
+    /// CR-302: repeated stop is idempotent — a second stop on an already-stopped
+    /// runtime is Ok and drains nothing.
+    #[tokio::test]
+    async fn repeated_stop_is_idempotent() {
+        let mgr = LocalRuntimeManager::new();
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert(
+                "run-1".into(),
+                LiveLocalProcess {
+                    runtime_id: "run-1".into(),
+                    app_id: "app-r".into(),
+                    child: None,
+                    identity: ProcessIdentity::default(),
+                    plan_fingerprint: String::new(),
+                    started_at: Instant::now(),
+                    port: None,
+                    open_url: None,
+                    program: "x".into(),
+                    cwd: PathBuf::from("/"),
+                    log: mgr.logs.get_or_open("app-r", "run-1"),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        }
+        mgr.stop("run-1", None).await.expect("first stop");
+        assert!(mgr.stop("run-1", None).await.is_ok(), "second stop is idempotent");
+        mgr.purge_app_logs("app-r");
+    }
+
+    /// CR-302: a reused PID (different start time) must NOT match the persisted
+    /// identity — an unknown process is never killed by stop/reconcile (#10).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pid_reuse_is_rejected_by_strict_identity() {
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+        let mut cmd = Command::new("node");
+        cmd.arg("-e")
+            .arg("setInterval(()=>{},1000)")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: pre_exec runs in the forked child before exec; setpgid is the
+        // standard new-process-group pattern used elsewhere in this module.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn node");
+        let pid = child.id().expect("pid");
+        let started = process_start_time_unix(Some(pid)).expect("start time");
+
+        let good = ProcessIdentity {
+            pid: Some(pid),
+            started_at_unix: Some(started),
+            executable: Some("node".into()),
+            cwd: Some(std::env::current_dir().unwrap().to_string_lossy().to_string()),
+            plan_fingerprint: Some("fp".into()),
+            process_group_id: Some(pid as i32),
+        };
+        assert!(
+            identity_matches_live_strict(&good),
+            "the correct identity must match the live process"
+        );
+        // A different process now owns the same PID (reuse): start time differs.
+        let reused = ProcessIdentity {
+            started_at_unix: Some(started + 10_000),
+            ..good.clone()
+        };
+        assert!(
+            !identity_matches_live_strict(&reused),
+            "a reused PID with a different start time must be rejected"
+        );
+        // Unknown PID / missing fingerprint are also rejected (fail closed).
+        assert!(!identity_matches_live_strict(&ProcessIdentity {
+            pid: Some(pid),
+            started_at_unix: Some(started),
+            executable: Some("node".into()),
+            cwd: Some(std::env::current_dir().unwrap().to_string_lossy().to_string()),
+            plan_fingerprint: None,
+            process_group_id: None,
+        }));
+
+        unsafe {
+            let _ = libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        let _ = child.wait().await;
+    }
 }

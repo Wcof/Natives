@@ -420,3 +420,22 @@ fn external_restart_propagates_stop_failure_contract() {
         "stop_app must surface stop failure to callers"
     );
 }
+
+/// CR-302: a local stop that cannot verify release must return Err — the adapter
+/// then marks the instance cleanup_failed (active-like), which blocks restart
+/// until a retry stop succeeds. It must never return a happy Ok(summary) that the
+/// adapter could turn into a false stopped.
+#[test]
+fn local_stop_surfaces_release_failure() {
+    let lifecycle = include_str!("../local/lifecycle.rs");
+    assert!(
+        lifecycle.contains("if released {") && lifecycle.contains("Err(Error::Internal(msg))"),
+        "stop_app must return Err on unverified release, never a false stopped"
+    );
+    // The adapter contract: stop Err → cleanup_failed (not stopped).
+    let adapters = include_str!("mod.rs");
+    assert!(
+        adapters.contains("mark_cleanup_failed") && adapters.contains("Err(e)"),
+        "adapter stop must map failure to cleanup_failed"
+    );
+}

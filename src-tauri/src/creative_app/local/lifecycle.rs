@@ -548,10 +548,20 @@ pub async fn stop_app(
     } else {
         Some(failures.join("; "))
     };
+    let msg = error
+        .clone()
+        .unwrap_or_else(|| "stop did not verify resource release".to_string());
     rec = record_stop_outcome(rec, released, error);
     store::update_app(conn, &rec)?;
     broadcast(app, if released { "stopped" } else { "stop_failed" }, id);
-    Ok(store::summary_from_local(&rec))
+    if released {
+        Ok(store::summary_from_local(&rec))
+    } else {
+        // CR-302: never claim stopped when resources were not verified released.
+        // The caller (adapter) marks the instance cleanup_failed (active-like),
+        // which blocks restart until a retry stop succeeds.
+        Err(Error::Internal(msg))
+    }
 }
 
 pub async fn delete_app(
