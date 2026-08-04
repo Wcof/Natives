@@ -35,24 +35,22 @@ pub fn browser_show(
 ) -> Result<()> {
     if !navigation_allowed(url) {
         return Err(Error::InvalidInput(
-            "navigation blocked: only http/https allowed".into(),
+            "navigation blocked: only loopback http/https allowed".into(),
         ));
     }
     super::service::validate_local_url(url)?;
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|e| Error::InvalidInput(format!("url parse: {e}")))?;
 
-    {
-        let mut st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
-        st.active_app_id = Some(app_id.to_string());
-        st.current_url = Some(url.to_string());
-    }
-
-    // Prefer existing child webview reuse
+    // Prefer existing child webview reuse; propagate errors instead of swallowing them.
     if let Some(wv) = app.get_webview(CHILD_LABEL) {
-        if let Ok(parsed) = url.parse() {
-            let _ = wv.navigate(parsed);
-        }
-        let _ = set_bounds_webview(&wv, &bounds);
-        let _ = wv.show();
+        wv.navigate(parsed)
+            .map_err(|e| Error::Internal(format!("webview navigate: {e}")))?;
+        set_bounds_webview(&wv, &bounds)?;
+        wv.show()
+            .map_err(|e| Error::Internal(format!("webview show: {e}")))?;
+        set_active(state, app_id, url)?;
         return Ok(());
     }
 
@@ -63,10 +61,6 @@ pub fn browser_show(
     // Window::add_child is gated on unstable; call via window handle.
     use tauri::webview::WebviewBuilder;
     use tauri::{LogicalPosition, LogicalSize};
-
-    let parsed: tauri::Url = url
-        .parse()
-        .map_err(|e| Error::InvalidInput(format!("url parse: {e}")))?;
 
     let builder = WebviewBuilder::new(CHILD_LABEL, tauri::WebviewUrl::External(parsed))
         .on_navigation(|nav_url| navigation_allowed(nav_url.as_str()));
@@ -80,6 +74,14 @@ pub fn browser_show(
         )
         .map_err(|e| Error::Internal(format!("add_child webview: {e}")))?;
 
+    set_active(state, app_id, url)?;
+    Ok(())
+}
+
+fn set_active(state: &BrowserStateHandle, app_id: &str, url: &str) -> Result<()> {
+    let mut st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
+    st.active_app_id = Some(app_id.to_string());
+    st.current_url = Some(url.to_string());
     Ok(())
 }
 
@@ -104,39 +106,45 @@ pub fn browser_set_bounds(app: &AppHandle, bounds: BrowserBounds) -> Result<()> 
 
 pub fn browser_hide(app: &AppHandle) -> Result<()> {
     if let Some(wv) = app.get_webview(CHILD_LABEL) {
-        let _ = wv.hide();
+        wv.hide()
+            .map_err(|e| Error::Internal(format!("webview hide failed: {e}")))?;
     }
     Ok(())
 }
 
 pub fn browser_close(app: &AppHandle, state: &BrowserStateHandle) -> Result<()> {
+    // A close failure must stay observable: do NOT clear BrowserState if the
+    // WebView could not actually be closed (P0: close failure swallowed).
     if let Some(wv) = app.get_webview(CHILD_LABEL) {
-        let _ = wv.close();
+        wv.close()
+            .map_err(|e| Error::Internal(format!("webview close failed: {e}")))?;
     }
-    if let Ok(mut st) = state.lock() {
-        st.active_app_id = None;
-        st.current_url = None;
-    }
+    let mut st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
+    st.active_app_id = None;
+    st.current_url = None;
     Ok(())
 }
 
 pub fn browser_reload(app: &AppHandle) -> Result<()> {
     if let Some(wv) = app.get_webview(CHILD_LABEL) {
-        let _ = wv.reload();
+        wv.reload()
+            .map_err(|e| Error::Internal(format!("webview reload failed: {e}")))?;
     }
     Ok(())
 }
 
 pub fn browser_back(app: &AppHandle) -> Result<()> {
     if let Some(wv) = app.get_webview(CHILD_LABEL) {
-        let _ = wv.eval("window.history.back()");
+        wv.eval("window.history.back()")
+            .map_err(|e| Error::Internal(format!("webview back failed: {e}")))?;
     }
     Ok(())
 }
 
 pub fn browser_forward(app: &AppHandle) -> Result<()> {
     if let Some(wv) = app.get_webview(CHILD_LABEL) {
-        let _ = wv.eval("window.history.forward()");
+        wv.eval("window.history.forward()")
+            .map_err(|e| Error::Internal(format!("webview forward failed: {e}")))?;
     }
     Ok(())
 }

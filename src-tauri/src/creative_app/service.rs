@@ -30,8 +30,12 @@ impl CreativeAppService {
         lock: &MutationLock,
         id: &str,
     ) -> Result<CreativeAppSummary> {
-        let _guard = lock.lock().await;
-        adapters::start(conn, ctx, id).await
+        // Spawn under the lock; health wait without it (batch 2 preemption).
+        let spawned = {
+            let _guard = lock.lock().await;
+            adapters::spawn_start(conn, ctx, id).await
+        }?;
+        adapters::await_ready(conn, ctx, id, &spawned).await
     }
 
     pub async fn stop(
@@ -102,11 +106,15 @@ pub fn validate_local_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Navigation allow-list for child webview.
+/// Navigation allow-list for child webview (Embed surface, P0).
+///
+/// The initial URL is validated by [`validate_local_url`]; subsequent navigation
+/// must stay on `127.0.0.1` / `localhost` too — a local app must never drive the
+/// child webview to a public host.
 pub fn navigation_allowed(url: &str) -> bool {
     let u = url.trim();
     if u.starts_with("http://") || u.starts_with("https://") {
-        return true;
+        return validate_local_url(u).is_ok();
     }
     false
 }
@@ -125,9 +133,15 @@ mod tests {
 
     #[test]
     fn navigation_filter() {
+        // Loopback only — the Embed child webview must never leave 127.0.0.1/localhost.
         assert!(navigation_allowed("http://127.0.0.1:1/"));
-        assert!(navigation_allowed("https://example.com/x"));
+        assert!(navigation_allowed("https://127.0.0.1:8443/"));
+        assert!(navigation_allowed("http://localhost:5173/"));
+        assert!(!navigation_allowed("https://example.com/x"));
+        assert!(!navigation_allowed("http://localhost.evil.com/x"));
+        assert!(!navigation_allowed("http://127.0.0.1.evil.com/x"));
         assert!(!navigation_allowed("file:///tmp"));
         assert!(!navigation_allowed("data:text/html,hi"));
+        assert!(!navigation_allowed("tauri://localhost"));
     }
 }

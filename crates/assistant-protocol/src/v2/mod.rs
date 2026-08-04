@@ -9,6 +9,7 @@
 //! via [`envelope::parse_request_compat`].
 
 pub mod capabilities;
+pub mod creative;
 pub mod credential;
 pub mod envelope;
 pub mod harness;
@@ -17,6 +18,7 @@ pub mod run;
 pub mod run_event;
 
 pub use capabilities::*;
+pub use creative::*;
 pub use credential::*;
 pub use envelope::*;
 pub use harness::*;

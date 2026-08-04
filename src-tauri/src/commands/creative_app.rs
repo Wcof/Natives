@@ -10,6 +10,7 @@ use crate::creative_app::docker;
 use crate::creative_app::install;
 use crate::creative_app::local::{self, LocalRuntimeHandle};
 use crate::creative_app::model::*;
+use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
 use crate::db::DbPool;
@@ -59,15 +60,31 @@ pub async fn creative_app_start(
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
+    // Phase 1 (spawn) holds the mutation lock so installs/lifecycle stay serial;
+    // it is fast. Phase 2 (health) runs WITHOUT the lock so a concurrent stop can
+    // cancel a long start (batch 2).
+    let pool_spawn = pool.clone();
+    let id_spawn = id.clone();
+    let spawned = {
+        let _guard = lock.lock().await;
+        let ctx2 = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_spawn)?;
+            rt.block_on(adapters::spawn_start(&c, &ctx2, &id_spawn))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("start join: {e}")))?
+    }?;
+    let ctx3 = ctx;
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(adapters::start(&c, &ctx, &id))
+        rt.block_on(adapters::await_ready(&c, &ctx3, &id, &spawned))
     })
     .await
-    .map_err(|e| Error::Internal(format!("start join: {e}")))?
+    .map_err(|e| Error::Internal(format!("start health join: {e}")))?
 }
 
 #[tauri::command]
@@ -177,7 +194,17 @@ pub async fn creative_app_install_github(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(install::install_github(&c, &handle, request))
+        let summary = rt.block_on(install::install_github(&c, &handle, request))?;
+        // Unified identity + startup plan for the newly installed external app.
+        let app_id = runtime_store::find_or_create_application(
+            &c,
+            CreativeAppSource::ExternalGithub,
+            &summary.id,
+        )?;
+        if let Ok(Some(rec)) = store::get_app(&c, &summary.id) {
+            let _ = runtime_store::upsert_active_plan(&c, &app_id, &rec.runtime_config_json);
+        }
+        runtime_store::attach_identity(&c, summary)
     })
     .await
     .map_err(|e| Error::Internal(format!("install join: {e}")))?
@@ -305,7 +332,25 @@ pub fn creative_app_browser_show(
     bounds: BrowserBounds,
     app_handle: tauri::AppHandle,
     browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
 ) -> Result<()> {
+    // Bind the preview to the app's active runtime instance (batch 6).
+    if let Ok(c) = conn(&state.db) {
+        if let Ok(app_identity) =
+            runtime_store::find_or_create_application(&c, CreativeAppSource::LocalProject, &app_id)
+                .or_else(|_| {
+                    runtime_store::find_or_create_application(
+                        &c,
+                        CreativeAppSource::ExternalGithub,
+                        &app_id,
+                    )
+                })
+        {
+            if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
+                let _ = runtime_store::upsert_preview_target(&c, &iid, &url, "child_webview");
+            }
+        }
+    }
     browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)
 }
 
@@ -341,7 +386,32 @@ pub fn creative_app_browser_hide(app_handle: tauri::AppHandle) -> Result<()> {
 pub fn creative_app_browser_close(
     app_handle: tauri::AppHandle,
     browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
 ) -> Result<()> {
+    // Clear the preview target for the app being closed (batch 6).
+    let closed_app = browser::browser_current(&browser)
+        .ok()
+        .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
+    if let Some(app_id) = closed_app {
+        if let Ok(c) = conn(&state.db) {
+            if let Ok(app_identity) = runtime_store::find_or_create_application(
+                &c,
+                CreativeAppSource::LocalProject,
+                &app_id,
+            )
+            .or_else(|_| {
+                runtime_store::find_or_create_application(
+                    &c,
+                    CreativeAppSource::ExternalGithub,
+                    &app_id,
+                )
+            }) {
+                if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
+                    let _ = runtime_store::clear_preview_targets(&c, &iid);
+                }
+            }
+        }
+    }
     browser::browser_close(&app_handle, &browser)
 }
 
@@ -536,6 +606,7 @@ fn create_local_app(
         open_url: None,
         current_port: None,
         process_identity_json: None,
+        volume_identity: local::volume_identity(&root),
         auto_open,
         startup_timeout_ms: timeout,
         last_started_at: None,
@@ -559,12 +630,18 @@ fn create_local_app(
     }
     tx.commit().map_err(Error::Database)?;
 
-    // startAfterSave is intentionally not auto-started here; UI calls start explicitly.
-    let _ = request.start_after_save;
+    // The dead `start_after_save` flag was removed (batch 7): the UI calls start
+    // explicitly after create; auto-start after save is a product no-op.
 
-    Ok(local::summary_from_local(
+    // Unified identity + startup plan for the newly registered local app.
+    let app_id =
+        runtime_store::find_or_create_application(conn, CreativeAppSource::LocalProject, &id)?;
+    let plan_json = plan.to_json().map_err(|e| Error::Internal(e.to_string()))?;
+    let _ = runtime_store::upsert_active_plan(conn, &app_id, &plan_json);
+    let summary = local::summary_from_local(
         &local::get_app(conn, &id)?.ok_or_else(|| Error::Internal("insert vanished".into()))?,
-    ))
+    );
+    Ok(runtime_store::attach_identity(conn, summary)?)
 }
 
 fn update_local_app(
@@ -644,7 +721,14 @@ fn update_local_app(
     rec.updated_at = chrono::Utc::now().to_rfc3339();
     local::update_app(&tx, &rec)?;
     tx.commit().map_err(Error::Database)?;
-    Ok(local::summary_from_local(&rec))
+    // Refresh the active startup plan + unified identity for the app.
+    let app_id =
+        runtime_store::find_or_create_application(conn, CreativeAppSource::LocalProject, &rec.id)?;
+    let _ = runtime_store::upsert_active_plan(conn, &app_id, &rec.launch_plan_json);
+    Ok(runtime_store::attach_identity(
+        conn,
+        local::summary_from_local(&rec),
+    )?)
 }
 
 #[tauri::command]
@@ -665,14 +749,15 @@ pub async fn creative_app_resolve_orphan(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(local::resolve_orphan(
+        let summary = rt.block_on(local::resolve_orphan(
             &c,
             &handle,
             local_runtime.as_ref(),
             host_port,
             &id,
             restart,
-        ))
+        ))?;
+        runtime_store::attach_identity(&c, summary)
     })
     .await
     .map_err(|e| Error::Internal(format!("resolve_orphan join: {e}")))?
@@ -715,7 +800,8 @@ pub async fn creative_app_install_local_dependencies(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(local::deps::install_dependencies(&c, &handle, &logs, &id))
+        let summary = rt.block_on(local::deps::install_dependencies(&c, &handle, &logs, &id))?;
+        runtime_store::attach_identity(&c, summary)
     })
     .await
     .map_err(|e| Error::Internal(format!("install deps join: {e}")))?
@@ -821,7 +907,9 @@ pub fn creative_app_get_local_config(
     state: State<'_, AppState>,
 ) -> Result<LocalCreativeConfig> {
     let c = conn(&state.db)?;
-    local::lifecycle::get_local_config(&c, &id)
+    let mut cfg = local::lifecycle::get_local_config(&c, &id)?;
+    cfg.summary = runtime_store::attach_identity(&c, cfg.summary)?;
+    Ok(cfg)
 }
 
 #[tauri::command]

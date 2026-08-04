@@ -160,10 +160,69 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
                 LaunchProgram::Internal => unreachable!(),
             }
         }
+        LocalLaunchRuntime::DockerCompose => {
+            if plan.program != LaunchProgram::Internal {
+                return Err(Error::InvalidInput(
+                    "docker_compose runtime requires program=internal (the compose file drives execution)".into(),
+                ));
+            }
+            let detail = plan.compose.take().ok_or_else(|| {
+                Error::InvalidInput("docker_compose runtime requires a compose plan".into())
+            })?;
+            // The compose file must exist inside the project root (absolute
+            // resolution happens at start; we validate reachability here).
+            let compose_rel = normalize_rel(&detail.compose_file)?;
+            let compose_path = resolve_under(root, &join_rel(&plan.cwd_relative, &compose_rel))?;
+            if !compose_path.is_file() {
+                return Err(Error::InvalidInput(format!(
+                    "compose file not found: {compose_rel}"
+                )));
+            }
+            if detail.project_seed.trim().is_empty() || detail.project_seed.len() > 64 {
+                return Err(Error::InvalidInput("invalid compose project seed".into()));
+            }
+            for c in detail.project_seed.chars() {
+                if !(c.is_ascii_alphanumeric() || c == '-') {
+                    return Err(Error::InvalidInput(
+                        "compose project seed may only contain letters, digits and '-'".into(),
+                    ));
+                }
+            }
+            for a in &detail.command {
+                validate_arg(a)?;
+            }
+            plan.health_path = normalize_url_path(&detail.health_path)?;
+            if let Some(p) = detail.host_port {
+                if p == 0 {
+                    return Err(Error::InvalidInput("invalid compose host port".into()));
+                }
+            }
+            plan.compose = Some(ComposePlanDetail {
+                compose_file: compose_rel,
+                project_seed: detail.project_seed,
+                service: detail.service,
+                command: detail.command,
+                health_path: detail.health_path,
+                host_port: detail.host_port,
+            });
+            plan.script = None;
+            plan.entry_file = None;
+            plan.script_runner = None;
+            plan.args.clear();
+        }
     }
 
     if plan.reason.trim().is_empty() {
         plan.reason = "validated".into();
+    }
+
+    // P0 dangerous-command gate: a plan whose effective command can place real
+    // trades is blocked by default. Only an explicit user authorization (added
+    // with the Compose plan in later batches) may relax this — never auto-start.
+    if super::risk::plan_command_risk(&plan) == super::risk::CommandRisk::Block {
+        return Err(Error::InvalidInput(
+            "launch plan blocked: command may place real trades; refusing to auto-start".into(),
+        ));
     }
 
     Ok(plan)
@@ -536,6 +595,8 @@ mod tests {
             auto_open: true,
             confidence: Some(1.0),
             reason: "test".into(),
+            compose: None,
+            trade_approval: None,
         }
     }
 
@@ -591,5 +652,90 @@ mod tests {
         let c = runner_port_flags(crate::creative_app::model::ScriptRunner::VueCli, 8080);
         assert!(!c.iter().any(|a| a == "--strictPort"));
         assert!(c.iter().any(|a| a == "--port"));
+    }
+
+    fn compose_plan(file: &str, command: Vec<String>) -> LaunchPlan {
+        let mut plan = html_plan();
+        plan.runtime = LocalLaunchRuntime::DockerCompose;
+        plan.program = LaunchProgram::Internal;
+        plan.compose = Some(ComposePlanDetail {
+            compose_file: file.into(),
+            project_seed: "proj".into(),
+            service: None,
+            command,
+            health_path: "/".into(),
+            host_port: None,
+        });
+        plan
+    }
+
+    /// Batch 5: a Compose plan validates only when the compose file exists under
+    /// root and the effective command is not a real-trading override.
+    #[test]
+    fn compose_plan_validates_and_gates_trade_override() {
+        let dir = temp_dir();
+        fs::write(
+            dir.join("docker-compose.yml"),
+            "services:\n  web:\n    image: x\n",
+        )
+        .unwrap();
+        // Explicit trade override is blocked by the risk gate.
+        let bad = compose_plan(
+            "docker-compose.yml",
+            vec!["trade".into(), "--config".into()],
+        );
+        assert!(
+            validate_launch_plan(&dir, bad).is_err(),
+            "a trade override must never validate"
+        );
+        // Safe compose plan validates with runtime preserved.
+        let ok = compose_plan("docker-compose.yml", vec![]);
+        let v = validate_launch_plan(&dir, ok).unwrap();
+        assert_eq!(v.runtime, LocalLaunchRuntime::DockerCompose);
+        assert_eq!(v.creative_runtime(), CreativeAppRuntime::DockerCompose);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compose_plan_requires_file_under_root() {
+        let dir = temp_dir();
+        let plan = compose_plan("nope.yml", vec![]);
+        assert!(validate_launch_plan(&dir, plan).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Batch 8: an explicit webserver approval relaxes the gate only when the
+    /// command is a webserver command; a mismatch stays blocked.
+    #[test]
+    fn trade_approval_only_relaxes_matching_safe_mode() {
+        let dir = temp_dir();
+        fs::write(
+            dir.join("docker-compose.yml"),
+            "services:\n  bot:\n    image: t\n",
+        )
+        .unwrap();
+
+        // A trade command override with a webserver approval must STILL block.
+        let mut mismatch = compose_plan(
+            "docker-compose.yml",
+            vec!["trade".into(), "--config".into()],
+        );
+        mismatch.trade_approval = Some(TradeApproval::Webserver);
+        assert!(
+            validate_launch_plan(&dir, mismatch).is_err(),
+            "a webserver approval can never run trade"
+        );
+
+        // A webserver command with a webserver approval validates.
+        let mut ok = compose_plan(
+            "docker-compose.yml",
+            vec!["webserver".into(), "--config".into()],
+        );
+        ok.trade_approval = Some(TradeApproval::Webserver);
+        assert!(
+            validate_launch_plan(&dir, ok).is_ok(),
+            "matching webserver approval must validate"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

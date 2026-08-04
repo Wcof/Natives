@@ -8,12 +8,14 @@ use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, 
 use crate::{Error, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 const GRACEFUL_WAIT_MS: u64 = 5_000;
 
@@ -46,11 +48,17 @@ struct LiveLocalProcess {
     program: String,
     cwd: PathBuf,
     log: Arc<LocalLogStore>,
+    /// Set when the instance is being stopped. Reader / health tasks observe it
+    /// so stop can preempt an in-flight start (P0 / batch 2).
+    cancelled: Arc<AtomicBool>,
 }
 
 pub struct LocalRuntimeManager {
     procs: Mutex<HashMap<String, LiveLocalProcess>>,
     logs: LogRegistry,
+    /// Tasks spawned on behalf of an instance (log readers, health wait). Kept
+    /// so stop can end them deterministically instead of relying on pipe EOF.
+    task_handles: Mutex<HashMap<String, Vec<JoinHandle<()>>>>,
 }
 
 impl Default for LocalRuntimeManager {
@@ -64,6 +72,7 @@ impl LocalRuntimeManager {
         Self {
             procs: Mutex::new(HashMap::new()),
             logs: LogRegistry::new(),
+            task_handles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -71,6 +80,7 @@ impl LocalRuntimeManager {
         &self.logs
     }
 
+    /// True while a managed child is still alive.
     pub async fn is_running(&self, app_id: &str) -> bool {
         let mut map = self.procs.lock().await;
         if let Some(p) = map.get_mut(app_id) {
@@ -86,6 +96,24 @@ impl LocalRuntimeManager {
             }
         }
         false
+    }
+
+    /// Register a task owned by an instance so stop can end it.
+    async fn track_task(&self, app_id: &str, handle: JoinHandle<()>) {
+        let mut map = self.task_handles.lock().await;
+        map.entry(app_id.to_string()).or_default().push(handle);
+    }
+
+    /// Abort all tracked tasks for an app (log readers / health). Called after
+    /// the process tree is gone so a reader can never linger on a dead pipe.
+    async fn end_tracked_tasks(&self, app_id: &str) {
+        let handles = {
+            let mut map = self.task_handles.lock().await;
+            map.remove(app_id).unwrap_or_default()
+        };
+        for h in handles {
+            h.abort();
+        }
     }
 
     pub async fn current_port(&self, app_id: &str) -> Option<u16> {
@@ -113,15 +141,66 @@ impl LocalRuntimeManager {
         }
     }
 
+    /// Stop the managed process tree and verify release (P0).
+    ///
+    /// Returns `Err` when the process group still has members or the app port is
+    /// still accepting connections after TERM→grace→KILL→reap. Callers must NOT
+    /// write `stopped` on `Err` — the identity/port must be preserved so a retry
+    /// stop stays possible.
     pub async fn stop(&self, app_id: &str, app: Option<&AppHandle>) -> Result<()> {
         let mut map = self.procs.lock().await;
         let Some(mut live) = map.remove(app_id) else {
+            // Nothing live to stop; make sure no tracked tasks linger either.
+            drop(map);
+            self.end_tracked_tasks(app_id).await;
             return Ok(());
         };
+        let pgid = live.identity.process_group_id;
+        let port = live.port;
+        // Signal readers / health first so stop preempts an in-flight start.
+        live.cancelled.store(true, Ordering::SeqCst);
         live.log.append(LogStream::System, "stopping process tree…");
+        let mut problems: Vec<String> = Vec::new();
+
         if let Some(mut child) = live.child.take() {
-            terminate_tree(&mut child, live.identity.process_group_id).await;
+            terminate_tree(&mut child, pgid).await;
+            // Reap the direct child — a reaped child must be waited, never left
+            // behind as a zombie. tokio caches the status, so a second wait here
+            // is safe when terminate_tree already reaped it.
+            if let Err(e) = child.wait().await {
+                problems.push(format!("child wait failed: {e}"));
+            }
         }
+        if let Some(pgid) = pgid {
+            if process_group_exists(pgid) {
+                problems.push(format!("process group {pgid} still has members after kill"));
+            }
+        }
+        if let Some(port) = port {
+            if !wait_port_released(port, Duration::from_secs(3)) {
+                problems.push(format!(
+                    "port {port} still accepting connections after stop"
+                ));
+            }
+        }
+
+        drop(map);
+        self.end_tracked_tasks(app_id).await;
+
+        if !problems.is_empty() {
+            live.log.append(
+                LogStream::System,
+                &format!("stop incomplete: {}", problems.join("; ")),
+            );
+            if let Some(app) = app {
+                emit_progress(app, app_id, "stop_failed", &problems.join("; "));
+            }
+            return Err(Error::Internal(format!(
+                "stop incomplete: {}",
+                problems.join("; ")
+            )));
+        }
+
         live.log.append(LogStream::System, "stopped");
         if let Some(app) = app {
             emit_progress(app, app_id, "stopped", "process stopped");
@@ -173,10 +252,20 @@ impl LocalRuntimeManager {
         };
 
         let (program, mut args) = build_command(plan, port)?;
+        // P0: never spawn a command that can place real trades without explicit
+        // authorization. The plan validator already gates registration; this is
+        // defense-in-depth at the spawn point.
+        if super::risk::classify_command(&program, &args) == super::risk::CommandRisk::Block {
+            return Err(Error::InvalidInput(
+                "start blocked: command may place real trades; refusing to auto-start".into(),
+            ));
+        }
         // Append runner-specific host/port flags (Vite vs Vue CLI differ).
         if matches!(
             plan.program,
-            LaunchProgram::Npm | LaunchProgram::Pnpm | LaunchProgram::Yarn
+            crate::creative_app::model::LaunchProgram::Npm
+                | LaunchProgram::Pnpm
+                | LaunchProgram::Yarn
         ) {
             let runner = plan.script_runner.ok_or_else(|| {
                 Error::InvalidInput(
@@ -258,6 +347,7 @@ impl LocalRuntimeManager {
         };
 
         // Pipe readers
+        let cancelled = Arc::new(AtomicBool::new(false));
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let app_handle = app.clone();
@@ -265,7 +355,7 @@ impl LocalRuntimeManager {
         let log_out = log.clone();
         let stdout_secrets = secret_values.clone();
         if let Some(out) = stdout {
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let entry = append_with_secrets(
@@ -277,13 +367,14 @@ impl LocalRuntimeManager {
                     emit_log(&app_handle, &app_id_out, &entry);
                 }
             });
+            self.track_task(app_id, handle).await;
         }
         let app_handle = app.clone();
         let app_id_err = app_id.to_string();
         let log_err = log.clone();
         let stderr_secrets = secret_values;
         if let Some(err) = stderr {
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let entry = append_with_secrets(
@@ -295,6 +386,7 @@ impl LocalRuntimeManager {
                     emit_log(&app_handle, &app_id_err, &entry);
                 }
             });
+            self.track_task(app_id, handle).await;
         }
 
         let open_path = if plan.open_path.starts_with('/') {
@@ -318,6 +410,7 @@ impl LocalRuntimeManager {
                     program: executable,
                     cwd: cwd.clone(),
                     log: log.clone(),
+                    cancelled,
                 },
             );
         }
@@ -374,7 +467,8 @@ impl LocalRuntimeManager {
     }
 
     /// Wait until health check passes or timeout. On failure leaves process running
-    /// (caller may stop or mark start_unhealthy).
+    /// (caller may stop or mark start_unhealthy). Cancellable: a stop preempts the
+    /// wait via the instance's cancelled flag (batch 2).
     pub async fn wait_healthy(
         &self,
         app: &AppHandle,
@@ -388,9 +482,20 @@ impl LocalRuntimeManager {
         } else {
             format!("/{health_path}")
         };
+        let cancelled = {
+            let map = self.procs.lock().await;
+            map.get(app_id).map(|p| p.cancelled.clone())
+        };
         emit_progress(app, app_id, "health_check", "waiting for server");
 
         loop {
+            if cancelled
+                .as_ref()
+                .map(|c| c.load(Ordering::SeqCst))
+                .unwrap_or(false)
+            {
+                return Err(Error::Cancelled("start cancelled by stop".into()));
+            }
             if !self.is_running(app_id).await {
                 return Err(Error::Internal("process exited before healthy".into()));
             }
@@ -452,7 +557,7 @@ fn emit_progress(app: &AppHandle, app_id: &str, stage: &str, message: &str) {
 
 fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)> {
     match plan.program {
-        LaunchProgram::Npm => {
+        crate::creative_app::model::LaunchProgram::Npm => {
             let script = plan
                 .script
                 .as_deref()
@@ -640,6 +745,33 @@ pub fn port_listening(port: u16) -> bool {
     .is_ok()
 }
 
+/// True when at least one process still exists in the given process group.
+/// POSIX: `kill(-pgid, 0)` returns 0 if any member is alive, -1/ESRCH if none.
+#[cfg(unix)]
+pub fn process_group_exists(pgid: i32) -> bool {
+    unsafe { libc::kill(-pgid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn process_group_exists(_pgid: i32) -> bool {
+    false
+}
+
+/// Poll until the port stops accepting TCP connections or `timeout` elapses.
+/// A port that was never bound reports released immediately.
+pub fn wait_port_released(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !port_listening(port) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 async fn http_reachable(url: &str) -> bool {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -658,6 +790,10 @@ async fn http_reachable(url: &str) -> bool {
 }
 
 async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
+    terminate_tree_with_grace(child, pgid, Duration::from_millis(GRACEFUL_WAIT_MS)).await;
+}
+
+async fn terminate_tree_with_grace(child: &mut Child, pgid: Option<i32>, grace: Duration) {
     // Graceful
     #[cfg(unix)]
     {
@@ -674,10 +810,10 @@ async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
         let _ = child.kill().await;
     }
 
-    let deadline = Instant::now() + Duration::from_millis(GRACEFUL_WAIT_MS);
+    let deadline = Instant::now() + grace;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
+            Ok(Some(_)) => break,
             Ok(None) if Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -685,12 +821,15 @@ async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
         }
     }
 
-    // Force
+    // Force: kill any remaining group members even when the direct child already
+    // exited gracefully (a detached grandchild keeps the group + port alive).
     #[cfg(unix)]
     {
         if let Some(pgid) = pgid {
-            unsafe {
-                let _ = libc::kill(-pgid, libc::SIGKILL);
+            if process_group_exists(pgid) {
+                unsafe {
+                    let _ = libc::kill(-pgid, libc::SIGKILL);
+                }
             }
         } else {
             let _ = child.start_kill();
@@ -714,6 +853,7 @@ async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
     {
         let _ = child.start_kill();
     }
+    // Always reap the direct child so it never becomes a zombie.
     let _ = child.wait().await;
 }
 
@@ -727,8 +867,98 @@ pub fn static_open_url(host_http_port: u16, creative_id: &str, open_path: &str) 
     format!("http://127.0.0.1:{host_http_port}/local-projects/{creative_id}{path}")
 }
 
+/// A preview URL candidate with its provenance (batch 6). The runtime probes
+/// candidates in order and picks the first healthy one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewUrlCandidate {
+    pub url: String,
+    pub source: &'static str,
+}
+
+/// Determinable URL candidates in priority order (batch 6):
+/// explicit plan port → framework default. Compose adds an inspect-resolved
+/// candidate at runtime (the actual published host port), which is async and
+/// not computable here.
+pub fn resolve_preview_urls(
+    plan: &LaunchPlan,
+    host_http_port: u16,
+    app_id: &str,
+) -> Vec<PreviewUrlCandidate> {
+    let mut out = Vec::new();
+    let open = |p: u16| -> String {
+        let path = if plan.open_path.starts_with('/') {
+            plan.open_path.clone()
+        } else {
+            format!("/{}", plan.open_path)
+        };
+        format!("http://127.0.0.1:{p}{path}")
+    };
+    match plan.runtime {
+        LocalLaunchRuntime::StaticHttp => {
+            out.push(PreviewUrlCandidate {
+                url: static_open_url(host_http_port, app_id, &plan.open_path),
+                source: "framework_default",
+            });
+        }
+        LocalLaunchRuntime::NodeDevServer => {
+            if let Some(p) = plan.port.value {
+                out.push(PreviewUrlCandidate {
+                    url: open(p),
+                    source: "explicit_plan",
+                });
+            }
+        }
+        LocalLaunchRuntime::DockerCompose => {
+            if let Some(d) = &plan.compose {
+                if let Some(p) = d.host_port {
+                    out.push(PreviewUrlCandidate {
+                        url: open(p),
+                        source: "explicit_plan",
+                    });
+                }
+                // framework default port (8080) as a last-resort candidate;
+                // compose_inspect is appended at runtime.
+                out.push(PreviewUrlCandidate {
+                    url: open(8080),
+                    source: "framework_default",
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Rewrite an `0.0.0.0`-hosted URL to loopback (batch 6) — a server that binds
+/// all interfaces must still be previewed on 127.0.0.1.
+pub fn normalize_loopback(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("http://0.0.0.0") {
+        format!("http://127.0.0.1{rest}")
+    } else if let Some(rest) = url.strip_prefix("https://0.0.0.0") {
+        format!("https://127.0.0.1{rest}")
+    } else {
+        url.to_string()
+    }
+}
+
 pub fn plan_is_static(plan: &LaunchPlan) -> bool {
     matches!(plan.runtime, LocalLaunchRuntime::StaticHttp)
+}
+
+/// Stable, unique Compose project name for a local creative app (batch 5).
+/// `natives-{seed}-{id-suffix}` — two Natives apps never share a project, and
+/// the name is deterministic across restarts so stop/down find the same project.
+pub fn compose_project_name(app_id: &str, seed: &str) -> String {
+    let seed = if seed.trim().is_empty() {
+        "compose"
+    } else {
+        seed
+    };
+    // First 8 hex chars of the app id as a collision-resistant suffix.
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    app_id.hash(&mut h);
+    let suffix = format!("{:08x}", h.finish());
+    format!("natives-{seed}-{suffix}")
 }
 
 #[cfg(test)]
@@ -745,5 +975,180 @@ mod tests {
     fn static_url_shape() {
         let u = static_open_url(1234, "abc", "/");
         assert_eq!(u, "http://127.0.0.1:1234/local-projects/abc/");
+    }
+
+    /// Batch 5: the Compose project name is stable per app and unique across apps.
+    #[test]
+    fn compose_project_name_is_stable_and_unique() {
+        let a = compose_project_name("app-1", "freq");
+        let a2 = compose_project_name("app-1", "freq");
+        let b = compose_project_name("app-2", "freq");
+        assert_eq!(a, a2, "same app + seed must derive the same project");
+        assert_ne!(a, b, "different apps must never share a compose project");
+        assert!(a.starts_with("natives-freq-"), "unexpected prefix: {a}");
+        assert_eq!(
+            compose_project_name("x", ""),
+            compose_project_name("x", "compose")
+        );
+    }
+
+    /// Batch 6: URL candidates follow the documented priority (explicit plan
+    /// port first, framework default last) and always target loopback.
+    #[test]
+    fn preview_url_priority_and_loopback() {
+        let mut node = LaunchPlan {
+            schema_version: 1,
+            source: crate::creative_app::model::LaunchPlanSource::Rule,
+            project_kind: crate::creative_app::model::LocalProjectKind::Vite,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: crate::creative_app::model::LaunchProgram::Npm,
+            cwd_relative: ".".into(),
+            script: Some("dev".into()),
+            entry_file: None,
+            script_runner: Some(crate::creative_app::model::ScriptRunner::Vite),
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Fixed,
+                value: Some(5173),
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            auto_open: true,
+            confidence: None,
+            reason: "t".into(),
+            compose: None,
+            trade_approval: None,
+        };
+        let cands = resolve_preview_urls(&node, 1234, "app");
+        assert_eq!(cands[0].source, "explicit_plan");
+        assert_eq!(cands[0].url, "http://127.0.0.1:5173/");
+
+        node.port.value = None;
+        let cands = resolve_preview_urls(&node, 1234, "app");
+        assert!(
+            cands.is_empty(),
+            "no fixed port → no deterministic candidate"
+        );
+
+        // 0.0.0.0 host must normalize to loopback for preview.
+        assert_eq!(
+            normalize_loopback("http://0.0.0.0:8080/api"),
+            "http://127.0.0.1:8080/api"
+        );
+        assert_eq!(
+            normalize_loopback("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080/"
+        );
+    }
+
+    /// P0: a process that ignores SIGTERM must still be killed (KILL follows the
+    /// grace window), its process group verified gone, its port verified released,
+    /// and the direct child reaped — never left as a zombie.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn term_timeout_kills_group_and_releases_port() {
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let Ok(_v) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available; cannot verify group kill");
+            return;
+        };
+
+        let port = pick_free_port();
+        let js = format!(
+            "process.on('SIGTERM', () => {{}}); \
+             require('http').createServer((_q,s)=>s.end('ok')).listen({port}, '127.0.0.1');"
+        );
+
+        let mut cmd = Command::new("node");
+        cmd.arg("-e")
+            .arg(&js)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: pre_exec runs in the forked child before exec; setpgid is the
+        // only libc call and its use here is the standard new-process-group pattern.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn node");
+
+        let pid = child.id().expect("node pid") as i32;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !port_listening(port) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node never bound port {port}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // node ignores SIGTERM, so the grace window must end in SIGKILL.
+        terminate_tree_with_grace(&mut child, Some(pid), Duration::from_millis(300)).await;
+
+        // Direct child must be reaped.
+        let _status = child.wait().await.expect("reap node child");
+
+        assert!(
+            !process_group_exists(pid),
+            "process group {pid} still has members after kill"
+        );
+        assert!(
+            wait_port_released(port, Duration::from_secs(2)),
+            "port {port} still accepting connections after kill"
+        );
+    }
+
+    /// Batch 2: stop must set the cancel flag (preempting health/readers) and
+    /// drain the instance's tracked tasks instead of leaving them running.
+    #[tokio::test]
+    async fn stop_sets_cancel_flag_and_drains_tasks() {
+        use std::future::pending;
+
+        let mgr = LocalRuntimeManager::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let task_handle = tokio::spawn(async move {
+            let _ = pending::<()>().await;
+        });
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert(
+                "a".into(),
+                LiveLocalProcess {
+                    child: None,
+                    identity: ProcessIdentity::default(),
+                    plan_fingerprint: String::new(),
+                    started_at: Instant::now(),
+                    port: None,
+                    open_url: None,
+                    program: "x".into(),
+                    cwd: PathBuf::from("/"),
+                    log: mgr.logs.get_or_open("a"),
+                    cancelled: cancelled.clone(),
+                },
+            );
+            mgr.task_handles
+                .lock()
+                .await
+                .insert("a".into(), vec![task_handle]);
+        }
+
+        mgr.stop("a", None).await.expect("stop succeeds");
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "stop must set the cancel flag before reaping"
+        );
+        let handles = mgr.task_handles.lock().await;
+        assert!(
+            !handles.contains_key("a"),
+            "stop must drain tracked reader/health tasks"
+        );
     }
 }

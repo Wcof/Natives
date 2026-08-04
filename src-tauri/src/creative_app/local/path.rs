@@ -107,6 +107,35 @@ pub fn device_name() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+/// Stable volume identity for a path (batch 4): the mount point on macOS via
+/// statfs, else the longest existing ancestor. Persisted so a volume re-mount
+/// can be recognized across restarts; never a secret.
+pub fn volume_identity(path: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::CString;
+        if let Ok(c) = CString::new(path.to_string_lossy().as_bytes()) {
+            let mut fs: libc::statfs = unsafe { std::mem::zeroed() };
+            if unsafe { libc::statfs(c.as_ptr(), &mut fs) } == 0 {
+                let mount = unsafe { std::ffi::CStr::from_ptr(fs.f_mntonname.as_ptr()) }
+                    .to_string_lossy()
+                    .to_string();
+                if !mount.is_empty() {
+                    return mount;
+                }
+            }
+        }
+    }
+    // Fallback: longest existing ancestor (e.g. the /Volumes/... root).
+    let mut p = path.to_path_buf();
+    while !p.exists() {
+        if !p.pop() {
+            break;
+        }
+    }
+    p.to_string_lossy().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +174,18 @@ mod tests {
         fs::write(dir.join("a/b/index.html"), "<html/>").unwrap();
         let p = resolve_under(&dir, "a/b/index.html").unwrap();
         assert!(p.ends_with("index.html"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Batch 4: the volume identity of an existing path is stable and non-empty
+    /// (the mount point), so a volume re-mount can be detected on restart.
+    #[test]
+    fn volume_identity_of_existing_path_is_stable() {
+        let dir = temp_dir();
+        let v1 = volume_identity(&dir);
+        let v2 = volume_identity(&dir);
+        assert!(!v1.is_empty(), "volume identity must never be empty");
+        assert_eq!(v1, v2, "volume identity must be stable across calls");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -97,42 +97,171 @@ pub fn resolve(conn: &Connection, id: &str) -> Result<ResolvedSource> {
     Err(Error::NotFound(id.into()))
 }
 
-/// Unified catalog list: each adapter contributes its projections.
+/// Unified catalog list: each adapter contributes its projections, then every
+/// summary is bound to its unified application id and active runtime instance.
 pub fn list_all(conn: &Connection) -> Result<Vec<CreativeAppSummary>> {
     let mut out = Vec::new();
     out.extend(internal::list(conn)?);
     out.extend(external::list(conn)?);
     out.extend(local::list(conn)?);
+    let mut out = out
+        .into_iter()
+        .map(|s| super::runtime_store::attach_identity(conn, s))
+        .collect::<Result<Vec<_>>>()?;
     sort_catalog(&mut out);
     Ok(out)
 }
 
 pub fn get_summary(conn: &Connection, id: &str) -> Result<CreativeAppSummary> {
-    match resolve(conn, id)? {
+    let summary = match resolve(conn, id)? {
         ResolvedSource::Internal => internal::get(conn, id),
         ResolvedSource::ExternalGithub => external::get(conn, id),
         ResolvedSource::LocalProject => local::get(conn, id),
-    }
+    }?;
+    super::runtime_store::attach_identity(conn, summary)
 }
 
-pub async fn start(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<CreativeAppSummary> {
-    match resolve(conn, id)? {
-        ResolvedSource::Internal => internal::start(conn, &ctx.app, id),
+/// Shared instance CAS for process/container sources: create the instance in
+/// `starting`, then mirror the driver outcome onto it. Internal Workshop apps
+/// have no runtime and skip this (enable/disable only).
+async fn begin_instance(conn: &Connection, source: ResolvedSource, id: &str) -> Result<String> {
+    let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+    if super::runtime_store::has_active_instance(conn, &app_id)? {
+        return Err(Error::InvalidInput(
+            "this app already has an active runtime instance; stop it first".into(),
+        ));
+    }
+    let plan_id = super::runtime_store::active_plan_id(conn, &app_id)?;
+    let owner_kind = match source {
+        ResolvedSource::ExternalGithub => super::runtime_store::external_owner_kind(conn, id)?,
+        ResolvedSource::LocalProject => super::runtime_store::local_owner_kind(conn, id)?,
+        ResolvedSource::Internal => unreachable!("internal has no runtime instance"),
+    };
+    super::runtime_store::create_instance(conn, &app_id, plan_id.as_deref(), owner_kind)
+}
+
+/// Phase 1 of start (caller holds the mutation lock): create the runtime
+/// instance and spawn the runtime. Fast for local (spawn only); external /
+/// internal finish entirely here. Returns the summary in its current state with
+/// `runtime_instance_id` bound, so phase 2 knows which instance to settle.
+pub async fn spawn_start(
+    conn: &Connection,
+    ctx: &LifecycleCtx,
+    id: &str,
+) -> Result<CreativeAppSummary> {
+    let source = resolve(conn, id)?;
+    if source == ResolvedSource::Internal {
+        let summary = internal::start(conn, &ctx.app, id)?;
+        return super::runtime_store::attach_identity(conn, summary);
+    }
+    let instance_id = begin_instance(conn, source, id).await?;
+    let result = match source {
         ResolvedSource::ExternalGithub => external::start(conn, &ctx.app, id).await,
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
             local::start(conn, &ctx.app, rt, ctx.host_http_port, id).await
         }
+        ResolvedSource::Internal => unreachable!(),
+    };
+    match result {
+        Ok(mut summary) => {
+            summary.runtime_instance_id = Some(instance_id.clone());
+            if source == ResolvedSource::ExternalGithub {
+                // External start includes its own health pass; settle the instance now.
+                let hint = super::runtime_store::external_instance_hint(conn, id)
+                    .unwrap_or((None, None, None));
+                let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
+                let _ = super::runtime_store::mark_running(
+                    conn,
+                    &instance_id,
+                    &urls,
+                    hint.0,
+                    hint.1,
+                    hint.2,
+                );
+            }
+            Ok(super::runtime_store::attach_identity(conn, summary)?)
+        }
+        Err(e) => {
+            let _ = super::runtime_store::mark_failed(conn, &instance_id, &e.to_string());
+            Err(e)
+        }
+    }
+}
+
+/// Phase 2 of start (NO mutation lock): settle the local health wait. External /
+/// internal are already settled by phase 1. A concurrent stop cancels the wait;
+/// the instance then stays owned by the stop path.
+pub async fn await_ready(
+    conn: &Connection,
+    ctx: &LifecycleCtx,
+    id: &str,
+    spawned: &CreativeAppSummary,
+) -> Result<CreativeAppSummary> {
+    match resolve(conn, id)? {
+        ResolvedSource::Internal | ResolvedSource::ExternalGithub => Ok(spawned.clone()),
+        ResolvedSource::LocalProject => {
+            let rt = ctx.require_local_runtime()?;
+            let result = local::await_start_ready(conn, &ctx.app, rt, id).await;
+            let instance_id = spawned.runtime_instance_id.clone();
+            match result {
+                Ok(summary) => {
+                    if summary.state == CreativeAppState::Running {
+                        if let Some(iid) = &instance_id {
+                            let hint = super::runtime_store::local_instance_hint(conn, id)
+                                .unwrap_or((None, None, None));
+                            let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
+                            let _ = super::runtime_store::mark_running(
+                                conn, iid, &urls, hint.0, hint.1, hint.2,
+                            );
+                        }
+                    }
+                    // Not running here means stop preempted the start; the instance
+                    // is owned by the stop path and is left untouched.
+                    Ok(super::runtime_store::attach_identity(conn, summary)?)
+                }
+                Err(e) => {
+                    if let Some(iid) = &instance_id {
+                        let _ = super::runtime_store::mark_failed(conn, iid, &e.to_string());
+                    }
+                    Err(e)
+                }
+            }
+        }
     }
 }
 
 pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<CreativeAppSummary> {
-    match resolve(conn, id)? {
-        ResolvedSource::Internal => internal::stop(conn, &ctx.app, id),
+    let source = resolve(conn, id)?;
+    if source == ResolvedSource::Internal {
+        let summary = internal::stop(conn, &ctx.app, id)?;
+        return super::runtime_store::attach_identity(conn, summary);
+    }
+    let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+    let instance_id = super::runtime_store::active_instance_id(conn, &app_id)?;
+    if let Some(iid) = &instance_id {
+        let _ = super::runtime_store::mark_stopping(conn, iid);
+    }
+    let result = match source {
         ResolvedSource::ExternalGithub => external::stop(conn, &ctx.app, id).await,
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
             local::stop(conn, &ctx.app, rt, id).await
+        }
+        ResolvedSource::Internal => unreachable!(),
+    };
+    match result {
+        Ok(summary) => {
+            if let Some(iid) = &instance_id {
+                super::runtime_store::mark_stopped(conn, iid)?;
+            }
+            Ok(super::runtime_store::attach_identity(conn, summary)?)
+        }
+        Err(e) => {
+            if let Some(iid) = &instance_id {
+                let _ = super::runtime_store::mark_cleanup_failed(conn, iid, &e.to_string());
+            }
+            Err(e)
         }
     }
 }
@@ -143,14 +272,19 @@ pub async fn delete(
     id: &str,
     opts: DeleteOptions,
 ) -> Result<DeleteResult> {
-    match resolve(conn, id)? {
+    let source = resolve(conn, id)?;
+    let result = match source {
         ResolvedSource::Internal => internal::delete(conn, &ctx.app, ctx.modules_dir(), id),
         ResolvedSource::ExternalGithub => external::delete(conn, &ctx.app, id, opts).await,
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
             local::delete(conn, &ctx.app, rt, id).await
         }
+    };
+    if result.is_ok() {
+        super::runtime_store::delete_application(conn, source.as_source(), id)?;
     }
+    result
 }
 
 pub fn open_target(conn: &Connection, id: &str) -> Result<OpenTarget> {
@@ -171,14 +305,12 @@ pub async fn restart(
         ResolvedSource::Internal => Err(Error::InvalidInput(
             "restart is only supported for local/external creative apps".into(),
         )),
-        ResolvedSource::ExternalGithub => {
-            // Stop failure must propagate — never start a new container on a half-stop.
-            external::stop(conn, &ctx.app, id).await?;
-            external::start(conn, &ctx.app, id).await
-        }
-        ResolvedSource::LocalProject => {
-            let rt = ctx.require_local_runtime()?;
-            local::restart(conn, &ctx.app, rt, ctx.host_http_port, id).await
+        ResolvedSource::ExternalGithub | ResolvedSource::LocalProject => {
+            // Stop must fully release (mark old instance stopped) before start
+            // creates a new instance — the instance CAS enforces this.
+            stop(conn, ctx, id).await?;
+            let spawned = spawn_start(conn, ctx, id).await?;
+            await_ready(conn, ctx, id, &spawned).await
         }
     }
 }
@@ -212,6 +344,8 @@ mod tests {
         let mut apps = vec![
             CreativeAppSummary {
                 id: "a".into(),
+                application_id: String::new(),
+                runtime_instance_id: None,
                 source: CreativeAppSource::Internal,
                 runtime: CreativeAppRuntime::WorkshopStatic,
                 title: "B".into(),
@@ -228,6 +362,8 @@ mod tests {
             },
             CreativeAppSummary {
                 id: "b".into(),
+                application_id: String::new(),
+                runtime_instance_id: None,
                 source: CreativeAppSource::ExternalGithub,
                 runtime: CreativeAppRuntime::DockerRun,
                 title: "A".into(),

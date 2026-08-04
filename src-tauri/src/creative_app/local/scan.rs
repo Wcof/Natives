@@ -72,6 +72,11 @@ pub fn inspect_local_project(
     let mut lock_pnpm = false;
     let mut lock_yarn = false;
     let mut summary_budget = MAX_SUMMARY_BYTES;
+    let mut compose_files: Vec<PathBuf> = Vec::new();
+    let mut has_compose = false;
+    let mut has_dockerfile = false;
+    let mut has_python = false;
+    let mut has_makefile = false;
 
     walk(
         &root,
@@ -105,6 +110,25 @@ pub fn inspect_local_project(
             }
             if name.starts_with("vue.config.") {
                 vue_config = true;
+            }
+            if matches!(
+                name.as_str(),
+                "docker-compose.yml" | "docker-compose.yaml" | "compose.yml" | "compose.yaml"
+            ) {
+                has_compose = true;
+                compose_files.push(path.to_path_buf());
+            }
+            if name == "dockerfile" {
+                has_dockerfile = true;
+            }
+            if name == "pyproject.toml"
+                || (name.starts_with("requirements") && name.ends_with(".txt"))
+                || (name.starts_with("requirements") && name.ends_with(".pip"))
+            {
+                has_python = true;
+            }
+            if name == "makefile" {
+                has_makefile = true;
             }
             if name == "package.json" && package_json_path.is_none() {
                 // prefer root package.json
@@ -270,10 +294,44 @@ pub fn inspect_local_project(
         has_index_html,
         &mut risks,
     );
+    // A Compose-only project gets a Docker Compose plan (batch 5) unless its
+    // default command is trade-blocked.
+    let rule_plan = match rule_plan {
+        Some(p) => Some(p),
+        None if has_compose => build_compose_plan(&root, &compose_files),
+        None => None,
+    };
 
     // existing registration note
     if existing_id.is_some() {
         risks.push("this path is already registered as a local creative app".into());
+    }
+
+    // Non-web manifest evidence (batch 4). These runtimes are not yet available
+    // as drivers, so detection is honest evidence + risks, never a fake plan.
+    let mut extra_manifests = Vec::new();
+    if has_compose {
+        extra_manifests.push("docker-compose".into());
+        risks.push(
+            "Compose project detected; the Docker Compose runner is not yet available".into(),
+        );
+        for cf in &compose_files {
+            if let Some(msg) = compose_command_risk(cf) {
+                blockers.push(msg);
+            }
+        }
+    }
+    if has_dockerfile {
+        extra_manifests.push("dockerfile".into());
+        risks.push("Dockerfile detected; local container runtime is pending".into());
+    }
+    if has_python {
+        extra_manifests.push("python".into());
+        risks.push("Python project detected; a Python runner is not yet available".into());
+    }
+    if has_makefile {
+        extra_manifests.push("makefile".into());
+        risks.push("Makefile detected; it is never auto-executable".into());
     }
 
     let _ = deps_from_pkg; // silence
@@ -291,9 +349,149 @@ pub fn inspect_local_project(
         risks,
         blockers,
         rule_plan,
+        extra_manifests,
         tree_sample,
         existing_id,
     })
+}
+
+/// Prove the project config has `dry_run: true` (batch 8). Reads only the
+/// dry_run projection from common config locations — never logs or returns
+/// config content or secrets.
+pub fn config_proves_dry_run(root: &Path) -> bool {
+    for cand in [
+        root.join("user_data/config.json"),
+        root.join("config.json"),
+        root.join("config/config.json"),
+    ] {
+        if let Ok(meta) = fs::metadata(&cand) {
+            if meta.len() > MAX_CONFIG_BYTES {
+                continue;
+            }
+        }
+        let Ok(data) = fs::read_to_string(&cand) else {
+            continue;
+        };
+        if let Ok(v) = serde_json::from_str::<Value>(&data) {
+            if v.get("dry_run").and_then(|x| x.as_bool()) == Some(true) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Inspect a Compose file's `command:` lines and block any that can place real
+/// trades (P0 dangerous-command gate). Only the inline form is parsed here; the
+/// Compose runtime batch parses full service topology.
+pub fn compose_command_risk(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    if meta.len() > MAX_CONFIG_BYTES {
+        return None;
+    }
+    let data = fs::read_to_string(path).ok()?;
+    let mut lines = data.lines().peekable();
+    while let Some(line) = lines.next() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("command:") else {
+            continue;
+        };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            // List form:
+            //   command:
+            //     - trade
+            //     - --config
+            let mut tokens: Vec<String> = Vec::new();
+            while let Some(next) = lines.peek() {
+                let n = next.trim_start();
+                if n.starts_with('-') {
+                    tokens.push(n.trim_start_matches('-').trim().to_string());
+                    lines.next();
+                } else {
+                    break;
+                }
+            }
+            if !tokens.is_empty()
+                && super::risk::classify_command("", &tokens) == super::risk::CommandRisk::Block
+            {
+                return Some(format!(
+                    "compose command may place real trades: {}",
+                    tokens.join(" ")
+                ));
+            }
+            continue;
+        }
+        let tokens: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
+        if !tokens.is_empty()
+            && super::risk::classify_command("", &tokens) == super::risk::CommandRisk::Block
+        {
+            return Some(format!("compose command may place real trades: {rest}"));
+        }
+    }
+    None
+}
+
+/// Build a Docker Compose rule plan for a Compose-only project (batch 5).
+/// Returns None when the compose default command can place real trades — the
+/// scan already recorded that as a blocker, so no plan is offered.
+fn build_compose_plan(root: &Path, compose_files: &[PathBuf]) -> Option<LaunchPlan> {
+    let file = compose_files
+        .iter()
+        .find(|f| f.parent() == Some(root))
+        .or_else(|| compose_files.first())?;
+    if compose_command_risk(file).is_some() {
+        return None;
+    }
+    let rel = file
+        .strip_prefix(root)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let seed = root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| {
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .take(32)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "compose".into());
+    let plan = LaunchPlan {
+        schema_version: 1,
+        source: LaunchPlanSource::Rule,
+        project_kind: LocalProjectKind::Unknown,
+        runtime: LocalLaunchRuntime::DockerCompose,
+        program: LaunchProgram::Internal,
+        cwd_relative: ".".into(),
+        script: None,
+        entry_file: None,
+        script_runner: None,
+        args: vec![],
+        environment_keys: vec![],
+        port: LaunchPort {
+            mode: LaunchPortMode::Auto,
+            value: None,
+        },
+        open_path: "/".into(),
+        health_path: "/".into(),
+        startup_timeout_ms: 120_000,
+        auto_open: true,
+        confidence: Some(0.7),
+        reason: "docker compose detected".into(),
+        compose: Some(ComposePlanDetail {
+            compose_file: rel,
+            project_seed: seed,
+            service: None,
+            command: vec![],
+            health_path: "/".into(),
+            host_port: None,
+        }),
+        trade_approval: None,
+    };
+    validate_launch_plan(root, plan).ok()
 }
 
 fn classify_kind(
@@ -361,6 +559,8 @@ fn build_rule_plan(
                 auto_open: true,
                 confidence: Some(0.95),
                 reason: "root index.html detected".into(),
+                compose: None,
+                trade_approval: None,
             };
             validate_launch_plan(root, plan).ok()
         }
@@ -405,6 +605,8 @@ fn build_rule_plan(
                 auto_open: true,
                 confidence: Some(0.8),
                 reason: format!("rule: {} run {script}", pm.as_str()),
+                compose: None,
+                trade_approval: None,
             };
             match validate_launch_plan(root, plan) {
                 Ok(p) => Some(p),
@@ -655,6 +857,120 @@ mod tests {
         )
         .unwrap();
         assert!(!r.tree_sample.iter().any(|t| t.contains(".env")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Batch 4: a Compose project is detected as evidence, and a `trade`
+    /// default command is a hard blocker (never silently runnable).
+    #[test]
+    fn compose_trade_command_is_blocked() {
+        let dir = temp_dir();
+        fs::write(
+            dir.join("docker-compose.yml"),
+            "services:\n  bot:\n    image: trading:latest\n    command: trade --config x.json\n",
+        )
+        .unwrap();
+        let conn = mem();
+        let r = inspect_local_project(
+            &conn,
+            &InspectLocalRequest {
+                project_root: dir.to_string_lossy().into(),
+            },
+        )
+        .unwrap();
+        assert!(
+            r.extra_manifests.iter().any(|m| m == "docker-compose"),
+            "compose manifest must be surfaced as evidence"
+        );
+        assert!(
+            r.blockers
+                .iter()
+                .any(|b| b.contains("may place real trades")),
+            "trade command must block: {:?}",
+            r.blockers
+        );
+        assert!(
+            r.rule_plan.is_none(),
+            "a Compose-only project must not get a fake web plan"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compose_webserver_command_is_not_blocked() {
+        let dir = temp_dir();
+        fs::write(
+            dir.join("compose.yaml"),
+            "services:\n  web:\n    image: trading:latest\n    command: webserver --config x.json\n",
+        )
+        .unwrap();
+        let conn = mem();
+        let r = inspect_local_project(
+            &conn,
+            &InspectLocalRequest {
+                project_root: dir.to_string_lossy().into(),
+            },
+        )
+        .unwrap();
+        assert!(
+            r.blockers.is_empty(),
+            "webserver must not block: {:?}",
+            r.blockers
+        );
+        // Batch 5: a safe Compose project is plan-able with a Docker Compose plan.
+        let plan = r.rule_plan.as_ref().expect("webserver compose gets a plan");
+        assert_eq!(plan.runtime, LocalLaunchRuntime::DockerCompose);
+        assert!(plan.compose.is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detects_python_dockerfile_makefile_evidence() {
+        let dir = temp_dir();
+        fs::write(dir.join("pyproject.toml"), "[project]\n").unwrap();
+        fs::write(dir.join("Dockerfile"), "FROM python\n").unwrap();
+        fs::write(dir.join("Makefile"), "all:\n\techo hi\n").unwrap();
+        let conn = mem();
+        let r = inspect_local_project(
+            &conn,
+            &InspectLocalRequest {
+                project_root: dir.to_string_lossy().into(),
+            },
+        )
+        .unwrap();
+        for m in ["python", "dockerfile", "makefile"] {
+            assert!(
+                r.extra_manifests.iter().any(|e| e == m),
+                "missing manifest evidence: {m}"
+            );
+        }
+        assert!(r.rule_plan.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Batch 8: dry-run is proven from the config projection, never returned.
+    #[test]
+    fn dry_run_projection_proves_safe_mode() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("user_data")).unwrap();
+        fs::write(
+            dir.join("user_data/config.json"),
+            r#"{"dry_run": true, "api_server": {"enabled": true}}"#,
+        )
+        .unwrap();
+        assert!(
+            config_proves_dry_run(&dir),
+            "dry_run:true must prove safe mode"
+        );
+        fs::write(
+            dir.join("user_data/config.json"),
+            r#"{"dry_run": false, "exchange": {"key": "SECRET"}}"#,
+        )
+        .unwrap();
+        assert!(
+            !config_proves_dry_run(&dir),
+            "dry_run:false must not prove safe mode"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

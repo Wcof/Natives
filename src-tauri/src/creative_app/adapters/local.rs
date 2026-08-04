@@ -31,6 +31,16 @@ pub async fn start(
     local::start_app(conn, app, runtime, host_http_port, id).await
 }
 
+/// Health phase of a local start, run without the mutation lock (batch 2).
+pub async fn await_start_ready(
+    conn: &Connection,
+    app: &AppHandle,
+    runtime: &LocalRuntimeManager,
+    id: &str,
+) -> Result<CreativeAppSummary> {
+    local::await_start_ready(conn, app, runtime, id).await
+}
+
 pub async fn stop(
     conn: &Connection,
     app: &AppHandle,

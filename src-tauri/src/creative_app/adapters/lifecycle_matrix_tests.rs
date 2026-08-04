@@ -8,7 +8,6 @@
 //! - Workshop Bridge surface is never selected for external/local
 
 use super::*;
-use crate::creative_app::model::*;
 use crate::db::{apply_migrations, create_tables};
 use crate::env_manager;
 use rusqlite::Connection;
@@ -54,6 +53,8 @@ fn sample_local(id: &str, root: &str, auto_open: bool) -> LocalCreativeAppRecord
         auto_open,
         confidence: None,
         reason: "test".into(),
+        compose: None,
+        trade_approval: None,
     };
     let now = chrono::Utc::now().to_rfc3339();
     LocalCreativeAppRecord {
@@ -73,6 +74,7 @@ fn sample_local(id: &str, root: &str, auto_open: bool) -> LocalCreativeAppRecord
         open_url: None,
         current_port: None,
         process_identity_json: None,
+        volume_identity: String::new(),
         auto_open,
         startup_timeout_ms: 60_000,
         last_started_at: None,
@@ -270,20 +272,47 @@ fn disabled_internal_cannot_open() {
     assert!(open_target(&conn, "mod-off").is_err());
 }
 
+/// Batch 3: after a user publishes a module, every catalog read returns the SAME
+/// application_id — the assistant card and the Personal Creations list agree on
+/// one identity (no per-read UUID churn).
+#[test]
+fn published_module_application_id_is_stable_across_catalog_reads() {
+    let conn = mem();
+    insert_module(&conn, "mod-1", 1);
+    let l1 = list_all(&conn).unwrap();
+    let l2 = list_all(&conn).unwrap();
+    let a1 = l1.iter().find(|a| a.id == "mod-1").expect("module in list");
+    let a2 = l2.iter().find(|a| a.id == "mod-1").expect("module in list");
+    assert!(
+        !a1.application_id.is_empty(),
+        "published module must carry a unified application_id"
+    );
+    assert_eq!(
+        a1.application_id, a2.application_id,
+        "application_id must be stable across catalog reads"
+    );
+    let resolved = crate::creative_app::runtime_store::find_or_create_application(
+        &conn,
+        CreativeAppSource::Internal,
+        "mod-1",
+    )
+    .unwrap();
+    assert_eq!(a1.application_id, resolved);
+}
+
 #[test]
 fn external_restart_propagates_stop_failure_contract() {
-    // Contract: adapters::restart for ExternalGithub must call stop then start,
-    // and stop Err must not be swallowed (see adapters/mod.rs). We assert the
-    // source code seam rather than spinning Docker: stop uses `?` before start.
+    // Contract: adapters::restart must stop before start, and stop Err must not
+    // be swallowed. Batch 1 routes restart through the unified stop()/start()
+    // wrappers (which own the instance CAS); stop still uses `?` before start.
     let src = include_str!("mod.rs");
     assert!(
-        src.contains("external::stop(conn, &ctx.app, id).await?")
-            || src.contains("external::stop(conn, &ctx.app, id).await ?"),
-        "external restart must propagate stop failure with `?` before start"
+        src.contains("stop(conn, ctx, id).await?;"),
+        "restart must propagate stop failure with `?` before start"
     );
     assert!(
-        !src.contains("let _ = external::stop"),
-        "external restart must not ignore stop errors"
+        !src.contains("let _ = stop(") && !src.contains("let _ = external::stop"),
+        "restart must not ignore stop errors"
     );
     let install = include_str!("../install.rs");
     assert!(

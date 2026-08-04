@@ -60,6 +60,8 @@ const STATE_KEYS: Record<CreativeAppState, string> = {
   start_failed: 'workshop.stateStartFailed',
   deleting: 'workshop.stateDeleting',
   delete_failed: 'workshop.stateDeleteFailed',
+  cleanup_failed: 'workshop.stateCleanupFailed',
+  orphaned: 'workshop.stateOrphaned',
 };
 
 function stateLabel(locale: Locale, state: CreativeAppState): string {
@@ -71,6 +73,8 @@ const FAILED_STATES: CreativeAppState[] = [
   'install_failed',
   'start_failed',
   'delete_failed',
+  'cleanup_failed',
+  'orphaned',
   'runtime_unavailable',
 ];
 

@@ -54,6 +54,8 @@ export function sortCreativeApps(apps: CreativeAppSummary[]): CreativeAppSummary
         return 2;
       case 'start_failed':
       case 'install_failed':
+      case 'cleanup_failed':
+      case 'orphaned':
         return 3;
       default:
         return 4;

@@ -126,11 +126,6 @@ pub async fn compose_up(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    // Also set COMPOSE project label via --project-name already
-    let label = resource_label(project.strip_prefix("natives-").unwrap_or(project));
-    // docker compose does not take arbitrary labels on up easily for all resources;
-    // we rely on container name project prefix + inspect by label when possible.
-    let _ = label;
     let args = [
         "compose",
         "-p",
@@ -142,7 +137,54 @@ pub async fn compose_up(
         "--no-build",
         "--remove-orphans",
     ];
-    // Build env slice
+    let env_slice: Vec<(&str, &str)> = env_refs.drain(..).collect();
+    let (code, _, stderr) = run_capture("docker", &args, &env_slice).await?;
+    if code != 0 {
+        return Err(fail_cmd("docker", &args, code, &stderr));
+    }
+    Ok(())
+}
+
+/// Start a Compose project with a Natives-owned command override (batch 8).
+/// The override file lives in `override_dir` and never touches the user's
+/// compose file; it sets the service `command` to the approved tokens.
+pub async fn compose_up_override(
+    project: &str,
+    compose_file: &Path,
+    service: &str,
+    command: &[String],
+    env_pairs: &[(String, String)],
+    override_dir: &Path,
+) -> Result<()> {
+    std::fs::create_dir_all(override_dir).map_err(Error::Io)?;
+    let override_path = override_dir.join(format!("{project}-override.yml"));
+    let cmd_yaml = command
+        .iter()
+        .map(|t| format!("- {t}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let yaml = format!("services:\n  {service}:\n    command:\n{cmd_yaml}\n");
+    std::fs::write(&override_path, yaml).map_err(Error::Io)?;
+
+    let file = compose_file.to_string_lossy();
+    let ov = override_path.to_string_lossy();
+    let args = [
+        "compose",
+        "-p",
+        project,
+        "-f",
+        file.as_ref(),
+        "-f",
+        ov.as_ref(),
+        "up",
+        "-d",
+        "--no-build",
+        "--remove-orphans",
+    ];
+    let mut env_refs: Vec<(&str, &str)> = env_pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     let env_slice: Vec<(&str, &str)> = env_refs.drain(..).collect();
     let (code, _, stderr) = run_capture("docker", &args, &env_slice).await?;
     if code != 0 {
@@ -209,6 +251,37 @@ pub async fn compose_ps_running(project: &str, compose_file: &Path) -> Result<bo
         return Ok(false);
     }
     Ok(!stdout.trim().is_empty())
+}
+
+/// Resolve the host port a Compose project actually published on 127.0.0.1
+/// (batch 5). Parses `docker ps` Ports output like `127.0.0.1:8080->8080/tcp`.
+pub async fn compose_host_port(project: &str, compose_file: &Path) -> Result<Option<u16>> {
+    let _ = compose_file;
+    let filter = format!("com.docker.compose.project={project}");
+    let args = ["ps", "--filter", &filter, "--format", "{{.Ports}}"];
+    let (code, stdout, _) = run_capture("docker", &args, &[]).await?;
+    if code != 0 {
+        return Ok(None);
+    }
+    for line in stdout.lines() {
+        for part in line.split(',') {
+            let part = part.trim();
+            if let Some(idx) = part.find("->") {
+                let left = &part[..idx];
+                if let Some(colon) = left.rfind(':') {
+                    if let Ok(p) = left[colon + 1..].parse::<u16>() {
+                        return Ok(Some(p));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Verify a Compose project has no running containers (post-stop check).
+pub async fn compose_has_running(project: &str, compose_file: &Path) -> Result<bool> {
+    Ok(compose_ps_running(project, compose_file).await?)
 }
 
 // ── Docker Run ─────────────────────────────────────────────────

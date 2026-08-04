@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { reasoningToggleLabel } from '@/lib/assistant-message-view';
-import { useLocale } from '@/i18n';
+import { t, useLocale } from '@/i18n';
 import MarkdownText from '../MarkdownText';
 
 // ─── Block Types ────────────────────────────────────────
@@ -282,6 +282,14 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
 }
 
 function ToolResultBlock({ block }: { block: ContentBlock }) {
+  // Batch 3: a structured card for the create_creative_draft handoff instead of
+  // a raw JSON dump — the draft belongs to the Personal Creations surface.
+  if (
+    block.toolName === 'create_creative_draft' &&
+    (block.toolOutput as Record<string, unknown> | undefined)?.draftId
+  ) {
+    return <CreativeDraftCreatedCard block={block} />;
+  }
   return (
     <div className={`border rounded-lg my-2 overflow-hidden ${block.isError ? 'border-red-400/30' : ''}`}>
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
@@ -295,6 +303,35 @@ function ToolResultBlock({ block }: { block: ContentBlock }) {
           <pre className="whitespace-pre-wrap">{JSON.stringify(block.toolOutput, null, 2)}</pre>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Structured result card for `create_creative_draft` (batch 3). */
+function CreativeDraftCreatedCard({ block }: { block: ContentBlock }) {
+  const locale = useLocale();
+  const out = (block.toolOutput ?? {}) as Record<string, unknown>;
+  const draftId = String(out.draftId ?? '');
+  const name = String(out.name ?? '');
+  const previewUrl = String(out.previewUrl ?? '');
+  return (
+    <div className="border rounded-lg my-2 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs">
+        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+        <span className="font-medium">{t(locale, 'creative.draftCreatedTitle')}</span>
+      </div>
+      <div className="px-3 py-2 text-xs border-t space-y-1">
+        <div>
+          {t(locale, 'creative.draftCreatedName')}: {name || '—'}
+        </div>
+        <div className="font-mono text-[var(--text-secondary)]">
+          {t(locale, 'creative.draftCreatedId')}: {draftId}
+        </div>
+        {previewUrl && (
+          <div className="font-mono text-[var(--text-secondary)]">/drafts/{draftId}/</div>
+        )}
+        <div className="text-[var(--text-secondary)]">{t(locale, 'creative.draftCreatedHint')}</div>
+      </div>
     </div>
   );
 }

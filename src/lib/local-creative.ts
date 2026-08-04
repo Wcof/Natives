@@ -35,7 +35,6 @@ export function buildCreateRequest(input: {
   launchMode: 'smart' | 'custom';
   launchPlan?: LaunchPlan | null;
   autoOpen: boolean;
-  startAfterSave: boolean;
   packageManager?: PackageManager;
 }): CreateLocalCreativeRequest {
   const title = input.title.trim() || defaultLocalTitleFromPath(input.projectRoot);
@@ -57,7 +56,6 @@ export function buildCreateRequest(input: {
     launchMode: input.launchMode,
     launchPlan: input.launchMode === 'custom' ? plan : plan,
     autoOpen: input.autoOpen,
-    startAfterSave: input.startAfterSave,
   };
 }
 
@@ -97,6 +95,7 @@ export function localIssueLabel(
     ai_error: 'AI 分析失败',
     start_unhealthy: '进程已启动但健康检查失败',
     orphaned_process: '发现残留进程',
+    stop_failed: '停止失败：资源未确认释放',
   };
   const en: Record<string, string> = {
     path_missing: 'Project path missing',
@@ -107,6 +106,7 @@ export function localIssueLabel(
     ai_error: 'AI analysis failed',
     start_unhealthy: 'Process started but health check failed',
     orphaned_process: 'Orphaned process detected',
+    stop_failed: 'Stop failed: resources not confirmed released',
   };
   return (locale === 'zh' ? zh : en)[code] ?? code;
 }

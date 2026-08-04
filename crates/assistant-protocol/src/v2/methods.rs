@@ -161,6 +161,8 @@ pub const ALL_METHODS: &[&str] = &[
     "capability.team.delete",
     "conversation.updateCapabilities",
     "conversation.getCapabilities",
+    // Local-creative AI analysis (P0): Host → Daemon controlled provider call.
+    "creative.local.analyze",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -322,6 +324,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "capability.team.delete",
     "conversation.updateCapabilities",
     "conversation.getCapabilities",
+    "creative.local.analyze",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -525,6 +528,7 @@ pub mod names {
     pub const CAPABILITY_TEAM_DELETE: &str = "capability.team.delete";
     pub const CONVERSATION_UPDATE_CAPABILITIES: &str = "conversation.updateCapabilities";
     pub const CONVERSATION_GET_CAPABILITIES: &str = "conversation.getCapabilities";
+    pub const CREATIVE_LOCAL_ANALYZE: &str = "creative.local.analyze";
 }
 
 /// Every advertised Harness method, in the order the design lists them.

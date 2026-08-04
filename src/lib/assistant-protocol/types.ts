@@ -686,6 +686,8 @@ export type AssistantMethod =
   | 'capability.team.delete'
   | 'conversation.updateCapabilities'
   | 'conversation.getCapabilities'
+  // Local-creative AI analysis (P0): Host → Daemon controlled provider call.
+  | 'creative.local.analyze'
   // Harness control plane (Native execution engine). Read surface first, then
   // the Draft → Validate → Diff → Publish → Rollback lifecycle, bindings, and
   // the per-Run evidence lookup.

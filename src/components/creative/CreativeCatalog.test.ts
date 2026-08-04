@@ -11,6 +11,7 @@ function app(
   partial: Pick<CreativeAppSummary, 'id' | 'source' | 'state'> & Partial<CreativeAppSummary>,
 ): CreativeAppSummary {
   return {
+    applicationId: partial.applicationId ?? `app-${partial.id}`,
     runtime: partial.source === 'internal' ? 'workshop_static' : 'local_static',
     title: partial.id,
     version: '1',

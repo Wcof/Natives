@@ -2,9 +2,40 @@
 use crate::{Error, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use std::path::Path;
+
+/// Map a source-table `state` string to a runtime_instances.status for the
+/// v12 backfill. Terminal / unknown states produce no instance.
+fn instance_status_for_state(state: &str) -> Option<&'static str> {
+    Some(match state {
+        "running" => "running",
+        "starting" => "starting",
+        "stopping" => "stopping",
+        "start_failed" => "failed",
+        "cleanup_failed" => "cleanup_failed",
+        "orphaned" => "orphaned",
+        _ => return None,
+    })
+}
+
+/// Extract pgid / pid from a local process_identity_json during backfill.
+pub(crate) fn parse_identity(json: Option<&str>) -> (Option<i32>, Option<u32>) {
+    let Some(s) = json else {
+        return (None, None);
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(s) else {
+        return (None, None);
+    };
+    let pgid = v
+        .get("processGroupId")
+        .and_then(|x| x.as_i64())
+        .map(|x| x as i32);
+    let pid = v.get("pid").and_then(|x| x.as_i64()).map(|x| x as u32);
+    (pgid, pid)
+}
 
 /// Database connection pool type alias
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -858,6 +889,223 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v11→v12: unified Application identity + RuntimeInstance (batch 1).
+    //
+    // `modules` / `external_creative_apps` / `local_creative_apps` stay the
+    // source detail. `applications` gives every app one identity; `startup_plans`
+    // keeps the versioned plan; `runtime_instances` records the current runtime
+    // (one active instance per app — the CAS batch 2 promotes to real owner);
+    // `preview_targets` will bind previews to instances (batch 6).
+    if current_version < 12 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS applications (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                icon TEXT,
+                version TEXT NOT NULL DEFAULT '1',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_source_id
+                ON applications(source, source_id);
+            CREATE INDEX IF NOT EXISTS idx_applications_updated
+                ON applications(updated_at);
+
+            CREATE TABLE IF NOT EXISTS startup_plans (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                plan_version INTEGER NOT NULL DEFAULT 1,
+                plan_json TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_startup_plans_application
+                ON startup_plans(application_id);
+
+            CREATE TABLE IF NOT EXISTS runtime_instances (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                plan_id TEXT REFERENCES startup_plans(id) ON DELETE SET NULL,
+                status TEXT NOT NULL,
+                cleanup_status TEXT,
+                owner_kind TEXT NOT NULL,
+                pgid INTEGER,
+                compose_project TEXT,
+                resolved_urls_json TEXT,
+                current_port INTEGER,
+                pid INTEGER,
+                failure TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_runtime_instances_application
+                ON runtime_instances(application_id);
+            CREATE INDEX IF NOT EXISTS idx_runtime_instances_status
+                ON runtime_instances(status);
+
+            CREATE TABLE IF NOT EXISTS preview_targets (
+                id TEXT PRIMARY KEY,
+                runtime_instance_id TEXT NOT NULL REFERENCES runtime_instances(id) ON DELETE CASCADE,
+                url TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                selected INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_preview_targets_instance
+                ON preview_targets(runtime_instance_id);
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '12');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Repair path for v12 tables when a database carries an advanced marker.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS applications (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            icon TEXT,
+            version TEXT NOT NULL DEFAULT '1',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_source_id
+            ON applications(source, source_id);
+        CREATE TABLE IF NOT EXISTS startup_plans (
+            id TEXT PRIMARY KEY,
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            plan_version INTEGER NOT NULL DEFAULT 1,
+            plan_json TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_startup_plans_application
+            ON startup_plans(application_id);
+        CREATE TABLE IF NOT EXISTS runtime_instances (
+            id TEXT PRIMARY KEY,
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            plan_id TEXT REFERENCES startup_plans(id) ON DELETE SET NULL,
+            status TEXT NOT NULL,
+            cleanup_status TEXT,
+            owner_kind TEXT NOT NULL,
+            pgid INTEGER,
+            compose_project TEXT,
+            resolved_urls_json TEXT,
+            current_port INTEGER,
+            pid INTEGER,
+            failure TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_runtime_instances_application
+            ON runtime_instances(application_id);
+        CREATE TABLE IF NOT EXISTS preview_targets (
+            id TEXT PRIMARY KEY,
+            runtime_instance_id TEXT NOT NULL REFERENCES runtime_instances(id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            selected INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_preview_targets_instance
+            ON preview_targets(runtime_instance_id);
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    // Idempotent backfill of existing sources into the unified identity / plans /
+    // runtime instances. Extracted so tests can prove idempotency.
+    backfill_creative_identity(conn)?;
+
+    // Migration v12→v13: runtime instance bookkeeping columns (batch 2).
+    // last_heartbeat / owner_pid / exit_code / resource_ledger_json give the
+    // instance row enough to answer "who owns it, is it alive, what leaked".
+    // Column adds are guarded by PRAGMA so re-running is safe (repair path).
+    if current_version < 13 {
+        let mut cols = std::collections::HashSet::new();
+        {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(runtime_instances)")
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(Error::Database)?;
+            for r in rows {
+                cols.insert(r.map_err(Error::Database)?);
+            }
+        }
+        if !cols.contains("last_heartbeat") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN last_heartbeat TEXT",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        if !cols.contains("owner_pid") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN owner_pid INTEGER",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        if !cols.contains("exit_code") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN exit_code INTEGER",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        if !cols.contains("resource_ledger_json") {
+            conn.execute(
+                "ALTER TABLE runtime_instances ADD COLUMN resource_ledger_json TEXT",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '13')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v13→v14: local app volume identity (batch 4). Persisted so a
+    // volume re-mount / disconnect can be recognized across restarts.
+    if current_version < 14 {
+        let has_volume = conn
+            .prepare("PRAGMA table_info(local_creative_apps)")
+            .map_err(Error::Database)?
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(Error::Database)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
+            .iter()
+            .any(|c| c == "volume_identity");
+        if !has_volume {
+            conn.execute(
+                "ALTER TABLE local_creative_apps ADD COLUMN volume_identity TEXT",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '14')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
@@ -953,6 +1201,202 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Idempotent backfill of the three existing sources into the unified
+/// `applications` identity, `startup_plans`, and `runtime_instances` for rows
+/// that are currently non-terminal. Safe to run repeatedly (INSERT OR IGNORE +
+/// deterministic ids); extracted so tests can prove idempotency.
+pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        INSERT OR IGNORE INTO applications (id, source, source_id, title, description, icon, version, created_at, updated_at)
+        SELECT 'app-internal-' || id, 'internal', id, COALESCE(name, id), description, icon,
+               COALESCE(NULLIF(version, ''), '1'),
+               COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        FROM modules;
+
+        INSERT OR IGNORE INTO applications (id, source, source_id, title, description, icon, version, created_at, updated_at)
+        SELECT 'app-external-' || id, 'external_github', id, COALESCE(title, id), description, icon,
+               COALESCE(NULLIF(version, ''), '1'),
+               COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        FROM external_creative_apps;
+
+        INSERT OR IGNORE INTO applications (id, source, source_id, title, description, icon, version, created_at, updated_at)
+        SELECT 'app-local-' || id, 'local_project', id, COALESCE(title, id), description, icon, '1',
+               COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        FROM local_creative_apps;
+
+        INSERT OR IGNORE INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+        SELECT 'plan-local-' || a.id, a.id, 1, l.launch_plan_json, 1,
+               COALESCE(l.created_at, datetime('now')), COALESCE(l.updated_at, datetime('now'))
+        FROM local_creative_apps l
+        JOIN applications a ON a.source = 'local_project' AND a.source_id = l.id;
+
+        INSERT OR IGNORE INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+        SELECT 'plan-external-' || a.id, a.id, 1, e.runtime_config_json, 1,
+               COALESCE(e.created_at, datetime('now')), COALESCE(e.updated_at, datetime('now'))
+        FROM external_creative_apps e
+        JOIN applications a ON a.source = 'external_github' AND a.source_id = e.id;
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    // Backfill runtime_instances for rows that are currently non-terminal, so
+    // every active resource is traceable to one instance even after migration.
+    {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut stmt = conn
+            .prepare(
+                "SELECT l.id, l.state, l.current_port, l.open_url, l.process_identity_json,
+                        l.launch_plan_json
+                 FROM local_creative_apps l
+                 JOIN applications a ON a.source = 'local_project' AND a.source_id = l.id",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(Error::Database)?;
+        for r in rows {
+            let (source_id, state, port, open_url, ident_json, plan_json) =
+                r.map_err(Error::Database)?;
+            let Some(status) = instance_status_for_state(&state) else {
+                continue;
+            };
+            let application_id = conn
+                .query_row(
+                    "SELECT id FROM applications WHERE source = 'local_project' AND source_id = ?1",
+                    params![source_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(Error::Database)?;
+            let (pgid, pid) = parse_identity(ident_json.as_deref());
+            let plan_id: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM startup_plans WHERE application_id = ?1 AND is_active = 1 LIMIT 1",
+                    params![application_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Error::Database)?;
+            let runtime = serde_json::from_str::<serde_json::Value>(&plan_json)
+                .ok()
+                .and_then(|v| {
+                    v.get("runtime")
+                        .and_then(|r| r.as_str())
+                        .map(str::to_string)
+                });
+            let owner_kind = if runtime.as_deref() == Some("static_http") {
+                "host_http"
+            } else {
+                "local_process"
+            };
+            let urls = open_url
+                .as_deref()
+                .map(|u| serde_json::json!([u]).to_string());
+            conn.execute(
+                "INSERT OR IGNORE INTO runtime_instances
+                    (id, application_id, plan_id, status, cleanup_status, owner_kind, pgid, compose_project,
+                     resolved_urls_json, current_port, pid, failure, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, ?7, ?8, ?9, NULL, ?10, ?10)",
+                params![
+                    format!("ri-backfill-{application_id}"),
+                    application_id,
+                    plan_id,
+                    status,
+                    owner_kind,
+                    pgid,
+                    urls,
+                    port,
+                    pid,
+                    now,
+                ],
+            )
+            .map_err(Error::Database)?;
+        }
+    }
+    {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.id, e.state, e.host_port, e.open_url, e.runtime_config_json
+                 FROM external_creative_apps e
+                 JOIN applications a ON a.source = 'external_github' AND a.source_id = e.id",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(Error::Database)?;
+        for r in rows {
+            let (source_id, state, port, open_url, cfg_json) = r.map_err(Error::Database)?;
+            let Some(status) = instance_status_for_state(&state) else {
+                continue;
+            };
+            let application_id = conn
+                .query_row(
+                    "SELECT id FROM applications WHERE source = 'external_github' AND source_id = ?1",
+                    params![source_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(Error::Database)?;
+            let plan_id: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM startup_plans WHERE application_id = ?1 AND is_active = 1 LIMIT 1",
+                    params![application_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Error::Database)?;
+            let owner_kind = if serde_json::from_str::<serde_json::Value>(&cfg_json)
+                .ok()
+                .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string))
+                .as_deref()
+                == Some("docker_compose")
+            {
+                "docker_compose"
+            } else {
+                "docker_run"
+            };
+            let urls = open_url
+                .as_deref()
+                .map(|u| serde_json::json!([u]).to_string());
+            conn.execute(
+                "INSERT OR IGNORE INTO runtime_instances
+                    (id, application_id, plan_id, status, cleanup_status, owner_kind, pgid, compose_project,
+                     resolved_urls_json, current_port, pid, failure, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, NULL, ?6, ?7, NULL, NULL, ?8, ?8)",
+                params![
+                    format!("ri-backfill-{application_id}"),
+                    application_id,
+                    plan_id,
+                    status,
+                    owner_kind,
+                    urls,
+                    port,
+                    now,
+                ],
+            )
+            .map_err(Error::Database)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,6 +1430,88 @@ mod tests {
             )
             .expect("query local_creative_apps");
         assert_eq!(local_exists, 1);
+    }
+
+    /// Batch 1: the three-source backfill into applications / startup_plans /
+    /// runtime_instances is idempotent and covers active rows.
+    #[test]
+    fn creative_identity_backfill_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        conn.execute(
+            "INSERT INTO modules (id, name, version, entry, type, enabled, state, created_at, updated_at)
+             VALUES ('mod1', 'M', '1', 'index.html', 'web-module', 1, 'installed', 't', 't')",
+            [],
+        )
+        .expect("insert module");
+        conn.execute(
+            "INSERT INTO local_creative_apps
+                (id, title, canonical_project_root, device_id, device_name, project_kind, launch_mode,
+                 launch_plan_json, plan_fingerprint, state, current_port, open_url, process_identity_json,
+                 startup_timeout_ms, created_at, updated_at)
+             VALUES ('loc1', 'Local', '/tmp/x', 'd', 'n', 'html', 'smart',
+                     '{\"schemaVersion\":1,\"runtime\":\"static_http\",\"program\":\"internal\"}', 'fp',
+                     'running', 5173, 'http://127.0.0.1:5173/', '{\"pid\":100,\"processGroupId\":100}',
+                     60000, 't', 't')",
+            [],
+        )
+        .expect("insert local app");
+        conn.execute(
+            "INSERT INTO external_creative_apps
+                (id, title, version, owner, repo, repository_url, release_tag, runtime, state, host_port,
+                 open_url, runtime_config_json, created_at, updated_at)
+             VALUES ('ext1', 'Ext', '1', 'o', 'r', 'http://x', 'v1', 'docker_compose', 'running', 8080,
+                     'http://127.0.0.1:8080/',
+                     '{\"kind\":\"docker_compose\",\"projectName\":\"natives-ext1\",\"composeFile\":\"/tmp/c.yml\",\"service\":\"web\",\"containerPort\":80,\"hostPort\":8080,\"openPath\":\"/\"}',
+                     't', 't')",
+            [],
+        )
+        .expect("insert external app");
+
+        backfill_creative_identity(&conn).expect("first backfill");
+        backfill_creative_identity(&conn).expect("second backfill (idempotency)");
+
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).expect("count") };
+        assert_eq!(count("SELECT COUNT(*) FROM applications"), 3);
+        assert_eq!(count("SELECT COUNT(*) FROM startup_plans"), 2);
+        assert_eq!(count("SELECT COUNT(*) FROM runtime_instances"), 2);
+
+        // The running local app got a real instance with owner_kind/port/pgid.
+        let (status, kind, port, pgid): (String, String, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT ri.status, ri.owner_kind, ri.current_port, ri.pgid
+                 FROM runtime_instances ri
+                 JOIN applications a ON a.id = ri.application_id
+                 WHERE a.source_id = 'loc1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("local instance");
+        assert_eq!(status, "running");
+        assert_eq!(kind, "host_http");
+        assert_eq!(port, Some(5173));
+        assert_eq!(pgid, Some(100));
+
+        // The external running app got a docker_compose instance.
+        let (status, kind): (String, String) = conn
+            .query_row(
+                "SELECT ri.status, ri.owner_kind
+                 FROM runtime_instances ri
+                 JOIN applications a ON a.id = ri.application_id
+                 WHERE a.source_id = 'ext1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("external instance");
+        assert_eq!(status, "running");
+        assert_eq!(kind, "docker_compose");
+
+        // Re-running again must not create duplicates.
+        backfill_creative_identity(&conn).expect("third backfill");
+        assert_eq!(count("SELECT COUNT(*) FROM applications"), 3);
+        assert_eq!(count("SELECT COUNT(*) FROM runtime_instances"), 2);
     }
 }
 

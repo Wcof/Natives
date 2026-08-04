@@ -58,7 +58,9 @@ export type CreativeAppState =
   | 'install_failed'
   | 'start_failed'
   | 'deleting'
-  | 'delete_failed';
+  | 'delete_failed'
+  | 'cleanup_failed'
+  | 'orphaned';
 
 export type LocalProjectKind =
   | 'html'
@@ -108,6 +110,10 @@ export interface CreativeAppActions {
 
 export interface CreativeAppSummary {
   id: string;
+  /** Unified identity across Catalog / assistant card / detail / preview. */
+  applicationId: string;
+  /** Active runtime instance id, when the app currently has one. */
+  runtimeInstanceId?: string;
   source: CreativeAppSource;
   runtime: CreativeAppRuntime;
   title: string;
@@ -284,7 +290,7 @@ export interface LaunchPlan {
   schemaVersion: 1;
   source: 'rule' | 'user' | 'ai';
   projectKind: LocalProjectKind;
-  runtime: 'static_http' | 'node_dev_server';
+  runtime: 'static_http' | 'node_dev_server' | 'docker_compose';
   program: 'internal' | 'npm' | 'pnpm' | 'yarn' | 'node';
   cwdRelative: string;
   script?: string;
@@ -299,6 +305,19 @@ export interface LaunchPlan {
   autoOpen: boolean;
   confidence?: number;
   reason: string;
+  /** Compose detail when runtime is docker_compose (batch 5). */
+  compose?: ComposePlanDetail;
+  /** Explicit user authorization to run a blocked compose default (batch 8). */
+  tradeApproval?: 'webserver' | 'dry_run';
+}
+
+export interface ComposePlanDetail {
+  composeFile: string;
+  projectSeed: string;
+  service?: string;
+  command: string[];
+  healthPath: string;
+  hostPort?: number;
 }
 
 export interface LocalToolVersions {
@@ -321,6 +340,8 @@ export interface LocalProjectScanResult {
   risks: string[];
   blockers: string[];
   rulePlan?: LaunchPlan;
+  /** Non-web manifests detected (docker-compose, dockerfile, python, makefile). */
+  extraManifests: string[];
   treeSample: string[];
   existingId?: string;
 }
@@ -335,7 +356,6 @@ export interface CreateLocalCreativeRequest {
   env?: Array<{ key: string; value: string }>;
   autoOpen?: boolean;
   startupTimeoutMs?: number;
-  startAfterSave?: boolean;
 }
 
 export interface UpdateLocalCreativeRequest {

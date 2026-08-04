@@ -10,10 +10,49 @@ use crate::{emit_db_state_changed, Error, Result};
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::AppHandle;
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Resolve the base loopback URL for a Compose project (batch 5): explicit host
+/// port wins, else the port the project actually published on 127.0.0.1.
+async fn resolve_compose_url(
+    project: &str,
+    compose_file: &std::path::Path,
+    detail: &ComposePlanDetail,
+) -> Result<String> {
+    let port = match detail.host_port {
+        Some(p) => p,
+        None => crate::creative_app::docker::compose_host_port(project, compose_file)
+            .await?
+            .unwrap_or(0),
+    };
+    if port == 0 {
+        return Err(Error::Internal(
+            "could not determine compose host port".into(),
+        ));
+    }
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+/// Absolute compose file path for a record + compose detail (batch 5).
+fn compose_abs_path(
+    rec: &LocalCreativeAppRecord,
+    detail: &ComposePlanDetail,
+) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(&rec.canonical_project_root);
+    let cwd = LaunchPlan::from_json(&rec.launch_plan_json)
+        .ok()
+        .map(|p| p.cwd_relative)
+        .unwrap_or_else(|| ".".into());
+    if cwd == "." {
+        root.join(&detail.compose_file)
+    } else {
+        root.join(&cwd).join(&detail.compose_file)
+    }
 }
 
 fn broadcast(app: &AppHandle, action: &str, id: &str) {
@@ -80,7 +119,7 @@ pub async fn start_app(
     };
 
     // Orphan recovery gate: if DB says running but supervisor has no live child,
-    // surface orphaned_process when identity is present.
+    // surface orphaned when identity is present.
     if matches!(rec.state, CreativeAppState::Running) && !runtime.is_running(id).await {
         if let Some(ident_json) = &rec.process_identity_json {
             if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
@@ -98,7 +137,7 @@ pub async fn start_app(
                     set_status_detail(
                         conn,
                         id,
-                        CreativeAppState::StartFailed,
+                        CreativeAppState::Orphaned,
                         Some(&detail),
                         Some(&detail.message),
                     )?;
@@ -153,85 +192,79 @@ pub async fn start_app(
         return Ok(store::summary_from_local(&rec));
     }
 
-    // node_dev_server
-    let env = store::get_env_map(conn, id)?;
-    match runtime
-        .start_node_dev(
-            app,
-            id,
-            &root,
-            &plan,
-            &rec.plan_fingerprint,
-            &env,
-            plan.port.value,
-        )
-        .await
-    {
-        Ok((port, open_url, identity)) => {
-            match runtime
-                .wait_healthy(app, id, &plan.health_path, rec.startup_timeout_ms)
-                .await
-            {
-                Ok(()) => {
-                    rec = store::get_app(conn, id)?.unwrap();
-                    rec.state = CreativeAppState::Running;
-                    rec.open_url = Some(open_url);
-                    rec.current_port = Some(port);
-                    rec.last_started_at = Some(now());
-                    rec.last_error = None;
-                    rec.status_detail_json = None;
-                    rec.process_identity_json =
-                        Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
-                    rec.updated_at = now();
-                    store::update_app(conn, &rec)?;
-                    broadcast(app, "started", id);
-                    Ok(store::summary_from_local(&rec))
+    // docker_compose (batch 5): up with a stable unique project, then health.
+    if plan.runtime == LocalLaunchRuntime::DockerCompose {
+        let detail = plan
+            .compose
+            .ok_or_else(|| Error::InvalidInput("compose plan missing detail".into()))?;
+        let compose_file_abs = if plan.cwd_relative == "." {
+            root.join(&detail.compose_file)
+        } else {
+            root.join(&plan.cwd_relative).join(&detail.compose_file)
+        };
+        let project = runtime::compose_project_name(id, &detail.project_seed);
+        let env = store::get_env_map(conn, id)?;
+        // P0 preflight: never start a compose command that can place real trades
+        // without explicit user approval (batch 8). The assistant can never set
+        // trade_approval — only a user action on the plan can.
+        if let Some(msg) = crate::creative_app::local::scan::compose_command_risk(&compose_file_abs)
+        {
+            let approved = match plan.trade_approval {
+                Some(TradeApproval::Webserver) => {
+                    // The user pre-approved the non-trading webserver override:
+                    // the effective command must actually be a webserver command.
+                    detail.command.first().map(|t| t.as_str()) == Some("webserver")
                 }
-                Err(e) => {
-                    let detail = CreativeAppStatusDetail {
-                        code: LocalCreativeIssueCode::StartUnhealthy,
-                        message: e.to_string(),
-                        recovery_actions: vec!["view_logs".into(), "stop".into(), "restart".into()],
-                    };
-                    // Keep process for log inspection; mark start_failed / unhealthy.
-                    set_status_detail(
-                        conn,
-                        id,
-                        CreativeAppState::StartFailed,
-                        Some(&detail),
-                        Some(&detail.message),
-                    )?;
-                    // still persist port/url/identity so stop works
-                    if let Ok(Some(mut r)) = store::get_app(conn, id) {
-                        r.open_url = Some(open_url);
-                        r.current_port = Some(port);
-                        r.process_identity_json =
-                            Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
-                        r.updated_at = now();
-                        let _ = store::update_app(conn, &r);
-                    }
-                    broadcast(app, "start_unhealthy", id);
-                    Err(e)
+                Some(TradeApproval::DryRun) => {
+                    // Proven dry-run projection; the command may stay default.
+                    crate::creative_app::local::scan::config_proves_dry_run(&root)
                 }
+                None => false,
+            };
+            if !approved {
+                let detail = CreativeAppStatusDetail {
+                    code: LocalCreativeIssueCode::ConfigInvalid,
+                    message: format!("{msg}; no explicit user approval"),
+                    recovery_actions: vec!["edit_plan".into(), "open_folder".into()],
+                };
+                set_status_detail(
+                    conn,
+                    id,
+                    CreativeAppState::StartFailed,
+                    Some(&detail),
+                    Some(&msg),
+                )?;
+                broadcast(app, "start_failed", id);
+                return Err(Error::InvalidInput(detail.message));
             }
         }
-        Err(e) => {
-            let msg = e.to_string();
-            let code = if msg.contains("port") {
-                LocalCreativeIssueCode::PortConflict
-            } else if msg.to_lowercase().contains("node")
-                || msg.to_lowercase().contains("npm")
-                || msg.to_lowercase().contains("pnpm")
-                || msg.to_lowercase().contains("yarn")
-                || msg.to_lowercase().contains("spawn")
-            {
-                LocalCreativeIssueCode::EnvironmentMissing
-            } else {
-                LocalCreativeIssueCode::ConfigInvalid
-            };
+        let up_result = match (plan.trade_approval, detail.command.as_slice()) {
+            (Some(TradeApproval::Webserver), cmd) if !cmd.is_empty() => {
+                let service = detail.service.clone().ok_or_else(|| {
+                    Error::InvalidInput("webserver override requires a compose service".into())
+                })?;
+                let override_dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".natives")
+                    .join("creative-apps")
+                    .join(id)
+                    .join("runtime");
+                crate::creative_app::docker::compose_up_override(
+                    &project,
+                    &compose_file_abs,
+                    &service,
+                    cmd,
+                    &env,
+                    &override_dir,
+                )
+                .await
+            }
+            _ => crate::creative_app::docker::compose_up(&project, &compose_file_abs, &env).await,
+        };
+        if let Err(e) = up_result {
             let detail = CreativeAppStatusDetail {
-                code,
-                message: msg.clone(),
+                code: LocalCreativeIssueCode::ConfigInvalid,
+                message: e.to_string(),
                 recovery_actions: vec!["view_logs".into(), "edit_plan".into()],
             };
             set_status_detail(
@@ -239,12 +272,207 @@ pub async fn start_app(
                 id,
                 CreativeAppState::StartFailed,
                 Some(&detail),
-                Some(&msg),
+                Some(&detail.message),
             )?;
             broadcast(app, "start_failed", id);
+            return Err(e);
+        }
+        // Resolve the host URL + health (explicit port → inspect fallback).
+        let url = resolve_compose_url(&project, &compose_file_abs, &detail).await?;
+        let health_url = format!("{}{}", url.trim_end_matches('/'), detail.health_path);
+        let timeout = Duration::from_millis(rec.startup_timeout_ms as u64);
+        match crate::creative_app::docker::wait_ready(&health_url, timeout).await {
+            Ok(()) => {
+                let mut rec = store::get_app(conn, id)?.unwrap();
+                rec.state = CreativeAppState::Running;
+                rec.open_url = Some(url.clone());
+                rec.current_port = Some(
+                    crate::creative_app::docker::compose_host_port(&project, &compose_file_abs)
+                        .await
+                        .ok()
+                        .flatten()
+                        .or(detail.host_port)
+                        .unwrap_or(0),
+                );
+                rec.last_error = None;
+                rec.status_detail_json = None;
+                rec.last_started_at = Some(now());
+                rec.updated_at = now();
+                store::update_app(conn, &rec)?;
+                broadcast(app, "started", id);
+                Ok(store::summary_from_local(&rec))
+            }
+            Err(e) => {
+                let detail = CreativeAppStatusDetail {
+                    code: LocalCreativeIssueCode::StartUnhealthy,
+                    message: e.to_string(),
+                    recovery_actions: vec!["view_logs".into(), "stop".into(), "restart".into()],
+                };
+                set_status_detail(
+                    conn,
+                    id,
+                    CreativeAppState::StartFailed,
+                    Some(&detail),
+                    Some(&detail.message),
+                )?;
+                broadcast(app, "start_unhealthy", id);
+                Err(e)
+            }
+        }
+    } else {
+        // node_dev_server — spawn phase only (under the caller's mutation lock).
+        // Health is awaited later without the lock so stop can preempt a long start.
+        let env = store::get_env_map(conn, id)?;
+        match runtime
+            .start_node_dev(
+                app,
+                id,
+                &root,
+                &plan,
+                &rec.plan_fingerprint,
+                &env,
+                plan.port.value,
+            )
+            .await
+        {
+            Ok((port, open_url, identity)) => {
+                let mut rec = store::get_app(conn, id)?.unwrap();
+                rec.open_url = Some(open_url);
+                rec.current_port = Some(port);
+                rec.process_identity_json =
+                    Some(serde_json::to_string(&identity).unwrap_or_else(|_| "{}".into()));
+                rec.last_error = None;
+                rec.updated_at = now();
+                store::update_app(conn, &rec)?;
+                broadcast(app, "starting", id);
+                Ok(store::summary_from_local(&rec))
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let code = if msg.contains("port") {
+                    LocalCreativeIssueCode::PortConflict
+                } else if msg.to_lowercase().contains("node")
+                    || msg.to_lowercase().contains("npm")
+                    || msg.to_lowercase().contains("pnpm")
+                    || msg.to_lowercase().contains("yarn")
+                    || msg.to_lowercase().contains("spawn")
+                {
+                    LocalCreativeIssueCode::EnvironmentMissing
+                } else {
+                    LocalCreativeIssueCode::ConfigInvalid
+                };
+                let detail = CreativeAppStatusDetail {
+                    code,
+                    message: msg.clone(),
+                    recovery_actions: vec!["view_logs".into(), "edit_plan".into()],
+                };
+                set_status_detail(
+                    conn,
+                    id,
+                    CreativeAppState::StartFailed,
+                    Some(&detail),
+                    Some(&msg),
+                )?;
+                broadcast(app, "start_failed", id);
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Await the spawned node dev server's health and settle the DB state. Runs
+/// WITHOUT the global mutation lock so a concurrent stop can cancel the wait.
+pub async fn await_start_ready(
+    conn: &Connection,
+    app: &AppHandle,
+    runtime: &LocalRuntimeManager,
+    id: &str,
+) -> Result<CreativeAppSummary> {
+    let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
+    let plan = parse_plan(&rec)?;
+    // Compose start is fully synchronous in start_app (up + health + Running),
+    // so the health phase is a no-op for it (batch 5).
+    if plan.runtime == LocalLaunchRuntime::DockerCompose {
+        return Ok(store::summary_from_local(&rec));
+    }
+    match runtime
+        .wait_healthy(app, id, &plan.health_path, rec.startup_timeout_ms)
+        .await
+    {
+        Ok(()) => {
+            let mut rec = store::get_app(conn, id)?.unwrap();
+            rec.state = CreativeAppState::Running;
+            rec.open_url = rec.open_url.clone();
+            rec.last_error = None;
+            rec.status_detail_json = None;
+            rec.last_started_at = Some(now());
+            rec.updated_at = now();
+            store::update_app(conn, &rec)?;
+            broadcast(app, "started", id);
+            Ok(store::summary_from_local(&rec))
+        }
+        Err(Error::Cancelled(_)) => {
+            // Stop preempted the start; return the stop-owned current state.
+            Ok(store::summary_from_local(
+                &store::get_app(conn, id)?.unwrap(),
+            ))
+        }
+        Err(e) => {
+            let detail = CreativeAppStatusDetail {
+                code: LocalCreativeIssueCode::StartUnhealthy,
+                message: e.to_string(),
+                recovery_actions: vec!["view_logs".into(), "stop".into(), "restart".into()],
+            };
+            // Keep the process for log inspection; mark start_failed / unhealthy.
+            set_status_detail(
+                conn,
+                id,
+                CreativeAppState::StartFailed,
+                Some(&detail),
+                Some(&detail.message),
+            )?;
+            broadcast(app, "start_unhealthy", id);
             Err(e)
         }
     }
+}
+
+/// Apply a stop outcome to the local record. On failure the record keeps its
+/// identity/port/URL and moves to `CleanupFailed` — it must NEVER claim stopped
+/// when resources were not verified released.
+fn record_stop_outcome(
+    mut rec: LocalCreativeAppRecord,
+    released: bool,
+    error: Option<String>,
+) -> LocalCreativeAppRecord {
+    if released {
+        rec.state = CreativeAppState::InstalledStopped;
+        rec.open_url = None;
+        rec.current_port = None;
+        rec.process_identity_json = None;
+        rec.status_detail_json = None;
+        rec.last_error = None;
+        rec.last_exit_reason = Some("stopped_by_user".into());
+    } else {
+        let msg = error.unwrap_or_else(|| "stop did not verify resource release".to_string());
+        let detail = CreativeAppStatusDetail {
+            code: LocalCreativeIssueCode::StopFailed,
+            message: msg.clone(),
+            recovery_actions: vec![
+                "stop".into(),
+                "view_logs".into(),
+                "open_terminal".into(),
+                "open_folder".into(),
+            ],
+        };
+        rec.state = CreativeAppState::CleanupFailed;
+        rec.last_error = Some(msg);
+        rec.status_detail_json = Some(serde_json::to_string(&detail).unwrap_or_default());
+        rec.last_exit_reason = None;
+        // identity / port / url are intentionally preserved for a retry stop.
+    }
+    rec.updated_at = now();
+    rec
 }
 
 pub async fn stop_app(
@@ -260,19 +488,46 @@ pub async fn stop_app(
     broadcast(app, "stopping", id);
 
     let plan = parse_plan(&rec).ok();
-    let mut warnings: Vec<String> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
     if plan.as_ref().map(runtime::plan_is_static).unwrap_or(false) {
-        // no process
+        // static apps keep no process; nothing to verify
+    } else if matches!(
+        plan.as_ref().map(|p| p.runtime),
+        Some(LocalLaunchRuntime::DockerCompose)
+    ) {
+        // Compose stop: stop the unique project (volumes retained), then verify
+        // no container of this project is still running.
+        let detail = plan
+            .as_ref()
+            .and_then(|p| p.compose.clone())
+            .ok_or_else(|| Error::Internal("compose plan missing detail".into()))?;
+        let compose_file_abs = compose_abs_path(&rec, &detail);
+        let project = runtime::compose_project_name(id, &detail.project_seed);
+        if let Err(e) = crate::creative_app::docker::compose_stop(&project, &compose_file_abs).await
+        {
+            failures.push(e.to_string());
+        }
+        if let Ok(running) =
+            crate::creative_app::docker::compose_ps_running(&project, &compose_file_abs).await
+        {
+            if running {
+                failures.push("compose project still has running containers after stop".into());
+            }
+        }
     } else {
         // Prefer live child; if missing, only kill when persisted identity fully matches.
         if runtime.is_running(id).await {
-            let _ = runtime.stop(id, Some(app)).await;
+            if let Err(e) = runtime.stop(id, Some(app)).await {
+                failures.push(e.to_string());
+            }
         } else if let Some(ident_json) = &rec.process_identity_json {
             if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
                 if identity_matches_live(&ident) {
-                    force_kill_identity(&ident);
+                    if let Err(e) = force_kill_identity(&ident).await {
+                        failures.push(e.to_string());
+                    }
                 } else if ident.pid.is_some() {
-                    warnings.push(
+                    failures.push(
                         "a process with this PID is alive but identity does not match; not killed"
                             .into(),
                     );
@@ -282,27 +537,15 @@ pub async fn stop_app(
     }
 
     let mut rec = store::get_app(conn, id)?.unwrap();
-    rec.state = CreativeAppState::InstalledStopped;
-    rec.open_url = None;
-    rec.current_port = None;
-    rec.process_identity_json = None;
-    rec.status_detail_json = if warnings.is_empty() {
+    let released = failures.is_empty();
+    let error = if released {
         None
     } else {
-        Some(
-            serde_json::to_string(&CreativeAppStatusDetail {
-                code: LocalCreativeIssueCode::OrphanedProcess,
-                message: warnings.join("; "),
-                recovery_actions: vec!["open_terminal".into(), "open_folder".into()],
-            })
-            .unwrap_or_default(),
-        )
+        Some(failures.join("; "))
     };
-    rec.last_error = warnings.first().cloned();
-    rec.last_exit_reason = Some("stopped_by_user".into());
-    rec.updated_at = now();
+    rec = record_stop_outcome(rec, released, error);
     store::update_app(conn, &rec)?;
-    broadcast(app, "stopped", id);
+    broadcast(app, if released { "stopped" } else { "stop_failed" }, id);
     Ok(store::summary_from_local(&rec))
 }
 
@@ -326,12 +569,26 @@ pub async fn delete_app(
 ) -> Result<DeleteResult> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
 
-    if runtime.is_running(id).await {
-        let _ = runtime.stop(id, Some(app)).await;
+    // A delete must never orphan a live process: propagate stop failures and keep
+    // the record (with identity) so the user can stop it first.
+    let plan = parse_plan(&rec).ok();
+    if matches!(
+        plan.as_ref().map(|p| p.runtime),
+        Some(LocalLaunchRuntime::DockerCompose)
+    ) {
+        // Compose delete: down the unique project, volumes retained (never `-v`).
+        if let Some(detail) = plan.and_then(|p| p.compose) {
+            let compose_file_abs = compose_abs_path(&rec, &detail);
+            let project = runtime::compose_project_name(id, &detail.project_seed);
+            crate::creative_app::docker::compose_down(&project, &compose_file_abs, false, false)
+                .await?;
+        }
+    } else if runtime.is_running(id).await {
+        runtime.stop(id, Some(app)).await?;
     } else if let Some(ident_json) = &rec.process_identity_json {
         if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
             if identity_matches_live(&ident) {
-                force_kill_identity(&ident);
+                force_kill_identity(&ident).await?;
             } else if pid_is_alive(ident.pid) {
                 return Err(Error::InvalidInput(
                     "cannot delete: a process is alive with this PID but identity does not match; stop it manually first".into(),
@@ -358,14 +615,41 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
         let mut orphan = false;
 
         if rec.state.is_transient() {
-            target = match rec.state {
-                CreativeAppState::Starting => CreativeAppState::StartFailed,
-                CreativeAppState::Stopping | CreativeAppState::Deleting => {
-                    CreativeAppState::InstalledStopped
+            match rec.state {
+                CreativeAppState::Starting => {
+                    target = CreativeAppState::StartFailed;
+                    clear_runtime = true;
                 }
-                other => other,
-            };
-            clear_runtime = true;
+                CreativeAppState::Stopping => {
+                    // The Host died mid-stop. If a live process still matches the
+                    // persisted identity it is orphaned — do NOT claim stopped.
+                    if let Some(ident_json) = &rec.process_identity_json {
+                        if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
+                            if identity_matches_live(&ident) {
+                                target = CreativeAppState::Orphaned;
+                                orphan = true;
+                                clear_runtime = false;
+                            } else {
+                                target = CreativeAppState::InstalledStopped;
+                                clear_runtime = true;
+                            }
+                        } else {
+                            target = CreativeAppState::InstalledStopped;
+                            clear_runtime = true;
+                        }
+                    } else {
+                        target = CreativeAppState::InstalledStopped;
+                        clear_runtime = true;
+                    }
+                }
+                CreativeAppState::Deleting => {
+                    target = CreativeAppState::InstalledStopped;
+                    clear_runtime = true;
+                }
+                other => {
+                    target = other;
+                }
+            }
         } else if matches!(rec.state, CreativeAppState::Running) {
             let plan_static = parse_plan(&rec)
                 .map(|p| runtime::plan_is_static(&p))
@@ -377,8 +661,8 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
             } else if let Some(ident_json) = &rec.process_identity_json {
                 if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
                     if identity_matches_live(&ident) {
-                        // Live leftover — do not auto-takeover pipes; mark orphan.
-                        target = CreativeAppState::StartFailed;
+                        // Live leftover — do not auto-takeover pipes; mark orphaned.
+                        target = CreativeAppState::Orphaned;
                         orphan = true;
                         clear_runtime = false;
                     } else {
@@ -424,6 +708,17 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
             }
             next.updated_at = now();
             store::update_app(conn, &next)?;
+            // Mirror the reconciled outcome onto the runtime instance (crash recovery).
+            let _ = crate::creative_app::runtime_store::settle_instance(
+                conn,
+                CreativeAppSource::LocalProject,
+                &next.id,
+                match target {
+                    CreativeAppState::Orphaned => "orphaned",
+                    CreativeAppState::InstalledStopped => "stopped",
+                    _ => "failed",
+                },
+            );
             n += 1;
             if let Some(a) = app {
                 broadcast(a, "reconcile", &next.id);
@@ -457,7 +752,8 @@ pub async fn resolve_orphan(
         if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
             // Only kill if identity still matches (pid + executable + cwd fingerprint).
             if identity_matches_live(&ident) {
-                force_kill_identity(&ident);
+                // On failure keep the orphaned identity so a retry stays possible.
+                force_kill_identity(&ident).await?;
                 let _ = runtime
                     .logs()
                     .get_or_open(id)
@@ -489,7 +785,7 @@ fn identity_matches_live(ident: &ProcessIdentity) -> bool {
     super::runtime::identity_matches_live_strict(ident)
 }
 
-fn force_kill_identity(ident: &ProcessIdentity) {
+async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
     #[cfg(unix)]
     {
         if let Some(pgid) = ident.process_group_id {
@@ -500,7 +796,17 @@ fn force_kill_identity(ident: &ProcessIdentity) {
             unsafe {
                 let _ = libc::kill(-pgid, libc::SIGKILL);
             }
-            return;
+            // Verify the group is really gone before claiming success.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while super::runtime::process_group_exists(pgid) {
+                if std::time::Instant::now() >= deadline {
+                    return Err(Error::Internal(format!(
+                        "process group {pgid} still has members after kill"
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            return Ok(());
         }
         if let Some(pid) = ident.pid {
             unsafe {
@@ -522,6 +828,7 @@ fn force_kill_identity(ident: &ProcessIdentity) {
                 .status();
         }
     }
+    Ok(())
 }
 
 /// Apply exited process cleanup to DB (call after poll_exits).
@@ -551,6 +858,13 @@ pub fn mark_process_exited(
     rec.status_detail_json = None;
     rec.updated_at = now();
     store::update_app(conn, &rec)?;
+    // Mirror the natural exit onto the runtime instance ledger.
+    let _ = crate::creative_app::runtime_store::mark_exited_for_source(
+        conn,
+        CreativeAppSource::LocalProject,
+        id,
+        exit_code,
+    );
     if let Some(a) = app {
         broadcast(a, "process_exited", id);
     }
@@ -568,6 +882,20 @@ pub async fn poll_and_reconcile_exits(
     for (id, code) in exited {
         mark_process_exited(conn, app, &id, code)?;
         n += 1;
+    }
+    // Refresh heartbeats for still-running local instances so the ledger never
+    // looks stale while the process is alive.
+    for rec in store::list_apps(conn)? {
+        if matches!(
+            rec.state,
+            CreativeAppState::Running | CreativeAppState::Starting
+        ) {
+            let _ = crate::creative_app::runtime_store::heartbeat_for_source(
+                conn,
+                CreativeAppSource::LocalProject,
+                &rec.id,
+            );
+        }
     }
     Ok(n)
 }
@@ -618,9 +946,200 @@ pub fn new_runtime_manager() -> LocalRuntimeHandle {
 mod tests {
     use super::*;
 
+    fn mem() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+        conn
+    }
+
+    fn sample_rec() -> LocalCreativeAppRecord {
+        let t = now();
+        LocalCreativeAppRecord {
+            id: "loc1".into(),
+            title: "Local".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: "/tmp/proj".into(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Vite,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: "{}".into(),
+            plan_fingerprint: "fp".into(),
+            state: CreativeAppState::Running,
+            status_detail_json: None,
+            open_url: Some("http://127.0.0.1:5173/".into()),
+            current_port: Some(5173),
+            process_identity_json: Some(r#"{"pid":123,"processGroupId":123}"#.into()),
+            volume_identity: String::new(),
+            auto_open: true,
+            startup_timeout_ms: 60_000,
+            last_started_at: Some(t.clone()),
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        }
+    }
+
     #[test]
     fn identity_without_pid_not_orphan() {
         let id = ProcessIdentity::default();
         assert!(!identity_matches_live(&id));
+    }
+
+    /// P0: a failed stop must never write installed_stopped and must preserve the
+    /// identity/port/url so a retry stop stays possible.
+    #[test]
+    fn stop_failure_keeps_identity_and_non_stopped_state() {
+        let rec = sample_rec();
+        let failed = record_stop_outcome(rec, false, Some("process group 123 still alive".into()));
+        assert_eq!(failed.state, CreativeAppState::CleanupFailed);
+        assert_ne!(failed.state.as_str(), "installed_stopped");
+        assert!(
+            failed.process_identity_json.is_some(),
+            "identity must be preserved on stop failure"
+        );
+        assert_eq!(failed.current_port, Some(5173), "port must be preserved");
+        assert_eq!(
+            failed.open_url.as_deref(),
+            Some("http://127.0.0.1:5173/"),
+            "url must be preserved"
+        );
+        assert!(failed.last_error.is_some());
+        let detail: CreativeAppStatusDetail =
+            serde_json::from_str(failed.status_detail_json.as_deref().unwrap()).unwrap();
+        assert_eq!(detail.code, LocalCreativeIssueCode::StopFailed);
+    }
+
+    #[test]
+    fn stop_success_clears_runtime_fields() {
+        let rec = sample_rec();
+        let ok = record_stop_outcome(rec, true, None);
+        assert_eq!(ok.state, CreativeAppState::InstalledStopped);
+        assert!(ok.process_identity_json.is_none());
+        assert!(ok.current_port.is_none());
+        assert!(ok.open_url.is_none());
+        assert_eq!(ok.last_exit_reason.as_deref(), Some("stopped_by_user"));
+    }
+
+    /// Batch 9, scenario 9 (Host/Daemon crash): a Running record whose live
+    /// process survived must reconcile to orphaned — never to a false stopped —
+    /// and the runtime instance settles to orphaned.
+    #[tokio::test]
+    async fn reconcile_marks_live_leftover_as_orphaned() {
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+
+        let conn = mem();
+        let cwd = std::env::temp_dir().join(format!("natives-orphan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("package.json"), "{}").unwrap();
+
+        let port = super::runtime::pick_free_port();
+        let js =
+            format!("require('http').createServer((q,s)=>s.end('ok')).listen({port},'127.0.0.1');");
+        let mut cmd = Command::new("node");
+        cmd.arg("-e")
+            .arg(&js)
+            .current_dir(&cwd)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn node");
+        let pid = child.id().expect("pid");
+        // Wait until the port is bound so the identity is unquestionably live.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !super::runtime::port_listening(port) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node never bound port"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let mut rec = sample_rec();
+        rec.canonical_project_root = cwd.to_string_lossy().to_string();
+        rec.current_port = Some(port);
+        rec.open_url = Some(format!("http://127.0.0.1:{port}/"));
+        rec.process_identity_json =
+            Some(serde_json::to_string(&build_live_identity(pid, &cwd, "fp")).unwrap());
+        store::insert_app(&conn, &rec).unwrap();
+        // Unified identity + a running instance so settle_instance can mirror.
+        let app = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc1",
+        )
+        .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&conn, &app, None, "local_process")
+                .unwrap();
+        crate::creative_app::runtime_store::mark_running(
+            &conn,
+            &iid,
+            &[rec.open_url.clone().unwrap()],
+            Some(port),
+            Some(pid as i32),
+            Some(pid),
+        )
+        .unwrap();
+
+        // The Host "crashed": reconcile sees a Running record with a live process.
+        reconcile_local_apps(&conn, None).unwrap();
+
+        let got = store::get_app(&conn, "loc1").unwrap().unwrap();
+        assert_eq!(
+            got.state,
+            CreativeAppState::Orphaned,
+            "a live leftover must be orphaned, never a false stopped"
+        );
+        assert!(
+            got.process_identity_json.is_some(),
+            "identity must be preserved for a retry stop"
+        );
+        let inst_status: String = conn
+            .query_row(
+                "SELECT status FROM runtime_instances WHERE id = ?1",
+                [&iid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(inst_status, "orphaned", "instance must settle to orphaned");
+
+        // The node server is still serving — kill the group then reap.
+        unsafe {
+            let _ = libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        let _ = child.wait().await;
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    fn build_live_identity(pid: u32, cwd: &std::path::Path, fp: &str) -> ProcessIdentity {
+        use sysinfo::{Pid, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        let p = sys.process(Pid::from_u32(pid)).expect("live process");
+        ProcessIdentity {
+            pid: Some(pid),
+            started_at_unix: Some(p.start_time() as i64),
+            executable: p.exe().map(|e| e.to_string_lossy().to_string()),
+            cwd: Some(cwd.to_string_lossy().to_string()),
+            plan_fingerprint: Some(fp.to_string()),
+            process_group_id: Some(pid as i32),
+        }
     }
 }

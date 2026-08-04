@@ -8,7 +8,7 @@ mod ssrf;
 pub mod web_search;
 
 pub use apply_patch_parser::{parse_patch_input, PatchOp};
-pub use creative_draft::{creative_draft_tools, CREATIVE_DRAFT_TOOL_NAMES};
+pub use creative_draft::{creative_draft_tools, creative_handoff_tool, CREATIVE_DRAFT_TOOL_NAMES};
 pub use plan::plan_mode_tools;
 pub use ssrf::validate_fetch_url;
 pub use web_search::{web_search_tool, SearchBackend, SearchProvider};
@@ -818,6 +818,10 @@ impl ToolHandler for TodoWriteTool {
 /// Return all built-in tool definitions.
 pub fn builtin_tools() -> Vec<Tool> {
     vec![
+        // Ordinary-assistant handoff (batch 3): creating a draft is benign and
+        // draft-scoped, so it ships in the default surface; the creative-session
+        // writing tools stay out of it.
+        creative_handoff_tool(),
         Tool {
             name: "read_file",
             description: "Read a text file (supports offset/limit; binary returns metadata only)",

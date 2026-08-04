@@ -7,6 +7,14 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct CreativeAppSummary {
     pub id: String,
+    /// Unified identity shared across Catalog / assistant card / detail /
+    /// preview for the same app, regardless of source (batch 1).
+    #[serde(default)]
+    pub application_id: String,
+    /// Active runtime instance id, when the app currently has one (empty when
+    /// not running). Buttons that operate on the runtime carry this id.
+    #[serde(default)]
+    pub runtime_instance_id: Option<String>,
     pub source: CreativeAppSource,
     pub runtime: CreativeAppRuntime,
     pub title: String,
@@ -62,6 +70,12 @@ pub enum CreativeAppState {
     StartFailed,
     Deleting,
     DeleteFailed,
+    /// Stop could not verify that resources (process group / port) were released.
+    /// Process identity, port and URL are preserved so a retry stop stays possible.
+    CleanupFailed,
+    /// A live process was found after restart / crash that the supervisor does not
+    /// own. Identity is preserved; the user must resolve it (stop or restart).
+    Orphaned,
 }
 
 impl CreativeAppState {
@@ -79,6 +93,8 @@ impl CreativeAppState {
             Self::StartFailed => "start_failed",
             Self::Deleting => "deleting",
             Self::DeleteFailed => "delete_failed",
+            Self::CleanupFailed => "cleanup_failed",
+            Self::Orphaned => "orphaned",
         }
     }
 
@@ -96,6 +112,8 @@ impl CreativeAppState {
             "start_failed" => Self::StartFailed,
             "deleting" => Self::Deleting,
             "delete_failed" => Self::DeleteFailed,
+            "cleanup_failed" => Self::CleanupFailed,
+            "orphaned" => Self::Orphaned,
             _ => return None,
         })
     }
@@ -193,6 +211,16 @@ impl CreativeAppActions {
                     can_delete: true,
                     can_retry: true,
                 },
+                // Stop failed to verify resource release, or a live process was found
+                // after crash. Resources may still exist — keep stop + retry open, and
+                // never offer "open" until resources are confirmed released.
+                CreativeAppState::CleanupFailed | CreativeAppState::Orphaned => Self {
+                    can_open: false,
+                    can_start: true,
+                    can_stop: true,
+                    can_delete: true,
+                    can_retry: true,
+                },
                 _ => Self {
                     can_open: false,
                     can_start: false,
@@ -202,6 +230,52 @@ impl CreativeAppActions {
                 },
             },
         }
+    }
+}
+
+// ── Runtime instance (batch 1: unified runtime ownership record) ──────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeInstanceStatus {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    CleanupFailed,
+    Orphaned,
+}
+
+impl RuntimeInstanceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::CleanupFailed => "cleanup_failed",
+            Self::Orphaned => "orphaned",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "stopping" => Self::Stopping,
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            "cleanup_failed" => Self::CleanupFailed,
+            "orphaned" => Self::Orphaned,
+            _ => return None,
+        })
+    }
+
+    /// Non-terminal statuses that must be unique per application (CAS).
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Starting | Self::Running | Self::Stopping)
     }
 }
 
@@ -305,6 +379,8 @@ pub enum LocalCreativeIssueCode {
     AiError,
     StartUnhealthy,
     OrphanedProcess,
+    /// Stop could not verify resource release (process group / port still present).
+    StopFailed,
 }
 
 impl LocalCreativeIssueCode {
@@ -318,6 +394,7 @@ impl LocalCreativeIssueCode {
             Self::AiError => "ai_error",
             Self::StartUnhealthy => "start_unhealthy",
             Self::OrphanedProcess => "orphaned_process",
+            Self::StopFailed => "stop_failed",
         }
     }
 
@@ -331,6 +408,7 @@ impl LocalCreativeIssueCode {
             "ai_error" => Self::AiError,
             "start_unhealthy" => Self::StartUnhealthy,
             "orphaned_process" => Self::OrphanedProcess,
+            "stop_failed" => Self::StopFailed,
             _ => return None,
         })
     }
@@ -390,6 +468,24 @@ pub struct LaunchPlan {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     pub reason: String,
+    /// Compose detail when `runtime` is `docker_compose` (batch 5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose: Option<ComposePlanDetail>,
+    /// Explicit user authorization to run a compose default that the P0 risk
+    /// classifier would otherwise block (batch 8). The assistant can never set
+    /// this — only a user action on a Host plan. Never stores user config content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trade_approval: Option<TradeApproval>,
+}
+
+/// The only modes that may relax the trade gate, both non-real-funds.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeApproval {
+    /// Run the engine's non-trading webserver mode.
+    Webserver,
+    /// Run dry-run — only allowed after the config projection proves dry_run.
+    DryRun,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -400,11 +496,37 @@ pub enum LaunchPlanSource {
     Ai,
 }
 
+/// Docker Compose plan detail (batch 5). Paths are project-relative; absolute
+/// resolution happens at start against the canonical project root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposePlanDetail {
+    /// Relative compose file (e.g. `docker-compose.yml`).
+    pub compose_file: String,
+    /// Seed for the unique Compose project name (`natives-{seed}-{suffix}`).
+    pub project_seed: String,
+    /// Optional service filter — only this service is started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// Effective command override, when the compose default is not acceptable.
+    #[serde(default)]
+    pub command: Vec<String>,
+    /// Health URL path on the resolved host port.
+    pub health_path: String,
+    /// Optional explicit host port override (else derived from inspect).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalLaunchRuntime {
     StaticHttp,
     NodeDevServer,
+    /// Docker Compose project (batch 5). The compose file is resolved relative to
+    /// the project root at start; the actual Compose project name is derived from
+    /// `project_seed` + a unique suffix so two Natives apps never share a project.
+    DockerCompose,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -495,6 +617,7 @@ impl LaunchPlan {
         match self.runtime {
             LocalLaunchRuntime::StaticHttp => CreativeAppRuntime::LocalStatic,
             LocalLaunchRuntime::NodeDevServer => CreativeAppRuntime::NodeDevServer,
+            LocalLaunchRuntime::DockerCompose => CreativeAppRuntime::DockerCompose,
         }
     }
 }
@@ -537,6 +660,9 @@ pub struct LocalCreativeAppRecord {
     pub open_url: Option<String>,
     pub current_port: Option<u16>,
     pub process_identity_json: Option<String>,
+    /// Stable volume identity (mount point) for the project root (batch 4).
+    #[serde(default)]
+    pub volume_identity: String,
     pub auto_open: bool,
     pub startup_timeout_ms: u32,
     pub last_started_at: Option<String>,
@@ -571,6 +697,10 @@ pub struct LocalProjectScanResult {
     pub blockers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_plan: Option<LaunchPlan>,
+    /// Non-web manifests detected (docker-compose, dockerfile, python, makefile).
+    /// Evidence only — these runtimes are not yet available as drivers (batch 4).
+    #[serde(default)]
+    pub extra_manifests: Vec<String>,
     /// Relative tree sample (virtual root /project).
     #[serde(default)]
     pub tree_sample: Vec<String>,
@@ -617,9 +747,6 @@ pub struct CreateLocalRequest {
     pub auto_open: Option<bool>,
     #[serde(default)]
     pub startup_timeout_ms: Option<u32>,
-    /// When true, start immediately after save (phase 2 runtime).
-    #[serde(default)]
-    pub start_after_save: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -963,6 +1090,8 @@ mod tests {
             CreativeAppState::Available,
             CreativeAppState::InstallFailed,
             CreativeAppState::RuntimeUnavailable,
+            CreativeAppState::CleanupFailed,
+            CreativeAppState::Orphaned,
         ] {
             assert_eq!(CreativeAppState::parse(s.as_str()), Some(s));
         }
@@ -1023,6 +1152,8 @@ mod tests {
             auto_open: true,
             confidence: Some(0.9),
             reason: "index.html present".into(),
+            compose: None,
+            trade_approval: None,
         };
         let j = plan.to_json().unwrap();
         let back = LaunchPlan::from_json(&j).unwrap();
@@ -1039,6 +1170,10 @@ mod tests {
         assert_eq!(
             LocalCreativeIssueCode::OrphanedProcess.as_str(),
             "orphaned_process"
+        );
+        assert_eq!(
+            LocalCreativeIssueCode::parse("stop_failed"),
+            Some(LocalCreativeIssueCode::StopFailed)
         );
     }
 }
