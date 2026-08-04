@@ -419,6 +419,22 @@ export const zh = {
       actionContinueCreating: '继续创作',
       actionRunSettings: '运行设置',
     },
+    // Operation journal (batch 2 CR-203): lifecycle mutation status labels.
+    operation: {
+      start: '启动',
+      stop: '停止',
+      restart: '重启',
+      delete: '删除',
+      install: '安装',
+      pending: '等待中',
+      waiting: '等待中',
+      running: '执行中',
+      compensating: '回滚中',
+      succeeded: '成功',
+      failed: '失败',
+      compensated: '已回滚',
+      cancelled: '已取消',
+    },
   },
 
   settings: {

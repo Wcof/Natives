@@ -426,6 +426,22 @@ export const en = {
       actionContinueCreating: 'Continue creating',
       actionRunSettings: 'Run settings',
     },
+    // Operation journal (batch 2 CR-203): lifecycle mutation status labels.
+    operation: {
+      start: 'Start',
+      stop: 'Stop',
+      restart: 'Restart',
+      delete: 'Delete',
+      install: 'Install',
+      pending: 'Waiting',
+      waiting: 'Waiting',
+      running: 'Running',
+      compensating: 'Rolling back',
+      succeeded: 'Succeeded',
+      failed: 'Failed',
+      compensated: 'Rolled back',
+      cancelled: 'Cancelled',
+    },
   },
 
   // Settings

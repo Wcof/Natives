@@ -270,7 +270,16 @@ export default function WorkshopPage() {
         const bounds: CreativeAppBrowserBounds = r
           ? { x: r.left, y: r.top, width: r.width, height: r.height }
           : { x: 280, y: 80, width: 900, height: 640 };
-        void window.nativesAPI?.creativeApp?.browserShow?.(app.id, target.url, bounds);
+        const p = window.nativesAPI?.creativeApp?.browserShow?.(app.id, target.url, bounds);
+        if (p) {
+          // Host failure must roll back the optimistic panel and stay visible
+          // (batch 2 CR-203, #31) instead of leaving a dead Browser pane open.
+          p.catch((err) => {
+            setBrowserApp(null);
+            setBrowserUrl('');
+            showToast(classifyError(err).userMessage);
+          });
+        }
       });
     } catch (err) {
       showToast(classifyError(err).userMessage);
