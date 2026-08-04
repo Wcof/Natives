@@ -40,6 +40,21 @@ pub struct EnvProfile {
 pub fn get_encryption_key(conn: &Connection) -> Result<String> {
     let cache = ENV_KEY_CACHE.lock().unwrap();
     if let Some(key) = cache.as_ref() {
+        #[cfg(test)]
+        {
+            // Tests run against separate in-memory DBs but share the process-
+            // global ENV_KEY_CACHE, so a concurrent test can swap in its own DB's
+            // key. Verify the cached key belongs to THIS connection before
+            // trusting it; re-init (which re-reads this DB's stored key) when it
+            // does not. Compiled out of production builds — zero overhead there.
+            match db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
+                Ok(Some(stored)) if &stored == key => {}
+                _ => {
+                    drop(cache);
+                    return init_env_encryption_key(conn);
+                }
+            }
+        }
         return Ok(key.clone());
     }
     drop(cache);

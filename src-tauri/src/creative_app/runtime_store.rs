@@ -81,10 +81,12 @@ pub fn application_id_for(
     lookup_application(conn, source_str(source), source_id)
 }
 
-/// Active plan id for an application (startup_plans is_active).
+/// Active plan id for an application (startup_plans is_active). Deterministic
+/// tie-break so migration dedup and writers agree on the newest active plan.
 pub fn active_plan_id(conn: &Connection, application_id: &str) -> Result<Option<String>> {
     conn.query_row(
-        "SELECT id FROM startup_plans WHERE application_id = ?1 AND is_active = 1 LIMIT 1",
+        "SELECT id FROM startup_plans WHERE application_id = ?1 AND is_active = 1
+         ORDER BY updated_at DESC, id LIMIT 1",
         params![application_id],
         |r| r.get(0),
     )
@@ -118,10 +120,16 @@ pub fn upsert_active_plan(
 }
 
 /// Id of the active (non-terminal) runtime instance for an app, if any.
+///
+/// `cleanup_failed` / `orphaned` are active-like (batch 1 CR-102): they block a
+/// new start until the resources are proven released or the user completes
+/// external takeover, so they must be visible to the same "has an active
+/// instance" guard that `starting`/`running`/`stopping` use.
 pub fn active_instance_id(conn: &Connection, application_id: &str) -> Result<Option<String>> {
     conn.query_row(
         "SELECT id FROM runtime_instances
-         WHERE application_id = ?1 AND status IN ('starting','running','stopping')
+         WHERE application_id = ?1 AND status IN
+             ('starting','running','stopping','cleanup_failed','orphaned')
          ORDER BY created_at DESC LIMIT 1",
         params![application_id],
         |r| r.get(0),
@@ -135,7 +143,56 @@ pub fn has_active_instance(conn: &Connection, application_id: &str) -> Result<bo
     Ok(active_instance_id(conn, application_id)?.is_some())
 }
 
-/// Create a new instance in `starting`. Caller must have checked the CAS.
+/// True when a rusqlite error is a UNIQUE constraint violation. The partial
+/// unique indexes added by migration v16 make "one active instance / one active
+/// plan per application" a database invariant, so a racing second insert is
+/// rejected here instead of depending on a process-level pre-check.
+fn is_unique_constraint(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(err, _)
+        if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE)
+}
+
+/// Fail with `NotFound` when the instance row does not exist, so a 0-row update
+/// on a live row can be reported as a conflict instead of silent success (#07).
+fn ensure_instance_exists(conn: &Connection, instance_id: &str) -> Result<()> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM runtime_instances WHERE id = ?1)",
+            params![instance_id],
+            |r| r.get(0),
+        )
+        .map_err(Error::Database)?;
+    if !exists {
+        return Err(Error::NotFound(format!("runtime instance {instance_id}")));
+    }
+    Ok(())
+}
+
+fn current_status(conn: &Connection, instance_id: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT status FROM runtime_instances WHERE id = ?1",
+        params![instance_id],
+        |r| r.get(0),
+    )
+    .map_err(Error::Database)
+}
+
+/// Convert a guarded UPDATE's affected-row count into a typed error: 0 rows on
+/// an existing row means the instance is in an unexpected status for that
+/// transition (conflict), never a silent success.
+fn expect_transition(affected: usize, instance_id: &str, from: &[&str], to: &str) -> Result<()> {
+    if affected == 0 {
+        return Err(Error::Conflict(format!(
+            "runtime instance {instance_id} cannot transition to {to} from current status (expected one of {from:?})"
+        )));
+    }
+    Ok(())
+}
+
+/// Create a new instance in `starting`. Caller may pre-check the CAS, but the
+/// database partial unique index is the authoritative guard: a second active
+/// instance for the same application is rejected with a typed conflict even
+/// under concurrent writers (#06).
 pub fn create_instance(
     conn: &Connection,
     application_id: &str,
@@ -144,15 +201,20 @@ pub fn create_instance(
 ) -> Result<String> {
     let id = Uuid::new_v4().to_string();
     let t = now();
-    conn.execute(
+    let res = conn.execute(
         "INSERT INTO runtime_instances
             (id, application_id, plan_id, status, cleanup_status, owner_kind, pgid, compose_project,
              resolved_urls_json, current_port, pid, failure, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'starting', NULL, ?4, NULL, NULL, NULL, NULL, NULL, NULL, ?5, ?5)",
         params![id, application_id, plan_id, owner_kind, t],
-    )
-    .map_err(Error::Database)?;
-    Ok(id)
+    );
+    match res {
+        Ok(_) => Ok(id),
+        Err(e) if is_unique_constraint(&e) => Err(Error::Conflict(format!(
+            "this app already has an active runtime instance; stop it first"
+        ))),
+        Err(e) => Err(Error::Database(e)),
+    }
 }
 
 pub fn mark_running(
@@ -163,6 +225,7 @@ pub fn mark_running(
     pgid: Option<i32>,
     pid: Option<u32>,
 ) -> Result<()> {
+    ensure_instance_exists(conn, instance_id)?;
     let urls_json = if urls.is_empty() {
         None
     } else {
@@ -176,8 +239,9 @@ pub fn mark_running(
     });
     let ledger_json = serde_json::to_string(&ledger).unwrap_or_default();
     // Guard on `starting`: if a stop already moved the instance to stopping /
-    // stopped, the start must not resurrect it (batch 2 start/stop race).
-    conn.execute(
+    // stopped, the start must not resurrect it (batch 2 start/stop race) and a
+    // 0-row update is reported as a conflict instead of silent success (#07).
+    let n = conn.execute(
         "UPDATE runtime_instances
          SET status = 'running', cleanup_status = NULL, resolved_urls_json = ?2,
              current_port = ?3, pgid = ?4, pid = ?5, owner_pid = ?5,
@@ -186,11 +250,12 @@ pub fn mark_running(
         params![instance_id, urls_json, port, pgid, pid, now(), ledger_json],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(n, instance_id, &["starting"], "running")
 }
 
 /// Refresh the instance heartbeat while its runtime is alive.
 pub fn heartbeat(conn: &Connection, instance_id: &str) -> Result<()> {
+    ensure_instance_exists(conn, instance_id)?;
     conn.execute(
         "UPDATE runtime_instances SET last_heartbeat = ?2, updated_at = ?2 WHERE id = ?1",
         params![instance_id, now()],
@@ -201,14 +266,18 @@ pub fn heartbeat(conn: &Connection, instance_id: &str) -> Result<()> {
 
 /// Record a natural process exit on the instance.
 pub fn mark_exited(conn: &Connection, instance_id: &str, exit_code: i32) -> Result<()> {
-    conn.execute(
+    ensure_instance_exists(conn, instance_id)?;
+    if current_status(conn, instance_id)? == "stopped" {
+        return Ok(());
+    }
+    let n = conn.execute(
         "UPDATE runtime_instances
          SET status = 'stopped', cleanup_status = 'completed', exit_code = ?2, updated_at = ?3
          WHERE id = ?1 AND status IN ('running','starting')",
         params![instance_id, exit_code, now()],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(n, instance_id, &["running", "starting"], "stopped")
 }
 
 /// Heartbeat the active instance of a source row (called from lifecycle poll).
@@ -316,56 +385,105 @@ pub fn clear_preview_targets(conn: &Connection, runtime_instance_id: &str) -> Re
 }
 
 pub fn mark_stopping(conn: &Connection, instance_id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE runtime_instances SET status = 'stopping', updated_at = ?2 WHERE id = ?1",
+    ensure_instance_exists(conn, instance_id)?;
+    if current_status(conn, instance_id)? == "stopping" {
+        return Ok(()); // retry of stop is idempotent
+    }
+    let n = conn.execute(
+        "UPDATE runtime_instances SET status = 'stopping', updated_at = ?2
+         WHERE id = ?1 AND status IN ('starting','running','cleanup_failed','orphaned')",
         params![instance_id, now()],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(
+        n,
+        instance_id,
+        &["starting", "running", "cleanup_failed", "orphaned"],
+        "stopping",
+    )
 }
 
 pub fn mark_stopped(conn: &Connection, instance_id: &str) -> Result<()> {
-    conn.execute(
+    ensure_instance_exists(conn, instance_id)?;
+    if current_status(conn, instance_id)? == "stopped" {
+        return Ok(()); // idempotent stop
+    }
+    let n = conn.execute(
         "UPDATE runtime_instances
          SET status = 'stopped', cleanup_status = 'completed', failure = NULL, updated_at = ?2
-         WHERE id = ?1",
+         WHERE id = ?1 AND status IN
+             ('starting','running','stopping','cleanup_failed','orphaned','failed')",
         params![instance_id, now()],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(
+        n,
+        instance_id,
+        &[
+            "starting",
+            "running",
+            "stopping",
+            "cleanup_failed",
+            "orphaned",
+            "failed",
+        ],
+        "stopped",
+    )
 }
 
 pub fn mark_failed(conn: &Connection, instance_id: &str, failure: &str) -> Result<()> {
-    conn.execute(
+    ensure_instance_exists(conn, instance_id)?;
+    if current_status(conn, instance_id)? == "failed" {
+        return Ok(()); // idempotent failure settlement
+    }
+    let n = conn.execute(
         "UPDATE runtime_instances
          SET status = 'failed', cleanup_status = 'failed', failure = ?2, updated_at = ?3
          WHERE id = ?1 AND status = 'starting'",
         params![instance_id, failure, now()],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(n, instance_id, &["starting"], "failed")
 }
 
 pub fn mark_cleanup_failed(conn: &Connection, instance_id: &str, failure: &str) -> Result<()> {
-    conn.execute(
+    ensure_instance_exists(conn, instance_id)?;
+    if current_status(conn, instance_id)? == "cleanup_failed" {
+        return Ok(()); // idempotent
+    }
+    let n = conn.execute(
         "UPDATE runtime_instances
          SET status = 'cleanup_failed', cleanup_status = 'failed', failure = ?2, updated_at = ?3
-         WHERE id = ?1",
+         WHERE id = ?1 AND status IN ('starting','running','stopping')",
         params![instance_id, failure, now()],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(
+        n,
+        instance_id,
+        &["starting", "running", "stopping"],
+        "cleanup_failed",
+    )
 }
 
 pub fn mark_orphaned(conn: &Connection, instance_id: &str, failure: &str) -> Result<()> {
-    conn.execute(
+    ensure_instance_exists(conn, instance_id)?;
+    if current_status(conn, instance_id)? == "orphaned" {
+        return Ok(()); // idempotent
+    }
+    let n = conn.execute(
         "UPDATE runtime_instances
          SET status = 'orphaned', cleanup_status = NULL, failure = ?2, updated_at = ?3
-         WHERE id = ?1",
+         WHERE id = ?1 AND status IN ('starting','running','stopping')",
         params![instance_id, failure, now()],
     )
     .map_err(Error::Database)?;
-    Ok(())
+    expect_transition(
+        n,
+        instance_id,
+        &["starting", "running", "stopping"],
+        "orphaned",
+    )
 }
 
 /// Delete the application identity and its runtime records. Source detail rows
@@ -550,7 +668,8 @@ mod tests {
     }
 
     /// Batch 2 race guard: a start must never resurrect an instance that a
-    /// concurrent stop already settled to stopped.
+    /// concurrent stop already settled to stopped — and a 0-row transition is
+    /// surfaced as a typed conflict instead of silent success (#07).
     #[test]
     fn mark_running_does_not_resurrect_stopped_instance() {
         let conn = mem();
@@ -561,8 +680,9 @@ mod tests {
         mark_stopping(&conn, &iid).unwrap();
         mark_stopped(&conn, &iid).unwrap();
 
-        // Late start health pass must NOT flip it back to running.
-        mark_running(
+        // Late start health pass must NOT flip it back to running; the guarded
+        // update returns a typed conflict rather than an invisible 0-row Ok.
+        let err = mark_running(
             &conn,
             &iid,
             &["http://127.0.0.1:5173/".into()],
@@ -570,7 +690,11 @@ mod tests {
             None,
             None,
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::Conflict(_)),
+            "late mark_running on a stopped instance must conflict, got {err:?}"
+        );
         let status: String = conn
             .query_row(
                 "SELECT status FROM runtime_instances WHERE id = ?1",
@@ -614,6 +738,143 @@ mod tests {
         assert_eq!(status, "stopped");
         assert_eq!(code, Some(3));
         assert!(active_instance_id(&conn, &app).unwrap().is_none());
+    }
+
+    /// Batch 1 CR-102: the partial unique index makes the second active instance
+    /// a DB-level conflict even when the caller skips the pre-check.
+    #[test]
+    fn create_instance_cas_rejects_second_active() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let i1 = create_instance(&conn, &app, None, "local_process").unwrap();
+        assert!(active_instance_id(&conn, &app).unwrap().as_deref() == Some(i1.as_str()));
+
+        let err = create_instance(&conn, &app, None, "local_process").unwrap_err();
+        assert!(
+            matches!(err, Error::Conflict(_)),
+            "second active instance must be a typed conflict, got {err:?}"
+        );
+    }
+
+    /// Batch 1 CR-102 (#07): transitions out of the expected status surface as
+    /// typed conflicts; idempotent terminal transitions stay Ok; a missing row
+    /// is NotFound — never a silent 0-row success.
+    #[test]
+    fn transitions_surface_wrong_status_as_conflict() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let iid = create_instance(&conn, &app, None, "local_process").unwrap();
+        // Stop preempts the starting instance directly.
+        mark_stopped(&conn, &iid).unwrap();
+        assert_eq!(current_status(&conn, &iid).unwrap(), "stopped");
+
+        // mark_failed only applies from 'starting'.
+        let err = mark_failed(&conn, &iid, "boom").unwrap_err();
+        assert!(
+            matches!(err, Error::Conflict(_)),
+            "mark_failed on a stopped instance must conflict, got {err:?}"
+        );
+
+        // Idempotent terminal transitions remain Ok.
+        assert!(mark_stopped(&conn, &iid).is_ok());
+        assert!(mark_exited(&conn, &iid, 1).is_ok());
+
+        // A missing instance is NotFound, not a silent success.
+        let err = mark_stopped(&conn, "no-such-id").unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound(_)),
+            "missing instance must be NotFound, got {err:?}"
+        );
+    }
+
+    /// Batch 1 CR-102: two SQLite writers racing to start the same app — only
+    /// the first insert wins; the DB partial unique index rejects the second
+    /// (concurrent double-start from #06).
+    #[test]
+    fn two_connections_reject_second_active_instance() {
+        let path = std::env::temp_dir().join(format!(
+            "natives-cas-two-conn-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn1 = Connection::open(&path).unwrap();
+        conn1.busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        create_tables(&conn1).unwrap();
+        apply_migrations(&conn1).unwrap();
+        let conn2 = Connection::open(&path).unwrap();
+        conn2.busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+
+        let app =
+            find_or_create_application(&conn1, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let i1 = create_instance(&conn1, &app, None, "local_process").unwrap();
+        assert!(active_instance_id(&conn1, &app).unwrap().as_deref() == Some(i1.as_str()));
+
+        // The second writer cannot insert a second active instance for the same app.
+        let err = create_instance(&conn2, &app, None, "local_process").unwrap_err();
+        assert!(
+            matches!(err, Error::Conflict(_)),
+            "second writer must hit the DB CAS, got {err:?}"
+        );
+        let count: i64 = conn1
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_instances
+                 WHERE application_id = ?1 AND status IN ('starting','running','stopping')",
+                params![app],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        drop(conn1);
+        drop(conn2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Batch 1 CR-102 (invariant #3): cleanup_failed is active-like — it is
+    /// visible to has_active_instance / active_instance_id so a new start is
+    /// blocked until the resources are proven released or the user recovers.
+    #[test]
+    fn cleanup_failed_is_active_like_and_blocks_new_start() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let iid = create_instance(&conn, &app, None, "local_process").unwrap();
+        mark_running(&conn, &iid, &[], None, None, None).unwrap();
+        mark_cleanup_failed(&conn, &iid, "port not released").unwrap();
+
+        assert!(
+            has_active_instance(&conn, &app).unwrap(),
+            "cleanup_failed must count as active-like"
+        );
+        assert!(
+            active_instance_id(&conn, &app).unwrap().as_deref() == Some(iid.as_str()),
+            "cleanup_failed instance must be the active one"
+        );
+
+        // The instance can be re-stopped (retry cleanup) and then a new start is
+        // allowed again.
+        mark_stopping(&conn, &iid).unwrap();
+        mark_stopped(&conn, &iid).unwrap();
+        assert!(!has_active_instance(&conn, &app).unwrap());
+    }
+
+    /// Batch 1 CR-102: orphaned is active-like and blocks new starts until
+    /// reconcile proves the identity or the user resolves it.
+    #[test]
+    fn orphaned_is_active_like_and_blocks_new_start() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let iid = create_instance(&conn, &app, None, "local_process").unwrap();
+        mark_running(&conn, &iid, &[], None, Some(100), Some(42)).unwrap();
+        mark_orphaned(&conn, &iid, "host ownership lost").unwrap();
+
+        assert!(has_active_instance(&conn, &app).unwrap());
+        assert!(active_instance_id(&conn, &app).unwrap().as_deref() == Some(iid.as_str()));
     }
 
     /// Batch 6: a preview target binds to the running instance and clears on close.

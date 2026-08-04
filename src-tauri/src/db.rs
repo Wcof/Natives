@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "15";
+pub const SCHEMA_VERSION: &str = "16";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1128,6 +1128,23 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v15→v16 (batch 1 CR-102): one active runtime instance and one
+    // active startup plan per application as DATABASE invariants.
+    //
+    // Existing duplicates (from the old double-start race) are reconciled first:
+    // the newest active row is kept, the rest are demoted (runtime duplicates →
+    // orphaned, plan duplicates → is_active=0) and each demotion is audited in
+    // `creative_identity_reports`. Only then are the partial unique indexes
+    // created, so a concurrent second start is rejected by the DB (#06/#07).
+    if current_version < 16 {
+        repair_creative_active_invariants(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '16')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
@@ -1573,6 +1590,170 @@ pub(crate) fn repair_creative_identity_ghosts(conn: &Connection) -> Result<usize
     Ok(deleted)
 }
 
+/// Batch 1 CR-102: reconcile duplicate active runtime/plan rows, then create the
+/// partial unique indexes that make "one active per application" a DB invariant.
+///
+/// Duplicates are NOT deleted and NOT silently marked stopped (invariant #8):
+/// the newest active row is kept and older runtime duplicates are demoted to
+/// `orphaned` (outside the index scope), while older plan duplicates get
+/// `is_active=0`. Every demotion is audited in `creative_identity_reports`.
+/// Idempotent: after the first run there are no duplicates left to demote.
+pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usize> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_identity_reports (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            application_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+    let ts = chrono::Utc::now().to_rfc3339();
+    let mut fixed = 0usize;
+
+    // 1) One active startup_plan per application.
+    let dup_plan_apps: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT application_id FROM startup_plans WHERE is_active = 1
+                 GROUP BY application_id HAVING COUNT(*) > 1",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(Error::Database)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+    };
+    for app in dup_plan_apps {
+        let ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM startup_plans
+                     WHERE application_id = ?1 AND is_active = 1
+                     ORDER BY updated_at DESC, id",
+                )
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map(params![app], |r| r.get::<_, String>(0))
+                .map_err(Error::Database)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+        };
+        for id in ids.into_iter().skip(1) {
+            let row_json: String = conn
+                .query_row(
+                    "SELECT json_object('id', id, 'application_id', application_id,
+                                        'plan_version', plan_version, 'is_active', is_active,
+                                        'updated_at', updated_at)
+                     FROM startup_plans WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(Error::Database)?;
+            conn.execute(
+                "UPDATE startup_plans SET is_active = 0, updated_at = ?2 WHERE id = ?1",
+                params![id, ts],
+            )
+            .map_err(Error::Database)?;
+            insert_identity_report(
+                conn,
+                &format!("plan-dedup-{id}"),
+                "duplicate_active_plan",
+                Some(&app),
+                None,
+                None,
+                "demoted",
+                &row_json,
+                &ts,
+            )?;
+            fixed += 1;
+        }
+    }
+
+    // 2) One active runtime_instance per application (over the index scope).
+    let dup_runtime_apps: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT application_id FROM runtime_instances
+                 WHERE status IN ('starting','running','stopping')
+                 GROUP BY application_id HAVING COUNT(*) > 1",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(Error::Database)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+    };
+    for app in dup_runtime_apps {
+        let ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM runtime_instances
+                     WHERE application_id = ?1 AND status IN ('starting','running','stopping')
+                     ORDER BY updated_at DESC, id",
+                )
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map(params![app], |r| r.get::<_, String>(0))
+                .map_err(Error::Database)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+        };
+        for id in ids.into_iter().skip(1) {
+            let row_json: String = conn
+                .query_row(
+                    "SELECT json_object('id', id, 'application_id', application_id,
+                                        'status', status, 'owner_kind', owner_kind,
+                                        'updated_at', updated_at)
+                     FROM runtime_instances WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(Error::Database)?;
+            // Demote to orphaned (NOT stopped — the resource is unproven; see
+            // invariant #8). Orphaned is outside the index scope so the partial
+            // unique index below remains satisfiable.
+            conn.execute(
+                "UPDATE runtime_instances
+                 SET status = 'orphaned', cleanup_status = NULL, updated_at = ?2
+                 WHERE id = ?1",
+                params![id, ts],
+            )
+            .map_err(Error::Database)?;
+            insert_identity_report(
+                conn,
+                &format!("runtime-dedup-{id}"),
+                "duplicate_active_runtime",
+                Some(&app),
+                None,
+                None,
+                "orphaned",
+                &row_json,
+                &ts,
+            )?;
+            fixed += 1;
+        }
+    }
+
+    // 3) Partial unique indexes — safe now that duplicates are gone.
+    conn.execute_batch(
+        "
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_instances_one_active
+            ON runtime_instances(application_id)
+            WHERE status IN ('starting','running','stopping');
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_startup_plans_one_active
+            ON startup_plans(application_id) WHERE is_active = 1;
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    Ok(fixed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1826,6 +2007,180 @@ mod tests {
             )
             .expect("count");
         assert_eq!(ext, 1);
+    }
+
+    /// Batch 1 CR-102: the v16 migration leaves the two active unique indexes in
+    /// place so a second active instance / plan is a DB-level violation.
+    #[test]
+    fn migration_creates_active_unique_indexes() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        let index = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                rusqlite::params![name],
+                |r| r.get(0),
+            )
+            .expect("index exists")
+        };
+        assert_eq!(index("idx_runtime_instances_one_active"), 1);
+        assert_eq!(index("idx_startup_plans_one_active"), 1);
+
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-1', 'local_project', 'loc1', 'L', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-1', 'app-1', 'starting', 'local_process', 't', 't')",
+            [],
+        )
+        .expect("insert active instance");
+        // A second active instance violates the partial unique index.
+        let err = conn
+            .execute(
+                "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+                 VALUES ('ri-2', 'app-1', 'starting', 'local_process', 'u', 'u')",
+                [],
+            )
+            .expect_err("second active instance must be rejected by the DB");
+        assert!(
+            matches!(&err, rusqlite::Error::SqliteFailure(f, _)
+                if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+            "expected UNIQUE constraint violation, got {err:?}"
+        );
+
+        // Same for active plans.
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-1', 'app-1', 1, '{}', 1, 't', 't')",
+            [],
+        )
+        .expect("insert active plan");
+        let err = conn
+            .execute(
+                "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+                 VALUES ('plan-2', 'app-1', 1, '{}', 1, 'u', 'u')",
+                [],
+            )
+            .expect_err("second active plan must be rejected by the DB");
+        assert!(matches!(&err, rusqlite::Error::SqliteFailure(..)));
+    }
+
+    /// Batch 1 CR-102: the repair reconciles pre-existing duplicate active rows
+    /// (kept newest, demoted rest audited) before the indexes are recreated, and
+    /// never fabricates a stopped status for an unproven resource.
+    #[test]
+    fn repair_active_invariants_dedups_duplicates() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // Simulate a pre-v16 database: no active unique indexes yet.
+        conn.execute("DROP INDEX idx_runtime_instances_one_active", [])
+            .expect("drop runtime index");
+        conn.execute("DROP INDEX idx_startup_plans_one_active", [])
+            .expect("drop plan index");
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-1', 'local_project', 'loc1', 'L', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        // Two active instances + two active plans for the same app.
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-old', 'app-1', 'running', 'local_process', 't', 't')",
+            [],
+        )
+        .expect("insert older running instance");
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-new', 'app-1', 'starting', 'local_process', 'u', 'u')",
+            [],
+        )
+        .expect("insert newer starting instance");
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-old', 'app-1', 1, '{}', 1, 't', 't')",
+            [],
+        )
+        .expect("insert older active plan");
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-new', 'app-1', 1, '{}', 1, 'u', 'u')",
+            [],
+        )
+        .expect("insert newer active plan");
+
+        let fixed = repair_creative_active_invariants(&conn).expect("repair");
+        assert_eq!(fixed, 2, "one runtime + one plan duplicate demoted");
+
+        // The newest active rows were kept; the older ones were demoted (not
+        // deleted, not fabricated as stopped).
+        let kept_runtime: String = conn
+            .query_row(
+                "SELECT id FROM runtime_instances WHERE application_id='app-1'
+                 AND status IN ('starting','running','stopping')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("kept runtime");
+        assert_eq!(kept_runtime, "ri-new");
+        let old_runtime_status: String = conn
+            .query_row(
+                "SELECT status FROM runtime_instances WHERE id='ri-old'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("old runtime status");
+        assert_eq!(
+            old_runtime_status, "orphaned",
+            "unproven duplicate must be orphaned, never fabricated stopped"
+        );
+        let kept_plan: String = conn
+            .query_row(
+                "SELECT id FROM startup_plans WHERE application_id='app-1' AND is_active=1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("kept plan");
+        assert_eq!(kept_plan, "plan-new");
+        let old_plan_active: i64 = conn
+            .query_row(
+                "SELECT is_active FROM startup_plans WHERE id='plan-old'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("old plan active");
+        assert_eq!(old_plan_active, 0);
+
+        // The indexes were recreated and now reject a second active instance.
+        let err = conn
+            .execute(
+                "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+                 VALUES ('ri-3', 'app-1', 'starting', 'local_process', 'x', 'x')",
+                [],
+            )
+            .expect_err("index must reject a second active instance");
+        assert!(matches!(&err, rusqlite::Error::SqliteFailure(..)));
+
+        // Idempotent re-run: no further demotions, no duplicate report rows.
+        let fixed2 = repair_creative_active_invariants(&conn).expect("repair again");
+        assert_eq!(fixed2, 0);
+        let reports: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports WHERE kind IN
+                 ('duplicate_active_runtime','duplicate_active_plan')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(reports, 2);
     }
 }
 
