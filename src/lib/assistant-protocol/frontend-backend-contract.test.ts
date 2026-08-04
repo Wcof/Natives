@@ -144,53 +144,6 @@ test('protocol run.rs advertises runtime_id and effort fields', () => {
   assert.ok(runRs.includes('pub effort: Option<String>'));
 });
 
-test('run.resume is catalogued, implemented, and its wire contract matches TS call shape', () => {
-  const methodsSrc = readFileSync(METHODS_RS, 'utf8');
-  const all = new Set(extractArrayConst(methodsSrc, 'ALL_METHODS'));
-  const implemented = new Set([
-    ...extractArrayConst(methodsSrc, 'IMPLEMENTED_METHODS'),
-    ...extractArrayConst(methodsSrc, 'HOST_IMPLEMENTED_METHODS'),
-  ]);
-  assert.ok(all.has('run.resume'), 'run.resume must stay in the ALL_METHODS catalogue');
-  assert.ok(
-    implemented.has('run.resume'),
-    'run.resume must be implemented (daemon or host) — no advertise-without-arm',
-  );
-
-  const runRs = readFileSync(
-    resolve(process.cwd(), 'crates/assistant-protocol/src/v2/run.rs'),
-    'utf8',
-  );
-  // Request wire shape (serde default = snake_case fields the TS side sends).
-  for (const field of [
-    'pub struct ResumeRunRequest',
-    'pub run_id: String',
-    'pub checkpoint_id: Option<String>',
-    'pub content: Option<String>',
-    'pub confirmed: bool',
-  ]) {
-    assert.ok(runRs.includes(field), `ResumeRunRequest missing ${field}`);
-  }
-  // Response wire shape (decision/reason/new_run_id/unresolved_effects).
-  for (const field of [
-    'pub struct ResumeRunResponse',
-    'pub decision: ResumeDecision',
-    'pub reason: String',
-    'pub unresolved_effects',
-    'pub new_run_id: Option<String>',
-  ]) {
-    assert.ok(runRs.includes(field), `ResumeRunResponse missing ${field}`);
-  }
-  // Decision vocabulary must stay snake_case (wire contract).
-  for (const variant of ['SafeToContinue', 'ConfirmationRequired', 'Blocked']) {
-    assert.ok(
-      runRs.includes(variant),
-      `ResumeDecision must keep the ${variant} variant`,
-    );
-  }
-});
-
-
 test('daemon capabilities keep codex unavailable in host_mediated helper source', () => {
   const hostCaps = readFileSync(
     resolve(process.cwd(), 'src-tauri/src/assistant_service/capabilities.rs'),

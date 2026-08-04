@@ -809,14 +809,7 @@ fn route_key(target: &RouteTarget) -> String {
 }
 
 fn route_health_connection() -> Result<Connection, rusqlite::Error> {
-    // Tests: use the stable per-process test store so a concurrent test mutating
-    // NATIVES_* env cannot swap the circuit state DB mid-test. Production reads
-    // the daemon authority DB from env.
-    #[cfg(test)]
-    let db_path = crate::storage::test_global_store_paths().0;
-    #[cfg(not(test))]
-    let db_path = crate::default_assistant_db_path();
-    let conn = Connection::open(db_path)?;
+    let conn = Connection::open(crate::natives_db_broker::default_assistant_db_path())?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS provider_route_health (route_key TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, open_until_ms INTEGER, half_open_in_flight INTEGER NOT NULL DEFAULT 0, in_flight INTEGER NOT NULL DEFAULT 0, last_selected_at TEXT, last_error TEXT, updated_at TEXT NOT NULL DEFAULT (datetime('now')))")?;
     let columns = conn
         .prepare("PRAGMA table_info(provider_route_health)")?

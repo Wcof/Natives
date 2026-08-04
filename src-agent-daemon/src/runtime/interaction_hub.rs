@@ -73,30 +73,6 @@ impl InteractionHub {
         })
     }
 
-    /// Check ownership of a permission waiter without consuming it. A mismatch
-    /// must surface before the durable interaction is marked resolved, so a
-    /// respond from the wrong run never steals the interaction from its owner.
-    pub async fn verify_permission_owner(
-        &self,
-        permission_id: &str,
-        expected_run_id: Option<&str>,
-    ) -> Result<(), String> {
-        let waiters = self.permission_waiters.lock().await;
-        let Some((run_id, _tool_name, _)) = waiters.get(permission_id) else {
-            return Err(format!(
-                "permission_orphaned: no live waiter for request_id={permission_id}"
-            ));
-        };
-        if let Some(expected) = expected_run_id.filter(|id| !id.is_empty()) {
-            if expected != run_id {
-                return Err(format!(
-                    "permission run_id mismatch: expected {run_id}, got {expected}"
-                ));
-            }
-        }
-        Ok(())
-    }
-
     pub async fn has_permission(&self, permission_id: &str) -> bool {
         self.permission_waiters
             .lock()

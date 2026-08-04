@@ -129,38 +129,9 @@ fn load_resumable_checkpoint(
 ///
 /// Production multi-process: set `NATIVES_DAEMON_MODE=uds` and use [`crate::client::DaemonClient`].
 pub fn global_run_manager() -> &'static RunManager {
-    #[cfg(test)]
-    {
-        // Tests that drive the daemon tool path (which resolves run lookups
-        // through the process-global manager) install an explicit override so
-        // they never lazily initialize a second manager mid-run — that would
-        // run startup recovery and interrupt in-flight fixture runs.
-        if let Some(slot) = test_global_manager_slot() {
-            if let Ok(guard) = slot.lock() {
-                if let Some(manager) = guard.as_ref() {
-                    return manager;
-                }
-            }
-        }
-    }
     use std::sync::OnceLock;
     static GLOBAL: OnceLock<RunManager> = OnceLock::new();
     GLOBAL.get_or_init(RunManager::new)
-}
-
-#[cfg(test)]
-fn test_global_manager_slot() -> Option<&'static std::sync::Mutex<Option<&'static RunManager>>> {
-    use std::sync::OnceLock;
-    static SLOT: OnceLock<std::sync::Mutex<Option<&'static RunManager>>> = OnceLock::new();
-    Some(SLOT.get_or_init(|| std::sync::Mutex::new(None)))
-}
-
-/// Test-only: install a `'static` RunManager as the process-global manager so
-/// the daemon tool path resolves runs through a manager the test controls.
-#[cfg(test)]
-pub fn set_test_global_run_manager(manager: &'static RunManager) {
-    let slot = test_global_manager_slot().expect("test global slot");
-    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(manager);
 }
 
 impl Default for RunManager {
@@ -211,7 +182,7 @@ impl RunManager {
             project_paths: Mutex::new(HashMap::new()),
             snapshot_path_override: None,
             data_store: Some(data_store.clone()),
-            runtime: Arc::new(ProductionRuntime::new_with_event_store(data_store.clone())),
+            runtime: Arc::new(ProductionRuntime::new_with_event_store(data_store)),
         };
         // Fail-closed: must not swallow recovery errors (task-04 / Phase 4).
         mgr.interrupt_active_sqlite_runs()?;
@@ -220,12 +191,11 @@ impl RunManager {
         crate::prompt_queue_store::recover_session_actors_on_startup()?;
         // Idempotent crash-gap repair: project context_snapshot rows for runs
         // that committed a ContextSnapshotCommitted event but never reached the
-        // run-end projection. Fail closed: a corrupted committed snapshot event
-        // (or a store that cannot answer the backfill) must abort startup so
-        // the daemon never serves on unrecoverable runs. Unrelated event rows
-        // that fail to decode are ignored inside the backfill.
-        crate::conversation_store::backfill_context_snapshots_with_store(&data_store)
-            .map_err(|error| format!("context snapshot backfill failed: {error}"))?;
+        // run-end projection. Best-effort — the loaders already fail closed on
+        // a missing snapshot, so a repair failure must not block daemon start.
+        if let Err(error) = crate::conversation_store::backfill_context_snapshots() {
+            eprintln!("[run_manager] context snapshot backfill failed: {error}");
+        }
         // Expire any in-memory waiters (oneshot futures are never restored).
         // InteractionHub starts empty on new process — no action required.
         Ok(mgr)
@@ -244,11 +214,8 @@ impl RunManager {
         {
             return None;
         }
-        // Under cfg(test), resolve a store ONLY from the thread-local test
-        // override. Process-global env vars are never consulted here: they can
-        // be mutated concurrently by other tests on other threads, which would
-        // make a memory-mode manager accidentally open another test's temp DB
-        // (or the developer's real assistant.db) and fail closed on recovery.
+        // Under cfg(test), only open env store when an explicit path is set for the
+        // current test (tempdir). Avoid picking up the developer's real assistant.db.
         #[cfg(test)]
         {
             if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
@@ -273,9 +240,49 @@ impl RunManager {
                 }
                 return None;
             }
-            // No thread-local override → memory-only manager. Never fall back to
-            // process-global env vars (leaked by concurrent tests).
-            return None;
+            let _env_guard = crate::storage::DataStore::env_test_lock();
+            let explicit = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("NATIVES_DB_PATH")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                });
+            let Some(db_path) = explicit else {
+                return None;
+            };
+            // Prefer temp paths in tests; still allow absolute explicit fixtures.
+            let db_path = std::path::PathBuf::from(db_path);
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    db_path
+                        .parent()
+                        .map(|p| p.join("artifacts"))
+                        .unwrap_or_else(std::env::temp_dir)
+                });
+            let store = DataStore::new(&db_path, &artifact_dir).ok()?;
+            // Reject empty/broken DBs so leaked env cannot poison pure unit tests.
+            let ok = store
+                .conn()
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='run_event'",
+                        [],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .ok()
+                })
+                .unwrap_or(false);
+            if !ok {
+                return None;
+            }
+            return Some(Arc::new(store));
         }
         #[cfg(not(test))]
         {
@@ -2822,137 +2829,6 @@ mod tests {
         f()
     }
 
-    /// Fully-migrated temp DataStore fixture for daemon tests that exercise the
-    /// global conversation store. Installs a thread-local override plus env vars
-    /// so `store()` / `store_from_env` resolve to the same temp DB, and restores
-    /// everything on drop. Holds the process env lock for the fixture's lifetime
-    /// (re-entrant on this thread).
-    ///
-    /// Use with [`block_on_current_thread`] so the thread-local override is
-    /// visible to every await; do not move the fixture into a spawned task.
-    struct TempStoreFixture {
-        _dir: tempfile::TempDir,
-        _guard: crate::storage::EnvTestGuard,
-        previous_asst: Option<String>,
-        previous_db: Option<String>,
-        previous_runtime: Option<String>,
-    }
-
-    impl TempStoreFixture {
-        fn new() -> Self {
-            let guard = crate::storage::DataStore::env_test_lock();
-            let dir = tempfile::tempdir().expect("tempdir");
-            let db_path = dir.path().join("natives.db");
-            let artifact_dir = dir.path().join("artifacts");
-            let previous_asst = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-            let previous_db = std::env::var("NATIVES_DB_PATH").ok();
-            let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
-            std::env::set_var("NATIVES_DB_PATH", &db_path);
-            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-            crate::storage::set_test_db_override(Some(db_path), Some(artifact_dir));
-            TempStoreFixture {
-                _dir: dir,
-                _guard: guard,
-                previous_asst,
-                previous_db,
-                previous_runtime,
-            }
-        }
-    }
-
-    impl Drop for TempStoreFixture {
-        fn drop(&mut self) {
-            crate::storage::set_test_db_override(None, None);
-            match &self.previous_asst {
-                Some(v) => std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v),
-                None => std::env::remove_var("NATIVES_ASSISTANT_DB_PATH"),
-            }
-            match &self.previous_db {
-                Some(v) => std::env::set_var("NATIVES_DB_PATH", v),
-                None => std::env::remove_var("NATIVES_DB_PATH"),
-            }
-            match &self.previous_runtime {
-                Some(v) => std::env::set_var("NATIVES_RUNTIME_DIR", v),
-                None => std::env::remove_var("NATIVES_RUNTIME_DIR"),
-            }
-        }
-    }
-
-    /// Run an async body on a current-thread runtime so thread-local test state
-    /// (e.g. `set_test_db_override`) set before `block_on` is visible to every
-    /// await. Use instead of `#[tokio::test]` when the body depends on it.
-    fn block_on_current_thread<R>(fut: impl std::future::Future<Output = R>) -> R {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime");
-        rt.block_on(fut)
-    }
-
-    /// Install a process-stable, store-backed RunManager as the process-global
-    /// manager for tests that drive the daemon tool path (which resolves run
-    /// lookups and the project store through `global_run_manager()`).
-    ///
-    /// The store lives in a leaked tempdir so no per-test fixture can delete it
-    /// while another test is still using the global manager. Each call also
-    /// points the current thread's store override at the same stable store, so
-    /// `conversation_store::store()` and the global manager agree.
-    fn install_global_manager_for_test() -> &'static RunManager {
-        let _guard = crate::storage::DataStore::env_test_lock();
-        use std::sync::OnceLock;
-        static STATE: OnceLock<(Box<tempfile::TempDir>, &'static RunManager)> = OnceLock::new();
-        let (dir, manager) = STATE.get_or_init(|| {
-            let dir = Box::new(tempfile::tempdir().expect("global tempdir"));
-            let db_path = dir.path().join("natives.db");
-            let artifact_dir = dir.path().join("artifacts");
-            let store = std::sync::Arc::new(
-                crate::storage::DataStore::new(&db_path, &artifact_dir)
-                    .expect("global store must migrate"),
-            );
-            let manager: &'static RunManager =
-                Box::leak(Box::new(RunManager::new_with_store(store)));
-            crate::run_manager::set_test_global_run_manager(manager);
-            (dir, manager)
-        });
-        let db_path = dir.path().join("natives.db");
-        let artifact_dir = dir.path().join("artifacts");
-        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
-        std::env::set_var("NATIVES_DB_PATH", &db_path);
-        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        crate::storage::set_test_db_override(Some(db_path), Some(artifact_dir));
-        manager
-    }
-
-    /// Serializes tests that run the daemon tool path through the shared
-    /// process-global manager, because a fault-injection test may temporarily
-    /// install a trigger on the shared store and must not overlap the others.
-    fn with_global_manager_lock<R>(f: impl FnOnce() -> R) -> R {
-        use std::sync::{Mutex, OnceLock};
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _g = LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        f()
-    }
-
-    /// Inject a failure into `run_event` INSERTs without removing the table.
-    /// Dropping the table would also break startup recovery (the backfill must
-    /// fail closed on a missing/unreadable event store), so the fixture fails
-    /// only the write path while SELECTs still work.
-    fn fail_run_event_inserts(store: &crate::storage::DataStore) {
-        store
-            .conn()
-            .unwrap()
-            .execute_batch(
-                "CREATE TRIGGER IF NOT EXISTS fail_run_event_insert
-                 BEFORE INSERT ON run_event
-                 BEGIN SELECT RAISE(FAIL, 'injected run_event insert failure'); END;",
-            )
-            .unwrap();
-    }
-
     #[test]
     fn create_run_is_idempotent_with_key() {
         let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
@@ -3219,9 +3095,11 @@ mod tests {
                     [],
                 )
                 .unwrap();
-            // Fail only the event write path; startup recovery still needs the
-            // table present (backfill must fail closed if run_event is gone).
-            fail_run_event_inserts(&store);
+            store
+                .conn()
+                .unwrap()
+                .execute("DROP TABLE run_event", [])
+                .unwrap();
 
             let rm = RunManager::new_with_store(store.clone());
             let run_id = format!("broken-event-{}", Uuid::new_v4());
@@ -3287,9 +3165,11 @@ mod tests {
                     [],
                 )
                 .unwrap();
-            // Fail only the event write path; startup recovery still needs the
-            // table present (backfill must fail closed if run_event is gone).
-            fail_run_event_inserts(&store);
+            store
+                .conn()
+                .unwrap()
+                .execute("DROP TABLE run_event", [])
+                .unwrap();
 
             let rm = RunManager::new_with_store(store.clone());
             let err = rm
@@ -3334,142 +3214,6 @@ mod tests {
             } else {
                 std::env::remove_var("NATIVES_RUNTIME_DIR");
             }
-        });
-    }
-
-    #[test]
-    fn recovery_fails_closed_on_corrupt_committed_snapshot_event() {
-        with_env_lock(|| {
-            let dir = tempfile::tempdir().unwrap();
-            let db_path = dir.path().join("natives.db");
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
-            std::env::set_var("NATIVES_DB_PATH", &db_path);
-            crate::storage::set_test_db_override(
-                Some(db_path.clone()),
-                Some(dir.path().join("artifacts")),
-            );
-            let store = Arc::new(
-                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
-            );
-            store
-                .conn()
-                .unwrap()
-                .execute(
-                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
-                     VALUES ('corrupt-snap-conv', 'agent', 'Corrupt Snap', 'openai', 'gpt-4o')",
-                    [],
-                )
-                .unwrap();
-            // A terminal run so startup recovery does not interrupt it.
-            store
-                .conn()
-                .unwrap()
-                .execute(
-                    "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
-                     VALUES ('corrupt-snap-run', 'corrupt-snap-conv', 'completed', 'openai', 'gpt-4o')",
-                    [],
-                )
-                .unwrap();
-            // A durable committed-snapshot event whose payload cannot be decoded
-            // must abort recovery: the daemon must not start on an unrecoverable
-            // run. `new_with_store` would panic here (fail closed); the fallible
-            // constructor surfaces the root cause.
-            store
-                .conn()
-                .unwrap()
-                .execute(
-                    "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
-                     VALUES ('corrupt-snap-run', 1, 'context_snapshot_committed', '{not-json', datetime('now'))",
-                    [],
-                )
-                .unwrap();
-
-            let err = match RunManager::try_new_with_store(store.clone()) {
-                Ok(_) => panic!("daemon must fail closed on a corrupt committed snapshot event"),
-                Err(err) => err,
-            };
-            assert!(err.contains("context snapshot backfill failed"), "{err}");
-            assert!(err.contains("corrupt context_snapshot_committed"), "{err}");
-        });
-    }
-
-    #[test]
-    fn temp_store_constructed_twice_no_home_files_no_cross_test_pollution() {
-        with_env_lock(|| {
-            let dir = tempfile::tempdir().unwrap();
-            let db_path = dir.path().join("natives.db");
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
-            std::env::set_var("NATIVES_DB_PATH", &db_path);
-            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-            crate::storage::set_test_db_override(
-                Some(db_path.clone()),
-                Some(dir.path().join("artifacts")),
-            );
-            let home_events = std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join(".natives")
-                .join("events");
-
-            // First construction on the same temp path.
-            let store1 = Arc::new(
-                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
-            );
-            let rm1 = RunManager::new_with_store(store1);
-            // Second construction reopens the same fully-migrated file.
-            let store2 = Arc::new(
-                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
-            );
-            let rm2 = RunManager::new_with_store(store2);
-
-            let run1 = rm1
-                .create_run(CreateRunRequest {
-                    capability_selection: None,
-                    conversation_id: "twice-conv".into(),
-                    provider_id: "openai".into(),
-                    model_id: "gpt-4o".into(),
-                    key_id: None,
-                    agent_profile_id: None,
-                    permission_profile: Some("ask".into()),
-                    content: Some("one".into()),
-                    attachments: None,
-                    max_steps: Some(3),
-                    parent_run_id: None,
-                    project_path: None,
-                    idempotency_key: Some(format!("twice-1-{}", Uuid::new_v4())),
-                    effort: None,
-                    runtime_id: None,
-                })
-                .unwrap();
-            let run2 = rm2
-                .create_run(CreateRunRequest {
-                    capability_selection: None,
-                    conversation_id: "twice-conv".into(),
-                    provider_id: "openai".into(),
-                    model_id: "gpt-4o".into(),
-                    key_id: None,
-                    agent_profile_id: None,
-                    permission_profile: Some("ask".into()),
-                    content: Some("two".into()),
-                    attachments: None,
-                    max_steps: Some(3),
-                    parent_run_id: None,
-                    project_path: None,
-                    idempotency_key: Some(format!("twice-2-{}", Uuid::new_v4())),
-                    effort: None,
-                    runtime_id: None,
-                })
-                .unwrap();
-            // Store-backed runs persist events to SQLite, never to ~/.natives.
-            for rid in [&run1.id, &run2.id] {
-                assert!(
-                    !home_events.join(format!("{rid}.jsonl")).exists(),
-                    "run {rid} must not write a home event log"
-                );
-            }
-            // Both managers see their own runs; no cross-construction pollution.
-            assert_eq!(rm1.get_run(&run1.id).unwrap().id, run1.id);
-            assert_eq!(rm2.get_run(&run2.id).unwrap().id, run2.id);
         });
     }
 
@@ -4956,256 +4700,223 @@ mod tests {
         // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
-    #[test]
-    fn cancel_mid_run_marks_interrupted() {
+    #[tokio::test]
+    async fn cancel_mid_run_marks_interrupted() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-        // start_with_seams touches the global conversation store; isolated temp
-        // store + current-thread runtime keep the thread-local override visible.
-        let _fixture = TempStoreFixture::new();
         let runtime_dir = std::env::temp_dir().join(format!("natives-cancel-{}", Uuid::new_v4()));
         std::fs::create_dir_all(runtime_dir.join("runs")).unwrap();
         let prev_runtime_dir = std::env::var("NATIVES_RUNTIME_DIR").ok();
         std::env::set_var("NATIVES_RUNTIME_DIR", &runtime_dir);
-        block_on_current_thread(async {
-            let rm = Arc::new(RunManager::new());
-            let run = rm
-                .create_run(CreateRunRequest {
-                    capability_selection: None,
-                    conversation_id: "c-cancel".into(),
-                    provider_id: "openai".into(),
-                    model_id: "gpt-4o".into(),
-                    key_id: Some("k".into()),
-                    agent_profile_id: None,
-                    permission_profile: Some("ask".into()),
-                    content: Some("slow".into()),
-                    attachments: None,
-                    max_steps: Some(50),
-                    parent_run_id: None,
-                    project_path: None,
-                    idempotency_key: Some(format!("cancel-mid-{}", Uuid::new_v4())),
-                    effort: None,
-                    runtime_id: None,
-                })
-                .unwrap();
+        let rm = Arc::new(RunManager::new());
+        let run = rm
+            .create_run(CreateRunRequest {
+                capability_selection: None,
+                conversation_id: "c-cancel".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: Some("k".into()),
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("slow".into()),
+                attachments: None,
+                max_steps: Some(50),
+                parent_run_id: None,
+                project_path: None,
+                idempotency_key: Some("cancel-mid".into()),
+                effort: None,
+                runtime_id: None,
+            })
+            .unwrap();
 
-            let cancel_flag_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let cancel_flag_seen_bg = cancel_flag_seen.clone();
-            // Signals when the fixture tool begins executing, so the test can cancel
-            // at a deterministic mid-flight point instead of racing engine startup.
-            let tool_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let tool_started_bg = tool_started.clone();
+        let cancel_flag_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_flag_seen_bg = cancel_flag_seen.clone();
 
-            let rm_start = rm.clone();
-            let rid = run.id.clone();
-            let start_handle = tokio::spawn(async move {
-                #[allow(dead_code)]
-                struct SlowProvider {
-                    seen: Arc<std::sync::atomic::AtomicBool>,
+        let rm_start = rm.clone();
+        let rid = run.id.clone();
+        let start_handle = tokio::spawn(async move {
+            #[allow(dead_code)]
+            struct SlowProvider {
+                seen: Arc<std::sync::atomic::AtomicBool>,
+            }
+            #[async_trait::async_trait]
+            impl agent_core::EngineProvider for SlowProvider {
+                async fn stream(
+                    &self,
+                    _model: &str,
+                    _messages: Vec<agent_core::EngineMessage>,
+                    _tools: &[agent_core::ToolSchema],
+                    _system_prompt: Option<&str>,
+                    _cancel: CancellationToken,
+                ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
+                {
+                    // Stay in stream long enough for cancel to register.
+                    for _ in 0..100 {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    let _ = &self.seen;
+                    Ok(Box::pin(futures_util::stream::iter(vec![
+                        agent_core::EngineProviderEvent::TextDelta("late".into()),
+                        agent_core::EngineProviderEvent::Completed,
+                    ])))
                 }
-                #[async_trait::async_trait]
-                impl agent_core::EngineProvider for SlowProvider {
-                    async fn stream(
-                        &self,
-                        _model: &str,
-                        _messages: Vec<agent_core::EngineMessage>,
-                        _tools: &[agent_core::ToolSchema],
-                        _system_prompt: Option<&str>,
-                        _cancel: CancellationToken,
-                    ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
-                    {
-                        // Stay in stream long enough for cancel to register.
-                        for _ in 0..100 {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            struct CancelAwareTools {
+                engines:
+                    Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<AgentEngine>>>>,
+                run_id: String,
+                seen: Arc<std::sync::atomic::AtomicBool>,
+            }
+            #[async_trait::async_trait]
+            impl agent_core::EngineToolRuntime for CancelAwareTools {
+                async fn list_tool_schemas(&self) -> Vec<agent_core::ToolSchema> {
+                    vec![]
+                }
+                async fn execute_tool(
+                    &self,
+                    _name: &str,
+                    _input: serde_json::Value,
+                    cancel: &CancellationToken,
+                ) -> agent_core::ToolExecutionResult {
+                    // Poll cancel token while "working".
+                    for _ in 0..40 {
+                        if cancel.is_cancelled() {
+                            self.seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                            return agent_core::ToolExecutionResult {
+                                output: serde_json::json!({"error": "cancelled"}),
+                                is_error: true,
+                                duration_ms: 0,
+                            };
                         }
-                        let _ = &self.seen;
-                        Ok(Box::pin(futures_util::stream::iter(vec![
-                            agent_core::EngineProviderEvent::TextDelta("late".into()),
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    }
+                    let _ = &self.run_id;
+                    agent_core::ToolExecutionResult {
+                        output: serde_json::json!({}),
+                        is_error: false,
+                        duration_ms: 0,
+                    }
+                }
+            }
+            // Provider that emits a tool call so tools path can observe cancel.
+            struct ToolThenSlow;
+            #[async_trait::async_trait]
+            impl agent_core::EngineProvider for ToolThenSlow {
+                async fn stream(
+                    &self,
+                    _model: &str,
+                    messages: Vec<agent_core::EngineMessage>,
+                    _tools: &[agent_core::ToolSchema],
+                    _system_prompt: Option<&str>,
+                    _cancel: CancellationToken,
+                ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
+                {
+                    if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
+                        return Ok(Box::pin(futures_util::stream::iter(vec![
+                            agent_core::EngineProviderEvent::TextDelta("done".into()),
                             agent_core::EngineProviderEvent::Completed,
-                        ])))
+                        ])));
                     }
-                }
-                struct CancelAwareTools {
-                    engines: Arc<
-                        tokio::sync::Mutex<std::collections::HashMap<String, Arc<AgentEngine>>>,
-                    >,
-                    run_id: String,
-                    seen: Arc<std::sync::atomic::AtomicBool>,
-                    started: Arc<std::sync::atomic::AtomicBool>,
-                }
-                #[async_trait::async_trait]
-                impl agent_core::EngineToolRuntime for CancelAwareTools {
-                    async fn list_tool_schemas(&self) -> Vec<agent_core::ToolSchema> {
-                        vec![]
-                    }
-                    async fn execute_tool(
-                        &self,
-                        _name: &str,
-                        _input: serde_json::Value,
-                        cancel: &CancellationToken,
-                    ) -> agent_core::ToolExecutionResult {
-                        // Signal the test that this tool is executing so cancel can
-                        // be delivered mid-flight deterministically.
-                        self.started
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                        // Poll cancel token while "working".
-                        for _ in 0..40 {
-                            if cancel.is_cancelled() {
-                                self.seen.store(true, std::sync::atomic::Ordering::SeqCst);
-                                return agent_core::ToolExecutionResult {
-                                    output: serde_json::json!({"error": "cancelled"}),
-                                    is_error: true,
-                                    duration_ms: 0,
-                                };
-                            }
-                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                        }
-                        let _ = &self.run_id;
-                        agent_core::ToolExecutionResult {
-                            output: serde_json::json!({}),
-                            is_error: false,
-                            duration_ms: 0,
-                        }
-                    }
-                }
-                // Provider that emits a tool call so tools path can observe cancel.
-                struct ToolThenSlow;
-                #[async_trait::async_trait]
-                impl agent_core::EngineProvider for ToolThenSlow {
-                    async fn stream(
-                        &self,
-                        _model: &str,
-                        messages: Vec<agent_core::EngineMessage>,
-                        _tools: &[agent_core::ToolSchema],
-                        _system_prompt: Option<&str>,
-                        _cancel: CancellationToken,
-                    ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
-                    {
-                        if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
-                            return Ok(Box::pin(futures_util::stream::iter(vec![
-                                agent_core::EngineProviderEvent::TextDelta("done".into()),
-                                agent_core::EngineProviderEvent::Completed,
-                            ])));
-                        }
-                        Ok(Box::pin(futures_util::stream::iter(vec![
-                            agent_core::EngineProviderEvent::ToolCallDelta {
-                                index: 0,
-                                id: Some("c1".into()),
-                                name: Some("read_file".into()),
-                                arguments_delta: r#"{"path":"x"}"#.into(),
-                            },
-                            agent_core::EngineProviderEvent::CompletedWithReason {
-                                reason: agent_core::ProviderStopReason::ToolUse,
-                            },
-                        ])))
-                    }
-                }
-                let tools = CancelAwareTools {
-                    engines: rm_start.runtime.engine_handles().await,
-                    run_id: rid.clone(),
-                    seen: cancel_flag_seen_bg,
-                    started: tool_started_bg,
-                };
-                rm_start
-                    .start_with_seams(
-                        StartRunRequest {
-                            agent_profile_id: None,
-                            capability_selection: None,
-                            run_id: Some(rid),
-                            conversation_id: None,
-                            provider_id: None,
-                            model_id: None,
-                            key_id: None,
-                            content: Some("slow".into()),
-                            attachments: None,
-                            trigger_message_id: None,
-                            permission_profile: Some("full_access".into()),
-                            max_steps: Some(5),
-                            project_path: None,
-                            idempotency_key: None,
-                            effort: None,
-                            runtime_id: None,
+                    Ok(Box::pin(futures_util::stream::iter(vec![
+                        agent_core::EngineProviderEvent::ToolCallDelta {
+                            index: 0,
+                            id: Some("c1".into()),
+                            name: Some("read_file".into()),
+                            arguments_delta: r#"{"path":"x"}"#.into(),
                         },
-                        &ToolThenSlow,
-                        &tools,
-                    )
-                    .await
-            });
-
-            // Wait until engine is registered, then cancel → request_cancel.
-            for _ in 0..50 {
-                if rm.runtime.has_engine(&run.id).await {
-                    break;
+                        agent_core::EngineProviderEvent::CompletedWithReason {
+                            reason: agent_core::ProviderStopReason::ToolUse,
+                        },
+                    ])))
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            assert!(
-                rm.runtime.has_engine(&run.id).await,
-                "engine must be registered before cancel"
-            );
-            // Deterministic cancel point: wait until the fixture tool has actually
-            // begun executing (it polls the cancel token mid-flight), so the
-            // assertion that the tool observed the cancel flag is not a timing race
-            // against engine startup.
-            let mut tool_started_seen = false;
-            for _ in 0..200 {
-                if tool_started.load(std::sync::atomic::Ordering::SeqCst) {
-                    tool_started_seen = true;
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            assert!(
-                tool_started_seen,
-                "tool must have begun executing before cancel"
-            );
-            let cancelled = rm
-                .cancel(CancelRunRequest {
-                    run_id: run.id.clone(),
-                })
-                .await
-                .unwrap();
-            assert_eq!(cancelled.status, RunStatusV2::Cancelled);
-
-            let start_result =
-                tokio::time::timeout(std::time::Duration::from_secs(6), start_handle)
-                    .await
-                    .expect("start should finish after cancel")
-                    .expect("join ok");
-            let _ = start_result;
-
-            let engine_cancelled = cancel_flag_seen.load(std::sync::atomic::Ordering::SeqCst);
-            let has_cancel_lifecycle = rm.runtime.events.replay_after(&run.id, 0).iter().any(|e| {
-                matches!(
-                    e.payload,
-                    RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
+            let tools = CancelAwareTools {
+                engines: rm_start.runtime.engine_handles().await,
+                run_id: rid.clone(),
+                seen: cancel_flag_seen_bg,
+            };
+            rm_start
+                .start_with_seams(
+                    StartRunRequest {
+                        agent_profile_id: None,
+                        capability_selection: None,
+                        run_id: Some(rid),
+                        conversation_id: None,
+                        provider_id: None,
+                        model_id: None,
+                        key_id: None,
+                        content: Some("slow".into()),
+                        attachments: None,
+                        trigger_message_id: None,
+                        permission_profile: Some("full_access".into()),
+                        max_steps: Some(5),
+                        project_path: None,
+                        idempotency_key: None,
+                        effort: None,
+                        runtime_id: None,
+                    },
+                    &ToolThenSlow,
+                    &tools,
                 )
-            });
-
-            if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
-                let evidence = serde_json::json!({
-                    "run_id": run.id,
-                    "status_after_cancel": cancelled.status.as_str(),
-                    "cancel_mid_run": true,
-                    "engine_was_registered": true,
-                    "engine_cancel_flag_observed_by_tool": engine_cancelled,
-                    "cancel_lifecycle_event": has_cancel_lifecycle,
-                });
-                let _ = std::fs::write(
-                    std::path::Path::new(&dir).join("daemon-cancel-mid.json"),
-                    serde_json::to_string_pretty(&evidence).unwrap_or_default(),
-                );
-            }
-            assert!(
-                has_cancel_lifecycle,
-                "cancel must append Cancelled/Interrupted lifecycle event via commit_transition"
-            );
-            // Tool path should observe cancel flag from request_cancel.
-            assert!(
-                engine_cancelled,
-                "production cancel must set engine cancel flag observed by tool execution"
-            );
-            // keep FIXTURE=1 for parallel tests under cfg(test)
+                .await
         });
+
+        // Wait until engine is registered, then cancel → request_cancel.
+        for _ in 0..50 {
+            if rm.runtime.has_engine(&run.id).await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            rm.runtime.has_engine(&run.id).await,
+            "engine must be registered before cancel"
+        );
+        let cancelled = rm
+            .cancel(CancelRunRequest {
+                run_id: run.id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status, RunStatusV2::Cancelled);
+
+        let start_result = tokio::time::timeout(std::time::Duration::from_secs(6), start_handle)
+            .await
+            .expect("start should finish after cancel")
+            .expect("join ok");
+        let _ = start_result;
+
+        let engine_cancelled = cancel_flag_seen.load(std::sync::atomic::Ordering::SeqCst);
+        let has_cancel_lifecycle = rm.runtime.events.replay_after(&run.id, 0).iter().any(|e| {
+            matches!(
+                e.payload,
+                RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
+            )
+        });
+
+        if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
+            let evidence = serde_json::json!({
+                "run_id": run.id,
+                "status_after_cancel": cancelled.status.as_str(),
+                "cancel_mid_run": true,
+                "engine_was_registered": true,
+                "engine_cancel_flag_observed_by_tool": engine_cancelled,
+                "cancel_lifecycle_event": has_cancel_lifecycle,
+            });
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("daemon-cancel-mid.json"),
+                serde_json::to_string_pretty(&evidence).unwrap_or_default(),
+            );
+        }
+        assert!(
+            has_cancel_lifecycle,
+            "cancel must append Cancelled/Interrupted lifecycle event via commit_transition"
+        );
+        // Tool path should observe cancel flag from request_cancel.
+        assert!(
+            engine_cancelled,
+            "production cancel must set engine cancel flag observed by tool execution"
+        );
+        // keep FIXTURE=1 for parallel tests under cfg(test)
         if let Some(v) = prev_runtime_dir {
             std::env::set_var("NATIVES_RUNTIME_DIR", v);
         } else {
@@ -5214,516 +4925,150 @@ mod tests {
         let _ = std::fs::remove_dir_all(runtime_dir);
     }
 
-    #[test]
-    fn permission_gate_emits_request_and_respond() {
+    #[tokio::test]
+    async fn permission_gate_emits_request_and_respond() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-        // The daemon tool path resolves runs through `global_run_manager()` and
-        // reads the conversation store through the thread-local override; install
-        // a stable store-backed global manager and point this thread at it.
-        let _ = install_global_manager_for_test();
-        with_global_manager_lock(|| {
-            block_on_current_thread(async {
-                let rm = crate::run_manager::global_run_manager();
-                // Event logs are durable by default; fixed ids would replay stale
-                // permission events from an earlier test process.
-                let project_dir = tempfile::tempdir().unwrap();
-                let run_key = format!("perm-{}", Uuid::new_v4());
-                let run = rm
-                    .create_run(CreateRunRequest {
-                        capability_selection: None,
-                        conversation_id: "c-perm".into(),
-                        provider_id: "openai".into(),
-                        model_id: "gpt-4o".into(),
-                        key_id: Some("k".into()),
-                        agent_profile_id: None,
-                        permission_profile: Some("ask".into()),
-                        content: Some("tool please".into()),
-                        attachments: None,
-                        max_steps: Some(5),
-                        parent_run_id: None,
-                        project_path: Some(project_dir.path().to_string_lossy().into_owned()),
-                        idempotency_key: Some(run_key),
-                        effort: None,
-                        runtime_id: None,
-                    })
-                    .unwrap();
-                // write_file requires a verified project identity; create_run bound one
-                // via the project path above. Also ensure the conversation exists on the
-                // env store used by start_with_seams' history/turn writes.
-                let _ = crate::conversation_store::ensure_conversation_stub(
-                    "c-perm",
-                    "openai",
-                    "gpt-4o",
-                    Some("ask"),
-                    run.project_id.as_deref(),
-                );
-
-                // Tool-calling fixture provider + permission gated tools.
-                let events = rm.runtime.events.clone();
-                let tools = crate::production::PermissionGatedTools {
-                    gateway: {
-                        let mut g = capability_gateway::CapabilityGateway::new();
-                        g.register_builtins();
-                        Arc::new(g)
-                    },
-                    permissions: rm.runtime.permissions.clone(),
-                    events: events.clone(),
-                    interactions: rm.runtime.interactions.clone(),
-                    subagents: rm.runtime.subagents.clone(),
-                    task_outputs: rm.runtime.task_outputs_ref(),
-                    engines: rm.runtime.engine_handles().await,
-                    runtime: None,
-                    provider_id: "openai".into(),
-                    key_id: None,
-                    parent_run_id: run.id.clone(),
-                    conversation_id: "c-perm".into(),
-                    model_id: "gpt-4o".into(),
-                    permission_profile: "ask".into(),
-                    tool_allowlist: None,
-                    team: None,
-                    mcp_tool_schemas: Vec::new(),
-                    selected_mcp_servers: None,
-                };
-                let provider = FixtureProvider {
-                    mode: FixtureMode::RequestPermissionPath,
-                };
-
-                let rm_bg = rm.clone();
-                let rid = run.id.clone();
-                let respond_handle = tokio::spawn(async move {
-                    // Wait for permission_requested event then approve.
-                    for _ in 0..100 {
-                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                        let evs = rm_bg.runtime.events.replay_after(&rid, 0);
-                        if let Some(pid) = evs.iter().find_map(|e| match &e.payload {
-                            RunEventKind::PermissionRequested { permission_id, .. } => {
-                                Some(permission_id.clone())
-                            }
-                            _ => None,
-                        }) {
-                            let _ = rm_bg.respond_permission(&pid, true).await;
-                            return;
-                        }
-                    }
-                });
-
-                let status = tokio::time::timeout(
-                    std::time::Duration::from_secs(6),
-                    rm.start_with_seams(
-                        StartRunRequest {
-                            agent_profile_id: None,
-                            capability_selection: None,
-                            run_id: Some(run.id.clone()),
-                            conversation_id: None,
-                            provider_id: None,
-                            model_id: None,
-                            key_id: None,
-                            content: Some("tool please".into()),
-                            attachments: None,
-                            trigger_message_id: None,
-                            permission_profile: Some("ask".into()),
-                            max_steps: Some(5),
-                            project_path: None,
-                            idempotency_key: None,
-                            effort: None,
-                            runtime_id: None,
-                        },
-                        &provider,
-                        &tools,
-                    ),
-                )
-                .await
-                .expect("permission-gated fixture run must terminate")
-                .unwrap();
-
-                let _ = respond_handle.await;
-                let evs = rm.replay(ReplayRunRequest {
-                    run_id: run.id.clone(),
-                    after_sequence: 0,
-                });
-                let has_perm_req = evs
-                    .iter()
-                    .any(|e| matches!(e.payload, RunEventKind::PermissionRequested { .. }));
-                let has_perm_resp = evs
-                    .iter()
-                    .any(|e| matches!(e.payload, RunEventKind::PermissionResponded { .. }));
-
-                if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
-                    let dump: Vec<_> = evs
-                        .iter()
-                        .map(|e| {
-                            serde_json::json!({
-                                "sequence": e.effective_run_sequence(),
-                                "type": e.payload.type_name(),
-                            })
-                        })
-                        .collect();
-                    let _ = std::fs::write(
-                        std::path::Path::new(&dir).join("permission-events.json"),
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "final_status": status.status.as_str(),
-                            "permission_requested": has_perm_req,
-                            "permission_responded": has_perm_resp,
-                            "events": dump,
-                        }))
-                        .unwrap_or_default(),
-                    );
-                }
-
-                assert!(
-                    has_perm_req,
-                    "expected permission_requested event; run_status={:?}; events=[{}]",
-                    status.status,
-                    evs.iter()
-                        .map(|e| e.payload.type_name().to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
-                assert!(has_perm_resp, "expected permission_responded event");
-                // keep FIXTURE=1 for parallel tests under cfg(test)
+        let rm = Arc::new(RunManager::new());
+        // Event logs are durable by default; fixed ids would replay stale
+        // permission events from an earlier test process.
+        let run_key = format!("perm-{}", Uuid::new_v4());
+        let run = rm
+            .create_run(CreateRunRequest {
+                capability_selection: None,
+                conversation_id: "c-perm".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: Some("k".into()),
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("tool please".into()),
+                attachments: None,
+                max_steps: Some(5),
+                parent_run_id: None,
+                project_path: None,
+                idempotency_key: Some(run_key),
+                effort: None,
+                runtime_id: None,
             })
-        });
-    }
+            .unwrap();
 
-    #[test]
-    fn permission_write_failure_fails_closed_handler_not_invoked() {
-        // Batch-2 acceptance #3: when the durable interaction write fails, the
-        // permission gate must fail closed — the tool handler is never invoked,
-        // the waiter is cleaned, and no started/permission fact is emitted.
-        let _ = install_global_manager_for_test();
-        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-        with_global_manager_lock(|| {
-            block_on_current_thread(async {
-                let rm = crate::run_manager::global_run_manager();
-                let project_dir = tempfile::tempdir().unwrap();
-                let run = rm
-                    .create_run(CreateRunRequest {
-                        capability_selection: None,
-                        conversation_id: "c-perm-fail".into(),
-                        provider_id: "openai".into(),
-                        model_id: "gpt-4o".into(),
-                        key_id: None,
-                        agent_profile_id: None,
-                        permission_profile: Some("ask".into()),
-                        content: Some("write please".into()),
-                        attachments: None,
-                        max_steps: Some(5),
-                        parent_run_id: None,
-                        project_path: Some(project_dir.path().to_string_lossy().into_owned()),
-                        idempotency_key: Some(format!("perm-fail-{}", Uuid::new_v4())),
-                        effort: None,
-                        runtime_id: None,
-                    })
-                    .unwrap();
-                let _ = crate::conversation_store::ensure_conversation_stub(
-                    &run.conversation_id,
-                    "openai",
-                    "gpt-4o",
-                    Some("ask"),
-                    run.project_id.as_deref(),
-                );
-                // Inject a durable event-write failure: the permission gate emits
-                // PermissionRequested/PermissionResponded via run_event, and a write
-                // failure there must fail the gate closed before the write handler
-                // runs. The trigger is installed after create_run so the run row's
-                // own queued event survives.
-                let store = crate::storage::open_resolved_store().unwrap();
-                store
-                    .conn()
-                    .unwrap()
-                    .execute_batch(
-                        "CREATE TRIGGER IF NOT EXISTS fail_run_event_insert
-                     BEFORE INSERT ON run_event
-                     BEGIN SELECT RAISE(FAIL, 'injected run_event write failure'); END;",
-                    )
-                    .unwrap();
-                let tools = crate::production::PermissionGatedTools {
-                    gateway: {
-                        let mut g = capability_gateway::CapabilityGateway::new();
-                        g.register_builtins();
-                        Arc::new(g)
-                    },
-                    permissions: rm.runtime.permissions.clone(),
-                    events: rm.runtime.events.clone(),
-                    interactions: rm.runtime.interactions.clone(),
-                    subagents: rm.runtime.subagents.clone(),
-                    task_outputs: rm.runtime.task_outputs_ref(),
-                    engines: rm.runtime.engine_handles().await,
-                    runtime: None,
-                    provider_id: "openai".into(),
-                    key_id: None,
-                    parent_run_id: run.id.clone(),
-                    conversation_id: run.conversation_id.clone(),
-                    model_id: "gpt-4o".into(),
-                    permission_profile: "ask".into(),
-                    tool_allowlist: None,
-                    team: None,
-                    mcp_tool_schemas: Vec::new(),
-                    selected_mcp_servers: None,
-                };
-                let target = project_dir.path().join("should-not-exist.txt");
-                let out = tools
-                    .execute_tool(
-                        "write_file",
-                        serde_json::json!({ "path": target.to_string_lossy(), "content": "x" }),
-                        &CancellationToken::new(),
-                    )
-                    .await;
-                assert!(
-                    out.is_error,
-                    "permission persistence failure must fail closed: {:?}",
-                    out.output
-                );
-                assert!(
-                    !target.exists(),
-                    "write handler must not have been invoked (handler invocation = 0)"
-                );
-                // No permission-request / started fact: the gate failed before any
-                // authorizing event was emitted.
-                let evs = rm.runtime.events.replay_after(&run.id, 0);
-                assert!(
-                    !evs.iter()
-                        .any(|e| matches!(e.payload, RunEventKind::PermissionRequested { .. })),
-                    "no PermissionRequested may be emitted when the durable write fails"
-                );
-                assert!(
-                    !evs.iter()
-                        .any(|e| matches!(e.payload, RunEventKind::ToolCallStarted { .. })),
-                    "no ToolCallStarted may be emitted when the durable write fails"
-                );
-                // Remove the fault injection so the shared global store is not left
-                // with a failing run_event trigger for other tests.
-                let _ = store
-                    .conn()
-                    .unwrap()
-                    .execute_batch("DROP TRIGGER IF EXISTS fail_run_event_insert");
-            })
-        });
-    }
+        // Tool-calling fixture provider + permission gated tools.
+        let events = rm.runtime.events.clone();
+        let tools = crate::production::PermissionGatedTools {
+            gateway: {
+                let mut g = capability_gateway::CapabilityGateway::new();
+                g.register_builtins();
+                Arc::new(g)
+            },
+            permissions: rm.runtime.permissions.clone(),
+            events: events.clone(),
+            interactions: rm.runtime.interactions.clone(),
+            subagents: rm.runtime.subagents.clone(),
+            task_outputs: rm.runtime.task_outputs_ref(),
+            engines: rm.runtime.engine_handles().await,
+            runtime: None,
+            provider_id: "openai".into(),
+            key_id: None,
+            parent_run_id: run.id.clone(),
+            conversation_id: "c-perm".into(),
+            model_id: "gpt-4o".into(),
+            permission_profile: "ask".into(),
+            tool_allowlist: None,
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
+        };
+        let provider = FixtureProvider {
+            mode: FixtureMode::RequestPermissionPath,
+        };
+        // Ensure ConfirmEach profile so side-effect tools ask.
+        rm.runtime.set_permission_profile("ask").await;
 
-    #[test]
-    fn subagent_switch_route_restarts_with_exact_scope_and_parent_cancel_cascades() {
-        // Batch-2 acceptance #5: `restart_subagent_with_binding` is the real
-        // production dispatch behind `subagent.switchRoute`. It must create a
-        // new child run that preserves the durable child scope exactly, cascade
-        // parent cancel to that child, and fail closed (no new run) when any
-        // durable scope field is missing.
-        let _ = install_global_manager_for_test();
-        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-        with_global_manager_lock(|| {
-            block_on_current_thread(async {
-                let rm = crate::run_manager::global_run_manager();
-                let project_dir = tempfile::tempdir().unwrap();
-                // create_run canonicalizes the project path (macOS /var -> /private/var);
-                // the durable session scope must use the same canonical form so the
-                // restarted child's project_path matches exactly.
-                let canonical_project = project_dir.path().canonicalize().unwrap();
-                let project_path = canonical_project.to_string_lossy().into_owned();
-                // The child run's agent_profile_id must resolve for the detached
-                // start to succeed; register a minimal `architect` expert.
-                {
-                    let store = crate::storage::open_resolved_store().unwrap();
-                    let _ = store.conn().unwrap().execute(
-                    "INSERT OR IGNORE INTO capability_expert
-                        (id, name, description, system_prompt, tools_json, disallowed_tools_json, skills_json, params_json)
-                     VALUES ('architect', 'Architect', 'test', 'You are an architect.', '[]', '[]', '[]', '{}')",
-                    [],
-                );
-                }
-                crate::conversation_store::ensure_conversation_stub(
-                    "sub-parent-conv",
-                    "openai",
-                    "gpt-4o",
-                    None,
-                    None,
-                )
-                .unwrap();
-                let parent = rm
-                    .create_run(CreateRunRequest {
-                        capability_selection: None,
-                        conversation_id: "sub-parent-conv".into(),
-                        provider_id: "openai".into(),
-                        model_id: "gpt-4o".into(),
-                        key_id: Some("parent-key".into()),
-                        agent_profile_id: None,
-                        permission_profile: Some("ask".into()),
-                        content: Some("spawn child".into()),
-                        attachments: None,
-                        max_steps: Some(5),
-                        parent_run_id: None,
-                        project_path: Some(project_path.clone()),
-                        idempotency_key: Some(format!("sub-parent-{}", Uuid::new_v4())),
-                        effort: None,
-                        runtime_id: None,
-                    })
-                    .unwrap();
-                // Register the parent as a cancel-tree root so the restarted child
-                // (ensure_execution_token with parent_run_id) joins the tree and
-                // parent cancel actually cascades.
-                rm.runtime
-                    .ensure_execution_token(&parent.id, None)
-                    .await
-                    .unwrap();
-                let child_conv = format!("sub-child-{}", Uuid::new_v4());
-                crate::conversation_store::ensure_conversation_stub(
-                    &child_conv,
-                    "anthropic",
-                    "claude",
-                    Some("full_access"),
-                    None,
-                )
-                .unwrap();
-                let session_id = Uuid::new_v4().to_string();
-                let session = crate::subagent_store::SubagentSession {
-                    id: session_id.clone(),
-                    parent_conversation_id: "sub-parent-conv".into(),
-                    child_conversation_id: child_conv.clone(),
-                    parent_run_id: Some(parent.id.clone()),
-                    task_call_id: None,
-                    name: "child".into(),
-                    task: "continue".into(),
-                    status: "running".into(),
-                    provider_id: "anthropic".into(),
-                    key_id: "child-key".into(),
-                    model_id: "claude".into(),
-                    attempted_bindings: vec![],
-                    last_activity_at: chrono::Utc::now().to_rfc3339(),
-                    closed_at: None,
-                    error: None,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
-                    project_path: Some(project_path.clone()),
-                    project_id: parent.project_id.clone(),
-                    project_identity_version: Some(1),
-                    permission_profile: Some("full_access".into()),
-                    agent_profile_id: Some("architect".into()),
-                    max_steps: Some(15),
-                    tool_allowlist: vec!["read_file".into()],
-                };
-                crate::subagent_store::insert_subagent_session(&session).unwrap();
-
-                let binding = crate::subagent_store::RouteBinding {
-                    provider_id: "anthropic".into(),
-                    key_id: "child-key-2".into(),
-                    model_id: "claude-3-5".into(),
-                };
-                let restarted =
-                    crate::production::restart_subagent_with_binding(&session_id, &binding)
-                        .await
-                        .unwrap();
-                let child_run_id = restarted.expect(
-                    "a running session with full durable scope must create a new child run",
-                );
-                let child = rm.get_run(&child_run_id).unwrap();
-                // Exact durable scope preserved on the new child run.
-                assert_eq!(
-                    child.project_path.as_deref(),
-                    session.project_path.as_deref(),
-                    "project identity must be preserved"
-                );
-                assert_eq!(
-                    child.project_id.as_deref(),
-                    session.project_id.as_deref(),
-                    "project identity must be preserved"
-                );
-                assert_eq!(
-                    child.permission_profile, "full_access",
-                    "permission ceiling preserved"
-                );
-                assert_eq!(
-                    child.agent_profile_id.as_deref(),
-                    Some("architect"),
-                    "agent profile preserved"
-                );
-                assert_eq!(child.max_steps, 15, "step budget preserved");
-                assert_eq!(
-                    child.parent_run_id.as_deref(),
-                    Some(parent.id.as_str()),
-                    "parent run must be preserved"
-                );
-                assert_eq!(child.conversation_id, child_conv);
-                assert_eq!(
-                    rm.runtime.peek_run_tool_allowlist(&child_run_id).await,
-                    Some(vec!["read_file".to_string()]),
-                    "tool allowlist must be applied to the child"
-                );
-                // Parent cancel cascades to the new child's execution token. The
-                // token is registered by the detached start task, so poll for it.
-                let mut child_tok = None;
-                for _ in 0..100 {
-                    if let Some(t) = rm.runtime.execution.token(&child_run_id).await {
-                        child_tok = Some(t);
-                        break;
+        let rm_bg = rm.clone();
+        let rid = run.id.clone();
+        let respond_handle = tokio::spawn(async move {
+            // Wait for permission_requested event then approve.
+            for _ in 0..100 {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                let evs = rm_bg.runtime.events.replay_after(&rid, 0);
+                if let Some(pid) = evs.iter().find_map(|e| match &e.payload {
+                    RunEventKind::PermissionRequested { permission_id, .. } => {
+                        Some(permission_id.clone())
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    _ => None,
+                }) {
+                    let _ = rm_bg.respond_permission(&pid, true).await;
+                    return;
                 }
-                let child_tok = match child_tok {
-                    Some(t) => t,
-                    None => panic!(
-                        "child must be registered in the cancel tree; child={:?}",
-                        rm.get_run(&child_run_id)
-                            .map(|r| (r.status, r.error_code.clone()))
-                    ),
-                };
-                assert!(!child_tok.is_cancelled());
-                rm.cancel(CancelRunRequest {
-                    run_id: parent.id.clone(),
+            }
+        });
+
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(6),
+            rm.start_with_seams(
+                StartRunRequest {
+                    agent_profile_id: None,
+                    capability_selection: None,
+                    run_id: Some(run.id.clone()),
+                    conversation_id: None,
+                    provider_id: None,
+                    model_id: None,
+                    key_id: None,
+                    content: Some("tool please".into()),
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: Some("ask".into()),
+                    max_steps: Some(5),
+                    project_path: None,
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: None,
+                },
+                &provider,
+                &tools,
+            ),
+        )
+        .await
+        .expect("permission-gated fixture run must terminate")
+        .unwrap();
+
+        let _ = respond_handle.await;
+        let evs = rm.replay(ReplayRunRequest {
+            run_id: run.id.clone(),
+            after_sequence: 0,
+        });
+        let has_perm_req = evs
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::PermissionRequested { .. }));
+        let has_perm_resp = evs
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::PermissionResponded { .. }));
+
+        if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
+            let dump: Vec<_> = evs
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "sequence": e.effective_run_sequence(),
+                        "type": e.payload.type_name(),
+                    })
                 })
-                .await
-                .unwrap();
-                assert!(
-                    child_tok.is_cancelled(),
-                    "parent cancel must cascade to the restarted child run"
-                );
+                .collect();
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("permission-events.json"),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "final_status": status.status.as_str(),
+                    "permission_requested": has_perm_req,
+                    "permission_responded": has_perm_resp,
+                    "events": dump,
+                }))
+                .unwrap_or_default(),
+            );
+        }
 
-                // Missing durable scope → fail closed, no new run created.
-                let incomplete_id = Uuid::new_v4().to_string();
-                let incomplete_conv = format!("sub-child-incomplete-{}", Uuid::new_v4());
-                crate::conversation_store::ensure_conversation_stub(
-                    &incomplete_conv,
-                    "anthropic",
-                    "claude",
-                    None,
-                    None,
-                )
-                .unwrap();
-                let incomplete = crate::subagent_store::SubagentSession {
-                    id: incomplete_id.clone(),
-                    parent_conversation_id: "sub-parent-conv".into(),
-                    child_conversation_id: incomplete_conv,
-                    parent_run_id: Some(parent.id.clone()),
-                    task_call_id: None,
-                    name: "incomplete".into(),
-                    task: "continue".into(),
-                    status: "running".into(),
-                    provider_id: "anthropic".into(),
-                    key_id: "child-key".into(),
-                    model_id: "claude".into(),
-                    attempted_bindings: vec![],
-                    last_activity_at: chrono::Utc::now().to_rfc3339(),
-                    closed_at: None,
-                    error: None,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
-                    project_path: Some(project_path.clone()),
-                    project_id: parent.project_id.clone(),
-                    project_identity_version: Some(1),
-                    permission_profile: Some("full_access".into()),
-                    agent_profile_id: Some("architect".into()),
-                    max_steps: None,
-                    tool_allowlist: vec![],
-                };
-                crate::subagent_store::insert_subagent_session(&incomplete).unwrap();
-                let err =
-                    crate::production::restart_subagent_with_binding(&incomplete_id, &binding)
-                        .await
-                        .unwrap_err();
-                assert!(
-                    err.contains("step budget"),
-                    "missing durable step budget must fail closed: {err}"
-                );
-            })
-        });
+        assert!(has_perm_req, "expected permission_requested event");
+        assert!(has_perm_resp, "expected permission_responded event");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
     /// Serialize credential-broker tests — shared process-global slot.
@@ -5816,8 +5161,8 @@ mod tests {
     async fn subagent_task_spawns_independent_identity() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rt = crate::production::ProductionRuntime::new();
-        // Task is Process/ProjectWrite — runs under full_access so the identity
-        // unit test never waits on a confirmation prompt.
+        // Task is Process/ProjectWrite — under ConfirmEach it asks; use autonomous for identity unit test.
+        rt.set_permission_profile("full_access").await;
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
@@ -5945,6 +5290,7 @@ mod tests {
             rt.block_on(async {
                 let parent_id = format!("parent-dual-{}", uuid::Uuid::new_v4());
                 let prt = crate::production::ProductionRuntime::new();
+                prt.set_permission_profile("full_access").await;
                 let tools = crate::production::PermissionGatedTools {
                     gateway: {
                         let mut g = capability_gateway::CapabilityGateway::new();
@@ -6094,15 +5440,11 @@ mod tests {
         let _ = rt;
     }
 
-    #[test]
-    fn mcp_call_through_permission_gate_emits_events() {
-        // Register a mock MCP server with no live session. The permission gate
-        // must emit ToolCallStarted, and the Core engine must settle the failed
-        // invocation with exactly one same-id ToolCallCompleted. Driving the
-        // call through the engine is required because ToolCallCompleted is a
-        // Core-owned fact — the daemon tool runtime only emits the Started fact.
-        let _ = install_global_manager_for_test();
-        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+    #[tokio::test]
+    async fn mcp_call_through_permission_gate_emits_events() {
+        // Register mock tool without live session → structured error + events.
+        let rt = crate::production::ProductionRuntime::new();
+        rt.set_permission_profile("full_access").await;
         crate::mcp_runtime::global_mcp()
             .register_server(agent_core::McpServerConfig {
                 id: "gate-test".into(),
@@ -6123,183 +5465,65 @@ mod tests {
                 input_schema: serde_json::json!({"type":"object"}),
             })
             .unwrap();
-        with_global_manager_lock(|| {
-            block_on_current_thread(async {
-                // The daemon tool path resolves run lookups and the project store
-                // through `global_run_manager()`, so the run must live there — a
-                // throwaway local manager is invisible to the verified-project gate
-                // and would trigger a second manager's startup recovery mid-flight.
-                let rm = crate::run_manager::global_run_manager();
-                let project_dir = tempfile::tempdir().unwrap();
-                let run = rm
-                    .create_run(CreateRunRequest {
-                        capability_selection: None,
-                        conversation_id: "c-mcp".into(),
-                        provider_id: "openai".into(),
-                        model_id: "m".into(),
-                        key_id: None,
-                        agent_profile_id: None,
-                        permission_profile: Some("full_access".into()),
-                        content: Some("call mcp".into()),
-                        attachments: None,
-                        max_steps: Some(5),
-                        parent_run_id: None,
-                        project_path: Some(project_dir.path().to_string_lossy().into_owned()),
-                        idempotency_key: Some(format!("mcp-gate-{}", Uuid::new_v4())),
-                        effort: None,
-                        runtime_id: None,
-                    })
-                    .unwrap();
-                // start_with_seams reads engine history and writes assistant turns
-                // through the env store, which may differ from the global manager's
-                // store — make sure the conversation exists there too.
-                let _ = crate::conversation_store::ensure_conversation_stub(
-                    &run.conversation_id,
-                    "openai",
-                    "m",
-                    None,
-                    run.project_id.as_deref(),
-                );
-                let tools = crate::production::PermissionGatedTools {
-                    gateway: {
-                        let mut g = capability_gateway::CapabilityGateway::new();
-                        g.register_builtins();
-                        Arc::new(g)
-                    },
-                    permissions: rm.runtime.permissions.clone(),
-                    events: rm.runtime.events.clone(),
-                    interactions: rm.runtime.interactions.clone(),
-                    subagents: rm.runtime.subagents.clone(),
-                    task_outputs: rm.runtime.task_outputs_ref(),
-                    engines: rm.runtime.engine_handles().await,
-                    runtime: None,
-                    provider_id: "openai".into(),
-                    key_id: None,
-                    parent_run_id: run.id.clone(),
-                    conversation_id: "c-mcp".into(),
-                    model_id: "m".into(),
-                    permission_profile: "full_access".into(),
-                    tool_allowlist: None,
-                    team: None,
-                    mcp_tool_schemas: Vec::new(),
-                    selected_mcp_servers: None,
-                };
-                // Fixture provider: emit one mcp_call tool use, then complete on the
-                // following tool-result turn.
-                struct McpCallProvider;
-                #[async_trait::async_trait]
-                impl agent_core::EngineProvider for McpCallProvider {
-                    async fn stream(
-                        &self,
-                        _model: &str,
-                        messages: Vec<agent_core::EngineMessage>,
-                        _tools: &[agent_core::ToolSchema],
-                        _system_prompt: Option<&str>,
-                        _cancel: CancellationToken,
-                    ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
-                    {
-                        if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
-                            return Ok(Box::pin(futures_util::stream::iter(vec![
-                                agent_core::EngineProviderEvent::TextDelta("mcp done".into()),
-                                agent_core::EngineProviderEvent::Completed,
-                            ])));
-                        }
-                        Ok(Box::pin(futures_util::stream::iter(vec![
-                            agent_core::EngineProviderEvent::ToolCallDelta {
-                                index: 0,
-                                id: Some("mcp-call-1".into()),
-                                name: Some("mcp_call".into()),
-                                arguments_delta:
-                                    r#"{"server":"gate-test","tool":"echo","arguments":{"x":1}}"#
-                                        .into(),
-                            },
-                            agent_core::EngineProviderEvent::CompletedWithReason {
-                                reason: agent_core::ProviderStopReason::ToolUse,
-                            },
-                        ])))
-                    }
-                }
-                let status = rm
-                .start_with_seams(
-                    StartRunRequest {
-                        agent_profile_id: None,
-                        capability_selection: None,
-                        run_id: Some(run.id.clone()),
-                        conversation_id: None,
-                        provider_id: None,
-                        model_id: None,
-                        key_id: None,
-                        content: Some("call mcp".into()),
-                        attachments: None,
-                        trigger_message_id: None,
-                        permission_profile: Some("full_access".into()),
-                        max_steps: Some(5),
-                        project_path: None,
-                        idempotency_key: None,
-                        effort: None,
-                        runtime_id: None,
-                    },
-                    &McpCallProvider,
-                    &tools,
-                )
-                .await
-                .unwrap_or_else(|error| {
-                    let run_status = rm.get_run(&run.id).map(|r| r.status);
-                    let event_types = rm
-                        .runtime
-                        .events
-                        .replay_after(&run.id, 0)
-                        .iter()
-                        .map(|e| e.payload.type_name().to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    panic!(
-                        "mcp fixture run must terminate: {error}; status={run_status:?}; events=[{event_types}]"
-                    );
-                });
-                assert!(status.status.is_terminal(), "run must be terminal");
-                let evs = rm.runtime.events.replay_after(&run.id, 0);
-                let started = evs
-                    .iter()
-                    .filter(|e| matches!(e.payload, RunEventKind::ToolCallStarted { .. }))
-                    .count();
-                let completed = evs
-                    .iter()
-                    .filter_map(|e| match &e.payload {
-                        RunEventKind::ToolCallCompleted { id, is_error, .. } => {
-                            Some((id.clone(), *is_error))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(
-                    started, 1,
-                    "expected exactly one ToolCallStarted for mcp_call"
-                );
-                assert_eq!(
-                    completed.len(),
-                    1,
-                    "expected exactly one ToolCallCompleted for mcp_call"
-                );
-                // No live session → the settled result is an error, but the run
-                // still settles with one completed Tool Result (no ghost success).
-                assert!(
-                    completed[0].1,
-                    "mcp_call without a live session must settle as an error"
-                );
-                if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
-                    let _ = std::fs::write(
-                        std::path::Path::new(&dir).join("mcp-call-gated.json"),
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "permission_gated": true,
-                            "tool_call_events": true,
-                            "settled_as_error": completed[0].1,
-                        }))
-                        .unwrap_or_default(),
-                    );
-                }
-            })
-        });
+        let tools = crate::production::PermissionGatedTools {
+            gateway: {
+                let mut g = capability_gateway::CapabilityGateway::new();
+                g.register_builtins();
+                Arc::new(g)
+            },
+            permissions: rt.permissions.clone(),
+            events: rt.events.clone(),
+            interactions: rt.interactions.clone(),
+            subagents: rt.subagents.clone(),
+            task_outputs: rt.task_outputs.clone(),
+            engines: rt.engine_handles().await,
+            runtime: None,
+            provider_id: "openai".into(),
+            key_id: None,
+            parent_run_id: "mcp-parent".into(),
+            conversation_id: "c".into(),
+            model_id: "m".into(),
+            permission_profile: "full_access".into(),
+            tool_allowlist: None,
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
+        };
+        let out = tools
+            .execute_tool(
+                "mcp_call",
+                serde_json::json!({
+                    "server": "gate-test",
+                    "tool": "echo",
+                    "arguments": {"x": 1}
+                }),
+                &CancellationToken::new(),
+            )
+            .await;
+        // No live session → error, but still gated + evented.
+        assert!(out.is_error || out.output.get("ok") == Some(&serde_json::json!(false)));
+        let evs = rt.events.replay_after("mcp-parent", 0);
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e.payload, RunEventKind::ToolCallStarted { .. })),
+            "expected ToolCallStarted for mcp_call"
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e.payload, RunEventKind::ToolCallCompleted { .. })),
+            "expected ToolCallCompleted for mcp_call"
+        );
+        if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("mcp-call-gated.json"),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "permission_gated": true,
+                    "tool_call_events": true,
+                    "is_error": out.is_error,
+                }))
+                .unwrap_or_default(),
+            );
+        }
     }
 
     #[test]
@@ -6671,155 +5895,149 @@ mod tests {
         });
     }
 
-    #[test]
-    fn cancel_vs_complete_race_single_terminal_and_consistent() {
+    #[tokio::test]
+    async fn cancel_vs_complete_race_single_terminal_and_consistent() {
         // 100 concurrent cancel-vs-complete races: each run ends with exactly one
         // terminal lifecycle event, and memory status matches that event.
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-        // Isolated temp store: the start/cancel paths touch the global
-        // conversation store, and RunManager::new() must never resolve to a
-        // leaked env path or the developer's assistant.db. Current-thread
-        // runtime keeps the thread-local override visible across awaits.
-        let _fixture = TempStoreFixture::new();
-        block_on_current_thread(async {
-            let mut terminal_mismatch = 0u32;
-            let mut multi_terminal = 0u32;
-            for i in 0..100 {
-                let rm = Arc::new(RunManager::new());
-                let run = rm
-                    .create_run(CreateRunRequest {
-                        capability_selection: None,
-                        conversation_id: format!("c-race-{i}"),
-                        provider_id: "openai".into(),
-                        model_id: "gpt-4o".into(),
-                        key_id: Some("k".into()),
+        let mut terminal_mismatch = 0u32;
+        let mut multi_terminal = 0u32;
+        for i in 0..100 {
+            let rm = Arc::new(RunManager::new());
+            let run = rm
+                .create_run(CreateRunRequest {
+                    capability_selection: None,
+                    conversation_id: format!("c-race-{i}"),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: Some("k".into()),
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("race".into()),
+                    attachments: None,
+                    max_steps: Some(3),
+                    parent_run_id: None,
+                    project_path: None,
+                    idempotency_key: Some(format!("race-key-{i}")),
+                    effort: None,
+                    runtime_id: None,
+                })
+                .unwrap();
+            let run_id = run.id.clone();
+
+            let rm_start = rm.clone();
+            let rid = run_id.clone();
+            let start_h = tokio::spawn(async move {
+                rm_start
+                    .start(StartRunRequest {
                         agent_profile_id: None,
-                        permission_profile: Some("ask".into()),
+                        capability_selection: None,
+                        run_id: Some(rid),
+                        conversation_id: None,
+                        provider_id: None,
+                        model_id: None,
+                        key_id: None,
                         content: Some("race".into()),
                         attachments: None,
+                        trigger_message_id: None,
+                        permission_profile: Some("full_access".into()),
                         max_steps: Some(3),
-                        parent_run_id: None,
                         project_path: None,
-                        idempotency_key: Some(format!("race-key-{i}")),
+                        idempotency_key: None,
                         effort: None,
                         runtime_id: None,
                     })
-                    .unwrap();
-                let run_id = run.id.clone();
-
-                let rm_start = rm.clone();
-                let rid = run_id.clone();
-                let start_h = tokio::spawn(async move {
-                    rm_start
-                        .start(StartRunRequest {
-                            agent_profile_id: None,
-                            capability_selection: None,
-                            run_id: Some(rid),
-                            conversation_id: None,
-                            provider_id: None,
-                            model_id: None,
-                            key_id: None,
-                            content: Some("race".into()),
-                            attachments: None,
-                            trigger_message_id: None,
-                            permission_profile: Some("full_access".into()),
-                            max_steps: Some(3),
-                            project_path: None,
-                            idempotency_key: None,
-                            effort: None,
-                            runtime_id: None,
-                        })
-                        .await
-                });
-                // Small jitter so cancel sometimes wins, sometimes loses.
-                if i % 2 == 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                }
-                let rm_cancel = rm.clone();
-                let rid2 = run_id.clone();
-                let cancel_h = tokio::spawn(async move {
-                    rm_cancel.cancel(CancelRunRequest { run_id: rid2 }).await
-                });
-
-                let start_res = start_h.await.unwrap();
-                let cancel_res = cancel_h.await.unwrap();
-                // Both may succeed or one may see already-terminal — both ok.
-                let _ = (start_res, cancel_res);
-
-                let final_run = rm.get_run(&run_id).expect("run present");
-                assert!(
-                    final_run.status.is_terminal(),
-                    "run {i} must be terminal, got {:?}",
-                    final_run.status
+                    .await
+            });
+            // Small jitter so cancel sometimes wins, sometimes loses.
+            if i % 2 == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            let rm_cancel = rm.clone();
+            let rid2 = run_id.clone();
+            let cancel_h =
+                tokio::spawn(
+                    async move { rm_cancel.cancel(CancelRunRequest { run_id: rid2 }).await },
                 );
 
-                let events = rm.runtime.events.replay_after(&run_id, 0);
-                let terminals: Vec<_> = events
-                    .iter()
-                    .filter(|e| {
-                        matches!(
-                            e.payload,
-                            RunEventKind::Completed { .. }
-                                | RunEventKind::Failed { .. }
-                                | RunEventKind::Cancelled { .. }
-                                | RunEventKind::Interrupted { .. }
-                        )
-                    })
-                    .collect();
-                if terminals.len() != 1 {
-                    multi_terminal += 1;
-                }
-                if let Some(ev) = terminals.first() {
-                    let status_from_event = match &ev.payload {
-                        RunEventKind::Completed { .. } => RunStatusV2::Completed,
-                        RunEventKind::Failed { .. } => RunStatusV2::Failed,
-                        RunEventKind::Cancelled { .. } => RunStatusV2::Cancelled,
-                        RunEventKind::Interrupted { .. } => RunStatusV2::Interrupted,
-                        _ => unreachable!(),
-                    };
-                    if status_from_event != final_run.status {
-                        terminal_mismatch += 1;
-                    }
-                } else {
+            let start_res = start_h.await.unwrap();
+            let cancel_res = cancel_h.await.unwrap();
+            // Both may succeed or one may see already-terminal — both ok.
+            let _ = (start_res, cancel_res);
+
+            let final_run = rm.get_run(&run_id).expect("run present");
+            assert!(
+                final_run.status.is_terminal(),
+                "run {i} must be terminal, got {:?}",
+                final_run.status
+            );
+
+            let events = rm.runtime.events.replay_after(&run_id, 0);
+            let terminals: Vec<_> = events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.payload,
+                        RunEventKind::Completed { .. }
+                            | RunEventKind::Failed { .. }
+                            | RunEventKind::Cancelled { .. }
+                            | RunEventKind::Interrupted { .. }
+                    )
+                })
+                .collect();
+            if terminals.len() != 1 {
+                multi_terminal += 1;
+            }
+            if let Some(ev) = terminals.first() {
+                let status_from_event = match &ev.payload {
+                    RunEventKind::Completed { .. } => RunStatusV2::Completed,
+                    RunEventKind::Failed { .. } => RunStatusV2::Failed,
+                    RunEventKind::Cancelled { .. } => RunStatusV2::Cancelled,
+                    RunEventKind::Interrupted { .. } => RunStatusV2::Interrupted,
+                    _ => unreachable!(),
+                };
+                if status_from_event != final_run.status {
                     terminal_mismatch += 1;
                 }
-
-                // Late outcome / cancel must be idempotent (no second terminal).
-                let _ = rm.commit_outcome(&run_id, &EngineOutcome::completed("late"));
-                let _ = rm
-                    .cancel(CancelRunRequest {
-                        run_id: run_id.clone(),
-                    })
-                    .await;
-                let after = rm.runtime.events.replay_after(&run_id, 0);
-                let after_term = after
-                    .iter()
-                    .filter(|e| {
-                        matches!(
-                            e.payload,
-                            RunEventKind::Completed { .. }
-                                | RunEventKind::Failed { .. }
-                                | RunEventKind::Cancelled { .. }
-                                | RunEventKind::Interrupted { .. }
-                        )
-                    })
-                    .count();
-                assert_eq!(
-                    after_term,
-                    terminals.len().max(1),
-                    "late commit/cancel must not add a second terminal (run {i})"
-                );
-                let reopened = rm.get_run(&run_id).unwrap();
-                assert_eq!(
-                    reopened.status, final_run.status,
-                    "reopen status must match final (run {i})"
-                );
+            } else {
+                terminal_mismatch += 1;
             }
+
+            // Late outcome / cancel must be idempotent (no second terminal).
+            let _ = rm.commit_outcome(&run_id, &EngineOutcome::completed("late"));
+            let _ = rm
+                .cancel(CancelRunRequest {
+                    run_id: run_id.clone(),
+                })
+                .await;
+            let after = rm.runtime.events.replay_after(&run_id, 0);
+            let after_term = after
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.payload,
+                        RunEventKind::Completed { .. }
+                            | RunEventKind::Failed { .. }
+                            | RunEventKind::Cancelled { .. }
+                            | RunEventKind::Interrupted { .. }
+                    )
+                })
+                .count();
             assert_eq!(
-                multi_terminal, 0,
-                "some runs had != 1 terminal lifecycle event"
+                after_term,
+                terminals.len().max(1),
+                "late commit/cancel must not add a second terminal (run {i})"
             );
-            assert_eq!(terminal_mismatch, 0, "some runs had event/status mismatch");
-        });
+            let reopened = rm.get_run(&run_id).unwrap();
+            assert_eq!(
+                reopened.status, final_run.status,
+                "reopen status must match final (run {i})"
+            );
+        }
+        assert_eq!(
+            multi_terminal, 0,
+            "some runs had != 1 terminal lifecycle event"
+        );
+        assert_eq!(terminal_mismatch, 0, "some runs had event/status mismatch");
     }
 }

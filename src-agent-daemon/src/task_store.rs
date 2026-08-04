@@ -12,6 +12,13 @@ use std::path::PathBuf;
 fn store() -> Result<DataStore, String> {
     #[cfg(test)]
     let _env_guard = crate::storage::DataStore::env_test_lock();
+    #[cfg(test)]
+    if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -23,22 +30,19 @@ fn store() -> Result<DataStore, String> {
                 .map(PathBuf::from)
         });
     #[cfg(test)]
-    {
-        let runtime_dir = std::env::var("NATIVES_RUNTIME_DIR").map(PathBuf::from).ok();
-        return crate::storage::resolve_test_store(db_path, runtime_dir);
-    }
+    let db_path = db_path.ok_or_else(|| {
+        "test store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)".to_string()
+    })?;
     #[cfg(not(test))]
-    {
-        let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let artifact_dir = db_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("artifacts");
-        DataStore::new(&db_path, &artifact_dir)
+    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+    let artifact_dir = db_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("artifacts");
+    DataStore::new(&db_path, &artifact_dir)
 }
 
 /// Insert a new task record.

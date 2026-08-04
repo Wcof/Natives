@@ -3327,7 +3327,7 @@ mod tests {
         }
 
         let tools = CountingTools(AtomicUsize::new(0));
-        AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
+        AgentEngine::new(EventSequencer::new())
             .run_with_tool_schemas(
                 EngineRunConfig {
                     run_id: "frozen-tools".into(),
@@ -3370,8 +3370,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut hooks = HookRegistry::new();
         hooks.register(HookEvent::SessionEnd, Box::new(RecordingHook(seen.clone())));
-        let engine =
-            AgentEngine::new(crate::event_seq::test_support::memory_sequencer()).with_hooks(hooks);
+        let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
         let provider = FakeProvider {
             rounds: Mutex::new(Vec::new()),
         };
@@ -3442,7 +3441,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let provider = RecordingTurnProvider(seen.clone());
         let run_id = format!("hook-inject-typed-{}", uuid::Uuid::new_v4());
-        AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
+        AgentEngine::new(EventSequencer::new())
             .with_hooks(hooks)
             .run_with_typed_messages(
                 EngineRunConfig {
@@ -3538,7 +3537,7 @@ mod tests {
             batch_calls: AtomicUsize::new(0),
             single_task_calls: AtomicUsize::new(0),
         };
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
                 vec![
@@ -3679,7 +3678,7 @@ mod tests {
             current: Arc::new(AtomicUsize::new(0)),
             max_seen: Arc::new(AtomicUsize::new(0)),
         };
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-parallel-{}", uuid::Uuid::new_v4());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![vec![
@@ -3806,7 +3805,7 @@ mod tests {
             current: Arc::new(AtomicUsize::new(0)),
             max_seen: Arc::new(AtomicUsize::new(0)),
         };
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![vec![
                 EngineProviderEvent::ToolCallDelta {
@@ -3853,7 +3852,7 @@ mod tests {
 
     #[tokio::test]
     async fn completes_simple_text_turn() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![vec![
                 EngineProviderEvent::TextDelta("hello".into()),
@@ -3896,7 +3895,7 @@ mod tests {
 
     #[tokio::test]
     async fn length_stop_never_executes_collected_tool_call() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
                 vec![
@@ -3994,8 +3993,7 @@ mod tests {
         }
         let mut hooks = HookRegistry::new();
         hooks.register(HookEvent::PreToolUse, Box::new(DenyHook));
-        let engine =
-            AgentEngine::new(crate::event_seq::test_support::memory_sequencer()).with_hooks(hooks);
+        let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
                 vec![
@@ -4072,7 +4070,7 @@ mod tests {
             }
         }
 
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = CapturingProvider {
             seen: Mutex::new(Vec::new()),
         };
@@ -4178,7 +4176,7 @@ mod tests {
 
     #[tokio::test]
     async fn executes_tool_then_completes() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
                 vec![
@@ -4224,7 +4222,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_turn_then_text_turn_are_distinct_turns() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-distinct-turns-{}", uuid::Uuid::new_v4());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
@@ -4351,7 +4349,7 @@ mod tests {
             }
         }
 
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let events = engine.events.clone();
         let run_id = format!("r-stream-{}", uuid::Uuid::new_v4());
         let run_id_bg = run_id.clone();
@@ -4433,7 +4431,7 @@ mod tests {
             }
         }
 
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let cancel = engine.cancel_flag();
         let events = engine.events.clone();
         let run_id = format!("r-provider-cancel-{}", uuid::Uuid::new_v4());
@@ -4538,7 +4536,7 @@ mod tests {
             }
         }
 
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-provider-retry-{}", uuid::Uuid::new_v4());
         let provider = FlakyProvider {
             attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -4614,7 +4612,7 @@ mod tests {
 
     #[tokio::test]
     async fn retries_empty_provider_response_once() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-empty-retry-{}", uuid::Uuid::new_v4());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
@@ -4675,7 +4673,7 @@ mod tests {
 
     #[tokio::test]
     async fn retries_stream_error_before_first_delta() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-pre-delta-error-{}", uuid::Uuid::new_v4());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
@@ -4730,7 +4728,7 @@ mod tests {
 
     #[tokio::test]
     async fn discards_partial_generation_error_without_retrying() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-partial-error-{}", uuid::Uuid::new_v4());
         let provider = FakeProvider {
             rounds: Mutex::new(vec![vec![
@@ -4962,8 +4960,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_requests_model_summary_and_injects_it_into_history() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
-            .with_context_budget(1_000, 512);
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
         let provider = CompactionProvider::new(
             SummaryBehavior::Answer,
             vec![
@@ -5051,8 +5048,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_falls_back_to_mechanical_when_summary_fails() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
-            .with_context_budget(1_000, 512);
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
         let provider = CompactionProvider::new(
             SummaryBehavior::Fail,
             vec![
@@ -5117,8 +5113,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_summary_is_interrupted_by_cancel() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
-            .with_context_budget(1_000, 512);
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
         let cancel = engine.cancel_token();
         let provider = Arc::new(CompactionProvider::new(
             SummaryBehavior::Hang,
@@ -5171,8 +5166,7 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_summary_failures_stop_paying_for_summarization() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
-            .with_context_budget(1_000, 512);
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
         let provider = CompactionProvider::new(
             SummaryBehavior::Fail,
             vec![
@@ -5211,7 +5205,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_summary_round_trip_when_history_is_within_budget() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let provider = CompactionProvider::new(
             SummaryBehavior::Answer,
             vec![
@@ -5248,7 +5242,7 @@ mod tests {
 
     #[tokio::test]
     async fn model_compaction_can_be_disabled() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
+        let engine = AgentEngine::new(EventSequencer::new())
             .with_context_budget(1_000, 512)
             .with_model_compaction(false);
         let provider = CompactionProvider::new(
@@ -5391,7 +5385,7 @@ mod tests {
     /// a millisecond, three times, ignoring the delay the provider asked for.
     #[tokio::test]
     async fn rate_limited_connect_error_waits_for_the_provider_hint() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-429-connect-{}", uuid::Uuid::new_v4());
         let provider = RateLimitedProvider {
             attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -5421,7 +5415,7 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limited_stream_event_waits_for_the_provider_hint() {
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let run_id = format!("r-429-stream-{}", uuid::Uuid::new_v4());
         let provider = RateLimitedProvider {
             attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -5448,9 +5442,7 @@ mod tests {
 
     #[tokio::test]
     async fn backoff_is_cancellable() {
-        let engine = Arc::new(AgentEngine::new(
-            crate::event_seq::test_support::memory_sequencer(),
-        ));
+        let engine = Arc::new(AgentEngine::new(EventSequencer::new()));
         let run_id = format!("r-429-cancel-{}", uuid::Uuid::new_v4());
         let provider = RateLimitedProvider {
             attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -5509,7 +5501,7 @@ mod tests {
             }
         }
 
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         let error = engine
             .run(
                 EngineRunConfig {
@@ -5578,7 +5570,7 @@ mod tests {
     #[tokio::test]
     async fn engine_hands_user_images_to_the_provider() {
         let provider = CaptureProvider::default();
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
+        let engine = AgentEngine::new(EventSequencer::new());
         engine
             .run(
                 EngineRunConfig {
@@ -5667,10 +5659,11 @@ mod tests {
         }
 
         let run_id = format!("follow-up-turn-boundary-{}", uuid::Uuid::new_v4());
-        let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
-            .with_input_receiver(Arc::new(FollowUpReceiver {
+        let engine = AgentEngine::new(EventSequencer::new()).with_input_receiver(Arc::new(
+            FollowUpReceiver {
                 offered: AtomicBool::new(false),
-            }));
+            },
+        ));
         let provider = FakeProvider {
             rounds: Mutex::new(vec![
                 vec![
@@ -5720,677 +5713,5 @@ mod tests {
                 .count(),
             2
         );
-    }
-
-    /// Pi behavior conformance — a table-driven fixture proving Natives absorbed
-    /// the Pi agent-loop behavior (turn identity, typed boundary, partial
-    /// assistant, exactly-one tool result, scheduler, safe-point steering,
-    /// follow-up, stop, and abort settlement). This asserts behavior, not class
-    /// names, and adds no TurnPolicy/Progress trait.
-    mod pi_conformance {
-        use super::*;
-        use crate::EngineOutcome;
-        use assistant_protocol::v2::RunEventV2;
-
-        struct ConformanceCase {
-            name: &'static str,
-            rounds: Vec<Vec<EngineProviderEvent>>,
-            max_steps: u32,
-            expect: fn(&EngineOutcome) -> bool,
-            check: fn(&[RunEventV2]) -> bool,
-        }
-
-        async fn run_case(case: &ConformanceCase) -> (EngineOutcome, Vec<RunEventV2>) {
-            let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
-            let provider = FakeProvider {
-                rounds: Mutex::new(case.rounds.clone()),
-            };
-            let run_id = format!("pi-conformance-{}", uuid::Uuid::new_v4());
-            let outcome = engine
-                .run(
-                    EngineRunConfig {
-                        run_id: run_id.clone(),
-                        conversation_id: "conformance".into(),
-                        model: "m".into(),
-                        system_prompt: None,
-                        messages: Vec::new(),
-                        user_content: "go".into(),
-                        max_steps: case.max_steps,
-                    },
-                    &provider,
-                    &FakeTools,
-                )
-                .await
-                .unwrap();
-            (outcome, engine.events.replay_after(&run_id, 0))
-        }
-
-        fn n_events(events: &[RunEventV2], pred: impl Fn(&RunEventKind) -> bool) -> usize {
-            events.iter().filter(|e| pred(&e.payload)).count()
-        }
-
-        #[tokio::test]
-        async fn pi_behavior_matrix() {
-            let cases: Vec<ConformanceCase> = vec![
-                // Turn: a provider retry stays in the SAME Turn; the committed
-                // response closes exactly one Turn.
-                ConformanceCase {
-                    name: "retry stays in the same turn",
-                    rounds: vec![
-                        vec![EngineProviderEvent::Error {
-                            message: "boom".into(),
-                            code: "rate_limit".into(),
-                            retryable: true,
-                            category: "Network".into(),
-                            retry_after_ms: None,
-                        }],
-                        vec![
-                            EngineProviderEvent::TextDelta("ok".into()),
-                            EngineProviderEvent::Completed,
-                        ],
-                    ],
-                    max_steps: 5,
-                    expect: |o| matches!(o, EngineOutcome::Completed { .. }),
-                    check: |events| {
-                        n_events(events, |p| matches!(p, RunEventKind::TurnStarted { .. })) == 1
-                            && n_events(events, |p| {
-                                matches!(p, RunEventKind::GenerationAttemptStarted { .. })
-                            }) == 2
-                            && n_events(events, |p| matches!(p, RunEventKind::TurnCompleted { .. }))
-                                == 1
-                    },
-                },
-                // Partial Assistant: deltas accumulate, then a reliable Final
-                // closes the message exactly once.
-                ConformanceCase {
-                    name: "partial assistant committed after final",
-                    rounds: vec![vec![
-                        EngineProviderEvent::TextDelta("hel".into()),
-                        EngineProviderEvent::TextDelta("lo".into()),
-                        EngineProviderEvent::Completed,
-                    ]],
-                    max_steps: 5,
-                    expect: |o| matches!(o, EngineOutcome::Completed { .. }),
-                    check: |events| {
-                        n_events(events, |p| matches!(p, RunEventKind::MessageStarted { .. })) == 1
-                            && n_events(events, |p| {
-                                matches!(p, RunEventKind::MessageCompleted { .. })
-                            }) == 1
-                            && n_events(events, |p| matches!(p, RunEventKind::MessageDelta { .. }))
-                                >= 1
-                    },
-                },
-                // Exactly-one tool result: one ToolCall → one same-id
-                // ToolCallCompleted with a stable result_message_id, then the
-                // tool-result turn continues.
-                ConformanceCase {
-                    name: "exactly one same-id tool result",
-                    rounds: vec![
-                        vec![
-                            EngineProviderEvent::ToolCallDelta {
-                                index: 0,
-                                id: Some("t1".into()),
-                                name: Some("echo".into()),
-                                arguments_delta: r#"{"x":1}"#.into(),
-                            },
-                            EngineProviderEvent::CompletedWithReason {
-                                reason: ProviderStopReason::ToolUse,
-                            },
-                        ],
-                        vec![
-                            EngineProviderEvent::TextDelta("done".into()),
-                            EngineProviderEvent::Completed,
-                        ],
-                    ],
-                    max_steps: 5,
-                    expect: |o| matches!(o, EngineOutcome::Completed { .. }),
-                    check: |events| {
-                        let completed: Vec<_> = events
-                            .iter()
-                            .filter_map(|e| match &e.payload {
-                                RunEventKind::ToolCallCompleted {
-                                    id,
-                                    result_message_id,
-                                    ..
-                                } => Some((id.clone(), result_message_id.clone())),
-                                _ => None,
-                            })
-                            .collect();
-                        completed.len() == 1
-                            && completed[0].0 == "t1"
-                            && completed[0].1.is_some()
-                            // The tool result ride is followed by a new Turn.
-                            && n_events(
-                                events,
-                                |p| matches!(p, RunEventKind::TurnStarted { .. }),
-                            ) == 2
-                    },
-                },
-                // should-stop: no tool, no follow-up → normal Completed (not a
-                // fabricated failure).
-                ConformanceCase {
-                    name: "no tool no follow-up stops normally",
-                    rounds: vec![vec![
-                        EngineProviderEvent::TextDelta("answer".into()),
-                        EngineProviderEvent::Completed,
-                    ]],
-                    max_steps: 5,
-                    expect: |o| matches!(o, EngineOutcome::Completed { .. }),
-                    check: |events| {
-                        n_events(events, |p| matches!(p, RunEventKind::TurnCompleted { .. })) == 1
-                    },
-                },
-            ];
-
-            for case in &cases {
-                let (outcome, events) = run_case(case).await;
-                assert!(
-                    (case.expect)(&outcome),
-                    "{}: unexpected outcome {outcome:?}",
-                    case.name
-                );
-                assert!(
-                    (case.check)(&events),
-                    "{}: event facts not observed",
-                    case.name
-                );
-            }
-        }
-
-        /// A no-Final tool call (no ToolUse stop reason) must NEVER be executed.
-        #[tokio::test]
-        async fn no_final_tool_call_never_executes() {
-            struct CountingTools(AtomicUsize);
-            #[async_trait::async_trait]
-            impl EngineToolRuntime for CountingTools {
-                async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
-                    vec![ToolSchema {
-                        name: "echo".into(),
-                        description: "echo".into(),
-                        input_schema: serde_json::json!({"type":"object"}),
-                    }]
-                }
-                async fn execute_tool(
-                    &self,
-                    _name: &str,
-                    _input: Value,
-                    _cancel: &CancellationToken,
-                ) -> ToolExecutionResult {
-                    self.0.fetch_add(1, Ordering::SeqCst);
-                    ToolExecutionResult {
-                        output: serde_json::json!({}),
-                        is_error: false,
-                        duration_ms: 0,
-                    }
-                }
-            }
-            let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
-            let run_id = format!("pi-no-final-{}", uuid::Uuid::new_v4());
-            let tools = CountingTools(AtomicUsize::new(0));
-            let provider = FakeProvider {
-                rounds: Mutex::new(vec![vec![
-                    EngineProviderEvent::ToolCallDelta {
-                        index: 0,
-                        id: Some("t1".into()),
-                        name: Some("echo".into()),
-                        arguments_delta: r#"{"x":1}"#.into(),
-                    },
-                    // `Completed` without a ToolUse stop reason — no reliable
-                    // final → the collected tool call must fail closed.
-                    EngineProviderEvent::Completed,
-                ]]),
-            };
-            let outcome = engine
-                .run(
-                    EngineRunConfig {
-                        run_id: run_id.clone(),
-                        conversation_id: "conformance".into(),
-                        model: "m".into(),
-                        system_prompt: None,
-                        messages: Vec::new(),
-                        user_content: "go".into(),
-                        max_steps: 5,
-                    },
-                    &provider,
-                    &tools,
-                )
-                .await
-                .unwrap();
-            // Tool handler invocation stays 0 (never executed).
-            assert_eq!(tools.0.load(Ordering::SeqCst), 0);
-            let events = engine.events.replay_after(&run_id, 0);
-            // The fail-closed rejection still settles as an error ToolCallCompleted
-            // (INVALID_TOOL_CALL_STOP_REASON when `Completed` = Stop without ToolUse,
-            // or UNKNOWN_PROVIDER_STOP_REASON when no reliable final arrived).
-            let rejected = events.iter().any(|e| match &e.payload {
-                RunEventKind::ToolCallCompleted {
-                    is_error, output, ..
-                } => {
-                    *is_error
-                        && output
-                            .get("error_code")
-                            .and_then(Value::as_str)
-                            .is_some_and(|code| {
-                                code == "INVALID_TOOL_CALL_STOP_REASON"
-                                    || code == "UNKNOWN_PROVIDER_STOP_REASON"
-                            })
-                }
-                _ => false,
-            });
-            assert!(
-                rejected,
-                "no-Final tool call must settle as a fail-closed error"
-            );
-            assert!(
-                matches!(outcome, EngineOutcome::Completed { .. }),
-                "{outcome:?}"
-            );
-        }
-
-        /// Scheduler: only explicitly ParallelSafe tools run concurrently; the
-        /// batch result order follows the source order regardless of completion.
-        #[tokio::test]
-        async fn scheduler_parallel_only_when_explicit_and_source_order() {
-            struct ParallelTools {
-                calls: Mutex<Vec<String>>,
-                /// Concurrently-running tools at any instant; peak > 1 proves the
-                /// batch actually overlapped (serial execution stays at 1).
-                running: AtomicUsize,
-                max_running: AtomicUsize,
-            }
-            #[async_trait::async_trait]
-            impl EngineToolRuntime for ParallelTools {
-                async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
-                    vec![
-                        ToolSchema {
-                            name: "p1".into(),
-                            description: "p1".into(),
-                            input_schema: serde_json::json!({"type":"object"}),
-                        },
-                        ToolSchema {
-                            name: "p2".into(),
-                            description: "p2".into(),
-                            input_schema: serde_json::json!({"type":"object"}),
-                        },
-                        ToolSchema {
-                            name: "s1".into(),
-                            description: "s1".into(),
-                            input_schema: serde_json::json!({"type":"object"}),
-                        },
-                    ]
-                }
-                async fn list_tool_capabilities(&self) -> Vec<ToolCapability> {
-                    vec![
-                        ToolCapability {
-                            name: "p1".into(),
-                            schema: serde_json::json!({"type":"object"}),
-                            execution_mode: ToolExecutionMode::ParallelSafe,
-                            side_effect: ToolSideEffect::ReadOnly,
-                            conflict_key: None,
-                        },
-                        ToolCapability {
-                            name: "p2".into(),
-                            schema: serde_json::json!({"type":"object"}),
-                            execution_mode: ToolExecutionMode::ParallelSafe,
-                            side_effect: ToolSideEffect::ReadOnly,
-                            conflict_key: None,
-                        },
-                        ToolCapability {
-                            name: "s1".into(),
-                            schema: serde_json::json!({"type":"object"}),
-                            execution_mode: ToolExecutionMode::Sequential,
-                            side_effect: ToolSideEffect::Write,
-                            conflict_key: None,
-                        },
-                    ]
-                }
-                async fn execute_tool(
-                    &self,
-                    name: &str,
-                    _input: Value,
-                    _cancel: &CancellationToken,
-                ) -> ToolExecutionResult {
-                    self.calls.lock().unwrap().push(name.to_string());
-                    let concurrent = self.running.fetch_add(1, Ordering::SeqCst) + 1;
-                    self.max_running.fetch_max(concurrent, Ordering::SeqCst);
-                    // First parallel tool completes LAST — source order must win.
-                    if name == "p1" {
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                    }
-                    self.running.fetch_sub(1, Ordering::SeqCst);
-                    ToolExecutionResult {
-                        output: serde_json::json!({"tool": name}),
-                        is_error: false,
-                        duration_ms: 1,
-                    }
-                }
-            }
-            let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
-            let run_id = format!("pi-sched-{}", uuid::Uuid::new_v4());
-            let tools = ParallelTools {
-                calls: Mutex::new(Vec::new()),
-                running: AtomicUsize::new(0),
-                max_running: AtomicUsize::new(0),
-            };
-            let provider = FakeProvider {
-                rounds: Mutex::new(vec![
-                    // Turn 1: two explicitly ParallelSafe tools in one batch.
-                    vec![
-                        EngineProviderEvent::ToolCallDelta {
-                            index: 0,
-                            id: Some("a1".into()),
-                            name: Some("p1".into()),
-                            arguments_delta: r#"{}"#.into(),
-                        },
-                        EngineProviderEvent::ToolCallDelta {
-                            index: 1,
-                            id: Some("b1".into()),
-                            name: Some("p2".into()),
-                            arguments_delta: r#"{}"#.into(),
-                        },
-                        EngineProviderEvent::CompletedWithReason {
-                            reason: ProviderStopReason::ToolUse,
-                        },
-                    ],
-                    // Turn 2: a Sequential tool on its own (never runs in parallel).
-                    vec![
-                        EngineProviderEvent::ToolCallDelta {
-                            index: 0,
-                            id: Some("c1".into()),
-                            name: Some("s1".into()),
-                            arguments_delta: r#"{}"#.into(),
-                        },
-                        EngineProviderEvent::CompletedWithReason {
-                            reason: ProviderStopReason::ToolUse,
-                        },
-                    ],
-                    // Turn 3: tool-result turn closes the run.
-                    vec![
-                        EngineProviderEvent::TextDelta("done".into()),
-                        EngineProviderEvent::Completed,
-                    ],
-                ]),
-            };
-            engine
-                .run(
-                    EngineRunConfig {
-                        run_id: run_id.clone(),
-                        conversation_id: "conformance".into(),
-                        model: "m".into(),
-                        system_prompt: None,
-                        messages: Vec::new(),
-                        user_content: "go".into(),
-                        max_steps: 5,
-                    },
-                    &provider,
-                    &tools,
-                )
-                .await
-                .unwrap();
-            let events = engine.events.replay_after(&run_id, 0);
-            // Results in source order (a1, b1, c1) regardless of completion order.
-            let completed: Vec<&String> = events
-                .iter()
-                .filter_map(|e| match &e.payload {
-                    RunEventKind::ToolCallCompleted { id, .. } => Some(id),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                completed,
-                vec!["a1", "b1", "c1"],
-                "Tool Results must keep the provider source order"
-            );
-            // Parallelism is observable: p1 and p2 ran concurrently (peak running
-            // > 1), so the batch did not serialize them.
-            assert!(
-                tools.max_running.load(Ordering::SeqCst) >= 2,
-                "explicitly ParallelSafe tools must run concurrently; calls={:?}, max_running={}",
-                *tools.calls.lock().unwrap(),
-                tools.max_running.load(Ordering::SeqCst)
-            );
-        }
-
-        /// Typed boundary: the provider receives AgentMessages; text/tool/tool-
-        /// result identity survives the conversion and comes back on the next
-        /// request.
-        #[tokio::test]
-        async fn typed_boundary_provider_receives_agent_messages() {
-            struct CapturingProvider {
-                seen: Mutex<Vec<Vec<crate::AgentMessage>>>,
-            }
-            #[async_trait::async_trait]
-            impl EngineProvider for CapturingProvider {
-                async fn stream(
-                    &self,
-                    _model: &str,
-                    _messages: Vec<EngineMessage>,
-                    _tools: &[ToolSchema],
-                    _system_prompt: Option<&str>,
-                    _cancel: CancellationToken,
-                ) -> Result<EngineProviderEventStream, EngineError> {
-                    unreachable!("CapturingProvider uses stream_turn")
-                }
-                async fn stream_turn(
-                    &self,
-                    req: ProviderTurnRequest,
-                    _cancel: CancellationToken,
-                ) -> Result<EngineProviderEventStream, EngineError> {
-                    self.seen.lock().unwrap().push(req.messages.clone());
-                    // First request asks for a tool; second completes.
-                    if req
-                        .messages
-                        .last()
-                        .map(|m| matches!(m, crate::AgentMessage::ToolResult(_)))
-                        .unwrap_or(false)
-                    {
-                        Ok(Box::pin(futures_util::stream::iter(vec![
-                            EngineProviderEvent::TextDelta("done".into()),
-                            EngineProviderEvent::Completed,
-                        ])))
-                    } else {
-                        Ok(Box::pin(futures_util::stream::iter(vec![
-                            EngineProviderEvent::ToolCallDelta {
-                                index: 0,
-                                id: Some("t1".into()),
-                                name: Some("echo".into()),
-                                arguments_delta: r#"{"x":1}"#.into(),
-                            },
-                            EngineProviderEvent::CompletedWithReason {
-                                reason: ProviderStopReason::ToolUse,
-                            },
-                        ])))
-                    }
-                }
-            }
-            let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
-            let run_id = format!("pi-typed-{}", uuid::Uuid::new_v4());
-            let provider = CapturingProvider {
-                seen: Mutex::new(Vec::new()),
-            };
-            engine
-                .run(
-                    EngineRunConfig {
-                        run_id: run_id.clone(),
-                        conversation_id: "conformance".into(),
-                        model: "m".into(),
-                        system_prompt: None,
-                        messages: Vec::new(),
-                        user_content: "use the tool".into(),
-                        max_steps: 5,
-                    },
-                    &provider,
-                    &FakeTools,
-                )
-                .await
-                .unwrap();
-            let seen = provider.seen.lock().unwrap();
-            assert_eq!(seen.len(), 2, "tool turn + result turn");
-            // Every request carries AgentMessages (the typed main chain); the
-            // first contains the user prompt and the second the tool result.
-            assert!(seen[0]
-                .iter()
-                .any(|m| matches!(m, crate::AgentMessage::User(_))));
-            assert!(seen[1]
-                .iter()
-                .any(|m| matches!(m, crate::AgentMessage::ToolResult(_))));
-        }
-
-        /// Steering is consumed only at the post-tool safe point, never
-        /// mid-assistant, and follows-up into a fresh provider turn.
-        #[tokio::test]
-        async fn steering_and_follow_up_consumed_at_safe_points() {
-            struct SteeringReceiver {
-                offered: AtomicBool,
-                consumed: AtomicUsize,
-            }
-            #[async_trait::async_trait]
-            impl crate::EngineInputReceiver for SteeringReceiver {
-                async fn drain(
-                    &self,
-                    kind: crate::PendingInputKind,
-                    _mode: crate::DrainMode,
-                    _point: crate::InputSafePoint,
-                ) -> Result<Vec<crate::PendingInput>, String> {
-                    if kind == crate::PendingInputKind::Steering
-                        && !self.offered.swap(true, Ordering::SeqCst)
-                    {
-                        self.consumed.fetch_add(1, Ordering::SeqCst);
-                        Ok(vec![crate::PendingInput {
-                            id: "steer-1".into(),
-                            kind,
-                            content: "steer".into(),
-                            lease_token: None,
-                        }])
-                    } else {
-                        Ok(Vec::new())
-                    }
-                }
-                async fn ack(
-                    &self,
-                    _input: &crate::PendingInput,
-                    _turn_id: Option<&str>,
-                ) -> Result<(), String> {
-                    Ok(())
-                }
-            }
-            let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer())
-                .with_input_receiver(Arc::new(SteeringReceiver {
-                    offered: AtomicBool::new(false),
-                    consumed: AtomicUsize::new(0),
-                }));
-            let run_id = format!("pi-steer-{}", uuid::Uuid::new_v4());
-            let provider = FakeProvider {
-                rounds: Mutex::new(vec![
-                    vec![
-                        EngineProviderEvent::ToolCallDelta {
-                            index: 0,
-                            id: Some("t1".into()),
-                            name: Some("echo".into()),
-                            arguments_delta: r#"{"x":1}"#.into(),
-                        },
-                        EngineProviderEvent::CompletedWithReason {
-                            reason: ProviderStopReason::ToolUse,
-                        },
-                    ],
-                    vec![
-                        EngineProviderEvent::TextDelta("after tool".into()),
-                        EngineProviderEvent::Completed,
-                    ],
-                    // The steering-triggered turn closes the run.
-                    vec![
-                        EngineProviderEvent::TextDelta("steered".into()),
-                        EngineProviderEvent::Completed,
-                    ],
-                ]),
-            };
-            let outcome = engine
-                .run(
-                    EngineRunConfig {
-                        run_id: run_id.clone(),
-                        conversation_id: "conformance".into(),
-                        model: "m".into(),
-                        system_prompt: None,
-                        messages: Vec::new(),
-                        user_content: "go".into(),
-                        max_steps: 5,
-                    },
-                    &provider,
-                    &FakeTools,
-                )
-                .await
-                .unwrap();
-            // The tool batch closed before steering was leased, and steering
-            // produced a fresh provider turn that ended the run normally.
-            let events = engine.events.replay_after(&run_id, 0);
-            assert_eq!(
-                n_events(&events, |p| matches!(p, RunEventKind::TurnStarted { .. })),
-                2,
-                "tool turn + steering turn (steering leased only at the safe point)"
-            );
-            assert!(
-                matches!(outcome, EngineOutcome::Completed { .. }),
-                "{outcome:?}"
-            );
-        }
-
-        /// Abort / agent end: cancel mid-flight settles as Cancelled with the
-        /// turn closed fail-closed (no fake Completed).
-        #[tokio::test]
-        async fn abort_mid_provider_settles_as_cancelled() {
-            // Provider that yields deltas continuously so the engine's between-
-            // event cancel check fires mid-turn (a stream that blocks on next()
-            // would not be interruptible, so this deliberately keeps yielding).
-            struct HangingProvider;
-            #[async_trait::async_trait]
-            impl EngineProvider for HangingProvider {
-                async fn stream(
-                    &self,
-                    _model: &str,
-                    _messages: Vec<EngineMessage>,
-                    _tools: &[ToolSchema],
-                    _system_prompt: Option<&str>,
-                    _cancel: CancellationToken,
-                ) -> Result<EngineProviderEventStream, EngineError> {
-                    Ok(Box::pin(futures_util::stream::unfold(
-                        0u32,
-                        |n| async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                            Some((
-                                EngineProviderEvent::TextDelta(format!("partial-{n}")),
-                                n + 1,
-                            ))
-                        },
-                    )))
-                }
-            }
-            let engine = AgentEngine::new(crate::event_seq::test_support::memory_sequencer());
-            let cancel = engine.cancel_token();
-            let run_id = format!("pi-abort-{}", uuid::Uuid::new_v4());
-            let run = tokio::spawn(async move {
-                engine
-                    .run(
-                        EngineRunConfig {
-                            run_id: run_id.clone(),
-                            conversation_id: "conformance".into(),
-                            model: "m".into(),
-                            system_prompt: None,
-                            messages: Vec::new(),
-                            user_content: "go".into(),
-                            max_steps: 5,
-                        },
-                        &HangingProvider,
-                        &FakeTools,
-                    )
-                    .await
-            });
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            cancel.cancel();
-            let outcome = run.await.unwrap().unwrap();
-            assert!(
-                matches!(outcome, EngineOutcome::Cancelled),
-                "cancel must settle as Cancelled, got {outcome:?}"
-            );
-        }
     }
 }

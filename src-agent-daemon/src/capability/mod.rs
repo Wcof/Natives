@@ -25,6 +25,13 @@ use std::path::PathBuf;
 pub(crate) fn store() -> Result<DataStore, String> {
     #[cfg(test)]
     let _env_guard = crate::storage::DataStore::env_test_lock();
+    #[cfg(test)]
+    if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -36,25 +43,22 @@ pub(crate) fn store() -> Result<DataStore, String> {
                 .map(PathBuf::from)
         });
     #[cfg(test)]
-    {
-        let runtime_dir = std::env::var("NATIVES_RUNTIME_DIR").map(PathBuf::from).ok();
-        return crate::storage::resolve_test_store(db_path, runtime_dir);
-    }
+    let db_path = db_path.ok_or_else(|| {
+        "test store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)".to_string()
+    })?;
     #[cfg(not(test))]
-    {
-        let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-                PathBuf::from(home).join(".natives").join("runtime")
-            })
-            .join("artifacts");
-        DataStore::new(&db_path, &artifact_dir)
+    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+    let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            PathBuf::from(home).join(".natives").join("runtime")
+        })
+        .join("artifacts");
+    DataStore::new(&db_path, &artifact_dir)
 }
 
 /// RPC dispatch for the `capability.*` configuration surface.

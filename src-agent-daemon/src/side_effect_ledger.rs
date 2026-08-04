@@ -6,10 +6,9 @@
 use serde_json::Value;
 
 fn ledger_store() -> Result<std::sync::Arc<crate::storage::DataStore>, String> {
-    // Tests first: lazily initializing the process-global RunManager from a
-    // test would run its startup recovery (`interrupt_active_sqlite_runs`) and
-    // mark in-flight fixture runs on the shared temp DB as Interrupted. The
-    // isolated test store avoids that side effect entirely.
+    if let Some(store) = crate::run_manager::global_run_manager().data_store_ref() {
+        return Ok(store);
+    }
     #[cfg(test)]
     {
         use std::sync::OnceLock;
@@ -26,9 +25,6 @@ fn ledger_store() -> Result<std::sync::Arc<crate::storage::DataStore>, String> {
             )
         });
         return Ok(store.clone());
-    }
-    if let Some(store) = crate::run_manager::global_run_manager().data_store_ref() {
-        return Ok(store);
     }
     #[allow(unreachable_code)]
     Err("no data store for side_effect_record".to_string())

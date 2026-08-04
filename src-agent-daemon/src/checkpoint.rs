@@ -612,31 +612,19 @@ pub fn global_checkpoint_manager() -> &'static CheckpointManager {
     use std::sync::OnceLock;
     static M: OnceLock<CheckpointManager> = OnceLock::new();
     M.get_or_init(|| {
-        #[cfg(test)]
-        {
-            // Tests: resolve to the isolated test store so checkpoint rows never
-            // touch ~/.natives/assistant.db.
-            match crate::storage::open_resolved_store() {
-                Ok(store) => CheckpointManager::with_store(Arc::new(store)),
-                Err(_) => CheckpointManager::new(),
-            }
-        }
-        #[cfg(not(test))]
-        {
-            // Best-effort open from env
-            let db = crate::default_assistant_db_path();
-            let art = std::env::var("NATIVES_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    std::env::var_os("HOME")
-                        .map(|h| PathBuf::from(h).join(".natives").join("runtime"))
-                        .unwrap_or_else(std::env::temp_dir)
-                })
-                .join("artifacts");
-            match DataStore::new(&db, &art) {
-                Ok(store) => CheckpointManager::with_store(Arc::new(store)),
-                Err(_) => CheckpointManager::new(),
-            }
+        // Best-effort open from env
+        let db = crate::default_assistant_db_path();
+        let art = std::env::var("NATIVES_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var_os("HOME")
+                    .map(|h| PathBuf::from(h).join(".natives").join("runtime"))
+                    .unwrap_or_else(std::env::temp_dir)
+            })
+            .join("artifacts");
+        match DataStore::new(&db, &art) {
+            Ok(store) => CheckpointManager::with_store(Arc::new(store)),
+            Err(_) => CheckpointManager::new(),
         }
     })
 }
