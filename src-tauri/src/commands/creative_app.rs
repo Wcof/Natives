@@ -10,10 +10,12 @@ use crate::creative_app::docker;
 use crate::creative_app::install;
 use crate::creative_app::local::{self, LocalRuntimeHandle};
 use crate::creative_app::model::*;
+use crate::creative_app::operation as op;
 use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
 use crate::db::DbPool;
+use crate::emit_db_state_changed;
 use crate::{Error, Result};
 use tauri::State;
 
@@ -42,6 +44,71 @@ fn lifecycle_ctx(
     LifecycleCtx::new(app, modules_dir(), Some(local_runtime), host_http_port)
 }
 
+// ── Operation journal helpers (batch 2 CR-201) ──────────────────────────
+
+/// Unified application id for a source row, read-only (never fabricates a row).
+fn operation_application_id(conn: &rusqlite::Connection, id: &str) -> Option<String> {
+    adapters::resolve(conn, id).ok().and_then(|s| {
+        runtime_store::application_id_for(conn, s.as_source(), id)
+            .ok()
+            .flatten()
+    })
+}
+
+/// Redacted input snapshot for the journal. Never stores env values or secrets.
+fn redacted_for(kind: &str, id: &str) -> String {
+    serde_json::json!({ "kind": kind, "appId": id }).to_string()
+}
+
+fn emit_operation(app: &tauri::AppHandle, conn: &rusqlite::Connection, op_id: i64) -> Result<()> {
+    if let Some(operation) = op::get_operation(conn, op_id)? {
+        emit_db_state_changed(
+            app,
+            "creative-operation",
+            serde_json::to_value(&operation).unwrap_or_else(|_| serde_json::json!({ "id": op_id })),
+        );
+    }
+    Ok(())
+}
+
+/// Guarded phase change + emit (called from the DB scopes of each mutation).
+fn journal(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+    op_id: i64,
+    from: &[&str],
+    to: &str,
+) -> Result<()> {
+    op::transition(conn, op_id, from, to)?;
+    emit_operation(app, conn, op_id)
+}
+
+fn settle_success(app: &tauri::AppHandle, conn: &rusqlite::Connection, op_id: i64) -> Result<()> {
+    op::finish_success(conn, op_id)?;
+    emit_operation(app, conn, op_id)
+}
+
+fn settle_failure(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+    op_id: i64,
+    code: &str,
+    message: &str,
+) -> Result<()> {
+    op::finish_failure(conn, op_id, Some(code), message)?;
+    emit_operation(app, conn, op_id)
+}
+
+fn settle_cancelled(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+    op_id: i64,
+    reason: &str,
+) -> Result<()> {
+    op::finish_cancelled(conn, op_id, Some(reason))?;
+    emit_operation(app, conn, op_id)
+}
+
 #[tauri::command]
 pub fn creative_app_list(state: State<'_, AppState>) -> Result<Vec<CreativeAppSummary>> {
     let c = conn(&state.db)?;
@@ -55,36 +122,96 @@ pub async fn creative_app_start(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    // Phase 1 (spawn) holds the mutation lock so installs/lifecycle stay serial;
-    // it is fast. Phase 2 (health) runs WITHOUT the lock so a concurrent stop can
-    // cancel a long start (batch 2).
-    let pool_spawn = pool.clone();
-    let id_spawn = id.clone();
+
+    // Journal: create the operation BEFORE the app lock so `waiting` is visible
+    // to the Renderer while the mutation waits its turn (CR-201 + CR-202).
+    let (op_id, op_app_id) = {
+        let c = conn(&pool)?;
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_START, &id);
+        (
+            op::create_operation(
+                &c,
+                app_id.as_deref(),
+                op::KIND_START,
+                "user",
+                Some(&redacted),
+            )?,
+            app_id,
+        )
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+    let _ = op_app_id;
+
+    // Phase 1 (spawn) holds the per-application lock so the same app stays
+    // exclusive; other apps proceed in parallel (CR-202). Phase 2 (health) runs
+    // WITHOUT the lock so a concurrent stop can cancel a long start.
     let spawned = {
-        let _guard = lock.lock().await;
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let pool_spawn = pool.clone();
+        let id_spawn = id.clone();
+        let app = ctx.app.clone();
         let ctx2 = ctx.clone();
         tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Handle::current();
             let c = conn(&pool_spawn)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
             rt.block_on(adapters::spawn_start(&c, &ctx2, &id_spawn))
         })
         .await
         .map_err(|e| Error::Internal(format!("start join: {e}")))?
     }?;
+
     let ctx3 = ctx;
-    tokio::task::spawn_blocking(move || {
+    let settle = tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(adapters::await_ready(&c, &ctx3, &id, &spawned))
+        let result = rt.block_on(adapters::await_ready(&c, &ctx3, &id, &spawned));
+        match result {
+            Ok(summary) if summary.state == CreativeAppState::Running => {
+                settle_success(&ctx3.app, &c, op_id)?;
+                Ok(summary)
+            }
+            Ok(summary) => {
+                // Stop preempted the health wait; the instance is owned by the
+                // stop path and the start operation is cancelled.
+                let _ = settle_cancelled(
+                    &ctx3.app,
+                    &c,
+                    op_id,
+                    "start superseded by a concurrent stop",
+                );
+                Ok(summary)
+            }
+            Err(e) => {
+                let _ = settle_failure(&ctx3.app, &c, op_id, "start_failed", &e.to_string());
+                Err(e)
+            }
+        }
     })
     .await
-    .map_err(|e| Error::Internal(format!("start health join: {e}")))?
+    .map_err(|e| Error::Internal(format!("start health join: {e}")))??;
+
+    Ok(MutationResult {
+        operation_id: op_id,
+        summary: settle,
+    })
 }
 
 #[tauri::command]
@@ -94,20 +221,71 @@ pub async fn creative_app_stop(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+
+    let op_id = {
         let c = conn(&pool)?;
-        rt.block_on(adapters::stop(&c, &ctx, &id))
-    })
-    .await
-    .map_err(|e| Error::Internal(format!("stop join: {e}")))?
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_STOP, &id);
+        op::create_operation(
+            &c,
+            app_id.as_deref(),
+            op::KIND_STOP,
+            "user",
+            Some(&redacted),
+        )?
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+
+    let result = {
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let app = ctx.app.clone();
+        let pool_inner = pool.clone();
+        let id_inner = id.clone();
+        let ctx_inner = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_inner)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
+            rt.block_on(adapters::stop(&c, &ctx_inner, &id_inner))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("stop join: {e}")))?
+    };
+
+    match result {
+        Ok(summary) => {
+            let c = conn(&pool)?;
+            settle_success(&ctx.app, &c, op_id)?;
+            Ok(MutationResult {
+                operation_id: op_id,
+                summary,
+            })
+        }
+        Err(e) => {
+            // Stop failure leaves the instance cleanup_failed (active-like);
+            // the operation itself is failed — resources are NOT verified
+            // released, so restart stays blocked until a retry stop succeeds.
+            let c = conn(&pool)?;
+            settle_failure(&ctx.app, &c, op_id, "stop_failed", &e.to_string())?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -118,21 +296,72 @@ pub async fn creative_app_delete(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<DeleteResult> {
+) -> Result<DeleteMutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
-    let opts = options.unwrap_or_default();
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+    let opts = options.unwrap_or_default();
+
+    let op_id = {
         let c = conn(&pool)?;
-        rt.block_on(adapters::delete(&c, &ctx, &id, opts))
-    })
-    .await
-    .map_err(|e| Error::Internal(format!("delete join: {e}")))?
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_DELETE, &id);
+        op::create_operation(
+            &c,
+            app_id.as_deref(),
+            op::KIND_DELETE,
+            "user",
+            Some(&redacted),
+        )?
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+
+    let result = {
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let app = ctx.app.clone();
+        let pool_inner = pool.clone();
+        let id_inner = id.clone();
+        let opts_inner = opts.clone();
+        let ctx_inner = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_inner)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
+            rt.block_on(adapters::delete(&c, &ctx_inner, &id_inner, opts_inner))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("delete join: {e}")))?
+    };
+
+    match result {
+        Ok(delete_result) => {
+            // On success the application row is gone; the operation survives with
+            // application_id NULL via the FK (audit trail).
+            let c = conn(&pool)?;
+            settle_success(&ctx.app, &c, op_id)?;
+            Ok(DeleteMutationResult {
+                operation_id: op_id,
+                result: delete_result,
+            })
+        }
+        Err(e) => {
+            let c = conn(&pool)?;
+            settle_failure(&ctx.app, &c, op_id, "delete_failed", &e.to_string())?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -142,20 +371,68 @@ pub async fn creative_app_restart(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+
+    let op_id = {
         let c = conn(&pool)?;
-        rt.block_on(adapters::restart(&c, &ctx, &id))
-    })
-    .await
-    .map_err(|e| Error::Internal(format!("restart join: {e}")))?
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_RESTART, &id);
+        op::create_operation(
+            &c,
+            app_id.as_deref(),
+            op::KIND_RESTART,
+            "user",
+            Some(&redacted),
+        )?
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+
+    let result = {
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let app = ctx.app.clone();
+        let pool_inner = pool.clone();
+        let id_inner = id.clone();
+        let ctx_inner = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_inner)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
+            rt.block_on(adapters::restart(&c, &ctx_inner, &id_inner))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("restart join: {e}")))?
+    };
+
+    match result {
+        Ok(summary) => {
+            let c = conn(&pool)?;
+            settle_success(&ctx.app, &c, op_id)?;
+            Ok(MutationResult {
+                operation_id: op_id,
+                summary,
+            })
+        }
+        Err(e) => {
+            let c = conn(&pool)?;
+            settle_failure(&ctx.app, &c, op_id, "restart_failed", &e.to_string())?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -186,15 +463,34 @@ pub async fn creative_app_install_github(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let handle = app_handle.clone();
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+
+    // No application identity exists yet — the operation is created without one
+    // and bound after install (CR-201). Install is bounded by the shared
+    // install/Docker semaphore instead of a per-app lock (CR-202).
+    let op_id = {
         let c = conn(&pool)?;
-        let summary = rt.block_on(install::install_github(&c, &handle, request))?;
+        let redacted = serde_json::json!({ "kind": op::KIND_INSTALL }).to_string();
+        op::create_operation(&c, None, op::KIND_INSTALL, "user", Some(&redacted))?
+    };
+    let _permit = lock.acquire_install().await;
+
+    let pool_inner = pool.clone();
+    let handle_inner = handle.clone();
+    let inner = tokio::task::spawn_blocking(move || -> crate::Result<CreativeAppSummary> {
+        let rt = tokio::runtime::Handle::current();
+        let c = conn(&pool_inner)?;
+        journal(
+            &handle_inner,
+            &c,
+            op_id,
+            &[op::PHASE_PENDING],
+            op::PHASE_RUNNING,
+        )?;
+        let summary = rt.block_on(install::install_github(&c, &handle_inner, request))?;
         // Unified identity + startup plan for the newly installed external app.
         let app_id = runtime_store::find_or_create_application(
             &c,
@@ -204,10 +500,58 @@ pub async fn creative_app_install_github(
         if let Ok(Some(rec)) = store::get_app(&c, &summary.id) {
             let _ = runtime_store::upsert_active_plan(&c, &app_id, &rec.runtime_config_json);
         }
-        runtime_store::attach_identity(&c, summary)
+        let _ = op::set_application(&c, op_id, &app_id);
+        Ok(runtime_store::attach_identity(&c, summary)?)
     })
     .await
     .map_err(|e| Error::Internal(format!("install join: {e}")))?
+    .map_err(|e| crate::Error::from(e));
+
+    match inner {
+        Ok(summary) => {
+            let c = conn(&pool)?;
+            settle_success(&handle, &c, op_id)?;
+            Ok(MutationResult {
+                operation_id: op_id,
+                summary,
+            })
+        }
+        Err(e) => {
+            let c = conn(&pool)?;
+            let _ = settle_failure(&handle, &c, op_id, "install_failed", &e.to_string());
+            Err(e)
+        }
+    }
+}
+
+/// Snapshot of all non-terminal operations (renderer projection, CR-203).
+#[tauri::command]
+pub fn creative_app_operations(state: State<'_, AppState>) -> Result<Vec<op::Operation>> {
+    let c = conn(&state.db)?;
+    op::active_operations(&c)
+}
+
+#[tauri::command]
+pub fn creative_app_operation_get(id: i64, state: State<'_, AppState>) -> Result<op::Operation> {
+    let c = conn(&state.db)?;
+    op::get_operation_or(&c, id)
+}
+
+/// Cancel an operation that has not started any side effect (pending/waiting).
+#[tauri::command]
+pub fn creative_app_operation_cancel(
+    id: i64,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<op::Operation> {
+    let c = conn(&state.db)?;
+    let operation = op::cancel(&c, id)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-operation",
+        serde_json::to_value(&operation).unwrap_or_default(),
+    );
+    Ok(operation)
 }
 
 #[tauri::command]
@@ -441,7 +785,9 @@ pub async fn creative_app_create_local(
 ) -> Result<CreativeAppSummary> {
     let pool = state.db.clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    // New registration: serialize registrations against each other, but do not
+    // block lifecycle ops on unrelated apps (CR-202).
+    let _guard = lock.acquire_app("__registration__").await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let mut c = conn(&pool)?;
@@ -466,7 +812,7 @@ pub async fn creative_app_update_local(
 ) -> Result<CreativeAppSummary> {
     let pool = state.db.clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    let _guard = lock.acquire_app(&request.id).await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let mut c = conn(&pool)?;
@@ -737,7 +1083,7 @@ pub async fn creative_app_resolve_orphan(
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    let _guard = lock.acquire_app(&id).await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
@@ -788,7 +1134,7 @@ pub async fn creative_app_install_local_dependencies(
     let pool = state.db.clone();
     let logs = local_runtime.logs().clone_registry();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    let _guard = lock.acquire_app(&id).await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();

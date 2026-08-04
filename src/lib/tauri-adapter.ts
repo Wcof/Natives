@@ -168,6 +168,49 @@ export interface CreativeAppDeleteResult {
   warnings: string[];
 }
 
+/**
+ * Operation journal (batch 2 CR-201): every lifecycle mutation records a
+ * durable operation row so the Renderer projects busy/error/retry from Host
+ * facts instead of frontend booleans (CR-203).
+ */
+export type CreativeAppOperationKind = 'start' | 'stop' | 'restart' | 'delete' | 'install';
+export type CreativeAppOperationPhase =
+  | 'pending'
+  | 'waiting'
+  | 'running'
+  | 'compensating'
+  | 'succeeded'
+  | 'failed'
+  | 'compensated'
+  | 'cancelled';
+
+export interface CreativeAppOperation {
+  id: number;
+  applicationId?: string | null;
+  runtimeInstanceId?: string | null;
+  kind: CreativeAppOperationKind;
+  phase: CreativeAppOperationPhase;
+  actor: string;
+  redactedInput?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  startedAt: string;
+  finishedAt?: string | null;
+  updatedAt: string;
+}
+
+/** Lifecycle mutation result: journaled operation id + current projection. */
+export interface CreativeAppMutationResult {
+  operationId: number;
+  summary: CreativeAppSummary;
+}
+
+/** Delete mutation result (the app is gone, so there is no summary). */
+export interface CreativeAppDeleteMutationResult {
+  operationId: number;
+  result: CreativeAppDeleteResult;
+}
+
 export type CreativeAppOpenTarget =
   | { kind: 'workshop_module'; moduleId: string }
   | { kind: 'local_url'; url: string; appId: string };
@@ -629,12 +672,16 @@ export interface NativesAPI {
   /** Multi-source Personal Creations (internal + GitHub + local project). */
   creativeApp: {
     list: () => Promise<CreativeAppSummary[]>;
-    start: (id: string) => Promise<CreativeAppSummary>;
-    stop: (id: string) => Promise<CreativeAppSummary>;
-    delete: (id: string, options?: CreativeAppDeleteOptions) => Promise<CreativeAppDeleteResult>;
+    start: (id: string) => Promise<CreativeAppMutationResult>;
+    stop: (id: string) => Promise<CreativeAppMutationResult>;
+    delete: (id: string, options?: CreativeAppDeleteOptions) => Promise<CreativeAppDeleteMutationResult>;
     getOpenTarget: (id: string) => Promise<CreativeAppOpenTarget>;
     inspectGithub: (request: CreativeAppInspectRequest) => Promise<CreativeAppInspectResult>;
-    installGithub: (request: CreativeAppInstallRequest) => Promise<CreativeAppSummary>;
+    installGithub: (request: CreativeAppInstallRequest) => Promise<CreativeAppMutationResult>;
+    operations: () => Promise<CreativeAppOperation[]>;
+    getOperation: (id: number) => Promise<CreativeAppOperation>;
+    cancelOperation: (id: number) => Promise<CreativeAppOperation>;
+    onOperationChanged: (callback: (op: CreativeAppOperation) => void) => () => void;
     logs: (id: string, tail?: number) => Promise<string>;
     reconcile: () => Promise<number>;
     githubTokenStatus: () => Promise<CreativeAppGithubTokenStatus>;
@@ -655,7 +702,7 @@ export interface NativesAPI {
     createLocal: (request: CreateLocalCreativeRequest) => Promise<CreativeAppSummary>;
     updateLocal: (request: UpdateLocalCreativeRequest) => Promise<CreativeAppSummary>;
     rescanLocal: (id: string) => Promise<LocalProjectScanResult>;
-    restart: (id: string) => Promise<CreativeAppSummary>;
+    restart: (id: string) => Promise<CreativeAppMutationResult>;
     resolveOrphan: (id: string, restart: boolean) => Promise<CreativeAppSummary>;
     getLocalLogs: (
       id: string,
@@ -1231,16 +1278,33 @@ const nativesAPI: NativesAPI = {
   // Creative App (multi-source)
   creativeApp: {
     list: () => cmd<CreativeAppSummary[]>('creative_app_list'),
-    start: (id: string) => cmd<CreativeAppSummary>('creative_app_start', { id }),
-    stop: (id: string) => cmd<CreativeAppSummary>('creative_app_stop', { id }),
+    start: (id: string) => cmd<CreativeAppMutationResult>('creative_app_start', { id }),
+    stop: (id: string) => cmd<CreativeAppMutationResult>('creative_app_stop', { id }),
     delete: (id: string, options?: CreativeAppDeleteOptions) =>
-      cmd<CreativeAppDeleteResult>('creative_app_delete', { id, options }),
+      cmd<CreativeAppDeleteMutationResult>('creative_app_delete', { id, options }),
     getOpenTarget: (id: string) =>
       cmd<CreativeAppOpenTarget>('creative_app_get_open_target', { id }),
     inspectGithub: (request: CreativeAppInspectRequest) =>
       cmd<CreativeAppInspectResult>('creative_app_inspect_github', { request }),
     installGithub: (request: CreativeAppInstallRequest) =>
-      cmd<CreativeAppSummary>('creative_app_install_github', { request }),
+      cmd<CreativeAppMutationResult>('creative_app_install_github', { request }),
+    operations: () => cmd<CreativeAppOperation[]>('creative_app_operations'),
+    getOperation: (id: number) =>
+      cmd<CreativeAppOperation>('creative_app_operation_get', { id }),
+    cancelOperation: (id: number) =>
+      cmd<CreativeAppOperation>('creative_app_operation_cancel', { id }),
+    onOperationChanged: (callback: (op: CreativeAppOperation) => void) => {
+      const unlisten = listen<{ channel: string; data: CreativeAppOperation }>(
+        'db-state-changed',
+        (event) => {
+          if (event.payload?.channel !== 'creative-operation') return;
+          if (event.payload?.data) callback(event.payload.data);
+        },
+      );
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    },
     logs: (id: string, tail?: number) => cmd<string>('creative_app_logs', { id, tail }),
     reconcile: () => cmd<number>('creative_app_reconcile'),
     githubTokenStatus: () =>
@@ -1285,7 +1349,7 @@ const nativesAPI: NativesAPI = {
       cmd<CreativeAppSummary>('creative_app_update_local', { request }),
     rescanLocal: (id: string) =>
       cmd<LocalProjectScanResult>('creative_app_rescan_local', { id }),
-    restart: (id: string) => cmd<CreativeAppSummary>('creative_app_restart', { id }),
+    restart: (id: string) => cmd<CreativeAppMutationResult>('creative_app_restart', { id }),
     resolveOrphan: (id: string, restart: boolean) =>
       cmd<CreativeAppSummary>('creative_app_resolve_orphan', { id, restart }),
     getLocalLogs: (id: string, limit?: number) =>

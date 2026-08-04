@@ -299,8 +299,10 @@ export default function WorkshopPage() {
     await withBusy(app.id, async () => {
       try {
         // Unified lifecycle: all three sources start via creativeApp.start
-        // (adapters map internal → enable_module).
-        const updated = await window.nativesAPI?.creativeApp?.start?.(app.id);
+        // (adapters map internal → enable_module). Mutations return the journaled
+        // operation id plus the current summary projection (batch 2 CR-201).
+        const result = await window.nativesAPI?.creativeApp?.start?.(app.id);
+        const updated = result?.summary;
         if (
           updated?.state === 'running' &&
           shouldAutoOpenAfterStart(updated) &&

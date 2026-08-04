@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "17";
+pub const SCHEMA_VERSION: &str = "18";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1157,6 +1157,42 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '17')",
             [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v17→v18 (batch 2 CR-201): operation journal for lifecycle
+    // mutations.
+    //
+    // install/start/stop/restart/delete each record a durable operation row
+    // (kind / phase / redacted input / error / timestamps) so every external
+    // side effect is traceable to an operation and partial failures have a
+    // recovery carrier. Additive and idempotent — no source detail is touched.
+    // `application_id` is nullable with ON DELETE SET NULL so a delete
+    // operation survives the removal of its own application row (audit trail).
+    if current_version < 18 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+                runtime_instance_id TEXT REFERENCES runtime_instances(id) ON DELETE SET NULL,
+                kind TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT 'user',
+                redacted_input_json TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_operations_application_active
+                ON operations(application_id, phase);
+            CREATE INDEX IF NOT EXISTS idx_operations_updated_at
+                ON operations(updated_at);
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '18');
+            ",
         )
         .map_err(Error::Database)?;
     }
@@ -2473,6 +2509,71 @@ mod tests {
         // Idempotent re-run finds nothing new.
         let fixed2 = upgrade_startup_plans_v1(&conn).expect("upgrade again");
         assert_eq!(fixed2, 0);
+    }
+
+    /// Batch 2 CR-201: migration v18 creates the `operations` journal table with
+    /// FK-linked app/instance columns and active-phase indexes, and is idempotent.
+    #[test]
+    fn migration_creates_operations_journal() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = '_schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("schema version");
+        assert_eq!(
+            version, SCHEMA_VERSION,
+            "migration must bump the tracked version"
+        );
+
+        conn.execute(
+            "INSERT INTO operations (kind, phase, actor, started_at, updated_at)
+             VALUES ('start', 'pending', 'user', 't', 't')",
+            [],
+        )
+        .expect("operations table accepts a minimal journal row");
+
+        // Application id can be NULL (install before the app identity exists) and
+        // the FK is satisfied once an application row exists.
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-op', 'local_project', 'loc', 'L', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        conn.execute(
+            "INSERT INTO operations (application_id, kind, phase, started_at, updated_at)
+             VALUES ('app-op', 'stop', 'running', 't', 't')",
+            [],
+        )
+        .expect("operation links to an application");
+
+        // Repeat migration is a no-op (no error, no duplicate table).
+        apply_migrations(&conn).expect("re-apply migrations");
+
+        // Deleting the application SET NULLs the operation's application_id so a
+        // delete operation journal survives its own app row (audit trail).
+        conn.execute(
+            "INSERT INTO operations (application_id, kind, phase, started_at, updated_at)
+             VALUES ('app-op', 'delete', 'succeeded', 't', 't')",
+            [],
+        )
+        .expect("insert delete operation");
+        conn.execute("DELETE FROM applications WHERE id = 'app-op'", [])
+            .expect("delete app");
+        let orphaned_app: Option<String> = conn
+            .query_row(
+                "SELECT application_id FROM operations WHERE kind = 'delete'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("delete operation row");
+        assert_eq!(orphaned_app, None, "FK SET NULL keeps the delete audit row");
     }
 }
 

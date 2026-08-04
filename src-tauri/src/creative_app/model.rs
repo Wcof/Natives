@@ -911,6 +911,26 @@ pub struct DeleteResult {
     pub warnings: Vec<String>,
 }
 
+/// Result of a lifecycle mutation that keeps the app: the journaled operation
+/// id plus the current summary projection. The summary stays in the response so
+/// existing consumers keep working during the one-version compatibility window
+/// (batch 2 CR-201).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationResult {
+    pub operation_id: i64,
+    pub summary: CreativeAppSummary,
+}
+
+/// Result of a delete mutation: the journaled operation id plus the delete
+/// outcome (the app is gone, so there is no summary to project).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMutationResult {
+    pub operation_id: i64,
+    pub result: DeleteResult,
+}
+
 /// Open target for list "open" action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

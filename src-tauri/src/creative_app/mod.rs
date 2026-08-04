@@ -12,6 +12,7 @@ pub mod github;
 pub mod install;
 pub mod local;
 pub mod model;
+pub mod operation;
 pub mod paths;
 pub mod probe;
 pub mod runtime_store;
