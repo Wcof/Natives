@@ -3,6 +3,7 @@
 > **唯一进度与契约源**（2026-07-23 文档清理后）：其它 `NATIVE_ENGINE_*` 快照 / task pack / linkage 状态文档已删除，请只更新本文件 + [`NATIVE-DAEMON-CAPABILITY-MAP.md`](./NATIVE-DAEMON-CAPABILITY-MAP.md) + [`NATIVE_ENGINE_ENV.md`](./NATIVE_ENGINE_ENV.md)。  
 > 冻结日期：2026-07-17（契约）；进度随代码更新  
 > **最近一次增量核对**：2026-07-29，Native Harness 证据闭环与 ADR-0015 Job/Scheduler 收敛
+> **2026-08-04（B00 可信基线）**：冻结基线 `9584c3c2`；建立 native/compat/test 三类执行入口矩阵与 10 点 crash matrix（`scripts/runtime-crash-matrix.json`）；生成 `natives-runtime/b00-baseline` 稳定标签
 > 基座：`agent-core` / `provider-adapters` / `capability-gateway` / `assistant-protocol` / `src-agent-daemon` / `src-tauri`  
 > 分层约束：[`standards/technical/01-layering.md`](../standards/technical/01-layering.md)  
 > 状态语义：`not_started` | `in_progress` | `partial` | `done` | `blocked`  
@@ -279,3 +280,64 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 - ~~`NATIVE_ENGINE_GAP_CHECKLIST.md`~~：已于 2026-07-23 文档清理时删除，勿再引用。  
 - [`EXECUTION-ENGINE-CAPABILITY-AUDIT.md`](./EXECUTION-ENGINE-CAPABILITY-AUDIT.md)：执行引擎能力审计（2026-07-26），本文第 2/3 节标签的证据来源。  
 - **本文档**：全量整改权威进度与契约；Phase 交付后同步更新本表。  
+
+## 15. 可信基线（B00，2026-08-04）
+
+> 实施批次 B00 / TASK-000 交付。来源：`docs/audit/natives-agent-problem-verification.md` + `docs/audit/natives-agent-issues.json`（审计 worktree）。本批次只冻结契约，**不修改生产代码，不创建 DB 迁移，不实现生产 failpoint**。后续 TASK-001..017 必须从 `natives-runtime/b00-baseline` 解析出的精确 SHA 开始。
+
+### 15.1 基线记录（可追溯）
+
+| 项 | 值 |
+|---|---|
+| 基线 Commit（GitHub `deploy` 最新） | `9584c3c263c1e83b1066e4208e1ab2d678a9deeb`（`fix(ui): use semantic log tokens`） |
+| 任务分支 | `codex/runtime-task-000-baseline-b00a-202608041512` |
+| 执行 Worktree | `Natives-agent-runtime-task-000-baseline-202608041512`（主工作区被 Creative OS B1 占用，用户显式授权为此任务创建 Worktree） |
+| Rust 工具链 | `stable-aarch64-apple-darwin`，rustc 1.96.0 / cargo 1.96.0 |
+| 其他工具链 | git 2.50.1；node v22.23.2；npm 10.9.8 |
+| OS | macOS 26.5.2（arm64） |
+| 可用磁盘（开始） | 35 GiB |
+| 共享 Cargo target（`.cargo-target-shared`） | 7.8 GiB |
+| node_modules（主工作区） | 1.0 GiB |
+| Worktree 自占 | 18 MiB |
+| 同时 Worktree | 3（主 + 审计 + 本任务）；B00 后清理本任务 Worktree 即回 2 |
+| 构建环境 | `CARGO_TARGET_DIR=…/.cargo-target-shared`、`CARGO_BUILD_JOBS=2`、`RUST_TEST_THREADS=2`、`CARGO_INCREMENTAL=0` |
+
+### 15.2 三类执行入口矩阵（native / compat / test）
+
+| 入口 | 路径 | 状态 | 权威约束 |
+|---|---|---|---|
+| **native（唯一生产主链）** | Renderer → Tauri Host → 认证 UDS → Daemon `rpc.rs` → `RunManager`（`runtime_id=native`）→ `ProductionRuntime` → `AgentEngine` → `ProviderTurnRequest` / `PermissionGatedTools` → `CapabilityGateway` | 生产 | Run 终态唯一提交者 = RunManager；事件 persist-first；Renderer 不合成 sequence/terminal；UI/Host 不得旁路 |
+| **compat（兼容运行时）** | `cli_runtime_bridge`（`claude_cli` 子进程，`run_manager.rs:1900-2065`），不经 AgentEngine/Gateway | 兼容窗 | 不宣称 Native Core 不变量；CLI capability 明示非 native authority（TASK-013 收口） |
+| **test / advanced seam** | `run_with_tool_schemas` EngineMessage compat（`engine.rs:289-420`；`production.rs:688-778`） | 仅测试与开发诊断 | 禁止生产静默降级；嵌入式模式仅单测/诊断，失败必须显式故障态 |
+
+### 15.3 十个可复现 crash points（故障注入契约）
+
+> 机器可读契约：`scripts/runtime-crash-matrix.json`（`contract_version=1`）。每点 = 一个可注入的 kill/DB 故障/资源故障相位 + 恢复契约 + 责任任务。TASK-017 全量验证时必须给出每个点的生产链或 crash test 证据。
+
+| ID | 名称 | 问题 | 优先级 | 相位 | 恢复契约 | 责任任务 |
+|---|---|---|---|---|---|---|
+| CRASH-01 | Checkpoint 越界读取 | N01 | P0 | `capture_before`（Gateway scope 校验前） | 绝对/`..`/symlink 在任何 read/checkpoint I/O 前拒绝，拒绝不产生快照 | TASK-001 |
+| CRASH-02 | Tool 成功后事实写失败 | D04 | P0 | ToolCallCompleted event append | crash 后 Resume Blocked；uncertain 持久化失败使 Run 不可自动恢复 | TASK-004 |
+| CRASH-03 | Checkpoint cursor 冒充 Ledger watermark | G01 | P0 | checkpoint cursor 写入 | cursor 可查询为 Ledger 前缀；event sequence 不再写入 ledger cursor | TASK-004 |
+| CRASH-04 | Turn 投影 crash-gap | N02/F02 | P0 | run end projection（多事务） | 任一写点 kill 后 transcript 与 reload 等价，收敛到完整或不存在 | TASK-005 |
+| CRASH-05 | Shell pipe 死锁 | J02 | P0 | stdout/stderr drain | 10MB 双流不 hang；cancel 后 child 已 kill/wait/reap | TASK-002 |
+| CRASH-06 | Shell Unicode 截断 panic | J02 | P0 | output cap/tail | CJK/emoji 任意 cap 边界不 panic | TASK-002 |
+| CRASH-07 | UDS 无界帧 / slowloris | N04 | P1 | RPC frame read | 固定上限终止 oversized frame；非法输入/慢连接均回收 session | TASK-003 |
+| CRASH-08 | SQLite 同步 Mutex 阻塞 async | F01 | P1 | storage 同步连接 | async 路径无直接 `Mutex<Connection>` 阻塞；BUSY/FULL 不丢 critical fact | TASK-006 |
+| CRASH-09 | Progress 无界积压 | H03 | P1 | progress channel | 固定容量 + 100MB 输出 RSS 有界；Result/cancel 后 late update 丢弃 | TASK-007 |
+| CRASH-10 | Sub Agent 创建失败留孤儿 | E04/N05 | P1 | child create 补偿 | 每个失败点后无 orphan row；重启后 budget 连续；child 互不越权 | TASK-009 |
+
+### 15.4 failpoint contract 说明
+
+- `scripts/runtime-crash-matrix.json` 是**契约**，不是生产 failpoint 实现。生产 failpoint 由各自任务卡（TASK-001..016）在允许路径内实现，TASK-017 全量验证。
+- 每个 crash point 的 `repro_test` 引用对应任务卡的 `targeted_tests`；命令名以任务卡最终实现为准。
+- 验收语义统一：启动副作用必须有 terminal 或 durable uncertain；无法证明 safe 时自动 Resume 调用 handler 次数为 0。
+
+### 15.5 验证命令与退出码（TASK-000）
+
+| 命令 | 退出码 | 备注 |
+|---|---|---|
+| `cargo fmt --check` | **0（2026-08-04 实跑）** | 共享 Target 环境；本批次不修改代码格式 |
+| `cargo check --workspace --jobs 2` | **0（2026-08-04 实跑）** | 共享 Target；8 crates；19.56s（缓存热，同 SHA）。执行前等待 Creative OS B1 的 `cargo test -p natives --lib`（独立 `target/`）结束后错峰运行，未并发使用共享 Target |
+
+> 未运行：workspace test、clippy、npm/lint/typecheck、Tauri build（B00 禁止）；前端依赖验证属 TASK-017。
