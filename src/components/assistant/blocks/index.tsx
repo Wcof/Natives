@@ -64,7 +64,7 @@ export interface ContentBlock {
 
 function TextBlock({ block }: { block: ContentBlock }) {
   return (
-    <div className="min-w-0 max-w-full break-words text-[15px] leading-7 text-black dark:text-white">
+    <div className="min-w-0 max-w-full break-words text-[15px] leading-7 text-[var(--text)]">
       <MarkdownText source={block.text} />
     </div>
   );

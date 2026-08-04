@@ -110,7 +110,7 @@ export default function AppLogsPanel({
         </div>
         <pre
           ref={preRef}
-          className="max-h-96 overflow-auto text-[11px] font-mono bg-zinc-950 p-4 rounded-xl border border-zinc-800 leading-relaxed whitespace-pre-wrap"
+          className="max-h-96 overflow-auto text-[11px] font-mono bg-[var(--background)] p-4 rounded-xl border border-[var(--border)] leading-relaxed whitespace-pre-wrap"
         >
           {(logFilter
             ? logsText
@@ -122,10 +122,10 @@ export default function AppLogsPanel({
             .split('\n')
             .map((line, i) => {
               const color = line.includes('[stderr]')
-                ? 'text-rose-300'
+                ? 'text-[var(--danger)]'
                 : line.includes('[system]')
-                  ? 'text-amber-200'
-                  : 'text-zinc-200';
+                  ? 'text-[var(--warning)]'
+                  : 'text-[var(--text-body)]';
               return (
                 <div key={i} className={color}>
                   {line}
