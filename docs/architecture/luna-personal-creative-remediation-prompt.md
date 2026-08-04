@@ -7,15 +7,28 @@
 
 不要把现有设计文档的“已完成”当作事实；每项能力都要验证生产入口、调用者、持久化、异常处理、资源生命周期和精准测试。
 
-## 0. 实施基线与工作区保护
+## 0. 实施基线、独占分支与工作区保护
 
-- Worktree：`/Users/ldh/Downloads/project/AiNative/Natives`
-- Branch：`deploy`
-- 审计 HEAD：`1b4b1792932e2e24160091c7700a2c092d01e5f2`
-- 审计日期：2026-08-03
-- 当前工作区非干净，并有未合并路径：`src/components/shell/SettingsPage.tsx`、`Sidebar.tsx`、`settings-navigation.ts`、对应 test、`src/i18n/en.ts`、`src/i18n/zh.ts`。
-- 开始每批前重新执行 `git status --short`、`git rev-parse HEAD`，覆盖 HEAD 和 working tree；不得覆盖用户修改或替用户选择冲突 stage。触碰 i18n 前先确认冲突已由用户/合并流程解决。
-- 不创建第二套 Target、Runtime 或 SQLite 权威；不 Push；不做历史清理或无关格式化。
+- 协调仓库：`/Users/ldh/Downloads/project/AiNative/Natives`。这里只用于读取 Git 状态和创建 worktree；不得在此切分支或实施整改。
+- 集成基线：执行时最新的 `origin/deploy`；本提示词更新时为 `c76da9e96583c60c9bb061ee63e9f3a53a446df5`。
+- 审计证据基线：`1b4b1792932e2e24160091c7700a2c092d01e5f2`，2026-08-03。基线之后发生变化的调用链必须重新验证，不能照抄审计结论。
+- 开工前执行 `git fetch --prune origin`、`git status --short --branch`、`git worktree list --porcelain`、`git branch -vv --all`，记录结果。不得修改、stash、reset、restore、clean 或提交协调仓库及其他 worktree 的现有改动。
+
+### 0.1 独占分支和 worktree 启动协议
+
+1. 为本任务生成唯一运行后缀，创建新分支 `codex/luna-personal-creative-<YYYYMMDD-HHMMSS>-<short-id>`。分支必须从开工时记录的 `origin/deploy` 创建，不得直接在 `deploy`、`main` 或 `release/*` 上开发。
+2. 同时创建同名的专属相邻 worktree，例如 `../Natives-luna-personal-creative-<short-id>`。后续读取、编辑、测试和提交都只能在该 worktree 内进行。
+3. 创建前同时检查本地/远端分支名和 `git worktree list --porcelain`。若名称、目录或分支已存在/被占用，生成新的 short-id；禁止复用、抢占、强制切换、删除或 prune 其他 Agent 的分支/worktree。
+4. 一个写入 Agent 独占一个分支和 worktree。子 Agent 默认只做只读审计；若必须并行写入，必须拥有另一条唯一分支和独立 worktree，完成后用明确 commit SHA 交接，禁止两个 Agent 同时写同一分支/worktree。
+5. 整个批次 0–9 默认沿用这一条专属任务分支，不为每批重复建分支。每批开始和提交前校验当前分支、仓库根目录与初始记录一致：`git branch --show-current`、`git rev-parse --show-toplevel`、`git status --short --branch`。
+6. 若发现目标分支被其他 worktree 占用、基线已推进或同一文件正在由其他 Agent 修改，停止冲突文件，报告分支、worktree、文件和 commit 差异，等待明确 handoff；不得自行 rebase、merge、cherry-pick、force push 或覆盖对方工作。
+
+### 0.2 提交与变更边界
+
+- 允许在专属分支按可验证批次提交；未经用户明确要求，不 Push、不合并回 `deploy`、不删除任何分支/worktree。
+- 专属 worktree 开工时必须干净；只暂存本任务文件，禁止 `git add -A` 吞入无关改动。
+- 不从协调仓库复制未提交文件来“同步进度”。需要其他 Agent 的成果时，只接受用户确认的 commit SHA/handoff。
+- 不创建第二套 Target、Runtime 或 SQLite 权威；不做历史清理、无关格式化或顺手修复。
 
 ## 1. 当前真实能力
 
@@ -254,6 +267,10 @@ rtk npx tsx --test src/lib/creative-app.test.ts src/lib/local-creative.test.ts s
 
 ## 10. 绝对禁止
 
+- 禁止直接在 `deploy`、`main`、`release/*` 或其他 Agent 的分支/worktree 上开发。
+- 禁止复用、抢占、强制切换或删除其他 Agent 正在使用的分支/worktree。
+- 禁止两个写入 Agent 同时操作同一分支/worktree；禁止用 stash/reset/restore/clean 覆盖并发工作。
+- 禁止未经明确 handoff 合并、rebase 或 cherry-pick 其他活跃 Agent 的分支。
 - 禁止 `docker system/container/volume/network prune`。
 - 禁止 `docker compose down -v`，除非是自动测试 fixture 且用户明确要求；真实 Freqtrade 永不允许。
 - 禁止修改/删除用户 Freqtrade 项目、配置、策略、交易数据。
@@ -267,4 +284,4 @@ rtk npx tsx --test src/lib/creative-app.test.ts src/lib/local-creative.test.ts s
 - 禁止用按钮、类型、Migration、No-op、Fake、未调用函数冒充完成。
 - 禁止用 Freqtrade 名称硬编码通用运行器。
 
-从批次 0 开始。若当前未合并工作区会覆盖用户文件，停止该文件的修改并报告冲突，但继续完成不冲突的安全后端工作；不要 stash/reset/restore 用户改动。
+先完成第 0 节启动协议并报告专属分支、worktree、基线 commit，再从批次 0 开始。若任何修改会覆盖用户或其他 Agent 的文件，停止该文件并报告冲突；只继续不冲突的工作，绝不抢分支或处理他人的未提交改动。
