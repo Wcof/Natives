@@ -2367,16 +2367,18 @@ impl RunManager {
         let conn = store.conn()?;
         let checkpoint =
             load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
-        // Scan the side-effect ledger for uncertain effects. A restore is only
-        // SafeToContinue when nothing is uncertain; uncertain effects that are
-        // not replay-safe hard-block resume (Blocked), while replay-safe ones
-        // require an explicit caller confirmation (ConfirmationRequired). No
-        // provider or tool is invoked until that confirmation arrives.
+        // Scan the side-effect ledger for unresolved effects. A restore is only
+        // SafeToContinue when nothing is unresolved; an effect left `started`
+        // (crash before a terminal) or `uncertain` means the external outcome
+        // is unknown, so auto-resume must not invoke the handler again.
+        // Non-replay-safe unresolved effects hard-block (Blocked), while
+        // replay-safe ones require an explicit caller confirmation
+        // (ConfirmationRequired). No provider or tool is invoked until then.
         let mut stmt = conn
             .prepare(
                 "SELECT id, tool_call_id, category, replay_safe
                  FROM side_effect_record
-                 WHERE run_id = ?1 AND status = 'uncertain'",
+                 WHERE run_id = ?1 AND status IN ('started', 'uncertain')",
             )
             .map_err(|e| e.to_string())?;
         let uncertain_effects: Vec<serde_json::Value> = stmt
@@ -4043,6 +4045,74 @@ mod tests {
             assert!(
                 response.new_run_id.is_none(),
                 "Blocked resume must not create a run"
+            );
+        });
+    }
+
+    #[test]
+    fn side_effect_resume_gate_blocks_started_effect() {
+        // TASK-004 (G02): a crash after `started` (intent recorded, no
+        // terminal) leaves an unknown side effect. Auto-resume must NOT invoke
+        // the handler again: it must hard-block instead of creating a run.
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-started', ?1, 'process', 'started', 0)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::Blocked,
+                "started (non-terminal) side effect must hard-block resume"
+            );
+            assert!(
+                response.new_run_id.is_none(),
+                "Blocked resume must not create a run for an unknown side effect"
+            );
+        });
+    }
+
+    #[test]
+    fn side_effect_resume_gate_allows_settled_effects() {
+        // Regression guard: fully settled effects must not block resume.
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-settled', ?1, 'process', 'completed', 1)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::SafeToContinue,
+                "settled effects must not block resume"
             );
         });
     }

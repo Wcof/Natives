@@ -124,9 +124,10 @@ pub fn record_tool_effect_state(
         "INSERT INTO side_effect_record
          (id, run_id, tool_call_id, category, target_summary, reversible, coverage_note,
           turn_id, side_effect_class, status, replay_safe, idempotency_key, external_reference,
-          resource, started_at, completed_at)
+          resource, started_at, completed_at, ledger_sequence)
          VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12,
-                 CASE WHEN ?13 THEN ?12 ELSE NULL END)",
+                 CASE WHEN ?13 THEN ?12 ELSE NULL END,
+                 (SELECT COALESCE(MAX(ledger_sequence),0)+1 FROM side_effect_record WHERE run_id = ?2))",
         rusqlite::params![
             uuid::Uuid::new_v4().to_string(),
             run_id,
@@ -146,6 +147,23 @@ pub fn record_tool_effect_state(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Query the durable side-effect watermark for a run: the highest ledger
+/// sequence recorded. This is what the checkpoint cursor must store — never
+/// the run_event sequence (G01). A run with no recorded side effects has a
+/// watermark of `"0"` (nothing happened, safe).
+pub fn ledger_watermark(run_id: &str) -> Result<Option<String>, String> {
+    let store = ledger_store()?;
+    let conn = store.conn()?;
+    let max: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(ledger_sequence) FROM side_effect_record WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(Some(max.unwrap_or(0).to_string()))
 }
 
 /// Aggregate coverage label for restore preview.
@@ -200,5 +218,66 @@ mod tests {
         assert_eq!(category_for_tool("write_file"), "workspace_file");
         assert_eq!(category_for_tool("run_terminal"), "process");
         assert_eq!(category_for_tool("mcp_call"), "mcp");
+    }
+
+    /// TASK-004 (G01): the ledger watermark is the max ledger sequence for a
+    /// run — never the run_event sequence. It is what the checkpoint cursor
+    /// must store instead of the last event sequence.
+    #[test]
+    fn ledger_watermark_is_ledger_sequence() {
+        let store = ledger_store().unwrap();
+        let run_id = format!("wm-{}", uuid::Uuid::new_v4());
+        let conn = store.conn().unwrap();
+        for i in 1..=3 {
+            conn.execute(
+                "INSERT INTO side_effect_record
+                 (id, run_id, category, status, replay_safe, ledger_sequence)
+                 VALUES (?1, ?2, 'process', 'completed', 1, ?3)",
+                rusqlite::params![format!("{run_id}-e{i}"), run_id, i],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let wm = ledger_watermark(&run_id).unwrap();
+        assert_eq!(
+            wm.as_deref(),
+            Some("3"),
+            "watermark must be the max ledger sequence, got {wm:?}"
+        );
+    }
+
+    /// TASK-004 (G01): each recorded state for a run advances the ledger
+    /// sequence monotonically, so the watermark is a real ledger prefix.
+    #[test]
+    fn ledger_sequence_advances_per_run() {
+        let run_id = format!("seq-{}", uuid::Uuid::new_v4());
+        record_tool_effect_state(
+            &run_id,
+            "call-1",
+            "write_file",
+            "workspace_file",
+            "completed",
+            true,
+            None,
+            &serde_json::json!({"path": "a.txt"}),
+        )
+        .unwrap();
+        record_tool_effect_state(
+            &run_id,
+            "call-2",
+            "run_terminal",
+            "process",
+            "completed",
+            true,
+            None,
+            &serde_json::json!({"command": "true"}),
+        )
+        .unwrap();
+        let wm = ledger_watermark(&run_id).unwrap();
+        assert_eq!(
+            wm.as_deref(),
+            Some("2"),
+            "two effects must advance the ledger to sequence 2, got {wm:?}"
+        );
     }
 }

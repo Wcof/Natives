@@ -45,6 +45,7 @@ pub const ALL: &[(i64, &str)] = &[
     (27, MIGRATION_027),
     (28, MIGRATION_028),
     (29, MIGRATION_029),
+    (30, MIGRATION_030),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1105,6 +1106,15 @@ ALTER TABLE subagent_session ADD COLUMN permission_profile TEXT;
 ALTER TABLE subagent_session ADD COLUMN agent_profile_id TEXT;
 ALTER TABLE subagent_session ADD COLUMN max_steps INTEGER;
 ALTER TABLE subagent_session ADD COLUMN tool_allowlist_json TEXT;
+";
+
+/// Migration 030 (TASK-004 / G01): per-run ledger sequence so the checkpoint
+/// cursor can store a real side-effect watermark instead of the last event
+/// sequence. Existing rows keep a NULL sequence (legacy) and are never claimed
+/// safe; `continue_run` already fails closed without a ledger watermark.
+const MIGRATION_030: &str = "
+ALTER TABLE side_effect_record ADD COLUMN ledger_sequence INTEGER;
+CREATE INDEX IF NOT EXISTS idx_side_effect_ledger_sequence ON side_effect_record(run_id, ledger_sequence);
 ";
 
 #[cfg(test)]

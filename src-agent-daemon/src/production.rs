@@ -808,13 +808,14 @@ impl ProductionRuntime {
                     } => Some(snapshot_id.as_str()),
                     _ => None,
                 });
-            let event_cursor = run_events
-                .last()
-                .map(|e| e.effective_run_sequence())
-                .unwrap_or(0)
-                .to_string();
+            let ledger_cursor = crate::side_effect_ledger::ledger_watermark(&run_id)?;
             self.checkpoint_manager()
-                .set_run_metadata(&run_id, Some(turn_id), snapshot_id, Some(&event_cursor))
+                .set_run_metadata(
+                    &run_id,
+                    Some(turn_id),
+                    snapshot_id,
+                    ledger_cursor.as_deref(),
+                )
                 .map_err(|error| format!("checkpoint metadata persistence failed: {error}"))?;
         }
         let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
