@@ -332,11 +332,13 @@ pub async fn creative_app_delete(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
 ) -> Result<DeleteMutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
+    let browser = browser.inner();
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
     let opts = options.unwrap_or_default();
 
@@ -383,6 +385,14 @@ pub async fn creative_app_delete(
 
     match result {
         Ok(delete_result) => {
+            // CR-303: a delete must not leave a child WebView showing the removed
+            // app — close it when it was showing this app (audit #09).
+            let showing = browser::browser_current(&browser)
+                .ok()
+                .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
+            if showing.as_deref() == Some(id.as_str()) {
+                let _ = browser::browser_close(&ctx.app, &browser);
+            }
             // On success the application row is gone; the operation survives with
             // application_id NULL via the FK (audit trail).
             let c = conn(&pool)?;
@@ -717,22 +727,28 @@ pub fn creative_app_browser_show(
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // Bind the preview to the app's active runtime instance (batch 6). Resolve
-    // the real source first and look up the identity READ-ONLY: open must never
-    // fabricate an application row (#01). Preview binding is best-effort here;
-    // full DB/WebView compensation is batch 3.
-    if let Ok(c) = conn(&state.db) {
-        if let Ok(source) = adapters::resolve(&c, &app_id) {
-            if let Ok(Some(app_identity)) =
-                runtime_store::application_id_for(&c, source.as_source(), &app_id)
-            {
-                if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
-                    let _ = runtime_store::upsert_preview_target(&c, &iid, &url, "child_webview");
-                }
-            }
-        }
+    // CR-303: never show a preview for an app without an active running
+    // instance — a stopped app's URL must not become visible in a WebView.
+    let active_instance = {
+        let c = conn(&state.db)?;
+        let source = adapters::resolve(&c, &app_id)?;
+        let app_identity = runtime_store::application_id_for(&c, source.as_source(), &app_id)?
+            .ok_or_else(|| Error::InvalidInput("app has no registered identity".into()))?;
+        runtime_store::active_instance_id(&c, &app_identity)?
+            .ok_or_else(|| Error::InvalidInput("app is not running; cannot open preview".into()))?
+    };
+    // External action first: show the WebView. A show failure must not leave a
+    // DB preview bind behind (audit #02: DB / BrowserState must not diverge).
+    browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)?;
+    // Commit the preview bind; on DB failure compensate by hiding the WebView.
+    let c = conn(&state.db)?;
+    if let Err(e) =
+        runtime_store::upsert_preview_target(&c, &active_instance, &url, "child_webview")
+    {
+        let _ = browser::browser_hide(&app_handle);
+        return Err(e);
     }
-    browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)
+    Ok(())
 }
 
 #[tauri::command]
@@ -769,12 +785,13 @@ pub fn creative_app_browser_close(
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // Clear the preview target for the app being closed (batch 6). Resolve the
-    // real source and look up identity READ-ONLY: close must never fabricate an
-    // application row (#01).
+    // CR-303: close the WebView FIRST (external action); only on success clear
+    // the DB preview bind. A close failure must not lose the bind while the
+    // WebView is still open (audit #02).
     let closed_app = browser::browser_current(&browser)
         .ok()
         .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
+    browser::browser_close(&app_handle, &browser)?;
     if let Some(app_id) = closed_app {
         if let Ok(c) = conn(&state.db) {
             if let Ok(source) = adapters::resolve(&c, &app_id) {
@@ -788,7 +805,7 @@ pub fn creative_app_browser_close(
             }
         }
     }
-    browser::browser_close(&app_handle, &browser)
+    Ok(())
 }
 
 #[tauri::command]

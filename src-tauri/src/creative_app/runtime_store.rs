@@ -96,7 +96,10 @@ pub fn instance_application_id(conn: &Connection, instance_id: &str) -> Result<O
 }
 
 /// Source row id for an application identity (source detail table id). Read-only.
-pub fn source_id_for_application(conn: &Connection, application_id: &str) -> Result<Option<String>> {
+pub fn source_id_for_application(
+    conn: &Connection,
+    application_id: &str,
+) -> Result<Option<String>> {
     conn.query_row(
         "SELECT source_id FROM applications WHERE id = ?1",
         params![application_id],
@@ -822,7 +825,10 @@ mod tests {
         let app =
             find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
         let i1 = create_instance(&conn, &app, None, "local_process").unwrap();
-        assert_eq!(instance_application_id(&conn, &i1).unwrap().as_deref(), Some(app.as_str()));
+        assert_eq!(
+            instance_application_id(&conn, &i1).unwrap().as_deref(),
+            Some(app.as_str())
+        );
         assert_eq!(
             source_id_for_application(&conn, &app).unwrap().as_deref(),
             Some("loc1")
@@ -831,9 +837,15 @@ mod tests {
         mark_stopping(&conn, &i1).unwrap();
         mark_stopped(&conn, &i1).unwrap();
         let i2 = create_instance(&conn, &app, None, "local_process").unwrap();
-        assert_eq!(instance_application_id(&conn, &i1).unwrap().as_deref(), Some(app.as_str()));
+        assert_eq!(
+            instance_application_id(&conn, &i1).unwrap().as_deref(),
+            Some(app.as_str())
+        );
         assert_ne!(i1, i2);
-        assert_eq!(instance_application_id(&conn, &i2).unwrap().as_deref(), Some(app.as_str()));
+        assert_eq!(
+            instance_application_id(&conn, &i2).unwrap().as_deref(),
+            Some(app.as_str())
+        );
 
         // Unknown ids resolve to None (never fabricated).
         assert!(instance_application_id(&conn, "nope").unwrap().is_none());
@@ -850,8 +862,15 @@ mod tests {
         mark_stopping(&conn, &i1).unwrap();
         mark_stopped(&conn, &i1).unwrap();
         let i2 = create_instance(&conn, &app, None, "local_process").unwrap();
-        mark_running(&conn, &i2, &["http://127.0.0.1:5173/".into()], Some(5173), None, None)
-            .unwrap();
+        mark_running(
+            &conn,
+            &i2,
+            &["http://127.0.0.1:5173/".into()],
+            Some(5173),
+            None,
+            None,
+        )
+        .unwrap();
 
         settle_instance_by_id(&conn, &i1, "failed").unwrap();
         let (s1, s2): (String, String) = conn

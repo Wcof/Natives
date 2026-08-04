@@ -400,7 +400,13 @@ pub async fn await_start_ready(
         return Ok(store::summary_from_local(&rec));
     }
     match runtime
-        .wait_healthy(app, runtime_id, id, &plan.health_path, rec.startup_timeout_ms)
+        .wait_healthy(
+            app,
+            runtime_id,
+            id,
+            &plan.health_path,
+            rec.startup_timeout_ms,
+        )
         .await
     {
         Ok(()) => {
@@ -763,15 +769,19 @@ pub async fn resolve_orphan(
     }
     // The user explicitly resolved the orphan: settle the orphaned instance to
     // stopped so a retry stop / restart can proceed (mirrors "clear identity").
-    if let Ok(Some(app_id)) =
-        crate::creative_app::runtime_store::application_id_for(conn, CreativeAppSource::LocalProject, id)
-    {
-        if let Ok(Some(iid)) = crate::creative_app::runtime_store::active_instance_id(conn, &app_id) {
+    if let Ok(Some(app_id)) = crate::creative_app::runtime_store::application_id_for(
+        conn,
+        CreativeAppSource::LocalProject,
+        id,
+    ) {
+        if let Ok(Some(iid)) = crate::creative_app::runtime_store::active_instance_id(conn, &app_id)
+        {
             let _ = runtime
                 .logs()
                 .get_or_open(id, &iid)
                 .append(LogStream::System, "orphaned process terminated by user");
-            let _ = crate::creative_app::runtime_store::settle_instance_by_id(conn, &iid, "stopped");
+            let _ =
+                crate::creative_app::runtime_store::settle_instance_by_id(conn, &iid, "stopped");
         }
     }
     // Clear identity
@@ -859,8 +869,7 @@ pub fn mark_process_exited(
     let _ = crate::creative_app::runtime_store::mark_exited(conn, runtime_id, exit_code);
 
     // Only mirror onto the source record when this run is still the active one.
-    let active =
-        crate::creative_app::runtime_store::active_instance_id(conn, &app_id)?;
+    let active = crate::creative_app::runtime_store::active_instance_id(conn, &app_id)?;
     if active.as_deref() != Some(runtime_id) {
         return Ok(());
     }
@@ -1023,15 +1032,8 @@ mod tests {
         let i1 =
             crate::creative_app::runtime_store::create_instance(&conn, &app, None, "local_process")
                 .unwrap();
-        crate::creative_app::runtime_store::mark_running(
-            &conn,
-            &i1,
-            &[],
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        crate::creative_app::runtime_store::mark_running(&conn, &i1, &[], None, None, None)
+            .unwrap();
         // Restart: run 1 is settled stopped, run 2 becomes active.
         crate::creative_app::runtime_store::mark_stopping(&conn, &i1).unwrap();
         crate::creative_app::runtime_store::mark_stopped(&conn, &i1).unwrap();

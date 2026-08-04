@@ -205,7 +205,9 @@ impl LocalLogStore {
 
 /// Per-runtime log directory: `.../local-creative/{appId}/runs/{runtimeId}`.
 pub fn log_dir(app_id: &str, runtime_id: &str) -> PathBuf {
-    app_log_dir(app_id).join("runs").join(safe_segment(runtime_id))
+    app_log_dir(app_id)
+        .join("runs")
+        .join(safe_segment(runtime_id))
 }
 
 /// Legacy / aggregate app-level log directory: `.../local-creative/{appId}`.
@@ -575,9 +577,7 @@ mod tests {
         assert_eq!(run2.recent_memory(10)[0].text, "second run");
         // Independent rings: each run's line is invisible to the other.
         assert!(
-            !run1.recent_memory(10)[0]
-                .text
-                .contains("second"),
+            !run1.recent_memory(10)[0].text.contains("second"),
             "run 1 must not see run 2's lines"
         );
         assert!(

@@ -372,7 +372,13 @@ fn serve_draft_file(
 }
 
 /// Serve local creative project files from DB-resolved roots.
-/// Route: `/local-projects/{creativeId}/{relativePath}`
+/// Route (CR-303): `/local-projects/{runtimeId}/{creativeId}/{relativePath}`
+///
+/// The runtime instance id is part of the URL and must be the app's ACTIVE
+/// running instance: a stopped (or superseded) run's URL answers 410, so a
+/// static preview URL is revocable and can never keep serving files after stop
+/// (audit #03). A legacy `/local-projects/{creativeId}/…` URL is redirected to
+/// the active tokenized URL only while the app runs, and dies (410) after stop.
 /// No Workshop Bridge injection; no Tauri capability.
 fn serve_local_project_file(
     request: Request,
@@ -387,31 +393,69 @@ fn serve_local_project_file(
         .unwrap_or(path_part);
     // percent-decode relative path segments carefully
     let path_part = percent_decode(path_part);
-    let mut parts = path_part.splitn(2, '/');
-    let creative_id = parts.next().unwrap_or("");
-    let mut rel = parts.next().unwrap_or("").to_string();
-    if creative_id.is_empty() || creative_id.contains("..") || creative_id.contains('\0') {
+    let mut seg = path_part.splitn(2, '/');
+    let seg1 = seg.next().unwrap_or("");
+    let rest = seg.next().unwrap_or("").to_string();
+    if seg1.is_empty() || seg1.contains("..") || seg1.contains('\0') {
         let resp = Response::from_string("Forbidden").with_status_code(403);
         request.respond(resp)?;
         return Ok(());
+    }
+
+    // Tokenized shape: {runtimeId}/{creativeId}/{rel}
+    let mut rest_seg = rest.splitn(2, '/');
+    let creative_id = rest_seg.next().unwrap_or("").to_string();
+    let rel = rest_seg.next().unwrap_or("").to_string();
+
+    // 1. Tokenized: seg1 must be an ACTIVE runtime instance of the named project.
+    if !creative_id.is_empty() && !creative_id.contains("..") && !creative_id.contains('\0') {
+        if let Some(project_root) = lookup_servable_runtime(db_path, seg1, &creative_id) {
+            return serve_project_files(
+                request,
+                project_root,
+                &format!("/local-projects/{seg1}/{creative_id}/"),
+                &rel,
+                &csp,
+                head_only,
+            );
+        }
+    }
+    // 2. Legacy: seg1 is the creative id. While the app runs, redirect to the
+    //    active tokenized URL (read-only redirect, never a permanent rewrite);
+    //    after stop the legacy URL is dead like the tokenized one.
+    if let Some((active_rt, _root)) = lookup_active_runtime_for_project(db_path, seg1) {
+        let target = format!("/local-projects/{active_rt}/{seg1}/{rest}");
+        let resp = Response::empty(302).with_header(csp).with_header(
+            Header::from_bytes("Location", target.clone().into_bytes())
+                .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap()),
+        );
+        request.respond(resp)?;
+        return Ok(());
+    }
+    // 3. Dead URL (stopped / superseded / unknown): 410 Gone.
+    let resp = Response::from_string("Gone").with_status_code(410);
+    request.respond(resp)?;
+    Ok(())
+}
+
+/// Serve one file under a project root with a tokenized `<base href>` so
+/// relative subresource URLs resolve under `/local-projects/{runtimeId}/{creativeId}/`.
+fn serve_project_files(
+    request: Request,
+    project_root: PathBuf,
+    base_href: &str,
+    rel: &str,
+    csp: &Header,
+    head_only: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut rel = rel.to_string();
+    if rel.is_empty() || rel.ends_with('/') {
+        rel = format!("{rel}index.html");
     }
     if rel.contains('\0') || rel.contains("..") {
         let resp = Response::from_string("Forbidden").with_status_code(403);
         request.respond(resp)?;
         return Ok(());
-    }
-
-    let project_root = match lookup_local_project_root(db_path, creative_id) {
-        Some(p) => p,
-        None => {
-            let resp = Response::from_string("Not Found").with_status_code(404);
-            request.respond(resp)?;
-            return Ok(());
-        }
-    };
-
-    if rel.is_empty() || rel.ends_with('/') {
-        rel = format!("{rel}index.html");
     }
 
     let candidate = match resolve_under_project(&project_root, &rel) {
@@ -472,7 +516,7 @@ fn serve_local_project_file(
     if head_only {
         let len = std::fs::metadata(&file_canon).map(|m| m.len()).unwrap_or(0);
         let resp = Response::empty(200)
-            .with_header(csp)
+            .with_header(csp.clone())
             .with_header(Header::from_bytes("Content-Type", mime).unwrap())
             .with_header(
                 Header::from_bytes("Content-Length", len.to_string().into_bytes())
@@ -482,32 +526,83 @@ fn serve_local_project_file(
         return Ok(());
     }
 
-    // HTML: serve raw, no bridge injection
+    // HTML: serve raw, no bridge injection, but anchor relative subresources to
+    // the tokenized prefix so they resolve even though the URL carries a runtime id.
     if mime == "text/html" {
         let raw = std::fs::read_to_string(&file_canon)?;
-        let resp = Response::from_string(raw)
-            .with_header(csp)
+        let body = inject_base_href(&raw, base_href);
+        let resp = Response::from_string(body)
+            .with_header(csp.clone())
             .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
         request.respond(resp)?;
     } else {
         let content = std::fs::read(&file_canon)?;
         let resp = Response::from_data(content)
-            .with_header(csp)
+            .with_header(csp.clone())
             .with_header(Header::from_bytes("Content-Type", mime).unwrap());
         request.respond(resp)?;
     }
     Ok(())
 }
 
-fn lookup_local_project_root(db_path: &Path, creative_id: &str) -> Option<PathBuf> {
+/// Tokenized route validation: the runtime instance must exist, be active
+/// (running/starting), and belong to the named local project (CR-303).
+fn lookup_servable_runtime(db_path: &Path, runtime_id: &str, creative_id: &str) -> Option<PathBuf> {
     let conn = Connection::open(db_path).ok()?;
     conn.query_row(
-        "SELECT canonical_project_root FROM local_creative_apps WHERE id = ?1",
-        [creative_id],
+        "SELECT lc.canonical_project_root
+         FROM runtime_instances ri
+         JOIN applications a ON a.id = ri.application_id AND a.source = 'local_project'
+         JOIN local_creative_apps lc ON lc.id = a.source_id
+         WHERE ri.id = ?1 AND lc.id = ?2
+           AND ri.status IN ('running','starting') AND lc.state = 'running'",
+        rusqlite::params![runtime_id, creative_id],
         |row| row.get::<_, String>(0),
     )
     .ok()
     .map(PathBuf::from)
+}
+
+/// Legacy single-segment route: while the app is running, resolve its active
+/// runtime instance id (for the redirect target); None once stopped.
+fn lookup_active_runtime_for_project(
+    db_path: &Path,
+    creative_id: &str,
+) -> Option<(String, PathBuf)> {
+    let conn = Connection::open(db_path).ok()?;
+    conn.query_row(
+        "SELECT ri.id, lc.canonical_project_root
+         FROM local_creative_apps lc
+         JOIN applications a ON a.source = 'local_project' AND a.source_id = lc.id
+         JOIN runtime_instances ri ON ri.application_id = a.id
+         WHERE lc.id = ?1 AND lc.state = 'running'
+           AND ri.status IN ('running','starting')
+         ORDER BY ri.created_at DESC LIMIT 1",
+        [creative_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+            ))
+        },
+    )
+    .ok()
+}
+
+/// Insert `<base href>` before `</head>` so relative subresources on a
+/// tokenized local-project URL resolve under the correct prefix.
+fn inject_base_href(html: &str, base: &str) -> String {
+    let lower = html.to_lowercase();
+    let Some(pos) = lower.find("</head>") else {
+        return html.to_string();
+    };
+    let mut result = String::with_capacity(html.len() + base.len() + 16);
+    result.push_str(&html[..pos]);
+    result.push_str("<base href=\"");
+    result.push_str(base);
+    result.push_str("\">");
+    result.push_str(&html[pos..]);
+    result
 }
 
 fn resolve_under_project(root: &Path, rel: &str) -> Option<PathBuf> {
@@ -945,5 +1040,130 @@ mod tests {
         assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
         let traversal = http_get(port, "/drafts/draft-1/../../natives.db");
         assert!(traversal.starts_with("HTTP/1.1 404"), "{traversal}");
+    }
+
+    /// CR-303: a local static preview URL is instance-scoped and revocable.
+    /// While the runtime is active the tokenized URL serves 200 (with a base
+    /// href anchoring relative subresources); after stop the same URL is gone.
+    #[test]
+    fn local_project_static_url_is_revoked_after_stop() {
+        use crate::creative_app::model::CreativeAppSource;
+        let f = fixture();
+        let app_id = "loc-static";
+        let root = f.data_dir.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("index.html"),
+            "<html><head></head><body>hi</body></html>",
+        )
+        .unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO local_creative_apps
+                    (id, title, canonical_project_root, device_id, device_name, project_kind,
+                     launch_mode, launch_plan_json, plan_fingerprint, state, auto_open,
+                     startup_timeout_ms, created_at, updated_at)
+                 VALUES ('loc-static','S',?1,'d','n','html','smart','{}','','running',1,60000,'t','t')",
+                rusqlite::params![root.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        let app = crate::creative_app::runtime_store::find_or_create_application(
+            &f.conn,
+            CreativeAppSource::LocalProject,
+            app_id,
+        )
+        .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&f.conn, &app, None, "host_http")
+                .unwrap();
+        crate::creative_app::runtime_store::mark_running(&f.conn, &iid, &[], None, None, None)
+            .unwrap();
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        let token_url = format!("/local-projects/{iid}/{app_id}/");
+        let ok = http_get(port, &token_url);
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+        assert!(
+            ok.contains("<base href="),
+            "HTML must carry the tokenized base href: {ok}"
+        );
+
+        // After stop the same URL is dead.
+        crate::creative_app::runtime_store::mark_stopped(&f.conn, &iid).unwrap();
+        let gone = http_get(port, &token_url);
+        assert!(
+            gone.starts_with("HTTP/1.1 410"),
+            "stopped run URL must be gone: {gone}"
+        );
+    }
+
+    /// CR-303: a legacy `/local-projects/{creativeId}/…` URL redirects to the
+    /// active tokenized URL only while the app runs; after stop it dies (410).
+    #[test]
+    fn legacy_local_url_redirects_while_running_then_dies() {
+        use crate::creative_app::model::CreativeAppSource;
+        let f = fixture();
+        let app_id = "loc-legacy";
+        let root = f.data_dir.join("proj2");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("index.html"),
+            "<html><head></head><body>legacy</body></html>",
+        )
+        .unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO local_creative_apps
+                    (id, title, canonical_project_root, device_id, device_name, project_kind,
+                     launch_mode, launch_plan_json, plan_fingerprint, state, auto_open,
+                     startup_timeout_ms, created_at, updated_at)
+                 VALUES ('loc-legacy','L',?1,'d','n','html','smart','{}','','running',1,60000,'t','t')",
+                rusqlite::params![root.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        let app = crate::creative_app::runtime_store::find_or_create_application(
+            &f.conn,
+            CreativeAppSource::LocalProject,
+            app_id,
+        )
+        .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&f.conn, &app, None, "host_http")
+                .unwrap();
+        crate::creative_app::runtime_store::mark_running(&f.conn, &iid, &[], None, None, None)
+            .unwrap();
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        // Running: legacy URL 302-redirects to the tokenized URL.
+        let redirect = http_get(port, &format!("/local-projects/{app_id}/"));
+        assert!(redirect.starts_with("HTTP/1.1 302"), "{redirect}");
+        assert!(
+            redirect.contains(&format!("Location: /local-projects/{iid}/{app_id}/")),
+            "{redirect}"
+        );
+
+        // After stop the legacy URL is gone too.
+        crate::creative_app::runtime_store::mark_stopped(&f.conn, &iid).unwrap();
+        let gone = http_get(port, &format!("/local-projects/{app_id}/"));
+        assert!(
+            gone.starts_with("HTTP/1.1 410"),
+            "legacy stopped URL must die: {gone}"
+        );
+    }
+
+    #[test]
+    fn base_href_is_injected_before_head_close() {
+        let html = "<html><head><title>x</title></head><body>a</body></html>";
+        let out = inject_base_href(html, "/local-projects/rt/cid/");
+        assert!(out.contains("<base href=\"/local-projects/rt/cid/\">"));
+        let base_pos = out.find("<base").unwrap();
+        let head_close = out.find("</head>").unwrap();
+        assert!(base_pos < head_close, "base must live inside <head>");
     }
 }

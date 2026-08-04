@@ -922,9 +922,7 @@ pub fn static_open_url(
     } else {
         format!("/{open_path}")
     };
-    format!(
-        "http://127.0.0.1:{host_http_port}/local-projects/{runtime_id}/{creative_id}{path}"
-    )
+    format!("http://127.0.0.1:{host_http_port}/local-projects/{runtime_id}/{creative_id}{path}")
 }
 
 /// A preview URL candidate with its provenance (batch 6). The runtime probes
@@ -1313,7 +1311,10 @@ mod tests {
             );
         }
         mgr.stop("run-1", None).await.expect("first stop");
-        assert!(mgr.stop("run-1", None).await.is_ok(), "second stop is idempotent");
+        assert!(
+            mgr.stop("run-1", None).await.is_ok(),
+            "second stop is idempotent"
+        );
         mgr.purge_app_logs("app-r");
     }
 
@@ -1349,7 +1350,12 @@ mod tests {
             pid: Some(pid),
             started_at_unix: Some(started),
             executable: Some("node".into()),
-            cwd: Some(std::env::current_dir().unwrap().to_string_lossy().to_string()),
+            cwd: Some(
+                std::env::current_dir()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             plan_fingerprint: Some("fp".into()),
             process_group_id: Some(pid as i32),
         };
@@ -1371,7 +1377,12 @@ mod tests {
             pid: Some(pid),
             started_at_unix: Some(started),
             executable: Some("node".into()),
-            cwd: Some(std::env::current_dir().unwrap().to_string_lossy().to_string()),
+            cwd: Some(
+                std::env::current_dir()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            ),
             plan_fingerprint: None,
             process_group_id: None,
         }));

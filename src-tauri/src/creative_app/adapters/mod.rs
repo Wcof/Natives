@@ -256,6 +256,9 @@ pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cre
         Ok(summary) => {
             if let Some(iid) = &instance_id {
                 super::runtime_store::mark_stopped(conn, iid)?;
+                // CR-303: a stopped instance has no live preview; drop its bind
+                // so DB preview state matches the dead endpoint.
+                let _ = super::runtime_store::clear_preview_targets(conn, iid);
             }
             Ok(super::runtime_store::attach_identity(conn, summary)?)
         }
@@ -283,8 +286,8 @@ pub async fn delete(
             // The active runtime id (may be empty when the app is not running).
             let app_id =
                 super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
-            let rt_id = super::runtime_store::active_instance_id(conn, &app_id)?
-                .unwrap_or_default();
+            let rt_id =
+                super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
             local::delete(conn, &ctx.app, rt, id, &rt_id).await
         }
     };
