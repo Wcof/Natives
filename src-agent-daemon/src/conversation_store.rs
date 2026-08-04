@@ -139,7 +139,7 @@ pub fn persist_queued_input_and_ack(
     tx.commit().map_err(|e| e.to_string())
 }
 
-fn store() -> Result<DataStore, String> {
+pub(crate) fn store() -> Result<DataStore, String> {
     // Phase 0: Daemon conversation/run authority is assistant.db.
     // Prefer NATIVES_ASSISTANT_DB_PATH; fall back to NATIVES_DB_PATH for tests that
     // still use a single temp file; finally default_assistant_db_path().

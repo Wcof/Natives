@@ -11,6 +11,7 @@ pub mod checkpoint;
 pub mod cli_runtime_bridge;
 pub mod client;
 pub mod codex_runtime_bridge;
+pub mod conversation_projector;
 pub mod conversation_store;
 pub mod creative_ai;
 pub mod event_log;

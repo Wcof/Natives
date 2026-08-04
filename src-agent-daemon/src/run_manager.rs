@@ -196,6 +196,14 @@ impl RunManager {
         if let Err(error) = crate::conversation_store::backfill_context_snapshots() {
             eprintln!("[run_manager] context snapshot backfill failed: {error}");
         }
+        // B03: idempotent conversation projection recovery — any committed
+        // turn whose events are not yet covered by the projector watermark is
+        // re-projected at startup. Best-effort like the snapshot backfill: a
+        // corrupt event quarantines its run, the daemon still starts and the
+        // remaining runs recover.
+        if let Err(error) = crate::conversation_projector::recover_projections() {
+            eprintln!("[run_manager] conversation projection recovery failed: {error}");
+        }
         // Expire any in-memory waiters (oneshot futures are never restored).
         // InteractionHub starts empty on new process — no action required.
         Ok(mgr)
@@ -2024,7 +2032,7 @@ impl RunManager {
                 Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
             };
             self.runtime.remove_engine(&run.id).await;
-            crate::conversation_store::append_assistant_turn_from_events(
+            crate::conversation_projector::project_run_from_events(
                 &run.conversation_id,
                 &run.id,
                 &self.runtime.events.replay_after_checked(&run.id, 0)?,
@@ -2137,7 +2145,7 @@ impl RunManager {
             Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
         let outcome = if matches!(outcome, EngineOutcome::Completed { .. })
-            && crate::conversation_store::append_assistant_turn_from_events(
+            && crate::conversation_projector::project_run_from_events(
                 &run.conversation_id,
                 &run.id,
                 &self.runtime.events.replay_after_checked(&run.id, 0)?,

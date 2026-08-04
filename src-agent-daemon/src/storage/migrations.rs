@@ -47,6 +47,7 @@ pub const ALL: &[(i64, &str)] = &[
     (29, MIGRATION_029),
     (30, MIGRATION_030),
     (31, MIGRATION_031),
+    (32, MIGRATION_032),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1135,6 +1136,38 @@ UPDATE side_effect_record
        WHEN side_effect_class = 'workspace_file' THEN 'never'
        ELSE 'confirm'
    END;
+";
+
+/// Migration 032: TASK-005 (B03) — idempotent conversation projection.
+///
+/// `projection_watermark` tracks how far a run's committed turns have been
+/// projected into the conversation tables; `projection_quarantine` records
+/// events/turns the projector explicitly isolated instead of silently
+/// skipping or overwriting.
+const MIGRATION_032: &str = "
+CREATE TABLE IF NOT EXISTS projection_watermark (
+    projector TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+    event_sequence INTEGER NOT NULL,
+    turn_count INTEGER NOT NULL DEFAULT 0,
+    digest TEXT NOT NULL,
+    compat_hits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (projector, run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_projection_watermark_run ON projection_watermark(projector, run_id);
+
+CREATE TABLE IF NOT EXISTS projection_quarantine (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projector TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    turn_id TEXT,
+    message_id TEXT,
+    reason TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ";
 
 #[cfg(test)]

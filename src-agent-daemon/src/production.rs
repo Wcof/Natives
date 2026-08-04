@@ -823,7 +823,7 @@ impl ProductionRuntime {
         // outcomes.  The store itself rejects only genuinely partial typed
         // turns, so a failed Run cannot silently lose an already committed
         // assistant message while still keeping incomplete streams out.
-        crate::conversation_store::append_assistant_turn_from_events(
+        crate::conversation_projector::project_run_from_events(
             &conversation_id,
             &run_id,
             &run_events,
