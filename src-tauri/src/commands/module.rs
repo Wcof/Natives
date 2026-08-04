@@ -54,6 +54,14 @@ pub fn module_install(
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let module_id = module_manager::install_module(conn, &modules_dir(), &path_or_zip)?;
+    // Register the unified creative identity for the newly installed workshop
+    // module. Catalog reads never fabricate identity (#01), so install is the
+    // registration seam that keeps a listed module's application_id stable.
+    crate::creative_app::runtime_store::find_or_create_application(
+        conn,
+        crate::creative_app::model::CreativeAppSource::Internal,
+        &module_id,
+    )?;
     emit_db_state_changed(
         &app_handle,
         "module",

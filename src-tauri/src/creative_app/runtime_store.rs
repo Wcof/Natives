@@ -68,6 +68,19 @@ fn lookup_application(conn: &Connection, src: &str, source_id: &str) -> Result<O
     .map_err(Error::Database)
 }
 
+/// Read-only application identity lookup for a source row. Never creates a row.
+///
+/// Identity rows are created by registration / lifecycle write paths and by the
+/// migration backfill; catalog reads, open, and close must NOT fabricate an
+/// identity (batch 1, #01).
+pub fn application_id_for(
+    conn: &Connection,
+    source: CreativeAppSource,
+    source_id: &str,
+) -> Result<Option<String>> {
+    lookup_application(conn, source_str(source), source_id)
+}
+
 /// Active plan id for an application (startup_plans is_active).
 pub fn active_plan_id(conn: &Connection, application_id: &str) -> Result<Option<String>> {
     conn.query_row(
@@ -391,13 +404,20 @@ pub fn delete_application(
 
 /// Fill `application_id` / `runtime_instance_id` on a summary before it crosses
 /// to the Renderer. Source detail stays authoritative for state and title.
+///
+/// This is a READ projection: it looks up the unified identity without creating
+/// one. Identity rows are guaranteed by the migration backfill for existing
+/// sources and by the registration / lifecycle write paths for new ones; a row
+/// without identity is reported as an empty id rather than fabricated (#01).
 pub fn attach_identity(
     conn: &Connection,
     mut summary: CreativeAppSummary,
 ) -> Result<CreativeAppSummary> {
-    let application_id = find_or_create_application(conn, summary.source, &summary.id)?;
-    summary.application_id = application_id.clone();
-    summary.runtime_instance_id = active_instance_id(conn, &application_id)?;
+    summary.application_id = lookup_application(conn, source_str(summary.source), &summary.id)?
+        .unwrap_or_default();
+    if !summary.application_id.is_empty() {
+        summary.runtime_instance_id = active_instance_id(conn, &summary.application_id)?;
+    }
     Ok(summary)
 }
 
@@ -499,7 +519,7 @@ mod tests {
     #[test]
     fn attach_identity_binds_summary_and_active_instance() {
         let conn = mem();
-        let mut summary = CreativeAppSummary {
+        let summary = CreativeAppSummary {
             id: "loc1".into(),
             application_id: String::new(),
             runtime_instance_id: None,
@@ -517,14 +537,13 @@ mod tests {
             local_project: None,
             actions: CreativeAppActions::default(),
         };
+        // Identity is created by the registration write path, then attach_identity
+        // (read-only) binds it onto the summary without ever fabricating one.
+        let app = find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
         let bound = attach_identity(&conn, summary.clone()).unwrap();
-        assert_eq!(
-            bound.application_id,
-            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap()
-        );
+        assert_eq!(bound.application_id, app);
         assert!(bound.runtime_instance_id.is_none());
 
-        let app = bound.application_id.clone();
         let iid = create_instance(&conn, &app, None, "host_http").unwrap();
         let bound2 = attach_identity(&conn, summary).unwrap();
         assert_eq!(bound2.runtime_instance_id.as_deref(), Some(iid.as_str()));

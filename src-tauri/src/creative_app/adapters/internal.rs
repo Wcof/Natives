@@ -46,6 +46,14 @@ pub fn get(conn: &Connection, id: &str) -> Result<CreativeAppSummary> {
 }
 
 pub fn start(conn: &Connection, app: &AppHandle, id: &str) -> Result<CreativeAppSummary> {
+    // Register the unified identity on the lifecycle write path (enable). Catalog
+    // reads never create identity (#01); enable is the first lifecycle action a
+    // workshop module goes through and is the natural registration seam.
+    crate::creative_app::runtime_store::find_or_create_application(
+        conn,
+        CreativeAppSource::Internal,
+        id,
+    )?;
     module_manager::enable_module(conn, id)?;
     crate::emit_db_state_changed(
         app,

@@ -334,20 +334,18 @@ pub fn creative_app_browser_show(
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // Bind the preview to the app's active runtime instance (batch 6).
+    // Bind the preview to the app's active runtime instance (batch 6). Resolve
+    // the real source first and look up the identity READ-ONLY: open must never
+    // fabricate an application row (#01). Preview binding is best-effort here;
+    // full DB/WebView compensation is batch 3.
     if let Ok(c) = conn(&state.db) {
-        if let Ok(app_identity) =
-            runtime_store::find_or_create_application(&c, CreativeAppSource::LocalProject, &app_id)
-                .or_else(|_| {
-                    runtime_store::find_or_create_application(
-                        &c,
-                        CreativeAppSource::ExternalGithub,
-                        &app_id,
-                    )
-                })
-        {
-            if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
-                let _ = runtime_store::upsert_preview_target(&c, &iid, &url, "child_webview");
+        if let Ok(source) = adapters::resolve(&c, &app_id) {
+            if let Ok(Some(app_identity)) =
+                runtime_store::application_id_for(&c, source.as_source(), &app_id)
+            {
+                if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
+                    let _ = runtime_store::upsert_preview_target(&c, &iid, &url, "child_webview");
+                }
             }
         }
     }
@@ -388,26 +386,21 @@ pub fn creative_app_browser_close(
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // Clear the preview target for the app being closed (batch 6).
+    // Clear the preview target for the app being closed (batch 6). Resolve the
+    // real source and look up identity READ-ONLY: close must never fabricate an
+    // application row (#01).
     let closed_app = browser::browser_current(&browser)
         .ok()
         .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
     if let Some(app_id) = closed_app {
         if let Ok(c) = conn(&state.db) {
-            if let Ok(app_identity) = runtime_store::find_or_create_application(
-                &c,
-                CreativeAppSource::LocalProject,
-                &app_id,
-            )
-            .or_else(|_| {
-                runtime_store::find_or_create_application(
-                    &c,
-                    CreativeAppSource::ExternalGithub,
-                    &app_id,
-                )
-            }) {
-                if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
-                    let _ = runtime_store::clear_preview_targets(&c, &iid);
+            if let Ok(source) = adapters::resolve(&c, &app_id) {
+                if let Ok(Some(app_identity)) =
+                    runtime_store::application_id_for(&c, source.as_source(), &app_id)
+                {
+                    if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
+                        let _ = runtime_store::clear_preview_targets(&c, &iid);
+                    }
                 }
             }
         }

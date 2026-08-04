@@ -7,6 +7,11 @@ use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use std::path::Path;
 
+/// Current host schema version after all incremental migrations. Kept in sync
+/// with the last `_schema_version` write in `apply_migrations`; tests assert
+/// against it so a future migration does not leave a stale literal behind.
+pub const SCHEMA_VERSION: &str = "15";
+
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
 fn instance_status_for_state(state: &str) -> Option<&'static str> {
@@ -1106,6 +1111,23 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v14→v15 (batch 1 CR-101): repair ghost `applications` identities.
+    //
+    // Older read paths used find-or-create on the browser open/close flow, which
+    // fabricated a fake `local_project` application row for a GitHub app. This
+    // migration only deletes rows with NO source row AND no dependent
+    // startup_plans/runtime_instances (double gate); every deleted row JSON is
+    // backed up to `creative_identity_reports`. Rows with dependencies or
+    // cross-source collisions are reported and left untouched.
+    if current_version < 15 {
+        repair_creative_identity_ghosts(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '15')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
@@ -1397,6 +1419,160 @@ pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Insert an immutable audit/report row for a creative identity repair.
+/// Deterministic `id` keeps re-runs idempotent (INSERT OR IGNORE).
+fn insert_identity_report(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    application_id: Option<&str>,
+    source: Option<&str>,
+    source_id: Option<&str>,
+    action: &str,
+    payload_json: &str,
+    ts: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO creative_identity_reports
+            (id, kind, application_id, source, source_id, action, payload_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![id, kind, application_id, source, source_id, action, payload_json, ts],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Batch 1 CR-101: delete confirmed ghost `applications` rows and audit the rest.
+///
+/// A ghost is an applications row whose source detail row is gone (no matching
+/// row in `modules` / `external_creative_apps` / `local_creative_apps`). We only
+/// delete ghosts with no dependent `startup_plans` / `runtime_instances` /
+/// `preview_targets` (double gate per upgrade plan T01); every deletion backs
+/// up the full row JSON into `creative_identity_reports`. Ghosts that still
+/// carry dependent data are quarantined (reported, kept), and a ghost whose
+/// source_id collides with a real row of another source is also reported.
+/// Idempotent: after the first run the deletable set is empty.
+pub(crate) fn repair_creative_identity_ghosts(conn: &Connection) -> Result<usize> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_identity_reports (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            application_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+    let ts = chrono::Utc::now().to_rfc3339();
+
+    let candidates: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.id, a.source, a.source_id
+                 FROM applications a
+                 WHERE NOT EXISTS (SELECT 1 FROM modules m WHERE m.id = a.source_id AND a.source = 'internal')
+                   AND NOT EXISTS (SELECT 1 FROM external_creative_apps e WHERE e.id = a.source_id AND a.source = 'external_github')
+                   AND NOT EXISTS (SELECT 1 FROM local_creative_apps l WHERE l.id = a.source_id AND a.source = 'local_project')",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+            .map_err(Error::Database)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(Error::Database)?);
+        }
+        out
+    };
+
+    let mut deleted = 0usize;
+    for (id, source, source_id) in candidates {
+        let row_json: String = conn
+            .query_row(
+                "SELECT json_object('id', id, 'source', source, 'source_id', source_id,
+                                    'title', title, 'version', version,
+                                    'created_at', created_at, 'updated_at', updated_at)
+                 FROM applications WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        // Double gate: dependent rows must be empty before we may delete.
+        let has_deps: i64 = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM startup_plans sp WHERE sp.application_id = ?1)
+                  + (SELECT COUNT(*) FROM runtime_instances ri WHERE ri.application_id = ?1)
+                  + (SELECT COUNT(*) FROM preview_targets pt
+                        JOIN runtime_instances ri2 ON ri2.id = pt.runtime_instance_id
+                     WHERE ri2.application_id = ?1)",
+                params![id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        if has_deps > 0 {
+            insert_identity_report(
+                conn,
+                &format!("ghost-quarantine-{id}"),
+                "ghost_application_with_dependencies",
+                Some(&id),
+                Some(&source),
+                Some(&source_id),
+                "quarantined",
+                &row_json,
+                &ts,
+            )?;
+            continue;
+        }
+        // Cross-source collision: the same source_id exists as a REAL row in a
+        // different source table. The real row lives in its own table, so
+        // deletion is still safe, but the collision is worth an audit record.
+        let cross: i64 = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM modules m WHERE m.id = ?2 AND ?1 <> 'internal')
+                  + (SELECT COUNT(*) FROM external_creative_apps e WHERE e.id = ?2 AND ?1 <> 'external_github')
+                  + (SELECT COUNT(*) FROM local_creative_apps l WHERE l.id = ?2 AND ?1 <> 'local_project')",
+                params![source, source_id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        if cross > 0 {
+            insert_identity_report(
+                conn,
+                &format!("collision-{id}"),
+                "cross_source_collision",
+                Some(&id),
+                Some(&source),
+                Some(&source_id),
+                "reported",
+                &row_json,
+                &ts,
+            )?;
+        }
+        insert_identity_report(
+            conn,
+            &format!("ghost-{id}"),
+            "ghost_application",
+            Some(&id),
+            Some(&source),
+            Some(&source_id),
+            "deleted",
+            &row_json,
+            &ts,
+        )?;
+        conn.execute("DELETE FROM applications WHERE id = ?1", params![id])
+            .map_err(Error::Database)?;
+        deleted += 1;
+    }
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1512,6 +1688,144 @@ mod tests {
         backfill_creative_identity(&conn).expect("third backfill");
         assert_eq!(count("SELECT COUNT(*) FROM applications"), 3);
         assert_eq!(count("SELECT COUNT(*) FROM runtime_instances"), 2);
+    }
+
+    /// Batch 1 CR-101: a ghost application (no source row, no dependent rows)
+    /// is deleted and its full row JSON is backed up to the report table.
+    #[test]
+    fn repair_ghost_identity_deletes_and_backs_up() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // A fake local_project identity the old browser show path would fabricate
+        // for a GitHub app (no matching source row anywhere).
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('ghost-1', 'local_project', 'ext-ghost', 'Ghost', '1', 't', 't')",
+            [],
+        )
+        .expect("insert ghost");
+
+        let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
+        assert_eq!(deleted, 1);
+
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM applications WHERE id = 'ghost-1'", [], |r| {
+                r.get(0)
+            })
+            .expect("count");
+        assert_eq!(remaining, 0);
+
+        // The row JSON was backed up with an audit record.
+        let (kind, action, payload): (String, String, String) = conn
+            .query_row(
+                "SELECT kind, action, payload_json FROM creative_identity_reports WHERE id = 'ghost-ghost-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("report row");
+        assert_eq!(kind, "ghost_application");
+        assert_eq!(action, "deleted");
+        assert!(payload.contains("ext-ghost"));
+
+        // Idempotent: a second run finds nothing new and adds no duplicate rows.
+        let deleted2 = repair_creative_identity_ghosts(&conn).expect("repair again");
+        assert_eq!(deleted2, 0);
+        let reports: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports WHERE kind = 'ghost_application'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(reports, 1);
+    }
+
+    /// Batch 1 CR-101: a ghost with dependent rows is quarantined, never deleted.
+    #[test]
+    fn repair_quarantines_ghost_with_dependencies() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('ghost-2', 'local_project', 'ext-ghost', 'Ghost', '1', 't', 't')",
+            [],
+        )
+        .expect("insert ghost");
+        // Dependent startup_plan keeps the row from being deletable.
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-ghost', 'ghost-2', 1, '{}', 1, 't', 't')",
+            [],
+        )
+        .expect("insert dependent plan");
+
+        let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
+        assert_eq!(deleted, 0, "ghost with dependencies must not be deleted");
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM applications WHERE id = 'ghost-2'", [], |r| {
+                r.get(0)
+            })
+            .expect("count");
+        assert_eq!(remaining, 1);
+        let quarantined: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports
+                 WHERE kind = 'ghost_application_with_dependencies' AND action = 'quarantined'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(quarantined, 1);
+    }
+
+    /// Batch 1 CR-101: a ghost whose source_id collides with a real row of a
+    /// different source is deleted (the real row lives in its own table) but the
+    /// collision is recorded for audit.
+    #[test]
+    fn repair_reports_cross_source_collision() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // A real external GitHub app.
+        conn.execute(
+            "INSERT INTO external_creative_apps
+                (id, title, version, owner, repo, repository_url, release_tag, runtime, state, runtime_config_json, created_at, updated_at)
+             VALUES ('ext-1', 'Ext', '1', 'o', 'r', 'http://x', 'v1', 'docker_compose', 'installed_stopped', '{}', 't', 't')",
+            [],
+        )
+        .expect("insert external");
+        // The ghost local_project identity the old browser path created for it.
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('ghost-3', 'local_project', 'ext-1', 'Ghost', '1', 't', 't')",
+            [],
+        )
+        .expect("insert ghost");
+
+        let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
+        assert_eq!(deleted, 1);
+        let collision: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports WHERE kind = 'cross_source_collision'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(collision, 1);
+        // The real external app row is untouched.
+        let ext: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM external_creative_apps WHERE id = 'ext-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(ext, 1);
     }
 }
 
