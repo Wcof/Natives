@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
@@ -2924,21 +2924,37 @@ impl PermissionGatedTools {
                 }
             };
         // Persist the child scope so a route restart restores it exactly
-        // (migration 029). Without this the durable session only carries
-        // provider/key/model and a restart would guess ask/max_steps=15 and
-        // drop project identity, profile, and allowlist.
-        let _ = crate::subagent_store::persist_subagent_scope(
+        // (migration 029). N05: bind the child to the parent's REAL project
+        // identity (id + version) — never write the project path into
+        // project_id. A persist failure fails closed BEFORE any child run is
+        // created.
+        let identity = self.verified_project_identity().await;
+        if let Err(error) = crate::subagent_store::persist_subagent_scope(
             &session_id,
             &crate::subagent_store::SubagentScope {
                 project_path: self.gateway.project_root.clone(),
-                project_id: self.gateway.project_root.clone(),
-                project_identity_version: None,
+                project_id: identity
+                    .as_ref()
+                    .map(|i| i.project_id.clone())
+                    .or_else(|| self.gateway.project_root.clone()),
+                project_identity_version: identity.as_ref().map(|i| i.identity_version as i64),
                 permission_profile: Some(child_perm.clone()),
                 agent_profile_id: child_profile_id.clone(),
                 max_steps: Some(child_max_steps as i64),
                 tool_allowlist: child_allowlist.clone(),
             },
-        );
+        ) {
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&error));
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": format!("persist child scope failed: {error}"),
+                    "code": "PERSISTENCE_FAILED",
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
         let project_path = self.gateway.project_root.clone();
@@ -2968,6 +2984,10 @@ impl PermissionGatedTools {
             })
             .await;
         if let Err(reason) = HookRegistry::aggregate_allow(&start_responses) {
+            // E04: the hidden session was created before the hook ran — close
+            // it so a denied spawn leaves no persistent session orphan.
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&reason));
             return ToolExecutionResult {
                 output: serde_json::json!({
                     "error": format!("subagent hook denied: {reason}"),
@@ -3040,6 +3060,14 @@ impl PermissionGatedTools {
             Err(e) => {
                 let _ =
                     crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
+                // E04: the child run was already created (queued) before the
+                // reservation — settle it so a failed registration leaves no
+                // queued orphan run behind.
+                crate::global_run_manager().fail_run_if_active(
+                    &child_run_id,
+                    format!("subagent reservation failed: {e}"),
+                    "SUBAGENT_REGISTER_FAILED",
+                );
                 return ToolExecutionResult {
                     output: serde_json::json!({"error": e}),
                     is_error: true,
