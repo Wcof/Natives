@@ -261,9 +261,11 @@ impl ProductionRuntime {
         Self::new_with_events_and_checkpoint(
             EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new_with_actor(
                 data_store.clone(),
-                actor,
+                actor.clone(),
             ))),
-            Arc::new(crate::checkpoint::CheckpointManager::with_store(data_store)),
+            Arc::new(crate::checkpoint::CheckpointManager::with_store_and_actor(
+                data_store, actor,
+            )),
         )
     }
 

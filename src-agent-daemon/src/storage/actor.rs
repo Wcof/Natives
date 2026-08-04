@@ -276,7 +276,7 @@ mod tests {
         let (store, _dir) = test_store();
         let actor = StorageActor::new(4, store.clone());
         let handles: Vec<_> = (0..10)
-            .map(|i| {
+            .map(|_i| {
                 let actor = actor.clone();
                 std::thread::spawn(move || {
                     actor.submit(true, insert_tag("c")).unwrap();

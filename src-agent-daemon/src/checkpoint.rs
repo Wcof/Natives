@@ -70,6 +70,10 @@ struct LiveCheckpoint {
 pub struct CheckpointManager {
     live: std::sync::Mutex<HashMap<String, LiveCheckpoint>>,
     store: Option<Arc<DataStore>>,
+    /// Optional bounded storage actor (TASK-006 / B04); when present, durable
+    /// checkpoint flushes execute on its single writer thread instead of
+    /// locking the DataStore Mutex from the calling (async) thread.
+    actor: Option<Arc<crate::storage::actor::StorageActor>>,
 }
 
 impl CheckpointManager {
@@ -77,6 +81,7 @@ impl CheckpointManager {
         Self {
             live: std::sync::Mutex::new(HashMap::new()),
             store: None,
+            actor: None,
         }
     }
 
@@ -84,6 +89,20 @@ impl CheckpointManager {
         Self {
             live: std::sync::Mutex::new(HashMap::new()),
             store: Some(store),
+            actor: None,
+        }
+    }
+
+    /// Checkpoint manager that routes durable flushes through a bounded
+    /// storage actor (TASK-006 / B04).
+    pub fn with_store_and_actor(
+        store: Arc<DataStore>,
+        actor: Arc<crate::storage::actor::StorageActor>,
+    ) -> Self {
+        Self {
+            live: std::sync::Mutex::new(HashMap::new()),
+            store: Some(store),
+            actor: Some(actor),
         }
     }
 
@@ -302,28 +321,51 @@ impl CheckpointManager {
 
     /// Flush live before/after images to SQLite without removing the live map.
     pub fn flush_live_to_store(&self, run_id: &str) -> Result<(), String> {
-        let map = self.live.lock().map_err(|e| e.to_string())?;
-        let live = map
-            .get(run_id)
-            .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-        let store = self
-            .store
-            .as_ref()
-            .ok_or_else(|| "checkpoint store unavailable".to_string())?;
-        let conn = store.conn()?;
-        let files: Vec<FileSnapshot> = live.files.values().cloned().collect();
-        let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
-            .map_err(|e| format!("serialize checkpoint snapshot: {e}"))?;
-        let changed = conn
-            .execute(
-                "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
-                params![snap, live.id],
-            )
-            .map_err(|e| e.to_string())?;
-        if changed != 1 {
-            return Err(format!("checkpoint row missing for run {run_id}"));
+        let (checkpoint_id, snap) = {
+            let map = self.live.lock().map_err(|e| e.to_string())?;
+            let live = map
+                .get(run_id)
+                .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
+            let files: Vec<FileSnapshot> = live.files.values().cloned().collect();
+            let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
+                .map_err(|e| format!("serialize checkpoint snapshot: {e}"))?;
+            (live.id.clone(), snap)
+        };
+        if let Some(actor) = &self.actor {
+            // TASK-006: the durable flush runs on the storage actor's single
+            // writer thread; the calling (async) thread never locks the Mutex.
+            let run_id = run_id.to_string();
+            actor
+                .submit(true, move |conn| {
+                    let changed = conn
+                        .execute(
+                            "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
+                            params![snap, checkpoint_id],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    if changed != 1 {
+                        return Err(format!("checkpoint row missing for run {run_id}"));
+                    }
+                    Ok(serde_json::json!(null))
+                })
+                .map(|_| ())
+        } else {
+            let store = self
+                .store
+                .as_ref()
+                .ok_or_else(|| "checkpoint store unavailable".to_string())?;
+            let conn = store.conn()?;
+            let changed = conn
+                .execute(
+                    "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
+                    params![snap, checkpoint_id],
+                )
+                .map_err(|e| e.to_string())?;
+            if changed != 1 {
+                return Err(format!("checkpoint row missing for run {run_id}"));
+            }
+            Ok(())
         }
-        Ok(())
     }
 
     pub fn load_checkpoint(&self, checkpoint_id: &str) -> Result<CheckpointRecord, String> {
@@ -831,6 +873,58 @@ mod tests {
             .expect("rewind after restart");
         assert_eq!(restored, vec!["persist.txt".to_string()]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&art);
+    }
+
+    /// TASK-006: a durable checkpoint flush routed through the bounded storage
+    /// actor still persists the snapshot_json (async path never locks the Mutex).
+    #[test]
+    fn flush_via_storage_actor_persists_snapshot() {
+        let root = std::env::temp_dir().join(format!("cp-act-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = root.join("act.txt");
+        std::fs::write(&file, "v1").unwrap();
+
+        let db = std::env::temp_dir().join(format!("cp-act-db-{}.sqlite", Uuid::new_v4()));
+        let art = std::env::temp_dir().join(format!("cp-act-art-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&art).unwrap();
+        let store = Arc::new(DataStore::new(&db, &art).expect("store"));
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('c-act', 'agent', 't', 'p', 'm')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('run-act', 'c-act', 'running', 'p', 'm')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let actor = crate::storage::actor::StorageActor::new(4, store.clone());
+        let mgr = CheckpointManager::with_store_and_actor(store.clone(), actor);
+        let cp_id = mgr.begin_run("run-act", "c-act", &root).unwrap();
+        mgr.capture_before("run-act", &trusted(&root, "act.txt"))
+            .unwrap();
+        std::fs::write(&file, "v2").unwrap();
+        // capture_after triggers flush_live_to_store → routed through the actor.
+        mgr.capture_after("run-act", &trusted(&root, "act.txt"))
+            .unwrap();
+        // The flush is durable: a fresh manager instance (no live map) reads it.
+        let mgr2 = CheckpointManager::with_store(store);
+        let preview = mgr2
+            .rewind_preview("run-act", &root, None)
+            .expect("actor-flushed snapshot is loadable");
+        assert_eq!(preview.checkpoint_id, cp_id);
+        assert_eq!(preview.files.len(), 1, "flush persisted the captured file");
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(&db);
