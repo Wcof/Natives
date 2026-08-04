@@ -4,6 +4,7 @@
 //! run end. Rewind refuses external modifications when conflict_policy=fail.
 
 use crate::storage::DataStore;
+use capability_gateway::TrustedPath;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -161,21 +162,32 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// Lazy capture before-image the first time a relative path is touched.
-    pub fn capture_before(&self, run_id: &str, rel_path: &str) -> Result<(), String> {
+    /// Lazy capture before-image the first time a Gateway-authorized path is
+    /// touched.
+    ///
+    /// Only accepts a [`TrustedPath`] produced by Gateway path preflight; a raw
+    /// caller-supplied path cannot be represented. Defense in depth: an
+    /// escaping `canonical` is rejected before any I/O, so checkpoint reads are
+    /// impossible for unauthorized paths even if a future caller bypasses the
+    /// Gateway.
+    pub fn capture_before(&self, run_id: &str, path: &TrustedPath) -> Result<(), String> {
         let mut map = self.live.lock().map_err(|e| e.to_string())?;
         let live = map
             .get_mut(run_id)
             .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-        if live.files.contains_key(rel_path) {
+        let key = path.project_relative.to_string_lossy().into_owned();
+        if live.files.contains_key(&key) {
             return Ok(());
         }
-        if rel_path.contains("..") {
-            return Err("path escape".into());
+        if !path.canonical.starts_with(&live.project_root) {
+            return Err(format!(
+                "checkpoint path {} escapes project root {}",
+                path.canonical.display(),
+                live.project_root.display()
+            ));
         }
-        let abs = live.project_root.join(rel_path);
-        let (existed, content, hash) = if abs.exists() {
-            let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
+        let (existed, content, hash) = if path.canonical.exists() {
+            let bytes = std::fs::read(&path.canonical).map_err(|e| e.to_string())?;
             let hash = hex_sha256(&bytes);
             let text = String::from_utf8(bytes).ok();
             (true, text, Some(hash))
@@ -183,9 +195,9 @@ impl CheckpointManager {
             (false, None, None)
         };
         live.files.insert(
-            rel_path.to_string(),
+            key.clone(),
             FileSnapshot {
-                path: rel_path.to_string(),
+                path: key,
                 before_hash: hash,
                 after_hash: None,
                 before_content: content,
@@ -196,27 +208,35 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// After a successful write, record after content/hash.
-    pub fn capture_after(&self, run_id: &str, rel_path: &str) -> Result<(), String> {
+    /// After a successful write, record after content/hash for a
+    /// Gateway-authorized path (same containment rule as `capture_before`).
+    pub fn capture_after(&self, run_id: &str, path: &TrustedPath) -> Result<(), String> {
         {
             let mut map = self.live.lock().map_err(|e| e.to_string())?;
             let live = map
                 .get_mut(run_id)
                 .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-            let abs = live.project_root.join(rel_path);
+            if !path.canonical.starts_with(&live.project_root) {
+                return Err(format!(
+                    "checkpoint path {} escapes project root {}",
+                    path.canonical.display(),
+                    live.project_root.display()
+                ));
+            }
+            let key = path.project_relative.to_string_lossy().into_owned();
             let entry = live
                 .files
-                .entry(rel_path.to_string())
+                .entry(key.clone())
                 .or_insert_with(|| FileSnapshot {
-                    path: rel_path.to_string(),
+                    path: key,
                     before_hash: None,
                     after_hash: None,
                     before_content: None,
                     after_content: None,
                     existed_before: false,
                 });
-            if abs.exists() {
-                let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
+            if path.canonical.exists() {
+                let bytes = std::fs::read(&path.canonical).map_err(|e| e.to_string())?;
                 entry.after_hash = Some(hex_sha256(&bytes));
                 entry.after_content = String::from_utf8(bytes).ok();
             } else {
@@ -669,19 +689,32 @@ pub fn estimate_context_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    /// Build a `TrustedPath` for an existing in-root file (mirrors the
+    /// canonical result Gateway preflight would produce).
+    fn trusted(root: &Path, rel: &str) -> TrustedPath {
+        let canonical = root
+            .join(rel)
+            .canonicalize()
+            .unwrap_or_else(|_| root.join(rel));
+        TrustedPath::new(canonical, PathBuf::from(rel))
+    }
 
     #[test]
     fn capture_and_rewind_roundtrip() {
         let root = std::env::temp_dir().join(format!("cp-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("a.txt");
         std::fs::write(&file, "before").unwrap();
 
         let mgr = CheckpointManager::new();
         let _id = mgr.begin_run("run1", "c1", &root).unwrap();
-        mgr.capture_before("run1", "a.txt").unwrap();
+        mgr.capture_before("run1", &trusted(&root, "a.txt"))
+            .unwrap();
         std::fs::write(&file, "after").unwrap();
-        mgr.capture_after("run1", "a.txt").unwrap();
+        mgr.capture_after("run1", &trusted(&root, "a.txt")).unwrap();
         let rec = mgr.finalize_run("run1").unwrap();
         assert_eq!(rec.files.len(), 1);
 
@@ -696,13 +729,15 @@ mod tests {
     fn rewind_without_finalize_uses_live() {
         let root = std::env::temp_dir().join(format!("cp2-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("b.txt");
         std::fs::write(&file, "v1").unwrap();
         let mgr = CheckpointManager::new();
         let cp_id = mgr.begin_run("run2", "c1", &root).unwrap();
-        mgr.capture_before("run2", "b.txt").unwrap();
+        mgr.capture_before("run2", &trusted(&root, "b.txt"))
+            .unwrap();
         std::fs::write(&file, "v2").unwrap();
-        mgr.capture_after("run2", "b.txt").unwrap();
+        mgr.capture_after("run2", &trusted(&root, "b.txt")).unwrap();
 
         let preview = mgr.rewind_preview("run2", &root, None).unwrap();
         assert!(preview.conflicts.is_empty());
@@ -719,13 +754,15 @@ mod tests {
     fn external_modification_conflicts() {
         let root = std::env::temp_dir().join(format!("cp3-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("c.txt");
         std::fs::write(&file, "v1").unwrap();
         let mgr = CheckpointManager::new();
         let cp_id = mgr.begin_run("run3", "c1", &root).unwrap();
-        mgr.capture_before("run3", "c.txt").unwrap();
+        mgr.capture_before("run3", &trusted(&root, "c.txt"))
+            .unwrap();
         std::fs::write(&file, "v2").unwrap();
-        mgr.capture_after("run3", "c.txt").unwrap();
+        mgr.capture_after("run3", &trusted(&root, "c.txt")).unwrap();
         // external edit after "run"
         std::fs::write(&file, "external").unwrap();
         let preview = mgr.rewind_preview("run3", &root, None).unwrap();
@@ -746,6 +783,7 @@ mod tests {
     fn checkpoint_survives_manager_restart_via_sqlite() {
         let root = std::env::temp_dir().join(format!("cp-restart-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("persist.txt");
         std::fs::write(&file, "v1").unwrap();
 
@@ -772,9 +810,11 @@ mod tests {
 
         let mgr1 = CheckpointManager::with_store(Arc::clone(&store));
         let cp_id = mgr1.begin_run("run-persist", "c1", &root).unwrap();
-        mgr1.capture_before("run-persist", "persist.txt").unwrap();
+        mgr1.capture_before("run-persist", &trusted(&root, "persist.txt"))
+            .unwrap();
         std::fs::write(&file, "v2").unwrap();
-        mgr1.capture_after("run-persist", "persist.txt").unwrap();
+        mgr1.capture_after("run-persist", &trusted(&root, "persist.txt"))
+            .unwrap();
         let rec = mgr1.finalize_run("run-persist").unwrap();
         assert_eq!(rec.id, cp_id);
         assert_eq!(rec.files.len(), 1);

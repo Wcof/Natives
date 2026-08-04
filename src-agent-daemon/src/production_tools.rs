@@ -1046,46 +1046,9 @@ impl EngineToolRuntime for PermissionGatedTools {
             }
         }
 
-        // Phase 3: lazy before-image for write tools (write_file / apply_patch).
-        let write_paths = extract_write_paths(name, &input);
-        for rel in &write_paths {
-            if let Err(error) = self
-                .checkpoint_manager()
-                .capture_before(&self.parent_run_id, rel)
-            {
-                return ToolExecutionResult {
-                    output: serde_json::json!({
-                        "error_code": "PERSISTENCE_FAILED",
-                        "error": format!("checkpoint before-image could not be persisted: {error}"),
-                    }),
-                    is_error: true,
-                    duration_ms: 0,
-                };
-            }
-        }
-
-        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
-            &self.parent_run_id,
-            &stream_tool_call_id,
-            name,
-            crate::side_effect_ledger::category_for_tool(name),
-            "started",
-            false,
-            turn_id,
-            &input,
-        ) {
-            return ToolExecutionResult {
-                output: serde_json::json!({
-                    "error_code": "PERSISTENCE_FAILED",
-                    "error": format!("tool side-effect ledger could not be started: {error}"),
-                }),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
         let started = Instant::now();
-        // Create tool call context
+        // Create tool call context FIRST so Gateway path preflight can
+        // authorize write paths before any checkpoint I/O (N01).
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
@@ -1144,6 +1107,62 @@ impl EngineToolRuntime for PermissionGatedTools {
             )
             .await;
 
+        // Phase 3: Gateway path preflight MUST precede any checkpoint I/O (N01).
+        // A rejected path returns before the ledger and the handler, so it
+        // causes zero I/O. Checkpoint only ever receives Gateway-authorized
+        // canonical paths (`TrustedPath`); it no longer accepts raw strings.
+        let trusted_paths = match self
+            .gateway
+            .preflight_write_paths(name, &input, &tool_context)
+        {
+            Ok(paths) => paths,
+            Err(e) => {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": e.code,
+                        "error": e.message,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                }
+            }
+        };
+        for trusted in &trusted_paths {
+            if let Err(error) = self
+                .checkpoint_manager()
+                .capture_before(&self.parent_run_id, trusted)
+            {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("checkpoint before-image could not be persisted: {error}"),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &stream_tool_call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "started",
+            false,
+            turn_id,
+            &input,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("tool side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
         let result = match self
             .gateway
             .execute(name, input.clone(), &tool_context)
@@ -1153,10 +1172,10 @@ impl EngineToolRuntime for PermissionGatedTools {
                 let mut output = out.result;
                 attach_tool_output_artifact(&self.parent_run_id, &stream_tool_call_id, &mut output);
                 let mut checkpoint_error = None;
-                for rel in &write_paths {
+                for trusted in &trusted_paths {
                     if let Err(error) = self
                         .checkpoint_manager()
-                        .capture_after(&self.parent_run_id, rel)
+                        .capture_after(&self.parent_run_id, trusted)
                     {
                         checkpoint_error = Some(error);
                         break;
@@ -1261,13 +1280,14 @@ impl EngineToolRuntime for PermissionGatedTools {
                     }
                 }
                 if !checkpoint_failed {
-                    for rel in &write_paths {
+                    for trusted in &trusted_paths {
+                        let rel = trusted.project_relative.to_string_lossy().into_owned();
                         // Best-effort FileChanged with before/after from checkpoint live map.
                         if let Ok(preview) = self
                             .checkpoint_manager()
                             .checkpoint_for_run_public(&self.parent_run_id)
                         {
-                            if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
+                            if let Some(snap) = preview.files.iter().find(|f| &f.path == &rel) {
                                 self.events.append(
                                     &self.parent_run_id,
                                     RunEventKind::FileChanged {
@@ -1531,37 +1551,6 @@ fn emit_terminal_output_deltas(
             }
         }
     }
-}
-fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
-    let mut paths = Vec::new();
-    match name {
-        "write_file" | "edit_file" => {
-            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
-                if !p.is_empty() && !p.contains("..") {
-                    // Prefer project-relative: strip absolute if possible is caller's job.
-                    paths.push(p.to_string());
-                }
-            }
-        }
-        "apply_patch" => {
-            if let Some(arr) = input.get("files").and_then(|v| v.as_array()) {
-                for f in arr {
-                    if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
-                        if !p.is_empty() && !p.contains("..") {
-                            paths.push(p.to_string());
-                        }
-                    }
-                }
-            }
-            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
-                if !p.is_empty() && !p.contains("..") {
-                    paths.push(p.to_string());
-                }
-            }
-        }
-        _ => {}
-    }
-    paths
 }
 fn tool_pattern(name: &str, input: &Value) -> String {
     if name == "run_terminal" {
