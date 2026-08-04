@@ -15,12 +15,30 @@ use rusqlite::params;
 /// The event log for a single run.
 pub struct EventLog {
     data_store: std::sync::Arc<DataStore>,
+    /// Optional bounded storage actor (TASK-006 / B04). When present, event
+    /// appends execute on the actor's single writer thread instead of locking
+    /// the DataStore Mutex from the calling (async) thread.
+    actor: Option<std::sync::Arc<crate::storage::actor::StorageActor>>,
 }
 
 impl EventLog {
     /// Create a new event log backed by the given data store.
     pub fn new(data_store: std::sync::Arc<DataStore>) -> Self {
-        EventLog { data_store }
+        EventLog {
+            data_store,
+            actor: None,
+        }
+    }
+
+    /// Create an event log that routes appends through a bounded storage actor.
+    pub fn new_with_actor(
+        data_store: std::sync::Arc<DataStore>,
+        actor: std::sync::Arc<crate::storage::actor::StorageActor>,
+    ) -> Self {
+        EventLog {
+            data_store,
+            actor: Some(actor),
+        }
     }
 
     /// Append an event to the log for a given run.
@@ -67,12 +85,35 @@ impl EventLog {
     /// Append a Protocol v2 event. `run_sequence` must be set; DB assigns `global_sequence`.
     /// Duplicate `event_id` is idempotent (returns existing global id, no second broadcast).
     pub fn append_event_v2(&self, event: &RunEventV2) -> Result<u64, String> {
+        if let Some(actor) = &self.actor {
+            // TASK-006: the fact append runs on the storage actor's single
+            // writer thread; the async caller parks on the bounded queue and
+            // reply instead of locking the DataStore Mutex directly.
+            let event = event.clone();
+            let reply = actor.submit(true, move |conn| {
+                Self::append_event_v2_with_conn(conn, &event)
+                    .map(|global| serde_json::json!(global))
+            })?;
+            return reply
+                .as_u64()
+                .ok_or_else(|| "storage actor returned a non-sequence result".into());
+        }
+        let conn = self.data_store.conn()?;
+        Self::append_event_v2_with_conn(&conn, event)
+    }
+
+    /// Full v2 append against an already-acquired connection. Executes on the
+    /// storage actor worker thread (TASK-006) or the calling thread for a
+    /// direct-path log; never locks the DataStore Mutex from an async thread.
+    fn append_event_v2_with_conn(
+        conn: &rusqlite::Connection,
+        event: &RunEventV2,
+    ) -> Result<u64, String> {
         let event_id = if event.event_id.trim().is_empty() {
             uuid::Uuid::new_v4().to_string()
         } else {
             event.event_id.clone()
         };
-        let mut conn = self.data_store.conn()?;
         if let Ok(existing) = conn.query_row(
             "SELECT id FROM run_event WHERE event_id = ?1 LIMIT 1",
             params![&event_id],
@@ -119,7 +160,7 @@ impl EventLog {
             // `started` row, so an already-`uncertain` effect (e.g. a failed
             // checkpoint after-image) is never silently promoted to settled.
             let tx = conn
-                .transaction()
+                .unchecked_transaction()
                 .map_err(|e| format!("PERSISTENCE_FAILED begin tool effect commit: {e}"))?;
             let row_id = Self::insert_run_event_row(
                 &tx,
@@ -144,7 +185,7 @@ impl EventLog {
             row_id as u64
         } else {
             Self::insert_run_event_row(
-                &conn,
+                conn,
                 &stored,
                 &event_id,
                 run_seq,
@@ -1033,5 +1074,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ledger_count, 0, "no intent means nothing to settle");
+    }
+
+    /// TASK-006: the fact append routes through the bounded storage actor and
+    /// still commits the ledger settlement atomically with the event.
+    #[test]
+    fn append_via_storage_actor_settles_ledger_atomically() {
+        let tmp = std::env::temp_dir();
+        let db_path = tmp.join(format!("test_events_actor_{}.db", uuid::Uuid::new_v4()));
+        let art_dir = tmp.join(format!("test_artifacts_actor_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(DataStore::new(&db_path, &art_dir).unwrap());
+        let actor = crate::storage::actor::StorageActor::new(8, store.clone());
+        let log = EventLog::new_with_actor(store.clone(), actor);
+        let run_id = "test-run-actor".to_string();
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO conversation (id, mode, title, provider_id, model_id) VALUES (?1, 'chat', 'Test', 'prov-1', 'model-1')",
+                params!["test-conv-actor"],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO run (id, conversation_id, status, provider_id, model_id) VALUES (?1, 'test-conv-actor', 'queued', 'prov-1', 'model-1')",
+                params![run_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO side_effect_record
+                 (id, run_id, tool_call_id, category, target_summary, side_effect_class,
+                  status, replay_safe, resource, started_at, ledger_sequence)
+                 VALUES (?1, ?2, 'call-a', 'workspace_file', '{}', 'workspace_file',
+                         'started', 0, '/tmp/f.txt', datetime('now'), 1)",
+                params!["sid-actor", run_id],
+            )
+            .unwrap();
+        }
+        let event = RunEventV2 {
+            event_id: "evt-actor".into(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: run_id.clone(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ToolCallCompleted {
+                id: "call-a".into(),
+                name: "write_file".into(),
+                output: serde_json::json!({"ok": true}),
+                is_error: false,
+                duration_ms: 3,
+                result_message_id: Some("rm-actor".into()),
+            },
+        };
+        let global = log.append_event_v2(&event).unwrap();
+        assert!(global > 0, "actor append returns a durable global sequence");
+        let conn = store.conn().unwrap();
+        let (status, replay_safe): (String, i64) = conn
+            .query_row(
+                "SELECT status, replay_safe FROM side_effect_record
+                 WHERE run_id = ?1 AND tool_call_id = 'call-a'",
+                params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(replay_safe, 1);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM run_event WHERE run_id = ?1 AND event_id = 'evt-actor'",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

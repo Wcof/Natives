@@ -15,6 +15,7 @@
 //! All tables use explicit foreign keys with CASCADE behavior.
 //! SQLite is configured with WAL mode and foreign keys enabled.
 
+pub mod actor;
 pub mod host_authority_migration;
 pub mod migrations;
 

@@ -250,9 +250,18 @@ impl ProductionRuntime {
     }
 
     pub fn new_with_event_store(data_store: Arc<crate::storage::DataStore>) -> Self {
+        // TASK-006 / B04: the bounded storage actor is the single writer for
+        // event facts; async engine paths submit appends instead of locking
+        // the DataStore Mutex directly. The EventLog holds an Arc, so the
+        // actor drains and exits when the runtime drops.
+        let actor = crate::storage::actor::StorageActor::new(
+            crate::storage::actor::DEFAULT_CAPACITY,
+            data_store.clone(),
+        );
         Self::new_with_events_and_checkpoint(
-            EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new(
+            EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new_with_actor(
                 data_store.clone(),
+                actor,
             ))),
             Arc::new(crate::checkpoint::CheckpointManager::with_store(data_store)),
         )
