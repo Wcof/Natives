@@ -513,6 +513,19 @@ impl EngineError {
         matches!(self, Self::Provider { category, .. } if category == "RateLimit")
     }
 
+    /// Provider-neutral context-overflow classification (TASK-011 / C03-I03).
+    /// Adapters map overflow to `ProviderErrorCategory::ContextLengthExceeded`;
+    /// the engine uses this to trigger a bounded one-shot compaction retry,
+    /// never an unbounded retry loop.
+    pub fn is_context_overflow(&self) -> bool {
+        matches!(
+            self,
+            Self::Provider { category, .. }
+                if category == "ContextLengthExceeded"
+                    || category == "ContextWindowExceeded"
+        )
+    }
+
     /// Delay the provider asked us to wait, if it named one.
     ///
     /// This is the value the retry loop feeds into [`provider_backoff_ms`]; it
@@ -1032,6 +1045,10 @@ impl AgentEngine {
 
             const MAX_PROVIDER_ATTEMPTS: u32 = 3;
             let mut attempt = 1u32;
+            // One-shot overflow policy (C03-I03): each user input may be
+            // compacted at most once in response to a context-overflow error;
+            // a second overflow fails without looping.
+            let mut overflow_compacted = false;
             let (text_acc, reasoning_acc, tool_acc, stop_reason) = 'attempts: loop {
                 self.events.append(
                     run_id,
@@ -1110,6 +1127,45 @@ impl AgentEngine {
                             return Ok(EngineOutcome::Cancelled);
                         }
                         attempt += 1;
+                        continue 'attempts;
+                    }
+                    Err(e) if e.is_context_overflow() => {
+                        self.events.append(
+                            run_id,
+                            RunEventKind::GenerationAttemptFailed {
+                                attempt,
+                                code: e.code().into(),
+                                retryable: false,
+                                retrying: !overflow_compacted,
+                                retry_in_ms: None,
+                            },
+                        );
+                        if overflow_compacted {
+                            // One-shot policy: the input was already compacted
+                            // once and the provider still rejects the context.
+                            // Fail immediately — never an unbounded retry loop.
+                            self.close_failed_turn(
+                                run_id,
+                                &turn_id,
+                                &assistant_message_id,
+                                "error",
+                                "",
+                                "",
+                            )?;
+                            return Err(e);
+                        }
+                        overflow_compacted = true;
+                        attempt += 1;
+                        let compacted = self
+                            .maybe_compact_typed_history(
+                                run_id,
+                                &turn_id,
+                                &config.model,
+                                provider,
+                                typed_messages,
+                            )
+                            .await?;
+                        typed_messages = compacted;
                         continue 'attempts;
                     }
                     Err(e) => {
@@ -5808,6 +5864,139 @@ mod tests {
             acked.as_slice(),
             &["steer-0".to_string(), "steer-1".to_string()],
             "each steering input is acked after injection"
+        );
+    }
+
+    /// TASK-011 (C03-I03): a provider context-overflow error triggers exactly
+    /// ONE bounded compaction retry; the turn then succeeds.
+    #[tokio::test]
+    async fn context_overflow_triggers_one_bounded_compaction_retry() {
+        struct OverflowOnceProvider {
+            calls: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl EngineProvider for OverflowOnceProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                Ok(Box::pin(futures_util::stream::iter(vec![])))
+            }
+            async fn stream_turn(
+                &self,
+                _request: ProviderTurnRequest,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(EngineError::Provider {
+                        message: "maximum context length exceeded".into(),
+                        code: "context_length_exceeded".into(),
+                        retryable: false,
+                        category: "ContextLengthExceeded".into(),
+                        retry_after_ms: None,
+                    });
+                }
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    EngineProviderEvent::TextDelta("recovered".into()),
+                    EngineProviderEvent::Completed,
+                ])))
+            }
+        }
+
+        let provider = OverflowOnceProvider {
+            calls: AtomicUsize::new(0),
+        };
+        let engine = AgentEngine::new(EventSequencer::new());
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("overflow-ok-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "long input".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            2,
+            "one overflow + one compacted retry, never more"
+        );
+    }
+
+    /// TASK-011 (C03-I03): a provider that keeps overflowing is failed after
+    /// at most one compaction retry — never an unbounded retry loop.
+    #[tokio::test]
+    async fn context_overflow_never_loops_past_one_compaction() {
+        struct OverflowAlwaysProvider {
+            calls: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl EngineProvider for OverflowAlwaysProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                Ok(Box::pin(futures_util::stream::iter(vec![])))
+            }
+            async fn stream_turn(
+                &self,
+                _request: ProviderTurnRequest,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Err(EngineError::Provider {
+                    message: "still too long".into(),
+                    code: "context_length_exceeded".into(),
+                    retryable: false,
+                    category: "ContextLengthExceeded".into(),
+                    retry_after_ms: None,
+                })
+            }
+        }
+
+        let provider = OverflowAlwaysProvider {
+            calls: AtomicUsize::new(0),
+        };
+        let engine = AgentEngine::new(EventSequencer::new());
+        let err = engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("overflow-loop-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "long input".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.is_context_overflow(), "{err}");
+        assert!(
+            provider.calls.load(Ordering::SeqCst) <= 2,
+            "initial attempt + at most one compaction retry"
         );
     }
 }
