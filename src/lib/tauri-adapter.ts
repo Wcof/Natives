@@ -322,6 +322,7 @@ export interface CreativeAppProgressEvent {
 }
 
 export interface CreativeAppLogEvent {
+  runtimeId: string | null;
   appId: string;
   seq: number;
   tsMs: number;
@@ -682,7 +683,7 @@ export interface NativesAPI {
     getOperation: (id: number) => Promise<CreativeAppOperation>;
     cancelOperation: (id: number) => Promise<CreativeAppOperation>;
     onOperationChanged: (callback: (op: CreativeAppOperation) => void) => () => void;
-    logs: (id: string, tail?: number) => Promise<string>;
+    logs: (id: string, tail?: number, cursor?: number) => Promise<string>;
     reconcile: () => Promise<number>;
     githubTokenStatus: () => Promise<CreativeAppGithubTokenStatus>;
     githubTokenSet: (token: string) => Promise<CreativeAppGithubTokenStatus>;
@@ -1305,7 +1306,8 @@ const nativesAPI: NativesAPI = {
         unlisten.then((fn) => fn());
       };
     },
-    logs: (id: string, tail?: number) => cmd<string>('creative_app_logs', { id, tail }),
+    logs: (id: string, tail?: number, cursor?: number) =>
+      cmd<string>('creative_app_logs', { runtimeId: id, tail, cursor }),
     reconcile: () => cmd<number>('creative_app_reconcile'),
     githubTokenStatus: () =>
       cmd<CreativeAppGithubTokenStatus>('creative_app_github_token_status'),

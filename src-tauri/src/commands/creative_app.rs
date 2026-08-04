@@ -44,6 +44,42 @@ fn lifecycle_ctx(
     LifecycleCtx::new(app, modules_dir(), Some(local_runtime), host_http_port)
 }
 
+/// Resolve which per-runtime log to read for a caller-supplied id (CR-301).
+///
+/// `id` may be a source id (app-scoped: read the active runtime; aggregate when
+/// stopped) or a runtime instance id (runtime-scoped). Returns
+/// `(source, runtime_id_to_read, app_id_for_dir)`.
+fn resolve_log_scope(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<(ResolvedSource, Option<String>, String)> {
+    if let Ok(ResolvedSource::LocalProject) = adapters::resolve(conn, id) {
+        let app_id = runtime_store::application_id_for(conn, CreativeAppSource::LocalProject, id)?
+            .unwrap_or_default();
+        let active = if app_id.is_empty() {
+            None
+        } else {
+            runtime_store::active_instance_id(conn, &app_id)?
+        };
+        return Ok((ResolvedSource::LocalProject, active, id.to_string()));
+    }
+    if let Ok(Some(app_id)) = runtime_store::instance_application_id(conn, id) {
+        // `id` is a runtime instance id belonging to a local process source.
+        let src = runtime_store::source_id_for_application(conn, &app_id)?
+            .unwrap_or_else(|| id.to_string());
+        return Ok((ResolvedSource::LocalProject, Some(id.to_string()), src));
+    }
+    let source = adapters::resolve(conn, id)?;
+    Ok((source, None, id.to_string()))
+}
+
+fn format_local_log_lines(mem: &[crate::creative_app::local::logs::LogLine]) -> String {
+    mem.iter()
+        .map(|l| format!("[{}] {}: {}", l.ts_ms, l.stream.as_str(), l.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 // ── Operation journal helpers (batch 2 CR-201) ──────────────────────────
 
 /// Unified application id for a source row, read-only (never fabricates a row).
@@ -556,37 +592,40 @@ pub fn creative_app_operation_cancel(
 
 #[tauri::command]
 pub async fn creative_app_logs(
-    id: String,
+    runtime_id: String,
     tail: Option<u32>,
+    cursor: Option<u64>,
     state: State<'_, AppState>,
     local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<String> {
     let pool = state.db.clone();
     let tail = tail.unwrap_or(200) as usize;
+    let cursor = cursor.unwrap_or(0);
     let local_runtime = local_runtime.inner().clone();
 
-    let source = {
+    let (source, rt_to_read, app_scope) = {
         let c = conn(&pool)?;
-        adapters::resolve(&c, &id)?
+        resolve_log_scope(&c, &runtime_id)?
     };
 
     match source {
         ResolvedSource::LocalProject => {
-            let mem = local_runtime.recent_logs(&id, tail);
-            if !mem.is_empty() {
-                let body = mem
-                    .into_iter()
-                    .map(|l| format!("[{}] {}: {}", l.ts_ms, l.stream.as_str(), l.text))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Ok(body);
+            if let Some(rt) = &rt_to_read {
+                // Runtime-scoped: the exact run the caller asked for (CR-301).
+                let mem = local_runtime.recent_logs(&app_scope, rt, cursor, tail);
+                if !mem.is_empty() {
+                    return Ok(format_local_log_lines(&mem));
+                }
+                return Ok(local_runtime.persisted_tail(&app_scope, rt, 256 * 1024));
             }
-            Ok(local_runtime.persisted_tail(&id, 256 * 1024))
+            // Stopped app (or pre-runtime legacy): app-level aggregate (dual-read).
+            Ok(local_runtime.app_aggregate_tail(&app_scope, 256 * 1024))
         }
         ResolvedSource::ExternalGithub => {
             let cfg_json = {
                 let c = conn(&pool)?;
-                let rec = store::get_app(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
+                let rec = store::get_app(&c, &app_scope)?
+                    .ok_or_else(|| Error::NotFound(app_scope.clone()))?;
                 rec.runtime_config_json
             };
             let cfg = store::parse_runtime_config(&cfg_json)?;
@@ -1085,17 +1124,25 @@ pub async fn creative_app_resolve_orphan(
     let lock = lock.inner().clone();
     let _guard = lock.acquire_app(&id).await;
     let handle = app_handle.clone();
+    let ctx = lifecycle_ctx(app_handle, local_runtime.clone(), host_port);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
+        // Kill the verified orphan, clear identity, settle the orphaned instance
+        // (never auto-takeover pipes; CR-302 proof chain).
         let summary = rt.block_on(local::resolve_orphan(
             &c,
             &handle,
             local_runtime.as_ref(),
-            host_port,
             &id,
-            restart,
         ))?;
+        if restart {
+            // Restart is a fresh start on a NEW runtime instance (the resolved
+            // orphan is already settled to stopped, so the instance CAS passes).
+            let spawned = rt.block_on(adapters::spawn_start(&c, &ctx, &id))?;
+            let summary = rt.block_on(adapters::await_ready(&c, &ctx, &id, &spawned))?;
+            return runtime_store::attach_identity(&c, summary);
+        }
         runtime_store::attach_identity(&c, summary)
     })
     .await
@@ -1106,10 +1153,27 @@ pub async fn creative_app_resolve_orphan(
 pub async fn creative_app_get_local_logs(
     id: String,
     limit: Option<u32>,
+    state: State<'_, AppState>,
     local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<Vec<serde_json::Value>> {
     let limit = limit.unwrap_or(200) as usize;
-    let lines = local_runtime.recent_logs(&id, limit);
+    let local_runtime = local_runtime.inner().clone();
+    let (rt_to_read, app_scope) = {
+        let c = conn(&state.db)?;
+        let (source, rt, scope) = resolve_log_scope(&c, &id)?;
+        if source != ResolvedSource::LocalProject {
+            return Err(Error::InvalidInput(
+                "getLocalLogs is for local project sources only".into(),
+            ));
+        }
+        (rt, scope)
+    };
+    // Runtime-scoped structured lines; empty when the app is stopped (the
+    // Renderer then falls back to the app-level aggregate via `logs`).
+    let Some(rt) = rt_to_read else {
+        return Ok(Vec::new());
+    };
+    let lines = local_runtime.recent_logs(&app_scope, &rt, 0, limit);
     Ok(lines
         .into_iter()
         .map(|l| {
@@ -1224,7 +1288,8 @@ pub async fn creative_app_diagnose_local_with_ai(
 ) -> Result<local::ai::AiDiagnosisResult> {
     let pool = state.db.clone();
     let local_runtime = local_runtime.inner().clone();
-    let tail = local_runtime.persisted_tail(&id, 12_000);
+    // App-level aggregate tail (legacy + per-runtime runs) for AI context.
+    let tail = local_runtime.app_aggregate_tail(&id, 12_000);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;

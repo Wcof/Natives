@@ -363,9 +363,12 @@ export default function WorkshopPage() {
     setLogsFor(app);
     setLogsText('…');
     setLogAutoScroll(true);
+    // Runtime-scoped logs (CR-301): prefer the active runtime instance id so a
+    // late event from an old run can never appear in the current run's viewer.
+    const logKey = app.runtimeInstanceId ?? app.id;
     try {
       if (app.source === 'local_project' && window.nativesAPI?.creativeApp?.getLocalLogs) {
-        const lines = await window.nativesAPI.creativeApp.getLocalLogs(app.id, 400);
+        const lines = await window.nativesAPI.creativeApp.getLocalLogs(logKey, 400);
         if (Array.isArray(lines) && lines.length > 0) {
           setLogsText(
             lines
@@ -375,7 +378,7 @@ export default function WorkshopPage() {
           return;
         }
       }
-      const text = await window.nativesAPI?.creativeApp?.logs?.(app.id, 200);
+      const text = await window.nativesAPI?.creativeApp?.logs?.(logKey, 200);
       setLogsText(text || '');
     } catch (err) {
       setLogsText(classifyError(err).userMessage);
@@ -387,7 +390,10 @@ export default function WorkshopPage() {
     const api = window.nativesAPI?.creativeApp;
     if (!api?.onLog) return;
     return api.onLog((ev) => {
-      if (ev.appId !== logsFor.id) return;
+      const matches = logsFor.runtimeInstanceId
+        ? ev.runtimeId != null && ev.runtimeId === logsFor.runtimeInstanceId
+        : ev.appId === logsFor.id;
+      if (!matches) return;
       setLogsText((prev) => {
         const line = `[${ev.stream}] ${ev.text}`;
         if (!prev || prev === '…') return line;

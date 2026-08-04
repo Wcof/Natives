@@ -27,8 +27,9 @@ pub async fn start(
     runtime: &LocalRuntimeManager,
     host_http_port: u16,
     id: &str,
+    runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
-    local::start_app(conn, app, runtime, host_http_port, id).await
+    local::start_app(conn, app, runtime, host_http_port, id, runtime_id).await
 }
 
 /// Health phase of a local start, run without the mutation lock (batch 2).
@@ -37,8 +38,9 @@ pub async fn await_start_ready(
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
     id: &str,
+    runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
-    local::await_start_ready(conn, app, runtime, id).await
+    local::await_start_ready(conn, app, runtime, id, runtime_id).await
 }
 
 pub async fn stop(
@@ -46,8 +48,9 @@ pub async fn stop(
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
     id: &str,
+    runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
-    local::stop_app(conn, app, runtime, id).await
+    local::stop_app(conn, app, runtime, id, runtime_id).await
 }
 
 pub async fn delete(
@@ -55,19 +58,10 @@ pub async fn delete(
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
     id: &str,
+    runtime_id: &str,
 ) -> Result<DeleteResult> {
     // Never delete the source project directory — only Natives metadata + logs.
-    local::delete_running_app(conn, app, runtime, id).await
-}
-
-pub async fn restart(
-    conn: &Connection,
-    app: &AppHandle,
-    runtime: &LocalRuntimeManager,
-    host_http_port: u16,
-    id: &str,
-) -> Result<CreativeAppSummary> {
-    local::restart_app(conn, app, runtime, host_http_port, id).await
+    local::delete_running_app(conn, app, runtime, id, runtime_id).await
 }
 
 pub fn open_target(conn: &Connection, id: &str) -> Result<OpenTarget> {

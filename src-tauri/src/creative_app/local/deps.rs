@@ -101,7 +101,7 @@ pub async fn install_dependencies(
     let pm = detect_pm_from_plan_or_locks(root, &plan)?;
     let (program, args) = resolve_install_command(root, pm)?;
 
-    let log = logs.get_or_open(id);
+    let log = logs.get_or_open(id, &format!("deps-{id}"));
     // Redact this app's env values from install logs (by value, not just pattern).
     log.set_secrets(store::secret_values(conn, id));
     log.append(

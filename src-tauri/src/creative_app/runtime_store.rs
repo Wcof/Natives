@@ -82,6 +82,42 @@ pub fn application_id_for(
     lookup_application(conn, source_str(source), source_id)
 }
 
+/// Application id that owns a runtime instance (or None for unknown/stale ids).
+/// Read-only; used to route late resource events to the right instance's owner
+/// instead of assuming the current active instance (CR-301 #05/#22).
+pub fn instance_application_id(conn: &Connection, instance_id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT application_id FROM runtime_instances WHERE id = ?1",
+        params![instance_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(Error::Database)
+}
+
+/// Source row id for an application identity (source detail table id). Read-only.
+pub fn source_id_for_application(conn: &Connection, application_id: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT source_id FROM applications WHERE id = ?1",
+        params![application_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(Error::Database)
+}
+
+/// Settle a SPECIFIC instance by its id (crash recovery mirror). Unlike
+/// `settle_instance` (which targets the current active instance), this is used
+/// when a late event from an old run must not touch a newer active instance.
+pub fn settle_instance_by_id(conn: &Connection, instance_id: &str, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE runtime_instances SET status = ?2, updated_at = ?3 WHERE id = ?1",
+        params![instance_id, status, now()],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 /// Active plan id for an application (startup_plans is_active). Deterministic
 /// tie-break so migration dedup and writers agree on the newest active plan.
 pub fn active_plan_id(conn: &Connection, application_id: &str) -> Result<Option<String>> {
@@ -804,6 +840,59 @@ mod tests {
         let iid = create_instance(&conn, &app, None, "host_http").unwrap();
         let bound2 = attach_identity(&conn, summary).unwrap();
         assert_eq!(bound2.runtime_instance_id.as_deref(), Some(iid.as_str()));
+    }
+
+    /// Batch 3 CR-301: instance→application→source mapping routes late resource
+    /// events to the right owner. A stale runtime id resolves to its original
+    /// application even after a newer instance exists.
+    #[test]
+    fn instance_to_application_to_source_mapping() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let i1 = create_instance(&conn, &app, None, "local_process").unwrap();
+        assert_eq!(instance_application_id(&conn, &i1).unwrap().as_deref(), Some(app.as_str()));
+        assert_eq!(
+            source_id_for_application(&conn, &app).unwrap().as_deref(),
+            Some("loc1")
+        );
+        // A later instance of the same app does not change the first mapping.
+        mark_stopping(&conn, &i1).unwrap();
+        mark_stopped(&conn, &i1).unwrap();
+        let i2 = create_instance(&conn, &app, None, "local_process").unwrap();
+        assert_eq!(instance_application_id(&conn, &i1).unwrap().as_deref(), Some(app.as_str()));
+        assert_ne!(i1, i2);
+        assert_eq!(instance_application_id(&conn, &i2).unwrap().as_deref(), Some(app.as_str()));
+
+        // Unknown ids resolve to None (never fabricated).
+        assert!(instance_application_id(&conn, "nope").unwrap().is_none());
+    }
+
+    /// Batch 3 CR-301: settle_instance_by_id touches exactly the named instance,
+    /// so a stale run's reconcile cannot clobber a newer active instance.
+    #[test]
+    fn settle_by_id_only_touches_named_instance() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let i1 = create_instance(&conn, &app, None, "local_process").unwrap();
+        mark_stopping(&conn, &i1).unwrap();
+        mark_stopped(&conn, &i1).unwrap();
+        let i2 = create_instance(&conn, &app, None, "local_process").unwrap();
+        mark_running(&conn, &i2, &["http://127.0.0.1:5173/".into()], Some(5173), None, None)
+            .unwrap();
+
+        settle_instance_by_id(&conn, &i1, "failed").unwrap();
+        let (s1, s2): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT status FROM runtime_instances WHERE id = ?1),
+                        (SELECT status FROM runtime_instances WHERE id = ?2)",
+                params![i1, i2],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(s1, "failed", "named instance must settle");
+        assert_eq!(s2, "running", "newer instance must be untouched");
     }
 
     /// Batch 2 race guard: a start must never resurrect an instance that a
