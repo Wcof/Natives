@@ -1080,6 +1080,32 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v13→v14: local app volume identity (batch 4). Persisted so a
+    // volume re-mount / disconnect can be recognized across restarts.
+    if current_version < 14 {
+        let has_volume = conn
+            .prepare("PRAGMA table_info(local_creative_apps)")
+            .map_err(Error::Database)?
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(Error::Database)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
+            .iter()
+            .any(|c| c == "volume_identity");
+        if !has_volume {
+            conn.execute(
+                "ALTER TABLE local_creative_apps ADD COLUMN volume_identity TEXT",
+                [],
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '14')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
