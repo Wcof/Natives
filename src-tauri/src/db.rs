@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "16";
+pub const SCHEMA_VERSION: &str = "17";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1145,6 +1145,22 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v16→v17 (batch 1 CR-103): promote `startup_plans` to a versioned
+    // LaunchProfile base.
+    //
+    // Adds nullable schema_version / driver_kind / ownership_mode columns,
+    // backfills them from the stored plan JSON (read/write both derive them; the
+    // columns are the persisted mirror), and repairs the earlier Compose backfill
+    // that classified a local docker_compose instance as `local_process`.
+    if current_version < 17 {
+        upgrade_startup_plans_v1(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '17')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
@@ -1332,10 +1348,12 @@ pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
                         .and_then(|r| r.as_str())
                         .map(str::to_string)
                 });
-            let owner_kind = if runtime.as_deref() == Some("static_http") {
-                "host_http"
-            } else {
-                "local_process"
+            let owner_kind = match runtime.as_deref() {
+                Some("static_http") => "host_http",
+                // Local Compose plans own a docker_compose project, NOT a local
+                // process (batch 1 CR-103 fixes the earlier misclassification).
+                Some("docker_compose") => "docker_compose",
+                _ => "local_process",
             };
             let urls = open_url
                 .as_deref()
@@ -1453,7 +1471,16 @@ fn insert_identity_report(
         "INSERT OR IGNORE INTO creative_identity_reports
             (id, kind, application_id, source, source_id, action, payload_json, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, kind, application_id, source, source_id, action, payload_json, ts],
+        params![
+            id,
+            kind,
+            application_id,
+            source,
+            source_id,
+            action,
+            payload_json,
+            ts
+        ],
     )
     .map_err(Error::Database)?;
     Ok(())
@@ -1498,7 +1525,13 @@ pub(crate) fn repair_creative_identity_ghosts(conn: &Connection) -> Result<usize
             )
             .map_err(Error::Database)?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
             .map_err(Error::Database)?;
         let mut out = Vec::new();
         for r in rows {
@@ -1628,7 +1661,8 @@ pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usi
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(Error::Database)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
     };
     for app in dup_plan_apps {
         let ids: Vec<String> = {
@@ -1642,7 +1676,8 @@ pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usi
             let rows = stmt
                 .query_map(params![app], |r| r.get::<_, String>(0))
                 .map_err(Error::Database)?;
-            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::Database)?
         };
         for id in ids.into_iter().skip(1) {
             let row_json: String = conn
@@ -1687,7 +1722,8 @@ pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usi
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(Error::Database)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
     };
     for app in dup_runtime_apps {
         let ids: Vec<String> = {
@@ -1701,7 +1737,8 @@ pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usi
             let rows = stmt
                 .query_map(params![app], |r| r.get::<_, String>(0))
                 .map_err(Error::Database)?;
-            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Error::Database)?
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::Database)?
         };
         for id in ids.into_iter().skip(1) {
             let row_json: String = conn
@@ -1750,6 +1787,183 @@ pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usi
         ",
     )
     .map_err(Error::Database)?;
+
+    Ok(fixed)
+}
+
+/// Derive a LaunchProfile `driver_kind` from a stored plan JSON. Handles the
+/// local LaunchPlan shape (`runtime`, camelCase) and the external RuntimeConfig
+/// shape (`kind`, snake_case). Kept self-contained because migrations must run
+/// against historical schemas without depending on domain modules.
+fn plan_driver_kind_from_json(json: &str) -> &'static str {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return "unknown";
+    };
+    if let Some(r) = v.get("runtime").and_then(|r| r.as_str()) {
+        return match r {
+            "static_http" => "local_static",
+            "docker_compose" => "docker_compose",
+            _ => "node_dev_server",
+        };
+    }
+    if let Some(k) = v.get("kind").and_then(|k| k.as_str()) {
+        return if k == "docker_compose" {
+            "docker_compose"
+        } else {
+            "docker_run"
+        };
+    }
+    "unknown"
+}
+
+/// Batch 1 CR-103: promote `startup_plans` to the versioned LaunchProfile base.
+///
+/// Adds nullable `schema_version` / `driver_kind` / `ownership_mode` columns
+/// (read-upgrader derives them from plan_json when NULL), backfills existing
+/// rows, and repairs the Compose backfill that misclassified a local
+/// docker_compose instance as `local_process`. Additive and idempotent: the
+/// column adds are PRAGMA-guarded and the backfill only touches NULL rows.
+pub(crate) fn upgrade_startup_plans_v1(conn: &Connection) -> Result<usize> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_identity_reports (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            application_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    // 1) Add the versioned columns (guarded so re-running is safe).
+    let plan_cols: Vec<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(startup_plans)")
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(Error::Database)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
+    };
+    if !plan_cols.iter().any(|c| c == "schema_version") {
+        conn.execute(
+            "ALTER TABLE startup_plans ADD COLUMN schema_version INTEGER",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+    if !plan_cols.iter().any(|c| c == "driver_kind") {
+        conn.execute("ALTER TABLE startup_plans ADD COLUMN driver_kind TEXT", [])
+            .map_err(Error::Database)?;
+    }
+    if !plan_cols.iter().any(|c| c == "ownership_mode") {
+        conn.execute(
+            "ALTER TABLE startup_plans ADD COLUMN ownership_mode TEXT",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // 2) Backfill columns for legacy rows (only those still missing them).
+    let ts = chrono::Utc::now().to_rfc3339();
+    let mut fixed = 0usize;
+    let missing: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, plan_json FROM startup_plans
+                 WHERE schema_version IS NULL OR driver_kind IS NULL OR ownership_mode IS NULL",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(Error::Database)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(Error::Database)?);
+        }
+        out
+    };
+    for (id, plan_json) in missing {
+        let dk = plan_driver_kind_from_json(&plan_json);
+        let sv = serde_json::from_str::<serde_json::Value>(&plan_json)
+            .ok()
+            .and_then(|v| v.get("schemaVersion").and_then(|s| s.as_u64()))
+            .unwrap_or(1);
+        conn.execute(
+            "UPDATE startup_plans
+             SET schema_version = ?2, driver_kind = ?3, ownership_mode = 'managed', updated_at = ?4
+             WHERE id = ?1",
+            params![id, sv as i64, dk, ts],
+        )
+        .map_err(Error::Database)?;
+        insert_identity_report(
+            conn,
+            &format!("plan-upgrade-{id}"),
+            "plan_versioned_columns",
+            None,
+            None,
+            None,
+            "backfilled",
+            &serde_json::json!({ "driverKind": dk, "schemaVersion": sv }).to_string(),
+            &ts,
+        )?;
+        fixed += 1;
+    }
+
+    // 3) Repair the earlier Compose backfill that classified local docker_compose
+    //    instances as `local_process` (#34).
+    let misclassified: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT ri.id, ri.application_id, l.launch_plan_json
+                 FROM runtime_instances ri
+                 JOIN applications a ON a.id = ri.application_id
+                 JOIN local_creative_apps l ON l.id = a.source_id AND a.source = 'local_project'
+                 WHERE ri.owner_kind = 'local_process'
+                   AND json_extract(l.launch_plan_json, '$.runtime') = 'docker_compose'",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(Error::Database)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(Error::Database)?);
+        }
+        out
+    };
+    for (rid, app_id, plan_json) in misclassified {
+        conn.execute(
+            "UPDATE runtime_instances SET owner_kind = 'docker_compose', updated_at = ?2 WHERE id = ?1",
+            params![rid, ts],
+        )
+        .map_err(Error::Database)?;
+        insert_identity_report(
+            conn,
+            &format!("owner-repair-{rid}"),
+            "plan_owner_repaired",
+            Some(&app_id),
+            None,
+            None,
+            "repaired",
+            &serde_json::json!({ "instanceId": rid, "driverKind": plan_driver_kind_from_json(&plan_json) })
+                .to_string(),
+            &ts,
+        )?;
+        fixed += 1;
+    }
 
     Ok(fixed)
 }
@@ -1892,9 +2106,11 @@ mod tests {
         assert_eq!(deleted, 1);
 
         let remaining: i64 = conn
-            .query_row("SELECT COUNT(*) FROM applications WHERE id = 'ghost-1'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM applications WHERE id = 'ghost-1'",
+                [],
+                |r| r.get(0),
+            )
             .expect("count");
         assert_eq!(remaining, 0);
 
@@ -1947,9 +2163,11 @@ mod tests {
         let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
         assert_eq!(deleted, 0, "ghost with dependencies must not be deleted");
         let remaining: i64 = conn
-            .query_row("SELECT COUNT(*) FROM applications WHERE id = 'ghost-2'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM applications WHERE id = 'ghost-2'",
+                [],
+                |r| r.get(0),
+            )
             .expect("count");
         assert_eq!(remaining, 1);
         let quarantined: i64 = conn
@@ -2181,6 +2399,80 @@ mod tests {
             )
             .expect("count reports");
         assert_eq!(reports, 2);
+    }
+
+    /// Batch 1 CR-103: migration v17 backfills the LaunchProfile v1 columns from
+    /// stored plan JSON and repairs the Compose backfill that classified a local
+    /// docker_compose instance as `local_process` (#34).
+    #[test]
+    fn upgrade_startup_plans_v1_backfills_and_repairs_compose_owner() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // A local compose app whose backfilled instance was misclassified.
+        conn.execute(
+            "INSERT INTO local_creative_apps
+                (id, title, canonical_project_root, device_id, device_name, project_kind, launch_mode,
+                 launch_plan_json, plan_fingerprint, state, startup_timeout_ms, created_at, updated_at)
+             VALUES ('loc-compose', 'Compose', '/tmp/c', 'd', 'n', 'other', 'smart',
+                     '{\"schemaVersion\":1,\"runtime\":\"docker_compose\",\"program\":\"internal\",\"compose\":{\"composeFile\":\"docker-compose.yml\",\"projectSeed\":\"p\"}}',
+                     'fp', 'running', 60000, 't', 't')",
+            [],
+        )
+        .expect("insert local compose app");
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-compose', 'local_project', 'loc-compose', 'Compose', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-compose', 'app-compose', 1,
+                     '{\"schemaVersion\":1,\"runtime\":\"docker_compose\",\"program\":\"internal\"}',
+                     1, 't', 't')",
+            [],
+        )
+        .expect("insert plan with NULL versioned columns");
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-compose', 'app-compose', 'running', 'local_process', 't', 't')",
+            [],
+        )
+        .expect("insert misclassified instance");
+
+        let fixed = upgrade_startup_plans_v1(&conn).expect("upgrade v17");
+        assert!(
+            fixed >= 2,
+            "expected plan backfill + owner repair, got {fixed}"
+        );
+
+        // Plan columns backfilled from JSON.
+        let (dk, sv, om): (String, i64, String) = conn
+            .query_row(
+                "SELECT driver_kind, schema_version, ownership_mode FROM startup_plans WHERE id = 'plan-compose'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("plan columns");
+        assert_eq!(dk, "docker_compose");
+        assert_eq!(sv, 1);
+        assert_eq!(om, "managed");
+
+        // The misclassified instance now owns a docker_compose project.
+        let kind: String = conn
+            .query_row(
+                "SELECT owner_kind FROM runtime_instances WHERE id = 'ri-compose'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("owner kind");
+        assert_eq!(kind, "docker_compose");
+
+        // Idempotent re-run finds nothing new.
+        let fixed2 = upgrade_startup_plans_v1(&conn).expect("upgrade again");
+        assert_eq!(fixed2, 0);
     }
 }
 

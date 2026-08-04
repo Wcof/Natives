@@ -10,6 +10,7 @@
 use super::model::*;
 use crate::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use uuid::Uuid;
 
 pub fn now() -> String {
@@ -94,29 +95,159 @@ pub fn active_plan_id(conn: &Connection, application_id: &str) -> Result<Option<
     .map_err(Error::Database)
 }
 
+/// Derive the LaunchProfile `driver_kind` from a stored plan JSON. Handles the
+/// local LaunchPlan shape (`runtime`, camelCase) and the external RuntimeConfig
+/// shape (`kind`, snake_case).
+pub fn driver_kind_for_plan_json(plan_json: &str) -> &'static str {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(plan_json) else {
+        return "unknown";
+    };
+    if let Some(r) = v.get("runtime").and_then(|r| r.as_str()) {
+        return match r {
+            "static_http" => "local_static",
+            "docker_compose" => "docker_compose",
+            _ => "node_dev_server",
+        };
+    }
+    if let Some(k) = v.get("kind").and_then(|k| k.as_str()) {
+        return if k == "docker_compose" {
+            "docker_compose"
+        } else {
+            "docker_run"
+        };
+    }
+    "unknown"
+}
+
+fn launch_plan_schema_version(plan_json: &str) -> u32 {
+    serde_json::from_str::<serde_json::Value>(plan_json)
+        .ok()
+        .and_then(|v| v.get("schemaVersion").and_then(|s| s.as_u64()))
+        .unwrap_or(1) as u32
+}
+
 /// Insert or replace the active startup plan (create / update paths).
+///
+/// Writes the LaunchProfile v1 columns (schema_version / driver_kind /
+/// ownership_mode) and preserves the one-active-plan invariant: any other
+/// active plan for the application is deactivated first (batch 1 CR-103).
 pub fn upsert_active_plan(
     conn: &Connection,
     application_id: &str,
     plan_json: &str,
 ) -> Result<String> {
     let t = now();
+    let driver_kind = driver_kind_for_plan_json(plan_json);
+    let schema_version = launch_plan_schema_version(plan_json);
     if let Some(id) = active_plan_id(conn, application_id)? {
         conn.execute(
-            "UPDATE startup_plans SET plan_json = ?2, updated_at = ?3 WHERE id = ?1",
-            params![id, plan_json, t],
+            "UPDATE startup_plans
+             SET plan_json = ?2, is_active = 1, schema_version = ?3, driver_kind = ?4,
+                 ownership_mode = 'managed', updated_at = ?5
+             WHERE id = ?1",
+            params![id, plan_json, schema_version as i64, driver_kind, t],
+        )
+        .map_err(Error::Database)?;
+        // A stray duplicate active plan (pre-dedup DB) must not survive the write.
+        conn.execute(
+            "UPDATE startup_plans SET is_active = 0, updated_at = ?2
+             WHERE application_id = ?1 AND is_active = 1 AND id <> ?3",
+            params![application_id, t, id],
         )
         .map_err(Error::Database)?;
         return Ok(id);
     }
     let id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
-         VALUES (?1, ?2, 1, ?3, 1, ?4, ?4)",
-        params![id, application_id, plan_json, t],
+        "INSERT INTO startup_plans
+            (id, application_id, plan_version, schema_version, driver_kind, ownership_mode,
+             plan_json, is_active, created_at, updated_at)
+         VALUES (?1, ?2, 1, ?3, ?4, 'managed', ?5, 1, ?6, ?6)",
+        params![
+            id,
+            application_id,
+            schema_version as i64,
+            driver_kind,
+            plan_json,
+            t
+        ],
     )
     .map_err(Error::Database)?;
     Ok(id)
+}
+
+/// Supported LaunchPlan schema version this build can execute. Anything newer
+/// fails closed — a future plan is never run with this build's assumptions.
+pub const SUPPORTED_LAUNCH_PLAN_SCHEMA: u32 = 1;
+
+/// Parse a LaunchPlan JSON, failing closed on an unsupported schema version.
+/// Reads stay lenient about unknown/extra fields (serde ignores them by
+/// default) so old plans written by earlier builds keep reading (CR-103).
+pub fn parse_launch_plan(plan_json: &str) -> Result<LaunchPlan> {
+    let plan = LaunchPlan::from_json(plan_json)?;
+    if plan.schema_version != SUPPORTED_LAUNCH_PLAN_SCHEMA {
+        return Err(Error::InvalidInput(format!(
+            "unsupported LaunchPlan schemaVersion: {}",
+            plan.schema_version
+        )));
+    }
+    Ok(plan)
+}
+
+/// Versioned LaunchProfile projection of a `startup_plans` row (CR-103).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchProfile {
+    pub id: String,
+    pub plan_version: u32,
+    pub schema_version: u32,
+    pub driver_kind: String,
+    pub ownership_mode: String,
+    pub is_active: bool,
+    pub plan_json: String,
+}
+
+/// Read the active LaunchProfile for an application. Legacy rows saved before
+/// migration v17 carry NULL versioned columns; the read-upgrader derives them
+/// from `plan_json` so old data stays fully readable without a rewrite.
+pub fn get_active_plan(conn: &Connection, application_id: &str) -> Result<Option<LaunchProfile>> {
+    let row = conn
+        .query_row(
+            "SELECT id, plan_version, schema_version, driver_kind, ownership_mode, is_active, plan_json
+             FROM startup_plans WHERE application_id = ?1 AND is_active = 1
+             ORDER BY updated_at DESC, id LIMIT 1",
+            params![application_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(Error::Database)?;
+    row.map(
+        |(id, plan_version, schema_version, driver_kind, ownership_mode, is_active, plan_json)| {
+            Ok(LaunchProfile {
+                id,
+                plan_version: plan_version as u32,
+                schema_version: schema_version
+                    .map(|v| v as u32)
+                    .unwrap_or_else(|| launch_plan_schema_version(&plan_json)),
+                driver_kind: driver_kind
+                    .unwrap_or_else(|| driver_kind_for_plan_json(&plan_json).to_string()),
+                ownership_mode: ownership_mode.unwrap_or_else(|| "managed".to_string()),
+                is_active: is_active != 0,
+                plan_json,
+            })
+        },
+    )
+    .transpose()
 }
 
 /// Id of the active (non-terminal) runtime instance for an app, if any.
@@ -241,15 +372,16 @@ pub fn mark_running(
     // Guard on `starting`: if a stop already moved the instance to stopping /
     // stopped, the start must not resurrect it (batch 2 start/stop race) and a
     // 0-row update is reported as a conflict instead of silent success (#07).
-    let n = conn.execute(
-        "UPDATE runtime_instances
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances
          SET status = 'running', cleanup_status = NULL, resolved_urls_json = ?2,
              current_port = ?3, pgid = ?4, pid = ?5, owner_pid = ?5,
              last_heartbeat = ?6, resource_ledger_json = ?7, failure = NULL, updated_at = ?6
          WHERE id = ?1 AND status = 'starting'",
-        params![instance_id, urls_json, port, pgid, pid, now(), ledger_json],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, urls_json, port, pgid, pid, now(), ledger_json],
+        )
+        .map_err(Error::Database)?;
     expect_transition(n, instance_id, &["starting"], "running")
 }
 
@@ -270,13 +402,14 @@ pub fn mark_exited(conn: &Connection, instance_id: &str, exit_code: i32) -> Resu
     if current_status(conn, instance_id)? == "stopped" {
         return Ok(());
     }
-    let n = conn.execute(
-        "UPDATE runtime_instances
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances
          SET status = 'stopped', cleanup_status = 'completed', exit_code = ?2, updated_at = ?3
          WHERE id = ?1 AND status IN ('running','starting')",
-        params![instance_id, exit_code, now()],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, exit_code, now()],
+        )
+        .map_err(Error::Database)?;
     expect_transition(n, instance_id, &["running", "starting"], "stopped")
 }
 
@@ -389,12 +522,13 @@ pub fn mark_stopping(conn: &Connection, instance_id: &str) -> Result<()> {
     if current_status(conn, instance_id)? == "stopping" {
         return Ok(()); // retry of stop is idempotent
     }
-    let n = conn.execute(
-        "UPDATE runtime_instances SET status = 'stopping', updated_at = ?2
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances SET status = 'stopping', updated_at = ?2
          WHERE id = ?1 AND status IN ('starting','running','cleanup_failed','orphaned')",
-        params![instance_id, now()],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, now()],
+        )
+        .map_err(Error::Database)?;
     expect_transition(
         n,
         instance_id,
@@ -408,14 +542,15 @@ pub fn mark_stopped(conn: &Connection, instance_id: &str) -> Result<()> {
     if current_status(conn, instance_id)? == "stopped" {
         return Ok(()); // idempotent stop
     }
-    let n = conn.execute(
-        "UPDATE runtime_instances
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances
          SET status = 'stopped', cleanup_status = 'completed', failure = NULL, updated_at = ?2
          WHERE id = ?1 AND status IN
              ('starting','running','stopping','cleanup_failed','orphaned','failed')",
-        params![instance_id, now()],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, now()],
+        )
+        .map_err(Error::Database)?;
     expect_transition(
         n,
         instance_id,
@@ -436,13 +571,14 @@ pub fn mark_failed(conn: &Connection, instance_id: &str, failure: &str) -> Resul
     if current_status(conn, instance_id)? == "failed" {
         return Ok(()); // idempotent failure settlement
     }
-    let n = conn.execute(
-        "UPDATE runtime_instances
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances
          SET status = 'failed', cleanup_status = 'failed', failure = ?2, updated_at = ?3
          WHERE id = ?1 AND status = 'starting'",
-        params![instance_id, failure, now()],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, failure, now()],
+        )
+        .map_err(Error::Database)?;
     expect_transition(n, instance_id, &["starting"], "failed")
 }
 
@@ -451,13 +587,14 @@ pub fn mark_cleanup_failed(conn: &Connection, instance_id: &str, failure: &str) 
     if current_status(conn, instance_id)? == "cleanup_failed" {
         return Ok(()); // idempotent
     }
-    let n = conn.execute(
-        "UPDATE runtime_instances
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances
          SET status = 'cleanup_failed', cleanup_status = 'failed', failure = ?2, updated_at = ?3
          WHERE id = ?1 AND status IN ('starting','running','stopping')",
-        params![instance_id, failure, now()],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, failure, now()],
+        )
+        .map_err(Error::Database)?;
     expect_transition(
         n,
         instance_id,
@@ -471,13 +608,14 @@ pub fn mark_orphaned(conn: &Connection, instance_id: &str, failure: &str) -> Res
     if current_status(conn, instance_id)? == "orphaned" {
         return Ok(()); // idempotent
     }
-    let n = conn.execute(
-        "UPDATE runtime_instances
+    let n = conn
+        .execute(
+            "UPDATE runtime_instances
          SET status = 'orphaned', cleanup_status = NULL, failure = ?2, updated_at = ?3
          WHERE id = ?1 AND status IN ('starting','running','stopping')",
-        params![instance_id, failure, now()],
-    )
-    .map_err(Error::Database)?;
+            params![instance_id, failure, now()],
+        )
+        .map_err(Error::Database)?;
     expect_transition(
         n,
         instance_id,
@@ -531,8 +669,8 @@ pub fn attach_identity(
     conn: &Connection,
     mut summary: CreativeAppSummary,
 ) -> Result<CreativeAppSummary> {
-    summary.application_id = lookup_application(conn, source_str(summary.source), &summary.id)?
-        .unwrap_or_default();
+    summary.application_id =
+        lookup_application(conn, source_str(summary.source), &summary.id)?.unwrap_or_default();
     if !summary.application_id.is_empty() {
         summary.runtime_instance_id = active_instance_id(conn, &summary.application_id)?;
     }
@@ -657,7 +795,8 @@ mod tests {
         };
         // Identity is created by the registration write path, then attach_identity
         // (read-only) binds it onto the summary without ever fabricating one.
-        let app = find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
         let bound = attach_identity(&conn, summary.clone()).unwrap();
         assert_eq!(bound.application_id, app);
         assert!(bound.runtime_instance_id.is_none());
@@ -794,18 +933,18 @@ mod tests {
     /// (concurrent double-start from #06).
     #[test]
     fn two_connections_reject_second_active_instance() {
-        let path = std::env::temp_dir().join(format!(
-            "natives-cas-two-conn-{}.db",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("natives-cas-two-conn-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let conn1 = Connection::open(&path).unwrap();
-        conn1.busy_timeout(std::time::Duration::from_secs(5))
+        conn1
+            .busy_timeout(std::time::Duration::from_secs(5))
             .unwrap();
         create_tables(&conn1).unwrap();
         apply_migrations(&conn1).unwrap();
         let conn2 = Connection::open(&path).unwrap();
-        conn2.busy_timeout(std::time::Duration::from_secs(5))
+        conn2
+            .busy_timeout(std::time::Duration::from_secs(5))
             .unwrap();
 
         let app =
@@ -875,6 +1014,125 @@ mod tests {
 
         assert!(has_active_instance(&conn, &app).unwrap());
         assert!(active_instance_id(&conn, &app).unwrap().as_deref() == Some(iid.as_str()));
+    }
+
+    /// Batch 1 CR-103: upserting a plan writes the LaunchProfile v1 columns
+    /// (schema_version / driver_kind / ownership_mode) and keeps one active plan.
+    #[test]
+    fn upsert_active_plan_writes_versioned_columns_and_single_active() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let plan = serde_json::json!({
+            "schemaVersion": 1,
+            "runtime": "node_dev_server",
+            "program": "npm",
+            "script": "dev",
+        })
+        .to_string();
+
+        let id = upsert_active_plan(&conn, &app, &plan).unwrap();
+        let profile = get_active_plan(&conn, &app).unwrap().expect("active plan");
+        assert_eq!(profile.id, id);
+        assert_eq!(profile.schema_version, 1);
+        assert_eq!(profile.driver_kind, "node_dev_server");
+        assert_eq!(profile.ownership_mode, "managed");
+        assert!(profile.is_active);
+
+        // An external docker_compose config is classified docker_compose.
+        let ext = serde_json::json!({ "kind": "docker_compose", "projectName": "x" }).to_string();
+        let _ = upsert_active_plan(&conn, &app, &ext).unwrap();
+        let profile = get_active_plan(&conn, &app).unwrap().expect("active plan");
+        assert_eq!(profile.driver_kind, "docker_compose");
+
+        // Exactly one active plan per app.
+        let active: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM startup_plans WHERE application_id = ?1 AND is_active = 1",
+                params![app],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, 1);
+    }
+
+    /// Batch 1 CR-103: a legacy plan row with NULL versioned columns is upgraded
+    /// on read — driver_kind / schema_version / ownership_mode derived from the
+    /// stored plan JSON, no rewrite needed.
+    #[test]
+    fn get_active_plan_read_upgrades_legacy_null_columns() {
+        let conn = mem();
+        let app =
+            find_or_create_application(&conn, CreativeAppSource::LocalProject, "loc1").unwrap();
+        let plan = serde_json::json!({
+            "schemaVersion": 1,
+            "runtime": "static_http",
+            "program": "internal",
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('legacy-plan', ?1, 1, ?2, 1, 't', 't')",
+            params![app, plan],
+        )
+        .unwrap();
+
+        let profile = get_active_plan(&conn, &app)
+            .unwrap()
+            .expect("legacy plan read");
+        assert_eq!(profile.id, "legacy-plan");
+        assert_eq!(profile.schema_version, 1);
+        assert_eq!(profile.driver_kind, "local_static");
+        assert_eq!(profile.ownership_mode, "managed");
+    }
+
+    /// Batch 1 CR-103: a LaunchPlan with an unsupported future schema version
+    /// fails closed; unknown extra fields are tolerated on read.
+    #[test]
+    fn parse_launch_plan_fails_closed_on_future_version() {
+        let v1 = serde_json::json!({
+            "schemaVersion": 1,
+            "source": "rule",
+            "projectKind": "html",
+            "runtime": "static_http",
+            "program": "internal",
+            "cwdRelative": ".",
+            "entryFile": "index.html",
+            "args": [],
+            "environmentKeys": [],
+            "port": { "mode": "auto" },
+            "openPath": "/",
+            "healthPath": "/",
+            "startupTimeoutMs": 60000,
+            "autoOpen": true,
+            "reason": "test",
+            "someFutureField": true,
+        })
+        .to_string();
+        let plan = parse_launch_plan(&v1).unwrap();
+        assert_eq!(plan.schema_version, 1);
+        assert_eq!(plan.runtime, LocalLaunchRuntime::StaticHttp);
+
+        let future = serde_json::json!({
+            "schemaVersion": 2,
+            "source": "rule",
+            "projectKind": "html",
+            "runtime": "static_http",
+            "program": "internal",
+            "cwdRelative": ".",
+            "port": { "mode": "auto" },
+            "openPath": "/",
+            "healthPath": "/",
+            "startupTimeoutMs": 60000,
+            "autoOpen": true,
+            "reason": "test",
+        })
+        .to_string();
+        let err = parse_launch_plan(&future).unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidInput(_)),
+            "future schema must fail closed, got {err:?}"
+        );
     }
 
     /// Batch 6: a preview target binds to the running instance and clears on close.
