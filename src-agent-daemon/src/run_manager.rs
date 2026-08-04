@@ -2416,6 +2416,7 @@ impl RunManager {
             return Ok(ResumeRunResponse {
                 decision: ResumeDecision::Blocked,
                 reason: "side-effect ledger has uncertain effects that are not replay-safe; resume is not possible".into(),
+                reason_code: "uncertain_side_effects_blocked".into(),
                 unresolved_effects: uncertain_effects,
                 new_run_id: None,
             });
@@ -2435,6 +2436,7 @@ impl RunManager {
             return Ok(ResumeRunResponse {
                 decision: ResumeDecision::ConfirmationRequired,
                 reason: "run has uncertain side effects; confirm before resume".into(),
+                reason_code: "uncertain_side_effects_confirmation_required".into(),
                 unresolved_effects: uncertain_effects,
                 new_run_id: None,
             });
@@ -2475,6 +2477,7 @@ impl RunManager {
         Ok(ResumeRunResponse {
             decision: ResumeDecision::SafeToContinue,
             reason: "resume approved".into(),
+            reason_code: "safe_to_continue".into(),
             unresolved_effects: Vec::new(),
             new_run_id: Some(new_run.id),
         })

@@ -46,6 +46,7 @@ pub const ALL: &[(i64, &str)] = &[
     (28, MIGRATION_028),
     (29, MIGRATION_029),
     (30, MIGRATION_030),
+    (31, MIGRATION_031),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1115,6 +1116,25 @@ ALTER TABLE subagent_session ADD COLUMN tool_allowlist_json TEXT;
 const MIGRATION_030: &str = "
 ALTER TABLE side_effect_record ADD COLUMN ledger_sequence INTEGER;
 CREATE INDEX IF NOT EXISTS idx_side_effect_ledger_sequence ON side_effect_record(run_id, ledger_sequence);
+";
+
+/// Migration 031: D03/G01 — add the per-row `replay_contract` and backfill it.
+///
+/// New intents populate `replay_contract` at write time
+/// (`side_effect_ledger::replay_contract_for`). Rows already in the table get:
+/// - `legacy_unverifiable` when they predate `ledger_sequence` (MIGRATION_030),
+///   so they are never claimed safe — their ledger prefix is unprovable;
+/// - `never` for checkpoint-covered workspace files;
+/// - `confirm` for everything else (external outcome unknown without the
+///   original handler).
+const MIGRATION_031: &str = "
+ALTER TABLE side_effect_record ADD COLUMN replay_contract TEXT;
+UPDATE side_effect_record
+   SET replay_contract = CASE
+       WHEN ledger_sequence IS NULL THEN 'legacy_unverifiable'
+       WHEN side_effect_class = 'workspace_file' THEN 'never'
+       ELSE 'confirm'
+   END;
 ";
 
 #[cfg(test)]

@@ -91,12 +91,16 @@ pub fn record_tool_effect_state(
         .unwrap_or(tool_name);
     let now = chrono::Utc::now().to_rfc3339();
     let terminal = matches!(status, "completed" | "failed" | "cancelled" | "uncertain");
+    let external_reference = target;
+    let idempotency_key = idempotency_key_for(tool_call_id);
+    let replay_contract = replay_contract_for(category);
     let changed = conn
         .execute(
             "UPDATE side_effect_record
              SET category = ?1, target_summary = ?2, coverage_note = ?3,
                  turn_id = ?4, side_effect_class = ?5, status = ?6,
-                 replay_safe = ?7, resource = ?8,
+                 replay_safe = ?7, resource = ?8, idempotency_key = ?13,
+                 external_reference = ?14, replay_contract = ?15,
                  completed_at = CASE WHEN ?9 THEN ?10 ELSE completed_at END
              WHERE run_id = ?11 AND tool_call_id = ?12
                AND (status NOT IN ('cancelled', 'uncertain') OR ?6 = 'uncertain')",
@@ -114,6 +118,9 @@ pub fn record_tool_effect_state(
                 now,
                 run_id,
                 tool_call_id,
+                idempotency_key,
+                external_reference,
+                replay_contract,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -124,10 +131,11 @@ pub fn record_tool_effect_state(
         "INSERT INTO side_effect_record
          (id, run_id, tool_call_id, category, target_summary, reversible, coverage_note,
           turn_id, side_effect_class, status, replay_safe, idempotency_key, external_reference,
-          resource, started_at, completed_at, ledger_sequence)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12,
-                 CASE WHEN ?13 THEN ?12 ELSE NULL END,
-                 (SELECT COALESCE(MAX(ledger_sequence),0)+1 FROM side_effect_record WHERE run_id = ?2))",
+          resource, started_at, completed_at, ledger_sequence, replay_contract)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 CASE WHEN ?15 THEN ?14 ELSE NULL END,
+                 (SELECT COALESCE(MAX(ledger_sequence),0)+1 FROM side_effect_record WHERE run_id = ?2),
+                 ?16)",
         rusqlite::params![
             uuid::Uuid::new_v4().to_string(),
             run_id,
@@ -140,9 +148,12 @@ pub fn record_tool_effect_state(
             category,
             status,
             if replay_safe { 1 } else { 0 },
+            idempotency_key,
+            external_reference,
             target,
             now,
             terminal,
+            replay_contract,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -207,6 +218,61 @@ pub fn category_for_tool(tool_name: &str) -> &'static str {
         name if name == "mcp_call" || name.starts_with("mcp__") => "mcp",
         _ => "external",
     }
+}
+
+/// Replay contract for a ledger row (D03).
+///
+/// - `never` — workspace files are covered by checkpoint before-images, so the
+///   effect is never re-run; a restore replays the captured file instead.
+/// - `confirm` — the external outcome (process/network/MCP) is unknown without
+///   the original handler, so re-running requires explicit confirmation and is
+///   never automatic.
+/// - `legacy_unverifiable` — rows written before `ledger_sequence` existed
+///   have no provable ledger prefix and must not be claimed safe (G01).
+pub fn replay_contract_for(category: &str) -> &'static str {
+    if category == "workspace_file" {
+        "never"
+    } else {
+        "confirm"
+    }
+}
+
+/// The stable idempotency key for an effect: the engine tool-call identity
+/// that produced it. A retried invocation that reuses the same call id maps to
+/// the same key, which is what lets the ledger recognise a duplicate instead
+/// of treating it as a fresh side effect (D03).
+pub fn idempotency_key_for(tool_call_id: &str) -> String {
+    tool_call_id.to_string()
+}
+
+/// Settle a `started` intent to a terminal status. Guarded so it only ever
+/// moves a `started` row — it never overwrites an already-settled or
+/// `uncertain` row. Returns whether a row was actually settled. Callers run
+/// this inside their own transaction so the settlement commits atomically
+/// with the fact that triggered it (D04).
+pub fn settle_tool_effect(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    tool_call_id: &str,
+    status: &str,
+    replay_safe: bool,
+) -> Result<bool, String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn
+        .execute(
+            "UPDATE side_effect_record
+             SET status = ?1, replay_safe = ?2, completed_at = ?3
+             WHERE run_id = ?4 AND tool_call_id = ?5 AND status = 'started'",
+            rusqlite::params![
+                status,
+                if replay_safe { 1 } else { 0 },
+                now,
+                run_id,
+                tool_call_id
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed > 0)
 }
 
 #[cfg(test)]
@@ -279,5 +345,113 @@ mod tests {
             Some("2"),
             "two effects must advance the ledger to sequence 2, got {wm:?}"
         );
+    }
+
+    /// D03: every ledger intent carries the stable engine call id as its
+    /// idempotency key, the external target as its external reference, and a
+    /// per-category replay contract (never for checkpoint-covered workspace,
+    /// confirm otherwise).
+    #[test]
+    fn intent_populates_idempotency_external_reference_and_replay_contract() {
+        let run_id = format!("d03-{}", uuid::Uuid::new_v4());
+        record_tool_effect_state(
+            &run_id,
+            "call-1",
+            "write_file",
+            "workspace_file",
+            "started",
+            false,
+            None,
+            &serde_json::json!({"path": "/tmp/a.txt"}),
+        )
+        .unwrap();
+        record_tool_effect_state(
+            &run_id,
+            "call-2",
+            "run_terminal",
+            "process",
+            "started",
+            false,
+            None,
+            &serde_json::json!({"command": "make build"}),
+        )
+        .unwrap();
+        let store = ledger_store().unwrap();
+        let conn = store.conn().unwrap();
+        let (key, reference, contract): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT idempotency_key, external_reference, replay_contract
+                 FROM side_effect_record WHERE run_id = ?1 AND tool_call_id = 'call-1'",
+                rusqlite::params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            key.as_deref(),
+            Some("call-1"),
+            "workspace intent keeps the stable call id as its idempotency key"
+        );
+        assert_eq!(reference.as_deref(), Some("/tmp/a.txt"));
+        assert_eq!(contract.as_deref(), Some("never"));
+        let (key, reference, contract): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT idempotency_key, external_reference, replay_contract
+                 FROM side_effect_record WHERE run_id = ?1 AND tool_call_id = 'call-2'",
+                rusqlite::params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(key.as_deref(), Some("call-2"));
+        assert_eq!(reference.as_deref(), Some("make build"));
+        assert_eq!(contract.as_deref(), Some("confirm"));
+    }
+
+    /// D04: settlement only ever moves a `started` intent — never an
+    /// already-settled row and never an `uncertain` row.
+    #[test]
+    fn settle_tool_effect_only_moves_started_rows() {
+        let run_id = format!("d04-{}", uuid::Uuid::new_v4());
+        record_tool_effect_state(
+            &run_id,
+            "call-a",
+            "write_file",
+            "workspace_file",
+            "started",
+            false,
+            None,
+            &serde_json::json!({"path": "a.txt"}),
+        )
+        .unwrap();
+        record_tool_effect_state(
+            &run_id,
+            "call-b",
+            "run_terminal",
+            "process",
+            "uncertain",
+            false,
+            None,
+            &serde_json::json!({"command": "x"}),
+        )
+        .unwrap();
+        let store = ledger_store().unwrap();
+        let conn = store.conn().unwrap();
+        // Started → settled.
+        assert!(
+            settle_tool_effect(&conn, &run_id, "call-a", "completed", true).unwrap(),
+            "a started intent must settle to its terminal status"
+        );
+        // Already settled → no-op, never double-settled.
+        assert!(
+            !settle_tool_effect(&conn, &run_id, "call-a", "failed", false).unwrap(),
+            "an already-settled row must not be re-settled"
+        );
+        // Uncertain → never overwritten by settlement.
+        assert!(
+            !settle_tool_effect(&conn, &run_id, "call-b", "completed", true).unwrap(),
+            "settlement must not promote an uncertain effect to settled"
+        );
+        drop(conn);
+        let wm = ledger_watermark(&run_id).unwrap();
+        assert_eq!(wm.as_deref(), Some("2"));
     }
 }

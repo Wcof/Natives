@@ -1181,48 +1181,17 @@ impl EngineToolRuntime for PermissionGatedTools {
                         break;
                     }
                 }
-                let checkpoint_failed = checkpoint_error.is_some();
-                // Side-effect ledger for restore coverage honesty.
-                let cat = crate::side_effect_ledger::category_for_tool(name);
-                let reversible = cat == "workspace_file";
-                let ledger_result = if checkpoint_failed {
-                    crate::side_effect_ledger::record_tool_effect_state(
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        name,
-                        cat,
-                        "uncertain",
-                        false,
-                        turn_id,
-                        &input,
-                    )
-                } else {
-                    crate::side_effect_ledger::record_tool_effect_state(
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        name,
-                        cat,
-                        "completed",
-                        reversible,
-                        turn_id,
-                        &input,
-                    )
-                };
                 if let Some(error) = checkpoint_error.as_deref() {
-                    output = serde_json::json!({
-                        "error_code": "PERSISTENCE_FAILED",
-                        "error": format!("checkpoint after-image could not be persisted: {error}"),
-                    });
-                }
-                if let Err(error) = ledger_result {
-                    // The handler already ran, so a failed completion write is
-                    // an unknown side effect. Keep the ledger conservative even
-                    // when the first completion update failed.
+                    // The handler already ran but the after-image could not be
+                    // persisted, so the effect outcome is not fully known:
+                    // surface a durable `uncertain` mark. If even that write
+                    // fails, the intent stays `started`, which the resume gate
+                    // treats as unresolved — never replay-safe (D04).
                     let _ = crate::side_effect_ledger::record_tool_effect_state(
                         &self.parent_run_id,
                         &stream_tool_call_id,
                         name,
-                        cat,
+                        crate::side_effect_ledger::category_for_tool(name),
                         "uncertain",
                         false,
                         turn_id,
@@ -1230,9 +1199,15 @@ impl EngineToolRuntime for PermissionGatedTools {
                     );
                     output = serde_json::json!({
                         "error_code": "PERSISTENCE_FAILED",
-                        "error": format!("tool side-effect ledger could not be completed: {error}"),
+                        "error": format!("checkpoint after-image could not be persisted: {error}"),
                     });
                 }
+                // On success the ledger intent stays `started`: the daemon
+                // event log settles it to a terminal status in the same
+                // transaction that appends the ToolCallCompleted fact (D04).
+                // A crash between the handler returning and that append leaves
+                // the effect unresolved, so resume blocks instead of re-running
+                // it.
                 if name == "run_terminal" && live_forwarder.is_none() {
                     emit_terminal_output_deltas(
                         &self.events,
@@ -1279,7 +1254,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                         }
                     }
                 }
-                if !checkpoint_failed {
+                if checkpoint_error.is_none() {
                     for trusted in &trusted_paths {
                         let rel = trusted.project_relative.to_string_lossy().into_owned();
                         // Best-effort FileChanged with before/after from checkpoint live map.

@@ -72,7 +72,7 @@ impl EventLog {
         } else {
             event.event_id.clone()
         };
-        let conn = self.data_store.conn()?;
+        let mut conn = self.data_store.conn()?;
         if let Ok(existing) = conn.query_row(
             "SELECT id FROM run_event WHERE event_id = ?1 LIMIT 1",
             params![&event_id],
@@ -107,22 +107,52 @@ impl EventLog {
             } => (Some(turn_id.clone()), Some(message_id.clone())),
             _ => (None, None),
         };
-        conn.execute(
-            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id, turn_id, message_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                stored.run_id,
-                run_seq as i64,
-                stored.payload.type_name(),
-                payload,
-                stored.timestamp.to_rfc3339(),
-                event_id,
-                turn_id,
-                message_id,
-            ],
-        )
-        .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;
-        let global = conn.last_insert_rowid() as u64;
+        let global = if let RunEventKind::ToolCallCompleted {
+            id, name, is_error, ..
+        } = &stored.payload
+        {
+            // D04: the ToolCallCompleted fact and the side-effect ledger
+            // settlement commit in one transaction. A crash or failed write
+            // rolls the pair back together, leaving the ledger intent
+            // `started` so resume blocks instead of re-running an effect whose
+            // fact never landed. The settlement is guarded to only move a
+            // `started` row, so an already-`uncertain` effect (e.g. a failed
+            // checkpoint after-image) is never silently promoted to settled.
+            let tx = conn
+                .transaction()
+                .map_err(|e| format!("PERSISTENCE_FAILED begin tool effect commit: {e}"))?;
+            let row_id = Self::insert_run_event_row(
+                &tx,
+                &stored,
+                &event_id,
+                run_seq,
+                &payload,
+                turn_id.as_deref(),
+                message_id.as_deref(),
+            )?;
+            let category = crate::side_effect_ledger::category_for_tool(name);
+            crate::side_effect_ledger::settle_tool_effect(
+                &tx,
+                &stored.run_id,
+                id,
+                if *is_error { "failed" } else { "completed" },
+                category == "workspace_file",
+            )
+            .map_err(|e| format!("PERSISTENCE_FAILED settle tool effect: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("PERSISTENCE_FAILED commit tool effect: {e}"))?;
+            row_id as u64
+        } else {
+            Self::insert_run_event_row(
+                &conn,
+                &stored,
+                &event_id,
+                run_seq,
+                &payload,
+                turn_id.as_deref(),
+                message_id.as_deref(),
+            )? as u64
+        };
 
         if matches!(
             &stored.payload,
@@ -213,6 +243,36 @@ impl EventLog {
             );
         }
         Ok(global)
+    }
+
+    /// Insert one `run_event` row on the given connection. Called either
+    /// directly (non-tool events) or inside a transaction that also settles
+    /// the side-effect ledger (ToolCallCompleted, D04).
+    fn insert_run_event_row(
+        conn: &rusqlite::Connection,
+        stored: &RunEventV2,
+        event_id: &str,
+        run_seq: u64,
+        payload: &str,
+        turn_id: Option<&str>,
+        message_id: Option<&str>,
+    ) -> Result<i64, String> {
+        conn.execute(
+            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id, turn_id, message_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                stored.run_id,
+                run_seq as i64,
+                stored.payload.type_name(),
+                payload,
+                stored.timestamp.to_rfc3339(),
+                event_id,
+                turn_id,
+                message_id,
+            ],
+        )
+        .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;
+        Ok(conn.last_insert_rowid())
     }
 
     /// Replay events for a run starting after the given sequence number.
@@ -814,5 +874,164 @@ mod tests {
             )
             .unwrap();
         assert_eq!((creation, read), (0, 0));
+    }
+
+    /// D04: appending the ToolCallCompleted fact settles the matching ledger
+    /// intent in the same transaction — the event and the terminal status are
+    /// either both committed or neither.
+    #[test]
+    fn tool_completed_event_settles_ledger_atomically() {
+        let (log, run_id) = setup_event_log();
+        {
+            let conn = log.data_store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO side_effect_record
+                 (id, run_id, tool_call_id, category, target_summary, side_effect_class,
+                  status, replay_safe, resource, started_at, ledger_sequence)
+                 VALUES (?1, ?2, 'call-1', 'workspace_file', '{}', 'workspace_file',
+                         'started', 0, '/tmp/f.txt', datetime('now'), 1)",
+                params!["sid-1", run_id],
+            )
+            .unwrap();
+        }
+        let event = RunEventV2 {
+            event_id: "evt-1".into(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: run_id.clone(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ToolCallCompleted {
+                id: "call-1".into(),
+                name: "write_file".into(),
+                output: serde_json::json!({"ok": true}),
+                is_error: false,
+                duration_ms: 3,
+                result_message_id: Some("rm-1".into()),
+            },
+        };
+        log.append_event_v2(&event).unwrap();
+        let conn = log.data_store.conn().unwrap();
+        let (status, replay_safe): (String, i64) = conn
+            .query_row(
+                "SELECT status, replay_safe FROM side_effect_record
+                 WHERE run_id = ?1 AND tool_call_id = 'call-1'",
+                params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(replay_safe, 1, "workspace effects settle as replay-safe");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM run_event WHERE run_id = ?1 AND event_id = 'evt-1'",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "the fact event must be committed with the settlement"
+        );
+    }
+
+    /// D04: a tool call whose effect is already `uncertain` (e.g. a failed
+    /// checkpoint after-image) must not be promoted to settled by the fact
+    /// append — the event is still recorded, the ledger stays unresolved.
+    #[test]
+    fn tool_completed_does_not_overwrite_uncertain_effect() {
+        let (log, run_id) = setup_event_log();
+        {
+            let conn = log.data_store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO side_effect_record
+                 (id, run_id, tool_call_id, category, target_summary, side_effect_class,
+                  status, replay_safe, resource, started_at, ledger_sequence)
+                 VALUES (?1, ?2, 'call-u', 'process', '{}', 'process',
+                         'uncertain', 0, 'cmd', datetime('now'), 1)",
+                params!["sid-u", run_id],
+            )
+            .unwrap();
+        }
+        let event = RunEventV2 {
+            event_id: "evt-u".into(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: run_id.clone(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ToolCallCompleted {
+                id: "call-u".into(),
+                name: "run_terminal".into(),
+                output: serde_json::json!({"ok": true}),
+                is_error: false,
+                duration_ms: 3,
+                result_message_id: Some("rm-u".into()),
+            },
+        };
+        log.append_event_v2(&event).unwrap();
+        let conn = log.data_store.conn().unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM side_effect_record
+                 WHERE run_id = ?1 AND tool_call_id = 'call-u'",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "uncertain",
+            "settlement must not promote an uncertain effect to settled"
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM run_event WHERE run_id = ?1 AND event_id = 'evt-u'",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    /// D04: a tool call with no ledger intent (read-only, preflight-denied)
+    /// still appends its fact event; settlement is a no-op.
+    #[test]
+    fn tool_completed_without_intent_appends_event_only() {
+        let (log, run_id) = setup_event_log();
+        let event = RunEventV2 {
+            event_id: "evt-x".into(),
+            global_sequence: 0,
+            run_sequence: 1,
+            run_id: run_id.clone(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::ToolCallCompleted {
+                id: "call-x".into(),
+                name: "web_fetch".into(),
+                output: serde_json::json!({"ok": true}),
+                is_error: false,
+                duration_ms: 3,
+                result_message_id: Some("rm-x".into()),
+            },
+        };
+        log.append_event_v2(&event).unwrap();
+        let conn = log.data_store.conn().unwrap();
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM run_event WHERE run_id = ?1 AND event_id = 'evt-x'",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 1);
+        let ledger_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM side_effect_record
+                 WHERE run_id = ?1 AND tool_call_id = 'call-x'",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ledger_count, 0, "no intent means nothing to settle");
     }
 }
