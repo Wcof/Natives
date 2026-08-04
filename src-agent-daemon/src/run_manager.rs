@@ -973,7 +973,24 @@ impl RunManager {
     }
 
     pub fn capabilities() -> DaemonCapabilities {
-        DaemonCapabilities::current()
+        let mut caps = DaemonCapabilities::current();
+        // TASK-013: the Claude CLI bridge is NOT a native daemon authority —
+        // runs it executes are controlled by the CLI, outside the daemon's
+        // execution/side-effect ledger. Mark it explicitly (Undetermined) so a
+        // caller can never mistake the CLI for a native runtime.
+        if crate::cli_runtime_bridge::claude_cli_available() {
+            caps.runtimes.push(assistant_protocol::v2::RuntimeCapability {
+                id: "cli".into(),
+                display_name: "Claude CLI (bridge)".into(),
+                status: assistant_protocol::v2::RuntimeAvailability::Undetermined,
+                reason: Some(
+                    "CLI executes externally; not a native daemon authority over runs, side effects, or ledger"
+                        .into(),
+                ),
+                methods: Vec::new(),
+            });
+        }
+        caps
     }
 
     pub fn create_run(&self, req: CreateRunRequest) -> Result<RunV2, String> {
@@ -6120,5 +6137,33 @@ mod tests {
             "some runs had != 1 terminal lifecycle event"
         );
         assert_eq!(terminal_mismatch, 0, "some runs had event/status mismatch");
+    }
+
+    /// TASK-013: the native runtime is the daemon's executable authority and
+    /// the CLI bridge, when present, is never advertised as a native authority.
+    #[test]
+    fn lineage_compat_capabilities_mark_cli_as_non_native() {
+        let caps = RunManager::capabilities();
+        let native = caps
+            .runtimes
+            .iter()
+            .find(|r| r.id == "native")
+            .expect("native runtime is always advertised");
+        assert_eq!(
+            native.status,
+            assistant_protocol::v2::RuntimeAvailability::Executable
+        );
+        if crate::cli_runtime_bridge::claude_cli_available() {
+            let cli = caps
+                .runtimes
+                .iter()
+                .find(|r| r.id == "cli")
+                .expect("CLI runtime is advertised when the CLI is available");
+            assert_ne!(
+                cli.status,
+                assistant_protocol::v2::RuntimeAvailability::Executable,
+                "the CLI must never claim native execution authority"
+            );
+        }
     }
 }
