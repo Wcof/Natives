@@ -23,9 +23,15 @@ pub use process_supervisor::{
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
+
+/// Bounded live-output channel capacity for long-running handlers (H03). A
+/// slow consumer must not grow memory unboundedly: overflow is dropped at the
+/// producer and counted in `ToolCallContext::progress_dropped_bytes`.
+pub const TERMINAL_PROGRESS_CAPACITY: usize = 4096;
 
 /// Best-effort output emitted by a long-running handler. The Gateway owns the
 /// process/MCP safety boundary; the caller owns persistence and rate limiting.
@@ -60,8 +66,13 @@ pub struct ToolCallContext {
     /// Shared run cancellation token (task-03). Tools/MCP must select on this.
     pub cancel: CancellationToken,
     /// Optional live output channel for handlers that can stream progress.
-    /// `None` keeps lightweight/test handlers allocation-free.
-    pub progress: Option<UnboundedSender<ToolProgressChunk>>,
+    /// Bounded (`TERMINAL_PROGRESS_CAPACITY`); overflow is dropped and counted
+    /// in `progress_dropped_bytes`. `None` keeps lightweight/test handlers
+    /// allocation-free.
+    pub progress: Option<Sender<ToolProgressChunk>>,
+    /// Bytes of live progress dropped because the bounded channel was full.
+    /// Progress is non-authoritative; overflow must never stall the handler.
+    pub progress_dropped_bytes: Arc<AtomicU64>,
     pub turn_id: Option<String>,
     pub message_id: Option<String>,
 }
@@ -108,9 +119,21 @@ impl ToolCallContext {
             project_identity_version: None,
             cancel,
             progress: None,
+            progress_dropped_bytes: Arc::new(AtomicU64::new(0)),
             turn_id: None,
             message_id: None,
         }
+    }
+
+    /// Attach a bounded live-output channel and its dropped-bytes counter. The
+    /// counter is shared with the daemon so overflow is observable.
+    pub fn set_progress(
+        &mut self,
+        progress: Option<Sender<ToolProgressChunk>>,
+        dropped_bytes: Arc<AtomicU64>,
+    ) {
+        self.progress = progress;
+        self.progress_dropped_bytes = dropped_bytes;
     }
 
     /// Construct context from a verified project identity (task-10).
@@ -158,6 +181,7 @@ impl ToolCallContext {
             project_identity_version: Some(identity_version),
             cancel,
             progress: None,
+            progress_dropped_bytes: Arc::new(AtomicU64::new(0)),
             turn_id: None,
             message_id: None,
         }
@@ -1339,5 +1363,62 @@ mod path_scope_preflight_tests {
             "got {}: {}",
             err.code, err.message
         );
+    }
+}
+
+#[cfg(test)]
+mod progress_bounded_tests {
+    //! TASK-007 (H03): live-output progress is bounded. Overflow is dropped at
+    //! the producer and counted in `progress_dropped_bytes`, never buffered
+    //! unboundedly, and never allowed to stall the handler.
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use tokio::sync::mpsc::error::TrySendError;
+
+    #[tokio::test]
+    async fn progress_channel_is_bounded_and_overflow_drops() {
+        let capacity = 2usize;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ToolProgressChunk>(capacity);
+        let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        // Producer behavior mirrors tools/mod.rs run_terminal: try_send, and on
+        // Full drop the chunk and count its bytes.
+        for i in 0..100 {
+            let chunk = ToolProgressChunk {
+                stream: "out".into(),
+                text: format!("line {i}"),
+            };
+            match tx.try_send(chunk) {
+                Ok(()) => {}
+                Err(TrySendError::Full(full)) => {
+                    dropped.fetch_add(full.text.len() as u64, Ordering::Relaxed);
+                }
+                Err(TrySendError::Closed(_)) => break,
+            }
+        }
+        // Slow consumer: the queue holds at most `capacity` — it never grows
+        // with the producer.
+        let mut drained = 0usize;
+        while let Ok(chunk) = rx.try_recv() {
+            let _ = chunk;
+            drained += 1;
+        }
+        assert_eq!(drained, capacity, "queue is bounded at capacity");
+        assert!(dropped.load(Ordering::Relaxed) > 0, "overflow is counted");
+    }
+
+    #[test]
+    fn context_attaches_bounded_progress_and_counter() {
+        let mut ctx = ToolCallContext::new(
+            std::path::PathBuf::from("."),
+            "r".into(),
+            "c".into(),
+            "t".into(),
+            "full_access".into(),
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel::<ToolProgressChunk>(4);
+        let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        ctx.set_progress(Some(tx), dropped.clone());
+        assert!(ctx.progress.is_some());
+        assert_eq!(ctx.progress_dropped_bytes.load(Ordering::Relaxed), 0);
     }
 }

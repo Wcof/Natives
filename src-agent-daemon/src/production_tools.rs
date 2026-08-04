@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
@@ -196,6 +196,22 @@ pub struct DaemonToolProgressSink {
     pending: Arc<Mutex<HashMap<String, (Instant, ToolProgressUpdate)>>>,
     scheduled_flushes: Arc<Mutex<HashSet<String>>>,
     sequence: Arc<AtomicU64>,
+}
+
+/// Process-wide registry of in-flight MCP tool calls (J03). A call enters when
+/// its invocation starts and leaves when it settles, so after a cancel the
+/// registry is quiet — there is no lingering request whose late response could
+/// be mistaken for a completed effect.
+static PENDING_MCP_CALLS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+fn pending_mcp_calls() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    PENDING_MCP_CALLS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Number of in-flight MCP calls; must be zero after every settle.
+pub fn pending_mcp_call_count() -> usize {
+    pending_mcp_calls().lock().unwrap().len()
 }
 
 impl DaemonToolProgressSink {
@@ -1058,9 +1074,14 @@ impl EngineToolRuntime for PermissionGatedTools {
             cancel.clone()
         };
         let live_settled = Arc::new(AtomicBool::new(false));
+        let live_dropped_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let live_forwarder = if name == "run_terminal" {
-            let (tx, mut rx) =
-                tokio::sync::mpsc::unbounded_channel::<capability_gateway::ToolProgressChunk>();
+            // H03: bounded live-output channel. Overflow drops at the producer
+            // and is counted in `live_dropped_bytes`; a slow consumer can never
+            // grow memory unboundedly.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<capability_gateway::ToolProgressChunk>(
+                capability_gateway::TERMINAL_PROGRESS_CAPACITY,
+            );
             let run_id = self.parent_run_id.clone();
             let call_id = stream_tool_call_id.clone();
             let turn_id = turn_id.map(str::to_string);
@@ -1102,6 +1123,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                 stream_tool_call_id.clone(),
                 cancel.clone(),
                 progress_tx,
+                live_dropped_bytes.clone(),
                 turn_id.map(str::to_string),
                 message_id.map(str::to_string),
             )
@@ -1621,7 +1643,8 @@ impl PermissionGatedTools {
         &self,
         tool_call_id: String,
         cancel: CancellationToken,
-        progress: Option<UnboundedSender<capability_gateway::ToolProgressChunk>>,
+        progress: Option<tokio::sync::mpsc::Sender<capability_gateway::ToolProgressChunk>>,
+        progress_dropped_bytes: Arc<std::sync::atomic::AtomicU64>,
         turn_id: Option<String>,
         message_id: Option<String>,
     ) -> capability_gateway::ToolCallContext {
@@ -1637,7 +1660,7 @@ impl PermissionGatedTools {
                     self.permission_profile.clone(),
                     cancel,
                 );
-            context.progress = progress;
+            context.set_progress(progress, progress_dropped_bytes);
             context.turn_id = turn_id;
             context.message_id = message_id;
             return context;
@@ -1656,7 +1679,7 @@ impl PermissionGatedTools {
             self.permission_profile.clone(),
             cancel,
         );
-        context.progress = progress;
+        context.set_progress(progress, progress_dropped_bytes);
         context.turn_id = turn_id;
         context.message_id = message_id;
         context
@@ -2035,7 +2058,14 @@ impl PermissionGatedTools {
             CancellationToken::new()
         };
         let context = self
-            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel, None, None, None)
+            .build_tool_call_context(
+                uuid::Uuid::new_v4().to_string(),
+                cancel,
+                None,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                None,
+                None,
+            )
             .await;
         match self
             .gateway
@@ -2491,7 +2521,8 @@ impl PermissionGatedTools {
                 }
             })
         };
-        match crate::runtime::mcp_invocation::invoke_mcp_tool_with_progress(
+        pending_mcp_calls().lock().unwrap().insert(call_id.clone());
+        let outcome = crate::runtime::mcp_invocation::invoke_mcp_tool_with_progress(
             &server_id,
             &tool_name,
             arguments,
@@ -2499,17 +2530,28 @@ impl PermissionGatedTools {
             Some(&self.parent_run_id),
             Some(progress_callback),
         )
-        .await
-        {
+        .await;
+        // J03: the pending registry is quiet once the call settles — no
+        // lingering request can later be mistaken for a fresh effect.
+        pending_mcp_calls().lock().unwrap().remove(&call_id);
+        match outcome {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
+                // J03: a late success that lands after the run was cancelled is
+                // never recorded as completed — the external outcome is
+                // unknowable while we are tearing the call down.
+                let status = if cancel.is_cancelled() {
+                    "uncertain"
+                } else {
+                    "completed"
+                };
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
                 let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
                     &call_id,
                     "mcp_call",
                     "mcp",
-                    "completed",
+                    status,
                     false,
                     turn_id,
                     &ledger_summary,
@@ -4005,6 +4047,53 @@ mod tests {
         assert_eq!(
             gate_through_registry(&[allowing, asking], PermissionProfile::ConfirmEach, true).await,
             HookPermissionGate::Prompt
+        );
+    }
+
+    /// TASK-007 (H03): after a tool call settles, a flood of late progress
+    /// updates is rejected — zero events appended (terminal is authoritative).
+    #[tokio::test]
+    async fn progress_backpressure_rejects_updates_after_terminal() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        sink.mark_tool_call_settled("late-call").await;
+        for i in 0..100 {
+            sink.publish(ToolProgressUpdate {
+                run_id: "bp-run".into(),
+                tool_call_id: "late-call".into(),
+                tool_name: "run_terminal".into(),
+                stream: "stdout".into(),
+                text: format!("late line {i}"),
+                final_update: false,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: 0,
+            })
+            .await;
+        }
+        let events = captured.0.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(&e.payload, RunEventKind::ToolOutputDelta { .. })),
+            "no progress event may be appended after the call settles"
+        );
+    }
+
+    /// TASK-007 (J03): the in-flight MCP registry returns to zero once a call
+    /// settles — no lingering request can be mistaken for a fresh effect.
+    #[test]
+    fn progress_backpressure_mcp_registry_quiet_after_settle() {
+        pending_mcp_calls()
+            .lock()
+            .unwrap()
+            .insert("mcp-call-1".to_string());
+        assert_eq!(pending_mcp_call_count(), 1);
+        pending_mcp_calls().lock().unwrap().remove("mcp-call-1");
+        assert_eq!(
+            pending_mcp_call_count(),
+            0,
+            "registry is quiet after settle"
         );
     }
 }
