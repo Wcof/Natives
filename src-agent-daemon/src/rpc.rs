@@ -177,6 +177,14 @@ impl RpcServer {
 
         println!("Listening on {}", self.socket_path);
 
+        // B05 (TASK-008): replay undelivered permission decisions from the
+        // outbox. A decision whose event/waiter delivery never completed after
+        // a crash is delivered here; the handler is never woken ahead of its
+        // durable event.
+        if let Err(error) = crate::interaction_store::recover_interaction_outbox().await {
+            eprintln!("[rpc] interaction outbox recovery failed: {error}");
+        }
+
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {

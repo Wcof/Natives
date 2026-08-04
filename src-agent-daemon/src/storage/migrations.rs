@@ -48,6 +48,7 @@ pub const ALL: &[(i64, &str)] = &[
     (30, MIGRATION_030),
     (31, MIGRATION_031),
     (32, MIGRATION_032),
+    (33, MIGRATION_033),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1168,6 +1169,27 @@ CREATE TABLE IF NOT EXISTS projection_quarantine (
     detail TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+/// Migration 033: TASK-008 (B05) — permission decision outbox.
+///
+/// A resolved decision writes its authoritative event delivery intent here in
+/// the SAME transaction as the `interaction` row; the RPC/delivery step then
+/// appends the run event and wakes the waiter, and marks the row delivered. An
+/// undelivered row is replayed at daemon start, so a decision is never lost
+/// and the waiter is never woken ahead of its durable event.
+const MIGRATION_033: &str = "
+CREATE TABLE IF NOT EXISTS interaction_outbox (
+    id TEXT PRIMARY KEY,
+    interaction_id TEXT NOT NULL,
+    run_id TEXT,
+    conversation_id TEXT,
+    kind TEXT NOT NULL,
+    response TEXT NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_interaction_outbox_delivered ON interaction_outbox(delivered);
 ";
 
 #[cfg(test)]
