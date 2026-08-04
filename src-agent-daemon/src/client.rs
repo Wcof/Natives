@@ -9,13 +9,14 @@
 //! let run = c.call("run.start", serde_json::json!({ ... })).await?;
 //! ```
 
+use crate::rpc::{read_frame, FrameError, FRAME_READ_TIMEOUT, MAX_FRAME_BYTES};
 use assistant_protocol::v1::daemon::{
     HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
 };
 use assistant_protocol::v2::PROTOCOL_V2;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use uuid::Uuid;
 
@@ -174,13 +175,30 @@ impl DaemonClient {
         writer.write_all(line.as_bytes()).await?;
         writer.write_all(b"\n").await?;
 
-        let mut resp_line = String::new();
-        let n = reader.read_line(&mut resp_line).await?;
-        if n == 0 {
-            return Err(DaemonClientError::Handshake(
-                "empty handshake response".into(),
-            ));
-        }
+        let resp_frame = match read_frame(&mut reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => {
+                return Err(DaemonClientError::Handshake(
+                    "empty handshake response".into(),
+                ))
+            }
+            Err(FrameError::Oversize) => {
+                return Err(DaemonClientError::Protocol(format!(
+                    "handshake response exceeds {MAX_FRAME_BYTES} bytes"
+                )))
+            }
+            Err(FrameError::Timeout) => {
+                return Err(DaemonClientError::Protocol(
+                    "handshake response frame read timed out".into(),
+                ))
+            }
+            Err(FrameError::Io) => {
+                return Err(DaemonClientError::Io(std::io::Error::other(
+                    "frame read failed",
+                )))
+            }
+        };
+        let resp_line = String::from_utf8_lossy(&resp_frame);
         let handshake_resp = parse_handshake_response_line(resp_line.trim())?;
         if !handshake_resp.accepted {
             return Err(DaemonClientError::Handshake(
@@ -290,11 +308,27 @@ impl DaemonClient {
             return Err(DaemonClientError::Protocol("connection closed".into()));
         }
 
-        let mut resp_line = String::new();
-        let n = self.reader.read_line(&mut resp_line).await?;
-        if n == 0 {
-            return Err(DaemonClientError::Protocol("connection closed".into()));
-        }
+        let resp_frame =
+            match read_frame(&mut self.reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+                Ok(Some(frame)) => frame,
+                Ok(None) => return Err(DaemonClientError::Protocol("connection closed".into())),
+                Err(FrameError::Oversize) => {
+                    return Err(DaemonClientError::Protocol(format!(
+                        "response frame exceeds {MAX_FRAME_BYTES} bytes"
+                    )))
+                }
+                Err(FrameError::Timeout) => {
+                    return Err(DaemonClientError::Protocol(
+                        "response frame read timed out".into(),
+                    ))
+                }
+                Err(FrameError::Io) => {
+                    return Err(DaemonClientError::Io(std::io::Error::other(
+                        "frame read failed",
+                    )))
+                }
+            };
+        let resp_line = String::from_utf8_lossy(&resp_frame);
         if let Ok(resp) = serde_json::from_str::<RpcResponse>(resp_line.trim()) {
             if resp.success {
                 return Ok(resp.data.unwrap_or(Value::Null));
