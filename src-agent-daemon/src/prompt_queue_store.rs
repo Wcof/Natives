@@ -121,15 +121,16 @@ impl EngineInputReceiver for DurableInputReceiver {
             rows.collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(|e| e.to_string())?
         };
-        if matches!(mode, DrainMode::All)
-            && queued
-                .first()
-                .is_some_and(|(_, _, drain_mode)| drain_mode == "one")
-        {
-            queued.truncate(1);
-        }
         let leased_at = chrono::Utc::now().to_rfc3339();
         for row in queued {
+            // C02: a `drain_mode='one'` row is a per-row batch boundary — the
+            // user asked to process just that input, so an All-mode drain stops
+            // before a 'one' row that follows already-leased 'all' rows (that
+            // row is leased alone in the NEXT drain). One/all is defined per
+            // row (FIFO), never by the first row alone.
+            if matches!(mode, DrainMode::All) && row.2 == "one" && !items.is_empty() {
+                break;
+            }
             let token = Uuid::new_v4().to_string();
             let changed = tx
                 .execute(
@@ -1502,6 +1503,90 @@ mod tests {
                         .all(|i| i.get("id").and_then(|v| v.as_str()) != Some(qid.as_str())),
                     "queue should not contain send_now item: {listed}"
                 );
+            });
+        });
+    }
+
+    /// TASK-010 (C02): a crash AFTER lease but BEFORE ack is at-least-once —
+    /// the row is reclaimed to queued on restart and a fresh run can drain it
+    /// (nothing lost, no double-commit of the same lease).
+    #[test]
+    fn prompt_queue_crash_reclaims_unacked_lease_on_restart() {
+        with_temp_db(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let cid = format!("pq-crash-{}", Uuid::new_v4());
+                let run1 = format!("run-crash-{}", Uuid::new_v4());
+                let run2 = format!("run-crash-{}", Uuid::new_v4());
+                interject(json!({
+                    "conversation_id": cid,
+                    "content": "survive the crash",
+                }))
+                .unwrap();
+                let s = store().unwrap();
+                let conn = s.conn().unwrap();
+                for run_id in [&run1, &run2] {
+                    conn.execute(
+                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                         VALUES (?1, ?2, 'running', 'test', 'test')",
+                        params![run_id, cid],
+                    )
+                    .unwrap();
+                }
+                drop(conn);
+
+                // Pre-crash run leases the input, then "crashes" before ack.
+                let first = DurableInputReceiver::new(&cid, &run1);
+                let leased = first
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(leased.len(), 1, "the input is leased");
+                let status_after_lease: String = store()
+                    .unwrap()
+                    .conn()
+                    .unwrap()
+                    .query_row(
+                        "SELECT status FROM prompt_queue WHERE conversation_id = ?1",
+                        params![cid],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(status_after_lease, "leased");
+
+                // Restart: the stale lease is reclaimed to queued.
+                let reclaimed = recover_session_actors_on_startup().unwrap();
+                assert!(reclaimed >= 1, "recovery ran");
+                let status_after_recovery: String = store()
+                    .unwrap()
+                    .conn()
+                    .unwrap()
+                    .query_row(
+                        "SELECT status FROM prompt_queue WHERE conversation_id = ?1",
+                        params![cid],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    status_after_recovery, "queued",
+                    "a crashed lease is reclaimed, never lost"
+                );
+
+                // A fresh run (restart) can drain it again — at-least-once.
+                let second = DurableInputReceiver::new(&cid, &run2);
+                let re_leased = second
+                    .drain(
+                        PendingInputKind::Steering,
+                        DrainMode::All,
+                        InputSafePoint::AfterToolBatch,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(re_leased.len(), 1, "the reclaimed input is redelivered");
             });
         });
     }

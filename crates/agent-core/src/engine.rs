@@ -5714,4 +5714,100 @@ mod tests {
             2
         );
     }
+
+    /// TASK-010 (C02): steering inputs are drained at safe points and injected
+    /// as COMPLETE User messages in FIFO order — never a half Assistant
+    /// message, never reordered, and each input is acked.
+    #[tokio::test]
+    async fn steering_injects_complete_user_messages_in_fifo_order() {
+        struct SteeringReceiver {
+            offered: AtomicUsize,
+            acked: Mutex<Vec<String>>,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::EngineInputReceiver for SteeringReceiver {
+            async fn drain(
+                &self,
+                kind: crate::PendingInputKind,
+                _mode: crate::DrainMode,
+                _point: crate::InputSafePoint,
+            ) -> Result<Vec<crate::PendingInput>, String> {
+                if kind == crate::PendingInputKind::Steering {
+                    let n = self.offered.fetch_add(1, Ordering::SeqCst);
+                    if n < 2 {
+                        return Ok(vec![crate::PendingInput {
+                            id: format!("steer-{n}"),
+                            kind,
+                            content: format!("steer-{n}"),
+                            lease_token: None,
+                        }]);
+                    }
+                }
+                Ok(Vec::new())
+            }
+
+            async fn ack(
+                &self,
+                input: &crate::PendingInput,
+                _turn_id: Option<&str>,
+            ) -> Result<(), String> {
+                self.acked.lock().unwrap().push(input.id.clone());
+                Ok(())
+            }
+        }
+
+        let receiver = Arc::new(SteeringReceiver {
+            offered: AtomicUsize::new(0),
+            acked: Mutex::new(Vec::new()),
+        });
+        let engine = AgentEngine::new(EventSequencer::new()).with_input_receiver(receiver.clone());
+        let mut messages: Vec<crate::AgentMessage> = Vec::new();
+        // Two steering inputs offered on successive drains — drain them FIFO.
+        engine
+            .drain_inputs(
+                crate::PendingInputKind::Steering,
+                crate::DrainMode::All,
+                crate::InputSafePoint::AfterToolBatch,
+                &mut messages,
+                None,
+            )
+            .await
+            .unwrap();
+        engine
+            .drain_inputs(
+                crate::PendingInputKind::Steering,
+                crate::DrainMode::All,
+                crate::InputSafePoint::AfterToolBatch,
+                &mut messages,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(messages.len(), 2, "both steering inputs are injected");
+        let texts: Vec<String> = messages
+            .iter()
+            .filter_map(|m| match m {
+                crate::AgentMessage::User(u) => u.content.iter().find_map(|b| match b {
+                    crate::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "[steering]\nsteer-0".to_string(),
+                "[steering]\nsteer-1".to_string()
+            ],
+            "steering inputs are complete User messages in FIFO order"
+        );
+        let acked = receiver.acked.lock().unwrap();
+        assert_eq!(
+            acked.as_slice(),
+            &["steer-0".to_string(), "steer-1".to_string()],
+            "each steering input is acked after injection"
+        );
+    }
 }
