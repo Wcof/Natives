@@ -2143,8 +2143,19 @@ pub(crate) fn register_tools_for_surface(
     gateway: &mut CapabilityGateway,
     allowlist: Option<&[String]>,
 ) {
+    // D01: a duplicate canonical tool name is a config bug that must fail the
+    // daemon before any run starts — never a silently shadowed tool.
+    let mut register = |tool| {
+        if let Err(error) = gateway.register(tool) {
+            panic!("tool surface registration failed (fail closed): {error}");
+        }
+    };
     match allowlist {
-        None => gateway.register_builtins(),
+        None => {
+            if let Err(error) = gateway.register_builtins() {
+                panic!("tool surface registration failed (fail closed): {error}");
+            }
+        }
         Some(list) => {
             let allowed: std::collections::HashSet<&str> =
                 list.iter().map(|s| s.as_str()).collect();
@@ -2156,7 +2167,7 @@ pub(crate) fn register_tools_for_surface(
                 .chain(capability_gateway::tools::creative_draft_tools())
             {
                 if allowed.contains(tool.name) {
-                    gateway.register(tool);
+                    register(tool);
                 }
             }
             // Orchestration tools are handled by PermissionGatedTools even if not in

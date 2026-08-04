@@ -1185,6 +1185,29 @@ impl EngineToolRuntime for PermissionGatedTools {
             };
         }
 
+        // D02: hold the cross-run conflict lease for the duration of the
+        // handler. The RAII guard releases it on every exit path, so a cancel
+        // or failure never leaves the conflict key leased.
+        let conflict_key = self.gateway.conflict_key_for(name);
+        let _conflict_lease = match conflict_key {
+            Some(key) => match crate::runtime::conflict_lease::global_conflict_leases()
+                .acquire_guard(&key, &self.parent_run_id)
+            {
+                Ok(guard) => Some(guard),
+                Err(error) => {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "CONFLICT_LEASE_DENIED",
+                            "error": error,
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+            },
+            None => None,
+        };
+
         let result = match self
             .gateway
             .execute(name, input.clone(), &tool_context)

@@ -5999,4 +5999,129 @@ mod tests {
             "initial attempt + at most one compaction retry"
         );
     }
+
+    /// TASK-012 (D02): tools sharing a conflict_key never overlap within a
+    /// batch, and results keep source order.
+    #[tokio::test]
+    async fn tool_scheduler_serializes_same_conflict_key_and_keeps_source_order() {
+        struct ConflictTools {
+            completion_order: Arc<Mutex<Vec<String>>>,
+            current: Arc<AtomicUsize>,
+            max_seen: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl EngineToolRuntime for ConflictTools {
+            async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+                vec![
+                    ToolSchema {
+                        name: "ex_a".into(),
+                        description: "a".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                    ToolSchema {
+                        name: "ex_b".into(),
+                        description: "b".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    },
+                ]
+            }
+            async fn list_tool_capabilities(&self) -> Vec<ToolCapability> {
+                vec![
+                    ToolCapability {
+                        name: "ex_a".into(),
+                        schema: serde_json::json!({"type":"object"}),
+                        execution_mode: ToolExecutionMode::ParallelSafe,
+                        side_effect: ToolSideEffect::Write,
+                        conflict_key: Some("file:///shared".into()),
+                    },
+                    ToolCapability {
+                        name: "ex_b".into(),
+                        schema: serde_json::json!({"type":"object"}),
+                        execution_mode: ToolExecutionMode::ParallelSafe,
+                        side_effect: ToolSideEffect::Write,
+                        conflict_key: Some("file:///shared".into()),
+                    },
+                ]
+            }
+            async fn execute_tool(
+                &self,
+                name: &str,
+                _input: Value,
+                _cancel: &CancellationToken,
+            ) -> ToolExecutionResult {
+                let running = self.current.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                self.max_seen.fetch_max(running, AtomicOrdering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                self.completion_order.lock().unwrap().push(name.to_string());
+                self.current.fetch_sub(1, AtomicOrdering::SeqCst);
+                ToolExecutionResult {
+                    output: serde_json::json!({"tool": name}),
+                    is_error: false,
+                    duration_ms: 0,
+                }
+            }
+        }
+
+        let runtime = ConflictTools {
+            completion_order: Arc::new(Mutex::new(Vec::new())),
+            current: Arc::new(AtomicUsize::new(0)),
+            max_seen: Arc::new(AtomicUsize::new(0)),
+        };
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-conflict-{}", uuid::Uuid::new_v4());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![vec![
+                EngineProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("c1".into()),
+                    name: Some("ex_a".into()),
+                    arguments_delta: r#"{}"#.into(),
+                },
+                EngineProviderEvent::ToolCallDelta {
+                    index: 1,
+                    id: Some("c2".into()),
+                    name: Some("ex_b".into()),
+                    arguments_delta: r#"{}"#.into(),
+                },
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::ToolUse,
+                },
+            ]]),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "do both".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &runtime,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.max_seen.load(AtomicOrdering::SeqCst),
+            1,
+            "tools sharing a conflict key must never overlap in a batch"
+        );
+        // Results keep source order regardless of completion order.
+        let events = engine.events.replay_after(&run_id, 0);
+        let completed: Vec<String> = events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                RunEventKind::ToolCallCompleted { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completed,
+            vec!["c1".to_string(), "c2".to_string()],
+            "results keep source order"
+        );
+    }
 }

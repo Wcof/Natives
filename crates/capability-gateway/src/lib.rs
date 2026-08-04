@@ -379,12 +379,31 @@ impl CapabilityGateway {
         self.project_root = Some(root.into());
     }
 
-    pub fn register(&mut self, tool: Tool) {
+    /// Register a tool. A duplicate canonical name is rejected (D01): the
+    /// gateway's advertised surface must be deterministic, so the second
+    /// registration fails instead of silently shadowing the first.
+    pub fn register(&mut self, tool: Tool) -> Result<(), String> {
+        if let Some(existing) = self.tools.iter().find(|t| t.name == tool.name) {
+            return Err(format!(
+                "duplicate tool name '{}' conflicts with existing registration (side_effect={:?})",
+                tool.name, existing.side_effect
+            ));
+        }
         self.tools.push(tool);
+        Ok(())
     }
 
     pub fn get_tool(&self, name: &str) -> Option<&Tool> {
         self.tools.iter().find(|t| t.name == name)
+    }
+
+    /// The conflict key a tool is bound to, if any. Used by the daemon to hold
+    /// a cross-run lease so the same key never overlaps (D02).
+    pub fn conflict_key_for(&self, name: &str) -> Option<String> {
+        self.tools
+            .iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.conflict_key.clone())
     }
 
     pub fn list_tools(&self) -> Vec<&Tool> {
@@ -418,11 +437,12 @@ impl CapabilityGateway {
     }
 
     /// Register all built-in tools.
-    pub fn register_builtins(&mut self) {
+    pub fn register_builtins(&mut self) -> Result<(), String> {
         let builtins = tools::builtin_tools();
         for tool in builtins {
-            self.register(tool);
+            self.register(tool)?;
         }
+        Ok(())
     }
 
     /// Enforce path/timeout/output policy, then run the tool handler.
@@ -965,7 +985,7 @@ mod p0_tests {
             parallel_safe: false,
             conflict_key: None,
             handler,
-        });
+        }).unwrap();
         gateway
     }
 
@@ -1019,7 +1039,7 @@ mod p0_tests {
             parallel_safe: false,
             conflict_key: None,
             handler: handler.clone(),
-        });
+        }).unwrap();
         let error = gateway
             .execute(
                 "bounded_array",
@@ -1353,7 +1373,7 @@ mod path_scope_preflight_tests {
             parallel_safe: false,
             conflict_key: None,
             handler: Arc::new(NoopHandler),
-        });
+        }).unwrap();
         let ctx = context_for(root.path());
         let err = gateway
             .preflight_write_paths("no_path_tool", &serde_json::json!({"path": "a.txt"}), &ctx)
@@ -1420,5 +1440,70 @@ mod progress_bounded_tests {
         ctx.set_progress(Some(tx), dropped.clone());
         assert!(ctx.progress.is_some());
         assert_eq!(ctx.progress_dropped_bytes.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[cfg(test)]
+mod registry_validation_tests {
+    //! TASK-012 (D01/D02): registration determinism and conflict-key exposure.
+    use super::*;
+
+    struct TestHandler;
+    #[async_trait::async_trait]
+    impl ToolHandler for TestHandler {
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolCallContext,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                result: serde_json::json!({}),
+                truncated: false,
+                duration_ms: 0,
+            })
+        }
+    }
+
+    fn sample_tool(name: &'static str) -> Tool {
+        Tool {
+            name,
+            description: "test",
+            schema: serde_json::json!({ "type": "object", "properties": {}, "required": [] }),
+            side_effect: SideEffect::ReadOnly,
+            permission_class: PermissionClass::AlwaysAllowed,
+            path_scope: PathScope::Any,
+            timeout_ms: 1000,
+            output_limit: 4096,
+            cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
+            handler: Arc::new(TestHandler),
+        }
+    }
+
+    /// D01: duplicate canonical tool names are rejected at registration.
+    #[test]
+    fn registry_rejects_duplicate_tool_names() {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register(sample_tool("dup")).unwrap();
+        let err = gateway.register(sample_tool("dup")).unwrap_err();
+        assert!(err.contains("duplicate tool name 'dup'"), "{err}");
+        // A distinct name is fine.
+        gateway.register(sample_tool("other")).unwrap();
+    }
+
+    /// D02: conflict_key_for exposes the registered key so the daemon can hold
+    /// a cross-run lease.
+    #[test]
+    fn registry_exposes_conflict_key_for() {
+        let mut gateway = CapabilityGateway::new();
+        let mut tool = sample_tool("exclusive");
+        tool.conflict_key = Some("file:///x".into());
+        gateway.register(tool).unwrap();
+        assert_eq!(
+            gateway.conflict_key_for("exclusive").as_deref(),
+            Some("file:///x")
+        );
+        assert_eq!(gateway.conflict_key_for("missing"), None);
     }
 }
