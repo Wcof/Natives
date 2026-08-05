@@ -30,6 +30,7 @@ import AppBrowserPanel from '@/components/creative/AppBrowserPanel';
 import ProposalInbox from '@/components/creative/ProposalInbox';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
+import { useBrowserWindow } from '@/hooks/useBrowserWindow';
 import CreativeHome from '@/components/creative/CreativeHome';
 import {
   defaultDeleteOptions,
@@ -163,13 +164,8 @@ export default function WorkshopPage() {
   const [browserUrl, setBrowserUrl] = useState('');
   // Agent proposals awaiting user approval (batch 10 CR-1002).
   const [pendingProposals, setPendingProposals] = useState<CreativeAppProposal[]>([]);
-  const browserHostRef = useRef<HTMLDivElement | null>(null);
-  const browserAppRef = useRef<string | null>(null);
-
-  // Keep the ref in sync so the cleanup effect (deps empty) can close the right WebView.
-  useEffect(() => {
-    browserAppRef.current = browserApp?.id ?? null;
-  }, [browserApp]);
+  // Browser-window controller (CR-1003): owns host bounds reporting + close-on-unmount.
+  const browserHostRef = useBrowserWindow(browserApp);
 
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
@@ -230,39 +226,6 @@ export default function WorkshopPage() {
     return api.onProgress((ev) => setProgress(ev));
   }, []);
 
-  useEffect(() => {
-    if (!browserApp) return;
-    const el = browserHostRef.current;
-    if (!el) return;
-    const report = () => {
-      const r = el.getBoundingClientRect();
-      const bounds: CreativeAppBrowserBounds = {
-        x: r.left,
-        y: r.top,
-        width: r.width,
-        height: r.height,
-      };
-      void window.nativesAPI?.creativeApp?.browserSetBounds?.(browserApp.id, bounds);
-    };
-    report();
-    const ro = new ResizeObserver(report);
-    ro.observe(el);
-    window.addEventListener('resize', report);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', report);
-    };
-  }, [browserApp]);
-
-  useEffect(() => {
-    return () => {
-      const id = browserAppRef.current;
-      if (id) {
-        void window.nativesAPI?.creativeApp?.browserClose?.(id);
-      }
-    };
-  }, []);
-
   const openInternalModule = async (id: string) => {
     window.dispatchEvent(new CustomEvent('navigate', { detail: `module:${id}` }));
   };
@@ -300,9 +263,8 @@ export default function WorkshopPage() {
   };
 
   const closeBrowser = async () => {
-    const id = browserAppRef.current;
-    if (id) {
-      await window.nativesAPI?.creativeApp?.browserClose?.(id);
+    if (browserApp) {
+      await window.nativesAPI?.creativeApp?.browserClose?.(browserApp.id);
     }
     setBrowserApp(null);
     setBrowserUrl('');
