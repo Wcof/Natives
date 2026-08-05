@@ -14,6 +14,7 @@ pub mod grant_store;
 pub mod install;
 pub mod local;
 pub mod model;
+pub mod non_owned;
 pub mod operation;
 pub mod paths;
 pub mod port_lease;

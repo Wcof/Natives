@@ -1342,6 +1342,69 @@ pub struct BinaryScanCandidate {
     pub risks: Vec<String>,
 }
 
+// ── Non-owned apps (batch 9 CR-901/902) ──────────────────────────────
+
+/// Ownership mode for a creative app — "managed" (Natives owns resources) or
+/// "attached"/"remote" (Natives can inspect/open but does not own stop/kill).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnershipMode {
+    /// Natives fully owns the runtime resources (local process, Docker, HTTP).
+    Managed,
+    /// A local service Natives did not start; inspect/open only, no stop/kill.
+    Attached,
+    /// A remote URL; approved origins only, never Tauri capability.
+    Remote,
+}
+
+impl OwnershipMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::Attached => "attached",
+            Self::Remote => "remote",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "managed" => Self::Managed,
+            "attached" => Self::Attached,
+            "remote" => Self::Remote,
+            _ => return None,
+        })
+    }
+}
+
+/// A non-owned app record: a URL/origin Natives can inspect and open, but whose
+/// lifecycle Natives does not own (attached local service or remote web app).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NonOwnedApp {
+    pub id: String,
+    pub ownership: OwnershipMode,
+    /// Base URL / origin to open (validated to loopback for attached).
+    pub url: String,
+    /// Approved origins for remote navigation (empty for attached).
+    #[serde(default)]
+    pub approved_origins: Vec<String>,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Probe result for a non-owned app — does the origin currently respond?
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NonOwnedProbe {
+    pub reachable: bool,
+    /// HTTP status code when reachable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// True when the origin does not answer (service disappeared).
+    pub unreachable: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserBounds {
