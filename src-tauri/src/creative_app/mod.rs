@@ -9,6 +9,7 @@ pub mod adapters;
 pub mod browser;
 pub mod docker;
 pub mod github;
+pub mod grant_store;
 pub mod install;
 pub mod local;
 pub mod model;

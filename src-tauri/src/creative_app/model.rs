@@ -1184,6 +1184,48 @@ pub struct BrowserProfile {
     pub updated_at: String,
 }
 
+// ── OAuth allowlist (batch 6 CR-602) ─────────────────────────────────
+
+/// Per-app domain allowlist entry for OAuth popup windows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAllowlistEntry {
+    pub id: String,
+    pub application_id: String,
+    /// Allowed domain (e.g. "accounts.google.com").
+    pub domain: String,
+    pub created_at: String,
+}
+
+// ── App grants (batch 6 CR-603) ──────────────────────────────────────
+
+/// Per-app capability grants for upload, download, clipboard, and window.open.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppGrant {
+    pub id: String,
+    pub application_id: String,
+    /// Grant kind: "upload", "download", "clipboard", "window_open".
+    pub kind: String,
+    /// "default_deny", "one_time", "persistent".
+    pub policy: String,
+    /// Optional path restriction (for upload/download).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl AppGrant {
+    pub const KIND_UPLOAD: &'static str = "upload";
+    pub const KIND_DOWNLOAD: &'static str = "download";
+    pub const KIND_CLIPBOARD: &'static str = "clipboard";
+    pub const KIND_WINDOW_OPEN: &'static str = "window_open";
+    pub const POLICY_DEFAULT_DENY: &'static str = "default_deny";
+    pub const POLICY_ONE_TIME: &'static str = "one_time";
+    pub const POLICY_PERSISTENT: &'static str = "persistent";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserBounds {
