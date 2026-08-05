@@ -160,6 +160,12 @@ export default function WorkshopPage() {
   const [browserApp, setBrowserApp] = useState<CreativeAppSummary | null>(null);
   const [browserUrl, setBrowserUrl] = useState('');
   const browserHostRef = useRef<HTMLDivElement | null>(null);
+  const browserAppRef = useRef<string | null>(null);
+
+  // Keep the ref in sync so the cleanup effect (deps empty) can close the right WebView.
+  useEffect(() => {
+    browserAppRef.current = browserApp?.id ?? null;
+  }, [browserApp]);
 
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
@@ -232,7 +238,7 @@ export default function WorkshopPage() {
         width: r.width,
         height: r.height,
       };
-      void window.nativesAPI?.creativeApp?.browserSetBounds?.(bounds);
+      void window.nativesAPI?.creativeApp?.browserSetBounds?.(browserApp.id, bounds);
     };
     report();
     const ro = new ResizeObserver(report);
@@ -246,7 +252,10 @@ export default function WorkshopPage() {
 
   useEffect(() => {
     return () => {
-      void window.nativesAPI?.creativeApp?.browserClose?.();
+      const id = browserAppRef.current;
+      if (id) {
+        void window.nativesAPI?.creativeApp?.browserClose?.(id);
+      }
     };
   }, []);
 
@@ -287,7 +296,10 @@ export default function WorkshopPage() {
   };
 
   const closeBrowser = async () => {
-    await window.nativesAPI?.creativeApp?.browserClose?.();
+    const id = browserAppRef.current;
+    if (id) {
+      await window.nativesAPI?.creativeApp?.browserClose?.(id);
+    }
     setBrowserApp(null);
     setBrowserUrl('');
   };

@@ -36,7 +36,7 @@ export default function AppBrowserPanel({
         <button
           type="button"
           className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
-          onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.()}
+          onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.(app.id)}
           title={t(locale, 'workshop.browserBack')}
         >
           <ChevronLeft size={14} />
@@ -44,7 +44,7 @@ export default function AppBrowserPanel({
         <button
           type="button"
           className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
-          onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.()}
+          onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.(app.id)}
           title={t(locale, 'workshop.browserForward')}
         >
           <ChevronRight size={14} />
@@ -52,7 +52,7 @@ export default function AppBrowserPanel({
         <button
           type="button"
           className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
-          onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.()}
+          onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.(app.id)}
           title={t(locale, 'workshop.browserReload')}
         >
           <RefreshCw size={14} />

@@ -690,13 +690,13 @@ export interface NativesAPI {
     githubTokenClear: () => Promise<CreativeAppGithubTokenStatus>;
     dockerStatus: () => Promise<CreativeAppDockerStatus>;
     browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
-    browserSetBounds: (bounds: CreativeAppBrowserBounds) => Promise<void>;
-    browserBack: () => Promise<void>;
-    browserForward: () => Promise<void>;
-    browserReload: () => Promise<void>;
-    browserHide: () => Promise<void>;
-    browserClose: () => Promise<void>;
-    browserCurrent: () => Promise<{ appId?: string | null; url?: string | null }>;
+    browserSetBounds: (appId: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
+    browserBack: (appId: string) => Promise<void>;
+    browserForward: (appId: string) => Promise<void>;
+    browserReload: (appId: string) => Promise<void>;
+    browserHide: (appId: string) => Promise<void>;
+    browserClose: (appId: string) => Promise<void>;
+    browserCurrent: (appId: string) => Promise<{ appId?: string | null; url?: string | null }>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
     onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
     inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
@@ -1318,15 +1318,15 @@ const nativesAPI: NativesAPI = {
     dockerStatus: () => cmd<CreativeAppDockerStatus>('creative_app_docker_status'),
     browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) =>
       cmd('creative_app_browser_show', { appId, url, bounds }),
-    browserSetBounds: (bounds: CreativeAppBrowserBounds) =>
-      cmd('creative_app_browser_set_bounds', { bounds }),
-    browserBack: () => cmd('creative_app_browser_back'),
-    browserForward: () => cmd('creative_app_browser_forward'),
-    browserReload: () => cmd('creative_app_browser_reload'),
-    browserHide: () => cmd('creative_app_browser_hide'),
-    browserClose: () => cmd('creative_app_browser_close'),
-    browserCurrent: () =>
-      cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current'),
+    browserSetBounds: (appId: string, bounds: CreativeAppBrowserBounds) =>
+      cmd('creative_app_browser_set_bounds', { appId, bounds }),
+    browserBack: (appId: string) => cmd('creative_app_browser_back', { appId }),
+    browserForward: (appId: string) => cmd('creative_app_browser_forward', { appId }),
+    browserReload: (appId: string) => cmd('creative_app_browser_reload', { appId }),
+    browserHide: (appId: string) => cmd('creative_app_browser_hide', { appId }),
+    browserClose: (appId: string) => cmd('creative_app_browser_close', { appId }),
+    browserCurrent: (appId: string) =>
+      cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current', { appId }),
     onProgress: (callback) => {
       const unlisten = listen<CreativeAppProgressEvent>('creative-app-progress', (event) => {
         callback(event.payload);
