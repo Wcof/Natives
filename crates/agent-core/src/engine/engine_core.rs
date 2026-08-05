@@ -75,6 +75,7 @@ fn is_long_running_tool_result(result: &ToolExecutionResult) -> bool {
 
 /// Tool execution seam used by the engine.
 #[async_trait::async_trait]
+#[allow(clippy::too_many_arguments)] // public trait: signature is frozen for implementors
 pub trait EngineToolRuntime: Send + Sync {
     async fn list_tool_schemas(&self) -> Vec<ToolSchema>;
 
@@ -1845,18 +1846,14 @@ impl AgentEngine {
                 &mut typed_messages,
             )
             .await?;
-            if let Err(error) = self
-                .drain_inputs(
-                    crate::PendingInputKind::Steering,
-                    crate::DrainMode::All,
-                    crate::InputSafePoint::AfterToolBatch,
-                    &mut typed_messages,
-                    Some(turn_id.0.as_str()),
-                )
-                .await
-            {
-                return Err(error);
-            }
+            self.drain_inputs(
+                crate::PendingInputKind::Steering,
+                crate::DrainMode::All,
+                crate::InputSafePoint::AfterToolBatch,
+                &mut typed_messages,
+                Some(turn_id.0.as_str()),
+            )
+            .await?;
 
             // Compact large tool outputs + repair dangling tool_call_ids before
             // the next provider turn (no isolated tool calls).
@@ -2632,6 +2629,7 @@ fn tool_result_block_to_value(block: &crate::ToolResultBlock) -> Value {
     }
 }
 
+#[allow(clippy::unnecessary_filter_map)] // every arm returns Some; rewrite is large and risky
 fn values_to_agent_messages(values: &[Value]) -> Vec<crate::AgentMessage> {
     values
         .iter()
@@ -2915,7 +2913,7 @@ fn validate_snapshot_tool_result_blocks(call_id: &str, value: &Value) -> Result<
                 }
             }
             "json" => {
-                if !block.get("value").is_some() {
+                if block.get("value").is_none() {
                     return Err(format!(
                         "snapshot tool {call_id} result {index} has no value"
                     ));

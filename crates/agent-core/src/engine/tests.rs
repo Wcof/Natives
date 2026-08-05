@@ -2943,6 +2943,11 @@ fn engine_public_traits_are_accessible() {
         }
     }
 
+    // Construct the trait impls so dead-code does not fire (their purpose is
+    // to prove the public traits are implementable).
+    let _tools = TestTools;
+    let _provider = TestProvider;
+
     // ToolProgressSink trait
     struct TestSink;
     #[async_trait::async_trait]
