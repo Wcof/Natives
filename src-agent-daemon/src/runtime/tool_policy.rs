@@ -400,8 +400,8 @@ fn canonical_rel_path(project_root: Option<&str>, path: &str) -> String {
                 }
             }
         }
-        if p.starts_with(root) {
-            return p[root.len()..].trim_start_matches('/').replace('\\', "/");
+        if let Some(rest) = p.strip_prefix(root) {
+            return rest.trim_start_matches('/').replace('\\', "/");
         }
     }
     p.trim_start_matches("./").replace('\\', "/")

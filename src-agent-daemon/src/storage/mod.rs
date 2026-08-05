@@ -29,7 +29,7 @@ use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
 thread_local! {
-    static ENV_LOCK_DEPTH: Cell<u32> = Cell::new(0);
+    static ENV_LOCK_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Re-entrant env lock for tests (same thread may nest).
@@ -76,9 +76,9 @@ impl Drop for EnvTestGuard {
 thread_local! {
     /// Per-test DB path override — avoids process-global env races under multi-thread tests.
     static TEST_DB_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
     static TEST_ARTIFACT_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Install a thread-local DB path for the current test thread (cfg(test) only).

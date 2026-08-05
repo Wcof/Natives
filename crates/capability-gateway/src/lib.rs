@@ -159,6 +159,7 @@ impl ToolCallContext {
     }
 
     /// Verified identity + registry-owned cancel token.
+    #[allow(clippy::too_many_arguments)] // public API: identity fields are fixed
     pub fn from_verified_identity_with_cancel(
         project_id: impl Into<String>,
         identity_version: u32,
@@ -1055,7 +1056,7 @@ mod p0_tests {
     #[test]
     fn all_builtin_schemas_are_supported_by_validator() {
         let mut gateway = CapabilityGateway::new();
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         gateway
             .validate_registered_schemas()
             .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
@@ -1064,7 +1065,7 @@ mod p0_tests {
     #[test]
     fn every_tool_has_a_verifiable_mode_and_writes_are_not_parallel() {
         let mut gateway = CapabilityGateway::new();
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         let capabilities = gateway.list_capabilities();
         assert!(!capabilities.is_empty(), "builtins must register");
         for capability in &capabilities {
@@ -1188,7 +1189,7 @@ mod path_scope_preflight_tests {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let mut gateway = CapabilityGateway::new();
         gateway.set_project_root(root.to_string_lossy().into_owned());
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         gateway
     }
 

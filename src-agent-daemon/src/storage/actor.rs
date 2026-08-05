@@ -38,6 +38,7 @@ const MAX_BUSY_RETRIES: u32 = 5;
 const RETRY_BACKOFF: Duration = Duration::from_millis(50);
 
 /// A database command queued on the actor.
+#[allow(clippy::type_complexity)] // pre-existing: command closure shape is fixed
 struct Command {
     run: Box<dyn Fn(&Connection) -> Result<serde_json::Value, String> + Send>,
     critical: bool,

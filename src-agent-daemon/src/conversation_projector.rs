@@ -260,32 +260,34 @@ fn project_committed_turn(
                 *duration_ms,
                 result_message_id.clone(),
             )),
-            RunEventKind::MessageCompleted { content, .. } => {
-                if let Some(content) = content {
-                    let blocks = content.get("content").ok_or_else(|| {
-                        let detail = content.to_string();
+            RunEventKind::MessageCompleted {
+                content: Some(content),
+                ..
+            } => {
+                let blocks = content.get("content").ok_or_else(|| {
+                    let detail = content.to_string();
+                    let _ = quarantine(
+                        run_id,
+                        turn_id.as_deref(),
+                        assistant_message_id.as_deref(),
+                        "corrupt_message_completed",
+                        &detail,
+                    );
+                    "corrupt message completed content: missing blocks".to_string()
+                })?;
+                committed_content =
+                    Some(serde_json::from_value(blocks.clone()).map_err(|error| {
                         let _ = quarantine(
                             run_id,
                             turn_id.as_deref(),
                             assistant_message_id.as_deref(),
                             "corrupt_message_completed",
-                            &detail,
+                            &error.to_string(),
                         );
-                        "corrupt message completed content: missing blocks".to_string()
-                    })?;
-                    committed_content =
-                        Some(serde_json::from_value(blocks.clone()).map_err(|error| {
-                            let _ = quarantine(
-                                run_id,
-                                turn_id.as_deref(),
-                                assistant_message_id.as_deref(),
-                                "corrupt_message_completed",
-                                &error.to_string(),
-                            );
-                            format!("invalid message completed content: {error}")
-                        })?);
-                }
+                        format!("invalid message completed content: {error}")
+                    })?);
             }
+            RunEventKind::MessageCompleted { content: None, .. } => {}
             _ => {}
         }
     }
@@ -474,6 +476,7 @@ fn project_committed_turn(
 /// blocks match the projected blocks (idempotent no-op). A content mismatch is
 /// surfaced as `ProjectionFailure::Conflict`; the caller quarantines it AFTER
 /// the transaction rolls back, never silently overwriting.
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 fn upsert_message_blocks(
     tx: &rusqlite::Transaction,
     conversation_id: &str,

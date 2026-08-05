@@ -83,7 +83,7 @@ struct LiveProcess {
     /// Accumulated bytes counted toward the 1MB delta cap.
     persisted_bytes: usize,
     /// Concurrent pipe reader tasks. Spawned right after the child starts so a
-    /// >64KB producer never blocks on a full OS pipe; drained to EOF and joined
+    /// \>64KB producer never blocks on a full OS pipe; drained to EOF and joined
     /// on cancel/finish so the registry stays quiet (J02).
     readers: Vec<JoinHandle<()>>,
 }

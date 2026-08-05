@@ -65,8 +65,6 @@ pub fn build_generate_body_with_controls(
     for message in &request.messages {
         let role = if message.role == "assistant" {
             "model"
-        } else if message.role == "tool" {
-            "user"
         } else {
             "user"
         };

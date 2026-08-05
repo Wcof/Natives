@@ -125,7 +125,7 @@ async fn checkpoint_path_production_chain_rejects_absolute_before_handler_io() {
     let rt = Arc::new(ProductionRuntime::new());
     let mut gateway = capability_gateway::CapabilityGateway::new();
     gateway.set_project_root(project.path().to_string_lossy().into_owned());
-    gateway.register_builtins();
+    let _ = gateway.register_builtins();
     let tools = PermissionGatedTools {
         gateway: Arc::new(gateway),
         permissions: rt.permissions.clone(),

@@ -1275,6 +1275,7 @@ pub async fn handle_rpc(
                 .get("run_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            #[allow(clippy::needless_return)] // return exits the outer method dispatch
             match run_manager().replay_checked(ReplayRunRequest {
                 run_id: run_id.to_string(),
                 after_sequence: after,
@@ -1703,7 +1704,7 @@ pub async fn handle_rpc(
         }
         names::TOOL_LIST => {
             let mut gateway = capability_gateway::CapabilityGateway::new();
-            gateway.register_builtins();
+            let _ = gateway.register_builtins();
             let tools = gateway
                 .list_tools()
                 .into_iter()
@@ -3256,9 +3257,10 @@ fn handle_rewind_rpc(
             let b = bound.canonicalize().unwrap_or_else(|_| bound.clone());
             let c = caller_p.canonicalize().unwrap_or(caller_p);
             if b != c {
-                return Err(format!(
+                return Err(
                     "workspace.restore refused: caller project_path does not match run identity; restored=0"
-                ));
+                        .into(),
+                );
             }
         }
         bound

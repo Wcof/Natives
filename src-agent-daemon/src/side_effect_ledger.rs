@@ -71,6 +71,7 @@ pub fn record_tool_effect(
 /// Record the execution state with the call identity used by Core.  Unknown
 /// completion is deliberately durable: resume code must block rather than
 /// replaying a side effect it cannot prove safe.
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub fn record_tool_effect_state(
     run_id: &str,
     tool_call_id: &str,

@@ -79,7 +79,7 @@ impl EventLog {
         let event_type = event_type_name(&event.payload);
         let payload = serde_json::to_string(&event.payload)
             .map_err(|e| format!("Failed to serialize event: {e}"))?;
-        self.append(&event.run_id, &event_type, &payload)
+        self.append(&event.run_id, event_type, &payload)
     }
 
     /// Append a Protocol v2 event. `run_sequence` must be set; DB assigns `global_sequence`.

@@ -1052,12 +1052,10 @@ impl EngineToolRuntime for PermissionGatedTools {
 
         // Inject project cwd for terminal when missing (sandbox).
         let mut input = input;
-        if name == "run_terminal" {
-            if input.get("cwd").and_then(|v| v.as_str()).is_none() {
-                if let Some(root) = &self.gateway.project_root {
-                    if let Some(obj) = input.as_object_mut() {
-                        obj.insert("cwd".into(), Value::String(root.clone()));
-                    }
+        if name == "run_terminal" && input.get("cwd").and_then(|v| v.as_str()).is_none() {
+            if let Some(root) = &self.gateway.project_root {
+                if let Some(obj) = input.as_object_mut() {
+                    obj.insert("cwd".into(), Value::String(root.clone()));
                 }
             }
         }
@@ -1307,7 +1305,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                             .checkpoint_manager()
                             .checkpoint_for_run_public(&self.parent_run_id)
                         {
-                            if let Some(snap) = preview.files.iter().find(|f| &f.path == &rel) {
+                            if let Some(snap) = preview.files.iter().find(|f| f.path == rel) {
                                 self.events.append(
                                     &self.parent_run_id,
                                     RunEventKind::FileChanged {
@@ -1692,7 +1690,7 @@ impl PermissionGatedTools {
             .gateway
             .project_root
             .as_ref()
-            .map(|s| std::path::PathBuf::from(s))
+            .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let mut context = capability_gateway::ToolCallContext::with_cancel(
             project_root,
@@ -1831,7 +1829,7 @@ impl PermissionGatedTools {
             .request_permission_for_profile(
                 profile,
                 &self.parent_run_id,
-                &tool_call_id,
+                tool_call_id,
                 name,
                 format!("Approve {name}?"),
                 input.clone(),
@@ -2420,6 +2418,7 @@ impl PermissionGatedTools {
     }
 
     /// Route `mcp_call` / namespaced `mcp__server__tool` through daemon MCP runtime.
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     async fn execute_mcp_call(
         &self,
         name: &str,
@@ -3451,7 +3450,7 @@ impl PermissionGatedTools {
                     let _ = crate::subagent_store::upsert_route_policy(
                         &self.conversation_id,
                         "default",
-                        &[default_binding.clone()],
+                        std::slice::from_ref(&default_binding),
                     );
                     let mut map = HashMap::new();
                     for (call_id, _, _) in tasks {
@@ -3730,10 +3729,8 @@ impl PermissionGatedTools {
             for b in &bindings {
                 crate::production::validate_route_binding(b)?;
             }
-            let mut pi = 0usize;
-            for (call_id, _, _) in tasks {
+            for (pi, (call_id, _, _)) in tasks.iter().enumerate() {
                 map.insert(call_id.clone(), bindings[pi % bindings.len()].clone());
-                pi += 1;
             }
         }
 
@@ -3746,6 +3743,8 @@ impl PermissionGatedTools {
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or_default();
             let mut pi = 0usize;
+            #[allow(clippy::explicit_counter_loop)]
+            // pi counts only processed items (continue skips)
             for (call_id, _, _) in tasks {
                 if map.contains_key(call_id) || pool.is_empty() {
                     continue;
@@ -4164,7 +4163,7 @@ mod plan_mode_runtime_tests {
         let rt = ProductionRuntime::new();
         let mut gateway = CapabilityGateway::new();
         gateway.set_project_root(root.to_string_lossy().to_string());
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         PermissionGatedTools {
             gateway: Arc::new(gateway),
             permissions: rt.permissions.clone(),
@@ -4528,7 +4527,10 @@ mod plan_mode_runtime_tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tools.interactions.cancel_runs(&[id.clone()]).await;
+        tools
+            .interactions
+            .cancel_runs(std::slice::from_ref(&id))
+            .await;
         let out = submitting.await.unwrap();
 
         assert_eq!(out.output["approved"], false);

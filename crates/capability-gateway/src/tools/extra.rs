@@ -417,51 +417,6 @@ fn memory_file_get(key: &str) -> Option<serde_json::Value> {
     None
 }
 
-#[cfg(test)]
-mod memory_tool_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn put_and_search_round_trip() {
-        let dir = std::env::temp_dir().join(format!("gw-mem-{}", uuid::Uuid::new_v4()));
-        std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
-        let tool = MemoryTool;
-        let context = ToolCallContext::new(
-            std::path::PathBuf::from("/tmp"),
-            "run-test".into(),
-            "conv-test".into(),
-            "tc-test".into(),
-            "ask".into(),
-        );
-        let put = tool
-            .execute(
-                serde_json::json!({
-                    "op": "put",
-                    "key": "deploy",
-                    "text": "deploy token rotated weekly"
-                }),
-                &context,
-            )
-            .await
-            .unwrap();
-        assert_eq!(put.result["ok"], true);
-        let search = tool
-            .execute(
-                serde_json::json!({
-                    "op": "search",
-                    "query": "deploy token"
-                }),
-                &context,
-            )
-            .await
-            .unwrap();
-        let matches = search.result["matches"].as_array().unwrap();
-        assert!(!matches.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-        std::env::remove_var("NATIVES_RUNTIME_DIR");
-    }
-}
-
 /// Task tools are orchestrated by Agent Daemon `PermissionGatedTools` (real child
 /// runs with independent provider/key/model). These gateway registrations only
 /// expose schema for the model; bare execute without orchestrator is an error.
@@ -725,4 +680,48 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             handler: Arc::new(NotificationTool),
         },
     ]
+}
+#[cfg(test)]
+mod memory_tool_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn put_and_search_round_trip() {
+        let dir = std::env::temp_dir().join(format!("gw-mem-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
+        let tool = MemoryTool;
+        let context = ToolCallContext::new(
+            std::path::PathBuf::from("/tmp"),
+            "run-test".into(),
+            "conv-test".into(),
+            "tc-test".into(),
+            "ask".into(),
+        );
+        let put = tool
+            .execute(
+                serde_json::json!({
+                    "op": "put",
+                    "key": "deploy",
+                    "text": "deploy token rotated weekly"
+                }),
+                &context,
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.result["ok"], true);
+        let search = tool
+            .execute(
+                serde_json::json!({
+                    "op": "search",
+                    "query": "deploy token"
+                }),
+                &context,
+            )
+            .await
+            .unwrap();
+        let matches = search.result["matches"].as_array().unwrap();
+        assert!(!matches.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("NATIVES_RUNTIME_DIR");
+    }
 }

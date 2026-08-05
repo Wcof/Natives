@@ -245,6 +245,7 @@ pub fn delete_route_policy(parent_conversation_id: &str) -> Result<(), String> {
 
 /// Create a hidden child conversation under parent + subagent_session row.
 /// Returns (session_id, child_conversation_id).
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub fn create_hidden_child_session(
     parent_conversation_id: &str,
     parent_run_id: Option<&str>,
@@ -1061,7 +1062,7 @@ mod tests {
             assert_eq!(p.bindings.len(), 2);
             let first = pick_binding(&p, &[]).unwrap();
             assert_eq!(first, b1);
-            let second = pick_binding(&p, &[b1.clone()]).unwrap();
+            let second = pick_binding(&p, std::slice::from_ref(&b1)).unwrap();
             assert_eq!(second, b2);
             assert!(pick_binding(&p, &[b1, b2]).is_err());
         });

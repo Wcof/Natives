@@ -96,6 +96,7 @@ pub struct RunManager {
 /// Load a checkpoint and verify it carries the committed snapshot, turn, and
 /// ledger watermarks a resumable restore needs. Returns
 /// `(id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor)`.
+#[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
 fn load_resumable_checkpoint(
     conn: &rusqlite::Connection,
     run_id: &str,
@@ -260,6 +261,7 @@ impl RunManager {
         Ok(mgr)
     }
 
+    #[allow(clippy::needless_return)] // cfg(test)/cfg(not(test)) branches make the tail ambiguous
     fn store_from_env() -> Option<Arc<DataStore>> {
         // Phase 0: authority store is assistant.db (NATIVES_ASSISTANT_DB_PATH).
         // Fall back to NATIVES_DB_PATH only for legacy test fixtures that still
@@ -308,9 +310,7 @@ impl RunManager {
                         .ok()
                         .filter(|s| !s.trim().is_empty())
                 });
-            let Some(db_path) = explicit else {
-                return None;
-            };
+            let db_path = explicit?;
             // Prefer temp paths in tests; still allow absolute explicit fixtures.
             let db_path = std::path::PathBuf::from(db_path);
             if let Some(parent) = db_path.parent() {
@@ -2030,7 +2030,7 @@ impl RunManager {
             let tools = crate::production::PermissionGatedTools {
                 gateway: {
                     let mut g = capability_gateway::CapabilityGateway::new();
-                    g.register_builtins();
+                    let _ = g.register_builtins();
                     if let Some(root) = request_project_path
                         .as_deref()
                         .or(run.project_path.as_deref())
@@ -4915,8 +4915,6 @@ mod tests {
                 }
             }
             struct CancelAwareTools {
-                engines:
-                    Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<AgentEngine>>>>,
                 run_id: String,
                 seen: Arc<std::sync::atomic::AtomicBool>,
             }
@@ -4984,7 +4982,6 @@ mod tests {
                 }
             }
             let tools = CancelAwareTools {
-                engines: rm_start.runtime.engine_handles().await,
                 run_id: rid.clone(),
                 seen: cancel_flag_seen_bg,
             };
@@ -5111,7 +5108,7 @@ mod tests {
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rm.runtime.permissions.clone(),
@@ -5136,7 +5133,6 @@ mod tests {
             mode: FixtureMode::RequestPermissionPath,
         };
         // Ensure ConfirmEach profile so side-effect tools ask.
-        rm.runtime.set_permission_profile("ask").await;
 
         let rm_bg = rm.clone();
         let rid = run.id.clone();
@@ -5316,11 +5312,10 @@ mod tests {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rt = crate::production::ProductionRuntime::new();
         // Task is Process/ProjectWrite — under ConfirmEach it asks; use autonomous for identity unit test.
-        rt.set_permission_profile("full_access").await;
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),
@@ -5444,11 +5439,10 @@ mod tests {
             rt.block_on(async {
                 let parent_id = format!("parent-dual-{}", uuid::Uuid::new_v4());
                 let prt = crate::production::ProductionRuntime::new();
-                prt.set_permission_profile("full_access").await;
                 let tools = crate::production::PermissionGatedTools {
                     gateway: {
                         let mut g = capability_gateway::CapabilityGateway::new();
-                        g.register_builtins();
+                        let _ = g.register_builtins();
                         Arc::new(g)
                     },
                     permissions: prt.permissions.clone(),
@@ -5602,7 +5596,6 @@ mod tests {
     async fn mcp_call_through_permission_gate_emits_events() {
         // Register mock tool without live session → structured error + events.
         let rt = crate::production::ProductionRuntime::new();
-        rt.set_permission_profile("full_access").await;
         crate::mcp_runtime::global_mcp()
             .register_server(agent_core::McpServerConfig {
                 id: "gate-test".into(),
@@ -5626,7 +5619,7 @@ mod tests {
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),

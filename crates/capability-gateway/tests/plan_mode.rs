@@ -73,7 +73,7 @@ fn nothing_that_writes_runs_or_spawns_survives_the_latch() {
 #[test]
 fn plan_control_tools_are_registered() {
     let mut gateway = CapabilityGateway::new();
-    gateway.register_builtins();
+    let _ = gateway.register_builtins();
     assert!(gateway.get_tool(plan_mode::ENTER_PLAN_MODE_TOOL).is_some());
     assert!(gateway.get_tool(plan_mode::EXIT_PLAN_MODE_TOOL).is_some());
 }
@@ -82,7 +82,7 @@ fn plan_control_tools_are_registered() {
 async fn exit_plan_mode_through_the_gateway_cannot_release_the_latch() {
     let run_id = format!("gw-exit-{}", uuid::Uuid::new_v4());
     let mut gateway = CapabilityGateway::new();
-    gateway.register_builtins();
+    let _ = gateway.register_builtins();
     let ctx = ToolCallContext::new(
         std::env::temp_dir(),
         run_id.clone(),

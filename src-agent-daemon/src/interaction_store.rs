@@ -232,6 +232,7 @@ pub async fn respond(params: Value) -> Result<Value, String> {
     let store = store()?;
     let (run_id, conversation_id, kind, outbox_id) = {
         let conn = store.conn()?;
+        #[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
         let existing: Option<(
             Option<String>,
             Option<String>,
@@ -436,6 +437,7 @@ async fn deliver_outbox(
 /// for the next recovery pass. Returns the number of rows delivered.
 pub async fn recover_interaction_outbox() -> Result<usize, String> {
     let store = store()?;
+    #[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
     let rows: Vec<(
         String,
         String,
@@ -467,6 +469,7 @@ pub async fn recover_interaction_outbox() -> Result<usize, String> {
     Ok(delivered)
 }
 
+#[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
 fn undelivered_outbox_rows(
     conn: &rusqlite::Connection,
 ) -> Result<

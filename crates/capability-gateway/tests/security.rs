@@ -16,7 +16,7 @@ fn test_traversal_escape_fails() {
 #[tokio::test]
 async fn gateway_execute_denies_traversal_and_etc() {
     let mut gateway = CapabilityGateway::new().with_project_root("/tmp/safe-project");
-    gateway.register_builtins();
+    let _ = gateway.register_builtins();
     let context = ToolCallContext::new(
         std::path::PathBuf::from("/tmp/safe-project"),
         "run-test".into(),
@@ -113,7 +113,7 @@ fn test_builtin_tools_registered() {
 #[test]
 fn test_gateway_register_and_list() {
     let mut gateway = CapabilityGateway::new();
-    gateway.register_builtins();
+    let _ = gateway.register_builtins();
     let tools = gateway.list_tools();
     // Plan requires a broad built-in catalog (file/edit/search/terminal/web/memory/task/mcp…).
     assert!(
@@ -144,7 +144,7 @@ fn test_gateway_register_and_list() {
 #[test]
 fn test_gateway_get_tool() {
     let mut gateway = CapabilityGateway::new();
-    gateway.register_builtins();
+    let _ = gateway.register_builtins();
     let tool = gateway.get_tool("read_file");
     assert!(tool.is_some(), "read_file should be found");
     assert_eq!(tool.unwrap().name, "read_file");

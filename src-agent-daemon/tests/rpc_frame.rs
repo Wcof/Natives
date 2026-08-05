@@ -20,7 +20,7 @@ fn temp_socket(tag: &str) -> PathBuf {
     ))
 }
 
-async fn start_server(socket: &PathBuf, bootstrap: &str) {
+async fn start_server(socket: &std::path::Path, bootstrap: &str) {
     let server = RpcServer::new(&socket.to_string_lossy(), bootstrap, "2.0.0", "0.1.0-test");
     let sock = socket.clone();
     tokio::spawn(async move {

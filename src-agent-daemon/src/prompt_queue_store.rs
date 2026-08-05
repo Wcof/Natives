@@ -27,7 +27,7 @@ static GLOBAL_HARNESS: OnceLock<Arc<SessionCoordinator>> = OnceLock::new();
 
 pub fn global_harness() -> Arc<SessionCoordinator> {
     GLOBAL_HARNESS
-        .get_or_init(|| SessionCoordinator::shared())
+        .get_or_init(SessionCoordinator::shared)
         .clone()
 }
 
@@ -101,7 +101,7 @@ impl EngineInputReceiver for DurableInputReceiver {
         let mut conn = store.conn()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut items = Vec::new();
-        let mut queued = {
+        let queued = {
             let mut stmt = tx
                 .prepare(
                     "SELECT id, content, COALESCE(drain_mode, 'all') FROM prompt_queue
@@ -828,7 +828,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
         );
     }
 
-    let action = harness.send_now(&conversation_id, id).map_err(|e| e)?;
+    let action = harness.send_now(&conversation_id, id)?;
     persist_actor_snapshot(&conversation_id)?;
 
     // Cancel active runs when needed. Only the winner of finish_run(expected_run_id)
@@ -866,57 +866,52 @@ async fn send_now(params: Value) -> Result<Value, String> {
             .or_else(|| active_ids.first().cloned());
 
         if let Some(expected_run_id) = expected {
-            if let Some(next) = harness.finish_run(&conversation_id, &expected_run_id, false) {
-                if let CoordinatorAction::StartPrompt { item } = next {
-                    let start_req = StartRunRequest {
-                        agent_profile_id: None,
-                        capability_selection: None,
-                        run_id: None,
-                        conversation_id: Some(conversation_id.clone()),
-                        provider_id: Some(provider_id.clone()),
-                        model_id: Some(model_id.clone()),
-                        key_id: None,
-                        content: Some(item.content.clone()),
-                        attachments: None,
-                        trigger_message_id: None,
-                        permission_profile: None,
-                        max_steps: None,
-                        project_path: project_path.clone(),
-                        idempotency_key: Some(format!("prompt-queue:{}", item.id)),
-                        effort: None,
-                        runtime_id: None,
-                    };
-                    let run = match crate::run_manager::RunManager::start_detached_global(start_req)
-                    {
-                        Ok(run) => run,
-                        Err(error) => {
-                            harness.requeue(&conversation_id, item.clone());
-                            persist_actor_snapshot(&conversation_id)?;
-                            return Err(error);
-                        }
-                    };
-                    let conn = store.conn()?;
-                    let now = chrono::Utc::now().to_rfc3339();
-                    harness.mark_running_item(
-                        &conversation_id,
-                        &run.id,
-                        Some(&item.id),
-                        &item.content,
-                    );
-                    let changed = conn.execute(
+            if let Some(CoordinatorAction::StartPrompt { item }) =
+                harness.finish_run(&conversation_id, &expected_run_id, false)
+            {
+                let start_req = StartRunRequest {
+                    agent_profile_id: None,
+                    capability_selection: None,
+                    run_id: None,
+                    conversation_id: Some(conversation_id.clone()),
+                    provider_id: Some(provider_id.clone()),
+                    model_id: Some(model_id.clone()),
+                    key_id: None,
+                    content: Some(item.content.clone()),
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: None,
+                    max_steps: None,
+                    project_path: project_path.clone(),
+                    idempotency_key: Some(format!("prompt-queue:{}", item.id)),
+                    effort: None,
+                    runtime_id: None,
+                };
+                let run = match crate::run_manager::RunManager::start_detached_global(start_req) {
+                    Ok(run) => run,
+                    Err(error) => {
+                        harness.requeue(&conversation_id, item.clone());
+                        persist_actor_snapshot(&conversation_id)?;
+                        return Err(error);
+                    }
+                };
+                let conn = store.conn()?;
+                let now = chrono::Utc::now().to_rfc3339();
+                harness.mark_running_item(&conversation_id, &run.id, Some(&item.id), &item.content);
+                let changed = conn
+                    .execute(
                         "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
                         params![now, item.id],
                     )
                     .map_err(|e| format!("mark queued prompt sent: {e}"))?;
-                    if changed != 1 {
-                        return Err("queued prompt was not transitioned to sent".into());
-                    }
-                    conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
-                        .map_err(|e| format!("remove sent prompt: {e}"))?;
-                    persist_actor_snapshot(&conversation_id)?;
-                    return serde_json::to_value(run)
-                        .map_err(|e| format!("serialize started run: {e}"));
+                if changed != 1 {
+                    return Err("queued prompt was not transitioned to sent".into());
                 }
+                conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id])
+                    .map_err(|e| format!("remove sent prompt: {e}"))?;
+                persist_actor_snapshot(&conversation_id)?;
+                return serde_json::to_value(run)
+                    .map_err(|e| format!("serialize started run: {e}"));
             }
         }
 
@@ -1342,16 +1337,17 @@ mod tests {
                 }))
                 .unwrap();
                 let s = store().unwrap();
-                let conn = s.conn().unwrap();
-                for run_id in [&run1, &run2] {
-                    conn.execute(
-                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
-                         VALUES (?1, ?2, 'running', 'test', 'test')",
-                        params![run_id, cid],
-                    )
-                    .unwrap();
+                {
+                    let conn = s.conn().unwrap();
+                    for run_id in [&run1, &run2] {
+                        conn.execute(
+                            "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                             VALUES (?1, ?2, 'running', 'test', 'test')",
+                            params![run_id, cid],
+                        )
+                        .unwrap();
+                    }
                 }
-                drop(conn);
                 let first = DurableInputReceiver::new(&cid, &run1);
                 let second = DurableInputReceiver::new(&cid, &run2);
                 let leased = first
@@ -1524,16 +1520,17 @@ mod tests {
                 }))
                 .unwrap();
                 let s = store().unwrap();
-                let conn = s.conn().unwrap();
-                for run_id in [&run1, &run2] {
-                    conn.execute(
-                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
-                         VALUES (?1, ?2, 'running', 'test', 'test')",
-                        params![run_id, cid],
-                    )
-                    .unwrap();
+                {
+                    let conn = s.conn().unwrap();
+                    for run_id in [&run1, &run2] {
+                        conn.execute(
+                            "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                             VALUES (?1, ?2, 'running', 'test', 'test')",
+                            params![run_id, cid],
+                        )
+                        .unwrap();
+                    }
                 }
-                drop(conn);
 
                 // Pre-crash run leases the input, then "crashes" before ack.
                 let first = DurableInputReceiver::new(&cid, &run1);

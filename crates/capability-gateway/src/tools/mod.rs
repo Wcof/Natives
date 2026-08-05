@@ -69,7 +69,7 @@ impl ToolHandler for ReadFileTool {
             retryable: true,
         })?;
         head.truncate(n);
-        let is_binary = head.iter().any(|&b| b == 0);
+        let is_binary = head.contains(&0);
         if is_binary {
             return Ok(ToolOutput {
                 result: serde_json::json!({
@@ -690,6 +690,7 @@ impl ToolHandler for RunTerminalTool {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // terminal output fields are fixed
 fn terminal_result(
     display: String,
     description: &str,

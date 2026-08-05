@@ -157,6 +157,7 @@ pub fn merge_agent_directive(
 /// This is the sole ordering authority for Native prompt layers. Callers may
 /// project the returned summaries into a Run snapshot, but only
 /// `effective_full_text` is passed to the engine and it is never persisted.
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub(crate) fn compile_effective_prompt(
     agent_kind: Option<&str>,
     profile: Option<&agent_core::AgentProfile>,
@@ -1441,6 +1442,7 @@ impl RealProvider {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     pub async fn stream_with_context_controls(
         &self,
         context: &EngineProviderContext,
@@ -1467,6 +1469,7 @@ impl RealProvider {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     pub async fn stream_with_typed_context_controls(
         &self,
         context: &EngineProviderContext,
@@ -1490,6 +1493,7 @@ impl RealProvider {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     pub(crate) async fn stream_with_history_context_controls(
         &self,
         context: &EngineProviderContext,
@@ -1903,6 +1907,7 @@ mod permission_bind_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
+    #[allow(deprecated)] // explicitly verifies the deprecated setter is a no-op
     async fn legacy_runtime_profile_setter_cannot_mutate_shared_profile() {
         let rt = ProductionRuntime::new();
         rt.set_permission_profile("readonly").await;
@@ -2181,7 +2186,6 @@ pub(crate) fn register_tools_for_surface(
 }
 
 /// Collect relative paths that a write-side tool is about to touch.
-
 pub(crate) fn normalize_permission_scope(scope: &str) -> String {
     match scope.trim().to_ascii_lowercase().as_str() {
         "run" | "this_run" => "this_run".into(),
@@ -2499,6 +2503,7 @@ fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64>
 }
 
 #[allow(dead_code)]
+#[allow(clippy::redundant_closure_call)] // IIFE pattern mirrors store() resolution
 fn parent_conversation_recently_active(conversation_id: &str, within_secs: i64) -> bool {
     let Ok(store) = (|| -> Result<crate::storage::DataStore, String> {
         #[cfg(test)]
@@ -2620,7 +2625,7 @@ mod tool_allowlist_tests {
             gateway: {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root("/tmp/natives-allowlist-test");
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),
@@ -2993,7 +2998,7 @@ mod subagent_persona_tests {
             gateway: {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root(project_root.to_string_lossy().to_string());
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),
