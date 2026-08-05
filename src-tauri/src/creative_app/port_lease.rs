@@ -13,7 +13,7 @@ use std::sync::Mutex;
 const DEFAULT_LEASE_TTL_SECS: i64 = 300;
 
 struct LeaseEntry {
-    port: u16,
+    _port: u16,
     op_key: String,
     expires_at: i64,
 }
@@ -66,7 +66,7 @@ impl PortLeaseRegistry {
         st.leases.insert(
             port,
             LeaseEntry {
-                port,
+                _port: port,
                 op_key: op_key.to_string(),
                 expires_at: expires,
             },

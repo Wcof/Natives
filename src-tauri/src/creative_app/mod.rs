@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod browser;
 pub mod docker;
+pub mod driver;
 pub mod github;
 pub mod grant_store;
 pub mod install;
