@@ -4,12 +4,14 @@ mod apply_patch_parser;
 pub mod creative_draft;
 mod extra;
 pub mod plan;
+pub mod proposal;
 mod ssrf;
 pub mod web_search;
 
 pub use apply_patch_parser::{parse_patch_input, PatchOp};
 pub use creative_draft::{creative_draft_tools, creative_handoff_tool, CREATIVE_DRAFT_TOOL_NAMES};
 pub use plan::plan_mode_tools;
+pub use proposal::creative_proposal_tool;
 pub use ssrf::validate_fetch_url;
 pub use web_search::{web_search_tool, SearchBackend, SearchProvider};
 
@@ -822,6 +824,10 @@ pub fn builtin_tools() -> Vec<Tool> {
         // draft-scoped, so it ships in the default surface; the creative-session
         // writing tools stay out of it.
         creative_handoff_tool(),
+        // Agent creative proposal (batch 10 CR-1001): structurally validates and
+        // forwards an app-creation/start proposal for user approval. The Host
+        // gate is the real security boundary; this tool never registers anything.
+        creative_proposal_tool(),
         Tool {
             name: "read_file",
             description: "Read a text file (supports offset/limit; binary returns metadata only)",

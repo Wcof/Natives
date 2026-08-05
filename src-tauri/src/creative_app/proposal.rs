@@ -9,7 +9,9 @@
 //!   outside the project, no command overrides that run arbitrary binaries)
 //! - secret values in environment keys (the proposal only carries KEY names)
 
-use super::model::{BinaryLaunchProfile, OwnershipMode, PythonLaunchProfile};
+use super::model::{
+    BinaryLaunchProfile, LaunchPort, LaunchPortMode, OwnershipMode, PythonLaunchProfile,
+};
 use crate::{Error, Result};
 use std::path::{Component, Path};
 
@@ -130,7 +132,7 @@ pub fn redacted_proposal_input(proposal: &AgentProposal) -> String {
 
 /// Driver payload variants a proposal can carry.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ProposedDriver {
     Python(PythonLaunchProfile),
     Binary(BinaryLaunchProfile),
@@ -196,9 +198,109 @@ pub fn path_escapes_root(path: &str) -> bool {
     p.components().any(|c| matches!(c, Component::ParentDir))
 }
 
+/// Convert a protocol proposal payload into a Host proposal and run the Host
+/// gate on it (batch 10 CR-1001 wire: Agent Daemon → Host validator).
+pub fn validate_protocol_proposal(
+    payload: &assistant_protocol::v2::CreativeProposalPayload,
+) -> Result<ValidatedProposal> {
+    let kind = match payload.kind.as_str() {
+        "create" => ProposalKind::Create,
+        "start" => ProposalKind::Start,
+        _ => {
+            return Err(Error::InvalidInput(format!(
+                "unknown proposal kind: {}",
+                payload.kind
+            )))
+        }
+    };
+    let ownership = OwnershipMode::parse(&payload.ownership).ok_or_else(|| {
+        Error::InvalidInput(format!("unknown ownership mode: {}", payload.ownership))
+    })?;
+    let driver = match &payload.driver {
+        assistant_protocol::v2::CreativeProposedDriver::Python {
+            schema_version,
+            interpreter,
+            entry,
+            args,
+            cwd_relative,
+            environment_keys,
+            open_path,
+            health_path,
+            startup_timeout_ms,
+        } => ProposedDriver::Python(PythonLaunchProfile {
+            schema_version: *schema_version,
+            interpreter: interpreter.clone(),
+            entry: entry.clone(),
+            args: args.clone(),
+            cwd_relative: cwd_relative.clone(),
+            environment_keys: environment_keys.clone(),
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: open_path.clone(),
+            health_path: health_path.clone(),
+            startup_timeout_ms: *startup_timeout_ms,
+            is_venv: interpreter.contains("/.venv/") || interpreter.contains("venv"),
+        }),
+        assistant_protocol::v2::CreativeProposedDriver::Binary {
+            schema_version,
+            executable_path,
+            executable_hash,
+            approved,
+            args,
+            cwd_relative,
+            environment_keys,
+            open_path,
+            health_path,
+            startup_timeout_ms,
+        } => ProposedDriver::Binary(BinaryLaunchProfile {
+            schema_version: *schema_version,
+            executable_path: executable_path.clone(),
+            executable_hash: executable_hash.clone(),
+            approved: *approved,
+            args: args.clone(),
+            cwd_relative: cwd_relative.clone(),
+            environment_keys: environment_keys.clone(),
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: open_path.clone(),
+            health_path: health_path.clone(),
+            startup_timeout_ms: *startup_timeout_ms,
+        }),
+        assistant_protocol::v2::CreativeProposedDriver::StaticHttp => {
+            ProposedDriver::StaticHttp
+        }
+        assistant_protocol::v2::CreativeProposedDriver::Compose {
+            command,
+            privileged,
+        } => ProposedDriver::Compose {
+            command: command.clone(),
+            privileged: *privileged,
+        },
+    };
+    let proposal = AgentProposal {
+        schema_version: payload.schema_version,
+        kind,
+        ownership,
+        title: payload.title.clone(),
+        project_root: payload.project_root.clone(),
+        driver,
+        open_path: payload.open_path.clone(),
+        health_path: payload.health_path.clone(),
+        environment_keys: payload.environment_keys.clone(),
+    };
+    proposal.validate()?;
+    Ok(ValidatedProposal {
+        redacted: redacted_proposal_input(&proposal),
+        proposal,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::model::{LaunchPort, LaunchPortMode};
     use super::*;
 
     fn base_python() -> PythonLaunchProfile {
@@ -353,5 +455,48 @@ mod tests {
         assert!(path_escapes_root("/abs/path"));
         assert!(!path_escapes_root("sub/app.py"));
         assert!(!path_escapes_root("."));
+    }
+
+    #[test]
+    fn protocol_payload_maps_to_host_proposal_and_passes_gate() {
+        use assistant_protocol::v2::{
+            CreativeProposalPayload, CreativeProposedDriver,
+        };
+        let payload = CreativeProposalPayload {
+            schema_version: 1,
+            kind: "create".into(),
+            ownership: "managed".into(),
+            title: "Static".into(),
+            project_root: "/proj".into(),
+            driver: CreativeProposedDriver::StaticHttp,
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec!["PORT".into()],
+        };
+        let validated = validate_protocol_proposal(&payload).unwrap();
+        assert_eq!(validated.proposal.title, "Static");
+        assert!(validated.redacted.contains("static_http"));
+    }
+
+    #[test]
+    fn protocol_payload_rejects_privileged_compose() {
+        use assistant_protocol::v2::{
+            CreativeProposalPayload, CreativeProposedDriver,
+        };
+        let payload = CreativeProposalPayload {
+            schema_version: 1,
+            kind: "start".into(),
+            ownership: "managed".into(),
+            title: "C".into(),
+            project_root: "/proj".into(),
+            driver: CreativeProposedDriver::Compose {
+                command: None,
+                privileged: true,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        assert!(validate_protocol_proposal(&payload).is_err());
     }
 }
