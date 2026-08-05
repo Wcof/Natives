@@ -9,9 +9,7 @@
 //!   outside the project, no command overrides that run arbitrary binaries)
 //! - secret values in environment keys (the proposal only carries KEY names)
 
-use super::model::{
-    BinaryLaunchProfile, LaunchPort, LaunchPortMode, OwnershipMode, PythonLaunchProfile,
-};
+use super::model::{BinaryLaunchProfile, OwnershipMode, PythonLaunchProfile};
 use crate::{Error, Result};
 use std::path::{Component, Path};
 
@@ -118,7 +116,7 @@ pub fn redacted_proposal_input(proposal: &AgentProposal) -> String {
         "title": proposal.title,
         "driver": match &proposal.driver {
             ProposedDriver::Python(p) => format!("python:{}", p.entry),
-            ProposedDriver::Binary(b) => "binary".to_string(),
+            ProposedDriver::Binary(_) => "binary".to_string(),
             ProposedDriver::StaticHttp => "static_http".to_string(),
             ProposedDriver::Compose { .. } => "compose".to_string(),
         },
@@ -197,6 +195,7 @@ pub fn path_escapes_root(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::model::{LaunchPort, LaunchPortMode};
 
     fn base_python() -> PythonLaunchProfile {
         PythonLaunchProfile {
