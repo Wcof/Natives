@@ -252,6 +252,8 @@ export const en = {
     actionContinueInstall: 'Continue install',
     actionLogs: 'Logs',
     actionRestart: 'Restart',
+    actionClose: 'Close',
+    dockLabel: 'Active Apps',
     actionEdit: 'Edit',
     emptyUnified: 'No creative apps yet. Use Add to create an internal app, add a local folder, or install from GitHub.',
     githubWizardTitle: 'Install from GitHub',
