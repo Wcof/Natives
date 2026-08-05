@@ -15,11 +15,7 @@ fn now() -> String {
 // ── OAuth Allowlist ─────────────────────────────────────────────────
 
 /// Add an allowed domain for OAuth popup.
-pub fn add_oauth_domain(
-    conn: &Connection,
-    application_id: &str,
-    domain: &str,
-) -> Result<String> {
+pub fn add_oauth_domain(conn: &Connection, application_id: &str, domain: &str) -> Result<String> {
     let id = Uuid::new_v4().to_string();
     let t = now();
     conn.execute(
@@ -32,7 +28,11 @@ pub fn add_oauth_domain(
 }
 
 /// Check if a domain is allowed for OAuth popup.
-pub fn is_oauth_domain_allowed(conn: &Connection, application_id: &str, domain: &str) -> Result<bool> {
+pub fn is_oauth_domain_allowed(
+    conn: &Connection,
+    application_id: &str,
+    domain: &str,
+) -> Result<bool> {
     let exists = conn
         .query_row(
             "SELECT 1 FROM oauth_allowlist WHERE application_id = ?1 AND domain = ?2",
@@ -100,18 +100,21 @@ pub fn set_grant(
              policy = excluded.policy,
              path = excluded.path,
              updated_at = excluded.updated_at",
-        params![Uuid::new_v4().to_string(), application_id, kind, policy, path, t],
+        params![
+            Uuid::new_v4().to_string(),
+            application_id,
+            kind,
+            policy,
+            path,
+            t
+        ],
     )
     .map_err(Error::Database)?;
     Ok(())
 }
 
 /// Get the grant policy for an application+kind. Returns default_deny if not set.
-pub fn get_grant(
-    conn: &Connection,
-    application_id: &str,
-    kind: &str,
-) -> Result<AppGrant> {
+pub fn get_grant(conn: &Connection, application_id: &str, kind: &str) -> Result<AppGrant> {
     conn.query_row(
         "SELECT id, application_id, kind, policy, path, created_at, updated_at
          FROM app_grants WHERE application_id = ?1 AND kind = ?2",
@@ -130,17 +133,11 @@ pub fn get_grant(
     )
     .optional()
     .map_err(Error::Database)?
-    .ok_or_else(|| {
-        Error::NotFound(format!("grant {kind} for app {application_id}"))
-    })
+    .ok_or_else(|| Error::NotFound(format!("grant {kind} for app {application_id}")))
 }
 
 /// Check if a grant is allowed (persistent or one_time).
-pub fn is_grant_allowed(
-    conn: &Connection,
-    application_id: &str,
-    kind: &str,
-) -> Result<bool> {
+pub fn is_grant_allowed(conn: &Connection, application_id: &str, kind: &str) -> Result<bool> {
     let grant = conn
         .query_row(
             "SELECT policy FROM app_grants WHERE application_id = ?1 AND kind = ?2",
@@ -153,7 +150,13 @@ pub fn is_grant_allowed(
         Some(AppGrant::POLICY_PERSISTENT) => Ok(true),
         Some(AppGrant::POLICY_ONE_TIME) => {
             // One-time grant: allow once, then reset to default_deny
-            set_grant(conn, application_id, kind, AppGrant::POLICY_DEFAULT_DENY, None)?;
+            set_grant(
+                conn,
+                application_id,
+                kind,
+                AppGrant::POLICY_DEFAULT_DENY,
+                None,
+            )?;
             Ok(true)
         }
         _ => Ok(false),
@@ -190,11 +193,8 @@ pub fn list_grants(conn: &Connection, application_id: &str) -> Result<Vec<AppGra
 
 /// Delete a grant.
 pub fn delete_grant(conn: &Connection, grant_id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM app_grants WHERE id = ?1",
-        params![grant_id],
-    )
-    .map_err(Error::Database)?;
+    conn.execute("DELETE FROM app_grants WHERE id = ?1", params![grant_id])
+        .map_err(Error::Database)?;
     Ok(())
 }
 
@@ -239,7 +239,14 @@ mod tests {
     fn grant_persistent_allowed() {
         let conn = fixture();
         ensure_app(&conn, "app-1");
-        set_grant(&conn, "app-1", AppGrant::KIND_UPLOAD, AppGrant::POLICY_PERSISTENT, None).unwrap();
+        set_grant(
+            &conn,
+            "app-1",
+            AppGrant::KIND_UPLOAD,
+            AppGrant::POLICY_PERSISTENT,
+            None,
+        )
+        .unwrap();
         assert!(is_grant_allowed(&conn, "app-1", AppGrant::KIND_UPLOAD).unwrap());
     }
 
@@ -247,7 +254,14 @@ mod tests {
     fn grant_one_time_consumed() {
         let conn = fixture();
         ensure_app(&conn, "app-1");
-        set_grant(&conn, "app-1", AppGrant::KIND_DOWNLOAD, AppGrant::POLICY_ONE_TIME, None).unwrap();
+        set_grant(
+            &conn,
+            "app-1",
+            AppGrant::KIND_DOWNLOAD,
+            AppGrant::POLICY_ONE_TIME,
+            None,
+        )
+        .unwrap();
         assert!(is_grant_allowed(&conn, "app-1", AppGrant::KIND_DOWNLOAD).unwrap());
         // Second call should return false (one-time consumed)
         assert!(!is_grant_allowed(&conn, "app-1", AppGrant::KIND_DOWNLOAD).unwrap());
@@ -257,7 +271,14 @@ mod tests {
     fn grant_list_and_delete() {
         let conn = fixture();
         ensure_app(&conn, "app-1");
-        set_grant(&conn, "app-1", AppGrant::KIND_CLIPBOARD, AppGrant::POLICY_PERSISTENT, None).unwrap();
+        set_grant(
+            &conn,
+            "app-1",
+            AppGrant::KIND_CLIPBOARD,
+            AppGrant::POLICY_PERSISTENT,
+            None,
+        )
+        .unwrap();
         let grants = list_grants(&conn, "app-1").unwrap();
         assert_eq!(grants.len(), 1);
         delete_grant(&conn, &grants[0].id).unwrap();
