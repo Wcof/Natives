@@ -3,6 +3,9 @@ name = "agent-core"
 version = "0.1.0"
 description = "Natives Agent Core — run state machine, event log, context and orchestration"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/Wcof/Natives"
+rust-version = "1.85"
 
 [dependencies]
 assistant-protocol = { path = "../assistant-protocol" }

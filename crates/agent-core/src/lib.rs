@@ -13,6 +13,7 @@ pub mod context_snapshot;
 pub mod doom_loop;
 pub mod engine;
 pub mod event_seq;
+pub mod facade;
 pub mod hook_handlers;
 pub mod hooks;
 pub mod input;
