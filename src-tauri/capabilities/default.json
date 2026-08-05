@@ -34,5 +34,6 @@
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit"
-  ]
+  ],
+  "note": "Capability isolation (CR-403): 'webview: [\"main\"]' means only the main Renderer webview gets these permissions. Child WebViews created via browser.rs with labels like 'creative-app-{appId}' do NOT match the 'main' filter, so they inherit zero Tauri capabilities. This prevents any Embed surface from invoking Tauri IPC commands like shell:allow-open, fs:*, or window:*. The on_navigation hook on each child WebView further restricts navigation to loopback addresses only."
 }
