@@ -31,6 +31,7 @@ import ProposalInbox from '@/components/creative/ProposalInbox';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import { useBrowserWindow } from '@/hooks/useBrowserWindow';
+import { useCreativeWindows } from '@/hooks/useCreativeWindows';
 import CreativeHome from '@/components/creative/CreativeHome';
 import {
   defaultDeleteOptions,
@@ -41,7 +42,6 @@ import {
   sourceBadge,
 } from '@/lib/creative-app';
 import type {
-  CreativeAppBrowserBounds,
   CreativeAppInspectResult,
   CreativeAppInstallCandidate,
   CreativeAppProposal,
@@ -160,12 +160,14 @@ export default function WorkshopPage() {
   const [progress, setProgress] = useState<CreativeAppProgressEvent | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
 
-  const [browserApp, setBrowserApp] = useState<CreativeAppSummary | null>(null);
-  const [browserUrl, setBrowserUrl] = useState('');
   // Agent proposals awaiting user approval (batch 10 CR-1002).
   const [pendingProposals, setPendingProposals] = useState<CreativeAppProposal[]>([]);
-  // Browser-window controller (CR-1003): owns host bounds reporting + close-on-unmount.
-  const browserHostRef = useBrowserWindow(browserApp);
+  // Window + browser controllers (CR-1003): shared host ref; the window hook
+  // owns open/close state, the browser hook owns bounds reporting + unmount close.
+  const browserHostRef = useRef<HTMLDivElement | null>(null);
+  const { browserApp, browserUrl, setBrowserApp, openExternal, closeBrowser } =
+    useCreativeWindows(browserHostRef);
+  useBrowserWindow(browserApp, browserHostRef);
 
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
@@ -230,46 +232,6 @@ export default function WorkshopPage() {
     window.dispatchEvent(new CustomEvent('navigate', { detail: `module:${id}` }));
   };
 
-  const openExternal = async (app: CreativeAppSummary) => {
-    try {
-      const target = await window.nativesAPI?.creativeApp?.getOpenTarget?.(app.id);
-      if (!target || target.kind !== 'local_url') {
-        showToast(t(locale, 'workshop.stateStartFailed'));
-        return;
-      }
-      const el = browserHostRef.current;
-      setBrowserApp(app);
-      setBrowserUrl(target.url);
-      requestAnimationFrame(() => {
-        const host = browserHostRef.current ?? el;
-        const r = host?.getBoundingClientRect();
-        const bounds: CreativeAppBrowserBounds = r
-          ? { x: r.left, y: r.top, width: r.width, height: r.height }
-          : { x: 280, y: 80, width: 900, height: 640 };
-        const p = window.nativesAPI?.creativeApp?.browserShow?.(app.id, target.url, bounds);
-        if (p) {
-          // Host failure must roll back the optimistic panel and stay visible
-          // (batch 2 CR-203, #31) instead of leaving a dead Browser pane open.
-          p.catch((err) => {
-            setBrowserApp(null);
-            setBrowserUrl('');
-            showToast(classifyError(err).userMessage);
-          });
-        }
-      });
-    } catch (err) {
-      showToast(classifyError(err).userMessage);
-    }
-  };
-
-  const closeBrowser = async () => {
-    if (browserApp) {
-      await window.nativesAPI?.creativeApp?.browserClose?.(browserApp.id);
-    }
-    setBrowserApp(null);
-    setBrowserUrl('');
-  };
-
   const handleOpen = async (app: CreativeAppSummary) => {
     // Open surface still differs by source (iframe vs child webview), but
     // resolution goes through creativeApp.getOpenTarget for non-internal paths
@@ -277,7 +239,7 @@ export default function WorkshopPage() {
     if (app.source === 'internal') {
       await openInternalModule(app.id);
     } else {
-      await openExternal(app);
+      await openExternal(app, showToast);
     }
   };
 
@@ -295,7 +257,7 @@ export default function WorkshopPage() {
           shouldAutoOpenAfterStart(updated) &&
           updated.source !== 'internal'
         ) {
-          await openExternal(updated);
+          await openExternal(updated, showToast);
         }
       } catch (err) {
         showToast(classifyError(err).userMessage);

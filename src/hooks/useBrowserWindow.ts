@@ -1,17 +1,17 @@
 //! Browser-window controller (batch 10 CR-1003).
 //!
-//! Owns the child-WebView host element lifecycle: reports the host div's
-//! bounds to the Host so the child WebView is placed/sized correctly, and
-//! closes the child WebView when the browser closes or WorkshopPage unmounts.
-//! Extracted from WorkshopPage so the browser seam has one real controller
-//! instead of inline effects.
+//! Attaches child-WebView host lifecycle to a caller-provided host div ref:
+//! reports the host element bounds to the Host so the child WebView is placed
+//! and sized correctly, and closes the child WebView on unmount. Extracted from
+//! WorkshopPage so the browser seam has one real controller instead of inline
+//! effects. The ref is provided by the caller so the window controller
+//! (useCreativeWindows) can share it.
 
-import { useEffect, useRef } from 'react';
-import type { CreativeAppBrowserBounds, CreativeAppSummary } from '@/lib/tauri-adapter';
+import { useEffect, useRef, type RefObject } from 'react';
+import type { CreativeAppSummary } from '@/lib/tauri-adapter';
 
-/** App id kept in a ref so the unmount cleanup can close the right WebView. */
-export function useBrowserWindow(app: CreativeAppSummary | null) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
+/** Attach host-bounds reporting + close-on-unmount to a shared host ref. */
+export function useBrowserWindow(app: CreativeAppSummary | null, hostRef: RefObject<HTMLDivElement | null>) {
   const appIdRef = useRef<string | null>(null);
 
   // Keep the app id available to the unmount cleanup (which has empty deps).
@@ -27,7 +27,7 @@ export function useBrowserWindow(app: CreativeAppSummary | null) {
     if (!el) return;
     const report = () => {
       const r = el.getBoundingClientRect();
-      const bounds: CreativeAppBrowserBounds = {
+      const bounds = {
         x: r.left,
         y: r.top,
         width: r.width,
@@ -43,7 +43,7 @@ export function useBrowserWindow(app: CreativeAppSummary | null) {
       ro.disconnect();
       window.removeEventListener('resize', report);
     };
-  }, [app]);
+  }, [app, hostRef]);
 
   // Close the child WebView on unmount so it cannot outlive the surface.
   useEffect(() => {
@@ -54,6 +54,4 @@ export function useBrowserWindow(app: CreativeAppSummary | null) {
       }
     };
   }, []);
-
-  return hostRef;
 }
