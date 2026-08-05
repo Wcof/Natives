@@ -21,6 +21,7 @@ pub mod port_lease;
 pub mod probe;
 pub mod process_driver;
 pub mod profile_store;
+pub mod proposal;
 pub mod runtime_store;
 pub mod service;
 pub mod service_store;

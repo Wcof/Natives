@@ -347,6 +347,7 @@ fn suggestion_to_plan(s: &AiLaunchSuggestion) -> LaunchPlan {
         confidence: Some(s.confidence),
         reason: s.reason.clone(),
         compose: None,
+        process_profile: None,
         trade_approval: None,
     }
 }

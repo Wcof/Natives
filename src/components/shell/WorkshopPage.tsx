@@ -27,8 +27,12 @@ import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import Modal from '@/components/ui/Modal';
 import AppLogsPanel from '@/components/creative/AppLogsPanel';
 import AppBrowserPanel from '@/components/creative/AppBrowserPanel';
+import ProposalInbox from '@/components/creative/ProposalInbox';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
+import { useBrowserWindow } from '@/hooks/useBrowserWindow';
+import { useCreativeWindows } from '@/hooks/useCreativeWindows';
+import { useCreativeImport } from '@/hooks/useCreativeImport';
 import CreativeHome from '@/components/creative/CreativeHome';
 import {
   defaultDeleteOptions,
@@ -39,9 +43,9 @@ import {
   sourceBadge,
 } from '@/lib/creative-app';
 import type {
-  CreativeAppBrowserBounds,
   CreativeAppInspectResult,
   CreativeAppInstallCandidate,
+  CreativeAppProposal,
   CreativeAppProgressEvent,
   CreativeAppSummary,
   LaunchPlan,
@@ -59,7 +63,6 @@ import {
   type LocalWizardStep,
 } from '@/lib/local-creative';
 
-type AddMenu = 'closed' | 'open';
 type WizardStep = 'url' | 'manual' | 'installing';
 
 function stateLabel(locale: Locale, state: CreativeAppSummary['state']): string {
@@ -122,7 +125,6 @@ export default function WorkshopPage() {
   // reactive useLocale：此前一发式 getLocale 导致切换语言后 creative 全面（经 prop 下发）停留旧语言
   const locale = useLocale();
   const [toast, setToast] = useState<string | null>(null);
-  const [addMenu, setAddMenu] = useState<AddMenu>('closed');
 
   const [permDialog, setPermDialog] = useState<{
     source: string;
@@ -157,15 +159,28 @@ export default function WorkshopPage() {
   const [progress, setProgress] = useState<CreativeAppProgressEvent | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
 
-  const [browserApp, setBrowserApp] = useState<CreativeAppSummary | null>(null);
-  const [browserUrl, setBrowserUrl] = useState('');
+  // Agent proposals awaiting user approval (batch 10 CR-1002).
+  const [pendingProposals, setPendingProposals] = useState<CreativeAppProposal[]>([]);
+  // Window + browser controllers (CR-1003): shared host ref; the window hook
+  // owns open/close state, the browser hook owns bounds reporting + unmount close.
   const browserHostRef = useRef<HTMLDivElement | null>(null);
-  const browserAppRef = useRef<string | null>(null);
-
-  // Keep the ref in sync so the cleanup effect (deps empty) can close the right WebView.
-  useEffect(() => {
-    browserAppRef.current = browserApp?.id ?? null;
-  }, [browserApp]);
+  const { browserApp, browserUrl, setBrowserApp, openExternal, closeBrowser } =
+    useCreativeWindows(browserHostRef);
+  useBrowserWindow(browserApp, browserHostRef);
+  // Import controller (CR-1003): add menu + dependency-install flow.
+  const {
+    addMenu,
+    setAddMenu,
+    pickAndImport,
+    openDepInstall,
+    confirmDepInstall,
+    closeDepInstall,
+    depInstallFor,
+    depInstalling,
+    depConfirmChecked,
+    setDepConfirmChecked,
+    depCommand,
+  } = useCreativeImport();
 
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
@@ -210,11 +225,6 @@ export default function WorkshopPage() {
   const [editCwd, setEditCwd] = useState('.');
   const [editLoading, setEditLoading] = useState(false);
 
-  const [depInstallFor, setDepInstallFor] = useState<CreativeAppSummary | null>(null);
-  const [depConfirmChecked, setDepConfirmChecked] = useState(false);
-  const [depInstalling, setDepInstalling] = useState(false);
-  const [depCommand, setDepCommand] = useState<string>('');
-
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2400);
@@ -226,82 +236,8 @@ export default function WorkshopPage() {
     return api.onProgress((ev) => setProgress(ev));
   }, []);
 
-  useEffect(() => {
-    if (!browserApp) return;
-    const el = browserHostRef.current;
-    if (!el) return;
-    const report = () => {
-      const r = el.getBoundingClientRect();
-      const bounds: CreativeAppBrowserBounds = {
-        x: r.left,
-        y: r.top,
-        width: r.width,
-        height: r.height,
-      };
-      void window.nativesAPI?.creativeApp?.browserSetBounds?.(browserApp.id, bounds);
-    };
-    report();
-    const ro = new ResizeObserver(report);
-    ro.observe(el);
-    window.addEventListener('resize', report);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', report);
-    };
-  }, [browserApp]);
-
-  useEffect(() => {
-    return () => {
-      const id = browserAppRef.current;
-      if (id) {
-        void window.nativesAPI?.creativeApp?.browserClose?.(id);
-      }
-    };
-  }, []);
-
   const openInternalModule = async (id: string) => {
     window.dispatchEvent(new CustomEvent('navigate', { detail: `module:${id}` }));
-  };
-
-  const openExternal = async (app: CreativeAppSummary) => {
-    try {
-      const target = await window.nativesAPI?.creativeApp?.getOpenTarget?.(app.id);
-      if (!target || target.kind !== 'local_url') {
-        showToast(t(locale, 'workshop.stateStartFailed'));
-        return;
-      }
-      const el = browserHostRef.current;
-      setBrowserApp(app);
-      setBrowserUrl(target.url);
-      requestAnimationFrame(() => {
-        const host = browserHostRef.current ?? el;
-        const r = host?.getBoundingClientRect();
-        const bounds: CreativeAppBrowserBounds = r
-          ? { x: r.left, y: r.top, width: r.width, height: r.height }
-          : { x: 280, y: 80, width: 900, height: 640 };
-        const p = window.nativesAPI?.creativeApp?.browserShow?.(app.id, target.url, bounds);
-        if (p) {
-          // Host failure must roll back the optimistic panel and stay visible
-          // (batch 2 CR-203, #31) instead of leaving a dead Browser pane open.
-          p.catch((err) => {
-            setBrowserApp(null);
-            setBrowserUrl('');
-            showToast(classifyError(err).userMessage);
-          });
-        }
-      });
-    } catch (err) {
-      showToast(classifyError(err).userMessage);
-    }
-  };
-
-  const closeBrowser = async () => {
-    const id = browserAppRef.current;
-    if (id) {
-      await window.nativesAPI?.creativeApp?.browserClose?.(id);
-    }
-    setBrowserApp(null);
-    setBrowserUrl('');
   };
 
   const handleOpen = async (app: CreativeAppSummary) => {
@@ -311,7 +247,7 @@ export default function WorkshopPage() {
     if (app.source === 'internal') {
       await openInternalModule(app.id);
     } else {
-      await openExternal(app);
+      await openExternal(app, showToast);
     }
   };
 
@@ -329,7 +265,7 @@ export default function WorkshopPage() {
           shouldAutoOpenAfterStart(updated) &&
           updated.source !== 'internal'
         ) {
-          await openExternal(updated);
+          await openExternal(updated, showToast);
         }
       } catch (err) {
         showToast(classifyError(err).userMessage);
@@ -601,19 +537,6 @@ export default function WorkshopPage() {
     });
   };
 
-  /** 依赖安装入口：此前整个对话框（含后端 install/preview 两条命令）无任何调用方 */
-  const openDepInstall = async (app: CreativeAppSummary) => {
-    setDepConfirmChecked(false);
-    setDepCommand('');
-    setDepInstallFor(app);
-    try {
-      const preview = await window.nativesAPI?.creativeApp?.previewLocalDependencyInstall?.(app.id);
-      if (preview) setDepCommand([preview.program, ...preview.args].join(' '));
-    } catch (err) {
-      showToast(classifyError(err).userMessage);
-    }
-  };
-
   const handleResolveOrphan = async (app: CreativeAppSummary, restart: boolean) => {
     if (busyIds.has(app.id)) return;
     await withBusy(app.id, async () => {
@@ -724,19 +647,6 @@ export default function WorkshopPage() {
           classifyError(err).userMessage,
         ),
       );
-    }
-  };
-
-  /** 经系统文件选择器导入 —— webview 的 File 对象在 Tauri v2 下没有真实路径 */
-  const pickAndImport = async () => {
-    setAddMenu('closed');
-    try {
-      const files = await window.nativesAPI?.dialog?.pickFiles?.();
-      const zip = files?.find((f) => f.toLowerCase().endsWith('.zip')) ?? files?.[0];
-      if (!zip) return;
-      await beginImport(zip, zip.split('/').pop() || zip);
-    } catch (err) {
-      showToast(classifyError(err).userMessage);
     }
   };
 
@@ -961,7 +871,7 @@ export default function WorkshopPage() {
                 <button
                   type="button"
                   className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
-                  onClick={() => void pickAndImport()}
+                  onClick={() => void pickAndImport(beginImport, showToast)}
                 >
                   <Package size={14} className="text-[var(--text-secondary)]" />
                   <span>{t(locale, 'workshop.addMenuImport')}</span>
@@ -1009,6 +919,19 @@ export default function WorkshopPage() {
             action={{ label: t(locale, 'common.retry'), onClick: () => { void reload(); } }}
           />
         )}
+        {pendingProposals.length > 0 && (
+          <div className="mb-4">
+            <ProposalInbox
+              proposals={pendingProposals}
+              onDismissed={(p) => setPendingProposals((prev) => prev.filter((x) => x !== p))}
+              onToast={showToast}
+              onRegistered={(p) => {
+                setPendingProposals((prev) => prev.filter((x) => x !== p));
+                void reload();
+              }}
+            />
+          </div>
+        )}
         <CreativeHome
           locale={locale}
           apps={apps}
@@ -1023,7 +946,7 @@ export default function WorkshopPage() {
           onAppLogs={(app) => { void openLogs(app); }}
           onRunSettings={(app) => { void openEditLocal(app); }}
           onResolveOrphan={(app, restart) => { void handleResolveOrphan(app, restart); }}
-          onInstallDeps={(app) => { void openDepInstall(app); }}
+          onInstallDeps={(app) => { void openDepInstall(app, showToast); }}
         />
       </div>
 
@@ -1676,7 +1599,7 @@ export default function WorkshopPage() {
       {depInstallFor && (
         <Modal
           isOpen
-          onClose={() => setDepInstallFor(null)}
+          onClose={closeDepInstall}
           title={t(locale, 'workshop.installDeps')}
           width={480}
         >
@@ -1705,7 +1628,7 @@ export default function WorkshopPage() {
               <button
                 type="button"
                 className="h-9 px-4 rounded-lg border border-[var(--border)]"
-                onClick={() => setDepInstallFor(null)}
+                onClick={closeDepInstall}
               >
                 {t(locale, 'common.cancel')}
               </button>
@@ -1713,21 +1636,14 @@ export default function WorkshopPage() {
                 type="button"
                 className="h-9 px-4 rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
                 disabled={!depConfirmChecked || depInstalling}
-                onClick={async () => {
-                  if (!depInstallFor) return;
-                  setDepInstalling(true);
-                  try {
-                    await window.nativesAPI?.creativeApp?.installLocalDependencies?.(
-                      depInstallFor.id,
-                    );
-                    showToast(t(locale, 'workshop.installDepsDone'));
-                    setDepInstallFor(null);
-                    void reload();
-                  } catch (err) {
-                    showToast(classifyError(err).userMessage);
-                  } finally {
-                    setDepInstalling(false);
-                  }
+                onClick={() => {
+                  void confirmDepInstall(
+                    () => {
+                      void reload();
+                      showToast(t(locale, 'workshop.installDepsDone'));
+                    },
+                    showToast,
+                  );
                 }}
               >
                 {t(locale, 'workshop.installDepsRun')}

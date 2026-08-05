@@ -395,6 +395,7 @@ mod tests {
             reason: "test".into(),
             compose: None,
             trade_approval: None,
+            process_profile: None,
         };
         let now = chrono::Utc::now().to_rfc3339();
         LocalCreativeAppRecord {

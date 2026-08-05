@@ -65,7 +65,7 @@ const DB_BUSY_TIMEOUT_MS: u64 = 5_000;
 const REVISION_PREFIX: &str = "rev-";
 const REVISION_SUFFIX: &str = ".html";
 
-fn invalid_input(message: impl Into<String>) -> ToolError {
+pub(crate) fn invalid_input(message: impl Into<String>) -> ToolError {
     ToolError {
         code: "invalid_input".into(),
         message: message.into(),
@@ -214,7 +214,7 @@ fn preview_url(draft_id: &str) -> String {
     format!("/drafts/{draft_id}/")
 }
 
-fn str_arg<'a>(input: &'a serde_json::Value, key: &str) -> Result<&'a str, ToolError> {
+pub(crate) fn str_arg<'a>(input: &'a serde_json::Value, key: &str) -> Result<&'a str, ToolError> {
     input
         .get(key)
         .and_then(|v| v.as_str())
