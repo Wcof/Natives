@@ -5,6 +5,7 @@
 //! these adapters; shared list/get/start/stop/delete/open semantics live here.
 
 pub mod external;
+pub mod facade;
 pub mod internal;
 pub mod local;
 
