@@ -34,8 +34,10 @@
 | `src/lib/tauri-adapter.ts` | CreativeAppProposal 类型 + proposalValidate/Approve/Reject |
 | `src/components/creative/ProposalApprovalCard.tsx` | 审批卡 |
 | `src/components/creative/ProposalInbox.tsx` | 提案收件箱 |
-| `src/components/shell/WorkshopPage.tsx` | 挂载 inbox + 接入 useBrowserWindow |
-| `src/hooks/useBrowserWindow.ts` | 新 hook：browser controller |
+| `src/components/shell/WorkshopPage.tsx` | 挂载 inbox + 接入四个 controller hooks |
+| `src/hooks/useBrowserWindow.ts` | browser controller：bounds 上报 + unmount 关窗 |
+| `src/hooks/useCreativeWindows.ts` | window controller：open/close 状态 |
+| `src/hooks/useCreativeImport.ts` | import controller：add menu + 依赖安装 |
 | `src/i18n/en.ts` + `zh.ts` | proposal 键（各 +12） |
 
 ## 3. 闭环链路
@@ -67,17 +69,19 @@ Agent (capability-gateway creative_proposal tool)
 
 - **CR-1001 ✅**：Host validator 安全矩阵全绿 + 协议 payload + gateway tool
 - **CR-1002 ✅**：Host commands + adapter + 审批卡 + inbox + WorkshopPage 挂载；**四类 driver 全部可注册**（StaticHttp/Python/Binary/Compose），Python/Binary 走 process_profile 受管进程，Compose 从项目根推导 compose file
-- **CR-1003 ✅ 主要**：browser controller（useBrowserWindow）+ window controller（useCreativeWindows）已抽为真实 hook；operation controller 已是 useCreativeAppCatalog hook；import 流程仍部分内联于 WorkshopPage（后续可继续按相同模式拆）
+- **CR-1003 ✅**：browser（useBrowserWindow）、window（useCreativeWindows）、import（useCreativeImport：add menu + 依赖安装）均抽为真实 hook；operation 即 useCreativeAppCatalog hook。模块导入向导（beginImport/permDialog）因跨多 modal 留在 shell，import 入口与依赖安装已收敛到 controller
 - **注册路径**：StaticHttp/Python/Binary/Compose proposal 均可注册为真实 app；Compose 无 compose file 时明确报错
 
 ## 6. 遗留风险
 
 - **Docker 不可用**：Compose 注册与 start 无法真实验收（代码路径 + 契约测试覆盖）
 - **Python/Binary spawn 已接 process_profile dispatch**：argv 构建走 process_driver，health/log 复用现有 managed-process 路径；真实环境验收待有相应项目
+- **模块导入向导仍在 shell**：beginImport/permDialog 跨多 modal 留在 WorkshopPage（import 入口与依赖安装已收敛到 useCreativeImport）
 - **`commands::provider` 单测挂起**：环境性
 
 ## 7. Final Integration 继承
 
-- commit：`3daf0fb`（schema 22）
+- commit：`c195c3f`（schema 22）
 - Agent 提案闭环已打通（tool → protocol → Host gate → Renderer 审批 → register），四类 driver 可注册
-- 禁止假设：不要假设所有注册的 driver 在本环境可真实启动（Docker/Python/Binary 环境验收待办）；不要假设 WorkshopPage import 流程已完全拆分（CR-1003 主要完成，import 仍部分内联）
+- CR-1003 四类 controller 已抽为真实 hook
+- 禁止假设：不要假设所有注册的 driver 在本环境可真实启动（Docker/Python/Binary 环境验收待办）；不要假设模块导入向导已从 shell 拆出
