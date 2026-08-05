@@ -604,6 +604,19 @@ fn emit_progress(app: &AppHandle, app_id: &str, stage: &str, message: &str) {
 }
 
 fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)> {
+    // Managed-process profile (batch 10 CR-1002): Python/Binary WebUI.
+    // Dispatch on the profile before the legacy program map.
+    if let Some(profile) = &plan.process_profile {
+        use crate::creative_app::model::ProcessProfile;
+        return match profile {
+            ProcessProfile::Python(p) => {
+                let mut args = vec![p.entry.clone()];
+                args.extend(p.args.iter().cloned());
+                Ok((p.interpreter.clone(), args))
+            }
+            ProcessProfile::Binary(b) => Ok((b.executable_path.clone(), b.args.clone())),
+        };
+    }
     match plan.program {
         crate::creative_app::model::LaunchProgram::Npm => {
             let script = plan
@@ -1079,6 +1092,7 @@ mod tests {
             reason: "t".into(),
             compose: None,
             trade_approval: None,
+            process_profile: None,
         };
         let cands = resolve_preview_urls(&node, 1234, "app", "run-1");
         assert_eq!(cands[0].source, "explicit_plan");

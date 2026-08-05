@@ -1025,6 +1025,7 @@ fn register_proposal_app(
                 confidence: Some(0.9),
                 reason: "agent proposal approved".into(),
                 compose: None,
+                process_profile: None,
                 trade_approval: None,
             };
             let summary = create_local_app(
@@ -1043,12 +1044,108 @@ fn register_proposal_app(
             )?;
             Ok(summary)
         }
-        ProposedDriver::Python(_) => Err(Error::InvalidInput(
-            "python driver registration requires the process driver spawn integration (not yet wired); approve a StaticHttp proposal or register the app via create_local".into(),
-        )),
-        ProposedDriver::Binary(_) => Err(Error::InvalidInput(
-            "binary driver registration not yet wired; approve a BinaryLaunchProfile directly".into(),
-        )),
+        ProposedDriver::Python(p) => {
+            // Python WebUI: build a managed-process plan carrying the profile.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            crate::creative_app::process_driver::validate_python_profile(p)?;
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: LocalProjectKind::Unknown,
+                runtime: LocalLaunchRuntime::NodeDevServer, // managed-process family
+                program: LaunchProgram::Node,
+                cwd_relative: p.cwd_relative.clone(),
+                script: Some(p.entry.clone()),
+                entry_file: Some(p.entry.clone()),
+                script_runner: None,
+                args: p.args.clone(),
+                environment_keys: proposal.environment_keys.clone(),
+                port: p.port.clone(),
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: p.startup_timeout_ms,
+                auto_open: true,
+                confidence: Some(0.85),
+                reason: "agent proposal: python webui".into(),
+                compose: None,
+                process_profile: Some(crate::creative_app::model::ProcessProfile::Python(
+                    p.clone(),
+                )),
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(p.startup_timeout_ms),
+                },
+            )?;
+            Ok(summary)
+        }
+        ProposedDriver::Binary(b) => {
+            // Binary WebUI: build a managed-process plan carrying the profile.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            crate::creative_app::process_driver::validate_binary_profile(b)?;
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: LocalProjectKind::Unknown,
+                runtime: LocalLaunchRuntime::NodeDevServer, // managed-process family
+                program: LaunchProgram::Node,
+                cwd_relative: b.cwd_relative.clone(),
+                script: None,
+                entry_file: None,
+                script_runner: None,
+                args: b.args.clone(),
+                environment_keys: proposal.environment_keys.clone(),
+                port: b.port.clone(),
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: b.startup_timeout_ms,
+                auto_open: true,
+                confidence: Some(0.85),
+                reason: "agent proposal: binary webui".into(),
+                compose: None,
+                process_profile: Some(crate::creative_app::model::ProcessProfile::Binary(
+                    b.clone(),
+                )),
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(b.startup_timeout_ms),
+                },
+            )?;
+            Ok(summary)
+        }
         ProposedDriver::Compose { .. } => Err(Error::InvalidInput(
             "compose driver registration requires an existing docker-compose project".into(),
         )),
@@ -1689,5 +1786,102 @@ mod proposal_tests {
         // ...but registration is honestly not wired, so it errors — no fake success.
         let err = register_proposal_app(&mut conn, &proposal).unwrap_err();
         assert!(err.to_string().contains("compose"));
+    }
+
+    #[test]
+    fn python_proposal_registers_local_app() {
+        use crate::creative_app::model::{LaunchPort, LaunchPortMode, PythonLaunchProfile};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("pyproj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("app.py"), "from flask import Flask\n").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let py = PythonLaunchProfile {
+            schema_version: 1,
+            interpreter: "/usr/bin/python3".into(),
+            entry: "app.py".into(),
+            args: vec![],
+            cwd_relative: ".".into(),
+            environment_keys: vec!["PORT".into()],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            is_venv: false,
+        };
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Create,
+            ownership: OwnershipMode::Managed,
+            title: "Python App".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Python(py),
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec!["PORT".into()],
+        };
+        proposal.validate().unwrap();
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Python App");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+    }
+
+    #[test]
+    fn binary_proposal_registers_local_app() {
+        use crate::creative_app::model::{BinaryLaunchProfile, LaunchPort, LaunchPortMode};
+        use crate::creative_app::process_driver::sha256_hex;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("binproj");
+        std::fs::create_dir_all(&root).unwrap();
+        // A real executable file so the hash is computed from actual content.
+        let bin_path = root.join("myapp");
+        std::fs::write(&bin_path, "#!/bin/sh\necho hi\n").unwrap();
+        let hash = sha256_hex(&bin_path).unwrap();
+        let bin_s = bin_path.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let b = BinaryLaunchProfile {
+            schema_version: 1,
+            executable_path: bin_s,
+            executable_hash: hash,
+            approved: true,
+            args: vec![],
+            cwd_relative: ".".into(),
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+        };
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Create,
+            ownership: OwnershipMode::Managed,
+            title: "Binary App".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Binary(b),
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        proposal.validate().unwrap();
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Binary App");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
     }
 }

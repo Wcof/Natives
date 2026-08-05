@@ -928,24 +928,25 @@ pub fn get_local_config(conn: &Connection, id: &str) -> Result<LocalCreativeConf
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
     let env_keys = store::list_env_keys(conn, id)?;
-    let dependency_install = if plan.runtime == LocalLaunchRuntime::NodeDevServer {
-        let root = PathBuf::from(&rec.canonical_project_root);
-        if !root.join("node_modules").is_dir() {
-            super::deps::preview_install_command(conn, id)
-                .ok()
-                .map(|(program, args, pm)| DependencyInstallPreview {
-                    display: format!("{program} {}", args.join(" ")),
-                    program,
-                    args,
-                    package_manager: pm,
-                    requires_confirmation: true,
-                })
+    let dependency_install =
+        if plan.runtime == LocalLaunchRuntime::NodeDevServer && plan.process_profile.is_none() {
+            let root = PathBuf::from(&rec.canonical_project_root);
+            if !root.join("node_modules").is_dir() {
+                super::deps::preview_install_command(conn, id)
+                    .ok()
+                    .map(|(program, args, pm)| DependencyInstallPreview {
+                        display: format!("{program} {}", args.join(" ")),
+                        program,
+                        args,
+                        package_manager: pm,
+                        requires_confirmation: true,
+                    })
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
     Ok(LocalCreativeConfig {
         summary: store::summary_from_local(&rec),
         launch_plan: plan,

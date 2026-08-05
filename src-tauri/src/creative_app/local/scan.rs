@@ -490,6 +490,7 @@ fn build_compose_plan(root: &Path, compose_files: &[PathBuf]) -> Option<LaunchPl
             host_port: None,
         }),
         trade_approval: None,
+        process_profile: None,
     };
     validate_launch_plan(root, plan).ok()
 }
@@ -561,6 +562,7 @@ fn build_rule_plan(
                 reason: "root index.html detected".into(),
                 compose: None,
                 trade_approval: None,
+                process_profile: None,
             };
             validate_launch_plan(root, plan).ok()
         }
@@ -607,6 +609,7 @@ fn build_rule_plan(
                 reason: format!("rule: {} run {script}", pm.as_str()),
                 compose: None,
                 trade_approval: None,
+                process_profile: None,
             };
             match validate_launch_plan(root, plan) {
                 Ok(p) => Some(p),

@@ -469,13 +469,27 @@ pub struct LaunchPlan {
     pub confidence: Option<f32>,
     pub reason: String,
     /// Compose detail when `runtime` is `docker_compose` (batch 5).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compose: Option<ComposePlanDetail>,
+    /// Managed-process detail when the app runs a Python or Binary WebUI
+    /// (batch 10 CR-1002). Additive — old readers ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_profile: Option<ProcessProfile>,
     /// Explicit user authorization to run a compose default that the P0 risk
     /// classifier would otherwise block (batch 8). The assistant can never set
     /// this — only a user action on a Host plan. Never stores user config content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trade_approval: Option<TradeApproval>,
+}
+
+/// Managed-process launch detail (batch 10 CR-1002): carries the Python or
+/// Binary profile so a proposal can register a real app that dispatches through
+/// the process driver on start. Never carries secret values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProcessProfile {
+    Python(PythonLaunchProfile),
+    Binary(BinaryLaunchProfile),
 }
 
 /// The only modes that may relax the trade gate, both non-real-funds.
@@ -1488,6 +1502,7 @@ mod tests {
             reason: "index.html present".into(),
             compose: None,
             trade_approval: None,
+            process_profile: None,
         };
         let j = plan.to_json().unwrap();
         let back = LaunchPlan::from_json(&j).unwrap();

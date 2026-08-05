@@ -73,6 +73,14 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
         validate_env_key(k)?;
     }
 
+    // Managed-process profile (Python/Binary, batch 10 CR-1002): the command is
+    // carried by the profile and validated by process_driver, so the legacy
+    // program map (package.json / node entry / static index.html) does not apply.
+    // cwd / open / health / port were already validated above.
+    if plan.process_profile.is_some() {
+        return Ok(plan);
+    }
+
     match plan.runtime {
         LocalLaunchRuntime::StaticHttp => {
             if plan.program != LaunchProgram::Internal {
@@ -597,6 +605,7 @@ mod tests {
             reason: "test".into(),
             compose: None,
             trade_approval: None,
+            process_profile: None,
         }
     }
 
