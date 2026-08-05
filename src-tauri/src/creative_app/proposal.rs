@@ -194,8 +194,8 @@ pub fn path_escapes_root(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model::{LaunchPort, LaunchPortMode};
+    use super::*;
 
     fn base_python() -> PythonLaunchProfile {
         PythonLaunchProfile {
