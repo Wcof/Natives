@@ -15,6 +15,7 @@ pub mod model;
 pub mod operation;
 pub mod paths;
 pub mod probe;
+pub mod profile_store;
 pub mod runtime_store;
 pub mod service;
 pub mod state_machine;

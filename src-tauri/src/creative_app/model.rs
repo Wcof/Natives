@@ -1161,6 +1161,29 @@ impl WindowInstance {
     pub const STATE_BACKGROUND: &'static str = "background";
 }
 
+// ── BrowserProfile (batch 6 CR-601) ──────────────────────────────────
+
+/// A browser profile is a named session isolation boundary. Profiles store
+/// metadata only — never cookie content, which is managed by the platform's
+/// WebKit data store. On macOS 26.5, all WKWebView instances share the same
+/// data store, so per-profile isolation is not available (see ADR-0017).
+/// Profiles are recorded for future use when platform isolation becomes
+/// possible, and for audit / clear operations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserProfile {
+    pub id: String,
+    /// Human-readable name (e.g. "Default", "Work").
+    pub name: String,
+    /// Platform-specific data store key (e.g. WKWebsiteDataStore identifier).
+    /// Never stores cookie content.
+    pub platform_store_key: String,
+    /// Whether this is the default profile for new apps.
+    pub is_default: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserBounds {
