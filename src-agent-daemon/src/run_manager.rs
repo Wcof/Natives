@@ -1,4 +1,55 @@
 //! RunManager — Daemon-side sole Run Authority (production path).
+//!
+//! # Lineage Contract: Retry / Continue / Fork / Resume
+//!
+//! Every operation that creates a new run from a prior run's checkpoint
+//! records a durable `resume_plan` row and inherits the source snapshot's
+//! typed transcript (AgentMessage), not the legacy EngineMessage history.
+//!
+//! ## Retry
+//! - Creates a new run in the same conversation with a distinct `run_id`.
+//! - Re-executes the last turn: the new run starts from the checkpoint
+//!   whose `turn_id` matches the retry source, and the user content is
+//!   the original input that triggered that turn.
+//! - `retry_of_turn_id` on the checkpoint row links the new run to the
+//!   exact turn being retried.
+//! - Blocked if the source run has `uncertain` side effects.
+//!
+//! ## Continue
+//! - Creates a new run from a durable checkpoint (the caller selects which
+//!   checkpoint via `checkpoint_id`).
+//! - The new run share the conversation_id but has a distinct run_id.
+//! - User content may be provided by the caller; if absent, the last known
+//!   content is used.
+//! - A `resume_plan` row with action `'continue'` and decision
+//!   `'SafeToContinue'` is persisted before the run is returned.
+//! - Blocked if the source run has `uncertain` side effects.
+//!
+//! ## Fork (not a separate API — equivalent to Continue with new content)
+//! - Fork is logically the same as Continue: a new run from a checkpoint.
+//! - The caller provides new user content to diverge from the source path.
+//! - No separate `fork` action — `resume_plan.action = 'continue'` covers
+//!   both continuation and divergence from a checkpoint.
+//!
+//! ## Resume
+//! - Creates a new run from a durable checkpoint after a crash/interrupt.
+//! - The resume decision is recorded in a `resume_plan` row with action
+//!   `'retry'` or `'continue'` and a decision of `'SafeToContinue'`,
+//!   `'ConfirmationRequired'`, or `'Blocked'`.
+//! - `ConfirmationRequired` means the caller must explicitly confirm before
+//!   the run can proceed (e.g., uncertain side effects exist).
+//! - `Blocked` means the run cannot resume (e.g., unresolved side effects).
+//!
+//! ## Snapshot lineage
+//! - Every checkpoint captures the typed transcript (AgentMessage) at the
+//!   point of commit. The typed transcript is the single source of truth
+//!   for the provider context — the legacy EngineMessage is never used
+//!   for checkpoint-based lineage operations.
+//! - A new run created from a checkpoint inherits the snapshot's typed
+//!   transcript, not the legacy EngineMessage history.
+//! - The `resume_plan` table is the authoritative lineage record: it links
+//!   `source_run_id` → `new_run_id` with the action, checkpoint, and
+//!   decision.
 
 use crate::production::{FixtureMode, FixtureProvider, ProductionRuntime};
 use crate::storage::DataStore;
@@ -2143,19 +2194,24 @@ impl RunManager {
             RunStatusV2::Preparing,
             TransitionMetadata::empty().with_lifecycle_hint("preparing"),
         );
+        // Production path: load typed messages directly instead of legacy
+        // EngineMessage. The typed transcript is the single source of truth for
+        // the provider context; the config.messages field (Vec<EngineMessage>) is
+        // unused when typed_transcript is provided.
+        let typed_history = crate::conversation_store::load_agent_messages(&run.conversation_id)?;
         let config = EngineRunConfig {
             run_id: run.id.clone(),
             conversation_id: run.conversation_id.clone(),
             model: req.model_id.unwrap_or_else(|| run.model_id.clone()),
             system_prompt: None,
-            messages: crate::conversation_store::engine_history(&run.conversation_id)?,
+            messages: Vec::new(),
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
         let tool_schemas = tools.list_tool_schemas().await;
         crate::production_tools::validate_tool_limit(tool_schemas.len())?;
         let outcome = match engine
-            .run_with_tool_schemas(config, provider, tools, tool_schemas)
+            .run_with_typed_messages(config, provider, tools, tool_schemas, typed_history)
             .await
         {
             Ok(o) => o,
