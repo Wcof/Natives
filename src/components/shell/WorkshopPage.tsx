@@ -32,6 +32,7 @@ import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import { useBrowserWindow } from '@/hooks/useBrowserWindow';
 import { useCreativeWindows } from '@/hooks/useCreativeWindows';
+import { useCreativeImport } from '@/hooks/useCreativeImport';
 import CreativeHome from '@/components/creative/CreativeHome';
 import {
   defaultDeleteOptions,
@@ -62,7 +63,6 @@ import {
   type LocalWizardStep,
 } from '@/lib/local-creative';
 
-type AddMenu = 'closed' | 'open';
 type WizardStep = 'url' | 'manual' | 'installing';
 
 function stateLabel(locale: Locale, state: CreativeAppSummary['state']): string {
@@ -125,7 +125,6 @@ export default function WorkshopPage() {
   // reactive useLocale：此前一发式 getLocale 导致切换语言后 creative 全面（经 prop 下发）停留旧语言
   const locale = useLocale();
   const [toast, setToast] = useState<string | null>(null);
-  const [addMenu, setAddMenu] = useState<AddMenu>('closed');
 
   const [permDialog, setPermDialog] = useState<{
     source: string;
@@ -168,6 +167,20 @@ export default function WorkshopPage() {
   const { browserApp, browserUrl, setBrowserApp, openExternal, closeBrowser } =
     useCreativeWindows(browserHostRef);
   useBrowserWindow(browserApp, browserHostRef);
+  // Import controller (CR-1003): add menu + dependency-install flow.
+  const {
+    addMenu,
+    setAddMenu,
+    pickAndImport,
+    openDepInstall,
+    confirmDepInstall,
+    closeDepInstall,
+    depInstallFor,
+    depInstalling,
+    depConfirmChecked,
+    setDepConfirmChecked,
+    depCommand,
+  } = useCreativeImport();
 
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
@@ -211,11 +224,6 @@ export default function WorkshopPage() {
   const [editOpenPath, setEditOpenPath] = useState('/');
   const [editCwd, setEditCwd] = useState('.');
   const [editLoading, setEditLoading] = useState(false);
-
-  const [depInstallFor, setDepInstallFor] = useState<CreativeAppSummary | null>(null);
-  const [depConfirmChecked, setDepConfirmChecked] = useState(false);
-  const [depInstalling, setDepInstalling] = useState(false);
-  const [depCommand, setDepCommand] = useState<string>('');
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -529,19 +537,6 @@ export default function WorkshopPage() {
     });
   };
 
-  /** 依赖安装入口：此前整个对话框（含后端 install/preview 两条命令）无任何调用方 */
-  const openDepInstall = async (app: CreativeAppSummary) => {
-    setDepConfirmChecked(false);
-    setDepCommand('');
-    setDepInstallFor(app);
-    try {
-      const preview = await window.nativesAPI?.creativeApp?.previewLocalDependencyInstall?.(app.id);
-      if (preview) setDepCommand([preview.program, ...preview.args].join(' '));
-    } catch (err) {
-      showToast(classifyError(err).userMessage);
-    }
-  };
-
   const handleResolveOrphan = async (app: CreativeAppSummary, restart: boolean) => {
     if (busyIds.has(app.id)) return;
     await withBusy(app.id, async () => {
@@ -652,19 +647,6 @@ export default function WorkshopPage() {
           classifyError(err).userMessage,
         ),
       );
-    }
-  };
-
-  /** 经系统文件选择器导入 —— webview 的 File 对象在 Tauri v2 下没有真实路径 */
-  const pickAndImport = async () => {
-    setAddMenu('closed');
-    try {
-      const files = await window.nativesAPI?.dialog?.pickFiles?.();
-      const zip = files?.find((f) => f.toLowerCase().endsWith('.zip')) ?? files?.[0];
-      if (!zip) return;
-      await beginImport(zip, zip.split('/').pop() || zip);
-    } catch (err) {
-      showToast(classifyError(err).userMessage);
     }
   };
 
@@ -889,7 +871,7 @@ export default function WorkshopPage() {
                 <button
                   type="button"
                   className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
-                  onClick={() => void pickAndImport()}
+                  onClick={() => void pickAndImport(beginImport, showToast)}
                 >
                   <Package size={14} className="text-[var(--text-secondary)]" />
                   <span>{t(locale, 'workshop.addMenuImport')}</span>
@@ -964,7 +946,7 @@ export default function WorkshopPage() {
           onAppLogs={(app) => { void openLogs(app); }}
           onRunSettings={(app) => { void openEditLocal(app); }}
           onResolveOrphan={(app, restart) => { void handleResolveOrphan(app, restart); }}
-          onInstallDeps={(app) => { void openDepInstall(app); }}
+          onInstallDeps={(app) => { void openDepInstall(app, showToast); }}
         />
       </div>
 
@@ -1617,7 +1599,7 @@ export default function WorkshopPage() {
       {depInstallFor && (
         <Modal
           isOpen
-          onClose={() => setDepInstallFor(null)}
+          onClose={closeDepInstall}
           title={t(locale, 'workshop.installDeps')}
           width={480}
         >
@@ -1646,7 +1628,7 @@ export default function WorkshopPage() {
               <button
                 type="button"
                 className="h-9 px-4 rounded-lg border border-[var(--border)]"
-                onClick={() => setDepInstallFor(null)}
+                onClick={closeDepInstall}
               >
                 {t(locale, 'common.cancel')}
               </button>
@@ -1654,21 +1636,14 @@ export default function WorkshopPage() {
                 type="button"
                 className="h-9 px-4 rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
                 disabled={!depConfirmChecked || depInstalling}
-                onClick={async () => {
-                  if (!depInstallFor) return;
-                  setDepInstalling(true);
-                  try {
-                    await window.nativesAPI?.creativeApp?.installLocalDependencies?.(
-                      depInstallFor.id,
-                    );
-                    showToast(t(locale, 'workshop.installDepsDone'));
-                    setDepInstallFor(null);
-                    void reload();
-                  } catch (err) {
-                    showToast(classifyError(err).userMessage);
-                  } finally {
-                    setDepInstalling(false);
-                  }
+                onClick={() => {
+                  void confirmDepInstall(
+                    () => {
+                      void reload();
+                      showToast(t(locale, 'workshop.installDepsDone'));
+                    },
+                    showToast,
+                  );
                 }}
               >
                 {t(locale, 'workshop.installDepsRun')}
