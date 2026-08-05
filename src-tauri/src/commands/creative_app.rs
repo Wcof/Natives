@@ -1146,9 +1146,83 @@ fn register_proposal_app(
             )?;
             Ok(summary)
         }
-        ProposedDriver::Compose { .. } => Err(Error::InvalidInput(
-            "compose driver registration requires an existing docker-compose project".into(),
-        )),
+        ProposedDriver::Compose {
+            command,
+            privileged: _,
+        } => {
+            // Compose app: derive the compose file from the project root.
+            // The proposal gate already rejected privileged containers and
+            // command overrides (validate), so `command` here is empty.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            let compose_file = [
+                "docker-compose.yml",
+                "docker-compose.yaml",
+                "compose.yml",
+                "compose.yaml",
+            ]
+            .iter()
+            .find(|f| root.join(f).is_file())
+            .map(|f| f.to_string())
+            .ok_or_else(|| {
+                Error::InvalidInput(
+                    "no docker-compose.yml / compose.yml found in project root".into(),
+                )
+            })?;
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: LocalProjectKind::Unknown,
+                runtime: LocalLaunchRuntime::DockerCompose,
+                program: LaunchProgram::Internal,
+                cwd_relative: ".".into(),
+                script: None,
+                entry_file: None,
+                script_runner: None,
+                args: vec![],
+                environment_keys: proposal.environment_keys.clone(),
+                port: crate::creative_app::model::LaunchPort {
+                    mode: crate::creative_app::model::LaunchPortMode::Auto,
+                    value: None,
+                },
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: 60_000,
+                auto_open: true,
+                confidence: Some(0.8),
+                reason: "agent proposal: docker compose".into(),
+                compose: Some(crate::creative_app::model::ComposePlanDetail {
+                    compose_file,
+                    project_seed: "agent".into(),
+                    service: None,
+                    command: command.clone().unwrap_or_default(),
+                    health_path: proposal.health_path.clone(),
+                    host_port: None,
+                }),
+                process_profile: None,
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(60_000),
+                },
+            )?;
+            Ok(summary)
+        }
     }
 }
 
@@ -1762,7 +1836,17 @@ mod proposal_tests {
     }
 
     #[test]
-    fn unsupported_driver_returns_clear_error() {
+    fn compose_proposal_registers_local_app() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("composeproj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("compose.yml"),
+            "services:\n  web:\n    image: nginx\n",
+        )
+        .unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::create_tables(&conn).unwrap();
         crate::db::apply_migrations(&conn).unwrap();
@@ -1772,7 +1856,7 @@ mod proposal_tests {
             kind: ProposalKind::Start,
             ownership: OwnershipMode::Managed,
             title: "Compose".into(),
-            project_root: "/proj".into(),
+            project_root: root_s,
             driver: ProposedDriver::Compose {
                 command: None,
                 privileged: false,
@@ -1781,11 +1865,40 @@ mod proposal_tests {
             health_path: "/".into(),
             environment_keys: vec![],
         };
-        // Validation passes for a non-privileged compose with no command...
         proposal.validate().unwrap();
-        // ...but registration is honestly not wired, so it errors — no fake success.
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Compose");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+    }
+
+    #[test]
+    fn compose_proposal_without_compose_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("nocompose");
+        std::fs::create_dir_all(&root).unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Start,
+            ownership: OwnershipMode::Managed,
+            title: "Compose".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Compose {
+                command: None,
+                privileged: false,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        proposal.validate().unwrap();
         let err = register_proposal_app(&mut conn, &proposal).unwrap_err();
-        assert!(err.to_string().contains("compose"));
+        assert!(err.to_string().contains("compose.yml"), "got: {err}");
     }
 
     #[test]
