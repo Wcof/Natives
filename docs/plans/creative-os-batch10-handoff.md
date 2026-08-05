@@ -9,64 +9,72 @@
 | Task | 提交 | 说明 |
 |---|---|---|
 | CR-1001 Versioned proposal + Host validator | `181f939` | AgentProposal schema + Host 校验 + redacted journal + 8 测试 |
-| CR-1001 cleanup | `edb151f` + `d0f7d76` | import/warning 清理 |
-| CR-1002 Proposal approval card | `e4c9be7` | ProposalApprovalCard 组件 + i18n + 11 键 |
+| CR-1002 Proposal approval card | `e4c9be7` | ProposalApprovalCard 组件 + i18n |
+| CR-1002 Host wiring | `1c5ff9d` | proposal_validate/approve/reject commands + register + adapter + inbox + 3 测试 |
+| CR-1001 Protocol tool | `12289fb` | CreativeProposalPayload + creative_proposal tool + validate_protocol_proposal |
+| CR-1003 Browser controller | `fc3646a` | useBrowserWindow hook 抽出 |
 
 - base SHA：`c2c116b`（Batch 9 final）
-- final 代码 stable：`e4c9be7`
+- final 代码 stable：`004a872`（fmt 整理后）
 
-## 2. 改动文件
+## 2. 改动文件（本批累计）
 
 | 文件 | 变化 |
 |---|---|
-| `src-tauri/src/creative_app/proposal.rs` | 新文件：AgentProposal、ProposedDriver、Host validator、redacted input、secret 检测 + 8 测试 |
-| `src-tauri/src/creative_app/model.rs` | （B8/B9 已含 OwnershipMode、Python/Binary profiles） |
+| `src-tauri/src/creative_app/proposal.rs` | AgentProposal、Host validator、validate_protocol_proposal、redacted |
+| `src-tauri/src/commands/creative_app.rs` | proposal_validate/approve/reject commands + register_proposal_app + 3 测试 |
+| `src-tauri/src/lib.rs` | 注册 proposal commands |
 | `src-tauri/src/creative_app/mod.rs` | proposal 模块 |
-| `src/components/creative/ProposalApprovalCard.tsx` | 新组件：提案审批卡 |
-| `src/i18n/en.ts` + `zh.ts` | proposal 键（各 +11） |
+| `crates/assistant-protocol/src/v2/creative.rs` | CreativeProposalPayload + CreativeProposedDriver |
+| `crates/capability-gateway/src/tools/proposal.rs` | creative_proposal tool + 4 测试 |
+| `crates/capability-gateway/src/tools/mod.rs` | 注册 tool + pub(crate) helpers |
+| `src/lib/tauri-adapter.ts` | CreativeAppProposal 类型 + proposalValidate/Approve/Reject |
+| `src/components/creative/ProposalApprovalCard.tsx` | 审批卡 |
+| `src/components/creative/ProposalInbox.tsx` | 提案收件箱 |
+| `src/components/shell/WorkshopPage.tsx` | 挂载 inbox + 接入 useBrowserWindow |
+| `src/hooks/useBrowserWindow.ts` | 新 hook：browser controller |
+| `src/i18n/en.ts` + `zh.ts` | proposal 键（各 +12） |
 
-## 3. Host validator 安全矩阵（CR-1001）
+## 3. 闭环链路
 
-| 拒绝项 | 测试 |
-|---|---|
-| cwd 逃逸（`../`、绝对路径） | `cwd_escape_rejected` |
-| privileged Compose 容器 | `privileged_compose_rejected` |
-| Compose command override（任意 binary） | `command_override_rejected` |
-| 未知 schema version | `unknown_schema_version_rejected` |
-| binary 不在项目 root 或系统路径 | `binary_outside_root_and_system_rejected` |
-| secret-like env key（TOKEN/SECRET/API_KEY/PASSWORD） | `secret_like_env_keys_flagged` |
-| 路径逃逸检测 | `path_escape_detection` |
+```
+Agent (capability-gateway creative_proposal tool)
+  → CreativeProposalPayload (assistant-protocol)
+  → Host validate_protocol_proposal (Host gate: cwd/privileged/secret/binary)
+  → ProposalInbox (Renderer 审批卡)
+  → creative_app_proposal_approve (journal + register StaticHttp)
+  → Application → Profile → Runtime → Window
+```
 
 ## 4. 测试结果
 
 | 命令 | 结果 |
 |---|---|
-| `cargo check` | PASS（0 errors，2 个 FFI 命名 warning） |
+| `cargo check -p natives -p capability-gateway -p assistant-protocol` | PASS（0 errors，2 个 FFI 命名 warning） |
 | `cargo fmt --check` | PASS |
-| `creative_app::` 186/186 | PASS（+8 from Batch 9） |
+| `creative_app::` 191/191 | PASS（+5 from Batch 9） |
+| `capability-gateway tools::proposal` 4/4 | PASS |
 | `db::tests` 9/9 | PASS |
 | `typecheck` | PASS |
-| `lint` | PASS（2431 键） |
+| `lint` | PASS（2432 键） |
 | `test` 763/763 | PASS |
 | `protocol:check` | PASS（154 methods） |
 
-## 5. ⚠️ 未完成项（明确标注）
+## 5. 完成状态
 
-**CR-1003（Renderer 领域拆分与生产 E2E）未实施。** WorkshopPage 仍持有 import/browser/operation/window controller，需要 Senior Frontend Agent 按真实边界抽出（不做空包装），并跑全链 E2E。
-
-**CR-1002 仅完成组件与 i18n 基础**，尚未接入 WorkshopPage 的实际审批流程（协议 Tool advertisement、Host approve 命令接线待做）。
-
-**协议层 proposal tool 未加**：`assistant-protocol` crate 无 proposal tool 类型，agent 无法直接提交 proposal（需协议 commit + 前端绑定生成）。
+- **CR-1001 ✅**：Host validator 安全矩阵全绿 + 协议 payload + gateway tool
+- **CR-1002 ✅**：Host commands + adapter + 审批卡 + inbox + WorkshopPage 挂载
+- **CR-1003 ⚠️ 部分**：browser controller 已抽出（useBrowserWindow）；import/operation/window controller 仍在 WorkshopPage，需后续 Frontend Agent 按相同模式继续拆
+- **注册路径**：StaticHttp proposal 可注册为真实 app；Python/Binary/Compose 明确报错（不伪造成功），等待对应 driver spawn 接线
 
 ## 6. 遗留风险
 
-- **CR-1003 未做**：Renderer 收敛是 Frontend L 工作量
-- **协议 Tool 未加**：agent→Host proposal 通路未打通
+- **Python/Binary/Compose proposal 注册未接线**：process driver spawn 集成待后续
 - **`commands::provider` 单测挂起**：环境性
 - **Docker 不可用**：Compose/Run 无法真实验收
 
 ## 7. Final Integration 继承
 
-- commit：`e4c9be7`（schema 22）
-- Host validator 安全矩阵全绿，可防御 agent 越权注册
-- 禁止假设：不要假设 agent 能提交 proposal（协议层未加）；不要假设 WorkshopPage 已拆分（CR-1003 未做）
+- commit：`004a872`（schema 22）
+- Agent 提案闭环已打通（tool → protocol → Host gate → Renderer 审批 → register）
+- 禁止假设：不要假设所有 driver proposal 可注册（只有 StaticHttp）；不要假设 WorkshopPage 已完全拆分（CR-1003 部分）
