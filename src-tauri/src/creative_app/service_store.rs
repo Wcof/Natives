@@ -42,10 +42,7 @@ pub fn create_service(
 }
 
 /// List all services for a runtime instance.
-pub fn list_services(
-    conn: &Connection,
-    runtime_instance_id: &str,
-) -> Result<Vec<ServiceInstance>> {
+pub fn list_services(conn: &Connection, runtime_instance_id: &str) -> Result<Vec<ServiceInstance>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, runtime_instance_id, name, readiness, required, endpoint_id, created_at, updated_at
@@ -89,11 +86,7 @@ pub fn update_service_readiness(
 }
 
 /// Bind a service to its endpoint.
-pub fn bind_service_endpoint(
-    conn: &Connection,
-    service_id: &str,
-    endpoint_id: &str,
-) -> Result<()> {
+pub fn bind_service_endpoint(conn: &Connection, service_id: &str, endpoint_id: &str) -> Result<()> {
     let t = now();
     conn.execute(
         "UPDATE service_instances SET endpoint_id = ?1, updated_at = ?2 WHERE id = ?3",
@@ -138,8 +131,9 @@ mod tests {
             [],
         )
         .unwrap();
-        let iid = crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "host_http")
-            .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "host_http")
+                .unwrap();
         crate::creative_app::runtime_store::mark_running(&conn, &iid, &[], None, None, None)
             .unwrap();
 
@@ -162,8 +156,13 @@ mod tests {
             [],
         )
         .unwrap();
-        let iid = crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "docker_compose")
-            .unwrap();
+        let iid = crate::creative_app::runtime_store::create_instance(
+            &conn,
+            "app-1",
+            None,
+            "docker_compose",
+        )
+        .unwrap();
         crate::creative_app::runtime_store::mark_running(&conn, &iid, &[], None, None, None)
             .unwrap();
 
@@ -187,8 +186,9 @@ mod tests {
             [],
         )
         .unwrap();
-        let iid = crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "host_http")
-            .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "host_http")
+                .unwrap();
         crate::creative_app::runtime_store::mark_running(&conn, &iid, &[], None, None, None)
             .unwrap();
         let sid = create_service(&conn, &iid, "main", true).unwrap();
@@ -210,8 +210,9 @@ mod tests {
             [],
         )
         .unwrap();
-        let iid = crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "host_http")
-            .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&conn, "app-1", None, "host_http")
+                .unwrap();
         crate::creative_app::runtime_store::mark_running(&conn, &iid, &[], None, None, None)
             .unwrap();
 

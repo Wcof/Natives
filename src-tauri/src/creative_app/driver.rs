@@ -75,10 +75,7 @@ pub fn capabilities_for(runtime: CreativeAppRuntime) -> DriverCapabilities {
 
 /// Resolve a driver kind from a plan's `driver_kind` column, falling back to
 /// the runtime mapping for legacy plans (CR-702 compatibility).
-pub fn resolve_driver_kind(
-    runtime: CreativeAppRuntime,
-    plan: Option<&LaunchProfile>,
-) -> String {
+pub fn resolve_driver_kind(runtime: CreativeAppRuntime, plan: Option<&LaunchProfile>) -> String {
     if let Some(p) = plan {
         if !p.driver_kind.is_empty() {
             return p.driver_kind.clone();
@@ -93,16 +90,34 @@ mod tests {
 
     #[test]
     fn driver_kind_mapping_stable() {
-        assert_eq!(driver_kind_for_runtime(CreativeAppRuntime::WorkshopStatic), "workshop_static");
-        assert_eq!(driver_kind_for_runtime(CreativeAppRuntime::LocalStatic), "local_static");
-        assert_eq!(driver_kind_for_runtime(CreativeAppRuntime::NodeDevServer), "node_dev_server");
-        assert_eq!(driver_kind_for_runtime(CreativeAppRuntime::DockerCompose), "docker_compose");
-        assert_eq!(driver_kind_for_runtime(CreativeAppRuntime::DockerRun), "docker_run");
+        assert_eq!(
+            driver_kind_for_runtime(CreativeAppRuntime::WorkshopStatic),
+            "workshop_static"
+        );
+        assert_eq!(
+            driver_kind_for_runtime(CreativeAppRuntime::LocalStatic),
+            "local_static"
+        );
+        assert_eq!(
+            driver_kind_for_runtime(CreativeAppRuntime::NodeDevServer),
+            "node_dev_server"
+        );
+        assert_eq!(
+            driver_kind_for_runtime(CreativeAppRuntime::DockerCompose),
+            "docker_compose"
+        );
+        assert_eq!(
+            driver_kind_for_runtime(CreativeAppRuntime::DockerRun),
+            "docker_run"
+        );
     }
 
     #[test]
     fn capabilities_are_driver_specific() {
-        assert_eq!(DriverCapabilities::LOCAL_PROCESS.supports_verified_stop, true);
+        assert_eq!(
+            DriverCapabilities::LOCAL_PROCESS.supports_verified_stop,
+            true
+        );
         assert_eq!(DriverCapabilities::HOST_HTTP.supports_reconcile, false);
         assert_eq!(DriverCapabilities::DOCKER.supports_reconcile, true);
     }

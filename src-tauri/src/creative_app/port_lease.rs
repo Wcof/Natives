@@ -46,8 +46,7 @@ impl PortLeaseRegistry {
         let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         // Expire stale leases
-        st.leases
-            .retain(|_, e| e.expires_at > unix_now());
+        st.leases.retain(|_, e| e.expires_at > unix_now());
 
         if let Some(existing) = st.leases.get(&port) {
             return Err(Error::InvalidInput(format!(
@@ -198,12 +197,7 @@ const KERN_SUCCESS: i32 = 0;
 #[link(name = "System", kind = "framework")]
 unsafe extern "C" {
     fn mach_task_self() -> mach_port_t;
-    fn task_info(
-        task: mach_port_t,
-        flavor: u32,
-        info: *mut i32,
-        count: *mut u32,
-    ) -> i32;
+    fn task_info(task: mach_port_t, flavor: u32, info: *mut i32, count: *mut u32) -> i32;
 }
 
 #[cfg(test)]
