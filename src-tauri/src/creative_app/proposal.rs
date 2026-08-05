@@ -270,9 +270,7 @@ pub fn validate_protocol_proposal(
             health_path: health_path.clone(),
             startup_timeout_ms: *startup_timeout_ms,
         }),
-        assistant_protocol::v2::CreativeProposedDriver::StaticHttp => {
-            ProposedDriver::StaticHttp
-        }
+        assistant_protocol::v2::CreativeProposedDriver::StaticHttp => ProposedDriver::StaticHttp,
         assistant_protocol::v2::CreativeProposedDriver::Compose {
             command,
             privileged,
@@ -459,9 +457,7 @@ mod tests {
 
     #[test]
     fn protocol_payload_maps_to_host_proposal_and_passes_gate() {
-        use assistant_protocol::v2::{
-            CreativeProposalPayload, CreativeProposedDriver,
-        };
+        use assistant_protocol::v2::{CreativeProposalPayload, CreativeProposedDriver};
         let payload = CreativeProposalPayload {
             schema_version: 1,
             kind: "create".into(),
@@ -480,9 +476,7 @@ mod tests {
 
     #[test]
     fn protocol_payload_rejects_privileged_compose() {
-        use assistant_protocol::v2::{
-            CreativeProposalPayload, CreativeProposedDriver,
-        };
+        use assistant_protocol::v2::{CreativeProposalPayload, CreativeProposedDriver};
         let payload = CreativeProposalPayload {
             schema_version: 1,
             kind: "start".into(),

@@ -82,7 +82,9 @@ impl ToolHandler for CreativeProposalTool {
         }
         let ownership = str_arg(&input, "ownership")?;
         if ownership != "managed" && ownership != "attached" && ownership != "remote" {
-            return Err(invalid_input("ownership must be managed, attached, or remote"));
+            return Err(invalid_input(
+                "ownership must be managed, attached, or remote",
+            ));
         }
         let title = str_arg(&input, "title")?.trim().to_string();
         if title.is_empty() || title.chars().count() > 200 {
@@ -181,6 +183,9 @@ mod tests {
         let mut p = payload("start");
         p["driver"] = serde_json::json!({"kind": "compose", "privileged": true});
         let out = tool.execute(p, &ctx()).await;
-        assert!(out.is_ok(), "structural pass-through; Host gate rejects privileged");
+        assert!(
+            out.is_ok(),
+            "structural pass-through; Host gate rejects privileged"
+        );
     }
 }

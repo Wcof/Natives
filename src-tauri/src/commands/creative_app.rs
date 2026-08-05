@@ -984,11 +984,11 @@ fn register_proposal_app(
     c: &mut rusqlite::Connection,
     proposal: &crate::creative_app::proposal::AgentProposal,
 ) -> Result<CreativeAppSummary> {
-    use crate::creative_app::proposal::ProposedDriver;
     use crate::creative_app::local;
     use crate::creative_app::model::{
-        LaunchMode, LocalProjectKind, LocalLaunchRuntime, LaunchProgram, LaunchPlanSource,
+        LaunchMode, LaunchPlanSource, LaunchProgram, LocalLaunchRuntime, LocalProjectKind,
     };
+    use crate::creative_app::proposal::ProposedDriver;
 
     match &proposal.driver {
         ProposedDriver::StaticHttp => {
@@ -1056,7 +1056,9 @@ fn register_proposal_app(
 }
 
 /// Derive a LaunchPort from a proposal's intended open path (auto port).
-fn proposal_port(_proposal: &crate::creative_app::proposal::AgentProposal) -> crate::creative_app::model::LaunchPort {
+fn proposal_port(
+    _proposal: &crate::creative_app::proposal::AgentProposal,
+) -> crate::creative_app::model::LaunchPort {
     crate::creative_app::model::LaunchPort {
         mode: crate::creative_app::model::LaunchPortMode::Auto,
         value: None,
@@ -1689,4 +1691,3 @@ mod proposal_tests {
         assert!(err.to_string().contains("compose"));
     }
 }
-
