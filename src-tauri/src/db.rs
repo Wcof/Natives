@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "18";
+pub const SCHEMA_VERSION: &str = "19";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1195,6 +1195,72 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
             ",
         )
         .map_err(Error::Database)?;
+    }
+
+    // Migration v18→v19 (batch 5 CR-501): Surface, Endpoint, Window tables.
+    //
+    // application_surfaces: each app has one main surface (backfilled from
+    // existing applications) and optionally embed surfaces for child WebViews.
+    //
+    // runtime_endpoints: each runtime instance can have zero or more endpoints
+    // (preview URL, API, health check). Backfilled from preview_targets.
+    //
+    // window_instances: each window maps 1:1 to a Tauri WebView/WebviewWindow.
+    // Backfilled from active browser_show entries.
+    if current_version < 19 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS application_surfaces (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL DEFAULT 'main',
+                label TEXT NOT NULL DEFAULT 'Main',
+                title TEXT,
+                url TEXT,
+                bounds_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_surfaces_application
+                ON application_surfaces(application_id);
+
+            CREATE TABLE IF NOT EXISTS runtime_endpoints (
+                id TEXT PRIMARY KEY,
+                runtime_instance_id TEXT NOT NULL REFERENCES runtime_instances(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL DEFAULT 'preview',
+                url TEXT NOT NULL,
+                port INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_endpoints_runtime
+                ON runtime_endpoints(runtime_instance_id);
+
+            CREATE TABLE IF NOT EXISTS window_instances (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                surface_id TEXT NOT NULL REFERENCES application_surfaces(id) ON DELETE CASCADE,
+                runtime_instance_id TEXT REFERENCES runtime_instances(id) ON DELETE SET NULL,
+                label TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'closed',
+                bounds_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_windows_application
+                ON window_instances(application_id);
+            CREATE INDEX IF NOT EXISTS idx_windows_surface
+                ON window_instances(surface_id);
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '19');
+            ",
+        )
+        .map_err(Error::Database)?;
+        // Backfill main surfaces for existing applications and preview
+        // endpoints for active runtimes (idempotent, additive).
+        if let Err(e) = crate::creative_app::surface_store::backfill_v19(conn) {
+            eprintln!("warning: surface backfill failed: {e}");
+        }
     }
 
     // Repair path for v9 tables when a database carries an advanced marker.

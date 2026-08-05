@@ -548,6 +548,13 @@ pub fn run() {
             commands::creative_app::creative_app_browser_hide,
             commands::creative_app::creative_app_browser_close,
             commands::creative_app::creative_app_browser_current,
+            // CR-501: Surface / Endpoint / Window
+            commands::creative_app::creative_app_surface_list,
+            commands::creative_app::creative_app_window_list,
+            commands::creative_app::creative_app_window_open,
+            commands::creative_app::creative_app_window_close,
+            commands::creative_app::creative_app_window_minimize,
+            commands::creative_app::creative_app_window_restore,
             commands::creative_app::creative_app_inspect_local,
             commands::creative_app::creative_app_create_local,
             commands::creative_app::creative_app_update_local,

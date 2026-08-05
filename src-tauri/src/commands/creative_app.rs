@@ -14,6 +14,7 @@ use crate::creative_app::operation as op;
 use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
+use crate::creative_app::surface_store;
 use crate::db::DbPool;
 use crate::emit_db_state_changed;
 use crate::{Error, Result};
@@ -812,6 +813,70 @@ pub fn creative_app_browser_current(
     browser: State<'_, BrowserStateHandle>,
 ) -> Result<serde_json::Value> {
     browser::browser_current(&browser, &app_id)
+}
+
+/// List all surfaces for the given application (CR-501).
+#[tauri::command]
+pub fn creative_app_surface_list(
+    application_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ApplicationSurface>> {
+    let c = conn(&state.db)?;
+    surface_store::list_surfaces(&c, &application_id)
+}
+
+/// List all windows for the given application (CR-501).
+#[tauri::command]
+pub fn creative_app_window_list(
+    application_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<WindowInstance>> {
+    let c = conn(&state.db)?;
+    surface_store::list_windows(&c, &application_id)
+}
+
+/// Open a window for the given application (CR-501).
+/// Creates a window instance if one doesn't exist for the surface.
+#[tauri::command]
+pub fn creative_app_window_open(
+    application_id: String,
+    surface_id: String,
+    label: String,
+    state: State<'_, AppState>,
+) -> Result<WindowInstance> {
+    let c = conn(&state.db)?;
+    // Check if a window with this label already exists
+    if let Some(existing) = surface_store::find_window_by_label(&c, &label)? {
+        // Re-open it
+        surface_store::update_window_state(&c, &existing.id, WindowInstance::STATE_OPEN)?;
+        return Ok(existing);
+    }
+    let wid = surface_store::create_window(&c, &application_id, &surface_id, None, &label)?;
+    let w = surface_store::find_window_by_label(&c, &label)?
+        .ok_or_else(|| Error::Internal("window vanished after create".into()))?;
+    surface_store::update_window_state(&c, &wid, WindowInstance::STATE_OPEN)?;
+    Ok(w)
+}
+
+/// Close a window (CR-501).
+#[tauri::command]
+pub fn creative_app_window_close(window_id: String, state: State<'_, AppState>) -> Result<()> {
+    let c = conn(&state.db)?;
+    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_CLOSED)
+}
+
+/// Minimize a window (CR-501).
+#[tauri::command]
+pub fn creative_app_window_minimize(window_id: String, state: State<'_, AppState>) -> Result<()> {
+    let c = conn(&state.db)?;
+    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_MINIMIZED)
+}
+
+/// Restore a window (CR-501).
+#[tauri::command]
+pub fn creative_app_window_restore(window_id: String, state: State<'_, AppState>) -> Result<()> {
+    let c = conn(&state.db)?;
+    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_OPEN)
 }
 
 // ── Local project (third source) ───────────────────────────────────

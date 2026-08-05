@@ -245,6 +245,8 @@ export const zh = {
     actionContinueInstall: '继续安装',
     actionLogs: '日志',
     actionRestart: '重启',
+    actionClose: '关闭',
+    dockLabel: '活动应用',
     actionEdit: '编辑',
     emptyUnified: '还没有创意应用。点击「添加」创建内部应用、从本地文件夹添加，或从 GitHub 安装容器应用。',
     githubWizardTitle: '从 GitHub 安装',
