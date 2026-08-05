@@ -1091,6 +1091,76 @@ pub struct DockerEngineStatus {
     pub error: Option<String>,
 }
 
+// ── Surface / Endpoint / Window (batch 5 CR-501) ──────────────────────
+
+/// A surface is a visual presentation of an application — either the main
+/// window surface or an embed surface (child WebView). Each application has
+/// exactly one main surface; additional embed surfaces are optional.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationSurface {
+    pub id: String,
+    pub application_id: String,
+    /// `main` for the primary surface, `embed` for child WebView surfaces.
+    pub kind: String,
+    /// Human-readable label (e.g. "Main Window", "Preview").
+    pub label: String,
+    /// Optional title overridden by the surface content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// URL the surface is currently showing (or should show).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A runtime endpoint is a network address where a runtime instance serves
+/// content. Each runtime instance can have multiple endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEndpoint {
+    pub id: String,
+    pub runtime_instance_id: String,
+    /// `preview` for the primary preview URL, `api` for backend API, `health`.
+    pub kind: String,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A window instance is a Tauri WebView (or WebviewWindow) that displays
+/// a surface. Each window maps 1:1 to a Tauri WebView object.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowInstance {
+    pub id: String,
+    pub application_id: String,
+    pub surface_id: String,
+    /// The runtime instance this window is bound to, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_instance_id: Option<String>,
+    /// Tauri WebView label, e.g. "creative-app-my-app".
+    pub label: String,
+    /// Window state: open, minimized, closed, background.
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl WindowInstance {
+    pub const STATE_OPEN: &'static str = "open";
+    pub const STATE_MINIMIZED: &'static str = "minimized";
+    pub const STATE_CLOSED: &'static str = "closed";
+    pub const STATE_BACKGROUND: &'static str = "background";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserBounds {

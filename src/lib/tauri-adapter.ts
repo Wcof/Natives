@@ -330,6 +330,31 @@ export interface CreativeAppLogEvent {
   text: string;
 }
 
+// CR-501: Surface / Endpoint / Window
+export interface CreativeAppSurface {
+  id: string;
+  applicationId: string;
+  kind: string;
+  label: string;
+  title?: string | null;
+  url?: string | null;
+  boundsJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreativeAppWindow {
+  id: string;
+  applicationId: string;
+  surfaceId: string;
+  runtimeInstanceId?: string | null;
+  label: string;
+  state: string;
+  boundsJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LaunchPlan {
   schemaVersion: 1;
   source: 'rule' | 'user' | 'ai';
@@ -697,6 +722,13 @@ export interface NativesAPI {
     browserHide: (appId: string) => Promise<void>;
     browserClose: (appId: string) => Promise<void>;
     browserCurrent: (appId: string) => Promise<{ appId?: string | null; url?: string | null }>;
+    // CR-501: Surface / Endpoint / Window
+    surfaceList: (applicationId: string) => Promise<CreativeAppSurface[]>;
+    windowList: (applicationId: string) => Promise<CreativeAppWindow[]>;
+    windowOpen: (applicationId: string, surfaceId: string, label: string) => Promise<CreativeAppWindow>;
+    windowClose: (windowId: string) => Promise<void>;
+    windowMinimize: (windowId: string) => Promise<void>;
+    windowRestore: (windowId: string) => Promise<void>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
     onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
     inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
@@ -1327,6 +1359,19 @@ const nativesAPI: NativesAPI = {
     browserClose: (appId: string) => cmd('creative_app_browser_close', { appId }),
     browserCurrent: (appId: string) =>
       cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current', { appId }),
+    // CR-501: Surface / Endpoint / Window
+    surfaceList: (applicationId: string) =>
+      cmd<CreativeAppSurface[]>('creative_app_surface_list', { applicationId }),
+    windowList: (applicationId: string) =>
+      cmd<CreativeAppWindow[]>('creative_app_window_list', { applicationId }),
+    windowOpen: (applicationId: string, surfaceId: string, label: string) =>
+      cmd<CreativeAppWindow>('creative_app_window_open', { applicationId, surfaceId, label }),
+    windowClose: (windowId: string) =>
+      cmd('creative_app_window_close', { windowId }),
+    windowMinimize: (windowId: string) =>
+      cmd('creative_app_window_minimize', { windowId }),
+    windowRestore: (windowId: string) =>
+      cmd('creative_app_window_restore', { windowId }),
     onProgress: (callback) => {
       const unlisten = listen<CreativeAppProgressEvent>('creative-app-progress', (event) => {
         callback(event.payload);

@@ -19,6 +19,7 @@ pub mod runtime_store;
 pub mod service;
 pub mod state_machine;
 pub mod store;
+pub mod surface_store;
 
 pub use adapters::{LifecycleCtx, ResolvedSource};
 pub use model::*;
