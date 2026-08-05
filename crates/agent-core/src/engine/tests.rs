@@ -159,8 +159,8 @@ async fn session_end_hook_fires_after_success() {
     engine
         .run(
             EngineRunConfig {
-                run_id: "run-hook-end".into(),
-                conversation_id: "conversation-hook-end".into(),
+                run_id: format!("run-hook-end-{}", uuid::Uuid::new_v4()),
+                conversation_id: format!("conversation-hook-end-{}", uuid::Uuid::new_v4()),
                 model: "model".into(),
                 system_prompt: None,
                 messages: Vec::new(),
@@ -641,11 +641,12 @@ async fn completes_simple_text_turn() {
             EngineProviderEvent::Completed,
         ]]),
     };
+    let run_id = format!("simple-text-{}", uuid::Uuid::new_v4());
     let status = engine
         .run(
             EngineRunConfig {
-                run_id: "r1".into(),
-                conversation_id: "c1".into(),
+                run_id: run_id.clone(),
+                conversation_id: format!("c-{run_id}"),
                 model: "m".into(),
                 system_prompt: None,
                 messages: Vec::new(),
@@ -661,7 +662,7 @@ async fn completes_simple_text_turn() {
         matches!(status, crate::EngineOutcome::Completed { .. }),
         "{status:?}"
     );
-    let events = engine.events.replay_after("r1", 0);
+    let events = engine.events.replay_after(&run_id, 0);
     // `Started` is a RunManager lifecycle event, not an engine domain event;
     // this assertion only ever passed by reading a stale on-disk r1.jsonl.
     assert!(events

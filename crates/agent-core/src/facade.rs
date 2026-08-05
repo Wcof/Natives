@@ -11,19 +11,19 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
-//! use agent_core::facade::{AgentRuntime, RuntimeBuilder};
-//! use agent_core::EngineProvider;
+//! ```rust,ignore
+//! // `my_provider` implements `agent_core::EngineProvider` and `MyTool`
+//! // implements `agent_core::EngineToolRuntime`. See examples/minimal-agent
+//! // for a fully compilable external consumer.
+//! use agent_core::facade::AgentRuntime;
 //!
 //! # async fn example() -> Result<(), String> {
-//! let outcome = AgentRuntime::builder()
+//! let runtime = AgentRuntime::builder()
 //!     .provider(my_provider)
 //!     .tool(MyTool)
 //!     .build()
-//!     .map_err(|e| e.to_string())?
-//!     .prompt("Hello, world!")
-//!     .await
 //!     .map_err(|e| e.to_string())?;
+//! let outcome = runtime.prompt("Hello, world!").await.map_err(|e| e.to_string())?;
 //! # Ok(())
 //! # }
 //! ```
