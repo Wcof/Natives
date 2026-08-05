@@ -348,9 +348,7 @@ pub fn validate_http_hook_url(url: &str, allow_hosts: &[String]) -> Result<(), S
     {
         return Err(format!("host '{host}' not in allowlist"));
     }
-    if host
-        .parse::<IpAddr>()
-        .is_ok_and(|ip| is_private_or_loopback(ip))
+    if host.parse::<IpAddr>().is_ok_and(is_private_or_loopback)
         || ["localhost", "metadata.google.internal", "169.254.169.254"]
             .iter()
             .any(|blocked| host.eq_ignore_ascii_case(blocked))
