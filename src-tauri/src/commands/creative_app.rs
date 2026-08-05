@@ -860,30 +860,21 @@ pub fn creative_app_window_open(
 
 /// Close a window (CR-501).
 #[tauri::command]
-pub fn creative_app_window_close(
-    window_id: String,
-    state: State<'_, AppState>,
-) -> Result<()> {
+pub fn creative_app_window_close(window_id: String, state: State<'_, AppState>) -> Result<()> {
     let c = conn(&state.db)?;
     surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_CLOSED)
 }
 
 /// Minimize a window (CR-501).
 #[tauri::command]
-pub fn creative_app_window_minimize(
-    window_id: String,
-    state: State<'_, AppState>,
-) -> Result<()> {
+pub fn creative_app_window_minimize(window_id: String, state: State<'_, AppState>) -> Result<()> {
     let c = conn(&state.db)?;
     surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_MINIMIZED)
 }
 
 /// Restore a window (CR-501).
 #[tauri::command]
-pub fn creative_app_window_restore(
-    window_id: String,
-    state: State<'_, AppState>,
-) -> Result<()> {
+pub fn creative_app_window_restore(window_id: String, state: State<'_, AppState>) -> Result<()> {
     let c = conn(&state.db)?;
     surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_OPEN)
 }

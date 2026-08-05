@@ -86,11 +86,7 @@ pub fn list_surfaces(conn: &Connection, application_id: &str) -> Result<Vec<Appl
 }
 
 /// Update a surface's URL.
-pub fn update_surface_url(
-    conn: &Connection,
-    surface_id: &str,
-    url: &str,
-) -> Result<()> {
+pub fn update_surface_url(conn: &Connection, surface_id: &str, url: &str) -> Result<()> {
     let t = now();
     conn.execute(
         "UPDATE application_surfaces SET url = ?1, updated_at = ?2 WHERE id = ?3",
@@ -136,11 +132,12 @@ pub fn list_endpoints(
     conn: &Connection,
     runtime_instance_id: &str,
 ) -> Result<Vec<RuntimeEndpoint>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, runtime_instance_id, kind, url, port, created_at, updated_at
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, runtime_instance_id, kind, url, port, created_at, updated_at
          FROM runtime_endpoints WHERE runtime_instance_id = ?1 ORDER BY created_at",
-    )
-    .map_err(Error::Database)?;
+        )
+        .map_err(Error::Database)?;
     let rows = stmt
         .query_map(params![runtime_instance_id], |row| {
             Ok(RuntimeEndpoint {
@@ -246,11 +243,7 @@ pub fn list_windows(conn: &Connection, application_id: &str) -> Result<Vec<Windo
 }
 
 /// Update window state.
-pub fn update_window_state(
-    conn: &Connection,
-    window_id: &str,
-    state: &str,
-) -> Result<()> {
+pub fn update_window_state(conn: &Connection, window_id: &str, state: &str) -> Result<()> {
     let t = now();
     conn.execute(
         "UPDATE window_instances SET state = ?1, updated_at = ?2 WHERE id = ?3",
@@ -276,13 +269,16 @@ pub fn delete_window(conn: &Connection, window_id: &str) -> Result<()> {
 /// Also backfill active preview endpoints from runtime_instances.
 pub fn backfill_v19(conn: &Connection) -> Result<()> {
     // Backfill main surfaces for every application without one
-    let mut stmt = conn.prepare(
-        "SELECT a.id, a.title FROM applications a
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.id, a.title FROM applications a
          WHERE a.id NOT IN (SELECT application_id FROM application_surfaces WHERE kind = 'main')",
-    )
-    .map_err(Error::Database)?;
+        )
+        .map_err(Error::Database)?;
     let apps: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(Error::Database)?
         .filter_map(|r| r.ok())
         .collect();
@@ -292,18 +288,21 @@ pub fn backfill_v19(conn: &Connection) -> Result<()> {
     }
 
     // Backfill preview endpoints from active runtime_instances
-    let mut stmt2 = conn.prepare(
-        "SELECT ri.id, pt.url
+    let mut stmt2 = conn
+        .prepare(
+            "SELECT ri.id, pt.url
          FROM runtime_instances ri
          JOIN preview_targets pt ON pt.runtime_instance_id = ri.id
          WHERE ri.status IN ('running', 'starting')
          AND NOT EXISTS (
              SELECT 1 FROM runtime_endpoints re WHERE re.runtime_instance_id = ri.id
          )",
-    )
-    .map_err(Error::Database)?;
+        )
+        .map_err(Error::Database)?;
     let endpoints: Vec<(String, String)> = stmt2
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(Error::Database)?
         .filter_map(|r| r.ok())
         .collect();
@@ -338,8 +337,14 @@ mod tests {
         )
         .unwrap();
 
-        let sid = create_surface(&conn, "app-1", "main", "Main", Some("http://localhost:3000/"))
-            .unwrap();
+        let sid = create_surface(
+            &conn,
+            "app-1",
+            "main",
+            "Main",
+            Some("http://localhost:3000/"),
+        )
+        .unwrap();
         assert!(!sid.is_empty());
 
         let surfaces = list_surfaces(&conn, "app-1").unwrap();
@@ -361,8 +366,14 @@ mod tests {
 
         let s1 = create_surface(&conn, "app-1", "main", "Main", None).unwrap();
         // Second call with kind="main" should update, not create another
-        let s2 = create_surface(&conn, "app-1", "main", "Main Updated", Some("http://localhost:8080/"))
-            .unwrap();
+        let s2 = create_surface(
+            &conn,
+            "app-1",
+            "main",
+            "Main Updated",
+            Some("http://localhost:8080/"),
+        )
+        .unwrap();
         assert_eq!(s1, s2, "main surface should be idempotent");
 
         let surfaces = list_surfaces(&conn, "app-1").unwrap();
@@ -381,13 +392,14 @@ mod tests {
         )
         .unwrap();
         let app_id = "app-1";
-        let iid = crate::creative_app::runtime_store::create_instance(&conn, app_id, None, "host_http")
-            .unwrap();
+        let iid =
+            crate::creative_app::runtime_store::create_instance(&conn, app_id, None, "host_http")
+                .unwrap();
         crate::creative_app::runtime_store::mark_running(&conn, &iid, &[], None, None, None)
             .unwrap();
 
-        let eid = create_endpoint(&conn, &iid, "preview", "http://127.0.0.1:8080/", Some(8080))
-            .unwrap();
+        let eid =
+            create_endpoint(&conn, &iid, "preview", "http://127.0.0.1:8080/", Some(8080)).unwrap();
         assert!(!eid.is_empty());
 
         let endpoints = list_endpoints(&conn, &iid).unwrap();

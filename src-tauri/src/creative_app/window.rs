@@ -26,9 +26,7 @@ pub fn open_window(
 ) -> Result<String> {
     // Ensure surface exists
     let surface_id = surface_store::find_main_surface(conn, application_id)?
-        .ok_or_else(|| {
-            Error::Internal(format!("no main surface for app {application_id}"))
-        })?;
+        .ok_or_else(|| Error::Internal(format!("no main surface for app {application_id}")))?;
 
     let label = browser::child_label(app_id);
 
@@ -68,11 +66,7 @@ pub fn close_window(
 }
 
 /// Minimize a window (hide the WebView).
-pub fn minimize_window(
-    app: &AppHandle,
-    conn: &Connection,
-    app_id: &str,
-) -> Result<()> {
+pub fn minimize_window(app: &AppHandle, conn: &Connection, app_id: &str) -> Result<()> {
     let label = browser::child_label(app_id);
 
     // Hide the WebView
@@ -87,11 +81,7 @@ pub fn minimize_window(
 }
 
 /// Restore a window (show the WebView).
-pub fn restore_window(
-    _app: &AppHandle,
-    _conn: &Connection,
-    _app_id: &str,
-) -> Result<()> {
+pub fn restore_window(_app: &AppHandle, _conn: &Connection, _app_id: &str) -> Result<()> {
     // Restore is handled by browser_show with an existing WebView:
     // the WebView is navigated to the URL and shown.
     // The state is updated by the caller.
