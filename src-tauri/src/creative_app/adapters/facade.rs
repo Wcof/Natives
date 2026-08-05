@@ -40,10 +40,7 @@ pub fn driver_for(conn: &Connection, id: &str) -> Result<DriverHandle> {
     let runtime = super::get_summary(conn, id)?.runtime;
     let driver_kind = driver::resolve_driver_kind(runtime, plan.as_ref());
     let caps = driver::capabilities_for(runtime);
-    Ok(DriverHandle {
-        driver_kind,
-        caps,
-    })
+    Ok(DriverHandle { driver_kind, caps })
 }
 
 /// Uniform start: spawn phase 1 (lock held) then settle health (phase 2).

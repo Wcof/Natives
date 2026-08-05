@@ -378,7 +378,9 @@ pub async fn creative_app_delete(
                 &[op::PHASE_WAITING, op::PHASE_PENDING],
                 op::PHASE_RUNNING,
             )?;
-            rt.block_on(adapters::facade::delete(&c, &ctx_inner, &id_inner, opts_inner))
+            rt.block_on(adapters::facade::delete(
+                &c, &ctx_inner, &id_inner, opts_inner,
+            ))
         })
         .await
         .map_err(|e| Error::Internal(format!("delete join: {e}")))?
