@@ -14,7 +14,8 @@ use crate::{Error, Result};
 use std::path::{Component, Path};
 
 /// The kind of proposal an agent can submit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProposalKind {
     Create,
     Start,
@@ -22,7 +23,8 @@ pub enum ProposalKind {
 
 /// What an agent proposes to do — a thin, versioned intent that the Host
 /// validates and the user approves. Never carries secret values.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentProposal {
     pub schema_version: u32,
     pub kind: ProposalKind,
@@ -97,7 +99,8 @@ impl AgentProposal {
 }
 
 /// Validated proposal outcome — what the Host records after approval.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatedProposal {
     pub proposal: AgentProposal,
     /// Redacted input snapshot for the operation journal (never secrets).
@@ -126,7 +129,8 @@ pub fn redacted_proposal_input(proposal: &AgentProposal) -> String {
 }
 
 /// Driver payload variants a proposal can carry.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProposedDriver {
     Python(PythonLaunchProfile),
     Binary(BinaryLaunchProfile),

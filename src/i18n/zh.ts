@@ -258,6 +258,7 @@ export const zh = {
     proposalReject: '拒绝',
     proposalApproved: '提案已批准',
     proposalRejected: '提案已拒绝',
+    proposalInbox: '待批准提案',
     actionEdit: '编辑',
     emptyUnified: '还没有创意应用。点击「添加」创建内部应用、从本地文件夹添加，或从 GitHub 安装容器应用。',
     githubWizardTitle: '从 GitHub 安装',

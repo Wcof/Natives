@@ -883,7 +883,186 @@ pub fn creative_app_window_restore(window_id: String, state: State<'_, AppState>
 
 // ── Local project (third source) ───────────────────────────────────
 
-/// 同上：本地项目扫描要遍历目录树，同步执行会卡住整个 UI。
+// ── Agent proposal gate (batch 10 CR-1001/1002) ───────────────────
+
+/// Validate an agent proposal through the Host gate. Returns the proposal
+/// (if valid) with a redacted journal snapshot. Never registers anything.
+#[tauri::command]
+pub fn creative_app_proposal_validate(
+    proposal: crate::creative_app::proposal::AgentProposal,
+) -> Result<crate::creative_app::proposal::ValidatedProposal> {
+    proposal.validate()?;
+    Ok(crate::creative_app::proposal::ValidatedProposal {
+        redacted: crate::creative_app::proposal::redacted_proposal_input(&proposal),
+        proposal,
+    })
+}
+
+/// Reject an agent proposal: record a `rejected` operation in the journal.
+/// No application is registered; the proposal is left untouched on the client.
+#[tauri::command]
+pub async fn creative_app_proposal_reject(
+    proposal: crate::creative_app::proposal::AgentProposal,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<i64> {
+    // Host gate still applies on reject: an invalid proposal is journaled as
+    // a failed rejection attempt so the audit trail is complete.
+    let validation = proposal.validate();
+    let pool = state.db.clone();
+    let app = app_handle.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        let redacted = crate::creative_app::proposal::redacted_proposal_input(&proposal);
+        let op_id = op::create_operation(&c, None, "proposal_reject", "user", Some(&redacted))?;
+        match validation {
+            Ok(_) => {
+                op::finish_success(&c, op_id)?;
+                emit_operation(&app, &c, op_id)?;
+            }
+            Err(e) => {
+                op::finish_failure(&c, op_id, Some("proposal_invalid"), &e.to_string())?;
+                emit_operation(&app, &c, op_id)?;
+            }
+        }
+        Ok(op_id)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("proposal_reject join: {e}")))?
+}
+
+/// Approve an agent proposal: the Host validates it, journals the approval,
+/// and registers the application. Returns the registered app summary.
+/// Drivers without a registration path return a clear error — never fake success.
+#[tauri::command]
+pub async fn creative_app_proposal_approve(
+    proposal: crate::creative_app::proposal::AgentProposal,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    lock: State<'_, MutationLock>,
+) -> Result<CreativeAppSummary> {
+    let pool = state.db.clone();
+    let lock = lock.inner().clone();
+    let _guard = lock.acquire_app("__registration__").await;
+
+    let handle = app_handle.clone();
+    tokio::task::spawn_blocking(move || {
+        // Host gate: reject dangerous inputs before anything is registered.
+        proposal.validate()?;
+
+        let mut c = conn(&pool)?;
+        let redacted = crate::creative_app::proposal::redacted_proposal_input(&proposal);
+        let op_id = op::create_operation(&c, None, "proposal_approve", "user", Some(&redacted))?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_RUNNING)?;
+
+        let result = register_proposal_app(&mut c, &proposal);
+        match result {
+            Ok(summary) => {
+                op::finish_success(&c, op_id)?;
+                emit_operation(&handle, &c, op_id)?;
+                crate::emit_db_state_changed(
+                    &handle,
+                    "creative-app",
+                    serde_json::json!({ "action": "proposal_approved", "id": summary.id }),
+                );
+                Ok(summary)
+            }
+            Err(e) => {
+                op::finish_failure(&c, op_id, Some("proposal_register_failed"), &e.to_string())?;
+                emit_operation(&handle, &c, op_id)?;
+                Err(e)
+            }
+        }
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("proposal_approve join: {e}")))?
+}
+
+/// Register an approved proposal as a real application. Only drivers with a
+/// concrete registration path are supported; others return a clear error.
+fn register_proposal_app(
+    c: &mut rusqlite::Connection,
+    proposal: &crate::creative_app::proposal::AgentProposal,
+) -> Result<CreativeAppSummary> {
+    use crate::creative_app::proposal::ProposedDriver;
+    use crate::creative_app::local;
+    use crate::creative_app::model::{
+        LaunchMode, LocalProjectKind, LocalLaunchRuntime, LaunchProgram, LaunchPlanSource,
+    };
+
+    match &proposal.driver {
+        ProposedDriver::StaticHttp => {
+            // Static HTTP app inside the proposed project root.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            let kind = if root.join("index.html").is_file() {
+                LocalProjectKind::Html
+            } else {
+                LocalProjectKind::Unknown
+            };
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: kind,
+                runtime: LocalLaunchRuntime::StaticHttp,
+                program: LaunchProgram::Internal,
+                cwd_relative: ".".into(),
+                script: None,
+                entry_file: Some("index.html".into()),
+                script_runner: None,
+                args: vec![],
+                environment_keys: proposal.environment_keys.clone(),
+                port: proposal_port(&proposal),
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: 60_000,
+                auto_open: true,
+                confidence: Some(0.9),
+                reason: "agent proposal approved".into(),
+                compose: None,
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(60_000),
+                },
+            )?;
+            Ok(summary)
+        }
+        ProposedDriver::Python(_) => Err(Error::InvalidInput(
+            "python driver registration requires the process driver spawn integration (not yet wired); approve a StaticHttp proposal or register the app via create_local".into(),
+        )),
+        ProposedDriver::Binary(_) => Err(Error::InvalidInput(
+            "binary driver registration not yet wired; approve a BinaryLaunchProfile directly".into(),
+        )),
+        ProposedDriver::Compose { .. } => Err(Error::InvalidInput(
+            "compose driver registration requires an existing docker-compose project".into(),
+        )),
+    }
+}
+
+/// Derive a LaunchPort from a proposal's intended open path (auto port).
+fn proposal_port(_proposal: &crate::creative_app::proposal::AgentProposal) -> crate::creative_app::model::LaunchPort {
+    crate::creative_app::model::LaunchPort {
+        mode: crate::creative_app::model::LaunchPortMode::Auto,
+        value: None,
+    }
+}
+
 #[tauri::command]
 pub async fn creative_app_inspect_local(
     request: InspectLocalRequest,
@@ -1420,3 +1599,94 @@ pub async fn creative_app_poll_local_exits(
     .await
     .map_err(|e| Error::Internal(format!("poll exits join: {e}")))?
 }
+
+#[cfg(test)]
+mod proposal_tests {
+    use super::*;
+    use crate::creative_app::model::OwnershipMode;
+    use crate::creative_app::proposal::{AgentProposal, ProposalKind, ProposedDriver};
+
+    fn static_proposal(root: &str) -> AgentProposal {
+        AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Create,
+            ownership: OwnershipMode::Managed,
+            title: "Approved App".into(),
+            project_root: root.into(),
+            driver: ProposedDriver::StaticHttp,
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec!["PORT".into()],
+        }
+    }
+
+    #[test]
+    fn static_proposal_registers_local_app() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), "<html>hi</html>").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = static_proposal(&root_s);
+        proposal.validate().unwrap();
+
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Approved App");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+        assert_eq!(summary.runtime, CreativeAppRuntime::LocalStatic);
+    }
+
+    #[test]
+    fn duplicate_proposal_path_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), "<html>hi</html>").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = static_proposal(&root_s);
+        proposal.validate().unwrap();
+        let _first = register_proposal_app(&mut conn, &proposal).unwrap();
+
+        // Registering the same path again must fail.
+        let err = register_proposal_app(&mut conn, &proposal).unwrap_err();
+        assert!(err.to_string().contains("already registered"));
+    }
+
+    #[test]
+    fn unsupported_driver_returns_clear_error() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Start,
+            ownership: OwnershipMode::Managed,
+            title: "Compose".into(),
+            project_root: "/proj".into(),
+            driver: ProposedDriver::Compose {
+                command: None,
+                privileged: false,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        // Validation passes for a non-privileged compose with no command...
+        proposal.validate().unwrap();
+        // ...but registration is honestly not wired, so it errors — no fake success.
+        let err = register_proposal_app(&mut conn, &proposal).unwrap_err();
+        assert!(err.to_string().contains("compose"));
+    }
+}
+

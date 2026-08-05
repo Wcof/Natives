@@ -27,6 +27,7 @@ import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import Modal from '@/components/ui/Modal';
 import AppLogsPanel from '@/components/creative/AppLogsPanel';
 import AppBrowserPanel from '@/components/creative/AppBrowserPanel';
+import ProposalInbox from '@/components/creative/ProposalInbox';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import CreativeHome from '@/components/creative/CreativeHome';
@@ -42,6 +43,7 @@ import type {
   CreativeAppBrowserBounds,
   CreativeAppInspectResult,
   CreativeAppInstallCandidate,
+  CreativeAppProposal,
   CreativeAppProgressEvent,
   CreativeAppSummary,
   LaunchPlan,
@@ -159,6 +161,8 @@ export default function WorkshopPage() {
 
   const [browserApp, setBrowserApp] = useState<CreativeAppSummary | null>(null);
   const [browserUrl, setBrowserUrl] = useState('');
+  // Agent proposals awaiting user approval (batch 10 CR-1002).
+  const [pendingProposals, setPendingProposals] = useState<CreativeAppProposal[]>([]);
   const browserHostRef = useRef<HTMLDivElement | null>(null);
   const browserAppRef = useRef<string | null>(null);
 
@@ -1008,6 +1012,19 @@ export default function WorkshopPage() {
             description={typeof error === 'string' ? error : classifyError(error).userMessage}
             action={{ label: t(locale, 'common.retry'), onClick: () => { void reload(); } }}
           />
+        )}
+        {pendingProposals.length > 0 && (
+          <div className="mb-4">
+            <ProposalInbox
+              proposals={pendingProposals}
+              onDismissed={(p) => setPendingProposals((prev) => prev.filter((x) => x !== p))}
+              onToast={showToast}
+              onRegistered={(p) => {
+                setPendingProposals((prev) => prev.filter((x) => x !== p));
+                void reload();
+              }}
+            />
+          </div>
         )}
         <CreativeHome
           locale={locale}

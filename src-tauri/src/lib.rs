@@ -555,6 +555,10 @@ pub fn run() {
             commands::creative_app::creative_app_window_close,
             commands::creative_app::creative_app_window_minimize,
             commands::creative_app::creative_app_window_restore,
+            // CR-1001/1002: Agent proposal gate
+            commands::creative_app::creative_app_proposal_validate,
+            commands::creative_app::creative_app_proposal_reject,
+            commands::creative_app::creative_app_proposal_approve,
             commands::creative_app::creative_app_inspect_local,
             commands::creative_app::creative_app_create_local,
             commands::creative_app::creative_app_update_local,

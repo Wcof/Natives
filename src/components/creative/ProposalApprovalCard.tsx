@@ -9,24 +9,27 @@
 import React, { useState } from 'react';
 import { useLocale, t } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
-
-/** A Host-validated proposal from an agent, ready for user approval. */
-export interface AgentProposalView {
-  schemaVersion: number;
-  kind: 'create' | 'start';
-  ownership: 'managed' | 'attached' | 'remote';
-  title: string;
-  projectRoot: string;
-  driver: string;
-  openPath: string;
-  envKeys: string[];
-}
+import type { CreativeAppProposal } from '@/lib/tauri-adapter';
 
 export interface ProposalApprovalCardProps {
-  proposal: AgentProposalView;
-  onApprove: (proposal: AgentProposalView) => Promise<void>;
-  onReject: (proposal: AgentProposalView) => Promise<void>;
+  proposal: CreativeAppProposal;
+  onApprove: (proposal: CreativeAppProposal) => Promise<void>;
+  onReject: (proposal: CreativeAppProposal) => Promise<void>;
   onToast: (message: string) => void;
+}
+
+/** Human-readable driver summary for the card. */
+function driverLabel(driver: CreativeAppProposal['driver']): string {
+  switch (driver.kind) {
+    case 'python':
+      return `python:${driver.entry}`;
+    case 'binary':
+      return 'binary';
+    case 'staticHttp':
+      return 'static_http';
+    case 'compose':
+      return 'compose';
+  }
 }
 
 export default function ProposalApprovalCard({
@@ -91,7 +94,7 @@ export default function ProposalApprovalCard({
         </div>
         <div className="flex justify-between">
           <span className="text-[var(--text-secondary)]">{t(locale, 'workshop.proposalDriver')}</span>
-          <span className="text-[var(--text)] font-mono">{proposal.driver}</span>
+          <span className="text-[var(--text)] font-mono">{driverLabel(proposal.driver)}</span>
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.projectRoot')}</span>

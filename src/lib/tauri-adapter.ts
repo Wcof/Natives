@@ -355,6 +355,30 @@ export interface CreativeAppWindow {
   updatedAt: string;
 }
 
+// CR-1001/1002: Agent proposal (versioned, Host-gated)
+export interface CreativeAppProposal {
+  schemaVersion: number;
+  kind: 'create' | 'start';
+  ownership: 'managed' | 'attached' | 'remote';
+  title: string;
+  projectRoot: string;
+  driver: CreativeAppProposedDriver;
+  openPath: string;
+  healthPath: string;
+  envKeys: string[];
+}
+
+export type CreativeAppProposedDriver =
+  | { kind: 'python'; schemaVersion: number; interpreter: string; entry: string; args: string[]; cwdRelative: string; environmentKeys: string[]; port: { mode: 'auto' | 'fixed'; value?: number | null }; openPath: string; healthPath: string; startupTimeoutMs: number; isVenv: boolean }
+  | { kind: 'binary'; schemaVersion: number; executablePath: string; executableHash: string; approved: boolean; args: string[]; cwdRelative: string; environmentKeys: string[]; port: { mode: 'auto' | 'fixed'; value?: number | null }; openPath: string; healthPath: string; startupTimeoutMs: number }
+  | { kind: 'staticHttp' }
+  | { kind: 'compose'; command?: string[] | null; privileged: boolean };
+
+export interface CreativeAppValidatedProposal {
+  proposal: CreativeAppProposal;
+  redacted: string;
+}
+
 export interface LaunchPlan {
   schemaVersion: 1;
   source: 'rule' | 'user' | 'ai';
@@ -729,6 +753,10 @@ export interface NativesAPI {
     windowClose: (windowId: string) => Promise<void>;
     windowMinimize: (windowId: string) => Promise<void>;
     windowRestore: (windowId: string) => Promise<void>;
+    // CR-1001/1002: Agent proposal gate
+    proposalValidate: (proposal: CreativeAppProposal) => Promise<CreativeAppValidatedProposal>;
+    proposalApprove: (proposal: CreativeAppProposal) => Promise<CreativeAppSummary>;
+    proposalReject: (proposal: CreativeAppProposal) => Promise<number>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
     onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
     inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
@@ -1372,6 +1400,13 @@ const nativesAPI: NativesAPI = {
       cmd('creative_app_window_minimize', { windowId }),
     windowRestore: (windowId: string) =>
       cmd('creative_app_window_restore', { windowId }),
+    // CR-1001/1002: Agent proposal gate
+    proposalValidate: (proposal: CreativeAppProposal) =>
+      cmd<CreativeAppValidatedProposal>('creative_app_proposal_validate', { proposal }),
+    proposalApprove: (proposal: CreativeAppProposal) =>
+      cmd<CreativeAppSummary>('creative_app_proposal_approve', { proposal }),
+    proposalReject: (proposal: CreativeAppProposal) =>
+      cmd<number>('creative_app_proposal_reject', { proposal }),
     onProgress: (callback) => {
       const unlisten = listen<CreativeAppProgressEvent>('creative-app-progress', (event) => {
         callback(event.payload);

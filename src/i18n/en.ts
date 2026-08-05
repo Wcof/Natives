@@ -265,6 +265,7 @@ export const en = {
     proposalReject: 'Reject',
     proposalApproved: 'Proposal approved',
     proposalRejected: 'Proposal rejected',
+    proposalInbox: 'Pending proposals',
     actionEdit: 'Edit',
     emptyUnified: 'No creative apps yet. Use Add to create an internal app, add a local folder, or install from GitHub.',
     githubWizardTitle: 'Install from GitHub',
