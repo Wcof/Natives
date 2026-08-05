@@ -1256,6 +1256,92 @@ impl ServiceInstance {
     pub const READY_STOPPED: &'static str = "stopped";
 }
 
+// ── Python WebUI profile (batch 8 CR-801) ────────────────────────────
+
+/// Versioned Python WebUI launch profile. Never stores secret values — only
+/// interpreter reference, module/args, cwd, and env KEY names.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonLaunchProfile {
+    pub schema_version: u32,
+    /// Interpreter reference: absolute venv path or system python name.
+    /// Examples: "/project/.venv/bin/python", "python3".
+    pub interpreter: String,
+    /// Entry module or script (relative to cwd). Examples: "app.py", "main.py".
+    pub entry: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Working directory relative to the project root (default ".").
+    #[serde(default)]
+    pub cwd_relative: String,
+    /// Env KEY names only — values never stored here.
+    #[serde(default)]
+    pub environment_keys: Vec<String>,
+    pub port: LaunchPort,
+    pub open_path: String,
+    pub health_path: String,
+    pub startup_timeout_ms: u32,
+    /// Whether the interpreter is a venv (true) or system python (false).
+    pub is_venv: bool,
+}
+
+/// Result of detecting a Python WebUI candidate in a project scan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonScanCandidate {
+    /// Relative entry script (e.g. "app.py").
+    pub entry: String,
+    /// Detected interpreter hint (venv path or system).
+    pub interpreter_hint: String,
+    /// Relative project root where the app lives (subdirectory or ".").
+    pub project_root_relative: String,
+    #[serde(default)]
+    pub risks: Vec<String>,
+    /// Whether the profile is fully specified (no missing env requirements).
+    pub complete: bool,
+}
+
+// ── Binary WebUI profile (batch 8 CR-802) ────────────────────────────
+
+/// Versioned Binary WebUI launch profile. The executable is identified by its
+/// canonical absolute path and content hash — a hash change requires re-approval.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryLaunchProfile {
+    pub schema_version: u32,
+    /// Canonical absolute path to the executable.
+    pub executable_path: String,
+    /// SHA-256 of the executable content at approval time.
+    pub executable_hash: String,
+    /// Whether the user approved this exact executable (hash matched).
+    pub approved: bool,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Working directory relative to the project root.
+    #[serde(default)]
+    pub cwd_relative: String,
+    #[serde(default)]
+    pub environment_keys: Vec<String>,
+    pub port: LaunchPort,
+    pub open_path: String,
+    pub health_path: String,
+    pub startup_timeout_ms: u32,
+}
+
+/// Result of detecting a Binary WebUI candidate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryScanCandidate {
+    /// Executable path relative to the project root.
+    pub executable_relative: String,
+    /// Whether the file is executable (has exec permission).
+    pub executable: bool,
+    /// Whether a prior approval record matches this file's hash.
+    pub previously_approved: bool,
+    #[serde(default)]
+    pub risks: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserBounds {
