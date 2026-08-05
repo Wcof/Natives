@@ -36,7 +36,9 @@ pub fn looks_like_python_web_entry(entry: &str) -> bool {
 /// Validate a Python profile. Returns Err on invalid configuration.
 pub fn validate_python_profile(profile: &PythonLaunchProfile) -> Result<()> {
     if profile.interpreter.is_empty() {
-        return Err(Error::InvalidInput("python interpreter cannot be empty".into()));
+        return Err(Error::InvalidInput(
+            "python interpreter cannot be empty".into(),
+        ));
     }
     if profile.entry.is_empty() {
         return Err(Error::InvalidInput("python entry cannot be empty".into()));
@@ -48,13 +50,21 @@ pub fn validate_python_profile(profile: &PythonLaunchProfile) -> Result<()> {
     }
     for c in entry.components() {
         if let std::path::Component::ParentDir = c {
-            return Err(Error::InvalidInput("python entry must not escape cwd".into()));
+            return Err(Error::InvalidInput(
+                "python entry must not escape cwd".into(),
+            ));
         }
     }
     // cwd_relative must not escape the project root.
     let cwd = Path::new(&profile.cwd_relative);
-    if cwd.is_absolute() || cwd.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(Error::InvalidInput("python cwd must be inside project root".into()));
+    if cwd.is_absolute()
+        || cwd
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(Error::InvalidInput(
+            "python cwd must be inside project root".into(),
+        ));
     }
     Ok(())
 }
@@ -63,7 +73,9 @@ pub fn validate_python_profile(profile: &PythonLaunchProfile) -> Result<()> {
 /// with a non-empty content hash, and must be approved.
 pub fn validate_binary_profile(profile: &BinaryLaunchProfile) -> Result<()> {
     if profile.executable_path.is_empty() {
-        return Err(Error::InvalidInput("binary executable path cannot be empty".into()));
+        return Err(Error::InvalidInput(
+            "binary executable path cannot be empty".into(),
+        ));
     }
     let exe = Path::new(&profile.executable_path);
     if !exe.is_absolute() {
@@ -123,8 +135,8 @@ impl Sha256 {
     fn new() -> Self {
         Self {
             state: [
-                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
-                0x1f83d9ab, 0x5be0cd19,
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
             ],
             buffer: [0; 64],
             buffer_len: 0,
@@ -138,8 +150,7 @@ impl Sha256 {
         if self.buffer_len > 0 {
             let space = 64 - self.buffer_len;
             let take = space.min(data.len());
-            self.buffer[self.buffer_len..self.buffer_len + take]
-                .copy_from_slice(&data[..take]);
+            self.buffer[self.buffer_len..self.buffer_len + take].copy_from_slice(&data[..take]);
             self.buffer_len += take;
             data = &data[take..];
             if self.buffer_len == 64 {
@@ -162,7 +173,11 @@ impl Sha256 {
     fn finalize(mut self) -> [u8; 32] {
         let bit_len = self.total_len.wrapping_mul(8);
         // Pad: 0x80 then zeros then 8-byte big-endian bit length
-        let pad_len = if self.buffer_len < 56 { 56 - self.buffer_len } else { 120 - self.buffer_len };
+        let pad_len = if self.buffer_len < 56 {
+            56 - self.buffer_len
+        } else {
+            120 - self.buffer_len
+        };
         let mut padding = vec![0u8; pad_len];
         padding[0] = 0x80;
         self.update(&padding);
@@ -258,7 +273,10 @@ mod tests {
             args: vec![],
             cwd_relative: ".".into(),
             environment_keys: vec!["PORT".into()],
-            port: super::super::model::LaunchPort { mode: super::super::model::LaunchPortMode::Auto, value: None },
+            port: super::super::model::LaunchPort {
+                mode: super::super::model::LaunchPortMode::Auto,
+                value: None,
+            },
             open_path: "/".into(),
             health_path: "/".into(),
             startup_timeout_ms: 60_000,
@@ -292,7 +310,10 @@ mod tests {
             args: vec![],
             cwd_relative: ".".into(),
             environment_keys: vec![],
-            port: super::super::model::LaunchPort { mode: super::super::model::LaunchPortMode::Auto, value: None },
+            port: super::super::model::LaunchPort {
+                mode: super::super::model::LaunchPortMode::Auto,
+                value: None,
+            },
             open_path: "/".into(),
             health_path: "/".into(),
             startup_timeout_ms: 60_000,
