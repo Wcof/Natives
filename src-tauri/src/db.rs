@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "21";
+pub const SCHEMA_VERSION: &str = "22";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1318,6 +1318,38 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
             ",
         )
         .map_err(Error::Database)?;
+    }
+
+    // Migration v21→v22 (batch 7 CR-701): service_instances table.
+    //
+    // A runtime can expose multiple services (e.g. Compose web + db); each
+    // service gets a row with its readiness state. Single-service runtimes get
+    // a "main" service row.
+    if current_version < 22 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS service_instances (
+                id TEXT PRIMARY KEY,
+                runtime_instance_id TEXT NOT NULL REFERENCES runtime_instances(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                readiness TEXT NOT NULL DEFAULT 'starting',
+                required INTEGER NOT NULL DEFAULT 1,
+                endpoint_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(runtime_instance_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_services_runtime
+                ON service_instances(runtime_instance_id);
+
+                        INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '22');
+            ",
+        )
+        .map_err(Error::Database)?;
+        // Backfill a "main" service row for active runtimes (idempotent).
+        if let Err(e) = crate::creative_app::service_store::backfill_v22(conn) {
+            eprintln!("warning: service backfill failed: {e}");
+        }
     }
 
     // Repair path for v9 tables when a database carries an advanced marker.
