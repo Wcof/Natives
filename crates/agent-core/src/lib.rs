@@ -19,6 +19,7 @@ pub mod input;
 pub mod lineage;
 pub mod mcp;
 pub mod message;
+pub mod metrics;
 pub mod permissions;
 pub mod profile;
 pub mod run_state;

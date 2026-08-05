@@ -4,6 +4,7 @@
 //! permission Ask/Allow/Deny, hooks, and subagent child runs.
 
 use agent_core::assemble_context;
+use agent_core::metrics::MetricsSink;
 use agent_core::{
     AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderContext,
     EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer,
@@ -93,6 +94,8 @@ pub struct ProductionRuntime {
     /// needs to travel is keyed by `run_id`. Nothing here can widen permissions
     /// or the tool surface — it is prompt text only.
     pub run_agent_directives: Arc<Mutex<HashMap<String, String>>>,
+    /// Bounded runtime metrics sink (non-authoritative, no secrets).
+    pub metrics_sink: MetricsSink,
 }
 
 #[cfg(test)]
@@ -287,6 +290,7 @@ impl ProductionRuntime {
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
             run_agent_directives: Arc::new(Mutex::new(HashMap::new())),
+            metrics_sink: crate::metrics::daemon_metrics_sink(),
         };
         // Assignment bridges remain until the subagent interaction protocol is moved.
         let mut rt = rt;
