@@ -181,9 +181,11 @@ fn handle_request(
             if path_only == "/natives-sdk.js" {
                 // Serve the bridge SDK — Workshop CSP applies
                 let script = include_str!("bridge_sdk.js");
-                let resp = Response::from_string(script).with_header(workshop_csp).with_header(
-                    Header::from_bytes("Content-Type", "application/javascript").unwrap(),
-                );
+                let resp = Response::from_string(script)
+                    .with_header(workshop_csp)
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                    );
                 request.respond(resp)?;
             } else if path_only.starts_with("/modules/") {
                 // Serve module static files — Workshop CSP (strict)
@@ -731,7 +733,6 @@ fn from_hex(b: u8) -> Option<u8> {
     }
 }
 
-
 fn handle_bridge_request(
     mut request: Request,
     token_manager: &TokenManager,
@@ -742,14 +743,10 @@ fn handle_bridge_request(
     if let Some(cl) = get_header(&request, "Content-Length") {
         if let Ok(len) = cl.parse::<u64>() {
             if len > MAX_BRIDGE_BODY {
-                let resp = Response::from_string(
-                    r#"{"error":"Request body too large"}"#,
-                )
-                .with_status_code(413)
-                .with_header(csp.clone())
-                .with_header(
-                    Header::from_bytes("Content-Type", "application/json").unwrap(),
-                );
+                let resp = Response::from_string(r#"{"error":"Request body too large"}"#)
+                    .with_status_code(413)
+                    .with_header(csp.clone())
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
                 request.respond(resp)?;
                 return Ok(());
             }
@@ -1309,7 +1306,10 @@ mod tests {
         // POST without Origin or Referer must be rejected
         assert!(!validate_origin(&None, &None));
         // Loopback origin is accepted
-        assert!(validate_origin(&Some("http://127.0.0.1:3000".into()), &None));
+        assert!(validate_origin(
+            &Some("http://127.0.0.1:3000".into()),
+            &None
+        ));
         // External origin is rejected
         assert!(!validate_origin(&Some("https://evil.com".into()), &None));
     }
@@ -1363,8 +1363,7 @@ mod tests {
         let oversized = "x".repeat((MAX_BRIDGE_BODY + 1) as usize);
         // Content-Length check: send with declared oversized length
         use std::io::{Read, Write};
-        let mut stream =
-            std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
         let req = format!(
             "POST /api/bridge/settings/getTheme HTTP/1.1\r\n\
              Host: 127.0.0.1\r\n\

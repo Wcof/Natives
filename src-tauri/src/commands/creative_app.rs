@@ -761,34 +761,22 @@ pub fn creative_app_browser_set_bounds(
 }
 
 #[tauri::command]
-pub fn creative_app_browser_back(
-    app_id: String,
-    app_handle: tauri::AppHandle,
-) -> Result<()> {
+pub fn creative_app_browser_back(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
     browser::browser_back(&app_handle, &app_id)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_forward(
-    app_id: String,
-    app_handle: tauri::AppHandle,
-) -> Result<()> {
+pub fn creative_app_browser_forward(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
     browser::browser_forward(&app_handle, &app_id)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_reload(
-    app_id: String,
-    app_handle: tauri::AppHandle,
-) -> Result<()> {
+pub fn creative_app_browser_reload(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
     browser::browser_reload(&app_handle, &app_id)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_hide(
-    app_id: String,
-    app_handle: tauri::AppHandle,
-) -> Result<()> {
+pub fn creative_app_browser_hide(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
     browser::browser_hide(&app_handle, &app_id)
 }
 

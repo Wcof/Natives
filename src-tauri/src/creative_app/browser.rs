@@ -233,9 +233,18 @@ mod tests {
     fn child_label_sanitizes_special_chars() {
         // Only alphanumeric, dash, underscore, dot survive.
         let label = child_label("app/one:two?x");
-        assert!(!label.contains('/'), "label must not contain slash: {label}");
-        assert!(!label.contains(':'), "label must not contain colon: {label}");
-        assert!(!label.contains('?'), "label must not contain question: {label}");
+        assert!(
+            !label.contains('/'),
+            "label must not contain slash: {label}"
+        );
+        assert!(
+            !label.contains(':'),
+            "label must not contain colon: {label}"
+        );
+        assert!(
+            !label.contains('?'),
+            "label must not contain question: {label}"
+        );
         // The sanitized result should be a valid WebView label.
         assert!(label.len() <= 64, "label must be ≤ 64 chars");
     }
@@ -262,14 +271,20 @@ mod tests {
 
         {
             let mut st = handle.lock().unwrap();
-            st.set_entry("app-a".into(), ActiveEntry {
-                app_id: "app-a".into(),
-                url: "http://127.0.0.1:3000/".into(),
-            });
-            st.set_entry("app-b".into(), ActiveEntry {
-                app_id: "app-b".into(),
-                url: "http://127.0.0.1:3001/".into(),
-            });
+            st.set_entry(
+                "app-a".into(),
+                ActiveEntry {
+                    app_id: "app-a".into(),
+                    url: "http://127.0.0.1:3000/".into(),
+                },
+            );
+            st.set_entry(
+                "app-b".into(),
+                ActiveEntry {
+                    app_id: "app-b".into(),
+                    url: "http://127.0.0.1:3001/".into(),
+                },
+            );
         }
 
         let st = handle.lock().unwrap();
@@ -285,14 +300,20 @@ mod tests {
 
         {
             let mut st = handle.lock().unwrap();
-            st.set_entry("app-a".into(), ActiveEntry {
-                app_id: "app-a".into(),
-                url: "http://127.0.0.1:3000/".into(),
-            });
-            st.set_entry("app-b".into(), ActiveEntry {
-                app_id: "app-b".into(),
-                url: "http://127.0.0.1:3001/".into(),
-            });
+            st.set_entry(
+                "app-a".into(),
+                ActiveEntry {
+                    app_id: "app-a".into(),
+                    url: "http://127.0.0.1:3000/".into(),
+                },
+            );
+            st.set_entry(
+                "app-b".into(),
+                ActiveEntry {
+                    app_id: "app-b".into(),
+                    url: "http://127.0.0.1:3001/".into(),
+                },
+            );
         }
 
         {
@@ -312,14 +333,20 @@ mod tests {
 
         {
             let mut st = handle.lock().unwrap();
-            st.set_entry("app-a".into(), ActiveEntry {
-                app_id: "app-a".into(),
-                url: "http://127.0.0.1:3000/".into(),
-            });
-            st.set_entry("app-b".into(), ActiveEntry {
-                app_id: "app-b".into(),
-                url: "http://127.0.0.1:3001/".into(),
-            });
+            st.set_entry(
+                "app-a".into(),
+                ActiveEntry {
+                    app_id: "app-a".into(),
+                    url: "http://127.0.0.1:3000/".into(),
+                },
+            );
+            st.set_entry(
+                "app-b".into(),
+                ActiveEntry {
+                    app_id: "app-b".into(),
+                    url: "http://127.0.0.1:3001/".into(),
+                },
+            );
         }
 
         // Simulate close: remove entry
@@ -380,7 +407,9 @@ mod tests {
     fn on_navigation_hook_rejects_remote_urls() {
         // The on_navigation closure calls navigation_allowed() which we test
         // above. Additionally, verify that the hook pattern works for redirects.
-        assert!(navigation_allowed("http://127.0.0.1:3000/api/callback?code=abc"));
+        assert!(navigation_allowed(
+            "http://127.0.0.1:3000/api/callback?code=abc"
+        ));
         assert!(!navigation_allowed("https://evil.com/steal?code=abc"));
     }
 
@@ -413,8 +442,12 @@ mod tests {
         // Verify that navigation_allowed is the function used by browser_show.
         // The actual WebView creation is tested via integration tests, but the
         // logic of the hook is verified here.
-        assert!(crate::creative_app::service::navigation_allowed("http://127.0.0.1:3000/"));
-        assert!(!crate::creative_app::service::navigation_allowed("https://evil.com/"));
+        assert!(crate::creative_app::service::navigation_allowed(
+            "http://127.0.0.1:3000/"
+        ));
+        assert!(!crate::creative_app::service::navigation_allowed(
+            "https://evil.com/"
+        ));
     }
 
     // ── BrowserState entry format ──────────────────────────────────────
@@ -425,10 +458,13 @@ mod tests {
         let handle = Mutex::new(state);
         {
             let mut st = handle.lock().unwrap();
-            st.set_entry("test-app".into(), ActiveEntry {
-                app_id: "test-app".into(),
-                url: "http://127.0.0.1:8080/page".into(),
-            });
+            st.set_entry(
+                "test-app".into(),
+                ActiveEntry {
+                    app_id: "test-app".into(),
+                    url: "http://127.0.0.1:8080/page".into(),
+                },
+            );
         }
 
         // Simulate browser_current by reading state directly
