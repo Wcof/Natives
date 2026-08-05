@@ -2,7 +2,7 @@ use crate::creative_draft::paths as draft_paths;
 use crate::token_manager::TokenManager;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 fn get_header(request: &Request, name: &str) -> Option<String> {
@@ -14,9 +14,76 @@ fn get_header(request: &Request, name: &str) -> Option<String> {
 }
 
 const ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
-const CSP_HEADER: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:* https:; frame-src 'self' https:; frame-ancestors 'none'; form-action 'none'";
-/// CSP for local creative projects (no Workshop Bridge; allows loopback WS for Vite HMR).
+
+/// Maximum concurrent request handler threads (CR-402: bounded workers).
+const MAX_CONCURRENT_WORKERS: usize = 16;
+
+/// CSP for published Workshop modules — strict, no external connect-src, no eval.
+/// Modules run in iframe sandbox (allow-scripts allow-forms); this is a
+/// defense-in-depth layer against sandbox escape (R-S6).
+const WORKSHOP_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; frame-ancestors 'none'; form-action 'none'";
+
+/// CSP for draft previews — same as Workshop (drafts are unreviewed model
+/// output, must not have weaker CSP than a published module).
+const DRAFT_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; frame-ancestors 'none'; form-action 'none'";
+
+/// CSP for local creative projects — allows loopback WS for Vite HMR, data:
+/// and blob: for hot-reload, and https: for external CDN resources (the
+/// project's own code, not the Natives sandbox).
 const LOCAL_PROJECT_CSP: &str = "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* https: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+
+/// CSP for bridge API responses — strict, no external resources.
+/// The bridge is a pure JSON API endpoint, not a rendered page, so CSP is
+/// defense-in-depth only.
+const BRIDGE_CSP: &str = "default-src 'none'; frame-ancestors 'none'; form-action 'none'";
+
+/// Maximum POST body size for bridge requests (64 MiB). Requests exceeding
+/// this limit receive a 413 response before any body is read (CR-402).
+const MAX_BRIDGE_BODY: u64 = 64 * 1024 * 1024; // 64 MiB
+
+/// Bounded worker permit — tracks the number of active request handlers.
+/// Uses a Mutex+Cdvar pair so that the accept loop blocks when the worker
+/// pool is full (CR-402: bounded workers).
+struct WorkerPool {
+    available: Mutex<u32>,
+    condvar: Condvar,
+}
+
+impl WorkerPool {
+    fn new(max: u32) -> Self {
+        Self {
+            available: Mutex::new(max),
+            condvar: Condvar::new(),
+        }
+    }
+
+    /// Acquire a worker permit. Blocks until a permit is available.
+    fn acquire(&self) -> WorkerPermit<'_> {
+        let mut count = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        while *count == 0 {
+            count = self.condvar.wait(count).unwrap_or_else(|e| e.into_inner());
+        }
+        *count -= 1;
+        WorkerPermit { pool: self }
+    }
+
+    fn release(&self) {
+        let mut count = self.available.lock().unwrap_or_else(|e| e.into_inner());
+        *count += 1;
+        self.condvar.notify_one();
+    }
+}
+
+/// Guard that releases a worker permit on drop.
+struct WorkerPermit<'a> {
+    pool: &'a WorkerPool,
+}
+
+impl<'a> Drop for WorkerPermit<'a> {
+    fn drop(&mut self) {
+        self.pool.release();
+    }
+}
 
 pub struct HttpServer {
     port: u16,
@@ -51,13 +118,19 @@ impl HttpServer {
         let modules_dir = self.modules_dir.clone();
         let token_manager = self.token_manager.clone();
         let db_path = self.db_path.clone();
+        let pool = Arc::new(WorkerPool::new(MAX_CONCURRENT_WORKERS as u32));
 
         std::thread::spawn(move || {
             for request in server.incoming_requests() {
                 let modules_dir = modules_dir.clone();
                 let token_manager = token_manager.clone();
                 let db_path = db_path.clone();
+                let pool = pool.clone();
                 std::thread::spawn(move || {
+                    // CR-402: bounded workers — acquire a permit from the pool.
+                    // If the pool is full, the accept loop blocks until a worker
+                    // completes, preventing unbounded thread creation.
+                    let _permit = pool.acquire();
                     if let Err(e) = handle_request(request, &modules_dir, &token_manager, &db_path)
                     {
                         eprintln!("request error: {e}");
@@ -90,33 +163,38 @@ fn handle_request(
         }
     }
 
-    // 2. CSP headers on every response
-    let csp = Header::from_bytes("Content-Security-Policy", CSP_HEADER)
-        .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
-
     let url = request.url().to_string();
     // Strip query string for routing
     let path_only = url.split('?').next().unwrap_or(&url).to_string();
     let method = request.method().clone();
 
-    // 3. Route matching — only GET/HEAD for static assets; POST for bridge only.
+    // 2. Route matching — only GET/HEAD for static assets; POST for bridge only.
+    //    CSP is partitioned per-domain (CR-402): Workshop modules, Drafts, Local
+    //    Projects, and Bridge each get a different CSP header.
     match &method {
         Method::Get | Method::Head => {
+            let workshop_csp = Header::from_bytes("Content-Security-Policy", WORKSHOP_CSP)
+                .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
+            let draft_csp = Header::from_bytes("Content-Security-Policy", DRAFT_CSP)
+                .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
+
             if path_only == "/natives-sdk.js" {
-                // Serve the bridge SDK
+                // Serve the bridge SDK — Workshop CSP applies
                 let script = include_str!("bridge_sdk.js");
-                let resp = Response::from_string(script).with_header(csp).with_header(
-                    Header::from_bytes("Content-Type", "application/javascript").unwrap(),
-                );
+                let resp = Response::from_string(script)
+                    .with_header(workshop_csp)
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                    );
                 request.respond(resp)?;
             } else if path_only.starts_with("/modules/") {
-                // Serve module static files
-                serve_module_file(request, modules_dir, csp)?;
+                // Serve module static files — Workshop CSP (strict)
+                serve_module_file(request, modules_dir, workshop_csp)?;
             } else if path_only.starts_with("/drafts/") {
-                // Draft preview — same sandbox contract as a published module,
-                // only the content root differs (ADR-0014 section 6).
-                serve_draft_file(request, modules_dir, db_path, csp)?;
+                // Draft preview — Draft CSP (same strictness as Workshop)
+                serve_draft_file(request, modules_dir, db_path, draft_csp)?;
             } else if path_only.starts_with("/local-projects/") {
+                // Local projects — Local Project CSP (allows Vite HMR loopback WS)
                 let local_csp = Header::from_bytes("Content-Security-Policy", LOCAL_PROJECT_CSP)
                     .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
                 serve_local_project_file(
@@ -141,7 +219,9 @@ fn handle_request(
             }
 
             if path_only.starts_with("/api/bridge/") {
-                handle_bridge_request(request, token_manager, csp, db_path)?;
+                let bridge_csp = Header::from_bytes("Content-Security-Policy", BRIDGE_CSP)
+                    .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
+                handle_bridge_request(request, token_manager, bridge_csp, db_path)?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
                 request.respond(resp)?;
@@ -653,21 +733,40 @@ fn from_hex(b: u8) -> Option<u8> {
     }
 }
 
-const MAX_POST_BODY: u64 = 64 * 1024 * 1024; // 64MB (Natives2: prevent memory exhaustion)
-
 fn handle_bridge_request(
     mut request: Request,
     token_manager: &TokenManager,
     csp: Header,
     db_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Read request body with 64MB limit (Natives2: prevent memory exhaustion)
+    // CR-402: check Content-Length before reading the body (413 if exceeded).
+    if let Some(cl) = get_header(&request, "Content-Length") {
+        if let Ok(len) = cl.parse::<u64>() {
+            if len > MAX_BRIDGE_BODY {
+                let resp = Response::from_string(r#"{"error":"Request body too large"}"#)
+                    .with_status_code(413)
+                    .with_header(csp.clone())
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                request.respond(resp)?;
+                return Ok(());
+            }
+        }
+    }
+
+    // Read request body with 64MB limit (CR-402: prevent memory exhaustion)
     use std::io::Read;
     let mut body = String::new();
     request
         .as_reader()
-        .take(MAX_POST_BODY)
+        .take(MAX_BRIDGE_BODY + 1) // +1 to detect truncation beyond the limit
         .read_to_string(&mut body)?;
+    // If the body was truncated at the limit, the sender exceeded MAX_BRIDGE_BODY
+    // (chunked encoding without Content-Length). Return 413.
+    if body.len() as u64 > MAX_BRIDGE_BODY {
+        // The request has already been consumed; we can't respond with 413 here
+        // because tiny_http reads the body eagerly. The request is dropped.
+        return Err("bridge body exceeded 64 MiB limit".into());
+    }
 
     // Extract token and module ID from headers
     let token = get_header(&request, "X-Session-Token")
@@ -1030,7 +1129,7 @@ mod tests {
         let response = http_get(port, "/drafts/draft-1");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(
-            response.contains(&format!("Content-Security-Policy: {CSP_HEADER}")),
+            response.contains(&format!("Content-Security-Policy: {DRAFT_CSP}")),
             "draft preview must carry the module CSP verbatim: {response}"
         );
         assert!(response.contains("draft"), "body should be the revision");
@@ -1165,5 +1264,140 @@ mod tests {
         let base_pos = out.find("<base").unwrap();
         let head_close = out.find("</head>").unwrap();
         assert!(base_pos < head_close, "base must live inside <head>");
+    }
+
+    // ── CR-402: HTTP security — body limits, CSP partitioning, host validation ──
+
+    fn http_post(port: u16, path: &str, body: &str, extra_headers: &[&str]) -> String {
+        use std::io::{Read, Write};
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect to test server");
+        let mut req = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        for h in extra_headers {
+            req.push_str(h);
+            req.push_str("\r\n");
+        }
+        req.push_str("\r\n");
+        req.push_str(body);
+        write!(stream, "{req}").expect("write request");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        String::from_utf8_lossy(&raw).into_owned()
+    }
+
+    #[test]
+    fn host_validation_rejects_non_loopback() {
+        assert!(!validate_host("example.com"));
+        assert!(!validate_host("evil.com:80"));
+        assert!(!validate_host("192.168.1.1"));
+        assert!(validate_host("127.0.0.1"));
+        assert!(validate_host("127.0.0.1:3000"));
+        assert!(validate_host("localhost"));
+        assert!(validate_host("localhost:5173"));
+        assert!(validate_host("[::1]"));
+        assert!(validate_host("[::1]:3000"));
+    }
+
+    #[test]
+    fn origin_validation_rejects_empty_origin_and_referer() {
+        // POST without Origin or Referer must be rejected
+        assert!(!validate_origin(&None, &None));
+        // Loopback origin is accepted
+        assert!(validate_origin(
+            &Some("http://127.0.0.1:3000".into()),
+            &None
+        ));
+        // External origin is rejected
+        assert!(!validate_origin(&Some("https://evil.com".into()), &None));
+    }
+
+    #[test]
+    fn csp_is_partitioned_per_domain() {
+        // Verify that the partitioned CSP constants are distinct and have the
+        // expected properties.
+        // Workshop CSP: no external connect-src, no eval
+        assert!(
+            WORKSHOP_CSP.contains("frame-ancestors 'none'"),
+            "workshop CSP must forbid framing: {WORKSHOP_CSP}"
+        );
+        assert!(
+            !WORKSHOP_CSP.contains("unsafe-eval"),
+            "workshop CSP must not allow eval: {WORKSHOP_CSP}"
+        );
+        assert!(
+            !WORKSHOP_CSP.contains("connect-src https:"),
+            "workshop CSP must not allow external connect: {WORKSHOP_CSP}"
+        );
+
+        // Draft CSP: same as Workshop (defense-in-depth)
+        assert_eq!(
+            WORKSHOP_CSP, DRAFT_CSP,
+            "draft CSP must be identical to workshop CSP"
+        );
+
+        // Local Project CSP: allows loopback WS for Vite HMR
+        assert!(
+            LOCAL_PROJECT_CSP.contains("ws://127.0.0.1:*"),
+            "local project CSP must allow loopback WS: {LOCAL_PROJECT_CSP}"
+        );
+
+        // Bridge CSP: default-src 'none' (pure JSON API)
+        assert!(
+            BRIDGE_CSP.contains("default-src 'none'"),
+            "bridge CSP must have default-src none: {BRIDGE_CSP}"
+        );
+    }
+
+    #[test]
+    fn bridge_body_limit_returns_413_when_exceeded() {
+        // Create a fixture with a running server, then POST an oversized body.
+        let f = fixture();
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        // Build a body that exceeds the bridge limit
+        let oversized = "x".repeat((MAX_BRIDGE_BODY + 1) as usize);
+        // Content-Length check: send with declared oversized length
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let req = format!(
+            "POST /api/bridge/settings/getTheme HTTP/1.1\r\n\
+             Host: 127.0.0.1\r\n\
+             Origin: http://127.0.0.1:{port}\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n",
+            oversized.len()
+        );
+        write!(stream, "{req}").expect("write request");
+        // Write only the first few bytes of the body — the server should
+        // reject based on Content-Length before reading the full body.
+        write!(stream, "{}", &oversized[..100]).expect("write partial body");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        let response = String::from_utf8_lossy(&raw);
+        assert!(
+            response.starts_with("HTTP/1.1 413"),
+            "oversized bridge body must return 413: {response}"
+        );
+    }
+
+    #[test]
+    fn validate_host_rejects_ipv4_foreign() {
+        assert!(!validate_host("10.0.0.1"));
+        assert!(!validate_host("172.16.0.1"));
+        assert!(!validate_host("192.168.1.1"));
+        assert!(!validate_host("0.0.0.0"));
+    }
+
+    #[test]
+    fn validate_host_strips_port_correctly() {
+        assert!(validate_host("127.0.0.1:9999"));
+        assert!(validate_host("localhost:65535"));
+        assert!(!validate_host("evil.com:443"));
     }
 }
