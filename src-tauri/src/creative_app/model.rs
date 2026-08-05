@@ -1226,6 +1226,36 @@ impl AppGrant {
     pub const POLICY_PERSISTENT: &'static str = "persistent";
 }
 
+// ── Service Instance (batch 7 CR-701) ────────────────────────────────
+
+/// A service instance is a single running unit inside a runtime instance.
+/// A Compose runtime can expose multiple services; other runtimes have exactly
+/// one service (the "main" service).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceInstance {
+    pub id: String,
+    pub runtime_instance_id: String,
+    /// Service name within the runtime (e.g. "web", "db", "main").
+    pub name: String,
+    /// Readiness state: "starting", "ready", "unhealthy", "degraded", "stopped".
+    pub readiness: String,
+    /// Whether this service is required for the app to be considered healthy.
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl ServiceInstance {
+    pub const READY_STARTING: &'static str = "starting";
+    pub const READY_READY: &'static str = "ready";
+    pub const READY_UNHEALTHY: &'static str = "unhealthy";
+    pub const READY_DEGRADED: &'static str = "degraded";
+    pub const READY_STOPPED: &'static str = "stopped";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserBounds {

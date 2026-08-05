@@ -299,7 +299,7 @@ pub async fn creative_app_stop(
                 &[op::PHASE_WAITING, op::PHASE_PENDING],
                 op::PHASE_RUNNING,
             )?;
-            rt.block_on(adapters::stop(&c, &ctx_inner, &id_inner))
+            rt.block_on(adapters::facade::stop(&c, &ctx_inner, &id_inner))
         })
         .await
         .map_err(|e| Error::Internal(format!("stop join: {e}")))?
@@ -378,7 +378,9 @@ pub async fn creative_app_delete(
                 &[op::PHASE_WAITING, op::PHASE_PENDING],
                 op::PHASE_RUNNING,
             )?;
-            rt.block_on(adapters::delete(&c, &ctx_inner, &id_inner, opts_inner))
+            rt.block_on(adapters::facade::delete(
+                &c, &ctx_inner, &id_inner, opts_inner,
+            ))
         })
         .await
         .map_err(|e| Error::Internal(format!("delete join: {e}")))?
@@ -1220,8 +1222,8 @@ pub async fn creative_app_resolve_orphan(
         if restart {
             // Restart is a fresh start on a NEW runtime instance (the resolved
             // orphan is already settled to stopped, so the instance CAS passes).
-            let spawned = rt.block_on(adapters::spawn_start(&c, &ctx, &id))?;
-            let summary = rt.block_on(adapters::await_ready(&c, &ctx, &id, &spawned))?;
+            // Routes through the driver facade (CR-702).
+            let summary = rt.block_on(adapters::facade::start(&c, &ctx, &id))?;
             return runtime_store::attach_identity(&c, summary);
         }
         runtime_store::attach_identity(&c, summary)
