@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "19";
+pub const SCHEMA_VERSION: &str = "21";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1261,6 +1261,63 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         if let Err(e) = crate::creative_app::surface_store::backfill_v19(conn) {
             eprintln!("warning: surface backfill failed: {e}");
         }
+    }
+
+    // Migration v19→v20 (batch 6 CR-601): BrowserProfile table.
+    //
+    // Profiles store metadata only — never cookie content. The platform_store_key
+    // identifies the WKWebsiteDataStore for future use when per-profile isolation
+    // becomes possible on the platform.
+    if current_version < 20 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS browser_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                platform_store_key TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            -- Seed the default profile
+            INSERT OR IGNORE INTO browser_profiles (id, name, platform_store_key, is_default, created_at, updated_at)
+                VALUES ('default', 'Default', 'default', 1, datetime('now'), datetime('now'));
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '20');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v20→v21 (batch 6 CR-602/603): OAuth allowlist + app grants.
+    //
+    // oauth_allowlist: per-app domain allowlist for OAuth popup windows.
+    // app_grants: per-app capability grants (upload, download, clipboard, window_open).
+    if current_version < 21 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS oauth_allowlist (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                domain TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(application_id, domain)
+            );
+
+            CREATE TABLE IF NOT EXISTS app_grants (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                policy TEXT NOT NULL DEFAULT 'default_deny',
+                path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(application_id, kind)
+            );
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '21');
+            ",
+        )
+        .map_err(Error::Database)?;
     }
 
     // Repair path for v9 tables when a database carries an advanced marker.
