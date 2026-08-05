@@ -5569,6 +5569,10 @@ mod tests {
         let db = dir.path().join("id.db");
         let artifacts = dir.path().join("art");
         std::fs::create_dir_all(&artifacts).unwrap();
+        // Install the test DB override so RunManager recovery (which calls
+        // conversation_store::store / prompt_queue_store::store) sees the same
+        // temp store instead of requiring NATIVES_DB_PATH.
+        crate::storage::set_test_db_override(Some(db.clone()), Some(artifacts.clone()));
         let store = std::sync::Arc::new(crate::storage::DataStore::new(&db, &artifacts).unwrap());
         // Install as global so PermissionGatedTools sees data_store_ref.
         let rm = std::sync::Arc::new(RunManager::new_with_store(store.clone()));

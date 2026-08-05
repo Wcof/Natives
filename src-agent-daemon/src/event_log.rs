@@ -563,7 +563,15 @@ fn decode_payload(event_type: &str, payload_str: &str) -> Result<RunEventPayload
     }
     // Recover from untagged historical rows.
     let normalized = normalize_stored_payload(event_type, payload_str);
-    serde_json::from_str(&normalized).map_err(|e| format!("decode payload: {e}"))
+    serde_json::from_str(&normalized).or_else(|_| {
+        // Unknown/unregistered event type (e.g. a row written by a newer or
+        // foreign schema). Surface it as the forward-compatibility Unknown
+        // variant instead of failing the whole replay for one undecodable row.
+        serde_json::from_str::<RunEventPayload>(
+            &serde_json::json!({"type": "unknown", "raw": {"event_type": event_type, "payload": payload_str}}).to_string(),
+        )
+        .map_err(|e| format!("decode payload: {e}"))
+    })
 }
 
 fn decode_event_v2(
@@ -602,7 +610,14 @@ fn decode_payload_v2(event_type: &str, payload_str: &str) -> Result<RunEventKind
         return Ok(payload);
     }
     let normalized = normalize_stored_payload(event_type, payload_str);
-    serde_json::from_str(&normalized).map_err(|e| format!("decode v2 payload: {e}"))
+    serde_json::from_str(&normalized).or_else(|_| {
+        // Unknown/unregistered event type: surface as the forward-compatibility
+        // Unknown variant instead of failing the whole replay for one row.
+        serde_json::from_str::<RunEventKind>(
+            &serde_json::json!({"type": "unknown", "raw": {"event_type": event_type, "payload": payload_str}}).to_string(),
+        )
+        .map_err(|e| format!("decode v2 payload: {e}"))
+    })
 }
 
 /// Get the event type name from a RunEventPayload.
