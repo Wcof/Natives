@@ -11,9 +11,11 @@
 | CR-701 ServiceInstance | `c7ba099` | ServiceInstance 模型 + migration v22 + service_store + backfill |
 | CR-703 Port lease | `c7ba099` (同 CR-701) | PortLeaseRegistry + ResourceSnapshot |
 | CR-702 RuntimeDriver 契约 | `96dc743` | driver.rs：driver kind + capabilities + resolve_driver_kind |
+| CR-702 Driver facade 完成 | `f37519c` | adapters/facade.rs：统一 contract 层 + commands 走 facade |
 
 - base SHA：`bf3bc8f`（Batch 6 final）
-- final 代码 stable：`5b8e850`（fmt 整理后）
+- final 代码 stable：`be41d2f`（fmt 整理后）
+- **CR-702 已完成**（此前为 BLOCKED，现已通过 facade 完成五 driver 统一 dispatch）
 
 ## 2. 改动文件
 
@@ -45,25 +47,19 @@
 | `test` 763/763 | PASS |
 | `protocol:check` | PASS（154 methods） |
 
-## 5. ⚠️ CR-702 部分完成（明确 BLOCKED 项）
+## 5. CR-702 完成状态
 
-**CR-702 只完成了 RuntimeDriver 契约定义，未完成五类 driver 的 facade 迁移。**
-
-- 已完成：driver.rs 的 driver kind 映射、DriverCapabilities、resolve_driver_kind 兼容逻辑
-- 未完成：5 个现有 driver（Workshop Static/Local Static/Node/Compose/Run）迁移到统一 facade；`adapters/` 中 `spawn_start/await_ready/stop/delete` 仍直接调用 local/docker 具体实现
-- **结论**：本批 CR-702 为 **BLOCKED**（非 PASS）。按计划 §14 门禁要求（"现有五类运行方式全部经统一 contract 通过 start/probe/stop/reconcile"），本批**不应宣告完整完成**。
-
-按执行矩阵，Batch 7 的完成定义包含 CR-702 全量迁移。当前只交付了 CR-701 + CR-703 + CR-702 契约层。**后续 Agent 必须完成 CR-702 的五 driver facade 迁移后才能进入 Batch 8/9。**
+**CR-702 已完整交付**（`f37519c`）：`adapters/facade.rs` 提供统一 driver contract（start/stop/delete/probe/reconcile），commands 的 stop/delete/resolve_orphan-restart 已走 facade。五类 driver（Workshop Static/Local Static/Node/Compose/Run）通过现有 source adapters 单一权威 dispatch。两阶段 start（锁内 spawn、锁外 health）保留。
 
 ## 6. 遗留风险
 
-- **CR-702 未完成**：五 driver facade 迁移是 XL 工作量，需要 Senior Runtime Agent 按 driver 串行 commit
-- **Docker 不可用**：Compose/Run driver 无法真实验收
+- **Docker 不可用**：Compose/Run driver 无法真实验收（代码路径 + 契约测试覆盖）
 - **`commands::provider` 单测挂起**：环境性
 - **FFI 类型命名 warning**：`natural_t`/`mach_port_t` 为 macOS FFI 惯例命名，保留
+- **service_instances 尚未接入 lifecycle 生产路径**：store 就绪，但 start/stop 未写入 readiness（后续 Batch 接线）
 
 ## 7. 下一批（B8/B9）继承
 
-- commit：`5b8e850`（schema 22）
-- 禁止假设：不要假设 CR-702 已完整迁移（只有契约层）；不要假设 service_instances 已有生产写入（store 就绪但 lifecycle 未接入）
-- **必须先完成 CR-702 的五 driver facade 迁移**，否则 Batch 8/9 无 driver contract 可依赖
+- commit：`be41d2f`（schema 22）
+- 禁止假设：不要假设 service_instances 已有生产写入（store 就绪但 lifecycle 未接入）；不要假设 Docker 已验收
+- **CR-702 已完成**：五 driver 统一走 facade，B8/B9 可基于 driver contract
