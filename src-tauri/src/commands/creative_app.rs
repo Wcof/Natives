@@ -411,7 +411,10 @@ pub async fn creative_app_delete(
             // are never silently orphaned. The app identity is resolved from the
             // still-present source row; window rows cascade-delete with it.
             if let Ok(application_id) = resolve_application_id(&c, &id_inner) {
-                let browser_state = app.state::<BrowserStateHandle>();
+                // Managed in setup; try_state avoids a panic if it is ever absent.
+                let browser_state = app
+                    .try_state::<BrowserStateHandle>()
+                    .ok_or_else(|| Error::Internal("browser state not managed".into()))?;
                 let gw = window::RealWebviewGateway::new(&app, browser_state.inner());
                 window::WindowController::close_app_windows(&gw, &mut c, &application_id)?;
             }
