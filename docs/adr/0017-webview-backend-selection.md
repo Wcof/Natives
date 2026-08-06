@@ -161,6 +161,7 @@ T08（Creative BrowserProfile / OAuth / grants）在 Tauri 2.11.5 + wry 0.55.1 �
 - `browser_profiles` 从「metadata-only / forward-looking」升级为**真实能力**：每个 profile 拥有独立的 16 字节 WebKit data store 标识（`platform_store_key` = 32-hex），`browser_show` 把该标识交给 `data_store_identifier`；同一 app 的多个 WebView 共享其 app 绑定 profile，不同 app/profile 互不串站。
 - 删除 profile 时 Host 负责清理对应 data store；OAuth 临时 surface 用 `incognito`（nonPersistent store），完成/取消即清理。
 - Embed 静态 surface（`creative-app-*`）仍**仅限 loopback** 导航、永不获得 Workshop Bridge / Tauri capability；OAuth 授权走独立的 `creative-oauth-*` 临时 surface（allowlist + loopback callback）。两个 trust domain 互不混用（见 T08 `oauth.rs`）。
+- `window.open`（`window_open` grant）的允许路径被**重归入受控 child webview**（`creative-popup-*`，loopback-only + 共享 profile store），**从不使用**系统默认 OS popup（其导航不受 `on_navigation` 约束）。
 
 ### 遗留限制
 
