@@ -636,8 +636,7 @@ pub fn settle_subagent_usage(
             ));
         }
     }
-    let new_cost = (used_cost.max(0.0))
-        + cost_usd.unwrap_or(0.0).max(0.0);
+    let new_cost = (used_cost.max(0.0)) + cost_usd.unwrap_or(0.0).max(0.0);
     if let Some(max) = max_cost {
         if new_cost > max.max(0.0) {
             return Err(format!(
@@ -930,11 +929,11 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SubagentSession> 
             .unwrap_or_default(),
         tokens_used: row.get::<_, i64>(24).unwrap_or(0).max(0) as u64,
         cost_usd: row.get::<_, f64>(25).unwrap_or(0.0).max(0.0),
-        max_tokens: row
-            .get::<_, Option<i64>>(26)?
-            .map(|v| v.max(0) as u64),
+        max_tokens: row.get::<_, Option<i64>>(26)?.map(|v| v.max(0) as u64),
         max_cost_usd: row.get::<_, Option<f64>>(27)?,
-        failure_policy: row.get::<_, String>(28).unwrap_or_else(|_| "isolate".into()),
+        failure_policy: row
+            .get::<_, String>(28)
+            .unwrap_or_else(|_| "isolate".into()),
         max_retries: row.get::<_, i64>(29).unwrap_or(0).max(0) as u32,
         retry_count: row.get::<_, i64>(30).unwrap_or(0).max(0) as u32,
         reservation_released: row.get::<_, i64>(31).unwrap_or(0) != 0,
@@ -1773,7 +1772,10 @@ mod tests {
             let err = settle_subagent_usage(&sid, 1, None).unwrap_err();
             assert!(err.contains("budget exceeded"), "{err}");
             let after = get_subagent_session(&sid).unwrap().unwrap();
-            assert_eq!(after.tokens_used, 100, "over-budget amount must not persist");
+            assert_eq!(
+                after.tokens_used, 100,
+                "over-budget amount must not persist"
+            );
         });
     }
 
@@ -1861,6 +1863,39 @@ mod tests {
             assert!(a.reservation_released, "terminal child slot released");
             let b = get_subagent_session(&sid_active).unwrap().unwrap();
             assert!(!b.reservation_released, "active child keeps its slot");
+        });
+    }
+
+    #[test]
+    fn restart_keeps_durable_budget_even_after_releasing_a_slot() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, child) = temp_session(&binding);
+            let mut res = snapshot(&serde_json::json!({}));
+            res.session_id = sid.clone();
+            res.max_tokens = Some(1_000);
+            reserve_subagent_slot(&res).unwrap();
+            settle_subagent_usage(&sid, 250, None).unwrap();
+
+            let s = store().unwrap();
+            let conn = s.conn().unwrap();
+            conn.execute(
+                "UPDATE run SET status = 'interrupted' WHERE id = ?1",
+                params![child],
+            )
+            .unwrap();
+
+            // Daemon restart: the interrupted child releases its slot, but the
+            // used budget must survive for tree accounting / resume.
+            let active = recover_subagent_reservations().unwrap();
+            assert_eq!(active, 0, "interrupted child frees its slot");
+            let loaded = get_subagent_session(&sid).unwrap().unwrap();
+            assert_eq!(loaded.tokens_used, 250, "budget persists across restart");
+            assert_eq!(subagent_tree_tokens_used("tree-root").unwrap(), 250);
         });
     }
 }

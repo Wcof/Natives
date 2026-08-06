@@ -1226,47 +1226,26 @@ mod tests {
         use ChildFailureEffect::*;
         // Isolate: parent observes the failure and continues — regardless of
         // sibling state or retries left.
-        assert_eq!(
-            FailurePolicy::Isolate.on_child_failed(true, 0),
-            Isolate
-        );
-        assert_eq!(
-            FailurePolicy::Isolate.on_child_failed(false, 3),
-            Isolate
-        );
+        assert_eq!(FailurePolicy::Isolate.on_child_failed(true, 0), Isolate);
+        assert_eq!(FailurePolicy::Isolate.on_child_failed(false, 3), Isolate);
         // FailFast: one failure fails the parent immediately, even while
         // siblings are still running.
         assert_eq!(
             FailurePolicy::FailFast.on_child_failed(false, 0),
             FailParent
         );
-        assert_eq!(
-            FailurePolicy::FailFast.on_child_failed(true, 0),
-            FailParent
-        );
+        assert_eq!(FailurePolicy::FailFast.on_child_failed(true, 0), FailParent);
         // RequireAll waits for every sibling to settle before failing the
         // parent (aggregate outcome).
-        assert_eq!(
-            FailurePolicy::RequireAll.on_child_failed(false, 0),
-            Isolate
-        );
+        assert_eq!(FailurePolicy::RequireAll.on_child_failed(false, 0), Isolate);
         assert_eq!(
             FailurePolicy::RequireAll.on_child_failed(true, 0),
             FailParent
         );
         // Retry re-queues the child while retries remain; exhausting retries
         // isolates (parent continues, child is failed).
-        assert_eq!(
-            FailurePolicy::Retry.on_child_failed(true, 1),
-            Retry
-        );
-        assert_eq!(
-            FailurePolicy::Retry.on_child_failed(false, 1),
-            Retry
-        );
-        assert_eq!(
-            FailurePolicy::Retry.on_child_failed(true, 0),
-            Isolate
-        );
+        assert_eq!(FailurePolicy::Retry.on_child_failed(true, 1), Retry);
+        assert_eq!(FailurePolicy::Retry.on_child_failed(false, 1), Retry);
+        assert_eq!(FailurePolicy::Retry.on_child_failed(true, 0), Isolate);
     }
 }

@@ -5535,6 +5535,9 @@ mod tests {
 
     #[tokio::test]
     async fn subagent_task_spawns_independent_identity() {
+        // Hold the env lock so a concurrent test cannot clear the fixture flag
+        // mid-test (the fixture path is env-driven for resolve_batch_assignment).
+        let _env_guard = crate::storage::DataStore::env_test_lock();
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rt = crate::production::ProductionRuntime::new();
         // Task is Process/ProjectWrite — under ConfirmEach it asks; use autonomous for identity unit test.
@@ -5570,7 +5573,8 @@ mod tests {
                     "provider_id": "anthropic",
                     "model_id": "claude-3",
                     "key_id": "child-key-from-broker",
-                    "permission_profile": "ask"
+                    "permission_profile": "ask",
+                    "fixture": true
                 }),
                 &CancellationToken::new(),
             )

@@ -8,8 +8,8 @@
 use agent_core::{
     default_subagent_tool_allowlist, AgentEngine, ChildFailureEffect, EngineToolRuntime,
     EventSequencer, FailurePolicy, HookEvent, HookRegistry, HookRequest, NoopToolProgressSink,
-    PermissionAggregate, PermissionManager, PermissionProfile, SubAgentManager, SubAgentStatus,
-    ToolExecutionResult, ToolProgressSink, ToolProgressUpdate, ToolSchema,
+    PermissionAggregate, PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager,
+    SubAgentStatus, ToolExecutionResult, ToolProgressSink, ToolProgressUpdate, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
@@ -3026,9 +3026,7 @@ impl PermissionGatedTools {
                 &crate::subagent_store::SubagentScope {
                     project_path: self.gateway.project_root.clone(),
                     project_id: project_id_for_scope.clone(),
-                    project_identity_version: identity
-                        .as_ref()
-                        .map(|i| i.identity_version as i64),
+                    project_identity_version: identity.as_ref().map(|i| i.identity_version as i64),
                     permission_profile: Some(child_perm.clone()),
                     agent_profile_id: child_profile_id.clone(),
                     max_steps: Some(child_max_steps as i64),
@@ -4016,11 +4014,9 @@ async fn watch_subagent_run(
                             budget_exceeded = Some(e);
                         }
                         Ok(()) => {
-                            if let Ok(tree_used) =
-                                crate::subagent_store::subagent_tree_tokens_used(
-                                    &tree_root_for_budget,
-                                )
-                            {
+                            if let Ok(tree_used) = crate::subagent_store::subagent_tree_tokens_used(
+                                &tree_root_for_budget,
+                            ) {
                                 if tree_used > max_tokens_per_tree {
                                     budget_exceeded = Some(format!(
                                         "subagent tree token budget exceeded ({tree_used}/{max_tokens_per_tree})"
@@ -4288,11 +4284,8 @@ async fn child_completed_terminal(
         let _ = subagents
             .update_status(mem_task_id, SubAgentStatus::Failed(task_output.clone()))
             .await;
-        let _ = crate::subagent_store::close_subagent_session(
-            session_id,
-            "failed",
-            Some(&task_output),
-        );
+        let _ =
+            crate::subagent_store::close_subagent_session(session_id, "failed", Some(&task_output));
     }
     // RequireAll: the batch fails when every sibling is settled and any failed.
     if failure_policy == FailurePolicy::RequireAll {
@@ -4388,9 +4381,7 @@ async fn child_failed_terminal(
             Ok(new_run_id) => {
                 let _ = subagents.update_run_id(mem_task_id, &new_run_id).await;
                 let _ = crate::subagent_store::update_subagent_session_status(
-                    session_id,
-                    "running",
-                    None,
+                    session_id, "running", None,
                 );
                 if let Some(rec) = task_outputs.lock().await.get_mut(task_id) {
                     rec.run_id = new_run_id.clone();
@@ -4541,8 +4532,8 @@ async fn requeue_child_run(
     } else {
         format!("{}", session.task)
     };
-    let created = crate::global_run_manager().create_run(
-        assistant_protocol::v2::CreateRunRequest {
+    let created =
+        crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
             capability_selection: None,
             conversation_id: child_conversation_id.to_string(),
             provider_id: binding.provider_id.clone(),
@@ -4558,8 +4549,7 @@ async fn requeue_child_run(
             idempotency_key: None,
             effort: None,
             runtime_id: Some("native".into()),
-        },
-    )?;
+        })?;
     crate::global_run_manager()
         .runtime
         .set_run_tool_allowlist(&created.id, child_allowlist.to_vec())
@@ -4991,6 +4981,122 @@ mod tests {
             0,
             "registry is quiet after settle"
         );
+    }
+
+    /// T05 FailFast action: one child failure cancels every sibling and fails
+    /// the parent run — the parent-side outcome the watcher applies.
+    #[tokio::test]
+    async fn fail_fast_action_cancels_siblings_and_fails_parent() {
+        let _env = crate::storage::DataStore::env_test_lock();
+        // Restore env on drop so `NATIVES_RUN_MANAGER_MEMORY` cannot leak into
+        // later tests in the same process.
+        let _env_restore = crate::storage::EnvRestore::capture();
+        // Memory-only global RunManager (hermetic; the durable budget side is
+        // covered by the subagent_store restart/recovery tests).
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
+        let rm = crate::run_manager::RunManager::new();
+        let make_run = |conversation_id: &str, parent: Option<&str>| {
+            rm.create_run(assistant_protocol::v2::CreateRunRequest {
+                capability_selection: None,
+                conversation_id: conversation_id.to_string(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: Some("k".into()),
+                agent_profile_id: None,
+                permission_profile: Some("full_access".into()),
+                content: Some("x".into()),
+                attachments: None,
+                max_steps: Some(5),
+                parent_run_id: parent.map(|p| p.to_string()),
+                project_path: None,
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            })
+            .unwrap()
+        };
+        let probe_parent = make_run("c-ff", None);
+        let parent = make_run("c-ff", None);
+        let child_a = make_run("c-ff", Some(&parent.id));
+        let child_b = make_run("c-ff", Some(&parent.id));
+
+        let subagents = Arc::new(SubAgentManager::new(SubAgentConfig::default()));
+        subagents.register_root_depth(&parent.id).await;
+        let a = subagents
+            .register(
+                "session-a".into(),
+                child_a.id.clone(),
+                &parent.id,
+                "a".into(),
+                1,
+                "openai".into(),
+                "k".into(),
+                "gpt-4o".into(),
+                "ask".into(),
+                vec!["read_file".into()],
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let b = subagents
+            .register(
+                "session-b".into(),
+                child_b.id.clone(),
+                &parent.id,
+                "b".into(),
+                1,
+                "openai".into(),
+                "k".into(),
+                "gpt-4o".into(),
+                "ask".into(),
+                vec!["read_file".into()],
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        crate::run_manager::install_global_for_test(rm);
+
+        // Probe: a queued run must be able to fail (FailFast depends on it).
+        let commit_result = crate::global_run_manager().commit_status(
+            &probe_parent.id,
+            assistant_protocol::v2::RunStatusV2::Failed,
+            agent_core::TransitionMetadata::empty()
+                .with_error_code("PROBE")
+                .with_lifecycle_hint("failed"),
+        );
+        match &commit_result {
+            Ok(run) => assert_eq!(
+                run.status.as_str(),
+                "failed",
+                "commit_status Ok must report the failed run: {run:?}"
+            ),
+            Err(e) => panic!("queued → failed must be legal for FailFast: {e}"),
+        }
+
+        fail_parent_and_cancel_siblings(&subagents, &parent.id, "injected child failure").await;
+
+        assert_eq!(
+            subagents.get(&a.id).await.unwrap().status,
+            SubAgentStatus::Cancelled,
+            "FailFast must cancel sibling A"
+        );
+        assert_eq!(
+            subagents.get(&b.id).await.unwrap().status,
+            SubAgentStatus::Cancelled,
+            "FailFast must cancel sibling B"
+        );
+        let parent_run = crate::global_run_manager().get_run(&parent.id).unwrap();
+        assert_eq!(
+            parent_run.status.as_str(),
+            "failed",
+            "FailFast must fail the parent run"
+        );
+        crate::run_manager::install_memory_global_for_test();
     }
 }
 
