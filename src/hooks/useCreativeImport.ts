@@ -7,6 +7,7 @@
 //! shell because it spans multiple modals; this hook owns the entry + install.
 
 import { useCallback, useState } from 'react';
+import { classifyError } from '@/lib/error-classifier';
 import type { CreativeAppSummary } from '@/lib/tauri-adapter';
 
 export type AddMenu = 'closed' | 'open';
@@ -36,7 +37,7 @@ export function useCreativeImport() {
         if (!zip) return;
         await beginImport(zip, zip.split('/').pop() || zip);
       } catch (err) {
-        onToast(String(err));
+        onToast(classifyError(err).userMessage);
       }
     },
     [],
@@ -53,7 +54,7 @@ export function useCreativeImport() {
           await window.nativesAPI?.creativeApp?.previewLocalDependencyInstall?.(app.id);
         if (preview) setDepCommand([preview.program, ...preview.args].join(' '));
       } catch (err) {
-        onToast(String(err));
+        onToast(classifyError(err).userMessage);
       }
     },
     [],
@@ -69,7 +70,7 @@ export function useCreativeImport() {
         setDepInstallFor(null);
         onDone();
       } catch (err) {
-        onToast(String(err));
+        onToast(classifyError(err).userMessage);
       } finally {
         setDepInstalling(false);
       }

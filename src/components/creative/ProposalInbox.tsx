@@ -20,6 +20,13 @@ export interface ProposalInboxProps {
   onRegistered: (proposal: CreativeAppProposal) => void;
 }
 
+/**
+ * Resolves `true` only when the decision actually changed (approved/rejected).
+ * A duplicate `already_decided` event resolves `false` so the card skips its
+ * success toast.
+ */
+export type ProposalDecision = (proposal: CreativeAppProposal) => Promise<boolean>;
+
 export default function ProposalInbox({
   proposals,
   onDismissed,
@@ -32,7 +39,7 @@ export default function ProposalInbox({
 
   if (proposals.length === 0) return null;
 
-  const approve = async (proposal: CreativeAppProposal) => {
+  const approve = async (proposal: CreativeAppProposal): Promise<boolean> => {
     const key = proposal.proposalId;
     setProcessing((prev) => new Set(prev).add(key));
     try {
@@ -40,10 +47,14 @@ export default function ProposalInbox({
       if (result?.status === 'approved') {
         onRegistered(proposal);
         onDismissed(proposal);
+        return true;
       }
-      // `already_decided` keeps the card; the host already made the decision.
-      // Any error propagates (no catch here) so the card shows it and stays
-      // visible — never a swallowed silent success.
+      // `already_decided` (or a null result): the host already settled this
+      // proposal. Keep the card until the next list reload, but report "no
+      // state change" so the card never toasts a fresh success for a duplicate
+      // event. Any error propagates (no catch here) so the card shows it and
+      // stays visible — never a swallowed silent success.
+      return false;
     } finally {
       setProcessing((prev) => {
         const next = new Set(prev);
@@ -53,14 +64,16 @@ export default function ProposalInbox({
     }
   };
 
-  const reject = async (proposal: CreativeAppProposal) => {
+  const reject = async (proposal: CreativeAppProposal): Promise<boolean> => {
     const key = proposal.proposalId;
     setProcessing((prev) => new Set(prev).add(key));
     try {
       const result = await window.nativesAPI?.creativeApp?.proposalReject?.(key);
       if (result?.status === 'rejected') {
         onDismissed(proposal);
+        return true;
       }
+      return false;
     } finally {
       setProcessing((prev) => {
         const next = new Set(prev);
