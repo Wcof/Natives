@@ -1021,64 +1021,83 @@ pub async fn creative_app_proposal_approve(
         let op_id = op::create_operation(&c, None, "proposal_approve", "user", Some(&redacted))?;
         op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_RUNNING)?;
 
-        // Pin the executable approval record BEFORE the CAS so a verification
-        // failure leaves the proposal pending (the user sees the error and can
-        // still reject).
-        if !canonical.is_empty() {
-            proposal_inbox::record_executable_approval(
+        // Everything from here on is a single decision transaction: a failure
+        // settles the journal op and (when we already CASed to approved) marks
+        // the proposal failed — the card never sees a silent success.
+        let decision: crate::Result<ProposalApproveResult> = (|| {
+            // Pin the executable approval record BEFORE the CAS so a
+            // verification failure leaves the proposal pending (the user sees
+            // the error and can still reject).
+            if !canonical.is_empty() {
+                proposal_inbox::record_executable_approval(
+                    &c,
+                    &canonical,
+                    &identity,
+                    &format!("proposal:{proposal_id}"),
+                    "user",
+                    &proposal_id,
+                )?;
+            }
+
+            if !proposal_inbox::cas_status(
                 &c,
-                &canonical,
-                &identity,
-                &format!("proposal:{proposal_id}"),
-                "user",
                 &proposal_id,
-            )?;
-        }
+                proposal_inbox::STATUS_PENDING,
+                proposal_inbox::STATUS_APPROVED,
+            )? {
+                return Ok(ProposalApproveResult::AlreadyDecided {
+                    proposal_id: proposal_id.clone(),
+                    current_status: stored.status.clone(),
+                });
+            }
 
-        if !proposal_inbox::cas_status(
-            &c,
-            &proposal_id,
-            proposal_inbox::STATUS_PENDING,
-            proposal_inbox::STATUS_APPROVED,
-        )? {
-            op::finish_failure(
-                &c,
-                op_id,
-                Some("proposal_already_decided"),
-                "concurrent decision",
-            )?;
-            emit_operation(&handle, &c, op_id)?;
-            return Ok(ProposalApproveResult::AlreadyDecided {
-                proposal_id: proposal_id.clone(),
-                current_status: stored.status.clone(),
-            });
-        }
+            match register_proposal_app(&mut c, &verified_proposal) {
+                Ok(summary) => Ok(ProposalApproveResult::Approved {
+                    proposal_id: proposal_id.clone(),
+                    app: summary,
+                }),
+                Err(e) => {
+                    // Registration failed — CAS approved → failed (terminal).
+                    let _ = proposal_inbox::cas_status(
+                        &c,
+                        &proposal_id,
+                        proposal_inbox::STATUS_APPROVED,
+                        proposal_inbox::STATUS_FAILED,
+                    );
+                    Err(e)
+                }
+            }
+        })();
 
-        match register_proposal_app(&mut c, &verified_proposal) {
-            Ok(summary) => {
+        match decision {
+            Ok(ProposalApproveResult::Approved {
+                proposal_id: pid,
+                app,
+            }) => {
                 op::finish_success(&c, op_id)?;
                 emit_operation(&handle, &c, op_id)?;
                 crate::emit_db_state_changed(
                     &handle,
                     "creative-app",
-                    serde_json::json!({ "action": "proposal_approved", "id": summary.id }),
+                    serde_json::json!({ "action": "proposal_approved", "id": app.id }),
                 );
                 Ok(ProposalApproveResult::Approved {
-                    proposal_id: proposal_id.clone(),
-                    app: summary,
+                    proposal_id: pid,
+                    app,
                 })
             }
-            Err(e) => {
-                // Registration failed — CAS pending → failed (terminal) and
-                // return the error. The approval card stays visible with the
-                // error; it is never shown as success.
-                let _ = proposal_inbox::cas_status(
+            Ok(result @ ProposalApproveResult::AlreadyDecided { .. }) => {
+                op::finish_failure(
                     &c,
-                    &proposal_id,
-                    proposal_inbox::STATUS_APPROVED,
-                    proposal_inbox::STATUS_FAILED,
-                );
-                op::finish_failure(&c, op_id, Some("proposal_register_failed"), &e.to_string())?;
+                    op_id,
+                    Some("proposal_already_decided"),
+                    "concurrent decision",
+                )?;
+                emit_operation(&handle, &c, op_id)?;
+                Ok(result)
+            }
+            Err(e) => {
+                op::finish_failure(&c, op_id, Some("proposal_approve_failed"), &e.to_string())?;
                 emit_operation(&handle, &c, op_id)?;
                 Err(e)
             }
