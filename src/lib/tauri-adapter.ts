@@ -408,6 +408,62 @@ export type CreativeAppProposalRejectResult =
   | { status: 'rejected'; proposalId: string }
   | { status: 'already_decided'; proposalId: string; currentStatus: string };
 
+// ── T08: BrowserProfile / grants / OAuth ─────────────────────────────
+
+export interface BrowserProfile {
+  id: string;
+  name: string;
+  platformStoreKey: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProfileBinding {
+  applicationId: string;
+  profileId: string;
+  updatedAt: string;
+}
+
+export interface AppGrant {
+  id: string;
+  applicationId: string;
+  kind: string;
+  policy: string;
+  path?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GrantEvent {
+  id: string;
+  applicationId: string;
+  kind: string;
+  event: string;
+  policy?: string | null;
+  path?: string | null;
+  createdAt: string;
+}
+
+export interface OAuthAllowlistEntry {
+  id: string;
+  applicationId: string;
+  domain: string;
+  createdAt: string;
+}
+
+export interface OAuthFlowResult {
+  ok: boolean;
+  callback: Record<string, string>;
+}
+
+/** Emitted by the Host when a download/window.open is denied so the UI can prompt. */
+export interface CreativeGrantRequested {
+  appId: string;
+  kind: string;
+  target: string;
+}
+
 export interface LaunchPlan {
   schemaVersion: 1;
   source: 'rule' | 'user' | 'ai';
@@ -775,6 +831,24 @@ export interface NativesAPI {
     browserHide: (appId: string) => Promise<void>;
     browserClose: (appId: string) => Promise<void>;
     browserCurrent: (appId: string) => Promise<{ appId?: string | null; url?: string | null }>;
+    // T08: BrowserProfile / grants / OAuth
+    profileList: () => Promise<BrowserProfile[]>;
+    profileCreate: (name: string) => Promise<BrowserProfile>;
+    profileDelete: (profileId: string) => Promise<void>;
+    profileBindings: () => Promise<ProfileBinding[]>;
+    profileBind: (appId: string, profileId: string) => Promise<void>;
+    profileUnbind: (appId: string) => Promise<void>;
+    grantSet: (appId: string, kind: string, policy: string, path?: string | null) => Promise<AppGrant>;
+    grantList: (appId: string) => Promise<AppGrant[]>;
+    grantDelete: (grantId: string) => Promise<void>;
+    grantEvents: (appId: string, limit?: number) => Promise<GrantEvent[]>;
+    uploadFiles: (appId: string) => Promise<string[]>;
+    clipboardRead: (appId: string) => Promise<string>;
+    clipboardWrite: (appId: string, text: string) => Promise<void>;
+    oauthDomains: (appId: string) => Promise<OAuthAllowlistEntry[]>;
+    oauthStart: (appId: string, authorizeUrl: string) => Promise<OAuthFlowResult>;
+    oauthCancel: (flowId: string) => Promise<void>;
+    onGrantRequested: (callback: (event: CreativeGrantRequested) => void) => () => void;
     // CR-501: Surface / Endpoint / Window
     surfaceList: (applicationId: string) => Promise<CreativeAppSurface[]>;
     windowList: (applicationId: string) => Promise<CreativeAppWindow[]>;
@@ -1422,6 +1496,49 @@ const nativesAPI: NativesAPI = {
     browserClose: (appId: string) => cmd('creative_app_browser_close', { appId }),
     browserCurrent: (appId: string) =>
       cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current', { appId }),
+    // T08: BrowserProfile / grants / OAuth
+    profileList: () => cmd<BrowserProfile[]>('creative_app_profile_list'),
+    profileCreate: (name: string) =>
+      cmd<BrowserProfile>('creative_app_profile_create', { name }),
+    profileDelete: (profileId: string) =>
+      cmd('creative_app_profile_delete', { profileId }),
+    profileBindings: () => cmd<ProfileBinding[]>('creative_app_profile_bindings'),
+    profileBind: (appId: string, profileId: string) =>
+      cmd('creative_app_profile_bind', { appId, profileId }),
+    profileUnbind: (appId: string) =>
+      cmd('creative_app_profile_unbind', { appId }),
+    grantSet: (appId: string, kind: string, policy: string, path?: string | null) =>
+      cmd<AppGrant>('creative_app_grant_set', { appId, kind, policy, path: path ?? null }),
+    grantList: (appId: string) =>
+      cmd<AppGrant[]>('creative_app_grant_list', { appId }),
+    grantDelete: (grantId: string) =>
+      cmd('creative_app_grant_delete', { grantId }),
+    grantEvents: (appId: string, limit?: number) =>
+      cmd<GrantEvent[]>('creative_app_grant_events', { appId, limit }),
+    uploadFiles: (appId: string) =>
+      cmd<string[]>('creative_app_upload_files', { appId }),
+    clipboardRead: (appId: string) =>
+      cmd<string>('creative_app_clipboard_read', { appId }),
+    clipboardWrite: (appId: string, text: string) =>
+      cmd('creative_app_clipboard_write', { appId, text }),
+    oauthDomains: (appId: string) =>
+      cmd<OAuthAllowlistEntry[]>('creative_app_oauth_domains', { appId }),
+    oauthStart: (appId: string, authorizeUrl: string) =>
+      cmd<OAuthFlowResult>('creative_app_oauth_start', { appId, authorizeUrl }),
+    oauthCancel: (flowId: string) =>
+      cmd('creative_app_oauth_cancel', { flowId }),
+    onGrantRequested: (callback: (event: CreativeGrantRequested) => void) => {
+      const unlisten = listen<{ channel: string; data: CreativeGrantRequested }>(
+        'db-state-changed',
+        (event) => {
+          if (event.payload?.channel !== 'creative-grant-requested') return;
+          if (event.payload?.data) callback(event.payload.data);
+        },
+      );
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    },
     // CR-501: Surface / Endpoint / Window
     surfaceList: (applicationId: string) =>
       cmd<CreativeAppSurface[]>('creative_app_surface_list', { applicationId }),

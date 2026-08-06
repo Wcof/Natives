@@ -322,6 +322,10 @@ pub fn run() {
                 creative_app::browser::BrowserState::new(),
             ));
             app.manage(creative_app::local::new_runtime_manager());
+            // T08: OAuth temp-surface flow registry (shareable Arc for handlers).
+            app.manage(std::sync::Arc::new(
+                creative_app::oauth::OAuthFlowRegistry::default(),
+            ));
 
             // Converge leftover installing/starting/stopping/deleting vs Docker labels
             {
@@ -554,6 +558,23 @@ pub fn run() {
             commands::creative_app::creative_app_browser_hide,
             commands::creative_app::creative_app_browser_close,
             commands::creative_app::creative_app_browser_current,
+            // T08: BrowserProfile / grants / OAuth
+            commands::creative_app::creative_app_profile_list,
+            commands::creative_app::creative_app_profile_create,
+            commands::creative_app::creative_app_profile_delete,
+            commands::creative_app::creative_app_profile_bindings,
+            commands::creative_app::creative_app_profile_bind,
+            commands::creative_app::creative_app_profile_unbind,
+            commands::creative_app::creative_app_grant_set,
+            commands::creative_app::creative_app_grant_list,
+            commands::creative_app::creative_app_grant_delete,
+            commands::creative_app::creative_app_grant_events,
+            commands::creative_app::creative_app_upload_files,
+            commands::creative_app::creative_app_clipboard_read,
+            commands::creative_app::creative_app_clipboard_write,
+            commands::creative_app::creative_app_oauth_domains,
+            creative_app::oauth::creative_app_oauth_start,
+            creative_app::oauth::creative_app_oauth_cancel,
             // CR-501: Surface / Endpoint / Window
             commands::creative_app::creative_app_surface_list,
             commands::creative_app::creative_app_window_list,

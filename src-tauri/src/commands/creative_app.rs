@@ -7,10 +7,12 @@
 use crate::creative_app::adapters::{self, LifecycleCtx, ResolvedSource};
 use crate::creative_app::browser::{self, BrowserStateHandle};
 use crate::creative_app::docker;
+use crate::creative_app::grant_store;
 use crate::creative_app::install;
 use crate::creative_app::local::{self, LocalRuntimeHandle};
 use crate::creative_app::model::*;
 use crate::creative_app::operation as op;
+use crate::creative_app::profile_store::{self, ProfileBinding};
 use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
@@ -20,6 +22,7 @@ use crate::db::DbPool;
 use crate::emit_db_state_changed;
 use crate::{Error, Result};
 use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::AppState;
 
@@ -904,6 +907,248 @@ pub fn creative_app_browser_current(
         }
     }
     Ok(serde_json::json!({ "appId": null, "url": null }))
+}
+
+// ── T08: Browser profiles ───────────────────────────────────────
+
+#[tauri::command]
+pub fn creative_app_profile_list(state: State<'_, AppState>) -> Result<Vec<BrowserProfile>> {
+    let c = conn(&state.db)?;
+    profile_store::list_profiles(&c)
+}
+
+#[tauri::command]
+pub fn creative_app_profile_create(
+    name: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<BrowserProfile> {
+    let c = conn(&state.db)?;
+    let id = profile_store::create_profile(&c, name.trim(), false)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-profile",
+        serde_json::json!({ "action": "create", "profileId": id }),
+    );
+    profile_store::find_profile(&c, &id)?
+        .ok_or_else(|| Error::Internal("profile vanished after create".into()))
+}
+
+#[tauri::command]
+pub fn creative_app_profile_delete(
+    profile_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    profile_store::delete_profile(&c, &profile_id)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-profile",
+        serde_json::json!({ "action": "delete", "profileId": profile_id }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn creative_app_profile_bindings(state: State<'_, AppState>) -> Result<Vec<ProfileBinding>> {
+    let c = conn(&state.db)?;
+    profile_store::list_profile_bindings(&c)
+}
+
+#[tauri::command]
+pub fn creative_app_profile_bind(
+    app_id: String,
+    profile_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    profile_store::bind_profile_to_app(&c, &app_id, &profile_id)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-profile",
+        serde_json::json!({ "action": "bind", "appId": app_id, "profileId": profile_id }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn creative_app_profile_unbind(
+    app_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    profile_store::unbind_profile(&c, &app_id)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-profile",
+        serde_json::json!({ "action": "unbind", "appId": app_id }),
+    );
+    Ok(())
+}
+
+// ── T08: App grants ─────────────────────────────────────────────
+
+#[tauri::command]
+pub fn creative_app_grant_set(
+    app_id: String,
+    kind: String,
+    policy: String,
+    path: Option<String>,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppGrant> {
+    let c = conn(&state.db)?;
+    if ![
+        AppGrant::KIND_UPLOAD,
+        AppGrant::KIND_DOWNLOAD,
+        AppGrant::KIND_CLIPBOARD,
+        AppGrant::KIND_WINDOW_OPEN,
+    ]
+    .contains(&kind.as_str())
+    {
+        return Err(Error::InvalidInput(format!("unknown grant kind '{kind}'")));
+    }
+    if ![
+        AppGrant::POLICY_DEFAULT_DENY,
+        AppGrant::POLICY_ONE_TIME,
+        AppGrant::POLICY_PERSISTENT,
+    ]
+    .contains(&policy.as_str())
+    {
+        return Err(Error::InvalidInput(format!(
+            "unknown grant policy '{policy}'"
+        )));
+    }
+    grant_store::set_grant(&c, &app_id, &kind, &policy, path.as_deref())?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-grant",
+        serde_json::json!({ "action": "set", "appId": app_id, "kind": kind }),
+    );
+    grant_store::get_grant(&c, &app_id, &kind)
+}
+
+#[tauri::command]
+pub fn creative_app_grant_list(
+    app_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<AppGrant>> {
+    let c = conn(&state.db)?;
+    grant_store::list_grants(&c, &app_id)
+}
+
+#[tauri::command]
+pub fn creative_app_grant_delete(
+    grant_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    grant_store::delete_grant(&c, &grant_id)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-grant",
+        serde_json::json!({ "action": "delete", "grantId": grant_id }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn creative_app_grant_events(
+    app_id: String,
+    limit: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<GrantEvent>> {
+    let c = conn(&state.db)?;
+    grant_store::list_grant_events(&c, &app_id, limit.unwrap_or(50).clamp(1, 200))
+}
+
+/// Upload: the user picks files via the OS dialog; only the user-chosen
+/// absolute paths are exposed to the caller. Requires an `upload` grant
+/// (one-time atomic or persistent); a grant path scope presets the dialog dir.
+#[tauri::command]
+pub async fn creative_app_upload_files(
+    app_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>> {
+    let scope = {
+        let c = conn(&state.db)?;
+        let outcome = grant_store::check_grant(&c, &app_id, AppGrant::KIND_UPLOAD, None)?;
+        if !outcome.allowed() {
+            return Err(Error::InvalidInput(
+                "upload permission not granted for this app".into(),
+            ));
+        }
+        grant_store::grant_scope(&c, &app_id, AppGrant::KIND_UPLOAD)?
+    };
+    let mut dialog = app_handle.dialog().file();
+    if let Some(scope) = scope {
+        dialog = dialog.set_directory(std::path::PathBuf::from(scope));
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.pick_files(move |files| {
+        let paths = files
+            .map(|list| {
+                list.into_iter()
+                    .filter_map(|p| p.into_path().ok())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = tx.send(paths);
+    });
+    let paths = rx
+        .await
+        .map_err(|e| Error::Internal(format!("file picker failed: {e}")))?;
+    if paths.is_empty() {
+        return Err(Error::Cancelled("upload cancelled by user".into()));
+    }
+    Ok(paths)
+}
+
+/// Clipboard read through the Host, gated by a `clipboard` grant. The child
+/// webview has no Tauri capability; this is the only clipboard path.
+#[tauri::command]
+pub fn creative_app_clipboard_read(app_id: String, state: State<'_, AppState>) -> Result<String> {
+    let c = conn(&state.db)?;
+    let outcome = grant_store::check_grant(&c, &app_id, AppGrant::KIND_CLIPBOARD, None)?;
+    if !outcome.allowed() {
+        return Err(Error::InvalidInput(
+            "clipboard permission not granted for this app".into(),
+        ));
+    }
+    super::clipboard::clipboard_read()
+}
+
+/// Clipboard write through the Host, gated by a `clipboard` grant.
+#[tauri::command]
+pub fn creative_app_clipboard_write(
+    app_id: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    let outcome = grant_store::check_grant(&c, &app_id, AppGrant::KIND_CLIPBOARD, None)?;
+    if !outcome.allowed() {
+        return Err(Error::InvalidInput(
+            "clipboard permission not granted for this app".into(),
+        ));
+    }
+    super::clipboard::clipboard_write(text)
+}
+
+/// List the OAuth allowlist domains for an app.
+#[tauri::command]
+pub fn creative_app_oauth_domains(
+    app_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<OAuthAllowlistEntry>> {
+    let c = conn(&state.db)?;
+    grant_store::list_oauth_domains(&c, &app_id)
 }
 
 /// List all surfaces for the given application (CR-501).

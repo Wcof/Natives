@@ -1353,8 +1353,9 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration v22→v23: creative proposal inbox + executable approval records
-    // (T06) and window_instances URL/reconcile truth (T07). Incremental
-    // tables/columns only — no DROP, no user-data rebuild.
+    // (T06), window_instances URL/reconcile truth (T07), and real browser
+    // profiles + grant history (T08). Incremental tables/columns only — no
+    // DROP, no user-data rebuild.
     if current_version < 23 {
         conn.execute_batch(
             "
@@ -1382,6 +1383,25 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_executable_approval_path
                 ON creative_executable_approval(canonical_path);
+
+            CREATE TABLE IF NOT EXISTS browser_profile_bindings (
+                application_id TEXT PRIMARY KEY REFERENCES applications(id) ON DELETE CASCADE,
+                profile_id TEXT NOT NULL REFERENCES browser_profiles(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS grant_events (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                event TEXT NOT NULL,
+                policy TEXT,
+                path TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_grant_events_app
+                ON grant_events(application_id, created_at);
             ",
         )
         .map_err(Error::Database)?;
@@ -1414,6 +1434,35 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
                 "ALTER TABLE window_instances ADD COLUMN reconcile_state TEXT NOT NULL DEFAULT 'ok';",
             )
             .map_err(Error::Database)?;
+        }
+        // T08: repair non-hex platform_store_key rows (pre-v23 placeholders
+        // like 'default') to a deterministic 16-byte identifier from the
+        // profile id, so a profile's cookies survive restart.
+        let profiles: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, platform_store_key FROM browser_profiles")
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(Error::Database)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(Error::Database)?);
+            }
+            out
+        };
+        let is_hex_key = |key: &str| key.len() == 32 && key.chars().all(|c| c.is_ascii_hexdigit());
+        for (id, key) in profiles {
+            if !is_hex_key(&key) {
+                let repaired = crate::creative_app::profile_store::store_key_for_id(&id);
+                conn.execute(
+                    "UPDATE browser_profiles SET platform_store_key = ?1 WHERE id = ?2",
+                    rusqlite::params![repaired, id],
+                )
+                .map_err(Error::Database)?;
+            }
         }
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23')",

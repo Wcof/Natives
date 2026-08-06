@@ -2,7 +2,7 @@
 
 ## 状态
 
-**DRAFT** — 2026-08-04 平台 spike 实验记录。本 ADR 记录 macOS 26.5.2 + Tauri 2.11.2 上的实际测试数据，以决定 Embed Surface 的多 WebView 后端方案。
+**DRAFT → APPROVED (T08 spike, 2026-08-06)** — 平台 spike 实验记录。本 ADR 记录 macOS 26.5.2 + Tauri 2.11.2 上的实际测试数据，以决定 Embed Surface 的多 WebView 后端方案。T08 在 Tauri 2.11.5 / wry 0.55.1 上追加了 per-profile data store 实测，修订了「Cookie 无法按 profile 隔离」的旧结论（见「T08 更新」）。
 
 ## 上下文
 
@@ -145,6 +145,29 @@ Creative OS Embed 需要为每个外部应用（Web 模块、预览、OAuth 回�
 ## 附录: WebKit 版本详情
 
 macOS 26.5.2 的 WebKit 版本对应 Safari 26.x 的 WebKit 引擎。具体版本号可通过 `sw_vers -productVersion` 和 `system_profiler SPApplicationsDataType | grep -i webkit` 获取。
+
+## T08 更新: per-profile data store 实测（2026-08-06）
+
+T08（Creative BrowserProfile / OAuth / grants）在 Tauri 2.11.5 + wry 0.55.1 上复核了 profile/cookie 隔离能力，结论修订如下。
+
+### 平台能力
+
+- wry 0.55.1 在 macOS ≥ 14 / iOS ≥ 17 走 `WKWebsiteDataStore(dataStoreForIdentifier:)`；Tauri 2.11.5 的 `WebviewBuilder::data_store_identifier([u8;16])` 直通该 API（`tauri-runtime-wry` → `with_data_store_identifier`）。
+- 因此 cookie / localStorage / IndexedDB / service worker **可以按 profile 隔离、持久**；`AppHandle::remove_data_store(uuid)` / `fetch_data_store_identifiers()` 可清理与枚举 store。
+- 旧结论「所有 WKWebView 共享同一 data store、无法按 profile 隔离」基于 Tauri 2.11.2 时期；现平台已支持，**该限制取消**。
+
+### 对产品声明的影响
+
+- `browser_profiles` 从「metadata-only / forward-looking」升级为**真实能力**：每个 profile 拥有独立的 16 字节 WebKit data store 标识（`platform_store_key` = 32-hex），`browser_show` 把该标识交给 `data_store_identifier`；同一 app 的多个 WebView 共享其 app 绑定 profile，不同 app/profile 互不串站。
+- 删除 profile 时 Host 负责清理对应 data store；OAuth 临时 surface 用 `incognito`（nonPersistent store），完成/取消即清理。
+- Embed 静态 surface（`creative-app-*`）仍**仅限 loopback** 导航、永不获得 Workshop Bridge / Tauri capability；OAuth 授权走独立的 `creative-oauth-*` 临时 surface（allowlist + loopback callback）。两个 trust domain 互不混用（见 T08 `oauth.rs`）。
+- `window.open`（`window_open` grant）的允许路径被**重归入受控 child webview**（`creative-popup-*`，loopback-only + 共享 profile store），**从不使用**系统默认 OS popup（其导航不受 `on_navigation` 约束）。
+
+### 遗留限制
+
+- `data_store_identifier` 是 per-WebView store 绑定，不是 per-process 隔离；多 WebView 仍共享进程。真正进程级隔离（`_WKProcessPool`）仍不可用，维持拒绝方案 C。
+- OAuth 回调判定为「临时 surface 内任意 loopback 导航」；多段 loopback 流程（本地登录页先于 callback）会把第一段 loopback 当作回调。T08 按「authorize → 一次性 callback」契约交付，超出契约的流程需后续 ADR 扩展。
+- **OAuth 凭证边界（R-S12/R-S13）**：T08 的 Host 边界是受控授权 surface（allowlist 导航 + 临时 incognito window + 完成/取消清理）。临时 surface 不持久化任何 token/refresh；回调仅携带授权 code 返回给发起方做 app 专属 exchange（Redirect URI 需与 app 在 Provider 注册的 loopback 回调一致，Host 无法替 app 构造 authorize URL）。exchange 得到的 refresh token 必须经现有 `capability_secrets`（AES-256-GCM envelope，R-S12）持久化，禁止明文落盘。Host 侧完整 exchange 路径由 `mcp_oauth_start`（ADR-0016 decision 7）提供，面向已知 token endpoint 的场景。
 
 ## 参考
 
