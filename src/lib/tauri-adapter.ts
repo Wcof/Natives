@@ -355,8 +355,15 @@ export interface CreativeAppWindow {
   updatedAt: string;
 }
 
-// CR-1001/1002: Agent proposal (versioned, Host-gated)
-export interface CreativeAppProposal {
+// CR-1001/1002: Agent proposal (versioned, Host-gated).
+//
+// The wire field is `environmentKeys` (Rust serde camelCase). A `envKeys`
+// twin silently drops the field — `protocol:check` forbids it. The proposal is
+// referenced by its stable `proposalId` (Daemon-generated); approve/reject
+// operate on that id and never re-send the executable body.
+
+/** The proposal body the Host validates (no inbox bookkeeping). */
+export interface CreativeAppProposalPayload {
   schemaVersion: number;
   kind: 'create' | 'start';
   ownership: 'managed' | 'attached' | 'remote';
@@ -365,7 +372,18 @@ export interface CreativeAppProposal {
   driver: CreativeAppProposedDriver;
   openPath: string;
   healthPath: string;
-  envKeys: string[];
+  environmentKeys: string[];
+}
+
+/** A pending inbox entry: the validated proposal flattened with bookkeeping. */
+export interface CreativeAppProposal extends CreativeAppProposalPayload {
+  proposalId: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  runId: string;
+  turnId?: string | null;
+  toolCallId: string;
 }
 
 export type CreativeAppProposedDriver =
@@ -375,9 +393,20 @@ export type CreativeAppProposedDriver =
   | { kind: 'compose'; command?: string[] | null; privileged: boolean };
 
 export interface CreativeAppValidatedProposal {
-  proposal: CreativeAppProposal;
+  proposal: CreativeAppProposalPayload;
   redacted: string;
 }
+
+// Tagged approve/reject results — a repeat click on an already-decided
+// proposal is an idempotent `already_decided` no-op, never an error and never
+// a fake second success.
+export type CreativeAppProposalApproveResult =
+  | { status: 'approved'; proposalId: string; app: CreativeAppSummary }
+  | { status: 'already_decided'; proposalId: string; currentStatus: string };
+
+export type CreativeAppProposalRejectResult =
+  | { status: 'rejected'; proposalId: string }
+  | { status: 'already_decided'; proposalId: string; currentStatus: string };
 
 export interface LaunchPlan {
   schemaVersion: 1;
@@ -754,9 +783,10 @@ export interface NativesAPI {
     windowMinimize: (windowId: string) => Promise<void>;
     windowRestore: (windowId: string) => Promise<void>;
     // CR-1001/1002: Agent proposal gate
-    proposalValidate: (proposal: CreativeAppProposal) => Promise<CreativeAppValidatedProposal>;
-    proposalApprove: (proposal: CreativeAppProposal) => Promise<CreativeAppSummary>;
-    proposalReject: (proposal: CreativeAppProposal) => Promise<number>;
+    proposalList: () => Promise<CreativeAppProposal[]>;
+    proposalValidate: (proposal: CreativeAppProposalPayload) => Promise<CreativeAppValidatedProposal>;
+    proposalApprove: (proposalId: string) => Promise<CreativeAppProposalApproveResult>;
+    proposalReject: (proposalId: string) => Promise<CreativeAppProposalRejectResult>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
     onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
     inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
@@ -1401,12 +1431,14 @@ const nativesAPI: NativesAPI = {
     windowRestore: (windowId: string) =>
       cmd('creative_app_window_restore', { windowId }),
     // CR-1001/1002: Agent proposal gate
-    proposalValidate: (proposal: CreativeAppProposal) =>
+    proposalList: () =>
+      cmd<CreativeAppProposal[]>('creative_app_proposal_list', {}),
+    proposalValidate: (proposal: CreativeAppProposalPayload) =>
       cmd<CreativeAppValidatedProposal>('creative_app_proposal_validate', { proposal }),
-    proposalApprove: (proposal: CreativeAppProposal) =>
-      cmd<CreativeAppSummary>('creative_app_proposal_approve', { proposal }),
-    proposalReject: (proposal: CreativeAppProposal) =>
-      cmd<number>('creative_app_proposal_reject', { proposal }),
+    proposalApprove: (proposalId: string) =>
+      cmd<CreativeAppProposalApproveResult>('creative_app_proposal_approve', { proposalId }),
+    proposalReject: (proposalId: string) =>
+      cmd<CreativeAppProposalRejectResult>('creative_app_proposal_reject', { proposalId }),
     onProgress: (callback) => {
       const unlisten = listen<CreativeAppProgressEvent>('creative-app-progress', (event) => {
         callback(event.payload);

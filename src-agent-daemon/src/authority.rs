@@ -242,6 +242,15 @@ impl ExecutionAuthority for EmbeddedAuthority {
                     .map_err(|e| AuthorityError::Message(format!("{}: {}", e.code, e.message)))?;
                 serde_json::to_value(resp).map_err(|e| AuthorityError::Message(e.to_string()))
             }
+            "proposal.listPending" => {
+                let store = global_run_manager()
+                    .data_store_ref()
+                    .ok_or_else(|| AuthorityError::Message("no data store".into()))?;
+                let facts = crate::proposal_fact::list_pending_proposal_facts(&store)
+                    .map_err(AuthorityError::Message)?;
+                serde_json::to_value(serde_json::json!({ "proposals": facts }))
+                    .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
             _ => Err(AuthorityError::Message(format!(
                 "{method} requires the UDS Agent Daemon"
             ))),

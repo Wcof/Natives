@@ -1346,6 +1346,36 @@ impl EngineToolRuntime for PermissionGatedTools {
                         })
                         .await;
                 }
+                // T06: convert a successful `creative_proposal` tool result into
+                // a durable typed proposal fact so the Host can pull it over UDS
+                // and surface a pending approval inbox. The tool result itself
+                // stays a normal ToolOutput — the fact is the durable side
+                // record. A persistence failure must not fail the tool call
+                // (the model still completed its work); it only loses the
+                // bridge, which is logged for observability.
+                if name == crate::proposal_fact::PROPOSAL_TOOL
+                    && output.get("ok").and_then(Value::as_bool) == Some(true)
+                {
+                    if let Some(payload) =
+                        crate::proposal_fact::proposal_from_tool_output(name, &output)
+                    {
+                        if let Some(store) =
+                            crate::run_manager::global_run_manager().data_store_ref()
+                        {
+                            if let Err(e) = crate::proposal_fact::record_proposal_fact(
+                                &store,
+                                &self.parent_run_id,
+                                turn_id,
+                                &stream_tool_call_id,
+                                &payload,
+                            ) {
+                                eprintln!(
+                                    "[proposal_fact] failed to record creative proposal fact: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
                 let is_error =
                     output.get("error_code").and_then(Value::as_str) == Some("PERSISTENCE_FAILED");
                 ToolExecutionResult {

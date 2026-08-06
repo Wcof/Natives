@@ -246,8 +246,6 @@ pub fn validate_protocol_proposal(
         assistant_protocol::v2::CreativeProposedDriver::Binary {
             schema_version,
             executable_path,
-            executable_hash,
-            approved,
             args,
             cwd_relative,
             environment_keys,
@@ -257,8 +255,12 @@ pub fn validate_protocol_proposal(
         } => ProposedDriver::Binary(BinaryLaunchProfile {
             schema_version: *schema_version,
             executable_path: executable_path.clone(),
-            executable_hash: executable_hash.clone(),
-            approved: *approved,
+            // T06: agent-supplied hash/approval are untrusted. The Host
+            // recomputes the content identity and records approval at the
+            // user's explicit approve action; a pending proposal is never
+            // pre-approved.
+            executable_hash: String::new(),
+            approved: false,
             args: args.clone(),
             cwd_relative: cwd_relative.clone(),
             environment_keys: environment_keys.clone(),

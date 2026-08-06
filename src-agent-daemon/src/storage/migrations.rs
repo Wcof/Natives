@@ -50,6 +50,7 @@ pub const ALL: &[(i64, &str)] = &[
     (32, MIGRATION_032),
     (33, MIGRATION_033),
     (34, MIGRATION_034),
+    (35, MIGRATION_035),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1202,6 +1203,29 @@ const MIGRATION_034: &str = "
 CREATE UNIQUE INDEX IF NOT EXISTS idx_side_effect_run_sequence
     ON side_effect_record(run_id, ledger_sequence)
     WHERE ledger_sequence IS NOT NULL;
+";
+
+/// Migration 035: Creative proposal facts (T06).
+///
+/// When a `creative_proposal` tool call completes, the Daemon persists a typed
+/// proposal fact here — durable across restart, so the Host can pull pending
+/// facts over UDS and rebuild its approval inbox even after the daemon or the
+/// Host restarted. `proposal_id` is the stable Daemon-generated id (never
+/// agent-supplied); `status` tracks the fact lifecycle (pending/approved/
+/// rejected/expired/failed) so a fact is never re-served after it is decided.
+const MIGRATION_035: &str = "
+CREATE TABLE IF NOT EXISTS creative_proposal_fact (
+    proposal_id TEXT PRIMARY KEY,
+    envelope_version INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    turn_id TEXT,
+    tool_call_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_proposal_fact_status ON creative_proposal_fact(status);
 ";
 
 #[cfg(test)]

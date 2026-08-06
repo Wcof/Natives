@@ -893,77 +893,211 @@ pub fn creative_app_proposal_validate(
     })
 }
 
-/// Reject an agent proposal: record a `rejected` operation in the journal.
-/// No application is registered; the proposal is left untouched on the client.
+/// Reject an agent proposal by its stable proposal id. The Host looks up the
+/// persisted inbox row (never a Renderer-supplied proposal body), CASes
+/// pending → rejected, and returns a tagged result. Rejecting an already-
+/// decided proposal is an idempotent no-op (`already_decided`).
 #[tauri::command]
 pub async fn creative_app_proposal_reject(
-    proposal: crate::creative_app::proposal::AgentProposal,
+    proposal_id: String,
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> Result<i64> {
-    // Host gate still applies on reject: an invalid proposal is journaled as
-    // a failed rejection attempt so the audit trail is complete.
-    let validation = proposal.validate();
+) -> Result<crate::creative_app::proposal_inbox::ProposalRejectResult> {
+    use crate::creative_app::proposal_inbox::{self, ProposalRejectResult};
     let pool = state.db.clone();
+    // Best-effort sync: the proposal may have been produced after the Renderer's
+    // last list. A sync failure must not block a reject of an already-known row.
+    if let Err(e) = proposal_inbox::sync_pending_from_daemon(&pool).await {
+        eprintln!("[proposal] sync before reject failed (continuing): {e}");
+    }
     let app = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let c = conn(&pool)?;
-        let redacted = crate::creative_app::proposal::redacted_proposal_input(&proposal);
-        let op_id = op::create_operation(&c, None, "proposal_reject", "user", Some(&redacted))?;
-        match validation {
-            Ok(_) => {
-                op::finish_success(&c, op_id)?;
-                emit_operation(&app, &c, op_id)?;
-            }
-            Err(e) => {
-                op::finish_failure(&c, op_id, Some("proposal_invalid"), &e.to_string())?;
-                emit_operation(&app, &c, op_id)?;
+        let Some(stored) = proposal_inbox::get_stored(&c, &proposal_id)? else {
+            return Err(Error::InvalidInput(format!(
+                "proposal not found or not pending: {proposal_id}"
+            )));
+        };
+        match stored.status.as_str() {
+            proposal_inbox::STATUS_PENDING => {}
+            other => {
+                return Ok(ProposalRejectResult::AlreadyDecided {
+                    proposal_id: proposal_id.clone(),
+                    current_status: other.to_string(),
+                });
             }
         }
-        Ok(op_id)
+        let redacted = crate::creative_app::proposal::redacted_proposal_input(
+            &crate::creative_app::proposal::validate_protocol_proposal(&stored.envelope.payload)?
+                .proposal,
+        );
+        let op_id = op::create_operation(&c, None, "proposal_reject", "user", Some(&redacted))?;
+        if !proposal_inbox::cas_status(
+            &c,
+            &proposal_id,
+            proposal_inbox::STATUS_PENDING,
+            proposal_inbox::STATUS_REJECTED,
+        )? {
+            op::finish_failure(
+                &c,
+                op_id,
+                Some("proposal_already_decided"),
+                "concurrent decision",
+            )?;
+            emit_operation(&app, &c, op_id)?;
+            return Ok(ProposalRejectResult::AlreadyDecided {
+                proposal_id: proposal_id.clone(),
+                current_status: stored.status.clone(),
+            });
+        }
+        op::finish_success(&c, op_id)?;
+        emit_operation(&app, &c, op_id)?;
+        crate::emit_db_state_changed(
+            &app,
+            "creative-app",
+            serde_json::json!({ "action": "proposal_rejected", "id": proposal_id }),
+        );
+        Ok(ProposalRejectResult::Rejected { proposal_id })
     })
     .await
     .map_err(|e| Error::Internal(format!("proposal_reject join: {e}")))?
 }
 
-/// Approve an agent proposal: the Host validates it, journals the approval,
-/// and registers the application. Returns the registered app summary.
-/// Drivers without a registration path return a clear error — never fake success.
+/// Approve an agent proposal by its stable proposal id.
+///
+/// The Host looks up the persisted, Host-validated inbox row, re-resolves the
+/// executable/interpreter identity (canonical path + Host-recomputed SHA-256),
+/// records the executable approval, CASes pending → approved, and registers
+/// the application. The Renderer never supplies executable paths or hashes.
+///
+/// Failures keep the proposal visible to the user: a verification failure
+/// leaves the status `pending`; a registration failure CASes it to `failed`
+/// and returns the error — never a success value.
 #[tauri::command]
 pub async fn creative_app_proposal_approve(
-    proposal: crate::creative_app::proposal::AgentProposal,
+    proposal_id: String,
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
-) -> Result<CreativeAppSummary> {
+) -> Result<crate::creative_app::proposal_inbox::ProposalApproveResult> {
+    use crate::creative_app::proposal_inbox::{self, ProposalApproveResult};
     let pool = state.db.clone();
+    if let Err(e) = proposal_inbox::sync_pending_from_daemon(&pool).await {
+        eprintln!("[proposal] sync before approve failed (continuing): {e}");
+    }
     let lock = lock.inner().clone();
     let _guard = lock.acquire_app("__registration__").await;
 
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
-        // Host gate: reject dangerous inputs before anything is registered.
-        proposal.validate()?;
-
         let mut c = conn(&pool)?;
+        let Some(stored) = proposal_inbox::get_stored(&c, &proposal_id)? else {
+            return Err(Error::InvalidInput(format!(
+                "proposal not found or not pending: {proposal_id}"
+            )));
+        };
+        match stored.status.as_str() {
+            proposal_inbox::STATUS_PENDING => {}
+            other => {
+                return Ok(ProposalApproveResult::AlreadyDecided {
+                    proposal_id: proposal_id.clone(),
+                    current_status: other.to_string(),
+                });
+            }
+        }
+
+        // Re-validate through the Host gate (defense in depth) and resolve the
+        // executable/interpreter identity. A shell pseudo-python, a missing
+        // binary, or a fake agent hash never gets here: the profile that was
+        // stored at merge time already passed the structural gate, and the
+        // identity resolution below re-checks existence + content.
+        let validated =
+            crate::creative_app::proposal::validate_protocol_proposal(&stored.envelope.payload)?;
+        let proposal = validated.proposal;
+        let (canonical, identity, verified_proposal) =
+            proposal_inbox::resolve_proposal_identity(&proposal)?;
+
         let redacted = crate::creative_app::proposal::redacted_proposal_input(&proposal);
         let op_id = op::create_operation(&c, None, "proposal_approve", "user", Some(&redacted))?;
         op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_RUNNING)?;
 
-        let result = register_proposal_app(&mut c, &proposal);
-        match result {
-            Ok(summary) => {
+        // Everything from here on is a single decision transaction: a failure
+        // settles the journal op and (when we already CASed to approved) marks
+        // the proposal failed — the card never sees a silent success.
+        let decision: crate::Result<ProposalApproveResult> = (|| {
+            // Pin the executable approval record BEFORE the CAS so a
+            // verification failure leaves the proposal pending (the user sees
+            // the error and can still reject).
+            if !canonical.is_empty() {
+                proposal_inbox::record_executable_approval(
+                    &c,
+                    &canonical,
+                    &identity,
+                    &format!("proposal:{proposal_id}"),
+                    "user",
+                    &proposal_id,
+                )?;
+            }
+
+            if !proposal_inbox::cas_status(
+                &c,
+                &proposal_id,
+                proposal_inbox::STATUS_PENDING,
+                proposal_inbox::STATUS_APPROVED,
+            )? {
+                return Ok(ProposalApproveResult::AlreadyDecided {
+                    proposal_id: proposal_id.clone(),
+                    current_status: stored.status.clone(),
+                });
+            }
+
+            match register_proposal_app(&mut c, &verified_proposal) {
+                Ok(summary) => Ok(ProposalApproveResult::Approved {
+                    proposal_id: proposal_id.clone(),
+                    app: summary,
+                }),
+                Err(e) => {
+                    // Registration failed — CAS approved → failed (terminal).
+                    let _ = proposal_inbox::cas_status(
+                        &c,
+                        &proposal_id,
+                        proposal_inbox::STATUS_APPROVED,
+                        proposal_inbox::STATUS_FAILED,
+                    );
+                    Err(e)
+                }
+            }
+        })();
+
+        match decision {
+            Ok(ProposalApproveResult::Approved {
+                proposal_id: pid,
+                app,
+            }) => {
                 op::finish_success(&c, op_id)?;
                 emit_operation(&handle, &c, op_id)?;
                 crate::emit_db_state_changed(
                     &handle,
                     "creative-app",
-                    serde_json::json!({ "action": "proposal_approved", "id": summary.id }),
+                    serde_json::json!({ "action": "proposal_approved", "id": app.id }),
                 );
-                Ok(summary)
+                Ok(ProposalApproveResult::Approved {
+                    proposal_id: pid,
+                    app,
+                })
+            }
+            Ok(result @ ProposalApproveResult::AlreadyDecided { .. }) => {
+                op::finish_failure(
+                    &c,
+                    op_id,
+                    Some("proposal_already_decided"),
+                    "concurrent decision",
+                )?;
+                emit_operation(&handle, &c, op_id)?;
+                Ok(result)
             }
             Err(e) => {
-                op::finish_failure(&c, op_id, Some("proposal_register_failed"), &e.to_string())?;
+                op::finish_failure(&c, op_id, Some("proposal_approve_failed"), &e.to_string())?;
                 emit_operation(&handle, &c, op_id)?;
                 Err(e)
             }
@@ -971,6 +1105,26 @@ pub async fn creative_app_proposal_approve(
     })
     .await
     .map_err(|e| Error::Internal(format!("proposal_approve join: {e}")))?
+}
+
+/// List pending proposals awaiting user approval. The Host first pulls fresh
+/// proposal facts from the daemon (reconnect-recoverable), then returns the
+/// pending inbox rows — each flattened with its validated proposal intent.
+#[tauri::command]
+pub async fn creative_app_proposal_list(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::creative_app::proposal_inbox::ProposalInboxEntry>> {
+    use crate::creative_app::proposal_inbox;
+    let pool = state.db.clone();
+    proposal_inbox::sync_pending_from_daemon(&pool).await?;
+    let _app = app_handle;
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        proposal_inbox::list_pending(&c)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("proposal_list join: {e}")))?
 }
 
 /// Register an approved proposal as a real application. Only drivers with a

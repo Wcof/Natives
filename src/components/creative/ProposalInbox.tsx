@@ -1,15 +1,16 @@
-//! Agent proposal inbox (batch 10 CR-1002).
+//! Agent proposal inbox (batch 10 CR-1002, hardened T06).
 //!
-//! Hosts a list of Host-validated agent proposals, each rendered as a
-//! ProposalApprovalCard. Approve routes through the Host gate
-//! (creative_app_proposal_approve → register + start); reject journals a
-//! rejection and removes the card. A proposal that fails to register stays
-//! visible — never faked as success.
+//! Hosts the Host-persisted list of validated agent proposals, each rendered as
+//! a ProposalApprovalCard keyed by the stable Daemon `proposalId`. Approve
+//! routes through the Host gate by id (creative_app_proposal_approve → register
+//! + start); reject journals a rejection and removes the card. A failure is
+//! rethrown to the card — the proposal stays visible with the error, and a
+//! success toast is only ever shown for a real success. Repeat clicks on an
+//! already-decided proposal are an idempotent `already_decided` no-op.
 
 import React, { useState } from 'react';
 import ProposalApprovalCard from './ProposalApprovalCard';
 import { useLocale, t } from '@/i18n';
-import { classifyError } from '@/lib/error-classifier';
 import type { CreativeAppProposal } from '@/lib/tauri-adapter';
 
 export interface ProposalInboxProps {
@@ -26,25 +27,23 @@ export default function ProposalInbox({
   onRegistered,
 }: ProposalInboxProps) {
   const locale = useLocale();
-  // Track which proposal ids are being processed.
+  // Track which proposal ids are being processed (disables double-submit).
   const [processing, setProcessing] = useState<Set<string>>(new Set());
 
   if (proposals.length === 0) return null;
 
-  const keyOf = (p: CreativeAppProposal) => `${p.kind}-${p.title}-${p.projectRoot}`;
-
   const approve = async (proposal: CreativeAppProposal) => {
-    const key = keyOf(proposal);
+    const key = proposal.proposalId;
     setProcessing((prev) => new Set(prev).add(key));
     try {
-      const summary = await window.nativesAPI?.creativeApp?.proposalApprove?.(proposal);
-      if (summary) {
+      const result = await window.nativesAPI?.creativeApp?.proposalApprove?.(key);
+      if (result?.status === 'approved') {
         onRegistered(proposal);
         onDismissed(proposal);
       }
-    } catch (err) {
-      // Registration failed — keep the proposal visible with the error.
-      onToast(classifyError(err).userMessage);
+      // `already_decided` keeps the card; the host already made the decision.
+      // Any error propagates (no catch here) so the card shows it and stays
+      // visible — never a swallowed silent success.
     } finally {
       setProcessing((prev) => {
         const next = new Set(prev);
@@ -55,13 +54,13 @@ export default function ProposalInbox({
   };
 
   const reject = async (proposal: CreativeAppProposal) => {
-    const key = keyOf(proposal);
+    const key = proposal.proposalId;
     setProcessing((prev) => new Set(prev).add(key));
     try {
-      await window.nativesAPI?.creativeApp?.proposalReject?.(proposal);
-      onDismissed(proposal);
-    } catch (err) {
-      onToast(classifyError(err).userMessage);
+      const result = await window.nativesAPI?.creativeApp?.proposalReject?.(key);
+      if (result?.status === 'rejected') {
+        onDismissed(proposal);
+      }
     } finally {
       setProcessing((prev) => {
         const next = new Set(prev);
@@ -72,22 +71,19 @@ export default function ProposalInbox({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-proposal-inbox>
       <h2 className="text-sm font-medium text-[var(--text)] px-1">
         {t(locale, 'workshop.proposalInbox')}
       </h2>
-      {proposals.map((p) => {
-        const key = keyOf(p);
-        return (
-          <ProposalApprovalCard
-            key={key}
-            proposal={p}
-            onApprove={approve}
-            onReject={reject}
-            onToast={onToast}
-          />
-        );
-      })}
+      {proposals.map((p) => (
+        <ProposalApprovalCard
+          key={p.proposalId}
+          proposal={p}
+          onApprove={approve}
+          onReject={reject}
+          onToast={onToast}
+        />
+      ))}
     </div>
   );
 }
