@@ -60,9 +60,9 @@ impl WebviewGateway for RealWebviewGateway<'_> {
     fn labels(&self) -> Vec<String> {
         self.app
             .webviews()
-            .into_iter()
-            .map(|(label, _wv)| label)
+            .keys()
             .filter(|l| browser::is_window_label(l))
+            .cloned()
             .collect()
     }
 
@@ -162,10 +162,10 @@ impl WindowController {
 
         // Execute the WebView: a show failure keeps the row closed — never a
         // fake open (T07).
-        gw.show(&label, app_id, url, bounds.clone()).map_err(|e| {
-            let _ = op::finish_failure(conn, op_id, Some("window_show_failed"), &e.to_string());
-            e
-        })?;
+        gw.show(&label, app_id, url, bounds.clone())
+            .inspect_err(|e| {
+                let _ = op::finish_failure(conn, op_id, Some("window_show_failed"), &e.to_string());
+            })?;
 
         // Verify: a WebView that vanishes right after show is a real failure.
         if !gw.exists(&label) {
@@ -208,10 +208,9 @@ impl WindowController {
 
         // External action first: close the WebView. Failure must stay observable.
         let was_missing = if gw.exists(&label) {
-            gw.close(&label).map_err(|e| {
+            gw.close(&label).inspect_err(|e| {
                 let _ =
                     op::finish_failure(conn, op_id, Some("window_close_failed"), &e.to_string());
-                e
             })?;
             if gw.exists(&label) {
                 let msg = format!("webview {label} still open after close");
@@ -229,9 +228,8 @@ impl WindowController {
             window.runtime_instance_id.as_deref(),
             was_missing,
         )
-        .map_err(|e| {
+        .inspect_err(|e| {
             let _ = op::finish_failure(conn, op_id, Some("window_commit_failed"), &e.to_string());
-            e
         })?;
 
         let _ = op::finish_success(conn, op_id);
@@ -254,9 +252,8 @@ impl WindowController {
         op::transition(conn, op_id, &[op::PHASE_PENDING], op::PHASE_RUNNING)?;
 
         if gw.exists(&label) {
-            gw.hide(&label).map_err(|e| {
+            gw.hide(&label).inspect_err(|e| {
                 let _ = op::finish_failure(conn, op_id, Some("window_hide_failed"), &e.to_string());
-                e
             })?;
             if let Err(e) =
                 surface_store::update_window_state(conn, window_id, WindowInstance::STATE_MINIMIZED)
@@ -335,9 +332,8 @@ impl WindowController {
             url,
             bounds.unwrap_or_else(|| stored_bounds(&window)),
         )
-        .map_err(|e| {
+        .inspect_err(|e| {
             let _ = op::finish_failure(conn, op_id, Some("window_show_failed"), &e.to_string());
-            e
         })?;
         if !gw.exists(&label) {
             let msg = format!("webview {label} missing after restore");
@@ -394,10 +390,10 @@ impl WindowController {
         Ok(n)
     }
 
-    /// Reconcile DB windows vs live child WebViews:
-    /// - a DB row in open/minimized state without a live WebView → missing → closed;
-    /// - a live child WebView with no DB row → orphaned → closed.
-    /// Never fabricates an open state for a window that has no WebView.
+    /// Reconcile DB windows vs live child WebViews. A DB row in open/minimized
+    /// state without a live WebView is marked missing → closed; a live child
+    /// WebView with no DB row is closed as an orphan. Never fabricates an open
+    /// state for a window that has no WebView.
     pub fn reconcile(gw: &dyn WebviewGateway, conn: &Connection) -> Result<ReconcileReport> {
         let mut report = ReconcileReport::default();
         for w in surface_store::list_all_windows(conn)? {
