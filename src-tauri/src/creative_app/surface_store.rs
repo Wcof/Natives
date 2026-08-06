@@ -290,6 +290,21 @@ pub fn list_all_windows(conn: &Connection) -> Result<Vec<WindowInstance>> {
     Ok(out)
 }
 
+/// Number of window rows currently in the `open` state — the live child
+/// WebView ceiling (R-P9 / T11). Every concurrent WebView costs a renderer
+/// process, a WKWebView, and a window surface; the support ceiling is
+/// [`super::window::MAX_LIVE_WINDOWS`].
+pub fn count_open_windows(conn: &Connection) -> Result<usize> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM window_instances WHERE state = ?1",
+            params![WindowInstance::STATE_OPEN],
+            |row| row.get(0),
+        )
+        .map_err(Error::Database)?;
+    Ok(n as usize)
+}
+
 /// Update window state. A 0-row update on an existing id is a typed conflict,
 /// never a silent success (T07: DB writes must be observable).
 pub fn update_window_state(conn: &Connection, window_id: &str, state: &str) -> Result<()> {

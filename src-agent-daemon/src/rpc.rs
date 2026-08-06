@@ -15,6 +15,7 @@ use assistant_protocol::v1::daemon::{
     DaemonHealth, DaemonStatus, HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
 };
 use assistant_protocol::v2::creative::CreativeLocalAnalyzeRequest;
+use assistant_protocol::v2::RunEventV2;
 use assistant_protocol::version::{negotiate, ProtocolVersion};
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
@@ -53,6 +54,64 @@ pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 /// Deadline for a peer to deliver one full frame. Bounds slowloris / stalled
 /// connections without affecting normal local request latency (N04).
 pub(crate) const FRAME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Cap on how many run events a single `run.getEvents` / `run.subscribe`
+/// wire response carries (R-P4 / T11). A run's full history can exceed
+/// `MAX_FRAME_BYTES` once serialized; the client pages forward through its
+/// `last_sequence` cursor, and the Renderer keeps only a 2000-event window.
+/// In-process callers (resume / subagent reconciliation) keep the full replay
+/// through `replay_checked` — only the UDS boundary is bounded.
+pub const MAX_WIRE_REPLAY_EVENTS: usize = 2000;
+
+/// Keep the oldest `MAX_WIRE_REPLAY_EVENTS` events of a replay batch
+/// (ascending sequence order) so a bounded batch always advances the client
+/// cursor monotonically.
+fn cap_wire_replay(events: Vec<RunEventV2>) -> Vec<RunEventV2> {
+    if events.len() <= MAX_WIRE_REPLAY_EVENTS {
+        events
+    } else {
+        events.into_iter().take(MAX_WIRE_REPLAY_EVENTS).collect()
+    }
+}
+
+#[cfg(test)]
+mod wire_replay_cap_tests {
+    use super::*;
+
+    fn event(run_id: &str, seq: u64) -> RunEventV2 {
+        RunEventV2 {
+            event_id: format!("e-{seq}"),
+            global_sequence: seq,
+            run_id: run_id.to_string(),
+            run_sequence: seq,
+            sequence: seq,
+            timestamp: chrono::Utc::now(),
+            payload: assistant_protocol::v2::RunEventKind::TextDelta {
+                text: format!("d{seq}"),
+            },
+        }
+    }
+
+    #[test]
+    fn cap_keeps_batches_within_bounds() {
+        let small = (1..=10).map(|s| event("r", s)).collect::<Vec<_>>();
+        assert_eq!(cap_wire_replay(small).len(), 10, "small batch is untouched");
+        let big = (1..=(MAX_WIRE_REPLAY_EVENTS + 500) as u64)
+            .map(|s| event("r", s))
+            .collect::<Vec<_>>();
+        let capped = cap_wire_replay(big);
+        assert_eq!(capped.len(), MAX_WIRE_REPLAY_EVENTS);
+        assert_eq!(
+            capped.first().map(|e| e.effective_run_sequence()),
+            Some(1),
+            "oldest events are kept so the client cursor advances monotonically"
+        );
+        assert_eq!(
+            capped.last().map(|e| e.effective_run_sequence()),
+            Some(MAX_WIRE_REPLAY_EVENTS as u64)
+        );
+    }
+}
 
 /// Result of a bounded frame read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1281,7 +1340,10 @@ pub async fn handle_rpc(
                 after_sequence: after,
             }) {
                 Ok(events) => {
-                    let payload = match serde_json::to_value(events) {
+                    // R-P4 / T11: bound the wire batch so a huge run never
+                    // produces an oversized UDS frame. In-process callers keep
+                    // the full replay; only the client-facing replay is capped.
+                    let payload = match serde_json::to_value(cap_wire_replay(events)) {
                         Ok(payload) => payload,
                         Err(error) => {
                             send_error(
@@ -1422,6 +1484,10 @@ pub async fn handle_rpc(
                     }
                 }
             }
+            // R-P4 / T11: bound the wire batch (same cap as run.getEvents) so a
+            // run that accumulated a long history while the client was away
+            // never produces an oversized frame. The client pages forward.
+            let events = cap_wire_replay(events);
             let terminal = run_manager()
                 .get_run(&run_id)
                 .map(|r| r.status.is_terminal())

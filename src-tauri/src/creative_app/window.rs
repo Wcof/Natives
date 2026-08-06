@@ -21,6 +21,12 @@ pub const OP_WINDOW_CLOSE: &str = "window_close";
 pub const OP_WINDOW_MINIMIZE: &str = "window_minimize";
 pub const OP_WINDOW_RESTORE: &str = "window_restore";
 
+/// Maximum concurrently-open child WebView windows. Every open window holds a
+/// live WKWebView (renderer process + surface); beyond this documented support
+/// ceiling a new `open` is refused with a typed error (R-P9 / T11). Re-opening
+/// an already-open surface reuses its window and is exempt.
+pub const MAX_LIVE_WINDOWS: usize = 10;
+
 /// Outcome counts of a window reconcile sweep.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
@@ -128,6 +134,23 @@ impl WindowController {
         let runtime_instance_id = require_running(conn, application_id)?;
         surface_store::find_main_surface(conn, application_id)?
             .ok_or_else(|| Error::Internal(format!("no main surface for app {application_id}")))?;
+
+        // R-P9 / T11: bound concurrent child WebViews. Re-opening an
+        // already-open surface reuses its live window (no new WebView), so the
+        // cap applies only when this open would add a new live WebView.
+        let reuses_open_window =
+            surface_store::find_latest_surface_window(conn, application_id, surface_id)?
+                .map(|w| w.state == WindowInstance::STATE_OPEN)
+                .unwrap_or(false);
+        if !reuses_open_window {
+            let open = surface_store::count_open_windows(conn)?;
+            if open >= MAX_LIVE_WINDOWS {
+                return Err(Error::Internal(format!(
+                    "window limit reached ({open}/{MAX_LIVE_WINDOWS} open): \
+                     close a window before opening another"
+                )));
+            }
+        }
 
         // Journal the operation before any external side effect.
         let op_id = op::create_operation(
@@ -694,6 +717,68 @@ mod tests {
         );
         assert!(gw.live.borrow().contains(&w1.label));
         assert!(gw.live.borrow().contains(&w2.label));
+    }
+
+    #[test]
+    fn open_refuses_beyond_live_window_cap() {
+        let conn = fixture();
+        let (surface_id, _iid) = seed_running_app(&conn, "app-1");
+        let gw = FakeGateway::default();
+        let mut c = conn;
+        // First open (counts as one live WebView).
+        WindowController::open(
+            &gw,
+            &mut c,
+            "app-1",
+            "app-1",
+            &surface_id,
+            "http://127.0.0.1:8080/",
+            bounds(),
+        )
+        .unwrap();
+        // Fill the remaining cap slots with distinct embed surfaces.
+        for i in 1..MAX_LIVE_WINDOWS {
+            let s = surface_store::create_surface(
+                &c,
+                "app-1",
+                &format!("embed{i}"),
+                &format!("Embed {i}"),
+                None,
+            )
+            .unwrap();
+            WindowController::open(
+                &gw,
+                &mut c,
+                "app-1",
+                "app-1",
+                &s,
+                "http://127.0.0.1:8080/embed",
+                bounds(),
+            )
+            .unwrap();
+        }
+        // A new surface at the cap is refused with a typed error.
+        let extra =
+            surface_store::create_surface(&c, "app-1", "embed-extra", "Extra", None).unwrap();
+        let err = WindowController::open(
+            &gw,
+            &mut c,
+            "app-1",
+            "app-1",
+            &extra,
+            "http://127.0.0.1:8080/embed",
+            bounds(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("window limit reached"),
+            "expected window-limit error, got {err}"
+        );
+        assert_eq!(
+            gw.live.borrow().len(),
+            MAX_LIVE_WINDOWS,
+            "no WebView beyond the cap"
+        );
     }
 
     // ── Close drives the real WebView; missing → reconciled closed ─────
