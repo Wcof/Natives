@@ -734,10 +734,16 @@ pub fn child_run_id_for_session(session_id: &str) -> Result<Option<String>, Stri
 /// terminal (interrupted by the restart, or finished before it), and mark the
 /// owning session interrupted. Returns the number of slots still occupied by
 /// *active* children after recovery (normally 0 — the restart interrupted
-/// them all), which the caller seeds into the in-memory slot ledger.
+/// them all).
 pub fn recover_subagent_reservations() -> Result<usize, String> {
     let s = store()?;
     let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    recover_subagent_reservations_on(&conn)
+}
+
+/// Connection-scoped variant so `RunManager` startup recovery reuses the exact
+/// DataStore it was given rather than re-resolving the env path.
+pub fn recover_subagent_reservations_on(conn: &rusqlite::Connection) -> Result<usize, String> {
     let now = chrono::Utc::now().to_rfc3339();
 
     // Sessions with a reservation whose live child run is terminal (or gone)

@@ -324,6 +324,14 @@ impl RunManager {
         };
         // Fail-closed: must not swallow recovery errors (task-04 / Phase 4).
         mgr.interrupt_active_sqlite_runs()?;
+        // T05: after the restart interrupts active child runs, release every
+        // subagent slot whose child is now terminal (interrupted) so the
+        // in-memory ledger is not over-subscribed. Durable budgets stay on the
+        // session rows and are not reset by recovery.
+        if let Some(store) = &mgr.data_store {
+            let conn = store.conn().map_err(|e| format!("conn lock: {e}"))?;
+            crate::subagent_store::recover_subagent_reservations_on(&conn)?;
+        }
         mgr.restore_runs_snapshot()?;
         // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
         crate::prompt_queue_store::recover_session_actors_on_startup()?;

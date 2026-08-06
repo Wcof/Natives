@@ -8,8 +8,8 @@
 use agent_core::{
     default_subagent_tool_allowlist, AgentEngine, ChildFailureEffect, EngineToolRuntime,
     EventSequencer, FailurePolicy, HookEvent, HookRegistry, HookRequest, NoopToolProgressSink,
-    PermissionAggregate, PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager,
-    SubAgentStatus, ToolExecutionResult, ToolProgressSink, ToolProgressUpdate, ToolSchema,
+    PermissionAggregate, PermissionManager, PermissionProfile, SubAgentManager, SubAgentStatus,
+    ToolExecutionResult, ToolProgressSink, ToolProgressUpdate, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
@@ -4671,6 +4671,7 @@ fn use_fixture_flag(input: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_core::SubAgentConfig;
 
     #[derive(Default)]
     struct CapturedEvents(std::sync::Mutex<Vec<assistant_protocol::v2::RunEventV2>>);
