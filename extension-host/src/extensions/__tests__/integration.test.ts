@@ -2,7 +2,8 @@
 //
 // Tests for MCP, Skills, Commands, and Hooks extension families.
 
-import { describe, it, assert } from 'tsx:test';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { MCPExtension, SkillsExtension, CommandsExtension, HooksExtension } from '../index';
 
 describe('MCPExtension', () => {

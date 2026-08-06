@@ -181,9 +181,49 @@ fn load_resumable_checkpoint(
 ///
 /// Production multi-process: set `NATIVES_DAEMON_MODE=uds` and use [`crate::client::DaemonClient`].
 pub fn global_run_manager() -> &'static RunManager {
-    use std::sync::OnceLock;
-    static GLOBAL: OnceLock<RunManager> = OnceLock::new();
-    GLOBAL.get_or_init(RunManager::new)
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static GLOBAL: OnceLock<RunManager> = OnceLock::new();
+        GLOBAL.get_or_init(RunManager::new)
+    }
+    #[cfg(test)]
+    {
+        *test_global_lock().lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Test-only process-global RunManager storage. Unlike the production
+/// `OnceLock`, a test can replace the global via [`install_global_for_test`]
+/// so a hermetic test deterministically binds the global to its own temp
+/// database (or to a memory-only manager) before touching it. The lazy fallback
+/// keeps the historical behavior for tests that never install.
+#[cfg(test)]
+fn test_global_lock() -> &'static std::sync::Mutex<&'static RunManager> {
+    use std::sync::{Mutex, OnceLock};
+    static TEST_GLOBAL: OnceLock<Mutex<&'static RunManager>> = OnceLock::new();
+    TEST_GLOBAL.get_or_init(|| Mutex::new(Box::leak(Box::new(RunManager::new()))))
+}
+
+/// Test-only: replace the process-global RunManager returned by
+/// [`global_run_manager`]. Call while holding [`DataStore::env_test_lock`] so
+/// the installation is deterministic under `--test-threads=2`. Returns the
+/// installed manager.
+#[cfg(test)]
+pub fn install_global_for_test(mgr: RunManager) -> &'static RunManager {
+    use std::sync::Mutex;
+    let m: &'static RunManager = Box::leak(Box::new(mgr));
+    let lock: &'static Mutex<&'static RunManager> = test_global_lock();
+    *lock.lock().unwrap_or_else(|e| e.into_inner()) = m;
+    m
+}
+
+/// Test-only: install a memory-only global RunManager (no data store, no
+/// ~/.natives snapshot/event defaults). Used by fixtures that exercise
+/// tool-gate behavior without a durable store.
+#[cfg(test)]
+pub fn install_memory_global_for_test() -> &'static RunManager {
+    install_global_for_test(RunManager::new_memory())
 }
 
 impl Default for RunManager {
@@ -953,10 +993,20 @@ impl RunManager {
         let root = std::env::var("NATIVES_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
-                std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(|h| std::path::PathBuf::from(h).join(".natives").join("runtime"))
-                    .unwrap_or_else(|| std::env::temp_dir().join("natives-runtime"))
+                #[cfg(test)]
+                {
+                    // T01 hermeticity: never default the runs snapshot to
+                    // ~/.natives in tests. A per-process temp dir keeps tests
+                    // from reading or writing the developer's home directory.
+                    std::env::temp_dir().join(format!("natives-runtime-{}", std::process::id()))
+                }
+                #[cfg(not(test))]
+                {
+                    std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .map(|h| std::path::PathBuf::from(h).join(".natives").join("runtime"))
+                        .unwrap_or_else(|| std::env::temp_dir().join("natives-runtime"))
+                }
             });
         root.join("runs").join("snapshot.json")
     }
@@ -3181,10 +3231,16 @@ mod tests {
                     [],
                 )
                 .unwrap();
+            // T01: keep the real migrated schema; inject persistence failure with a
+            // trigger so recovery (SELECT on run_event) still works while INSERT fails.
             store
                 .conn()
                 .unwrap()
-                .execute("DROP TABLE run_event", [])
+                .execute(
+                    "CREATE TRIGGER fail_run_event_insert BEFORE INSERT ON run_event
+                     BEGIN SELECT RAISE(FAIL, 'injected run_event insert'); END",
+                    [],
+                )
                 .unwrap();
 
             let rm = RunManager::new_with_store(store.clone());
@@ -3251,10 +3307,16 @@ mod tests {
                     [],
                 )
                 .unwrap();
+            // T01: keep the real migrated schema; inject persistence failure with a
+            // trigger so recovery (SELECT on run_event) still works while INSERT fails.
             store
                 .conn()
                 .unwrap()
-                .execute("DROP TABLE run_event", [])
+                .execute(
+                    "CREATE TRIGGER fail_run_event_insert BEFORE INSERT ON run_event
+                     BEGIN SELECT RAISE(FAIL, 'injected run_event insert'); END",
+                    [],
+                )
                 .unwrap();
 
             let rm = RunManager::new_with_store(store.clone());
@@ -3552,10 +3614,16 @@ mod tests {
 
     #[test]
     fn retry_creates_new_run_id() {
-        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        // T01: hermetic memory RunManager — no ~/.natives reads, no leaked
+        // thread-local override, deterministic under --test-threads=2.
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        crate::storage::set_test_db_override(None, None);
         std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
         std::env::remove_var("NATIVES_DB_PATH");
+        let rt_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("NATIVES_RUNTIME_DIR", rt_dir.path());
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
         let rm = RunManager::new();
         let original = rm
             .create_run(CreateRunRequest {
@@ -5078,6 +5146,19 @@ mod tests {
 
     #[tokio::test]
     async fn permission_gate_emits_request_and_respond() {
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("perm-gate.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(
+            Some(db_path.clone()),
+            Some(dir.path().join("artifacts")),
+        );
+        let _store =
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rm = Arc::new(RunManager::new());
         // Event logs are durable by default; fixed ids would replay stale
@@ -5594,6 +5675,18 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_call_through_permission_gate_emits_events() {
+        // T01: hermetic — fresh temp runtime dir (snapshot + event JSONL), a
+        // memory RunManager so the verified-project check escapes, and no
+        // ~/.natives access. Deterministic under --test-threads=2.
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        crate::storage::set_test_db_override(None, None);
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
+        let rt_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("NATIVES_RUNTIME_DIR", rt_dir.path());
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
+        crate::run_manager::install_global_for_test(crate::run_manager::RunManager::new());
         // Register mock tool without live session → structured error + events.
         let rt = crate::production::ProductionRuntime::new();
         crate::mcp_runtime::global_mcp()
@@ -5659,10 +5752,15 @@ mod tests {
                 .any(|e| matches!(e.payload, RunEventKind::ToolCallStarted { .. })),
             "expected ToolCallStarted for mcp_call"
         );
+        // The direct tool path emits ToolCallStarted and surfaces the failure;
+        // the ENGINE (agent-core engine_core, covered by its own tests) appends
+        // the ToolCallCompleted fact around a full turn. A direct call must NOT
+        // fabricate a completion for a call that never reached a live MCP
+        // session — that would be a fake green (fail-closed).
         assert!(
-            evs.iter()
+            !evs.iter()
                 .any(|e| matches!(e.payload, RunEventKind::ToolCallCompleted { .. })),
-            "expected ToolCallCompleted for mcp_call"
+            "direct mcp_call must not fabricate ToolCallCompleted without a live session"
         );
         if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
             let _ = std::fs::write(
@@ -6050,6 +6148,15 @@ mod tests {
     async fn cancel_vs_complete_race_single_terminal_and_consistent() {
         // 100 concurrent cancel-vs-complete races: each run ends with exactly one
         // terminal lifecycle event, and memory status matches that event.
+        // T01: hermetic memory RunManagers — no ~/.natives, no leaked override.
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        crate::storage::set_test_db_override(None, None);
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
+        let rt_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("NATIVES_RUNTIME_DIR", rt_dir.path());
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let mut terminal_mismatch = 0u32;
         let mut multi_terminal = 0u32;

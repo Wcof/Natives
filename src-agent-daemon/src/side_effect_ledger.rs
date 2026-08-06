@@ -11,20 +11,74 @@ fn ledger_store() -> Result<std::sync::Arc<crate::storage::DataStore>, String> {
     }
     #[cfg(test)]
     {
+        // T01 hermeticity: resolve the ledger store from the current test's
+        // thread-local override/env first (each hermetic test gets its own
+        // temp DB — no cross-test contention on a shared fixed path). Fall
+        // back to the historical per-process temp DB only when a test sets
+        // neither. Never default to ~/.natives.
+        use std::collections::HashMap;
+        use std::path::PathBuf;
         use std::sync::OnceLock;
-        static TEST_STORE: OnceLock<std::sync::Arc<crate::storage::DataStore>> = OnceLock::new();
-        let store = TEST_STORE.get_or_init(|| {
-            let db = std::env::temp_dir().join(format!(
-                "natives-side-effect-ledger-test-{}.db",
-                std::process::id()
-            ));
-            let artifacts = db.with_extension("artifacts");
-            std::sync::Arc::new(
-                crate::storage::DataStore::new(&db, &artifacts)
-                    .expect("test side-effect ledger store must migrate"),
-            )
-        });
-        return Ok(store.clone());
+        let (db, artifacts) = if let Some((db, art)) = crate::storage::test_db_override() {
+            (db, art)
+        } else {
+            let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var("NATIVES_DB_PATH")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(PathBuf::from)
+                });
+            match db_path {
+                Some(db) => {
+                    let art = std::env::var("NATIVES_RUNTIME_DIR")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| db.with_extension("artifacts"));
+                    (db, art)
+                }
+                None => {
+                    // Historical fallback: one temp DB per test process.
+                    static TEST_STORE: OnceLock<
+                        std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<crate::storage::DataStore>>>,
+                    > = OnceLock::new();
+                    let db = std::env::temp_dir().join(format!(
+                        "natives-side-effect-ledger-test-{}.db",
+                        std::process::id()
+                    ));
+                    let art = db.with_extension("artifacts");
+                    let cache = TEST_STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+                    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+                    return Ok(map
+                        .entry(db.clone())
+                        .or_insert_with(|| {
+                            std::sync::Arc::new(
+                                crate::storage::DataStore::new(&db, &art)
+                                    .expect("test side-effect ledger store must migrate"),
+                            )
+                        })
+                        .clone());
+                }
+            }
+        };
+        // Per-path cache so a test that resolves its own DB does not re-run
+        // migrations on every ledger write.
+        static PER_PATH: OnceLock<
+            std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<crate::storage::DataStore>>>,
+        > = OnceLock::new();
+        let cache = PER_PATH.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+        return Ok(map
+            .entry(db.clone())
+            .or_insert_with(|| {
+                std::sync::Arc::new(
+                    crate::storage::DataStore::new(&db, &artifacts)
+                        .expect("test side-effect ledger store must migrate"),
+                )
+            })
+            .clone());
     }
     #[allow(unreachable_code)]
     Err("no data store for side_effect_record".to_string())

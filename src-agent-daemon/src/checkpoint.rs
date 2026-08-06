@@ -671,24 +671,53 @@ impl Default for CheckpointManager {
 }
 
 pub fn global_checkpoint_manager() -> &'static CheckpointManager {
-    use std::sync::OnceLock;
-    static M: OnceLock<CheckpointManager> = OnceLock::new();
-    M.get_or_init(|| {
-        // Best-effort open from env
-        let db = crate::default_assistant_db_path();
-        let art = std::env::var("NATIVES_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var_os("HOME")
-                    .map(|h| PathBuf::from(h).join(".natives").join("runtime"))
-                    .unwrap_or_else(std::env::temp_dir)
-            })
-            .join("artifacts");
-        match DataStore::new(&db, &art) {
-            Ok(store) => CheckpointManager::with_store(Arc::new(store)),
-            Err(_) => CheckpointManager::new(),
-        }
-    })
+    #[cfg(test)]
+    {
+        *test_checkpoint_global_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+    #[cfg(not(test))]
+    {
+        use std::sync::OnceLock;
+        static M: OnceLock<CheckpointManager> = OnceLock::new();
+        M.get_or_init(|| {
+            let db = crate::default_assistant_db_path();
+            let art = std::env::var("NATIVES_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    std::env::var_os("HOME")
+                        .map(|h| PathBuf::from(h).join(".natives").join("runtime"))
+                        .unwrap_or_else(std::env::temp_dir)
+                })
+                .join("artifacts");
+            match DataStore::new(&db, &art) {
+                Ok(store) => CheckpointManager::with_store(Arc::new(store)),
+                Err(_) => CheckpointManager::new(),
+            }
+        })
+    }
+}
+
+/// Test-only process-global checkpoint manager. Defaults to a memory-only
+/// manager (never `~/.natives`); a test can install a store-backed one via
+/// [`install_checkpoint_global_for_test`].
+#[cfg(test)]
+fn test_checkpoint_global_lock() -> &'static std::sync::Mutex<&'static CheckpointManager> {
+    use std::sync::{Mutex, OnceLock};
+    static M: OnceLock<Mutex<&'static CheckpointManager>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(Box::leak(Box::new(CheckpointManager::new()))))
+}
+
+/// Test-only: replace the process-global checkpoint manager. Call while
+/// holding [`DataStore::env_test_lock`] for determinism under
+/// `--test-threads=2`.
+#[cfg(test)]
+pub fn install_checkpoint_global_for_test(mgr: CheckpointManager) -> &'static CheckpointManager {
+    let m: &'static CheckpointManager = Box::leak(Box::new(mgr));
+    let lock = test_checkpoint_global_lock();
+    *lock.lock().unwrap_or_else(|e| e.into_inner()) = m;
+    m
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {

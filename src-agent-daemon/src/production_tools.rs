@@ -4412,11 +4412,55 @@ mod plan_mode_runtime_tests {
 
     #[tokio::test]
     async fn approval_releases_the_latch_and_restores_the_declared_profile() {
+        // T01: hermetic. The plan-mode gate persists a pending interaction
+        // (interaction_store) and the side-effect ledger, so the fixture needs
+        // a temp SQLite store; the process-global RunManager is installed as a
+        // MEMORY manager so the verified-project check escapes (no bound run)
+        // and checkpointing is in-memory. ~/.natives is never touched.
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        let env_dir = tempfile::tempdir().unwrap();
+        let db = env_dir.path().join("plan.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", env_dir.path());
+        crate::storage::set_test_db_override(
+            Some(db.clone()),
+            Some(env_dir.path().join("artifacts")),
+        );
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
+        crate::run_manager::install_memory_global_for_test();
+        crate::checkpoint::install_checkpoint_global_for_test(
+            crate::checkpoint::CheckpointManager::new(),
+        );
         let id = run_id("approve");
+        // interaction/session_actor rows reference conversation + run, so the
+        // fixture must create the FK stubs before the prompt is raised.
+        let conv_id = format!("conv-{id}");
+        crate::conversation_store::ensure_conversation_stub(&conv_id, "openai", "gpt-4o", None, None)
+            .unwrap();
+        {
+            let store = crate::storage::DataStore::new(&db, &env_dir.path().join("artifacts")).unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                     VALUES (?1, ?2, 'created', 'openai', 'gpt-4o')",
+                    rusqlite::params![id, conv_id],
+                )
+                .unwrap();
+        }
         let dir = tempfile::tempdir().unwrap();
         let root = project_root(&dir);
         let tools = Arc::new(tools_for(&id, "full_access", &root));
         plan_mode::enter(&id, "full_access");
+        // T01: the direct tool path bypasses production begin_run; register the
+        // run with the installed memory checkpoint manager so capture_before
+        // (write_file after approval) finds a live checkpoint.
+        crate::checkpoint::global_checkpoint_manager()
+            .begin_run(&id, &conv_id, &root)
+            .unwrap();
 
         let submitting = {
             let tools = tools.clone();
@@ -4456,7 +4500,42 @@ mod plan_mode_runtime_tests {
 
     #[tokio::test]
     async fn rejection_keeps_the_run_planning() {
+        // T01: hermetic — same env/DB + memory-global setup as the approval
+        // sibling (pending interaction + ledger need a temp store).
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        let env_dir = tempfile::tempdir().unwrap();
+        let db = env_dir.path().join("plan-reject.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", env_dir.path());
+        crate::storage::set_test_db_override(
+            Some(db.clone()),
+            Some(env_dir.path().join("artifacts")),
+        );
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
+        crate::run_manager::install_memory_global_for_test();
+        crate::checkpoint::install_checkpoint_global_for_test(
+            crate::checkpoint::CheckpointManager::new(),
+        );
         let id = run_id("reject");
+        // interaction/session_actor rows reference conversation + run, so the
+        // fixture must create the FK stubs before the prompt is raised.
+        let conv_id = format!("conv-{id}");
+        crate::conversation_store::ensure_conversation_stub(&conv_id, "openai", "gpt-4o", None, None)
+            .unwrap();
+        {
+            let store = crate::storage::DataStore::new(&db, &env_dir.path().join("artifacts")).unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                     VALUES (?1, ?2, 'created', 'openai', 'gpt-4o')",
+                    rusqlite::params![id, conv_id],
+                )
+                .unwrap();
+        }
         let dir = tempfile::tempdir().unwrap();
         let root = project_root(&dir);
         let tools = Arc::new(tools_for(&id, "full_access", &root));

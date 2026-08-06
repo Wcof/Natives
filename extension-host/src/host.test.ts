@@ -3,7 +3,8 @@
 // Tests for manifest validation, capability denial, timeout,
 // output limit, crash, and restart.
 
-import { describe, it, assert } from 'tsx:test';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { ExtensionHost, type ExtensionManifest } from './index';
 
 describe('ExtensionHost', () => {

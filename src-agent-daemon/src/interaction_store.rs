@@ -791,6 +791,13 @@ mod tests {
     #[test]
     fn interaction_idempotency_event_failure_blocks_delivery() {
         with_temp_db(|| {
+            // T01: bind the process-global RunManager to THIS test's temp store
+            // so outbox delivery appends against the migrated schema (FK on
+            // run_event.run_id -> run.id). Deterministic and never ~/.natives.
+            let global_store = std::sync::Arc::new(store().unwrap());
+            crate::run_manager::install_global_for_test(
+                crate::run_manager::RunManager::new_with_store(global_store),
+            );
             // The outbox has no run FK, so a row can reference a deleted run.
             // Delivering it appends InteractionResponded against a missing run,
             // which fails; the row must stay undelivered for a later replay.

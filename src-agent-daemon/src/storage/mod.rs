@@ -101,6 +101,59 @@ pub fn test_db_override() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     Some((db, art))
 }
 
+/// Test-only RAII guard: captures the `NATIVES_*` env vars and restores them on
+/// drop so one test's fixture can never leak a deleted temp path into a later
+/// test (T01 hermeticity). Use together with [`DataStore::env_test_lock`].
+#[cfg(test)]
+pub struct EnvRestore {
+    db: Option<String>,
+    asst: Option<String>,
+    rt: Option<String>,
+    fixture: Option<String>,
+    event_dir: Option<String>,
+    event_disable: Option<String>,
+    run_mgr_memory: Option<String>,
+}
+
+#[cfg(test)]
+impl EnvRestore {
+    pub fn capture() -> Self {
+        Self {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+            fixture: std::env::var("NATIVES_DAEMON_FIXTURE").ok(),
+            event_dir: std::env::var("NATIVES_EVENT_LOG_DIR").ok(),
+            event_disable: std::env::var("NATIVES_EVENT_LOG_DISABLE").ok(),
+            run_mgr_memory: std::env::var("NATIVES_RUN_MANAGER_MEMORY").ok(),
+        }
+    }
+
+    pub fn restore(&self) {
+        for (name, value) in [
+            ("NATIVES_DB_PATH", self.db.as_deref()),
+            ("NATIVES_ASSISTANT_DB_PATH", self.asst.as_deref()),
+            ("NATIVES_RUNTIME_DIR", self.rt.as_deref()),
+            ("NATIVES_DAEMON_FIXTURE", self.fixture.as_deref()),
+            ("NATIVES_EVENT_LOG_DIR", self.event_dir.as_deref()),
+            ("NATIVES_EVENT_LOG_DISABLE", self.event_disable.as_deref()),
+            ("NATIVES_RUN_MANAGER_MEMORY", self.run_mgr_memory.as_deref()),
+        ] {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
     conn: Mutex<Connection>,
@@ -194,6 +247,17 @@ impl DataStore {
     /// Re-entrant on the same thread so store() can nest under with_temp_db.
     #[cfg(test)]
     pub fn env_test_lock() -> EnvTestGuard {
+        // T01 hermeticity: never let agent-core's EventSequencer fall through
+        // to ~/.natives/events in tests. When no event log is configured for
+        // the current test, force memory-only events so a test never reads or
+        // writes the developer's home directory. Tests that need durable
+        // events set NATIVES_EVENT_LOG_DIR or NATIVES_RUNTIME_DIR first.
+        if std::env::var("NATIVES_EVENT_LOG_DIR").is_err()
+            && std::env::var("NATIVES_RUNTIME_DIR").is_err()
+            && std::env::var("NATIVES_EVENT_LOG_DISABLE").is_err()
+        {
+            std::env::set_var("NATIVES_EVENT_LOG_DISABLE", "1");
+        }
         EnvTestGuard::acquire()
     }
 
