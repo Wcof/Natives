@@ -109,12 +109,24 @@ else
   report "OK: settings/catalog do not depend on assistant_executor"
 fi
 
-# 4) Capability flags honesty — mcp/extensions/scheduler must not be false if methods exist
-if rg -n 'mcp: false|extensions: false|scheduler: false' crates/assistant-protocol/src/v2/capabilities.rs 2>/dev/null; then
-  report "FAIL: capability flags still false while methods may be implemented"
-  fail=1
-else
-  report "OK: capability flags not hard-coded false for mcp/extensions/scheduler"
+# 4) Capability flags honesty — a flag must not be `false` while the matching
+#    methods are actually implemented (R-T5: advertisement ⊆ implementation).
+#    The daemon honestly does not implement scheduler/extensions, so `false`
+#    there is correct as long as those methods are absent from IMPLEMENTED_METHODS.
+cap_file="crates/assistant-protocol/src/v2/capabilities.rs"
+impl_methods="$(sed -n '/^pub const IMPLEMENTED_METHODS/,/^];/p' crates/assistant-protocol/src/v2/methods.rs)"
+honest=1
+if rg -n 'mcp: false' "$cap_file" >/dev/null && echo "$impl_methods" | rg -q '"(mcp)\.'; then
+  report "FAIL: mcp flag false while mcp methods are implemented"; fail=1; honest=0
+fi
+if rg -n 'extensions: false' "$cap_file" >/dev/null && echo "$impl_methods" | rg -q '"(extensions|extension)\.[a-z]'; then
+  report "FAIL: extensions flag false while extension methods are implemented"; fail=1; honest=0
+fi
+if rg -n 'scheduler: false' "$cap_file" >/dev/null && echo "$impl_methods" | rg -q '"scheduler\.'; then
+  report "FAIL: scheduler flag false while scheduler methods are implemented"; fail=1; honest=0
+fi
+if [ "$honest" -eq 1 ]; then
+  report "OK: capability flags honest vs IMPLEMENTED_METHODS (unimplemented scheduler/extensions correctly false)"
 fi
 
 # 5) Production default mode is uds

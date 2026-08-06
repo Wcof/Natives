@@ -107,7 +107,7 @@ impl DaemonCapabilities {
             hooks: true,
             subagents: true,
             mcp: true,
-            extensions: false,
+            extensions: true,
             scheduler: false,
             event_replay: true,
             credential_broker: true,
@@ -130,7 +130,7 @@ mod tests {
         assert!(caps.subagents);
         assert!(caps.mcp);
         assert!(!caps.scheduler);
-        assert!(!caps.extensions);
+        assert!(caps.extensions);
         assert!(caps.methods.iter().any(|m| m == "run.start"));
         assert!(caps.methods.iter().any(|m| m == "extension.list"));
         assert!(!caps.methods.iter().any(|m| m.starts_with("scheduler.")));

@@ -3607,7 +3607,7 @@ mod tests {
         assert!(!caps.scheduler);
         assert!(caps.methods.iter().any(|m| m == "extension.list"));
         assert!(!caps.methods.iter().any(|m| m == "extension.enable"));
-        assert!(!caps.extensions);
+        assert!(caps.extensions);
     }
 
     struct StaticStreamAdapter {
