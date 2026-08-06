@@ -4,6 +4,7 @@
 //! permission Ask/Allow/Deny, hooks, and subagent child runs.
 
 use agent_core::assemble_context;
+use agent_core::metrics::MetricsSink;
 use agent_core::{
     AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderContext,
     EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer,
@@ -93,6 +94,8 @@ pub struct ProductionRuntime {
     /// needs to travel is keyed by `run_id`. Nothing here can widen permissions
     /// or the tool surface — it is prompt text only.
     pub run_agent_directives: Arc<Mutex<HashMap<String, String>>>,
+    /// Bounded runtime metrics sink (non-authoritative, no secrets).
+    pub metrics_sink: MetricsSink,
 }
 
 #[cfg(test)]
@@ -154,6 +157,7 @@ pub fn merge_agent_directive(
 /// This is the sole ordering authority for Native prompt layers. Callers may
 /// project the returned summaries into a Run snapshot, but only
 /// `effective_full_text` is passed to the engine and it is never persisted.
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub(crate) fn compile_effective_prompt(
     agent_kind: Option<&str>,
     profile: Option<&agent_core::AgentProfile>,
@@ -250,11 +254,22 @@ impl ProductionRuntime {
     }
 
     pub fn new_with_event_store(data_store: Arc<crate::storage::DataStore>) -> Self {
+        // TASK-006 / B04: the bounded storage actor is the single writer for
+        // event facts; async engine paths submit appends instead of locking
+        // the DataStore Mutex directly. The EventLog holds an Arc, so the
+        // actor drains and exits when the runtime drops.
+        let actor = crate::storage::actor::StorageActor::new(
+            crate::storage::actor::DEFAULT_CAPACITY,
+            data_store.clone(),
+        );
         Self::new_with_events_and_checkpoint(
-            EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new(
+            EventSequencer::with_persistence(Arc::new(crate::event_log::EventLog::new_with_actor(
                 data_store.clone(),
+                actor.clone(),
             ))),
-            Arc::new(crate::checkpoint::CheckpointManager::with_store(data_store)),
+            Arc::new(crate::checkpoint::CheckpointManager::with_store_and_actor(
+                data_store, actor,
+            )),
         )
     }
 
@@ -276,6 +291,7 @@ impl ProductionRuntime {
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
             run_agent_directives: Arc::new(Mutex::new(HashMap::new())),
+            metrics_sink: crate::metrics::daemon_metrics_sink(),
         };
         // Assignment bridges remain until the subagent interaction protocol is moved.
         let mut rt = rt;
@@ -808,13 +824,14 @@ impl ProductionRuntime {
                     } => Some(snapshot_id.as_str()),
                     _ => None,
                 });
-            let event_cursor = run_events
-                .last()
-                .map(|e| e.effective_run_sequence())
-                .unwrap_or(0)
-                .to_string();
+            let ledger_cursor = crate::side_effect_ledger::ledger_watermark(&run_id)?;
             self.checkpoint_manager()
-                .set_run_metadata(&run_id, Some(turn_id), snapshot_id, Some(&event_cursor))
+                .set_run_metadata(
+                    &run_id,
+                    Some(turn_id),
+                    snapshot_id,
+                    ledger_cursor.as_deref(),
+                )
                 .map_err(|error| format!("checkpoint metadata persistence failed: {error}"))?;
         }
         let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
@@ -822,7 +839,7 @@ impl ProductionRuntime {
         // outcomes.  The store itself rejects only genuinely partial typed
         // turns, so a failed Run cannot silently lose an already committed
         // assistant message while still keeping incomplete streams out.
-        crate::conversation_store::append_assistant_turn_from_events(
+        crate::conversation_projector::project_run_from_events(
             &conversation_id,
             &run_id,
             &run_events,
@@ -1425,6 +1442,7 @@ impl RealProvider {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     pub async fn stream_with_context_controls(
         &self,
         context: &EngineProviderContext,
@@ -1451,6 +1469,7 @@ impl RealProvider {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     pub async fn stream_with_typed_context_controls(
         &self,
         context: &EngineProviderContext,
@@ -1474,6 +1493,7 @@ impl RealProvider {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     pub(crate) async fn stream_with_history_context_controls(
         &self,
         context: &EngineProviderContext,
@@ -1887,6 +1907,7 @@ mod permission_bind_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
+    #[allow(deprecated)] // explicitly verifies the deprecated setter is a no-op
     async fn legacy_runtime_profile_setter_cannot_mutate_shared_profile() {
         let rt = ProductionRuntime::new();
         rt.set_permission_profile("readonly").await;
@@ -2131,8 +2152,19 @@ pub(crate) fn register_tools_for_surface(
     gateway: &mut CapabilityGateway,
     allowlist: Option<&[String]>,
 ) {
+    // D01: a duplicate canonical tool name is a config bug that must fail the
+    // daemon before any run starts — never a silently shadowed tool.
+    let mut register = |tool| {
+        if let Err(error) = gateway.register(tool) {
+            panic!("tool surface registration failed (fail closed): {error}");
+        }
+    };
     match allowlist {
-        None => gateway.register_builtins(),
+        None => {
+            if let Err(error) = gateway.register_builtins() {
+                panic!("tool surface registration failed (fail closed): {error}");
+            }
+        }
         Some(list) => {
             let allowed: std::collections::HashSet<&str> =
                 list.iter().map(|s| s.as_str()).collect();
@@ -2144,7 +2176,7 @@ pub(crate) fn register_tools_for_surface(
                 .chain(capability_gateway::tools::creative_draft_tools())
             {
                 if allowed.contains(tool.name) {
-                    gateway.register(tool);
+                    register(tool);
                 }
             }
             // Orchestration tools are handled by PermissionGatedTools even if not in
@@ -2154,7 +2186,6 @@ pub(crate) fn register_tools_for_surface(
 }
 
 /// Collect relative paths that a write-side tool is about to touch.
-
 pub(crate) fn normalize_permission_scope(scope: &str) -> String {
     match scope.trim().to_ascii_lowercase().as_str() {
         "run" | "this_run" => "this_run".into(),
@@ -2472,6 +2503,7 @@ fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64>
 }
 
 #[allow(dead_code)]
+#[allow(clippy::redundant_closure_call)] // IIFE pattern mirrors store() resolution
 fn parent_conversation_recently_active(conversation_id: &str, within_secs: i64) -> bool {
     let Ok(store) = (|| -> Result<crate::storage::DataStore, String> {
         #[cfg(test)]
@@ -2593,7 +2625,7 @@ mod tool_allowlist_tests {
             gateway: {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root("/tmp/natives-allowlist-test");
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),
@@ -2966,7 +2998,7 @@ mod subagent_persona_tests {
             gateway: {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root(project_root.to_string_lossy().to_string());
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),

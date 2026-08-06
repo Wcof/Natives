@@ -377,13 +377,13 @@ fn load_expert_profile_from_db(id: &str) -> Option<AgentProfile> {
             .get("systemPrompt")
             .and_then(Value::as_str)
             .map(str::to_string),
-        tools: expert.get("tools").and_then(|v| as_vec(v)),
-        disallowed_tools: expert.get("disallowedTools").and_then(|v| as_vec(v)),
+        tools: expert.get("tools").and_then(as_vec),
+        disallowed_tools: expert.get("disallowedTools").and_then(as_vec),
         permission_mode: expert
             .get("permissionMode")
             .and_then(Value::as_str)
             .map(str::to_string),
-        skills: expert.get("skills").and_then(|v| as_vec(v)),
+        skills: expert.get("skills").and_then(as_vec),
         provider_id: expert
             .get("providerId")
             .and_then(Value::as_str)

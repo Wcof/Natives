@@ -23,9 +23,15 @@ pub use process_supervisor::{
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
+
+/// Bounded live-output channel capacity for long-running handlers (H03). A
+/// slow consumer must not grow memory unboundedly: overflow is dropped at the
+/// producer and counted in `ToolCallContext::progress_dropped_bytes`.
+pub const TERMINAL_PROGRESS_CAPACITY: usize = 4096;
 
 /// Best-effort output emitted by a long-running handler. The Gateway owns the
 /// process/MCP safety boundary; the caller owns persistence and rate limiting.
@@ -60,8 +66,13 @@ pub struct ToolCallContext {
     /// Shared run cancellation token (task-03). Tools/MCP must select on this.
     pub cancel: CancellationToken,
     /// Optional live output channel for handlers that can stream progress.
-    /// `None` keeps lightweight/test handlers allocation-free.
-    pub progress: Option<UnboundedSender<ToolProgressChunk>>,
+    /// Bounded (`TERMINAL_PROGRESS_CAPACITY`); overflow is dropped and counted
+    /// in `progress_dropped_bytes`. `None` keeps lightweight/test handlers
+    /// allocation-free.
+    pub progress: Option<Sender<ToolProgressChunk>>,
+    /// Bytes of live progress dropped because the bounded channel was full.
+    /// Progress is non-authoritative; overflow must never stall the handler.
+    pub progress_dropped_bytes: Arc<AtomicU64>,
     pub turn_id: Option<String>,
     pub message_id: Option<String>,
 }
@@ -108,9 +119,21 @@ impl ToolCallContext {
             project_identity_version: None,
             cancel,
             progress: None,
+            progress_dropped_bytes: Arc::new(AtomicU64::new(0)),
             turn_id: None,
             message_id: None,
         }
+    }
+
+    /// Attach a bounded live-output channel and its dropped-bytes counter. The
+    /// counter is shared with the daemon so overflow is observable.
+    pub fn set_progress(
+        &mut self,
+        progress: Option<Sender<ToolProgressChunk>>,
+        dropped_bytes: Arc<AtomicU64>,
+    ) {
+        self.progress = progress;
+        self.progress_dropped_bytes = dropped_bytes;
     }
 
     /// Construct context from a verified project identity (task-10).
@@ -136,6 +159,7 @@ impl ToolCallContext {
     }
 
     /// Verified identity + registry-owned cancel token.
+    #[allow(clippy::too_many_arguments)] // public API: identity fields are fixed
     pub fn from_verified_identity_with_cancel(
         project_id: impl Into<String>,
         identity_version: u32,
@@ -158,6 +182,7 @@ impl ToolCallContext {
             project_identity_version: Some(identity_version),
             cancel,
             progress: None,
+            progress_dropped_bytes: Arc::new(AtomicU64::new(0)),
             turn_id: None,
             message_id: None,
         }
@@ -207,6 +232,29 @@ impl ToolCallContext {
             });
         }
         Ok(canonical)
+    }
+}
+
+/// A path authorized by the Gateway for checkpoint/rewind I/O.
+///
+/// Produced only by [`CapabilityGateway::preflight_write_paths`]: `canonical`
+/// is verified to be inside the project root, and `project_relative` is the
+/// in-root form used as the checkpoint key and rewind path. Checkpoint must
+/// consume only this type — a raw caller-supplied path cannot be represented.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedPath {
+    /// Absolute canonical path on disk.
+    pub canonical: PathBuf,
+    /// Path relative to the project root.
+    pub project_relative: PathBuf,
+}
+
+impl TrustedPath {
+    pub fn new(canonical: PathBuf, project_relative: PathBuf) -> Self {
+        Self {
+            canonical,
+            project_relative,
+        }
     }
 }
 
@@ -332,12 +380,31 @@ impl CapabilityGateway {
         self.project_root = Some(root.into());
     }
 
-    pub fn register(&mut self, tool: Tool) {
+    /// Register a tool. A duplicate canonical name is rejected (D01): the
+    /// gateway's advertised surface must be deterministic, so the second
+    /// registration fails instead of silently shadowing the first.
+    pub fn register(&mut self, tool: Tool) -> Result<(), String> {
+        if let Some(existing) = self.tools.iter().find(|t| t.name == tool.name) {
+            return Err(format!(
+                "duplicate tool name '{}' conflicts with existing registration (side_effect={:?})",
+                tool.name, existing.side_effect
+            ));
+        }
         self.tools.push(tool);
+        Ok(())
     }
 
     pub fn get_tool(&self, name: &str) -> Option<&Tool> {
         self.tools.iter().find(|t| t.name == name)
+    }
+
+    /// The conflict key a tool is bound to, if any. Used by the daemon to hold
+    /// a cross-run lease so the same key never overlaps (D02).
+    pub fn conflict_key_for(&self, name: &str) -> Option<String> {
+        self.tools
+            .iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.conflict_key.clone())
     }
 
     pub fn list_tools(&self) -> Vec<&Tool> {
@@ -371,11 +438,12 @@ impl CapabilityGateway {
     }
 
     /// Register all built-in tools.
-    pub fn register_builtins(&mut self) {
+    pub fn register_builtins(&mut self) -> Result<(), String> {
         let builtins = tools::builtin_tools();
         for tool in builtins {
-            self.register(tool);
+            self.register(tool)?;
         }
+        Ok(())
     }
 
     /// Enforce path/timeout/output policy, then run the tool handler.
@@ -529,21 +597,7 @@ impl CapabilityGateway {
         let path_keys = ["path", "root", "cwd", "file", "directory", "dir"];
         for key in path_keys {
             if let Some(path) = input.get(key).and_then(|v| v.as_str()) {
-                policy::check_path_traversal(path)?;
-                let effective_scope = self.effective_path_scope(&tool.path_scope);
-                match policy::check_path_scope(path, &effective_scope) {
-                    policy::PolicyResult::Allowed => {}
-                    policy::PolicyResult::Denied(msg)
-                    | policy::PolicyResult::NeedsApproval(msg) => {
-                        // Outside scope is hard-denied at gateway; elevation uses
-                        // PermissionClass Ask path at the engine layer when allowed.
-                        return Err(ToolError {
-                            code: "path_scope_denied".into(),
-                            message: msg,
-                            retryable: false,
-                        });
-                    }
-                }
+                self.check_path_for_scope(tool, path)?;
             }
         }
 
@@ -562,6 +616,66 @@ impl CapabilityGateway {
         Ok(())
     }
 
+    /// Authorize the write paths a tool declares in `input` against the tool's
+    /// path scope and canonical project root, returning only trusted paths.
+    ///
+    /// MUST run before any filesystem or checkpoint I/O. This is the single
+    /// authority for "which paths may be read or written"; Checkpoint consumes
+    /// only its output (via [`TrustedPath`]). Absolute, dotdot and symlink
+    /// escapes are rejected here — the call must never reach the checkpoint,
+    /// the ledger, or the handler.
+    pub fn preflight_write_paths(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<Vec<TrustedPath>, ToolError> {
+        let tool = self.get_tool(tool_name).ok_or_else(|| ToolError {
+            code: "unknown_tool".into(),
+            message: format!("unknown tool: {tool_name}"),
+            retryable: false,
+        })?;
+        // Keep the same traversal/scope enforcement as execute(), so a call
+        // rejected here is rejected identically there.
+        self.enforce_input_policy(tool, input)?;
+        let mut trusted = Vec::new();
+        for raw in declared_write_paths(tool_name, input) {
+            self.check_path_for_scope(tool, &raw)?;
+            let canonical = context.resolve_path(&raw)?;
+            let relative = canonical
+                .strip_prefix(context.project_root.as_path())
+                .map_err(|_| ToolError {
+                    code: "PATH_ESCAPE".into(),
+                    message: format!(
+                        "resolved path {} escapes project root {}",
+                        canonical.display(),
+                        context.project_root.display()
+                    ),
+                    retryable: false,
+                })?;
+            trusted.push(TrustedPath::new(canonical.clone(), relative.to_path_buf()));
+        }
+        Ok(trusted)
+    }
+
+    /// Traversal + scope check for one path, matching the exact rejection
+    /// `execute()` would produce. `NeedsApproval` is hard-denied here because
+    /// the checkpoint/ledger path has no approval loop of its own.
+    fn check_path_for_scope(&self, tool: &Tool, path: &str) -> Result<(), ToolError> {
+        policy::check_path_traversal(path)?;
+        let effective_scope = self.effective_path_scope(&tool.path_scope);
+        match policy::check_path_scope(path, &effective_scope) {
+            policy::PolicyResult::Allowed => Ok(()),
+            policy::PolicyResult::Denied(msg) | policy::PolicyResult::NeedsApproval(msg) => {
+                Err(ToolError {
+                    code: "path_scope_denied".into(),
+                    message: msg,
+                    retryable: false,
+                })
+            }
+        }
+    }
+
     fn effective_path_scope(&self, declared: &PathScope) -> PathScope {
         match declared {
             PathScope::Any => {
@@ -574,6 +688,36 @@ impl CapabilityGateway {
             other => other.clone(),
         }
     }
+}
+
+/// Extract the write paths a tool declares in its input for checkpoint capture.
+/// write_file/edit_file use `path`; apply_patch uses `files[].path` plus the
+/// optional top-level `path`. Entries are left unvalidated here — preflight
+/// rejects invalid ones explicitly rather than silently dropping them.
+fn declared_write_paths(name: &str, input: &serde_json::Value) -> Vec<String> {
+    fn push_non_empty(out: &mut Vec<String>, value: Option<&str>) {
+        if let Some(p) = value {
+            if !p.is_empty() {
+                out.push(p.to_string());
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    match name {
+        "write_file" | "edit_file" => {
+            push_non_empty(&mut paths, input.get("path").and_then(|v| v.as_str()));
+        }
+        "apply_patch" => {
+            if let Some(files) = input.get("files").and_then(|v| v.as_array()) {
+                for f in files {
+                    push_non_empty(&mut paths, f.get("path").and_then(|v| v.as_str()));
+                }
+            }
+            push_non_empty(&mut paths, input.get("path").and_then(|v| v.as_str()));
+        }
+        _ => {}
+    }
+    paths
 }
 
 /// Small, dependency-free Draft-07 subset used by the built-in manifests.
@@ -842,7 +986,7 @@ mod p0_tests {
             parallel_safe: false,
             conflict_key: None,
             handler,
-        });
+        }).unwrap();
         gateway
     }
 
@@ -896,7 +1040,7 @@ mod p0_tests {
             parallel_safe: false,
             conflict_key: None,
             handler: handler.clone(),
-        });
+        }).unwrap();
         let error = gateway
             .execute(
                 "bounded_array",
@@ -912,7 +1056,7 @@ mod p0_tests {
     #[test]
     fn all_builtin_schemas_are_supported_by_validator() {
         let mut gateway = CapabilityGateway::new();
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         gateway
             .validate_registered_schemas()
             .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
@@ -921,7 +1065,7 @@ mod p0_tests {
     #[test]
     fn every_tool_has_a_verifiable_mode_and_writes_are_not_parallel() {
         let mut gateway = CapabilityGateway::new();
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         let capabilities = gateway.list_capabilities();
         assert!(!capabilities.is_empty(), "builtins must register");
         for capability in &capabilities {
@@ -1012,5 +1156,355 @@ mod p0_tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "cancelled");
+    }
+}
+
+#[cfg(test)]
+mod path_scope_preflight_tests {
+    //! TASK-001 (N01): `preflight_write_paths` is the single authority that
+    //! authorizes write paths for checkpoint I/O. Absolute, dotdot and symlink
+    //! escapes must be rejected BEFORE any path is returned as trusted.
+    use super::*;
+    use std::path::Path;
+
+    struct NoopHandler;
+    #[async_trait::async_trait]
+    impl ToolHandler for NoopHandler {
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolCallContext,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                result: serde_json::json!({}),
+                truncated: false,
+                duration_ms: 0,
+            })
+        }
+    }
+
+    fn gateway_with_root(root: &Path) -> CapabilityGateway {
+        // Production binds project roots from verified identity (canonical);
+        // mirror that here so macOS `/var` → `/private/var` symlinks resolve.
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let mut gateway = CapabilityGateway::new();
+        gateway.set_project_root(root.to_string_lossy().into_owned());
+        let _ = gateway.register_builtins();
+        gateway
+    }
+
+    fn context_for(root: &Path) -> ToolCallContext {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        ToolCallContext::with_cancel(
+            root,
+            "run-path".into(),
+            "conv-path".into(),
+            "call-path".into(),
+            "autonomous".into(),
+            CancellationToken::new(),
+        )
+    }
+
+    fn assert_path_rejection(err: ToolError) {
+        assert!(
+            matches!(
+                err.code.as_str(),
+                "path_traversal" | "path_scope_denied" | "PATH_ESCAPE"
+            ),
+            "expected a path rejection code, got {}: {}",
+            err.code,
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_path_scope_preflight_rejects_absolute_system_path() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths(
+                "write_file",
+                &serde_json::json!({"path": "/etc/passwd", "content": "x"}),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_path_rejection(err);
+    }
+
+    #[test]
+    fn test_path_scope_preflight_rejects_absolute_outside_project() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "TOP-SECRET").unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths(
+                "write_file",
+                &serde_json::json!({"path": secret.to_string_lossy(), "content": "x"}),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_path_rejection(err);
+    }
+
+    #[test]
+    fn test_path_scope_preflight_rejects_dotdot() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths(
+                "write_file",
+                &serde_json::json!({"path": "../escape.txt", "content": "x"}),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_path_rejection(err);
+    }
+
+    #[test]
+    fn test_path_scope_preflight_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("secret.txt");
+        std::fs::write(&target, "TOP-SECRET").unwrap();
+        let link = root.path().join("evil-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths(
+                "write_file",
+                &serde_json::json!({"path": "evil-link", "content": "x"}),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_path_rejection(err);
+    }
+
+    #[test]
+    fn test_path_scope_preflight_rejects_missing_path_with_symlink_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = root.path().join("evil-dir");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths(
+                "write_file",
+                &serde_json::json!({"path": "evil-dir/new.txt", "content": "x"}),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_path_rejection(err);
+    }
+
+    #[test]
+    fn test_path_scope_preflight_apply_patch_files_array_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths(
+                "apply_patch",
+                &serde_json::json!({"files": [{"path": "/etc/passwd", "content": "x"}]}),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_path_rejection(err);
+    }
+
+    #[test]
+    fn test_path_scope_preflight_allows_project_relative() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        let file = root.path().join("src").join("a.txt");
+        std::fs::write(&file, "hi").unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let trusted = gateway
+            .preflight_write_paths(
+                "write_file",
+                &serde_json::json!({"path": "src/a.txt", "content": "x"}),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(trusted.len(), 1);
+        assert_eq!(
+            trusted[0].canonical,
+            file.canonicalize().unwrap(),
+            "trusted path must be canonical"
+        );
+        assert_eq!(
+            trusted[0].project_relative,
+            std::path::PathBuf::from("src/a.txt"),
+            "trusted path must carry the project-relative form"
+        );
+    }
+
+    #[test]
+    fn test_path_scope_preflight_non_write_tool_returns_empty() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = gateway_with_root(root.path());
+        let ctx = context_for(root.path());
+        let trusted = gateway
+            .preflight_write_paths("grep", &serde_json::json!({"pattern": "x"}), &ctx)
+            .unwrap();
+        assert!(trusted.is_empty());
+    }
+
+    #[test]
+    fn test_path_scope_preflight_scope_none_is_denied() {
+        let root = tempfile::tempdir().unwrap();
+        let mut gateway = gateway_with_root(root.path());
+        gateway.register(Tool {
+            name: "no_path_tool",
+            description: "test",
+            schema: serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+            side_effect: SideEffect::Write,
+            permission_class: PermissionClass::ProjectWrite,
+            path_scope: PathScope::None,
+            timeout_ms: 1000,
+            output_limit: 4096,
+            cancellable: false,
+            parallel_safe: false,
+            conflict_key: None,
+            handler: Arc::new(NoopHandler),
+        }).unwrap();
+        let ctx = context_for(root.path());
+        let err = gateway
+            .preflight_write_paths("no_path_tool", &serde_json::json!({"path": "a.txt"}), &ctx)
+            .unwrap_err();
+        assert_eq!(
+            err.code, "path_scope_denied",
+            "got {}: {}",
+            err.code, err.message
+        );
+    }
+}
+
+#[cfg(test)]
+mod progress_bounded_tests {
+    //! TASK-007 (H03): live-output progress is bounded. Overflow is dropped at
+    //! the producer and counted in `progress_dropped_bytes`, never buffered
+    //! unboundedly, and never allowed to stall the handler.
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use tokio::sync::mpsc::error::TrySendError;
+
+    #[tokio::test]
+    async fn progress_channel_is_bounded_and_overflow_drops() {
+        let capacity = 2usize;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ToolProgressChunk>(capacity);
+        let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        // Producer behavior mirrors tools/mod.rs run_terminal: try_send, and on
+        // Full drop the chunk and count its bytes.
+        for i in 0..100 {
+            let chunk = ToolProgressChunk {
+                stream: "out".into(),
+                text: format!("line {i}"),
+            };
+            match tx.try_send(chunk) {
+                Ok(()) => {}
+                Err(TrySendError::Full(full)) => {
+                    dropped.fetch_add(full.text.len() as u64, Ordering::Relaxed);
+                }
+                Err(TrySendError::Closed(_)) => break,
+            }
+        }
+        // Slow consumer: the queue holds at most `capacity` — it never grows
+        // with the producer.
+        let mut drained = 0usize;
+        while let Ok(chunk) = rx.try_recv() {
+            let _ = chunk;
+            drained += 1;
+        }
+        assert_eq!(drained, capacity, "queue is bounded at capacity");
+        assert!(dropped.load(Ordering::Relaxed) > 0, "overflow is counted");
+    }
+
+    #[test]
+    fn context_attaches_bounded_progress_and_counter() {
+        let mut ctx = ToolCallContext::new(
+            std::path::PathBuf::from("."),
+            "r".into(),
+            "c".into(),
+            "t".into(),
+            "full_access".into(),
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel::<ToolProgressChunk>(4);
+        let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        ctx.set_progress(Some(tx), dropped.clone());
+        assert!(ctx.progress.is_some());
+        assert_eq!(ctx.progress_dropped_bytes.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[cfg(test)]
+mod registry_validation_tests {
+    //! TASK-012 (D01/D02): registration determinism and conflict-key exposure.
+    use super::*;
+
+    struct TestHandler;
+    #[async_trait::async_trait]
+    impl ToolHandler for TestHandler {
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolCallContext,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                result: serde_json::json!({}),
+                truncated: false,
+                duration_ms: 0,
+            })
+        }
+    }
+
+    fn sample_tool(name: &'static str) -> Tool {
+        Tool {
+            name,
+            description: "test",
+            schema: serde_json::json!({ "type": "object", "properties": {}, "required": [] }),
+            side_effect: SideEffect::ReadOnly,
+            permission_class: PermissionClass::AlwaysAllowed,
+            path_scope: PathScope::Any,
+            timeout_ms: 1000,
+            output_limit: 4096,
+            cancellable: true,
+            parallel_safe: false,
+            conflict_key: None,
+            handler: Arc::new(TestHandler),
+        }
+    }
+
+    /// D01: duplicate canonical tool names are rejected at registration.
+    #[test]
+    fn registry_rejects_duplicate_tool_names() {
+        let mut gateway = CapabilityGateway::new();
+        gateway.register(sample_tool("dup")).unwrap();
+        let err = gateway.register(sample_tool("dup")).unwrap_err();
+        assert!(err.contains("duplicate tool name 'dup'"), "{err}");
+        // A distinct name is fine.
+        gateway.register(sample_tool("other")).unwrap();
+    }
+
+    /// D02: conflict_key_for exposes the registered key so the daemon can hold
+    /// a cross-run lease.
+    #[test]
+    fn registry_exposes_conflict_key_for() {
+        let mut gateway = CapabilityGateway::new();
+        let mut tool = sample_tool("exclusive");
+        tool.conflict_key = Some("file:///x".into());
+        gateway.register(tool).unwrap();
+        assert_eq!(
+            gateway.conflict_key_for("exclusive").as_deref(),
+            Some("file:///x")
+        );
+        assert_eq!(gateway.conflict_key_for("missing"), None);
     }
 }

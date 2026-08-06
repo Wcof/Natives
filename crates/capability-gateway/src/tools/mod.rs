@@ -71,7 +71,7 @@ impl ToolHandler for ReadFileTool {
             retryable: true,
         })?;
         head.truncate(n);
-        let is_binary = head.iter().any(|&b| b == 0);
+        let is_binary = head.contains(&0);
         if is_binary {
             return Ok(ToolOutput {
                 result: serde_json::json!({
@@ -585,19 +585,28 @@ impl ToolHandler for RunTerminalTool {
         // state or the caller drops the channel.
         let progress_task = context.progress.as_ref().map(|tx| {
             let tx = tx.clone();
+            let dropped = context.progress_dropped_bytes.clone();
             let task_id = task_id.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 for _ in 0..12_000 {
                     for chunk in supervisor.drain_output(&task_id).await {
-                        if tx
-                            .send(crate::ToolProgressChunk {
-                                stream: chunk.stream.to_string(),
-                                text: chunk.text,
-                            })
-                            .is_err()
-                        {
-                            return;
+                        let chunk = crate::ToolProgressChunk {
+                            stream: chunk.stream.to_string(),
+                            text: chunk.text,
+                        };
+                        // H03: the live-output channel is bounded. Overflow is
+                        // dropped and counted — never buffered unboundedly and
+                        // never allowed to stall the shell.
+                        match tx.try_send(chunk) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(full)) => {
+                                dropped.fetch_add(
+                                    full.text.len() as u64,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
                         }
                     }
                     match supervisor.poll(&task_id).await {
@@ -683,6 +692,7 @@ impl ToolHandler for RunTerminalTool {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // terminal output fields are fixed
 fn terminal_result(
     display: String,
     description: &str,

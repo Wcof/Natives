@@ -454,6 +454,7 @@ impl SubAgentManager {
     ///
     /// Generates new `id` / `run_id`. Prefer [`register`] when the child run is
     /// created by RunManager so metadata shares the real run id.
+    #[allow(clippy::too_many_arguments)] // public API: child scope fields are fixed
     pub async fn spawn(
         &self,
         parent_run_id: &str,
@@ -489,6 +490,7 @@ impl SubAgentManager {
     /// Register a sub-agent whose `run_id` was already allocated by RunManager.
     ///
     /// `id` is typically the persistent `subagent_session` id (also used as task_id).
+    #[allow(clippy::too_many_arguments)] // public API: child scope fields are fixed
     pub async fn register(
         &self,
         id: String,
@@ -612,14 +614,13 @@ impl SubAgentManager {
                     })
                     .unwrap_or(false)
             };
-            if need {
-                if self
+            if need
+                && self
                     .update_status(&d.id, SubAgentStatus::Cancelled)
                     .await
                     .is_ok()
-                {
-                    count += 1;
-                }
+            {
+                count += 1;
             }
         }
         count
@@ -771,8 +772,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrency_limit() {
-        let mut config = SubAgentConfig::default();
-        config.max_concurrent = 1;
+        let config = SubAgentConfig {
+            max_concurrent: 1,
+            ..Default::default()
+        };
         let manager = SubAgentManager::new(config);
 
         // Spawn first sub-agent
@@ -886,9 +889,11 @@ mod tests {
 
     #[tokio::test]
     async fn queued_occupies_concurrent_reservation() {
-        let mut config = SubAgentConfig::default();
-        config.max_concurrent = 1;
-        config.max_concurrent_global = 1;
+        let config = SubAgentConfig {
+            max_concurrent: 1,
+            max_concurrent_global: 1,
+            ..Default::default()
+        };
         let manager = SubAgentManager::new(config);
         let _a = spawn_default(&manager, "p", "A", 1).await.unwrap();
         // Still Queued — must block second spawn.
@@ -899,9 +904,11 @@ mod tests {
 
     #[tokio::test]
     async fn batch_preflight_all_or_nothing() {
-        let mut config = SubAgentConfig::default();
-        config.max_concurrent_global = 2;
-        config.max_concurrent = 2;
+        let config = SubAgentConfig {
+            max_concurrent_global: 2,
+            max_concurrent: 2,
+            ..Default::default()
+        };
         let manager = SubAgentManager::new(config);
         // Preflight of 3 must fail without leaving reservations.
         let err = manager.reserve_batch("p", 3).await.unwrap_err();
@@ -940,10 +947,12 @@ mod tests {
 
     #[tokio::test]
     async fn tool_and_token_budgets_enforce() {
-        let mut config = SubAgentConfig::default();
-        config.max_tool_calls_per_child = 2;
-        config.max_tokens_per_child = 10;
-        config.max_tokens_per_tree = 15;
+        let config = SubAgentConfig {
+            max_tool_calls_per_child: 2,
+            max_tokens_per_child: 10,
+            max_tokens_per_tree: 15,
+            ..Default::default()
+        };
         let manager = SubAgentManager::new(config);
         manager.consume_tool_call("c1", "root").await.unwrap();
         manager.consume_tool_call("c1", "root").await.unwrap();

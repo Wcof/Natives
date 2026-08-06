@@ -28,24 +28,13 @@ pub struct EventSequencer {
     persistence: Option<Arc<dyn EventPersistence>>,
 }
 
+#[derive(Default)]
 struct Inner {
     sequences: HashMap<String, u64>,
     events: HashMap<String, Vec<RunEventV2>>,
     buses: HashMap<String, broadcast::Sender<RunEventV2>>,
     loaded: HashMap<String, bool>,
     load_errors: HashMap<String, String>,
-}
-
-impl Default for Inner {
-    fn default() -> Self {
-        Self {
-            sequences: HashMap::new(),
-            events: HashMap::new(),
-            buses: HashMap::new(),
-            loaded: HashMap::new(),
-            load_errors: HashMap::new(),
-        }
-    }
 }
 
 /// Resolve durable event directory. `None` only when explicitly disabled.

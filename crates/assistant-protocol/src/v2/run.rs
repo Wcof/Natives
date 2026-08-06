@@ -343,6 +343,13 @@ pub struct ResumeRunRequest {
 pub struct ResumeRunResponse {
     pub decision: ResumeDecision,
     pub reason: String,
+    /// Stable machine-readable reason code, additive. Old clients that do not
+    /// know the field ignore it; new clients can branch on it instead of
+    /// parsing `reason` prose. Values: `safe_to_continue`,
+    /// `uncertain_side_effects_confirmation_required`,
+    /// `uncertain_side_effects_blocked`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason_code: String,
     #[serde(default)]
     pub unresolved_effects: Vec<serde_json::Value>,
     /// Present only when a new independent run was created.

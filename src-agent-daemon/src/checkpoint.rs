@@ -4,6 +4,7 @@
 //! run end. Rewind refuses external modifications when conflict_policy=fail.
 
 use crate::storage::DataStore;
+use capability_gateway::TrustedPath;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -69,6 +70,10 @@ struct LiveCheckpoint {
 pub struct CheckpointManager {
     live: std::sync::Mutex<HashMap<String, LiveCheckpoint>>,
     store: Option<Arc<DataStore>>,
+    /// Optional bounded storage actor (TASK-006 / B04); when present, durable
+    /// checkpoint flushes execute on its single writer thread instead of
+    /// locking the DataStore Mutex from the calling (async) thread.
+    actor: Option<Arc<crate::storage::actor::StorageActor>>,
 }
 
 impl CheckpointManager {
@@ -76,6 +81,7 @@ impl CheckpointManager {
         Self {
             live: std::sync::Mutex::new(HashMap::new()),
             store: None,
+            actor: None,
         }
     }
 
@@ -83,6 +89,20 @@ impl CheckpointManager {
         Self {
             live: std::sync::Mutex::new(HashMap::new()),
             store: Some(store),
+            actor: None,
+        }
+    }
+
+    /// Checkpoint manager that routes durable flushes through a bounded
+    /// storage actor (TASK-006 / B04).
+    pub fn with_store_and_actor(
+        store: Arc<DataStore>,
+        actor: Arc<crate::storage::actor::StorageActor>,
+    ) -> Self {
+        Self {
+            live: std::sync::Mutex::new(HashMap::new()),
+            store: Some(store),
+            actor: Some(actor),
         }
     }
 
@@ -161,21 +181,32 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// Lazy capture before-image the first time a relative path is touched.
-    pub fn capture_before(&self, run_id: &str, rel_path: &str) -> Result<(), String> {
+    /// Lazy capture before-image the first time a Gateway-authorized path is
+    /// touched.
+    ///
+    /// Only accepts a [`TrustedPath`] produced by Gateway path preflight; a raw
+    /// caller-supplied path cannot be represented. Defense in depth: an
+    /// escaping `canonical` is rejected before any I/O, so checkpoint reads are
+    /// impossible for unauthorized paths even if a future caller bypasses the
+    /// Gateway.
+    pub fn capture_before(&self, run_id: &str, path: &TrustedPath) -> Result<(), String> {
         let mut map = self.live.lock().map_err(|e| e.to_string())?;
         let live = map
             .get_mut(run_id)
             .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-        if live.files.contains_key(rel_path) {
+        let key = path.project_relative.to_string_lossy().into_owned();
+        if live.files.contains_key(&key) {
             return Ok(());
         }
-        if rel_path.contains("..") {
-            return Err("path escape".into());
+        if !path.canonical.starts_with(&live.project_root) {
+            return Err(format!(
+                "checkpoint path {} escapes project root {}",
+                path.canonical.display(),
+                live.project_root.display()
+            ));
         }
-        let abs = live.project_root.join(rel_path);
-        let (existed, content, hash) = if abs.exists() {
-            let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
+        let (existed, content, hash) = if path.canonical.exists() {
+            let bytes = std::fs::read(&path.canonical).map_err(|e| e.to_string())?;
             let hash = hex_sha256(&bytes);
             let text = String::from_utf8(bytes).ok();
             (true, text, Some(hash))
@@ -183,9 +214,9 @@ impl CheckpointManager {
             (false, None, None)
         };
         live.files.insert(
-            rel_path.to_string(),
+            key.clone(),
             FileSnapshot {
-                path: rel_path.to_string(),
+                path: key,
                 before_hash: hash,
                 after_hash: None,
                 before_content: content,
@@ -196,27 +227,35 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// After a successful write, record after content/hash.
-    pub fn capture_after(&self, run_id: &str, rel_path: &str) -> Result<(), String> {
+    /// After a successful write, record after content/hash for a
+    /// Gateway-authorized path (same containment rule as `capture_before`).
+    pub fn capture_after(&self, run_id: &str, path: &TrustedPath) -> Result<(), String> {
         {
             let mut map = self.live.lock().map_err(|e| e.to_string())?;
             let live = map
                 .get_mut(run_id)
                 .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-            let abs = live.project_root.join(rel_path);
+            if !path.canonical.starts_with(&live.project_root) {
+                return Err(format!(
+                    "checkpoint path {} escapes project root {}",
+                    path.canonical.display(),
+                    live.project_root.display()
+                ));
+            }
+            let key = path.project_relative.to_string_lossy().into_owned();
             let entry = live
                 .files
-                .entry(rel_path.to_string())
+                .entry(key.clone())
                 .or_insert_with(|| FileSnapshot {
-                    path: rel_path.to_string(),
+                    path: key,
                     before_hash: None,
                     after_hash: None,
                     before_content: None,
                     after_content: None,
                     existed_before: false,
                 });
-            if abs.exists() {
-                let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
+            if path.canonical.exists() {
+                let bytes = std::fs::read(&path.canonical).map_err(|e| e.to_string())?;
                 entry.after_hash = Some(hex_sha256(&bytes));
                 entry.after_content = String::from_utf8(bytes).ok();
             } else {
@@ -282,28 +321,51 @@ impl CheckpointManager {
 
     /// Flush live before/after images to SQLite without removing the live map.
     pub fn flush_live_to_store(&self, run_id: &str) -> Result<(), String> {
-        let map = self.live.lock().map_err(|e| e.to_string())?;
-        let live = map
-            .get(run_id)
-            .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-        let store = self
-            .store
-            .as_ref()
-            .ok_or_else(|| "checkpoint store unavailable".to_string())?;
-        let conn = store.conn()?;
-        let files: Vec<FileSnapshot> = live.files.values().cloned().collect();
-        let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
-            .map_err(|e| format!("serialize checkpoint snapshot: {e}"))?;
-        let changed = conn
-            .execute(
-                "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
-                params![snap, live.id],
-            )
-            .map_err(|e| e.to_string())?;
-        if changed != 1 {
-            return Err(format!("checkpoint row missing for run {run_id}"));
+        let (checkpoint_id, snap) = {
+            let map = self.live.lock().map_err(|e| e.to_string())?;
+            let live = map
+                .get(run_id)
+                .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
+            let files: Vec<FileSnapshot> = live.files.values().cloned().collect();
+            let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
+                .map_err(|e| format!("serialize checkpoint snapshot: {e}"))?;
+            (live.id.clone(), snap)
+        };
+        if let Some(actor) = &self.actor {
+            // TASK-006: the durable flush runs on the storage actor's single
+            // writer thread; the calling (async) thread never locks the Mutex.
+            let run_id = run_id.to_string();
+            actor
+                .submit(true, move |conn| {
+                    let changed = conn
+                        .execute(
+                            "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
+                            params![snap, checkpoint_id],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    if changed != 1 {
+                        return Err(format!("checkpoint row missing for run {run_id}"));
+                    }
+                    Ok(serde_json::json!(null))
+                })
+                .map(|_| ())
+        } else {
+            let store = self
+                .store
+                .as_ref()
+                .ok_or_else(|| "checkpoint store unavailable".to_string())?;
+            let conn = store.conn()?;
+            let changed = conn
+                .execute(
+                    "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
+                    params![snap, checkpoint_id],
+                )
+                .map_err(|e| e.to_string())?;
+            if changed != 1 {
+                return Err(format!("checkpoint row missing for run {run_id}"));
+            }
+            Ok(())
         }
-        Ok(())
     }
 
     pub fn load_checkpoint(&self, checkpoint_id: &str) -> Result<CheckpointRecord, String> {
@@ -669,19 +731,32 @@ pub fn estimate_context_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    /// Build a `TrustedPath` for an existing in-root file (mirrors the
+    /// canonical result Gateway preflight would produce).
+    fn trusted(root: &Path, rel: &str) -> TrustedPath {
+        let canonical = root
+            .join(rel)
+            .canonicalize()
+            .unwrap_or_else(|_| root.join(rel));
+        TrustedPath::new(canonical, PathBuf::from(rel))
+    }
 
     #[test]
     fn capture_and_rewind_roundtrip() {
         let root = std::env::temp_dir().join(format!("cp-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("a.txt");
         std::fs::write(&file, "before").unwrap();
 
         let mgr = CheckpointManager::new();
         let _id = mgr.begin_run("run1", "c1", &root).unwrap();
-        mgr.capture_before("run1", "a.txt").unwrap();
+        mgr.capture_before("run1", &trusted(&root, "a.txt"))
+            .unwrap();
         std::fs::write(&file, "after").unwrap();
-        mgr.capture_after("run1", "a.txt").unwrap();
+        mgr.capture_after("run1", &trusted(&root, "a.txt")).unwrap();
         let rec = mgr.finalize_run("run1").unwrap();
         assert_eq!(rec.files.len(), 1);
 
@@ -696,13 +771,15 @@ mod tests {
     fn rewind_without_finalize_uses_live() {
         let root = std::env::temp_dir().join(format!("cp2-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("b.txt");
         std::fs::write(&file, "v1").unwrap();
         let mgr = CheckpointManager::new();
         let cp_id = mgr.begin_run("run2", "c1", &root).unwrap();
-        mgr.capture_before("run2", "b.txt").unwrap();
+        mgr.capture_before("run2", &trusted(&root, "b.txt"))
+            .unwrap();
         std::fs::write(&file, "v2").unwrap();
-        mgr.capture_after("run2", "b.txt").unwrap();
+        mgr.capture_after("run2", &trusted(&root, "b.txt")).unwrap();
 
         let preview = mgr.rewind_preview("run2", &root, None).unwrap();
         assert!(preview.conflicts.is_empty());
@@ -719,13 +796,15 @@ mod tests {
     fn external_modification_conflicts() {
         let root = std::env::temp_dir().join(format!("cp3-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("c.txt");
         std::fs::write(&file, "v1").unwrap();
         let mgr = CheckpointManager::new();
         let cp_id = mgr.begin_run("run3", "c1", &root).unwrap();
-        mgr.capture_before("run3", "c.txt").unwrap();
+        mgr.capture_before("run3", &trusted(&root, "c.txt"))
+            .unwrap();
         std::fs::write(&file, "v2").unwrap();
-        mgr.capture_after("run3", "c.txt").unwrap();
+        mgr.capture_after("run3", &trusted(&root, "c.txt")).unwrap();
         // external edit after "run"
         std::fs::write(&file, "external").unwrap();
         let preview = mgr.rewind_preview("run3", &root, None).unwrap();
@@ -746,6 +825,7 @@ mod tests {
     fn checkpoint_survives_manager_restart_via_sqlite() {
         let root = std::env::temp_dir().join(format!("cp-restart-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let file = root.join("persist.txt");
         std::fs::write(&file, "v1").unwrap();
 
@@ -772,9 +852,11 @@ mod tests {
 
         let mgr1 = CheckpointManager::with_store(Arc::clone(&store));
         let cp_id = mgr1.begin_run("run-persist", "c1", &root).unwrap();
-        mgr1.capture_before("run-persist", "persist.txt").unwrap();
+        mgr1.capture_before("run-persist", &trusted(&root, "persist.txt"))
+            .unwrap();
         std::fs::write(&file, "v2").unwrap();
-        mgr1.capture_after("run-persist", "persist.txt").unwrap();
+        mgr1.capture_after("run-persist", &trusted(&root, "persist.txt"))
+            .unwrap();
         let rec = mgr1.finalize_run("run-persist").unwrap();
         assert_eq!(rec.id, cp_id);
         assert_eq!(rec.files.len(), 1);
@@ -791,6 +873,58 @@ mod tests {
             .expect("rewind after restart");
         assert_eq!(restored, vec!["persist.txt".to_string()]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&art);
+    }
+
+    /// TASK-006: a durable checkpoint flush routed through the bounded storage
+    /// actor still persists the snapshot_json (async path never locks the Mutex).
+    #[test]
+    fn flush_via_storage_actor_persists_snapshot() {
+        let root = std::env::temp_dir().join(format!("cp-act-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = root.join("act.txt");
+        std::fs::write(&file, "v1").unwrap();
+
+        let db = std::env::temp_dir().join(format!("cp-act-db-{}.sqlite", Uuid::new_v4()));
+        let art = std::env::temp_dir().join(format!("cp-act-art-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&art).unwrap();
+        let store = Arc::new(DataStore::new(&db, &art).expect("store"));
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('c-act', 'agent', 't', 'p', 'm')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('run-act', 'c-act', 'running', 'p', 'm')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let actor = crate::storage::actor::StorageActor::new(4, store.clone());
+        let mgr = CheckpointManager::with_store_and_actor(store.clone(), actor);
+        let cp_id = mgr.begin_run("run-act", "c-act", &root).unwrap();
+        mgr.capture_before("run-act", &trusted(&root, "act.txt"))
+            .unwrap();
+        std::fs::write(&file, "v2").unwrap();
+        // capture_after triggers flush_live_to_store → routed through the actor.
+        mgr.capture_after("run-act", &trusted(&root, "act.txt"))
+            .unwrap();
+        // The flush is durable: a fresh manager instance (no live map) reads it.
+        let mgr2 = CheckpointManager::with_store(store);
+        let preview = mgr2
+            .rewind_preview("run-act", &root, None)
+            .expect("actor-flushed snapshot is loadable");
+        assert_eq!(preview.checkpoint_id, cp_id);
+        assert_eq!(preview.files.len(), 1, "flush persisted the captured file");
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(&db);

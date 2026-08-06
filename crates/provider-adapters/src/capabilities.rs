@@ -1057,8 +1057,8 @@ pub mod contract_tests {
     /// Test that all adapters satisfy the contract:
     /// - Have Non-empty capabilities
     /// - Non-empty provider type
-    /// Can chat
-    /// Can list models
+    ///   Can chat
+    ///   Can list models
     pub fn run_contract_tests(adapter: &dyn ProviderAdapter) {
         let caps = adapter.capabilities();
         assert!(!caps.features.is_empty(), "Features should not be empty");

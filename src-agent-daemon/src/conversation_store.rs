@@ -48,6 +48,7 @@ pub fn persist_queued_input_and_ack(
     let now = chrono::Utc::now().to_rfc3339();
     let message_id = format!("queue:{input_id}");
     let expected_marker = format!("prompt_queue:{input_id}");
+    #[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
     let existing: Option<(String, String, String, Option<String>, Option<String>)> = tx
         .query_row(
             "SELECT conversation_id, role, status, run_id, turn_id
@@ -139,7 +140,7 @@ pub fn persist_queued_input_and_ack(
     tx.commit().map_err(|e| e.to_string())
 }
 
-fn store() -> Result<DataStore, String> {
+pub(crate) fn store() -> Result<DataStore, String> {
     // Phase 0: Daemon conversation/run authority is assistant.db.
     // Prefer NATIVES_ASSISTANT_DB_PATH; fall back to NATIVES_DB_PATH for tests that
     // still use a single temp file; finally default_assistant_db_path().
@@ -1387,17 +1388,19 @@ fn append_single_assistant_turn(
                 *duration_ms,
                 result_message_id.clone(),
             )),
-            RunEventKind::MessageCompleted { content, .. } => {
-                if let Some(content) = content {
-                    let blocks = content
-                        .get("content")
-                        .ok_or_else(|| "message completed content missing blocks".to_string())?;
-                    committed_content = Some(
-                        serde_json::from_value(blocks.clone())
-                            .map_err(|e| format!("invalid message completed content: {e}"))?,
-                    );
-                }
+            RunEventKind::MessageCompleted {
+                content: Some(content),
+                ..
+            } => {
+                let blocks = content
+                    .get("content")
+                    .ok_or_else(|| "message completed content missing blocks".to_string())?;
+                committed_content = Some(
+                    serde_json::from_value(blocks.clone())
+                        .map_err(|e| format!("invalid message completed content: {e}"))?,
+                );
             }
+            RunEventKind::MessageCompleted { content: None, .. } => {}
             _ => {}
         }
     }
@@ -1867,6 +1870,7 @@ fn persist_summary_text_message(
         return Ok(());
     };
     let now = chrono::Utc::now().to_rfc3339();
+    #[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
     let existing: Option<(String, String, String, Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT conversation_id, role, status, run_id, turn_id

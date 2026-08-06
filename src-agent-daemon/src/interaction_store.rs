@@ -189,9 +189,16 @@ pub fn list_pending(params: Value) -> Result<Value, String> {
     Ok(json!({ "interactions": rows }))
 }
 
-/// Resolve a pending interaction. Emits `InteractionResponded` on the run event bus
-/// when `run_id` is present. For `tool_permission` rows, also best-effort wakes the
-/// live permission waiter via RunManager.
+/// Resolve a pending interaction (TASK-008 / B05).
+///
+/// The decision UPDATE and its delivery intent (`interaction_outbox`) commit in
+/// one transaction; after commit, `deliver_outbox` appends the authoritative
+/// `InteractionResponded` event and wakes the waiter, then marks the row
+/// delivered. A duplicate response with the SAME decision is idempotent
+/// (returns the original result); a conflicting decision is rejected. An
+/// undelivered outbox row is replayed at daemon start, so a crash between the
+/// decision and the event loses nothing and the handler never runs ahead of
+/// its durable event.
 pub async fn respond(params: Value) -> Result<Value, String> {
     let id = params
         .get("id")
@@ -223,13 +230,20 @@ pub async fn respond(params: Value) -> Result<Value, String> {
     let now = chrono::Utc::now().to_rfc3339();
 
     let store = store()?;
-    let (run_id, conversation_id, kind) = {
+    let (run_id, conversation_id, kind, outbox_id) = {
         let conn = store.conn()?;
-
-        // Load current row (for run_id / kind) before update.
-        let existing: Option<(Option<String>, Option<String>, String, String)> = conn
+        #[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
+        let existing: Option<(
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )> = conn
             .query_row(
-                "SELECT run_id, conversation_id, kind, status FROM interaction WHERE id = ?1",
+                "SELECT run_id, conversation_id, kind, status, response, responded_at
+                 FROM interaction WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok((
@@ -237,18 +251,37 @@ pub async fn respond(params: Value) -> Result<Value, String> {
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| e.to_string())?;
 
-        let Some((run_id, conversation_id, kind, status)) = existing else {
+        let Some((run_id, conversation_id, kind, status, stored_response, stored_at)) = existing
+        else {
             // Stable orphan code shared with permission.respond (task-04).
             return Err(format!("permission_orphaned: interaction not found: {id}"));
         };
         if status == "resolved" {
-            return Err(format!("already_resolved: interaction {id}"));
+            // Idempotent duplicate: the same decision returns the original
+            // result. A conflicting decision is rejected (A02/J04).
+            if stored_response.as_deref() == Some(response_str.as_str()) {
+                return Ok(json!({
+                    "ok": true,
+                    "id": id,
+                    "status": "resolved",
+                    "already_resolved": true,
+                    "run_id": run_id,
+                    "kind": kind,
+                    "response": response,
+                    "responded_at": stored_at.unwrap_or(now),
+                }));
+            }
+            return Err(format!(
+                "conflict: interaction {id} already resolved with a different decision"
+            ));
         }
         if status != "pending" {
             // expired / cancelled after restart — not grantable.
@@ -257,7 +290,9 @@ pub async fn respond(params: Value) -> Result<Value, String> {
             ));
         }
 
-        let changed = conn
+        // Decision + outbox delivery intent in ONE transaction (A02/J04).
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let changed = tx
             .execute(
                 "UPDATE interaction
                  SET status = 'resolved', response = ?1, responded_at = ?2
@@ -268,23 +303,67 @@ pub async fn respond(params: Value) -> Result<Value, String> {
         if changed == 0 {
             return Err(format!("interaction not pending: {id}"));
         }
-        (run_id, conversation_id, kind)
+        let outbox_id = uuid::Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO interaction_outbox (id, interaction_id, run_id, kind, response)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![outbox_id, id, run_id, kind, response_str],
+        )
+        .map_err(|e| format!("insert interaction outbox: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit interaction outbox: {e}"))?;
+        (run_id, conversation_id, kind, Some(outbox_id))
     }; // drop MutexGuard before any .await
 
-    // Emit InteractionResponded on the run bus when we know the run.
-    if let Some(ref rid) = run_id {
-        if !rid.is_empty() {
-            crate::run_manager::global_run_manager().events().append(
-                rid,
-                RunEventKind::InteractionResponded {
-                    interaction_id: id.clone(),
-                    response: response.clone(),
-                },
-            );
+    if let Some(outbox_id) = outbox_id {
+        deliver_outbox(
+            &outbox_id,
+            &id,
+            run_id.as_deref(),
+            conversation_id.as_deref(),
+            &kind,
+            &response,
+        )
+        .await?;
+    }
+
+    Ok(json!({
+        "ok": true,
+        "id": id,
+        "status": "resolved",
+        "run_id": run_id,
+        "kind": kind,
+        "response": response,
+        "responded_at": now,
+    }))
+}
+
+/// Deliver a committed outbox decision. The authoritative event is appended
+/// FIRST; if it fails, the outbox row stays undelivered (a restart replays it)
+/// and the waiter is never woken ahead of its durable event. Only after the
+/// event and the waiter wake succeed is the row marked delivered.
+async fn deliver_outbox(
+    outbox_id: &str,
+    interaction_id: &str,
+    run_id: Option<&str>,
+    conversation_id: Option<&str>,
+    kind: &str,
+    response: &Value,
+) -> Result<(), String> {
+    if let Some(rid) = run_id.filter(|r| !r.is_empty()) {
+        let event = crate::run_manager::global_run_manager().events().append(
+            rid,
+            RunEventKind::InteractionResponded {
+                interaction_id: interaction_id.to_string(),
+                response: response.clone(),
+            },
+        );
+        if matches!(&event.payload, RunEventKind::Failed { code, .. } if code == "PERSISTENCE_FAILED")
+        {
+            return Err("PERSISTENCE_FAILED append InteractionResponded".into());
         }
     }
 
-    // tool_permission recovery: also wake live permission waiter if still present.
     if kind == "tool_permission" {
         let approved = response
             .get("approved")
@@ -292,27 +371,25 @@ pub async fn respond(params: Value) -> Result<Value, String> {
             .unwrap_or(false);
         let scope = response.get("scope").and_then(Value::as_str);
         let _ = crate::run_manager::global_run_manager()
-            .respond_permission_for_run(&id, approved, run_id.as_deref(), scope)
+            .respond_permission_for_run(interaction_id, approved, run_id, scope)
             .await;
     }
 
-    // subagent_assignment: wake batch waiters (NOT permission.respond).
+    // subagent_assignment: wake batch waiters + persist route policy.
     if kind == "subagent_assignment" {
-        let _ = crate::production::wake_assignment_waiter(&id, response.clone());
-        // Persist route policy when pool/bindings/assignments are present.
+        let _ = crate::production::wake_assignment_waiter(interaction_id, response.clone());
         let cid = response
             .get("conversation_id")
             .or_else(|| response.get("parent_conversation_id"))
             .and_then(Value::as_str)
             .map(|s| s.to_string())
-            .or(conversation_id.clone());
+            .or_else(|| conversation_id.map(str::to_string));
         if let Some(cid) = cid {
             let bindings_val = response
                 .get("pool")
                 .or_else(|| response.get("bindings"))
                 .cloned()
                 .or_else(|| {
-                    // Derive pool from assignments when pool omitted.
                     response.get("assignments").and_then(|arr| {
                         let list: Vec<crate::subagent_store::RouteBinding> = arr
                             .as_array()?
@@ -348,15 +425,85 @@ pub async fn respond(params: Value) -> Result<Value, String> {
         }
     }
 
-    Ok(json!({
-        "ok": true,
-        "id": id,
-        "status": "resolved",
-        "run_id": run_id,
-        "kind": kind,
-        "response": response,
-        "responded_at": now,
-    }))
+    let _ = store()?.conn()?.execute(
+        "UPDATE interaction_outbox SET delivered = 1 WHERE id = ?1",
+        params![outbox_id],
+    );
+    Ok(())
+}
+
+/// Replay undelivered decisions from the outbox at daemon start (B05). Each
+/// undelivered row is delivered exactly once; a delivery failure leaves the row
+/// for the next recovery pass. Returns the number of rows delivered.
+pub async fn recover_interaction_outbox() -> Result<usize, String> {
+    let store = store()?;
+    #[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+    )> = {
+        let conn = store.conn()?;
+        undelivered_outbox_rows(&conn)?
+    };
+    let mut delivered = 0;
+    for (outbox_id, interaction_id, run_id, conversation_id, kind, response) in rows {
+        let response: Value = serde_json::from_str(&response).unwrap_or(Value::Null);
+        if deliver_outbox(
+            &outbox_id,
+            &interaction_id,
+            run_id.as_deref(),
+            conversation_id.as_deref(),
+            &kind,
+            &response,
+        )
+        .await
+        .is_ok()
+        {
+            delivered += 1;
+        }
+    }
+    Ok(delivered)
+}
+
+#[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
+fn undelivered_outbox_rows(
+    conn: &rusqlite::Connection,
+) -> Result<
+    Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+    )>,
+    String,
+> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, interaction_id, run_id, conversation_id, kind, response
+             FROM interaction_outbox WHERE delivered = 0",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 /// RPC entry: `interaction.*` methods.
@@ -488,19 +635,24 @@ mod tests {
             let listed = list_pending(json!({ "conversation_id": cid })).unwrap();
             assert!(listed["interactions"].as_array().unwrap().is_empty());
 
-            // Second respond fails
+            // Same decision again is idempotent — returns the original result.
+            let again = rt
+                .block_on(respond(json!({
+                    "id": id,
+                    "response": { "approved": true, "scope": "this_run" },
+                })))
+                .unwrap();
+            assert_eq!(again["already_resolved"], true);
+            assert_eq!(again["response"]["approved"], true);
+
+            // A conflicting decision is rejected.
             let err = rt
                 .block_on(respond(json!({
                     "id": id,
                     "response": { "approved": false },
                 })))
                 .unwrap_err();
-            assert!(
-                err.contains("not pending")
-                    || err.contains("not found")
-                    || err.contains("already_resolved"),
-                "{err}"
-            );
+            assert!(err.contains("conflict"), "{err}");
         });
     }
 
@@ -535,6 +687,145 @@ mod tests {
             assert_eq!(a["interactions"].as_array().unwrap().len(), 1);
             let all = list_pending(json!({})).unwrap();
             assert_eq!(all["interactions"].as_array().unwrap().len(), 2);
+        });
+    }
+
+    /// TASK-008 (A02/J04): a duplicate response with the SAME decision is
+    /// idempotent (returns the original result); a conflicting decision is
+    /// rejected.
+    #[test]
+    fn interaction_idempotency_duplicate_returns_original_and_conflict_rejected() {
+        with_temp_db(|| {
+            let cid = format!("ix-c-{}", Uuid::new_v4());
+            conversation_store::ensure_conversation_stub(&cid, "openai", "gpt-4o", None, None)
+                .unwrap();
+            let id = format!("ix-{}", Uuid::new_v4());
+            insert_pending(
+                &id,
+                None,
+                Some(&cid),
+                "tool_permission",
+                json!({ "tool_name": "write_file" }),
+            )
+            .unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let out = rt
+                .block_on(respond(json!({
+                    "id": id,
+                    "response": { "approved": true, "scope": "once" },
+                })))
+                .unwrap();
+            assert_eq!(out["status"], "resolved");
+            // Same decision → idempotent, returns the original result.
+            let again = rt
+                .block_on(respond(json!({
+                    "id": id,
+                    "response": { "approved": true, "scope": "once" },
+                })))
+                .unwrap();
+            assert_eq!(again["already_resolved"], true);
+            assert_eq!(again["response"]["approved"], true);
+            // Conflicting decision → rejected.
+            let err = rt
+                .block_on(respond(json!({
+                    "id": id,
+                    "response": { "approved": false },
+                })))
+                .unwrap_err();
+            assert!(err.contains("conflict"), "{err}");
+        });
+    }
+
+    /// TASK-008 (A02/J04): an undelivered outbox row (crash after the decision
+    /// commit, before delivery) is replayed by recovery and marked delivered.
+    #[test]
+    fn interaction_idempotency_outbox_recovery_delivers_undelivered() {
+        with_temp_db(|| {
+            let cid = format!("ix-c-{}", Uuid::new_v4());
+            conversation_store::ensure_conversation_stub(&cid, "openai", "gpt-4o", None, None)
+                .unwrap();
+            let id = format!("ix-{}", Uuid::new_v4());
+            insert_pending(&id, None, Some(&cid), "custom", json!({})).unwrap();
+            // Simulate a crash after the decision commit and before delivery:
+            // resolved interaction + an undelivered outbox row.
+            {
+                let db = store().unwrap();
+                let conn = db.conn().unwrap();
+                conn.execute(
+                    "UPDATE interaction SET status='resolved', response='{\"ok\":true}' WHERE id=?1",
+                    params![id],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO interaction_outbox (id, interaction_id, run_id, kind, response)
+                     VALUES ('outbox-1', ?1, NULL, 'custom', '{\"ok\":true}')",
+                    params![id],
+                )
+                .unwrap();
+            }
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let delivered = rt.block_on(recover_interaction_outbox()).unwrap();
+            assert_eq!(delivered, 1, "undelivered decision is replayed");
+            let db = store().unwrap();
+            let conn = db.conn().unwrap();
+            let marked: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM interaction_outbox WHERE id='outbox-1' AND delivered=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(marked, 1, "delivered row is marked delivered");
+        });
+    }
+
+    /// TASK-008 (A02/J04): when the authoritative event append fails, delivery
+    /// stops and the outbox row stays undelivered — the waiter (handler) is
+    /// never woken ahead of a durable event.
+    #[test]
+    fn interaction_idempotency_event_failure_blocks_delivery() {
+        with_temp_db(|| {
+            // The outbox has no run FK, so a row can reference a deleted run.
+            // Delivering it appends InteractionResponded against a missing run,
+            // which fails; the row must stay undelivered for a later replay.
+            {
+                let db = store().unwrap();
+                let conn = db.conn().unwrap();
+                conn.execute(
+                    "INSERT INTO interaction_outbox (id, interaction_id, run_id, kind, response)
+                     VALUES ('outbox-fail', 'ix-fail', 'deleted-run', 'tool_permission', '{\"approved\":true}')",
+                    [],
+                )
+                .unwrap();
+            }
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let delivered = rt.block_on(recover_interaction_outbox()).unwrap();
+            assert_eq!(
+                delivered, 0,
+                "a failing delivery is not counted as delivered"
+            );
+            let db = store().unwrap();
+            let conn = db.conn().unwrap();
+            let still_undelivered: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM interaction_outbox WHERE id='outbox-fail' AND delivered=0",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                still_undelivered, 1,
+                "event failure leaves the row for replay"
+            );
         });
     }
 }

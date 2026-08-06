@@ -297,8 +297,8 @@ impl OpenAiSseParser {
     pub fn finished_tool_calls(&self) -> Vec<(String, String, String)> {
         self.tool_acc
             .values()
+            .filter(|&(id, name, _)| !id.is_empty() || !name.is_empty())
             .cloned()
-            .filter(|(id, name, _)| !id.is_empty() || !name.is_empty())
             .collect()
     }
 

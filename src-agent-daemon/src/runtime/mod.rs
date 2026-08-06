@@ -2,6 +2,7 @@
 //!
 //! Deep modules behind the ProductionRuntime facade (task-01).
 
+pub mod conflict_lease;
 pub mod execution_registry;
 pub mod interaction_hub;
 pub mod mcp_invocation;

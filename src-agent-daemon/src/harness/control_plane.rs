@@ -114,7 +114,7 @@ fn validate_project_scope(
     let requested = project_path
         .canonicalize()
         .map_err(|e| HarnessError::scope_mismatch(e.to_string()))?;
-    if requested != PathBuf::from(&identity.canonical_path) {
+    if requested.as_path() != std::path::Path::new(&identity.canonical_path) {
         return Err(HarnessError::scope_mismatch(format!(
             "project_id {project_id} resolves to {}, not {}",
             identity.canonical_path,
@@ -124,6 +124,7 @@ fn validate_project_scope(
     Ok(())
 }
 
+#[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
 fn layer_refs(
     conn: &Connection,
     project_id: Option<&str>,

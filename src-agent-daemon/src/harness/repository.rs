@@ -664,7 +664,7 @@ pub fn ensure_source_drift_candidate(
     profile_id: &str,
     mismatches: &Value,
 ) -> Result<Option<DraftRow>, HarnessError> {
-    if mismatches.as_array().map_or(true, Vec::is_empty) {
+    if mismatches.as_array().is_none_or(Vec::is_empty) {
         return Ok(None);
     }
     let candidate_json = mismatches.to_string();
