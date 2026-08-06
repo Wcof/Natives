@@ -960,6 +960,63 @@ mod tests {
         );
     }
 
+    fn count_previews(conn: &Connection, runtime_instance_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM preview_targets WHERE runtime_instance_id = ?1",
+            params![runtime_instance_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn closing_one_of_two_windows_keeps_the_runtime_preview() {
+        let conn = fixture();
+        let (surface_id, iid) = seed_running_app(&conn, "app-1");
+        let gw = FakeGateway::default();
+        let mut c = conn;
+        let w1 = WindowController::open(
+            &gw,
+            &mut c,
+            "app-1",
+            "app-1",
+            &surface_id,
+            "http://127.0.0.1:8080/",
+            bounds(),
+        )
+        .unwrap();
+        let surface2 =
+            surface_store::create_surface(&c, "app-1", "embed", "Embed 2", None).unwrap();
+        let w2 = WindowController::open(
+            &gw,
+            &mut c,
+            "app-1",
+            "app-1",
+            &surface2,
+            "http://127.0.0.1:8080/embed",
+            bounds(),
+        )
+        .unwrap();
+        assert_eq!(
+            count_previews(&c, &iid),
+            1,
+            "both windows share one runtime preview"
+        );
+
+        // Closing the first window must NOT drop the preview while the second
+        // window still shows the runtime content.
+        WindowController::close(&gw, &mut c, &w1.id).unwrap();
+        assert_eq!(
+            count_previews(&c, &iid),
+            1,
+            "preview must survive while another window is open"
+        );
+
+        // Closing the last window drops the runtime preview.
+        WindowController::close(&gw, &mut c, &w2.id).unwrap();
+        assert_eq!(count_previews(&c, &iid), 0);
+    }
+
     #[test]
     fn child_label_generates_correct_window_label() {
         // The legacy app-level label still exists for compatibility; window

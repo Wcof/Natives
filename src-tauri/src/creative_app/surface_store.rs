@@ -340,6 +340,10 @@ pub fn commit_window_open(
 /// Transactionally mark a window CLOSED and clear its preview bind. When the
 /// real WebView was already gone (`was_missing`), the row records the reconcile
 /// gap so the UI can show why the window is closed (honest state).
+///
+/// The runtime preview bind is dropped ONLY when no other window of the same
+/// runtime still shows content — closing one of several windows must not make
+/// the surviving windows look offline.
 pub fn commit_window_closed(
     conn: &mut Connection,
     window_id: &str,
@@ -367,11 +371,23 @@ pub fn commit_window_closed(
         )));
     }
     if let Some(iid) = runtime_instance_id {
-        tx.execute(
-            "DELETE FROM preview_targets WHERE runtime_instance_id = ?1",
-            params![iid],
-        )
-        .map_err(Error::Database)?;
+        // Only drop the runtime preview when no other non-closed window still
+        // binds to the same runtime instance.
+        let other_open: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM window_instances
+                 WHERE runtime_instance_id = ?1 AND state != 'closed' AND id != ?2",
+                params![iid, window_id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        if other_open == 0 {
+            tx.execute(
+                "DELETE FROM preview_targets WHERE runtime_instance_id = ?1",
+                params![iid],
+            )
+            .map_err(Error::Database)?;
+        }
     }
     tx.commit().map_err(Error::Database)
 }
