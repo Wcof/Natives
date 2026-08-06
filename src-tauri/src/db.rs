@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "22";
+pub const SCHEMA_VERSION: &str = "23";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1350,6 +1350,45 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         if let Err(e) = crate::creative_app::service_store::backfill_v22(conn) {
             eprintln!("warning: service backfill failed: {e}");
         }
+    }
+
+    // Migration v22→v23: creative proposal inbox + executable approval records
+    // (T06). The Host persists pending agent proposals here after validating
+    // daemon facts, and records each approved executable's canonical path +
+    // Host-recomputed SHA-256 so a later content change invalidates the
+    // authorization. Incremental tables only — no DROP, no user-data rebuild.
+    if current_version < 23 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS creative_proposal_inbox (
+                proposal_id TEXT PRIMARY KEY,
+                envelope_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                failure TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                approved_at TEXT,
+                approver TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_proposal_inbox_status
+                ON creative_proposal_inbox(status);
+
+            CREATE TABLE IF NOT EXISTS creative_executable_approval (
+                id TEXT PRIMARY KEY,
+                canonical_path TEXT NOT NULL,
+                file_identity TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                approver TEXT NOT NULL,
+                approved_at TEXT NOT NULL,
+                proposal_id TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_executable_approval_path
+                ON creative_executable_approval(canonical_path);
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23');
+            ",
+        )
+        .map_err(Error::Database)?;
     }
 
     // Repair path for v9 tables when a database carries an advanced marker.

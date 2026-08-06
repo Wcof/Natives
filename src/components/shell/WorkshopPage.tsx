@@ -236,6 +236,33 @@ export default function WorkshopPage() {
     return api.onProgress((ev) => setProgress(ev));
   }, []);
 
+  // T06: pending proposal inbox. The Host pulls proposal facts from the daemon
+  // on every list, so a fresh proposal produced by any assistant run appears
+  // here; a db-state-changed broadcast after approve/reject re-lists. The
+  // inbox is Host-persisted, so pending proposals survive a restart.
+  useEffect(() => {
+    const api = window.nativesAPI?.creativeApp;
+    const reloadProposals = () => {
+      if (!api?.proposalList) return;
+      void api
+        .proposalList()
+        .then((rows) => setPendingProposals(Array.isArray(rows) ? rows : []))
+        .catch(() => {
+          // The Host is the authority; a failed list must not clear an inbox
+          // the user already sees.
+        });
+    };
+    reloadProposals();
+    if (!window.nativesAPI?.onDbStateChanged) return;
+    const unsub = window.nativesAPI.onDbStateChanged((_event, channel) => {
+      if (channel !== 'creative-app') return;
+      reloadProposals();
+    });
+    return () => {
+      unsub?.();
+    };
+  }, []);
+
   const openInternalModule = async (id: string) => {
     window.dispatchEvent(new CustomEvent('navigate', { detail: `module:${id}` }));
   };

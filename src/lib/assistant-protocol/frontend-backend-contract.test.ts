@@ -162,3 +162,33 @@ test('daemon capabilities keep codex unavailable in host_mediated helper source'
     'protocol capabilities honesty rules must document Codex unavailable',
   );
 });
+
+test('proposal.listPending is catalogued and daemon-implemented (T06)', () => {
+  const src = readFileSync(METHODS_RS, 'utf8');
+  const all = new Set(extractArrayConst(src, 'ALL_METHODS'));
+  const daemon = new Set(extractArrayConst(src, 'IMPLEMENTED_METHODS'));
+  assert.ok(all.has('proposal.listPending'), 'catalogue must include proposal.listPending');
+  assert.ok(
+    daemon.has('proposal.listPending'),
+    'daemon must implement proposal.listPending (capability advertisement honesty)',
+  );
+});
+
+test('proposal envelope wire shape carries environmentKeys + stable proposalId (T06)', () => {
+  const creativeRs = readFileSync(
+    resolve(process.cwd(), 'crates/assistant-protocol/src/v2/creative.rs'),
+    'utf8',
+  );
+  assert.ok(creativeRs.includes('pub environment_keys: Vec<String>'), 'payload env keys');
+  assert.ok(creativeRs.includes('pub proposal_id: String'), 'envelope stable id');
+  assert.ok(creativeRs.includes('pub run_id: String'), 'envelope run lineage');
+  assert.ok(creativeRs.includes('pub tool_call_id: String'), 'envelope tool-call lineage');
+
+  const typesTs = readFileSync(
+    resolve(process.cwd(), 'src/lib/assistant-protocol/types.ts'),
+    'utf8',
+  );
+  assert.ok(typesTs.includes('environmentKeys'), 'generated TS must use environmentKeys');
+  assert.ok(typesTs.includes('proposalId'), 'generated TS must carry the stable proposal id');
+  assert.doesNotMatch(typesTs, /\benvKeys\s*[:;,]/, 'generated TS must not use envKeys');
+});

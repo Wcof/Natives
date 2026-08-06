@@ -33,12 +33,46 @@ pub fn looks_like_python_web_entry(entry: &str) -> bool {
     PYTHON_WEB_ENTRIES.contains(&name)
 }
 
+/// Shell/script interpreters a Python profile must never reference (T06).
+///
+/// A proposal whose interpreter is `/bin/sh`, `/bin/bash`, `/usr/bin/env`, a
+/// JS runtime, etc. is a red flag: it would let the agent execute arbitrary
+/// commands through the "python" launch path. The basename must be Python-like.
+pub const FORBIDDEN_INTERPRETER_NAMES: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "tcsh", "env", "node", "deno",
+    "ruby", "perl", "php", "pwsh", "powershell",
+];
+
+/// Whether an interpreter basename is plausibly a Python executable.
+pub fn is_plausible_python_interpreter(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("python")
+}
+
 /// Validate a Python profile. Returns Err on invalid configuration.
 pub fn validate_python_profile(profile: &PythonLaunchProfile) -> Result<()> {
     if profile.interpreter.is_empty() {
         return Err(Error::InvalidInput(
             "python interpreter cannot be empty".into(),
         ));
+    }
+    // T06: the interpreter must look like a Python executable. `/bin/sh` and
+    // friends are rejected here (before the user ever sees the proposal) so a
+    // "python app" can never silently run a shell. File existence + identity
+    // are verified again at approval (`resolve_python_interpreter`).
+    let interpreter_name = Path::new(&profile.interpreter)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if FORBIDDEN_INTERPRETER_NAMES.contains(&interpreter_name) {
+        return Err(Error::InvalidInput(format!(
+            "interpreter {interpreter_name} is not a Python executable"
+        )));
+    }
+    if !is_plausible_python_interpreter(interpreter_name) {
+        return Err(Error::InvalidInput(format!(
+            "interpreter must be a Python executable, got '{interpreter_name}'"
+        )));
     }
     if profile.entry.is_empty() {
         return Err(Error::InvalidInput("python entry cannot be empty".into()));
@@ -69,8 +103,63 @@ pub fn validate_python_profile(profile: &PythonLaunchProfile) -> Result<()> {
     Ok(())
 }
 
-/// Validate a Binary profile. The executable must be an absolute canonical path
-/// with a non-empty content hash, and must be approved.
+/// Resolve a Python interpreter to its canonical absolute path at approval
+/// time. The interpreter must exist, be a regular executable file, and be a
+/// Python executable — never a shell. Returns the canonical path.
+pub fn resolve_python_interpreter(interpreter: &str) -> Result<String> {
+    let name = Path::new(interpreter)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if !is_plausible_python_interpreter(name) || FORBIDDEN_INTERPRETER_NAMES.contains(&name) {
+        return Err(Error::InvalidInput(format!(
+            "interpreter '{interpreter}' is not a Python executable"
+        )));
+    }
+    let path = Path::new(interpreter);
+    if !path.is_absolute() {
+        return Err(Error::InvalidInput(
+            "python interpreter must be an absolute path".into(),
+        ));
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|e| {
+        Error::InvalidInput(format!(
+            "python interpreter not found or not accessible: {interpreter}: {e}"
+        ))
+    })?;
+    let meta = std::fs::metadata(&canonical)
+        .map_err(|e| Error::InvalidInput(format!("cannot stat {canonical:?}: {e}")))?;
+    if !meta.is_file() {
+        return Err(Error::InvalidInput(format!(
+            "python interpreter is not a regular file: {}",
+            canonical.display()
+        )));
+    }
+    ensure_executable(&canonical, &meta)?;
+    Ok(canonical.to_string_lossy().to_string())
+}
+
+#[cfg(unix)]
+fn ensure_executable(path: &Path, meta: &std::fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if meta.permissions().mode() & 0o111 == 0 {
+        return Err(Error::InvalidInput(format!(
+            "file is not executable: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_executable(_path: &Path, _meta: &std::fs::Metadata) -> Result<()> {
+    Ok(())
+}
+
+/// Validate a Binary profile structurally. The executable must be an absolute
+/// path. T06: the agent's `approved` flag and hash are untrusted and are NOT
+/// checked here — the Host recomputes file identity and records approval at the
+/// user's explicit approve action (`resolve_binary_identity`).
 pub fn validate_binary_profile(profile: &BinaryLaunchProfile) -> Result<()> {
     if profile.executable_path.is_empty() {
         return Err(Error::InvalidInput(
@@ -83,17 +172,52 @@ pub fn validate_binary_profile(profile: &BinaryLaunchProfile) -> Result<()> {
             "binary executable path must be absolute and canonical".into(),
         ));
     }
-    if profile.executable_hash.len() != 64 {
-        return Err(Error::InvalidInput(
-            "binary executable hash must be a 64-char SHA-256 hex".into(),
-        ));
-    }
-    if !profile.approved {
-        return Err(Error::InvalidInput(
-            "binary executable is not approved; hash changed or never approved".into(),
-        ));
-    }
     Ok(())
+}
+
+/// Resolve a binary executable to its canonical path and Host-recomputed
+/// SHA-256 at approval time. The executable must exist and be a regular file.
+/// Returns `(canonical_path, sha256_hex)`.
+pub fn resolve_binary_identity(executable_path: &str) -> Result<(String, String)> {
+    let path = Path::new(executable_path);
+    if !path.is_absolute() {
+        return Err(Error::InvalidInput(
+            "binary executable path must be absolute".into(),
+        ));
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|e| {
+        Error::InvalidInput(format!(
+            "binary executable not found or not accessible: {executable_path}: {e}"
+        ))
+    })?;
+    let meta = std::fs::metadata(&canonical)
+        .map_err(|e| Error::InvalidInput(format!("cannot stat {canonical:?}: {e}")))?;
+    if !meta.is_file() {
+        return Err(Error::InvalidInput(format!(
+            "binary executable is not a regular file: {}",
+            canonical.display()
+        )));
+    }
+    let hash = sha256_hex(&canonical)?;
+    Ok((canonical.to_string_lossy().to_string(), hash))
+}
+
+/// Verify that a binary's current content still matches an expected identity
+/// (canonical path + SHA-256) right before it is launched. Any change — content
+/// replacement, symlink target swap — re-canonicalizes and re-hashes, and a
+/// mismatch invalidates the authorization. Returns the re-canonicalized path.
+///
+/// This is the T06 "变化即授权失效" guard. It is also the TOCTOU mitigation:
+/// the caller must open and spawn FROM the returned canonical path, and T09's
+/// launch path re-runs this check in the same window.
+pub fn verify_binary_identity(executable_path: &str, expected_hash: &str) -> Result<String> {
+    let (canonical, current_hash) = resolve_binary_identity(executable_path)?;
+    if current_hash != expected_hash {
+        return Err(Error::InvalidInput(format!(
+            "binary executable changed since approval (hash mismatch); re-approval required"
+        )));
+    }
+    Ok(canonical)
 }
 
 /// Compute the SHA-256 hex of a file (used for binary approval).
@@ -301,12 +425,49 @@ mod tests {
     }
 
     #[test]
-    fn binary_profile_requires_approval_and_hash() {
-        let approved = BinaryLaunchProfile {
+    fn python_profile_rejects_shell_as_fake_interpreter() {
+        // T06: `/bin/sh` masquerading as a Python interpreter is blocked before
+        // the proposal is ever shown to the user.
+        let base = PythonLaunchProfile {
+            schema_version: 1,
+            interpreter: "/bin/sh".into(),
+            entry: "app.py".into(),
+            args: vec![],
+            cwd_relative: ".".into(),
+            environment_keys: vec![],
+            port: super::super::model::LaunchPort {
+                mode: super::super::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            is_venv: false,
+        };
+        for shell in ["/bin/sh", "/bin/bash", "/usr/bin/env", "/usr/bin/node", "sh"] {
+            let mut p = base.clone();
+            p.interpreter = shell.into();
+            assert!(
+                validate_python_profile(&p).is_err(),
+                "shell interpreter {shell} must be rejected"
+            );
+        }
+        // A real venv python passes.
+        let mut ok = base.clone();
+        ok.interpreter = "/proj/.venv/bin/python3".into();
+        assert!(validate_python_profile(&ok).is_ok());
+    }
+
+    #[test]
+    fn binary_profile_structural_validation() {
+        // T06: the agent's `approved` flag and hash are untrusted and must NOT
+        // be required by the structural validator — the Host recomputes file
+        // identity at approve time.
+        let profile = BinaryLaunchProfile {
             schema_version: 1,
             executable_path: "/usr/local/bin/myapp".into(),
-            executable_hash: "a".repeat(64),
-            approved: true,
+            executable_hash: String::new(),
+            approved: false,
             args: vec![],
             cwd_relative: ".".into(),
             environment_keys: vec![],
@@ -318,22 +479,79 @@ mod tests {
             health_path: "/".into(),
             startup_timeout_ms: 60_000,
         };
-        assert!(validate_binary_profile(&approved).is_ok());
+        // No approval claim, no agent hash — still structurally valid.
+        assert!(validate_binary_profile(&profile).is_ok());
 
-        // Unapproved rejected
-        let mut bad = approved.clone();
-        bad.approved = false;
+        // Relative path rejected.
+        let mut bad = profile.clone();
+        bad.executable_path = "bin/myapp".into();
         assert!(validate_binary_profile(&bad).is_err());
 
-        // Short hash rejected
-        let mut bad2 = approved.clone();
-        bad2.executable_hash = "deadbeef".into();
+        // Empty path rejected.
+        let mut bad2 = profile.clone();
+        bad2.executable_path = "".into();
         assert!(validate_binary_profile(&bad2).is_err());
+    }
 
-        // Relative path rejected
-        let mut bad3 = approved.clone();
-        bad3.executable_path = "bin/myapp".into();
-        assert!(validate_binary_profile(&bad3).is_err());
+    #[test]
+    fn resolve_binary_identity_recomputes_hash_and_blocks_swap() {
+        // T06: the Host recomputes the executable's SHA-256 at approval (never
+        // trusting an agent-supplied value), and a content swap invalidates the
+        // identity right before launch.
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("myapp");
+        std::fs::write(&bin, b"#!/bin/sh\necho v1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let (canonical, hash) = resolve_binary_identity(bin.to_str().unwrap()).unwrap();
+        assert!(canonical.ends_with("myapp"));
+        assert_eq!(hash.len(), 64);
+
+        // Same content passes identity verification.
+        assert_eq!(verify_binary_identity(&canonical, &hash).unwrap(), canonical);
+
+        // Replace the content → identity mismatch → authorization invalid.
+        std::fs::write(&bin, b"#!/bin/sh\necho v2 - swapped\n").unwrap();
+        assert!(verify_binary_identity(&canonical, &hash).is_err());
+    }
+
+    #[test]
+    fn resolve_binary_identity_rejects_missing_and_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        assert!(resolve_binary_identity(missing.to_str().unwrap()).is_err());
+
+        let dir = tmp.path().join("adir");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(resolve_binary_identity(dir.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn resolve_python_interpreter_rejects_shell_and_accepts_real_python() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A real (fake) python executable named python3.
+        let py = tmp.path().join("python3");
+        std::fs::write(&py, b"#!/usr/bin/env python3\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        for shell in ["/bin/sh", "/bin/bash", "/usr/bin/env", "/usr/bin/node"] {
+            assert!(
+                resolve_python_interpreter(shell).is_err(),
+                "shell interpreter {shell} must be blocked at approval"
+            );
+        }
+        assert!(
+            resolve_python_interpreter(py.to_str().unwrap()).is_ok(),
+            "a python3 executable must resolve"
+        );
     }
 
     #[test]
