@@ -33,6 +33,7 @@ tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 tokio = { version = "1", features = ["full"] }
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Windows Named Pipe support will use tokio's named pipe when stabilized

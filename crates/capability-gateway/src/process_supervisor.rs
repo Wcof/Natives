@@ -17,6 +17,11 @@ use tokio::time::{Duration, Instant};
 /// Default foreground budget before auto-background (scheme Phase 1).
 pub const DEFAULT_FOREGROUND_BUDGET_MS: u64 = 15_000;
 
+/// Grace period after SIGTERM before a cancelling child is escalated to
+/// SIGKILL. A cooperative child gets a real chance to clean up; a child that
+/// traps/ignores TERM is still reaped within this budget.
+pub const TERM_GRACE_MS: u64 = 500;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessSpec {
     pub run_id: String,
@@ -208,6 +213,61 @@ fn spawn_pipe_reader<R: AsyncRead + Unpin + Send + 'static>(
     })
 }
 
+/// TERM → grace → KILL escalation against the child's process group.
+///
+/// The child was spawned in its own process group, so signalling `-pid` reaps
+/// the whole tree (shell + its children), not just the direct child. Returns
+/// once the direct child has been reaped; `try_wait` polling keeps this
+/// non-blocking in async contexts (R-B6).
+async fn terminate_process(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        let Some(pid) = child.id() else {
+            return;
+        };
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGTERM);
+        }
+        let exited = wait_bounded(child, Duration::from_millis(TERM_GRACE_MS)).await;
+        // Always SIGKILL the group afterwards: a grandchild that ignored TERM
+        // must not survive the cancel, and a group with no survivors makes
+        // this a harmless no-op.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        if !exited {
+            let _ = wait_bounded(child, Duration::from_secs(2)).await;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows: the child was created in its own process group; start_kill
+        // signals the direct child and wait reaps it.
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+}
+
+/// Poll `try_wait` until the child exits or the deadline passes. Never blocks
+/// the async runtime on a raw `waitpid`.
+async fn wait_bounded(child: &mut Child, deadline: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        if start.elapsed() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 impl Default for LocalProcessSupervisor {
     fn default() -> Self {
         Self::new()
@@ -236,6 +296,13 @@ impl ProcessSupervisor for LocalProcessSupervisor {
             use std::os::windows::process::CommandExt;
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        }
+        #[cfg(unix)]
+        {
+            // Run the child in its own process group so cancel can TERM/KILL the
+            // whole tree (shell + its children), not just the direct child.
+            use std::os::unix::process::CommandExt;
+            cmd.as_std_mut().process_group(0);
         }
 
         let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
@@ -347,19 +414,21 @@ impl ProcessSupervisor for LocalProcessSupervisor {
     }
 
     async fn cancel(&self, task_id: &str) -> Result<ProcessSnapshot, String> {
-        let mut map = self.inner.lock().await;
-        let proc = map
-            .get_mut(task_id)
-            .ok_or_else(|| format!("unknown task {task_id}"))?;
-        if let Some(mut child) = proc.child.take() {
-            let _ = child.start_kill();
-            // Reap the child before touching readers so their pipes hit EOF.
-            let _ = child.wait().await;
+        let (child, readers) = {
+            let mut map = self.inner.lock().await;
+            let proc = map
+                .get_mut(task_id)
+                .ok_or_else(|| format!("unknown task {task_id}"))?;
+            let child = proc.child.take();
+            proc.state = ProcessState::Cancelled;
+            (child, std::mem::take(&mut proc.readers))
+        };
+        // The map lock is dropped before the escalation so pipe readers can
+        // keep appending final bytes while the child is being terminated (a
+        // >64KB burst must not block on the registry).
+        if let Some(mut child) = child {
+            terminate_process(&mut child).await;
         }
-        proc.state = ProcessState::Cancelled;
-        // Drop the lock before joining: readers need it to append final bytes.
-        let readers = std::mem::take(&mut proc.readers);
-        drop(map);
         Self::join_readers(readers).await;
         let map = self.inner.lock().await;
         let proc = map
@@ -767,5 +836,188 @@ mod tests {
             "background output must be captured, got {:?}",
             snap.stdout_tail
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // T04: real-process cancel evidence — TERM-trap, 1GB output, parallel
+    // cancel, and process-tree kill. These fail against a supervisor that only
+    // SIGKILLs the direct child or drains output after exit.
+    // -----------------------------------------------------------------------
+
+    /// A real child that records SIGTERM and keeps running (ignores it) must
+    /// receive TERM first and then be escalated to KILL within the budget.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_trap_term_child_is_terminated_within_budget() {
+        let dir = std::env::temp_dir().join(format!("ps-term-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("term.txt");
+        let script = dir.join("trap_term.py");
+        std::fs::write(
+            &script,
+            format!(
+                r#"import signal, time, sys
+def handler(signum, frame):
+    open({marker:?}, "w").write("term")
+signal.signal(signal.SIGTERM, handler)
+print("ready", flush=True)
+while True:
+    time.sleep(1)
+"#
+            ),
+        )
+        .unwrap();
+
+        let sup = LocalProcessSupervisor::new();
+        let task_id = format!("t-term-{}", uuid::Uuid::new_v4());
+        let _snap = sup
+            .spawn(ProcessSpec {
+                run_id: "run-shell".into(),
+                task_id: task_id.clone(),
+                display_command: "trap_term.py".into(),
+                program: "python3".into(),
+                args: vec![script.to_string_lossy().to_string()],
+                cwd: dir.clone(),
+                timeout_ms: 60_000,
+                background: true,
+            })
+            .await
+            .expect("spawn trap_term.py (python3 required)");
+
+        // Give the child a moment to install its handler.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let started = Instant::now();
+        let cancelled = sup.cancel(&task_id).await.unwrap();
+        assert_eq!(cancelled.state, ProcessState::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "TERM→KILL escalation took too long: {:?}",
+            started.elapsed()
+        );
+
+        // TERM must have been attempted (the handler ran) before KILL reaped it.
+        assert!(
+            marker.exists(),
+            "child must have received SIGTERM before escalation, but {} does not exist",
+            marker.display()
+        );
+        // Child must be reaped (not left as a zombie/runner).
+        let after = sup.poll(&task_id).await.unwrap();
+        assert_eq!(after.state, ProcessState::Cancelled);
+        assert_eq!(
+            after.exit_code, None,
+            "cancelled child has no exit code yet"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1GB stdout must complete without deadlocking and must never grow the
+    /// persisted buffer past the 1MiB cap.
+    #[tokio::test]
+    async fn shell_1gb_stdout_bounded_memory_and_no_deadlock() {
+        let sup = LocalProcessSupervisor::with_budget(2_000);
+        let snap = tokio::time::timeout(
+            Duration::from_secs(120),
+            sup.spawn(sh_spec(
+                "t-1gb",
+                "head -c 1073741824 /dev/zero; true",
+                false,
+            )),
+        )
+        .await
+        .expect("1GB producer must not hang")
+        .unwrap();
+        assert!(
+            matches!(snap.state, ProcessState::Completed | ProcessState::Failed),
+            "1GB stdout must not deadlock, got {:?}",
+            snap.state
+        );
+        assert_eq!(snap.exit_code, Some(0));
+        // The supervisor caps persisted output at 1MiB per stream.
+        let final_snap = sup.wait("t-1gb", 30_000).await.unwrap();
+        assert!(final_snap.stdout_tail.len() <= 8_192, "tail bounded");
+        assert!(final_snap.truncated, "1GB must be flagged truncated");
+    }
+
+    /// Two concurrent cancels of the same task must both settle, with the
+    /// child reaped exactly once and no registry lock deadlock.
+    #[tokio::test]
+    async fn parallel_cancel_same_task_is_safe() {
+        let sup = Arc::new(LocalProcessSupervisor::new());
+        let task_id = format!("t-par-{}", uuid::Uuid::new_v4());
+        sup.spawn(sh_spec(&task_id, "sleep 30", true))
+            .await
+            .unwrap();
+
+        let a = sup.clone();
+        let b = sup.clone();
+        let tid_a = task_id.clone();
+        let tid_b = task_id.clone();
+        let (ra, rb) = tokio::join!(async move { a.cancel(&tid_a).await }, async move {
+            b.cancel(&tid_b).await
+        },);
+        assert_eq!(ra.unwrap().state, ProcessState::Cancelled);
+        assert_eq!(rb.unwrap().state, ProcessState::Cancelled);
+        let after = sup.poll(&task_id).await.unwrap();
+        assert_eq!(after.state, ProcessState::Cancelled);
+    }
+
+    /// Cancelling a shell that spawned a background child must kill the whole
+    /// process group, not just the direct shell.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parent_cancel_kills_process_tree() {
+        let dir = std::env::temp_dir().join(format!("ps-tree-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("child.pid");
+        let cmd = format!("sleep 30 & echo $! > {}; wait", pidfile.to_string_lossy());
+        let sup = LocalProcessSupervisor::new();
+        let task_id = format!("t-tree-{}", uuid::Uuid::new_v4());
+        sup.spawn(ProcessSpec {
+            run_id: "run-shell".into(),
+            task_id: task_id.clone(),
+            display_command: cmd.clone(),
+            program: "/bin/sh".into(),
+            args: vec!["-lc".into(), cmd],
+            cwd: dir.clone(),
+            timeout_ms: 60_000,
+            background: true,
+        })
+        .await
+        .unwrap();
+
+        // Wait until the background child pid is recorded, then cancel.
+        let child_pid = {
+            let mut deadline = 0;
+            loop {
+                if pidfile.exists() {
+                    let raw = std::fs::read_to_string(&pidfile).unwrap_or_default();
+                    if let Ok(pid) = raw.trim().parse::<i32>() {
+                        break pid;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                deadline += 1;
+                assert!(deadline < 100, "background child pid never recorded");
+            }
+        };
+
+        let cancelled = sup.cancel(&task_id).await.unwrap();
+        assert_eq!(cancelled.state, ProcessState::Cancelled);
+
+        // The grandchild must be gone too (same process group, TERM/KILL).
+        let mut gone = false;
+        for _ in 0..50 {
+            // kill(pid, 0) probes liveness without signalling.
+            let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+            if !alive {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(gone, "grandchild {child_pid} survived parent cancel");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

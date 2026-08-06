@@ -71,6 +71,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -209,16 +210,38 @@ pub struct McpRoot {
     pub name: String,
 }
 
+/// A live stdio session shared between the request/response exchange and
+/// `stop()`. The session lives in the registry as an `Arc`; the lock layout is
+/// deliberate:
+///
+/// - `exchange` serialises exchanges and is held for the *whole* roundtrip.
+///   `stop()` never takes it, so cancellation never waits on a slow server.
+/// - `child` is locked only by `stop()`/liveness — never by an exchange — so
+///   killing the child is always possible even mid-read.
+/// - `stdin` is locked only around individual writes, so `stop()` can send a
+///   protocol cancel and close it between writes.
+/// - `lines` is fed by a dedicated reader thread; `recv_timeout` gives every
+///   exchange a real deadline even when the child is silent (a blocking
+///   `read_line` on the raw pipe could otherwise hang forever).
 struct StdioSession {
-    child: Child,
-    stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
-    next_id: u64,
+    exchange: std::sync::Mutex<()>,
+    child: Arc<std::sync::Mutex<Child>>,
+    stdin: Arc<std::sync::Mutex<Option<ChildStdin>>>,
+    lines: std::sync::Mutex<std::sync::mpsc::Receiver<Result<String, String>>>,
+    next_id: AtomicU64,
+    stopping: Arc<AtomicBool>,
 }
+
+/// Ceiling for one JSON-RPC line from a stdio child. A pathological server must
+/// not be able to grow the reader's buffer without bound.
+const MAX_MCP_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct McpRuntime {
     registry: Mutex<McpRegistry>,
-    sessions: Mutex<HashMap<String, StdioSession>>,
+    sessions: Mutex<HashMap<String, Arc<StdioSession>>>,
+    /// Servers whose handshake is in flight. `stop()` can still signal them
+    /// via the shared stopping flag even before the session is registered.
+    starting: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Background SSE curl children (long-lived ingest).
     sse_children: Mutex<HashMap<String, Child>>,
     status: Mutex<HashMap<String, String>>,
@@ -255,6 +278,7 @@ impl McpRuntime {
         Self {
             registry: Mutex::new(McpRegistry::new()),
             sessions: Mutex::new(HashMap::new()),
+            starting: Mutex::new(HashMap::new()),
             sse_children: Mutex::new(HashMap::new()),
             status: Mutex::new(HashMap::new()),
             credentials: Mutex::new(McpCredentialStore::new()),
@@ -507,15 +531,22 @@ impl McpRuntime {
 
         let _ = self.stop(server_id);
 
-        let mut child = Command::new(&command)
-            .args(&args)
+        let mut cmd = Command::new(&command);
+        cmd.args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            // Own process group so `stop()` can TERM/KILL the whole tree.
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("spawn mcp stdio failed: {e}"))?;
 
-        let mut stdin = child
+        let stdin = child
             .stdin
             .take()
             .ok_or_else(|| "mcp stdin missing".to_string())?;
@@ -523,136 +554,188 @@ impl McpRuntime {
             .stdout
             .take()
             .ok_or_else(|| "mcp stdout missing".to_string())?;
-        let mut reader = BufReader::new(stdout);
+
+        let stopping = Arc::new(AtomicBool::new(false));
+        // Register as starting so a concurrent `stop()` can signal the
+        // handshake even before the session lands in the registry.
+        if let Ok(mut starting) = self.starting.lock() {
+            starting.insert(server_id.to_string(), stopping.clone());
+        }
+
+        let lines_rx = spawn_stdio_reader(stdout);
+        let session = Arc::new(StdioSession {
+            exchange: std::sync::Mutex::new(()),
+            child: Arc::new(Mutex::new(child)),
+            stdin: Arc::new(Mutex::new(Some(stdin))),
+            lines: Mutex::new(lines_rx),
+            next_id: AtomicU64::new(3),
+            stopping: stopping.clone(),
+        });
 
         let roots = self.effective_roots();
         let mut pending_notes: Vec<Value> = Vec::new();
 
-        // Declare only what we actually serve. We answer `roots/list`, so `roots`
-        // is advertised; we do not implement sampling or elicitation, so they are
-        // absent and a server can adapt instead of failing mid-run.
-        let init_resp = stdio_roundtrip(
-            &mut stdin,
-            &mut reader,
-            &roots,
-            &mut pending_notes,
-            1,
-            "initialize",
-            json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "roots": { "listChanged": false } },
-                "clientInfo": { "name": "natives-agent-daemon", "version": "0.1.0" }
-            }),
-            Duration::from_secs(5),
-            None,
-        )?;
-        let caps = McpServerCapabilities::from_initialize(
-            server_id,
-            init_resp.get("result").unwrap_or(&Value::Null),
-        );
-        // Legacy tolerance: a server that sent no `capabilities` at all predates
-        // the field being load-bearing, so we still probe it. A server that sent
-        // a populated object without `tools` is taken at its word.
-        let advertises_tools =
-            caps.tools || caps.raw.as_object().map(|o| o.is_empty()).unwrap_or(true);
-        if let Ok(mut map) = self.capabilities.lock() {
-            map.insert(server_id.to_string(), caps);
-        }
+        // The handshake happens on the session's own mutexes, so a concurrent
+        // stop that signals `stopping` aborts it instead of deadlocking on the
+        // registry. Only the exchange/line locks are held across the read.
+        let handshake = (|| {
+            let _exchange = session
+                .exchange
+                .lock()
+                .map_err(|e| format!("mcp session lock: {e}"))?;
+            let mut lines = session
+                .lines
+                .lock()
+                .map_err(|e| format!("mcp lines lock: {e}"))?;
 
-        // initialized notification (best-effort; servers may ignore)
-        let _ = writeln!(
-            stdin,
-            "{}",
-            json!({"jsonrpc":"2.0","method":"notifications/initialized"})
-        );
-        let _ = stdin.flush();
-
-        // Only ask for tools if the handshake said there are tools. Probing a
-        // server that never advertised `tools` invites a `-32601` we would then
-        // have to paper over as "zero tools" — the exact lie capabilities exist
-        // to prevent.
-        let tools_resp = if advertises_tools {
-            stdio_roundtrip(
-                &mut stdin,
-                &mut reader,
+            // Declare only what we actually serve. We answer `roots/list`, so
+            // `roots` is advertised; we do not implement sampling or
+            // elicitation, so they are absent and a server can adapt instead
+            // of failing mid-run.
+            let init_resp = stdio_roundtrip(
+                &session.stdin,
+                &mut lines,
                 &roots,
                 &mut pending_notes,
-                2,
-                "tools/list",
-                json!({}),
+                1,
+                "initialize",
+                json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": { "roots": { "listChanged": false } },
+                    "clientInfo": { "name": "natives-agent-daemon", "version": "0.1.0" }
+                }),
                 Duration::from_secs(5),
                 None,
-            )?
-        } else {
-            json!({})
-        };
-
-        let mut discovered = 0usize;
-        if let Some(tools) = tools_resp
-            .pointer("/result/tools")
-            .and_then(|v| v.as_array())
-        {
-            for t in tools {
-                let name = t
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("tool")
-                    .to_string();
-                let description = t
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let input_schema = t
-                    .get("inputSchema")
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type":"object"}));
-                self.upsert_tool(McpToolDescriptor {
-                    server_id: server_id.to_string(),
-                    name,
-                    description,
-                    input_schema,
-                })?;
-                discovered += 1;
+                &stopping,
+            )?;
+            let caps = McpServerCapabilities::from_initialize(
+                server_id,
+                init_resp.get("result").unwrap_or(&Value::Null),
+            );
+            // Legacy tolerance: a server that sent no `capabilities` at all predates
+            // the field being load-bearing, so we still probe it. A server that sent
+            // a populated object without `tools` is taken at its word.
+            let advertises_tools =
+                caps.tools || caps.raw.as_object().map(|o| o.is_empty()).unwrap_or(true);
+            if let Ok(mut map) = self.capabilities.lock() {
+                map.insert(server_id.to_string(), caps);
             }
-        }
 
-        if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.insert(
-                server_id.to_string(),
-                StdioSession {
-                    child,
-                    stdin,
-                    reader,
-                    next_id: 3,
-                },
+            // initialized notification (best-effort; servers may ignore)
+            let _ = write_mcp_line(
+                &session.stdin,
+                &json!({
+                    "jsonrpc":"2.0",
+                    "method":"notifications/initialized",
+                }),
             );
-        }
-        self.record_notifications(server_id, pending_notes);
-        if let Ok(mut st) = self.status.lock() {
-            st.insert(
-                server_id.to_string(),
-                format!("started tools_discovered={discovered}"),
-            );
-        }
 
-        Ok(json!({
-            "server_id": server_id,
-            "tools_discovered": discovered,
-            "status": "started",
-            "transport": "stdio",
-            "session_live": true,
-            "capabilities": self.server_capabilities(server_id),
-            "roots_granted": roots.len(),
-        }))
+            // Only ask for tools if the handshake said there are tools. Probing a
+            // server that never advertised `tools` invites a `-32601` we would then
+            // have to paper over as "zero tools" — the exact lie capabilities exist
+            // to prevent.
+            let tools_resp = if advertises_tools {
+                stdio_roundtrip(
+                    &session.stdin,
+                    &mut lines,
+                    &roots,
+                    &mut pending_notes,
+                    2,
+                    "tools/list",
+                    json!({}),
+                    Duration::from_secs(5),
+                    None,
+                    &stopping,
+                )?
+            } else {
+                json!({})
+            };
+
+            let mut discovered = 0usize;
+            if let Some(tools) = tools_resp
+                .pointer("/result/tools")
+                .and_then(|v| v.as_array())
+            {
+                for t in tools {
+                    let name = t
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool")
+                        .to_string();
+                    let description = t
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let input_schema = t
+                        .get("inputSchema")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type":"object"}));
+                    self.upsert_tool(McpToolDescriptor {
+                        server_id: server_id.to_string(),
+                        name,
+                        description,
+                        input_schema,
+                    })?;
+                    discovered += 1;
+                }
+            }
+            Ok::<usize, String>(discovered)
+        })();
+
+        // A stopped-while-starting server must not leave a live session behind.
+        let registered = if stopping.load(Ordering::SeqCst) {
+            Err("mcp stdio session stopped while starting".to_string())
+        } else {
+            handshake.map(|discovered| {
+                if let Ok(mut sessions) = self.sessions.lock() {
+                    sessions.insert(server_id.to_string(), session.clone());
+                }
+                if let Ok(mut st) = self.status.lock() {
+                    st.insert(
+                        server_id.to_string(),
+                        format!("started tools_discovered={discovered}"),
+                    );
+                }
+                self.record_notifications(server_id, pending_notes);
+                json!({
+                    "server_id": server_id,
+                    "tools_discovered": discovered,
+                    "status": "started",
+                    "transport": "stdio",
+                    "session_live": true,
+                    "capabilities": self.server_capabilities(server_id),
+                    "roots_granted": roots.len(),
+                })
+            })
+        };
+        if let Ok(mut starting) = self.starting.lock() {
+            starting.remove(server_id);
+        }
+        if registered.is_err() {
+            // Make sure the child is reaped even though the session never
+            // entered the registry.
+            stop_stdio_session(session);
+        }
+        registered
     }
 
     pub fn stop(&self, server_id: &str) -> Result<(), String> {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            if let Some(mut session) = sessions.remove(server_id) {
-                let _ = session.child.kill();
-                let _ = session.child.wait();
+        // Signal a handshake that is still in flight so it aborts.
+        if let Ok(mut starting) = self.starting.lock() {
+            if let Some(flag) = starting.remove(server_id) {
+                flag.store(true, Ordering::SeqCst);
             }
+        }
+        // Detach the session record first (a brief lock). An in-flight
+        // exchange keeps running on its own `Arc`; the child signal below
+        // makes its blocking read return.
+        let session = {
+            let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            sessions.remove(server_id)
+        };
+        if let Some(session) = session {
+            stop_stdio_session(session);
         }
         if let Ok(mut kids) = self.sse_children.lock() {
             if let Some(mut child) = kids.remove(server_id) {
@@ -784,15 +867,20 @@ impl McpRuntime {
             McpTransport::Stdio => {
                 let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
                 let session = sessions
-                    .get_mut(server_id)
+                    .get(server_id)
                     .ok_or_else(|| format!("no live stdio session: {server_id}"))?;
-                match session.child.try_wait() {
+                let mut child = session
+                    .child
+                    .lock()
+                    .map_err(|e| format!("mcp child lock: {e}"))?;
+                match child.try_wait() {
                     Ok(None) => Ok(json!({
                         "server_id": server_id,
                         "alive": true,
                         "transport": "stdio",
                     })),
                     Ok(Some(status)) => {
+                        drop(child);
                         sessions.remove(server_id);
                         Ok(json!({
                             "server_id": server_id,
@@ -937,21 +1025,34 @@ impl McpRuntime {
         timeout: Duration,
         progress: Option<McpProgressCallback>,
     ) -> Result<Value, String> {
-        // Resolve roots before taking the session lock: answering `roots/list`
+        // Resolve roots before taking any session lock: answering `roots/list`
         // mid-exchange must not need a second lock we already hold.
         let roots = self.effective_roots();
+        // Lookup-only use of the registry: the mutex is not held across the
+        // blocking read/write below, so `stop()` can always detach the session
+        // and kill the child without waiting for us (T04).
+        let session = {
+            let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            sessions
+                .get(server_id)
+                .cloned()
+                .ok_or_else(|| format!("mcp stdio session not started: {server_id}"))?
+        };
+        if session.stopping.load(Ordering::SeqCst) {
+            return Err(format!("mcp stdio session stopped: {server_id}"));
+        }
+        // Serialise exchanges; `stop()` never takes this mutex.
+        let _exchange = session.exchange.lock().map_err(|e| e.to_string())?;
+        if session.stopping.load(Ordering::SeqCst) {
+            return Err(format!("mcp stdio session stopped: {server_id}"));
+        }
+        let id = session.next_id.fetch_add(1, Ordering::SeqCst);
         let mut notes: Vec<Value> = Vec::new();
         let result = {
-            let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
-            let session = sessions
-                .get_mut(server_id)
-                .ok_or_else(|| format!("mcp stdio session not started: {server_id}"))?;
-            let id = session.next_id;
-            session.next_id += 1;
-            let StdioSession { stdin, reader, .. } = session;
+            let mut lines = session.lines.lock().map_err(|e| e.to_string())?;
             stdio_roundtrip(
-                stdin,
-                reader,
+                &session.stdin,
+                &mut lines,
                 &roots,
                 &mut notes,
                 id,
@@ -959,6 +1060,7 @@ impl McpRuntime {
                 params,
                 timeout,
                 progress.as_ref(),
+                &session.stopping,
             )
         };
         self.record_notifications(server_id, notes);
@@ -1059,7 +1161,9 @@ impl McpRuntime {
             .stdout
             .take()
             .ok_or_else(|| "http mcp stdout unavailable".to_string())?;
-        let (line_tx, line_rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        // Bounded line channel: a chatty server is backpressured (the reader
+        // thread stops draining curl) instead of growing memory unboundedly.
+        let (line_tx, line_rx) = std::sync::mpsc::sync_channel::<Result<String, String>>(256);
         let reader_thread = std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let line = line.map_err(|error| format!("http mcp stdout read failed: {error}"));
@@ -1075,12 +1179,16 @@ impl McpRuntime {
             if cancel.is_some_and(|callback| callback()) {
                 let _ = child.kill();
                 let _ = child.wait();
+                // Drop the receiver so a reader blocked on a full bounded
+                // channel can exit, then join it.
+                drop(line_rx);
                 let _ = reader_thread.join();
                 return Err("mcp call cancelled".into());
             }
             if std::time::Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
+                drop(line_rx);
                 let _ = reader_thread.join();
                 return Err(format!("http mcp {method} timeout"));
             }
@@ -1113,6 +1221,7 @@ impl McpRuntime {
                 Ok(Err(error)) => {
                     let _ = child.kill();
                     let _ = child.wait();
+                    drop(line_rx);
                     let _ = reader_thread.join();
                     return Err(error);
                 }
@@ -1135,6 +1244,7 @@ impl McpRuntime {
         let status = child
             .wait()
             .map_err(|e| format!("http mcp wait failed: {e}"))?;
+        drop(line_rx);
         let _ = reader_thread.join();
         if !status.success() {
             let mut stderr = String::new();
@@ -1899,8 +2009,8 @@ fn now_millis() -> u64 {
 /// - other `id`        → a stale response from an earlier timed-out call; skip it.
 #[allow(clippy::too_many_arguments)]
 fn stdio_roundtrip(
-    stdin: &mut ChildStdin,
-    reader: &mut BufReader<ChildStdout>,
+    stdin: &Mutex<Option<ChildStdin>>,
+    lines: &mut std::sync::mpsc::Receiver<Result<String, String>>,
     roots: &[Value],
     notes: &mut Vec<Value>,
     id: u64,
@@ -1908,6 +2018,7 @@ fn stdio_roundtrip(
     params: Value,
     timeout: Duration,
     progress: Option<&McpProgressCallback>,
+    stopping: &AtomicBool,
 ) -> Result<Value, String> {
     let req = json!({
         "jsonrpc": "2.0",
@@ -1915,16 +2026,30 @@ fn stdio_roundtrip(
         "method": method,
         "params": params,
     });
-    writeln!(stdin, "{req}").map_err(|e| e.to_string())?;
-    stdin.flush().map_err(|e| e.to_string())?;
+    write_mcp_line(stdin, &req)?;
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
+        if stopping.load(Ordering::SeqCst) {
+            return Err("mcp call cancelled".into());
+        }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             return Err(format!("mcp {method} timeout"));
         }
-        let frame = read_json_line(reader, remaining)?;
+        // recv_timeout gives a real deadline even when the child is silent —
+        // a blocking read on the pipe would hang forever (T04).
+        let line = match lines.recv_timeout(remaining) {
+            Ok(Ok(line)) => line,
+            Ok(Err(e)) => return Err(e),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err(format!("mcp {method} timeout"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("mcp stdout closed".into());
+            }
+        };
+        let frame: Value = serde_json::from_str(&line).map_err(|e| format!("mcp json: {e}"))?;
 
         let frame_method = frame.get("method").and_then(|v| v.as_str());
         let frame_id = frame.get("id");
@@ -1932,8 +2057,7 @@ fn stdio_roundtrip(
         match (frame_method, frame_id) {
             (Some(server_method), Some(request_id)) => {
                 let response = serve_server_request(server_method, request_id, roots);
-                writeln!(stdin, "{response}").map_err(|e| e.to_string())?;
-                stdin.flush().map_err(|e| e.to_string())?;
+                write_mcp_line(stdin, &response)?;
             }
             (Some(server_method), None) => {
                 if server_method == "notifications/progress" {
@@ -1953,6 +2077,123 @@ fn stdio_roundtrip(
                 // Neither a request nor a response. Not addressable; ignore.
             }
         }
+    }
+}
+
+/// Spawn the dedicated reader thread for a stdio child's stdout. Complete lines
+/// are pushed over a bounded channel, so a silent child still gives every
+/// exchange a real `recv_timeout` deadline and a chatty child is backpressured
+/// (the channel fills and the reader stops draining the pipe).
+fn spawn_stdio_reader(stdout: ChildStdout) -> std::sync::mpsc::Receiver<Result<String, String>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    if buf.len() > MAX_MCP_LINE_BYTES {
+                        let _ = tx.send(Err("mcp line too large (exceeds 16 MiB cap)".to_string()));
+                        break;
+                    }
+                    if buf.last() == Some(&b'\n') {
+                        let line = String::from_utf8_lossy(&buf).trim().to_string();
+                        buf.clear();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if tx.send(Ok(line)).is_err() {
+                            break; // receiver dropped → session teardown
+                        }
+                    }
+                    // Partial line (no newline yet): keep accumulating.
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(format!("mcp read: {e}")));
+                    break;
+                }
+            }
+        }
+    });
+    rx
+}
+
+/// Write one JSON-RPC frame, locking the shared stdin only for the duration of
+/// the write. `stop()` can therefore close the pipe between writes (and never
+/// waits on an in-flight exchange).
+fn write_mcp_line(stdin: &Mutex<Option<ChildStdin>>, value: &Value) -> Result<(), String> {
+    let mut guard = stdin.lock().map_err(|e| e.to_string())?;
+    let writer = guard
+        .as_mut()
+        .ok_or_else(|| "mcp stdin closed".to_string())?;
+    writeln!(writer, "{value}").map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())
+}
+
+/// Detach-and-kill a stdio session with a bounded escalation:
+/// protocol cancel → close stdin → SIGTERM → grace → SIGKILL → wait.
+///
+/// The sessions registry mutex is never held here, and `exchange`/`lines`
+/// (held by an in-flight exchange) are never taken, so cancellation can
+/// always reach the child even while a request is stuck (T04).
+fn stop_stdio_session(session: Arc<StdioSession>) {
+    session.stopping.store(true, Ordering::SeqCst);
+    // Best-effort protocol cancel + stdin close. Use try_lock: the in-flight
+    // exchange only holds stdin while writing, but if the child stopped
+    // reading a full pipe the writer could be blocked — escalate to the child
+    // signal instead of waiting on the pipe.
+    if let Ok(mut guard) = session.stdin.try_lock() {
+        if let Some(writer) = guard.as_mut() {
+            let _ = writeln!(
+                writer,
+                "{}",
+                json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": { "requestId": Value::Null, "reason": "client cancelled" },
+                })
+            );
+            let _ = writer.flush();
+        }
+        guard.take(); // drop the write end → child sees EOF on its stdin
+    }
+    let mut child = match session.child.lock() {
+        Ok(child) => child,
+        Err(_) => return,
+    };
+    if child.try_wait().ok().flatten().is_some() {
+        return; // already exited
+    }
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGTERM);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {}
+                Err(_) => break,
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Always SIGKILL the group: a grandchild that ignored TERM must not
+        // survive a server stop; an empty group makes this a no-op.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -1992,28 +2233,6 @@ fn strip_mcp_namespace(server_id: &str, tool_name: &str) -> String {
         rest.to_string()
     } else {
         tool_name.to_string()
-    }
-}
-
-fn read_json_line<R: BufRead>(reader: &mut R, timeout: Duration) -> Result<Value, String> {
-    let start = std::time::Instant::now();
-    let mut line = String::new();
-    loop {
-        if start.elapsed() > timeout {
-            return Err("mcp handshake timeout".into());
-        }
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => return Err("mcp stdout closed".into()),
-            Ok(_) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                return serde_json::from_str(trimmed).map_err(|e| format!("mcp json: {e}"));
-            }
-            Err(e) => return Err(format!("mcp read: {e}")),
-        }
     }
 }
 
@@ -2639,6 +2858,348 @@ for line in sys.stdin:
             "unexpected call result: {called}"
         );
         let _ = rt.stop("mock");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // T04: a `stop()` while a stdio request is blocked in the transport must
+    // not deadlock. Before the fix the sessions mutex was held across the
+    // whole blocking read, so `stop()` waited for the (30s) transport timeout.
+    // -----------------------------------------------------------------------
+
+    const HUNG_MOCK: &str = r#"
+import sys, json, time
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    method = req.get("method")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"hung","version":"0"}}}), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":{"tools":[{"name":"hang","description":"hang forever","inputSchema":{"type":"object"}}]}}), flush=True)
+    elif method == "tools/call":
+        while True:
+            time.sleep(3600)
+"#;
+
+    /// Register + start a stdio server that never answers `tools/call`.
+    /// Returns the temp dir (cleaned by the caller).
+    fn start_hung(rt: &McpRuntime, id: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mcp-hung-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let script = dir.join("hung_mock.py");
+        std::fs::write(&script, HUNG_MOCK).expect("write hung mock");
+        rt.register_server(McpServerConfig {
+            id: id.into(),
+            transport: McpTransport::Stdio,
+            command: Some("python3".into()),
+            args: Some(vec![script.to_string_lossy().to_string()]),
+            url: None,
+            trusted: true,
+            auth_token: None,
+            headers: None,
+        })
+        .expect("register hung server");
+        let started = rt.start(id);
+        if let Err(e) = started {
+            let _ = std::fs::remove_dir_all(&dir);
+            panic!("hung stdio mock could not start (python3 required): {e}");
+        }
+        dir
+    }
+
+    #[test]
+    fn stop_does_not_wait_for_inflight_stdio_read() {
+        let rt = Arc::new(McpRuntime::new());
+        let dir = start_hung(&rt, "hung");
+        let call_rt = rt.clone();
+        let caller = std::thread::spawn(move || call_rt.call_tool("hung", "hang", json!({})));
+        // Let the call block on the server's never-answering tools/call.
+        std::thread::sleep(Duration::from_millis(400));
+
+        let stop_rt = rt.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stopper = std::thread::spawn(move || {
+            let res = stop_rt.stop("hung");
+            let _ = tx.send(res);
+        });
+        let stop_result = rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("stop must not wait on the in-flight blocking read (deadlock)");
+        assert!(stop_result.is_ok(), "stop failed: {:?}", stop_result);
+
+        // The blocked call must now return: the child was killed, so the read
+        // hit EOF instead of the 30s transport timeout.
+        let call_result = caller.join().expect("call thread must exit");
+        assert!(call_result.is_err(), "hung call must not succeed");
+        // The session must be detached (child + registry quiet).
+        assert!(rt.sessions.lock().unwrap().get("hung").is_none());
+        let _ = stopper.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn call_tool_after_stop_fails_fast() {
+        let rt = McpRuntime::new();
+        let dir = start_hung(&rt, "gone");
+        rt.stop("gone").expect("stop");
+        let t0 = std::time::Instant::now();
+        let err = rt.call_tool("gone", "hang", json!({})).unwrap_err();
+        assert!(err.contains("session not started"), "got: {err}");
+        assert!(
+            t0.elapsed() < Duration::from_secs(1),
+            "call after stop must fail fast"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_escalates_term_then_kill_for_stuck_stdio() {
+        // A child that records SIGTERM and keeps running (ignores it) must be
+        // TERM'd first and then SIGKILL'd, and the session must be reaped.
+        let dir = std::env::temp_dir().join(format!("mcp-term-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("term.txt");
+        let script = dir.join("term_trap.py");
+        std::fs::write(
+            &script,
+            format!(
+                r#"import signal, time, sys, json
+def handler(signum, frame):
+    open({marker:?}, "w").write("term")
+signal.signal(signal.SIGTERM, handler)
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    req = json.loads(line)
+    method = req.get("method")
+    if method == "initialize":
+        send({{"jsonrpc":"2.0","id":req["id"],"result":{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"termtrap","version":"0"}}}}}})
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        send({{"jsonrpc":"2.0","id":req["id"],"result":{{"tools":[{{"name":"hang","description":"hang","inputSchema":{{"type":"object"}}}}]}}}})
+    elif method == "tools/call":
+        while True:
+            time.sleep(3600)
+"#
+            ),
+        )
+        .unwrap();
+        let rt = McpRuntime::new();
+        rt.register_server(McpServerConfig {
+            id: "termtrap".into(),
+            transport: McpTransport::Stdio,
+            command: Some("python3".into()),
+            args: Some(vec![script.to_string_lossy().to_string()]),
+            url: None,
+            trusted: true,
+            auth_token: None,
+            headers: None,
+        })
+        .unwrap();
+        if rt.start("termtrap").is_err() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return; // python3 unavailable in CI — skip
+        }
+        // Give the handler a moment to install.
+        std::thread::sleep(Duration::from_millis(300));
+        let t0 = std::time::Instant::now();
+        rt.stop("termtrap").unwrap();
+        assert!(t0.elapsed() < Duration::from_secs(5), "escalation too slow");
+        assert!(
+            marker.exists(),
+            "SIGTERM must have been attempted before escalation to KILL"
+        );
+        assert!(rt.sessions.lock().unwrap().get("termtrap").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn http_flood_cancel_does_not_hang_or_grow_unbounded() {
+        // A server that floods SSE lines must (a) be bounded by the bounded
+        // reader channel and (b) cancel without the reader join hanging on a
+        // full channel.
+        let dir = std::env::temp_dir().join(format!("mcp-http-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("http_flood.py");
+        let portfile = dir.join("port");
+        std::fs::write(
+            &script,
+            r#"
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            while True:
+                self.wfile.write(b"data: " + b"x" * 1000 + b"\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+    def log_message(self, *a):
+        pass
+srv = HTTPServer(("127.0.0.1", 0), H)
+with open(sys.argv[1], "w") as f:
+    f.write(str(srv.server_address[1]))
+srv.serve_forever()
+"#,
+        )
+        .unwrap();
+        let mut srv = Command::new("python3")
+            .arg(&script)
+            .arg(&portfile)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("python3 required");
+        let port = {
+            let mut deadline = 0;
+            loop {
+                if portfile.exists() {
+                    if let Ok(raw) = std::fs::read_to_string(&portfile) {
+                        if let Ok(p) = raw.trim().parse::<u16>() {
+                            break p;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+                deadline += 1;
+                assert!(deadline < 200, "http server never reported a port");
+            }
+        };
+
+        let rt = McpRuntime::new();
+        rt.register_server(McpServerConfig {
+            id: "flood".into(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            url: Some(format!("http://127.0.0.1:{port}/mcp")),
+            trusted: true,
+            auth_token: None,
+            headers: None,
+        })
+        .unwrap();
+        rt.upsert_tool(McpToolDescriptor {
+            server_id: "flood".into(),
+            name: "t".into(),
+            description: "flood".into(),
+            input_schema: json!({"type": "object"}),
+        })
+        .unwrap();
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_flag = cancelled.clone();
+        let cancel_cb: McpCancelCallback = Arc::new(move || cancel_flag.load(Ordering::SeqCst));
+        let call_rt = Arc::new(rt);
+        let call_rt2 = call_rt.clone();
+        let caller = std::thread::spawn(move || {
+            call_rt2.call_tool_with_progress_and_cancel(
+                "flood",
+                "t",
+                json!({}),
+                None,
+                Some(cancel_cb),
+            )
+        });
+        // Let curl/reader settle into the flood, then cancel.
+        std::thread::sleep(Duration::from_millis(300));
+        cancelled.store(true, Ordering::SeqCst);
+        let t0 = std::time::Instant::now();
+        let res = caller
+            .join()
+            .expect("caller thread must exit (reader join must not hang)");
+        assert!(
+            t0.elapsed() < Duration::from_secs(3),
+            "cancel took too long: {:?}",
+            t0.elapsed()
+        );
+        assert!(res.is_err(), "flooded call must be cancelled");
+
+        let _ = srv.kill();
+        let _ = srv.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn roundtrip_timeout_is_distinct_from_stop() {
+        // A never-responding child must surface a transport timeout, not a
+        // cancel, and a stopped session must surface a cancel, not a timeout —
+        // the audit/ledger distinction depends on it.
+        let dir = std::env::temp_dir().join(format!("mcp-timeout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("sleep_forever.py");
+        std::fs::write(&script, "import time\nwhile True: time.sleep(3600)\n").unwrap();
+
+        let mut child = Command::new("python3")
+            .arg(&script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("python3 required");
+        let stdin = Arc::new(Mutex::new(Some(child.stdin.take().expect("stdin"))));
+        let mut lines = spawn_stdio_reader(child.stdout.take().expect("stdout"));
+        let stopping = Arc::new(AtomicBool::new(false));
+        let roots: Vec<Value> = Vec::new();
+        let mut notes = Vec::new();
+
+        let timeout_err = stdio_roundtrip(
+            &stdin,
+            &mut lines,
+            &roots,
+            &mut notes,
+            1,
+            "tools/call",
+            json!({}),
+            Duration::from_millis(300),
+            None,
+            &stopping,
+        )
+        .unwrap_err();
+        assert!(
+            timeout_err.contains("timeout"),
+            "timeout must be explicit, got: {timeout_err}"
+        );
+        assert!(
+            !timeout_err.contains("cancelled"),
+            "timeout must not masquerade as cancel: {timeout_err}"
+        );
+
+        stopping.store(true, Ordering::SeqCst);
+        let stop_err = stdio_roundtrip(
+            &stdin,
+            &mut lines,
+            &roots,
+            &mut notes,
+            2,
+            "tools/call",
+            json!({}),
+            Duration::from_millis(300),
+            None,
+            &stopping,
+        )
+        .unwrap_err();
+        assert!(
+            stop_err.contains("cancelled"),
+            "stopped session must surface cancel, got: {stop_err}"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
