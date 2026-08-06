@@ -266,7 +266,8 @@ impl LocalRuntimeManager {
         // Port selection through a held lease (T09). A bound listener reserves
         // the port at the OS level until we release the hold right before
         // spawn, closing the pick-free-port → spawn TOCTOU window.
-        let registry = leases.unwrap_or_else(|| Arc::new(crate::creative_app::port_lease::PortLeaseRegistry::new()));
+        let registry = leases
+            .unwrap_or_else(|| Arc::new(crate::creative_app::port_lease::PortLeaseRegistry::new()));
         let op_key = format!("start:{app_id}:{runtime_id}");
         let port = match plan.port.mode {
             crate::creative_app::model::LaunchPortMode::Fixed => {
@@ -275,16 +276,16 @@ impl LocalRuntimeManager {
                     .value
                     .ok_or_else(|| Error::InvalidInput("fixed port missing".into()))?;
                 // Registry acquire also verifies the port is free at OS level.
-                registry.acquire(p, &op_key).map_err(|_| {
-                    Error::InvalidInput(format!("port {p} is already in use"))
-                })?
+                registry
+                    .acquire(p, &op_key)
+                    .map_err(|_| Error::InvalidInput(format!("port {p} is already in use")))?
             }
             crate::creative_app::model::LaunchPortMode::Auto => {
                 let p = preferred_port.unwrap_or(0);
                 if p != 0 {
-                    registry.acquire(p, &op_key).map_err(|_| {
-                        Error::InvalidInput(format!("port {p} is already in use"))
-                    })?
+                    registry
+                        .acquire(p, &op_key)
+                        .map_err(|_| Error::InvalidInput(format!("port {p} is already in use")))?
                 } else {
                     registry.acquire_auto(&op_key)?
                 }
@@ -624,7 +625,12 @@ impl LocalRuntimeManager {
     }
 }
 
-fn emit_log<R: tauri::Runtime>(app: &tauri::AppHandle<R>, runtime_id: &str, app_id: &str, line: &LogLine) {
+fn emit_log<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    runtime_id: &str,
+    app_id: &str,
+    line: &LogLine,
+) {
     let ev = CreativeAppLogEvent {
         runtime_id: runtime_id.to_string(),
         app_id: app_id.to_string(),
@@ -636,7 +642,12 @@ fn emit_log<R: tauri::Runtime>(app: &tauri::AppHandle<R>, runtime_id: &str, app_
     let _ = app.emit("creative-app-log", &ev);
 }
 
-fn emit_progress<R: tauri::Runtime>(app: &tauri::AppHandle<R>, app_id: &str, stage: &str, message: &str) {
+fn emit_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    app_id: &str,
+    stage: &str,
+    message: &str,
+) {
     let ev = CreativeAppOperationProgress {
         app_id: app_id.to_string(),
         stage: stage.to_string(),
@@ -659,10 +670,9 @@ fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)>
                 // start (canonical path + python identity) so a swapped/shell
                 // interpreter is refused — the agent's stored string is never
                 // trusted at the spawn point.
-                let interpreter =
-                    crate::creative_app::process_driver::resolve_python_interpreter(
-                        &p.interpreter,
-                    )?;
+                let interpreter = crate::creative_app::process_driver::resolve_python_interpreter(
+                    &p.interpreter,
+                )?;
                 let mut args = vec![p.entry.clone()];
                 args.extend(p.args.iter().cloned());
                 Ok((interpreter, args))
@@ -670,11 +680,10 @@ fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)>
             ProcessProfile::Binary(b) => {
                 // T09: recompute identity at launch. A content change since
                 // approval invalidates the authorization and refuses to spawn.
-                let canonical =
-                    crate::creative_app::process_driver::verify_binary_identity(
-                        &b.executable_path,
-                        &b.executable_hash,
-                    )?;
+                let canonical = crate::creative_app::process_driver::verify_binary_identity(
+                    &b.executable_path,
+                    &b.executable_hash,
+                )?;
                 Ok((canonical, b.args.clone()))
             }
         };
@@ -1140,10 +1149,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let (canonical, hash) = crate::creative_app::process_driver::resolve_binary_identity(
-            bin.to_str().unwrap(),
-        )
-        .unwrap();
+        let (canonical, hash) =
+            crate::creative_app::process_driver::resolve_binary_identity(bin.to_str().unwrap())
+                .unwrap();
 
         let base_plan = LaunchPlan {
             schema_version: 1,
@@ -1218,10 +1226,9 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let canonical = crate::creative_app::process_driver::resolve_python_interpreter(
-            py.to_str().unwrap(),
-        )
-        .unwrap();
+        let canonical =
+            crate::creative_app::process_driver::resolve_python_interpreter(py.to_str().unwrap())
+                .unwrap();
 
         let plan = LaunchPlan {
             schema_version: 1,
@@ -1446,7 +1453,9 @@ mod tests {
                 .insert("a-run".into(), vec![task_handle]);
         }
 
-        mgr.stop::<tauri::Wry>("a-run", None).await.expect("stop succeeds");
+        mgr.stop::<tauri::Wry>("a-run", None)
+            .await
+            .expect("stop succeeds");
         assert!(
             cancelled.load(Ordering::SeqCst),
             "stop must set the cancel flag before reaping"
@@ -1491,7 +1500,9 @@ mod tests {
         ids.sort();
         assert_eq!(ids, vec!["run-1".to_string(), "run-2".to_string()]);
         // Stopping run 1 must not touch run 2.
-        mgr.stop::<tauri::Wry>("run-1", None).await.expect("stop run-1");
+        mgr.stop::<tauri::Wry>("run-1", None)
+            .await
+            .expect("stop run-1");
         assert_eq!(mgr.live_runtime_ids().await, vec!["run-2".to_string()]);
         mgr.purge_app_logs("app-iso");
     }
@@ -1558,7 +1569,9 @@ mod tests {
                 },
             );
         }
-        mgr.stop::<tauri::Wry>("run-1", None).await.expect("first stop");
+        mgr.stop::<tauri::Wry>("run-1", None)
+            .await
+            .expect("first stop");
         assert!(
             mgr.stop::<tauri::Wry>("run-1", None).await.is_ok(),
             "second stop is idempotent"
@@ -1680,7 +1693,8 @@ mod tests {
             process_profile: None,
         };
         let mk_dir = |tag: &str| {
-            let d = std::env::temp_dir().join(format!("natives-t09-two-{tag}-{}", uuid::Uuid::new_v4()));
+            let d = std::env::temp_dir()
+                .join(format!("natives-t09-two-{tag}-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(
                 d.join("server.js"),
@@ -1732,14 +1746,8 @@ mod tests {
             .expect("stop a");
         assert!(!mgr.is_running("run-a").await);
         assert!(mgr.is_running("run-b").await);
-        assert!(
-            !port_listening(port_a),
-            "project A port must be released"
-        );
-        assert!(
-            port_listening(port_b),
-            "project B port must stay live"
-        );
+        assert!(!port_listening(port_a), "project A port must be released");
+        assert!(port_listening(port_b), "project B port must stay live");
 
         mgr.stop::<tauri::test::MockRuntime>("run-b", Some(&handle))
             .await
@@ -1801,7 +1809,15 @@ mod tests {
         };
         let (port, _url, _identity) = mgr
             .start_node_dev(
-                &handle, "run-term", "app-term", &dir, &plan, "fp-term", &[], None, None,
+                &handle,
+                "run-term",
+                "app-term",
+                &dir,
+                &plan,
+                "fp-term",
+                &[],
+                None,
+                None,
             )
             .await
             .expect("spawn term-ignoring server");

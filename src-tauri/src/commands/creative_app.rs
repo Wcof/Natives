@@ -1448,22 +1448,17 @@ pub async fn creative_app_proposal_approve(
             // Launch start→health→endpoint. A start failure keeps the proposal
             // approved and the app retryable (its state honestly reflects the
             // outcome); only a registration failure is terminal for the card.
-            let summary = match start_approved_app(
-                &handle,
-                &local_runtime,
-                host_port,
-                &pool,
-                &app_id,
-                &lock,
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    // The app is registered; return its honest current state
-                    // (StartFailed) so the approval card reflects reality and
-                    // the user can retry from the catalog.
-                    crate::creative_app::adapters::get_summary(&c, &app_id).map_err(|_| e)?
-                }
-            };
+            let summary =
+                match start_approved_app(&handle, &local_runtime, host_port, &pool, &app_id, &lock)
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // The app is registered; return its honest current state
+                        // (StartFailed) so the approval card reflects reality and
+                        // the user can retry from the catalog.
+                        crate::creative_app::adapters::get_summary(&c, &app_id).map_err(|_| e)?
+                    }
+                };
             Ok(ProposalApproveResult::Approved {
                 proposal_id: proposal_id.clone(),
                 app: summary,
@@ -1627,8 +1622,8 @@ pub fn creative_app_non_owned_open(
     browser: State<'_, BrowserStateHandle>,
 ) -> Result<()> {
     let c = conn(&state.db)?;
-    let app = crate::creative_app::non_owned::get(&c, &id)?
-        .ok_or_else(|| Error::NotFound(id.clone()))?;
+    let app =
+        crate::creative_app::non_owned::get(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
     let url = crate::creative_app::non_owned::open_url_for(&app)?;
     let label = browser::non_owned_label(&app.id);
     let approved = match app.ownership {
@@ -1641,7 +1636,15 @@ pub fn creative_app_non_owned_open(
         width: 960.0,
         height: 720.0,
     };
-    browser::browser_show_non_owned(&app_handle, &browser, &label, &app.id, &url, bounds, approved)
+    browser::browser_show_non_owned(
+        &app_handle,
+        &browser,
+        &label,
+        &app.id,
+        &url,
+        bounds,
+        approved,
+    )
 }
 
 /// Delete a non-owned app record. This never stops or kills the external

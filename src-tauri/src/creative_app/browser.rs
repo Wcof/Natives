@@ -140,7 +140,8 @@ pub fn browser_show_non_owned(
         .map_err(|e| Error::Internal(format!("add_child webview: {e}")))?;
     set_active(state, label, app_id, url)?;
     Ok(())
-}/// Open a grant-approved popup: a child webview in the main window with a
+}
+/// Open a grant-approved popup: a child webview in the main window with a
 /// unique label, the app's profile data store (shared cookies), loopback-only
 /// navigation, and no Tauri capability. Returns the new webview's label.
 ///

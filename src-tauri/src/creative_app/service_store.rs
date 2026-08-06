@@ -140,7 +140,8 @@ pub fn record_instance_ready(
     let sid = upsert_main_service(conn, runtime_instance_id)?;
     let mut bound = false;
     for url in urls {
-        let eid = super::surface_store::create_endpoint(conn, runtime_instance_id, "preview", url, port)?;
+        let eid =
+            super::surface_store::create_endpoint(conn, runtime_instance_id, "preview", url, port)?;
         if !bound {
             bind_service_endpoint(conn, &sid, &eid)?;
             bound = true;

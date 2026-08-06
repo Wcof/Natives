@@ -100,9 +100,8 @@ impl PortLeaseRegistry {
     /// The returned port is the REAL bound address of a live listener, so the
     /// random port is derived from an actual bind — never a guessed value.
     pub fn acquire_auto(self: &Arc<Self>, op_key: &str) -> Result<PortLease> {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
-            Error::InvalidInput(format!("could not allocate a free port: {e}"))
-        })?;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| Error::InvalidInput(format!("could not allocate a free port: {e}")))?;
         let port = listener
             .local_addr()
             .map_err(|e| Error::InvalidInput(format!("could not read allocated port: {e}")))?
@@ -211,7 +210,11 @@ impl PortLease {
     }
 
     fn remove_entry(&self) {
-        let mut st = self.registry.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = self
+            .registry
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(key) = st.leases.get(&self.port) {
             if key.op_key == self.op_key {
                 st.leases.remove(&self.port);

@@ -33,7 +33,9 @@ pub fn register(
     title: &str,
 ) -> Result<NonOwnedApp> {
     if title.trim().is_empty() {
-        return Err(Error::InvalidInput("non-owned app title cannot be empty".into()));
+        return Err(Error::InvalidInput(
+            "non-owned app title cannot be empty".into(),
+        ));
     }
     match ownership {
         OwnershipMode::Managed => {
@@ -91,8 +93,7 @@ fn row_to_app(r: &rusqlite::Row<'_>) -> rusqlite::Result<NonOwnedApp> {
     let origins_json: String = r.get(3)?;
     Ok(NonOwnedApp {
         id: r.get(0)?,
-        ownership: OwnershipMode::parse(&r.get::<_, String>(1)?)
-            .unwrap_or(OwnershipMode::Managed),
+        ownership: OwnershipMode::parse(&r.get::<_, String>(1)?).unwrap_or(OwnershipMode::Managed),
         url: r.get(2)?,
         approved_origins: serde_json::from_str(&origins_json).unwrap_or_default(),
         title: r.get(4)?,
@@ -109,9 +110,7 @@ pub fn list(conn: &Connection) -> Result<Vec<NonOwnedApp>> {
              FROM non_owned_apps ORDER BY created_at",
         )
         .map_err(Error::Database)?;
-    let rows = stmt
-        .query_map([], row_to_app)
-        .map_err(Error::Database)?;
+    let rows = stmt.query_map([], row_to_app).map_err(Error::Database)?;
     let mut out = Vec::new();
     for row in rows {
         out.push(row.map_err(Error::Database)?);
@@ -232,8 +231,7 @@ pub fn validate_remote_url(url: &str, approved_origins: &[String]) -> Result<()>
 /// app's approved origins — same contract as the loopback-only filter for
 /// managed apps, but against the explicit approved-origin set.
 pub fn remote_navigation_allowed(url: &str, approved_origins: &[String]) -> bool {
-    url.trim().starts_with("http://")
-        && validate_remote_url(url, approved_origins).is_ok()
+    url.trim().starts_with("http://") && validate_remote_url(url, approved_origins).is_ok()
 }
 
 /// Honest delete for a non-owned app: only removes the record, never stops or

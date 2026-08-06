@@ -473,13 +473,12 @@ fn record_ready_endpoint(
     }
     // The real port comes from the source record (settled by the health pass),
     // never a guessed value.
-    let port = store::get_app(conn, id).ok().flatten().and_then(|r| r.current_port);
-    let _ = crate::creative_app::service_store::record_instance_ready(
-        conn,
-        runtime_id,
-        &urls,
-        port,
-    );
+    let port = store::get_app(conn, id)
+        .ok()
+        .flatten()
+        .and_then(|r| r.current_port);
+    let _ =
+        crate::creative_app::service_store::record_instance_ready(conn, runtime_id, &urls, port);
 }
 
 /// Apply a stop outcome to the local record. On failure the record keeps its
@@ -600,11 +599,7 @@ pub async fn stop_app<R: tauri::Runtime>(
     if released {
         let _ = crate::creative_app::service_store::mark_instance_stopped(conn, runtime_id);
     } else {
-        let _ = crate::creative_app::service_store::mark_instance_unhealthy(
-            conn,
-            runtime_id,
-            &msg,
-        );
+        let _ = crate::creative_app::service_store::mark_instance_unhealthy(conn, runtime_id, &msg);
     }
     broadcast(app, if released { "stopped" } else { "stop_failed" }, id);
     if released {
@@ -1384,12 +1379,17 @@ mod tests {
         let port = summary
             .local_project
             .as_ref()
-            .and_then(|_| store::get_app(&conn, "loc-e2e").unwrap().unwrap().current_port)
+            .and_then(|_| {
+                store::get_app(&conn, "loc-e2e")
+                    .unwrap()
+                    .unwrap()
+                    .current_port
+            })
             .expect("real port from health pass");
 
         // ServiceInstance + RuntimeEndpoint rows are REAL, not store-only.
-        let services = crate::creative_app::service_store::list_services(&conn, &instance_id)
-            .unwrap();
+        let services =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "main");
         assert_eq!(services[0].readiness, "ready");
@@ -1398,7 +1398,10 @@ mod tests {
         assert_eq!(endpoints.len(), 1);
         assert_eq!(endpoints[0].kind, "preview");
         assert!(endpoints[0].url.contains(&port.to_string()));
-        assert_eq!(services[0].endpoint_id.as_deref(), Some(endpoints[0].id.as_str()));
+        assert_eq!(
+            services[0].endpoint_id.as_deref(),
+            Some(endpoints[0].id.as_str())
+        );
 
         // The child is live on the real port.
         assert!(rt.is_running(&instance_id).await);
@@ -1418,8 +1421,8 @@ mod tests {
             rt.live_runtime_ids().await.is_empty(),
             "no live process slot may remain after stop"
         );
-        let services_after = crate::creative_app::service_store::list_services(&conn, &instance_id)
-            .unwrap();
+        let services_after =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
         assert_eq!(
             services_after[0].readiness,
             crate::creative_app::model::ServiceInstance::READY_STOPPED
@@ -1501,13 +1504,9 @@ mod tests {
             "loc-static",
         )
         .unwrap();
-        let instance_id = crate::creative_app::runtime_store::create_instance(
-            &conn,
-            &app_id,
-            None,
-            "host_http",
-        )
-        .unwrap();
+        let instance_id =
+            crate::creative_app::runtime_store::create_instance(&conn, &app_id, None, "host_http")
+                .unwrap();
         crate::creative_app::service_store::upsert_main_service(&conn, &instance_id).unwrap();
 
         let mock = tauri::test::mock_app();
@@ -1523,8 +1522,8 @@ mod tests {
         assert_eq!(summary.state, CreativeAppState::Running);
 
         // Service + endpoint rows are real.
-        let services = crate::creative_app::service_store::list_services(&conn, &instance_id)
-            .unwrap();
+        let services =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].readiness, "ready");
         let endpoints =
@@ -1540,8 +1539,8 @@ mod tests {
             .await
             .expect("static stop");
         assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
-        let services_after = crate::creative_app::service_store::list_services(&conn, &instance_id)
-            .unwrap();
+        let services_after =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
         assert_eq!(services_after[0].readiness, "stopped");
         assert!(
             crate::creative_app::surface_store::list_endpoints(&conn, &instance_id)
@@ -1556,20 +1555,22 @@ mod tests {
     /// Host-trusted interpreter (T06) and releases everything on stop.
     #[tokio::test]
     async fn python_driver_e2e_runs_real_server_via_trusted_interpreter() {
-        let Ok(_) = std::process::Command::new("python3").arg("--version").output() else {
+        let Ok(_) = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+        else {
             eprintln!("[skip] python3 not available");
             return;
         };
         // The trusted interpreter must resolve (real python, not a shell).
-        let interpreter = match crate::creative_app::process_driver::resolve_python_interpreter(
-            "python3",
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("[skip] python3 not resolvable: {e}");
-                return;
-            }
-        };
+        let interpreter =
+            match crate::creative_app::process_driver::resolve_python_interpreter("python3") {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[skip] python3 not resolvable: {e}");
+                    return;
+                }
+            };
 
         let conn = mem();
         let rt = new_runtime_manager();
@@ -1687,17 +1688,23 @@ mod tests {
             .unwrap()
             .current_port
             .expect("python port");
-        assert!(super::runtime::port_listening(port), "python server must listen");
+        assert!(
+            super::runtime::port_listening(port),
+            "python server must listen"
+        );
 
-        let services = crate::creative_app::service_store::list_services(&conn, &instance_id)
-            .unwrap();
+        let services =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
         assert_eq!(services[0].readiness, "ready");
 
         let stopped = stop_app(&conn, &handle, &rt, "loc-py", &instance_id)
             .await
             .expect("python stop");
         assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
-        assert!(!super::runtime::port_listening(port), "python port released");
+        assert!(
+            !super::runtime::port_listening(port),
+            "python port released"
+        );
         let _ = std::fs::remove_dir_all(&cwd);
     }
 }

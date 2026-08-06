@@ -167,7 +167,8 @@ pub async fn spawn_start(
     if driver.capabilities().supports_prepare {
         if let Err(e) = driver.prepare(conn, ctx, id, &instance_id).await {
             let _ = super::runtime_store::mark_failed(conn, &instance_id, &e.to_string());
-            let _ = super::service_store::mark_instance_unhealthy(conn, &instance_id, &e.to_string());
+            let _ =
+                super::service_store::mark_instance_unhealthy(conn, &instance_id, &e.to_string());
             return Err(e);
         }
     }
@@ -189,7 +190,8 @@ pub async fn spawn_start(
                     hint.1,
                     hint.2,
                 );
-                let _ = super::service_store::record_instance_ready(conn, &instance_id, &urls, hint.0);
+                let _ =
+                    super::service_store::record_instance_ready(conn, &instance_id, &urls, hint.0);
             }
             Ok(super::runtime_store::attach_identity(conn, summary)?)
         }
@@ -226,7 +228,9 @@ pub async fn await_ready(
                     let hint = super::runtime_store::local_instance_hint(conn, id)
                         .unwrap_or((None, None, None));
                     let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
-                    let _ = super::runtime_store::mark_running(conn, iid, &urls, hint.0, hint.1, hint.2);
+                    let _ = super::runtime_store::mark_running(
+                        conn, iid, &urls, hint.0, hint.1, hint.2,
+                    );
                     // ServiceInstance/Endpoint rows are written by the local
                     // driver itself (await_start_ready) — the adapter only
                     // settles the runtime instance CAS.
@@ -275,8 +279,7 @@ pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cre
         Err(e) => {
             if let Some(iid) = &instance_id {
                 let _ = super::runtime_store::mark_cleanup_failed(conn, iid, &e.to_string());
-                let _ =
-                    super::service_store::mark_instance_unhealthy(conn, iid, &e.to_string());
+                let _ = super::service_store::mark_instance_unhealthy(conn, iid, &e.to_string());
             }
             Err(e)
         }
@@ -294,13 +297,17 @@ pub async fn delete(
     let result = match source {
         ResolvedSource::Internal => driver.delete(conn, ctx, id, "", opts).await,
         ResolvedSource::ExternalGithub => {
-            let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
-            let rt_id = super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
+            let app_id =
+                super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+            let rt_id =
+                super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
             driver.delete(conn, ctx, id, &rt_id, opts).await
         }
         ResolvedSource::LocalProject => {
-            let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
-            let rt_id = super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
+            let app_id =
+                super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+            let rt_id =
+                super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
             driver.delete(conn, ctx, id, &rt_id, opts).await
         }
     };
