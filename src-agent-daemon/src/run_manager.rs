@@ -324,6 +324,14 @@ impl RunManager {
         };
         // Fail-closed: must not swallow recovery errors (task-04 / Phase 4).
         mgr.interrupt_active_sqlite_runs()?;
+        // T05: after the restart interrupts active child runs, release every
+        // subagent slot whose child is now terminal (interrupted) so the
+        // in-memory ledger is not over-subscribed. Durable budgets stay on the
+        // session rows and are not reset by recovery.
+        if let Some(store) = &mgr.data_store {
+            let conn = store.conn().map_err(|e| format!("conn lock: {e}"))?;
+            crate::subagent_store::recover_subagent_reservations_on(&conn)?;
+        }
         mgr.restore_runs_snapshot()?;
         // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
         crate::prompt_queue_store::recover_session_actors_on_startup()?;
@@ -5535,6 +5543,9 @@ mod tests {
 
     #[tokio::test]
     async fn subagent_task_spawns_independent_identity() {
+        // Hold the env lock so a concurrent test cannot clear the fixture flag
+        // mid-test (the fixture path is env-driven for resolve_batch_assignment).
+        let _env_guard = crate::storage::DataStore::env_test_lock();
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rt = crate::production::ProductionRuntime::new();
         // Task is Process/ProjectWrite — under ConfirmEach it asks; use autonomous for identity unit test.
@@ -5570,7 +5581,8 @@ mod tests {
                     "provider_id": "anthropic",
                     "model_id": "claude-3",
                     "key_id": "child-key-from-broker",
-                    "permission_profile": "ask"
+                    "permission_profile": "ask",
+                    "fixture": true
                 }),
                 &CancellationToken::new(),
             )

@@ -119,7 +119,7 @@ pub fn resolve_child_tool_allowlist(
     out
 }
 
-/// Failure propagation for child batches (task-11).
+/// Failure propagation for child batches (task-11, T05).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FailurePolicy {
     /// Parent receives child failure; siblings continue (default).
@@ -129,6 +129,8 @@ pub enum FailurePolicy {
     FailFast,
     /// Wait for all; any failure makes aggregate fail.
     RequireAll,
+    /// Re-queue a failed child up to `max_retries`; then isolate.
+    Retry,
 }
 
 impl FailurePolicy {
@@ -136,9 +138,52 @@ impl FailurePolicy {
         match s.trim().to_ascii_lowercase().as_str() {
             "fail_fast" | "failfast" => Self::FailFast,
             "require_all" | "requireall" => Self::RequireAll,
+            "retry" | "retry_failed" => Self::Retry,
             _ => Self::Isolate,
         }
     }
+
+    /// Stable wire name for persistence (inverse of [`Self::parse`]).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Isolate => "isolate",
+            Self::FailFast => "fail_fast",
+            Self::RequireAll => "require_all",
+            Self::Retry => "retry",
+        }
+    }
+
+    /// What a terminal child *failure* must do to the parent run.
+    ///
+    /// This is the single decision the production watcher consumes (T05).
+    /// `all_siblings_terminal` is true when every sibling child of the same
+    /// parent has already settled — only [`FailurePolicy::RequireAll`] cares.
+    /// `retries_remaining` is `max_retries.saturating_sub(retry_count)`.
+    pub fn on_child_failed(
+        &self,
+        all_siblings_terminal: bool,
+        retries_remaining: u32,
+    ) -> ChildFailureEffect {
+        match self {
+            FailurePolicy::Isolate => ChildFailureEffect::Isolate,
+            FailurePolicy::FailFast => ChildFailureEffect::FailParent,
+            FailurePolicy::RequireAll if all_siblings_terminal => ChildFailureEffect::FailParent,
+            FailurePolicy::RequireAll => ChildFailureEffect::Isolate,
+            FailurePolicy::Retry if retries_remaining > 0 => ChildFailureEffect::Retry,
+            FailurePolicy::Retry => ChildFailureEffect::Isolate,
+        }
+    }
+}
+
+/// Concrete parent-side action a child failure triggers under a policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildFailureEffect {
+    /// Parent observes `SubagentFailed` and continues; siblings unaffected.
+    Isolate,
+    /// Parent run fails now (and sibling children are cancelled).
+    FailParent,
+    /// Re-queue the child on the same hidden conversation.
+    Retry,
 }
 
 /// Sub-agent configuration — every field is enforced by [`SubAgentManager`].
@@ -629,6 +674,26 @@ impl SubAgentManager {
     /// Backward-compatible alias — metadata only (engines are cancelled by cancel_run_tree).
     pub async fn cascade_cancel(&self, parent_run_id: &str) -> usize {
         self.cascade_cancel_metadata(parent_run_id).await
+    }
+
+    /// Re-point a sub-agent's run id (Retry re-queue) without touching status
+    /// or the concurrent slot — the slot stays reserved across the retry.
+    pub async fn update_run_id(&self, id: &str, new_run_id: &str) -> Result<(), String> {
+        let mut agents = self.agents.lock().await;
+        let Some(agent) = agents.get_mut(id) else {
+            return Err(format!("Sub-agent '{}' not found", id));
+        };
+        let old_run = agent.run_id.clone();
+        if old_run == new_run_id {
+            return Ok(());
+        }
+        agent.run_id = new_run_id.to_string();
+        drop(agents);
+        let mut ledger = self.ledger.lock().await;
+        if let Some(depth) = ledger.depth_of.remove(&old_run) {
+            ledger.depth_of.insert(new_run_id.to_string(), depth);
+        }
+        Ok(())
     }
 
     /// Update sub-agent status.
@@ -1150,5 +1215,37 @@ mod tests {
             FailurePolicy::parse("require_all"),
             FailurePolicy::RequireAll
         );
+        assert_eq!(FailurePolicy::parse("retry"), FailurePolicy::Retry);
+    }
+
+    /// T05: the failure policy must produce a concrete, testable parent-side
+    /// effect for every terminal child failure — the production watcher (and
+    /// nothing else) consumes this decision.
+    #[test]
+    fn failure_policy_effects_on_child_failure() {
+        use ChildFailureEffect::*;
+        // Isolate: parent observes the failure and continues — regardless of
+        // sibling state or retries left.
+        assert_eq!(FailurePolicy::Isolate.on_child_failed(true, 0), Isolate);
+        assert_eq!(FailurePolicy::Isolate.on_child_failed(false, 3), Isolate);
+        // FailFast: one failure fails the parent immediately, even while
+        // siblings are still running.
+        assert_eq!(
+            FailurePolicy::FailFast.on_child_failed(false, 0),
+            FailParent
+        );
+        assert_eq!(FailurePolicy::FailFast.on_child_failed(true, 0), FailParent);
+        // RequireAll waits for every sibling to settle before failing the
+        // parent (aggregate outcome).
+        assert_eq!(FailurePolicy::RequireAll.on_child_failed(false, 0), Isolate);
+        assert_eq!(
+            FailurePolicy::RequireAll.on_child_failed(true, 0),
+            FailParent
+        );
+        // Retry re-queues the child while retries remain; exhausting retries
+        // isolates (parent continues, child is failed).
+        assert_eq!(FailurePolicy::Retry.on_child_failed(true, 1), Retry);
+        assert_eq!(FailurePolicy::Retry.on_child_failed(false, 1), Retry);
+        assert_eq!(FailurePolicy::Retry.on_child_failed(true, 0), Isolate);
     }
 }
