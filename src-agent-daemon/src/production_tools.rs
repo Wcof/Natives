@@ -214,6 +214,22 @@ pub fn pending_mcp_call_count() -> usize {
     pending_mcp_calls().lock().unwrap().len()
 }
 
+/// Ledger settlement status for an MCP call outcome.
+///
+/// A transport timeout / failure while the run is *not* cancelled is `failed`;
+/// a user cancel is `uncertain` because the external outcome is unknowable
+/// while we tear the call down. The two states are deliberately distinct and
+/// auditable (T04).
+fn mcp_ledger_status(outcome_ok: bool, cancelled: bool) -> &'static str {
+    if cancelled {
+        "uncertain"
+    } else if outcome_ok {
+        "completed"
+    } else {
+        "failed"
+    }
+}
+
 impl DaemonToolProgressSink {
     pub fn new(events: EventSequencer) -> Self {
         Self {
@@ -340,8 +356,13 @@ impl ToolProgressSink for DaemonToolProgressSink {
         // before settlement, or settlement wins and the late update is dropped.
         let mut pending = self.pending.lock().await;
         let mut settled = self.settled.lock().await;
+        let mut scheduled = self.scheduled_flushes.lock().await;
         settled.insert(tool_call_id.to_string());
         pending.remove(tool_call_id);
+        // Drain any scheduled flush task for this call so progress work is
+        // immediately zero after settle (T04); a flush already running is a
+        // no-op because `settled` is set and `pending` is empty.
+        scheduled.remove(tool_call_id);
     }
 }
 impl PermissionGatedTools {
@@ -2588,17 +2609,16 @@ impl PermissionGatedTools {
         // J03: the pending registry is quiet once the call settles — no
         // lingering request can later be mistaken for a fresh effect.
         pending_mcp_calls().lock().unwrap().remove(&call_id);
+        // T04: settle the progress channel so late progress frames are rejected
+        // and any buffered flush task is drained — progress tasks return to 0.
+        progress.mark_tool_call_settled(&call_id).await;
         match outcome {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
                 // J03: a late success that lands after the run was cancelled is
                 // never recorded as completed — the external outcome is
                 // unknowable while we are tearing the call down.
-                let status = if cancel.is_cancelled() {
-                    "uncertain"
-                } else {
-                    "completed"
-                };
+                let status = mcp_ledger_status(true, cancel.is_cancelled());
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
                 let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
@@ -2648,11 +2668,7 @@ impl PermissionGatedTools {
                     &call_id,
                     "mcp_call",
                     "mcp",
-                    if cancel.is_cancelled() {
-                        "uncertain"
-                    } else {
-                        "failed"
-                    },
+                    mcp_ledger_status(false, cancel.is_cancelled()),
                     false,
                     turn_id,
                     &ledger_summary,
@@ -4176,6 +4192,68 @@ mod tests {
             pending_mcp_call_count(),
             0,
             "registry is quiet after settle"
+        );
+    }
+
+    /// T04: the ledger must distinguish a transport timeout (not cancelled →
+    /// `failed`) from a user cancel (`uncertain`) so resume/audit can tell them
+    /// apart.
+    #[test]
+    fn mcp_ledger_status_distinguishes_timeout_from_cancel() {
+        assert_eq!(mcp_ledger_status(true, false), "completed");
+        assert_eq!(mcp_ledger_status(false, false), "failed"); // timeout
+        assert_eq!(mcp_ledger_status(true, true), "uncertain"); // cancel
+        assert_eq!(mcp_ledger_status(false, true), "uncertain"); // cancel
+    }
+
+    /// T04: settling an MCP call must drain the progress sink's pending buffer
+    /// and scheduled flush tasks — after a cancel no progress work is left.
+    #[tokio::test]
+    async fn mcp_settle_drains_progress_tasks_to_zero() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        // A pending non-final update buffers into the sink and schedules a flush.
+        sink.publish(ToolProgressUpdate {
+            run_id: "drain-run".into(),
+            tool_call_id: "drain-call".into(),
+            tool_name: "mcp_call".into(),
+            stream: "mcp".into(),
+            text: "pending delta".into(),
+            final_update: false,
+            turn_id: Some("turn-1".into()),
+            message_id: Some("message-1".into()),
+            progress_sequence: 0,
+        })
+        .await;
+        assert!(
+            !sink.pending.lock().await.is_empty(),
+            "buffered progress is pending before settle"
+        );
+        sink.mark_tool_call_settled("drain-call").await;
+        assert!(
+            sink.pending.lock().await.is_empty(),
+            "pending buffer drained after settle"
+        );
+        assert!(
+            sink.scheduled_flushes.lock().await.is_empty(),
+            "no scheduled flush task remains after settle"
+        );
+        // A late update after settle is rejected entirely.
+        sink.publish(ToolProgressUpdate {
+            run_id: "drain-run".into(),
+            tool_call_id: "drain-call".into(),
+            tool_name: "mcp_call".into(),
+            stream: "mcp".into(),
+            text: "late".into(),
+            final_update: false,
+            turn_id: None,
+            message_id: None,
+            progress_sequence: 0,
+        })
+        .await;
+        assert!(
+            sink.pending.lock().await.is_empty(),
+            "late update must not repopulate the buffer"
         );
     }
 }
