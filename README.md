@@ -20,12 +20,13 @@ Natives 是**本机个人全能 AI 工作台**：统一管理凭证与环境，�
 
 - **💻 完整 PTY 终端** — portable-pty (Rust) + xterm.js，多 Tab、环境注入、TUI
 - **🤖 AI 工作台** — Agent / Subagent 编排与用量等（Hub / capability）
-- **⚙️ 原生执行引擎** — Rust workspace（`crates/` + `src-agent-daemon/`）：Agent 守护进程、MCP 协议、provider 适配、多模态图片贯通
+- **⚙️ 原生执行引擎** — Agent Daemon（`src-agent-daemon/` + `crates/`）独立进程，经 UDS 与 Tauri Host 通信：run 状态机、provider 适配、工具 Capability Gateway、事件序列持久化（协议 v2）
+- **🧩 扩展宿主** — `extension-host/`：隔离的 TypeScript 运行时，承载 MCP、Skills、Hooks 与插件
 - **📇 能力库** — MCP / CLI / Agent 能力注册、连接器密钥链路与权限门控（ADR-0016）
 - **⏰ 任务模块** — cron 调度、运行详情、表单草稿持久化（ADR-0015）
 - **🔌 本地模块运行时** — iframe + 本地 HTTP；Unique Origin 沙箱；Bridge API
 - **🧬 本地创意工坊** — 生成/安装 web-module，事件驱动热上架；数据按 domain 长青（Workshop）
-- **🔐 环境注入 & 凭证** — 多组环境 + AES-256-GCM 加密存储
+- **🔐 环境注入 & 凭证** — 多组环境 + AES-256-GCM 加密存储，Credential Broker 密钥链路
 - **🎨 玻璃态视觉系统** — Liquid Glass，多皮肤与设计令牌
 - **📊 CCUsage Token 统计** — 追踪 Claude/Codex 等用量（真实数据源）
 - **🌐 国际化** — 中 / 英双语
@@ -46,13 +47,15 @@ Natives 是**本机个人全能 AI 工作台**：统一管理凭证与环境，�
 
 | 领域 | 技术 |
 |------|------|
-| 桌面框架 | Tauri v2 (Rust backend) |
+| 桌面框架 | Tauri v2 (Rust backend · `src-tauri/`) |
+| 执行引擎 | Native Agent Daemon（`src-agent-daemon/` + `crates/`，UDS 协议 v2） |
+| 扩展宿主 | `extension-host/`（隔离 TypeScript 运行时） |
 | 前端框架 | Next.js 15 (App Router) + 静态导出 |
 | 语言 | TypeScript + Rust |
-| 数据库 | SQLite (rusqlite, WAL 模式, 30 张表) |
+| 数据库 | SQLite (rusqlite, WAL 模式; 宿主库与引擎库权威分立) |
 | 终端 | portable-pty + @xterm/xterm |
 | 验证 | Zod |
-| 凭证加密 | AES-256-GCM |
+| 凭证加密 | AES-256-GCM + Credential Broker |
 | 图标 | lucide-react |
 | 皮肤引擎 | CSS 自定义属性 + 动态主题注入 |
 
@@ -88,7 +91,7 @@ npm run tauri:dev
 # TypeScript 类型检查
 npm run typecheck
 
-# ESLint 代码风格检查
+# ESLint 代码风格检查 + i18n / 硬编码颜色校验
 npm run lint
 
 # 运行测试
@@ -96,6 +99,15 @@ npm run test
 
 # Next.js 生产构建
 npm run build
+
+# 性能检查（typecheck + lint + build + 包体积阈值）
+npm run perf:check
+
+# 协议一致性检查（Host/Daemon wire 类型与前端绑定同步）
+npm run protocol:check
+
+# 原生引擎验证（Agent Daemon 侧车打包 + 协议贯通）
+npm run verify:native-engine
 
 # Tauri 打包 (生成 .app / .dmg)
 npm run tauri:build
@@ -114,23 +126,31 @@ npm run tauri:build
 
 ```
 Natives/
-├── src-tauri/              # Tauri Rust 后端
+├── src-tauri/              # Tauri Rust Host（窗口、PTY、宿主 SQLite、凭证、Daemon 监督）
 │   ├── src/
 │   │   ├── main.rs         # Tauri 入口
 │   │   ├── lib.rs          # 库入口
-│   │   ├── commands/       # IPC 命令 (db, fs, module, terminal, usage, plugins)
-│   │   ├── db.rs           # SQLite 初始化 + CRUD
+│   │   ├── commands/       # IPC 命令 (db, fs, module, terminal, usage, assistant, jobs …)
+│   │   ├── db.rs           # 宿主 SQLite 初始化 + CRUD
 │   │   ├── env_manager.rs  # AES-256-GCM 凭证加密
+│   │   ├── credential_broker.rs # Credential Broker 密钥链路
 │   │   ├── http_server.rs  # 本地 HTTP 服务 (tiny_http)
-│   │   └── terminal.rs     # PTY 终端管理
+│   │   ├── terminal.rs     # PTY 终端管理
+│   │   ├── daemon/         # Agent Daemon 监督 + UDS RPC 客户端
+│   │   ├── assistant_service/ # 运行网关 / 能力目录（Host 侧）
+│   │   └── runtime/        # 运行编排
 │   └── capabilities/       # Tauri 权限声明 (最小权限)
-├── crates/                 # Rust workspace（执行引擎）
-│   ├── agent-core/         # Agent 执行核心
-│   ├── assistant-protocol/ # 助理协议
-│   ├── capability-gateway/ # 能力网关
-│   ├── harness-core/       # 引擎 harness / 控制面 RPC
-│   └── provider-adapters/  # Provider 适配
-├── src-agent-daemon/       # Agent 守护进程
+├── crates/                 # Rust workspace（执行引擎共享库）
+│   ├── agent-core/         # Agent 执行核心（run 状态机、事件日志）
+│   ├── assistant-protocol/ # Host/Daemon 协议 wire 类型唯一源
+│   ├── capability-gateway/ # 工具 schema、策略、沙箱、审计
+│   ├── contract-linter/    # KI-3 静态审计（Host 与 Daemon 共享）
+│   ├── harness-core/       # Harness 领域模型（Hook、provenance、会话协调）
+│   └── provider-adapters/  # Provider 统一适配
+├── src-agent-daemon/       # Agent 守护进程（独立进程，UDS 协议 v2）
+│   └── src/                # run/会话权威、capability 解析、MCP/CLI 运行时、凭证
+├── extension-host/         # 隔离 TypeScript 扩展运行时（MCP/Skills/Hooks/Plugins）
+├── scripts/                # 构建、协议同步、i18n/颜色检查等脚本
 ├── src/
 │   ├── app/                # Next.js App Router 页面
 │   │   ├── page.tsx        # 主界面（三栏布局）
@@ -145,14 +165,16 @@ Natives/
 │   ├── components/         # 共享组件
 │   │   ├── shell/          # 外壳布局 (Header/Sidebar/Terminal/Settings)
 │   │   ├── dashboard/      # 仪表盘组件 (TokenHero, SkillsPanel, ModelStats)
+│   │   ├── assistant/      # AI 助手会话组件
+│   │   ├── creative/       # 创意工坊组件
+│   │   ├── capabilities/   # 能力库组件
 │   │   ├── files/          # 文件管理组件
-│   │   ├── ai/             # AI 相关组件
 │   │   ├── ui/             # 通用 UI (LiquidGlass, Modal, Toast, Skeleton)
 │   │   └── settings/       # 设置面板组件
 │   ├── hooks/              # React Hooks
 │   ├── i18n/               # 国际化（中/英）
-│   ├── lib/                # 前端工具库 (tauri-adapter, design-tokens, theme-engine)
-│   └── types/              # TypeScript 类型定义
+│   ├── lib/                # 前端工具库 (tauri-adapter, design-tokens, theme-engine, assistant-*)
+│   └── types/              # TypeScript 类型定义（generated/ 为协议绑定，勿手改）
 ├── docs/                   # 见 docs/README.md
 │   ├── README.md           # 文档索引与权威优先级
 │   ├── standards/          # 约束唯一权威
@@ -167,7 +189,15 @@ Natives/
 
 ## 架构概览
 
-### 三层架构
+### 生产执行主链
+
+```
+UI → Tauri Host (Rust) → UDS → Agent Daemon (src-agent-daemon/ + crates/*)
+```
+
+Renderer、Host 命令、调度器与租户均不得绕过此主链。Host 数据与 Daemon 数据为**两个独立 SQLite 权威**；Renderer 不直接打开 SQLite。
+
+### 模块分层
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -181,8 +211,29 @@ Natives/
 │   DB CRUD · 环境注入 · 模块安装/卸载 · 搜索        │
 ├─────────────────────────────────────────────────┤
 │            基础设施层 (Infrastructure)            │
-│   Tauri v2 (Rust) · SQLite · tiny_http · IPC     │
+│   Tauri Host (Rust) · Agent Daemon · SQLite · UDS │
 └─────────────────────────────────────────────────┘
+```
+
+### 进程模型
+
+```
+Tauri Host Main (Rust · src-tauri/)
+├── 窗口 / FOUC / 端口
+├── 宿主 SQLite（模块、环境、凭证 broker 等）
+├── module_manager / 创意应用生命周期
+├── 本地 HTTP（Workshop 静态 + Bridge）
+├── PTY 终端 / 环境注入
+└── Daemon 监督 + ExecutionAuthority façade
+
+Agent Daemon (src-agent-daemon/ + crates/*)
+├── Run / 会话权威存储
+├── Provider 适配 + 工具 Capability Gateway
+├── 事件序列与持久化
+└── 协议 v2 RPC（诚实 capability 表面）
+
+extension-host/（隔离 TypeScript 运行时）
+└── MCP / Skills / Hooks / Plugins 扩展宿主
 ```
 
 ### 四大设计支柱
@@ -250,11 +301,12 @@ await window.natives.notification.send('Hello from plugin!');
 
 ## 数据存储
 
-SQLite 数据库存储在 `~/.natives/` 目录下（dotfile 模式）：
+数据存储在 `~/.natives/` 目录下（dotfile 模式），**宿主库与引擎库权威分立**：
 
-- WAL 模式 + 外键约束
-- 30 张表 + 增量迁移（`PRAGMA table_info`）
-- 仅 Rust 后端 (`src-tauri/`) 读写，前端通过 tauri-adapter + IPC 同步
+- **宿主 SQLite**（`src-tauri/`）— 模块、环境、凭证 broker、创意应用等
+- **引擎 SQLite**（Agent Daemon）— run / 会话、事件序列、用量等
+
+两者均 WAL 模式 + 外键约束 + 增量迁移；仅各自 Rust 权威读写，Renderer 不直接打开 SQLite，前端经 tauri-adapter + IPC / UDS 同步。
 
 ---
 
