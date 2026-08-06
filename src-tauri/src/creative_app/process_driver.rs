@@ -39,8 +39,21 @@ pub fn looks_like_python_web_entry(entry: &str) -> bool {
 /// JS runtime, etc. is a red flag: it would let the agent execute arbitrary
 /// commands through the "python" launch path. The basename must be Python-like.
 pub const FORBIDDEN_INTERPRETER_NAMES: &[&str] = &[
-    "sh", "bash", "zsh", "dash", "ksh", "fish", "tcsh", "env", "node", "deno",
-    "ruby", "perl", "php", "pwsh", "powershell",
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "tcsh",
+    "env",
+    "node",
+    "deno",
+    "ruby",
+    "perl",
+    "php",
+    "pwsh",
+    "powershell",
 ];
 
 /// Whether an interpreter basename is plausibly a Python executable.
@@ -444,7 +457,13 @@ mod tests {
             startup_timeout_ms: 60_000,
             is_venv: false,
         };
-        for shell in ["/bin/sh", "/bin/bash", "/usr/bin/env", "/usr/bin/node", "sh"] {
+        for shell in [
+            "/bin/sh",
+            "/bin/bash",
+            "/usr/bin/env",
+            "/usr/bin/node",
+            "sh",
+        ] {
             let mut p = base.clone();
             p.interpreter = shell.into();
             assert!(
@@ -512,7 +531,10 @@ mod tests {
         assert_eq!(hash.len(), 64);
 
         // Same content passes identity verification.
-        assert_eq!(verify_binary_identity(&canonical, &hash).unwrap(), canonical);
+        assert_eq!(
+            verify_binary_identity(&canonical, &hash).unwrap(),
+            canonical
+        );
 
         // Replace the content → identity mismatch → authorization invalid.
         std::fs::write(&bin, b"#!/bin/sh\necho v2 - swapped\n").unwrap();

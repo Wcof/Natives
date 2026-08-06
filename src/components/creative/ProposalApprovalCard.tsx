@@ -156,6 +156,16 @@ export default function ProposalApprovalCard({
             </span>
           </div>
         )}
+        {(proposal.driver.kind === 'python' || proposal.driver.kind === 'binary') && (
+          <div className="flex justify-between gap-4">
+            <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalPort')}</span>
+            <span className="text-[var(--text)] font-mono" data-proposal-port>
+              {proposal.driver.port.mode === 'fixed' && proposal.driver.port.value != null
+                ? `${t(locale, 'workshop.proposalPortFixed')}: ${proposal.driver.port.value}`
+                : t(locale, 'workshop.proposalPortAuto')}
+            </span>
+          </div>
+        )}
         {proposal.environmentKeys.length > 0 && (
           <div className="flex justify-between gap-4">
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalEnvKeys')}</span>

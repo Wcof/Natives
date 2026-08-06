@@ -42,7 +42,9 @@ fn ledger_store() -> Result<std::sync::Arc<crate::storage::DataStore>, String> {
                 None => {
                     // Historical fallback: one temp DB per test process.
                     static TEST_STORE: OnceLock<
-                        std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<crate::storage::DataStore>>>,
+                        std::sync::Mutex<
+                            HashMap<PathBuf, std::sync::Arc<crate::storage::DataStore>>,
+                        >,
                     > = OnceLock::new();
                     let db = std::env::temp_dir().join(format!(
                         "natives-side-effect-ledger-test-{}.db",

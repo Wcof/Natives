@@ -928,14 +928,22 @@ pub async fn creative_app_proposal_reject(
             }
         }
         let redacted = crate::creative_app::proposal::redacted_proposal_input(
-            &crate::creative_app::proposal::validate_protocol_proposal(
-                &stored.envelope.payload,
-            )?
-            .proposal,
+            &crate::creative_app::proposal::validate_protocol_proposal(&stored.envelope.payload)?
+                .proposal,
         );
         let op_id = op::create_operation(&c, None, "proposal_reject", "user", Some(&redacted))?;
-        if !proposal_inbox::cas_status(&c, &proposal_id, proposal_inbox::STATUS_PENDING, proposal_inbox::STATUS_REJECTED)? {
-            op::finish_failure(&c, op_id, Some("proposal_already_decided"), "concurrent decision")?;
+        if !proposal_inbox::cas_status(
+            &c,
+            &proposal_id,
+            proposal_inbox::STATUS_PENDING,
+            proposal_inbox::STATUS_REJECTED,
+        )? {
+            op::finish_failure(
+                &c,
+                op_id,
+                Some("proposal_already_decided"),
+                "concurrent decision",
+            )?;
             emit_operation(&app, &c, op_id)?;
             return Ok(ProposalRejectResult::AlreadyDecided {
                 proposal_id: proposal_id.clone(),
@@ -1033,7 +1041,12 @@ pub async fn creative_app_proposal_approve(
             proposal_inbox::STATUS_PENDING,
             proposal_inbox::STATUS_APPROVED,
         )? {
-            op::finish_failure(&c, op_id, Some("proposal_already_decided"), "concurrent decision")?;
+            op::finish_failure(
+                &c,
+                op_id,
+                Some("proposal_already_decided"),
+                "concurrent decision",
+            )?;
             emit_operation(&handle, &c, op_id)?;
             return Ok(ProposalApproveResult::AlreadyDecided {
                 proposal_id: proposal_id.clone(),

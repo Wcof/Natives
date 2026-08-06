@@ -33,7 +33,10 @@ pub const PROPOSAL_TOOL: &str = "creative_proposal";
 /// The tool returns `{"ok": true, "proposal": <payload>, ...}`. Anything that
 /// is not a well-formed payload yields `None` — the fact bridge must never
 /// fabricate a fact from an unparsable or failed tool result.
-pub fn proposal_from_tool_output(name: &str, output: &serde_json::Value) -> Option<CreativeProposalPayload> {
+pub fn proposal_from_tool_output(
+    name: &str,
+    output: &serde_json::Value,
+) -> Option<CreativeProposalPayload> {
     if name != PROPOSAL_TOOL {
         return None;
     }
@@ -43,9 +46,7 @@ pub fn proposal_from_tool_output(name: &str, output: &serde_json::Value) -> Opti
     let proposal = output.get("proposal")?;
     serde_json::from_value(proposal.clone())
         .map_err(|e| {
-            eprintln!(
-                "[proposal_fact] tool returned ok=true but payload failed to parse: {e}"
-            );
+            eprintln!("[proposal_fact] tool returned ok=true but payload failed to parse: {e}");
         })
         .ok()
 }
@@ -188,8 +189,8 @@ mod tests {
     #[test]
     fn fact_is_durable_and_survives_reopen() {
         with_store(|store| {
-            let pid = record_proposal_fact(&store, "run-1", Some("turn-1"), "tc-1", &payload())
-                .unwrap();
+            let pid =
+                record_proposal_fact(&store, "run-1", Some("turn-1"), "tc-1", &payload()).unwrap();
             assert!(!pid.is_empty());
 
             let facts = list_pending_proposal_facts(&store).unwrap();
@@ -265,5 +266,71 @@ mod tests {
             &serde_json::json!({"ok": true, "proposal": {"schemaVersion": "not-a-number"}})
         )
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn rpc_serves_pending_facts_over_real_dispatch() {
+        use assistant_protocol::v1::daemon::RpcRequest;
+        use assistant_protocol::version::ProtocolVersion;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let _guard = DataStore::env_test_lock();
+        let _restore = EnvRestore::capture();
+        let _clear = ClearOverride;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("rpc.db");
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+
+        // Warm the global RunManager against the temp store and record a fact.
+        let _mgr =
+            crate::run_manager::install_global_for_test(crate::run_manager::RunManager::new());
+        let store = crate::run_manager::global_run_manager()
+            .data_store_ref()
+            .expect("env-driven store");
+        let pid = record_proposal_fact(&store, "run-1", None, "tc-1", &payload()).unwrap();
+
+        // Drive the real RPC dispatch (same path the Host uses over UDS).
+        let (client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (_server_read, mut server_write) = server.into_split();
+        let request = RpcRequest {
+            protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
+            request_id: "probe-proposal".into(),
+            client_id: "test".into(),
+            session_token: "s".into(),
+            method: "proposal.listPending".into(),
+            params: serde_json::json!({}),
+        };
+        let protocol_version = ProtocolVersion::new(2, 0, 0);
+        let started_at = std::time::Instant::now();
+        let dispatch = crate::rpc::handle_rpc(
+            &mut server_write,
+            &request,
+            &protocol_version,
+            "0.0.0-test",
+            &started_at,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), dispatch)
+            .await
+            .expect("dispatch must answer");
+        drop(server_write);
+
+        let mut line = String::new();
+        let mut reader = BufReader::new(client);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("read rpc response");
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        let proposals = value["data"]["proposals"].as_array().unwrap();
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0]["proposalId"], pid);
+        assert_eq!(proposals[0]["payload"]["environmentKeys"][0], "PORT");
     }
 }

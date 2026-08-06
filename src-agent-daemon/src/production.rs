@@ -1938,10 +1938,7 @@ mod permission_bind_tests {
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        crate::storage::set_test_db_override(
-            Some(db.clone()),
-            Some(dir.path().join("artifacts")),
-        );
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
         let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
         let cid = "c-mismatch";
         crate::conversation_store::ensure_conversation_stub(cid, "openai", "gpt-4o", None, None)

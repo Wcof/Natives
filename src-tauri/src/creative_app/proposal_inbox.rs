@@ -56,7 +56,9 @@ pub struct ProposalInboxEntry {
     pub proposal: AgentProposal,
 }
 
-fn conn<'a>(pool: &'a DbPool) -> crate::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
+fn conn<'a>(
+    pool: &'a DbPool,
+) -> crate::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
     pool.get().map_err(|e| Error::Internal(format!("db: {e}")))
 }
 
@@ -154,7 +156,10 @@ pub fn list_pending(c: &rusqlite::Connection) -> crate::Result<Vec<ProposalInbox
 }
 
 /// Look up a stored proposal by id.
-pub fn get_stored(c: &rusqlite::Connection, proposal_id: &str) -> crate::Result<Option<StoredProposal>> {
+pub fn get_stored(
+    c: &rusqlite::Connection,
+    proposal_id: &str,
+) -> crate::Result<Option<StoredProposal>> {
     let row = c
         .query_row(
             "SELECT envelope_json, status, created_at, updated_at, failure
@@ -248,7 +253,14 @@ pub fn record_executable_approval(
                 "INSERT INTO creative_executable_approval
                     (id, canonical_path, file_identity, scope, approver, approved_at, proposal_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), ?6)",
-                params![id, canonical_path, file_identity, scope, approver, proposal_id],
+                params![
+                    id,
+                    canonical_path,
+                    file_identity,
+                    scope,
+                    approver,
+                    proposal_id
+                ],
             )
             .map_err(Error::Database)?;
         }
@@ -278,9 +290,8 @@ pub fn resolve_proposal_identity(
         }
         ProposedDriver::Python(p) => {
             let canonical = resolve_python_interpreter(&p.interpreter)?;
-            let hash = crate::creative_app::process_driver::sha256_hex(std::path::Path::new(
-                &canonical,
-            ))?;
+            let hash =
+                crate::creative_app::process_driver::sha256_hex(std::path::Path::new(&canonical))?;
             let mut p2 = p.clone();
             p2.interpreter = canonical.clone();
             let mut verified = proposal.clone();
@@ -317,7 +328,9 @@ pub enum ProposalApproveResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ProposalRejectResult {
-    Rejected { proposal_id: String },
+    Rejected {
+        proposal_id: String,
+    },
     AlreadyDecided {
         proposal_id: String,
         current_status: String,
@@ -450,7 +463,10 @@ mod tests {
         assert!(cas_status(&conn, "p-1", STATUS_PENDING, STATUS_APPROVED).unwrap());
         // Repeat approve is a no-op (returns false, does not corrupt).
         assert!(!cas_status(&conn, "p-1", STATUS_PENDING, STATUS_APPROVED).unwrap());
-        assert_eq!(get_stored(&conn, "p-1").unwrap().unwrap().status, STATUS_APPROVED);
+        assert_eq!(
+            get_stored(&conn, "p-1").unwrap().unwrap().status,
+            STATUS_APPROVED
+        );
     }
 
     #[test]

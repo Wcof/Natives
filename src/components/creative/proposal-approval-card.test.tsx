@@ -167,9 +167,19 @@ describe('ProposalApprovalCard failure contract', () => {
   });
 
   it('the inbox rethrows so the card stays visible with the error', () => {
-    // T06 bug #3: ProposalInbox swallowed approve/reject errors, so the card
-    // followed up with a success toast. The error must propagate.
-    assert.match(inboxSource, /catch \(err\) \{\s*throw err;\s*\}/);
+    // T06 bug #3: ProposalInbox swallowed approve/reject errors (caught and
+    // toasted), so the card followed up with a success toast. The error must
+    // propagate to the card — the inbox must not catch it at all.
+    assert.doesNotMatch(
+      inboxSource,
+      /catch \(err\) \{\s*onToast\(/,
+      'inbox must not swallow the error into a toast',
+    );
+    const approveBody = inboxSource.slice(
+      inboxSource.indexOf('const approve'),
+      inboxSource.indexOf('const reject'),
+    );
+    assert.equal(approveBody.includes('catch (err)'), false, 'approve must not catch errors');
   });
 
   it('an already-decided result never dismisses the card silently', () => {

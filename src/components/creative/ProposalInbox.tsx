@@ -42,10 +42,8 @@ export default function ProposalInbox({
         onDismissed(proposal);
       }
       // `already_decided` keeps the card; the host already made the decision.
-    } catch (err) {
-      // Registration/verification failed — rethrow so the card shows the error
-      // and stays visible. Never swallow into a silent success.
-      throw err;
+      // Any error propagates (no catch here) so the card shows it and stays
+      // visible — never a swallowed silent success.
     } finally {
       setProcessing((prev) => {
         const next = new Set(prev);
@@ -63,8 +61,6 @@ export default function ProposalInbox({
       if (result?.status === 'rejected') {
         onDismissed(proposal);
       }
-    } catch (err) {
-      throw err;
     } finally {
       setProcessing((prev) => {
         const next = new Set(prev);
