@@ -32,28 +32,156 @@ enum ProjectionFailure {
         turn_id: String,
         message_id: String,
     },
-    /// Any other write/commit failure (rolled back, nothing to quarantine).
-    Other(String),
+    /// A transient DB error (busy/locked/full); the watermark was not advanced.
+    Retryable(String),
+    /// A non-transient error (FK/constraint/other); the watermark was not
+    /// advanced. Recovery must surface it, not silently skip the run.
+    Fatal(String),
 }
 
-impl From<String> for ProjectionFailure {
-    fn from(value: String) -> Self {
-        ProjectionFailure::Other(value)
+/// How one committed turn group ended after a projection attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProjectionStatus {
+    /// The turn was newly materialized and the watermark advanced.
+    Projected,
+    /// The turn was already projected; nothing changed (idempotent no-op).
+    AlreadyProjected,
+    /// A corrupt/conflicting turn was explicitly quarantined and is durable.
+    Quarantined,
+    /// A transient DB error (busy/locked/disk-full) aborted the turn; the
+    /// watermark was NOT advanced so a later retry re-attempts it.
+    RetryableFailure,
+    /// A non-transient error (FK/constraint/other) aborted the turn; the
+    /// watermark was NOT advanced.
+    FatalFailure,
+}
+
+/// A run-level projection failure. `retryable` separates transient DB errors
+/// from permanent ones so startup recovery can keep a retry watermark: a
+/// retryable failure is re-attempted on the next start, a fatal one is surfaced
+/// to the operator instead of being silently swallowed.
+#[derive(Debug, Clone)]
+pub struct ProjectionError {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl ProjectionError {
+    fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    fn fatal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
     }
 }
 
+impl std::fmt::Display for ProjectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProjectionError {}
+
+impl From<ProjectionError> for String {
+    fn from(value: ProjectionError) -> Self {
+        value.message
+    }
+}
+
+/// String errors from store/open paths are conservatively retryable: re-running
+/// recovery is always safe (projection is idempotent), so failing a run over a
+/// one-shot open error only delays the retry, never corrupts data.
+impl From<String> for ProjectionError {
+    fn from(value: String) -> Self {
+        ProjectionError::retryable(value)
+    }
+}
+
+impl From<ProjectionFailure> for ProjectionError {
+    fn from(value: ProjectionFailure) -> Self {
+        match value {
+            ProjectionFailure::Conflict {
+                run_id,
+                turn_id,
+                message_id,
+            } => ProjectionError::fatal(format!(
+                "content conflict for message {message_id} (run {run_id}, turn {turn_id}) was not quarantined"
+            )),
+            ProjectionFailure::Retryable(message) => ProjectionError::retryable(message),
+            ProjectionFailure::Fatal(message) => ProjectionError::fatal(message),
+        }
+    }
+}
+
+/// Classify a rusqlite error as retryable (busy/locked/disk-full) or not.
+/// FK/constraint violations are permanent — no amount of retrying changes the
+/// rows — so they surface as fatal failures, never as quarantines.
+fn classify_db_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(
+            rusqlite::ffi::ErrorCode::DatabaseBusy
+                | rusqlite::ffi::ErrorCode::DatabaseLocked
+                | rusqlite::ffi::ErrorCode::DiskFull
+                | rusqlite::ffi::ErrorCode::OperationInterrupted
+                | rusqlite::ffi::ErrorCode::OutOfMemory
+                | rusqlite::ffi::ErrorCode::SystemIoFailure
+        )
+    )
+}
+
+fn sqlite_failure(context: &str, error: rusqlite::Error) -> ProjectionFailure {
+    if classify_db_error(&error) {
+        ProjectionFailure::Retryable(format!("{context}: {error}"))
+    } else {
+        ProjectionFailure::Fatal(format!("{context}: {error}"))
+    }
+}
+
+/// Per-run projection report.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunProjection {
+    pub projected: usize,
+    pub already_projected: usize,
+    pub quarantined: usize,
+}
+
+/// Startup-recovery report: every target run ended projected or quarantined.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecoveryReport {
+    /// Runs that were actually processed (projected or quarantined).
+    pub runs: usize,
+    pub total_projected: usize,
+    pub total_quarantined: usize,
+}
+
 /// Project all committed turns in `events` into the conversation tables for a
-/// run. Returns the number of turns projected.
+/// run.
 ///
 /// Production entry point (TASK-005): the daemon calls this after a run's
 /// engine completes and again during startup recovery. Both calls are
 /// idempotent; corrupt events are isolated in `projection_quarantine` and the
 /// other turns still project.
+///
+/// Error contract (T03): a DB/FK/commit error aborts the whole run with a
+/// [`ProjectionError`] and leaves the projection watermark exactly where it
+/// was — the successfully projected turns stay durable, the failed turn is
+/// retried on the next call. No error is swallowed: only genuinely corrupt or
+/// conflicting turns are quarantined, and never a plain DB failure.
 pub fn project_run_from_events(
     conversation_id: &str,
     run_id: &str,
     events: &[RunEventV2],
-) -> Result<usize, String> {
+) -> Result<RunProjection, ProjectionError> {
     let run_exists: i64 = conversation_store::store()?
         .conn()?
         .query_row(
@@ -61,45 +189,43 @@ pub fn project_run_from_events(
             params![run_id],
             |row| row.get(0),
         )
-        .map_err(|e| format!("project run existence: {e}"))?;
+        .map_err(|e| sqlite_failure("project run existence", e))?;
     if run_exists == 0 {
         // Legacy/symbolic run without an FK row: the compat reader keeps the
         // projection working without name-prefix FK heuristics.
-        return conversation_store::append_assistant_turn_from_events(
-            conversation_id,
-            run_id,
-            events,
-        )
-        .map(|_| 0);
+        conversation_store::append_assistant_turn_from_events(conversation_id, run_id, events)?;
+        return Ok(RunProjection::default());
     }
-    let mut projected = 0;
+    let mut report = RunProjection::default();
     for group in group_turns(events) {
-        match project_committed_turn(conversation_id, run_id, &group) {
-            Ok(Some(_)) => projected += 1,
-            Ok(None) => {}
-            // The corrupt/conflicting turn was quarantined inside
-            // `project_committed_turn`; the other turns still project.
-            Err(_) => {}
+        match project_committed_turn(conversation_id, run_id, &group)? {
+            Some(ProjectionStatus::Projected) => report.projected += 1,
+            Some(ProjectionStatus::AlreadyProjected) => report.already_projected += 1,
+            Some(ProjectionStatus::Quarantined) => report.quarantined += 1,
+            Some(ProjectionStatus::RetryableFailure) | Some(ProjectionStatus::FatalFailure) => {
+                unreachable!("projection failures are returned as Err, never as a status")
+            }
+            None => {}
         }
     }
-    Ok(projected)
+    Ok(report)
 }
 
 /// Startup recovery (B03): backfill projections for every run that has
-/// committed turns not yet covered by its projection watermark. Idempotent and
-/// safe to run on every daemon start; returns the number of turns projected.
-pub fn recover_projections() -> Result<usize, String> {
+/// committed turns not yet covered by its projection watermark.
+///
+/// Fails (returns `Err`) whenever any target run ends in a DB/FK/commit error,
+/// so a half-projected run is never silently accepted as recovered. Runs whose
+/// events/turns were explicitly quarantined count as handled — recovery only
+/// succeeds when every target run is projected or quarantined.
+pub fn recover_projections() -> Result<RecoveryReport, String> {
     let store = conversation_store::store()?;
     let run_ids: Vec<String> = {
         let conn = store.conn()?;
         runs_needing_recovery(&conn)?
     };
-    let mut total = 0;
+    let mut report = RecoveryReport::default();
     for run_id in run_ids {
-        let events = {
-            let conn = store.conn()?;
-            load_events_for_run(&conn, &run_id)
-        };
         let conversation_id = {
             let conn = store.conn()?;
             conn.query_row(
@@ -107,18 +233,31 @@ pub fn recover_projections() -> Result<usize, String> {
                 params![run_id],
                 |row| row.get::<_, String>(0),
             )
-            .unwrap_or_default()
+            .map_err(|e| {
+                format!("projection recovery: conversation lookup for run {run_id}: {e}")
+            })?
         };
-        let Ok(events) = events else {
-            // A corrupt stored event quarantines the run; other runs recover.
-            continue;
-        };
-        if conversation_id.is_empty() || events.is_empty() {
+        if conversation_id.trim().is_empty() {
+            // No FK row to attach the projection to; nothing projectable.
             continue;
         }
-        total += project_run_from_events(&conversation_id, &run_id, &events)?;
+        let conn = store.conn()?;
+        match load_events_for_run(&conn, &run_id)? {
+            LoadEvents::Events(events) if events.is_empty() => {}
+            LoadEvents::Events(events) => {
+                let projection = project_run_from_events(&conversation_id, &run_id, &events)
+                    .map_err(|e| format!("projection recovery failed for run {run_id}: {e}"))?;
+                report.runs += 1;
+                report.total_projected += projection.projected;
+                report.total_quarantined += projection.quarantined;
+            }
+            LoadEvents::QuarantinedRun => {
+                report.runs += 1;
+                report.total_quarantined += 1;
+            }
+        }
     }
-    Ok(total)
+    Ok(report)
 }
 
 /// Runs with a committed turn not yet covered by the projection watermark.
@@ -142,12 +281,18 @@ fn runs_needing_recovery(conn: &rusqlite::Connection) -> Result<Vec<String>, Str
     Ok(ids)
 }
 
+/// Result of decoding a run's stored events.
+enum LoadEvents {
+    Events(Vec<RunEventV2>),
+    /// A corrupt stored payload explicitly quarantined the run; recovery counts
+    /// it as handled (quarantine is durable and queryable) and moves on.
+    QuarantinedRun,
+}
+
 /// Decode every stored event for a run. A corrupt payload quarantines the run
-/// explicitly (no silent skip) and aborts only that run's recovery.
-fn load_events_for_run(
-    conn: &rusqlite::Connection,
-    run_id: &str,
-) -> Result<Vec<RunEventV2>, String> {
+/// explicitly (no silent skip) and is reported as [`LoadEvents::QuarantinedRun`]
+/// so recovery never mistakes it for a swallowed failure.
+fn load_events_for_run(conn: &rusqlite::Connection, run_id: &str) -> Result<LoadEvents, String> {
     let payloads: Vec<String> = conn
         .prepare("SELECT payload FROM run_event WHERE run_id = ?1 ORDER BY sequence")
         .map_err(|e| e.to_string())?
@@ -166,12 +311,15 @@ fn load_events_for_run(
                     None,
                     "corrupt_stored_event",
                     &error.to_string(),
-                )?;
-                return Err(format!("corrupt stored event for run {run_id}: {error}"));
+                )
+                .map_err(|e| {
+                    format!("corrupt stored event for run {run_id} could not be quarantined: {e}")
+                })?;
+                return Ok(LoadEvents::QuarantinedRun);
             }
         }
     }
-    Ok(events)
+    Ok(LoadEvents::Events(events))
 }
 
 /// Split events into turn groups using the same boundaries as the legacy
@@ -196,14 +344,18 @@ fn group_turns(events: &[RunEventV2]) -> Vec<Vec<RunEventV2>> {
     groups
 }
 
-/// Project one turn group in a single transaction. Returns the assistant
-/// message id when the turn was projected, `None` when the group was skipped
-/// (partial typed turn, or nothing projectable).
+/// Project one turn group in a single transaction. Returns:
+///
+/// - `Ok(None)` when the group is skipped (partial typed turn, or nothing
+///   projectable);
+/// - `Ok(Some(status))` when the group was handled with that status;
+/// - `Err(ProjectionError)` when a DB/FK/commit error aborted the group — the
+///   watermark is untouched so the retry re-attempts it.
 fn project_committed_turn(
     conversation_id: &str,
     run_id: &str,
     events: &[RunEventV2],
-) -> Result<Option<String>, String> {
+) -> Result<Option<ProjectionStatus>, ProjectionError> {
     let has_turn_start = events
         .iter()
         .any(|e| matches!(&e.payload, RunEventKind::TurnStarted { .. }));
@@ -264,28 +416,34 @@ fn project_committed_turn(
                 content: Some(content),
                 ..
             } => {
-                let blocks = content.get("content").ok_or_else(|| {
-                    let detail = content.to_string();
-                    let _ = quarantine(
-                        run_id,
-                        turn_id.as_deref(),
-                        assistant_message_id.as_deref(),
-                        "corrupt_message_completed",
-                        &detail,
-                    );
-                    "corrupt message completed content: missing blocks".to_string()
-                })?;
-                committed_content =
-                    Some(serde_json::from_value(blocks.clone()).map_err(|error| {
-                        let _ = quarantine(
+                // A corrupt committed payload is quarantined explicitly, never
+                // swallowed. If the quarantine row itself cannot be written,
+                // that is a retryable failure — the next recovery re-attempts.
+                let blocks = match content
+                    .get("content")
+                    .ok_or_else(|| content.to_string())
+                    .and_then(|blocks| {
+                        serde_json::from_value::<Vec<ContentBlock>>(blocks.clone())
+                            .map_err(|e| e.to_string())
+                    }) {
+                    Ok(blocks) => blocks,
+                    Err(detail) => {
+                        quarantine(
                             run_id,
                             turn_id.as_deref(),
                             assistant_message_id.as_deref(),
                             "corrupt_message_completed",
-                            &error.to_string(),
-                        );
-                        format!("invalid message completed content: {error}")
-                    })?);
+                            &detail,
+                        )
+                        .map_err(|e| {
+                            ProjectionError::retryable(format!(
+                                "corrupt turn could not be quarantined: {e}"
+                            ))
+                        })?;
+                        return Ok(Some(ProjectionStatus::Quarantined));
+                    }
+                };
+                committed_content = Some(blocks);
             }
             RunEventKind::MessageCompleted { content: None, .. } => {}
             _ => {}
@@ -330,10 +488,10 @@ fn project_committed_turn(
 
     let store = conversation_store::store()?;
     let conn = store.conn()?;
-    let outcome: Result<Option<String>, ProjectionFailure> = (|| {
+    let outcome: Result<TurnWrite, ProjectionFailure> = (|| {
         let tx = conn
             .unchecked_transaction()
-            .map_err(|e| format!("project turn begin: {e}"))?;
+            .map_err(|e| sqlite_failure("project turn begin", e))?;
 
         // Turn record — idempotent; the affected count tells us whether this
         // turn is new (count the watermark once) or an already-projected
@@ -350,7 +508,7 @@ fn project_committed_turn(
                     chrono::Utc::now().to_rfc3339()
                 ],
             )
-            .map_err(|e| format!("project turn insert: {e}"))?;
+            .map_err(|e| sqlite_failure("project turn insert", e))?;
 
         // Assistant message + blocks (mirrors the legacy append path so the
         // stored rows are byte-identical: content blocks + run_reference).
@@ -430,7 +588,7 @@ fn project_committed_turn(
                     updated_at = datetime('now')",
                 params![run_id, last_sequence as i64, digest, compat_contribution],
             )
-            .map_err(|e| format!("project watermark upsert: {e}"))?;
+            .map_err(|e| sqlite_failure("project watermark upsert", e))?;
         } else {
             tx.execute(
                 "INSERT INTO projection_watermark
@@ -441,14 +599,19 @@ fn project_committed_turn(
                     updated_at = datetime('now')",
                 params![run_id, last_sequence as i64, digest],
             )
-            .map_err(|e| format!("project watermark idempotent: {e}"))?;
+            .map_err(|e| sqlite_failure("project watermark idempotent", e))?;
         }
         tx.commit()
-            .map_err(|e| format!("project turn commit: {e}"))?;
-        Ok(Some(assistant_id))
+            .map_err(|e| sqlite_failure("project turn commit", e))?;
+        if turn_affected > 0 {
+            Ok(TurnWrite::Projected)
+        } else {
+            Ok(TurnWrite::AlreadyProjected)
+        }
     })();
     match outcome {
-        Ok(id) => Ok(id),
+        Ok(TurnWrite::Projected) => Ok(Some(ProjectionStatus::Projected)),
+        Ok(TurnWrite::AlreadyProjected) => Ok(Some(ProjectionStatus::AlreadyProjected)),
         Err(ProjectionFailure::Conflict {
             run_id,
             turn_id,
@@ -456,20 +619,35 @@ fn project_committed_turn(
         }) => {
             // The transaction rolled back when the closure dropped `tx`.
             // Quarantine on a fresh connection so the isolation survives the
-            // rollback — never a silent overwrite.
+            // rollback — never a silent overwrite. A quarantine write failure
+            // is surfaced as retryable; the conflict was not silently dropped.
             let detail =
                 format!("stored content for message {message_id} disagrees with the events");
-            let _ = quarantine(
+            quarantine(
                 &run_id,
                 Some(&turn_id),
                 Some(&message_id),
                 "content_conflict",
                 &detail,
-            );
-            Err(detail)
+            )
+            .map_err(|e| {
+                ProjectionError::retryable(format!(
+                    "content conflict could not be quarantined: {e}"
+                ))
+            })?;
+            Ok(Some(ProjectionStatus::Quarantined))
         }
-        Err(ProjectionFailure::Other(error)) => Err(error),
+        Err(ProjectionFailure::Retryable(message)) => Err(ProjectionError::retryable(message)),
+        Err(ProjectionFailure::Fatal(message)) => Err(ProjectionError::fatal(message)),
     }
+}
+
+/// Result of a successful per-turn write.
+enum TurnWrite {
+    /// The turn row was newly inserted (watermark counted once).
+    Projected,
+    /// The turn row already existed (idempotent re-projection).
+    AlreadyProjected,
 }
 
 /// Insert a message row + blocks when absent; when present, verify the stored
@@ -493,11 +671,11 @@ fn upsert_message_blocks(
             "SELECT sort_order, block_json FROM message_block
              WHERE message_id = ?1 ORDER BY sort_order",
         )
-        .map_err(|e| e.to_string())?
+        .map_err(|e| sqlite_failure("project existing blocks read", e))?
         .query_map(params![message_id], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|e| e.to_string())?
+        .map_err(|e| sqlite_failure("project existing blocks map", e))?
         .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| sqlite_failure("project existing blocks collect", e))?;
     if !existing.is_empty() {
         let projected: Vec<(i64, String)> = blocks
             .iter()
@@ -530,7 +708,7 @@ fn upsert_message_blocks(
             now
         ],
     )
-    .map_err(|e| format!("project message insert: {e}"))?;
+    .map_err(|e| sqlite_failure("project message insert", e))?;
     for (index, block) in blocks.iter().enumerate() {
         let block_type = block.get("type").and_then(Value::as_str).unwrap_or("text");
         tx.execute(
@@ -538,7 +716,7 @@ fn upsert_message_blocks(
              VALUES (?1, ?2, ?3, ?4, NULL, 0)",
             params![message_id, index as i64, block_type, block.to_string()],
         )
-        .map_err(|e| format!("project block insert: {e}"))?;
+        .map_err(|e| sqlite_failure("project block insert", e))?;
     }
     Ok(())
 }
@@ -787,7 +965,9 @@ mod tests {
     fn projector_preserves_full_tool_pair_and_block_order() {
         let ((conv, run), _dir) = setup();
         let events = typed_turn_events(&run, "t1");
-        let projected = project_run_from_events(&conv, &run, &events).unwrap();
+        let projected = project_run_from_events(&conv, &run, &events)
+            .unwrap()
+            .projected;
         assert_eq!(projected, 1, "one committed turn projects");
         let messages = conversation_store::load_agent_messages(&conv).unwrap();
         assert_eq!(messages.len(), 2, "assistant + tool result");
@@ -854,7 +1034,9 @@ mod tests {
         let events = typed_turn_events(&run, "t1");
         let mut partial = events;
         partial.retain(|e| !matches!(e.payload, RunEventKind::TurnCompleted { .. }));
-        let projected = project_run_from_events(&conv, &run, &partial).unwrap();
+        let projected = project_run_from_events(&conv, &run, &partial)
+            .unwrap()
+            .projected;
         assert_eq!(projected, 0);
         assert!(conversation_store::load_agent_messages(&conv)
             .unwrap()
@@ -876,8 +1058,9 @@ mod tests {
                 serde_json::json!({ "message_id": "msg-t1", "role": "assistant", "content": "not-an-array" }),
             );
         }
-        let projected = project_run_from_events(&conv, &run, &events).unwrap();
-        assert_eq!(projected, 0, "corrupt turn must not project");
+        let report = project_run_from_events(&conv, &run, &events).unwrap();
+        assert_eq!(report.projected, 0, "corrupt turn must not project");
+        assert_eq!(report.quarantined, 1, "corrupt turn must be quarantined");
         let store = conversation_store::store().unwrap();
         let conn = store.conn().unwrap();
         let quarantined: i64 = conn
@@ -958,8 +1141,11 @@ mod tests {
                 text: "hello".into(),
             },
         )];
-        let projected = project_run_from_events(&conv, &run, &events).unwrap();
-        assert_eq!(projected, 0, "compat path returns legacy count semantics");
+        let report = project_run_from_events(&conv, &run, &events).unwrap();
+        assert_eq!(
+            report.projected, 0,
+            "compat path returns legacy count semantics"
+        );
         let messages = conversation_store::load_agent_messages(&conv).unwrap();
         assert_eq!(
             messages.len(),
@@ -1017,10 +1203,315 @@ mod tests {
             "nothing projected before recovery"
         );
         let recovered = recover_projections().unwrap();
-        assert_eq!(recovered, 1, "the committed turn is backfilled at startup");
+        assert_eq!(
+            recovered.total_projected, 1,
+            "the committed turn is backfilled at startup"
+        );
         let messages = conversation_store::load_agent_messages(&conv).unwrap();
         assert_eq!(messages.len(), 2, "assistant + tool result after recovery");
         // Re-running recovery is a no-op.
-        assert_eq!(recover_projections().unwrap(), 0, "recovery is idempotent");
+        assert_eq!(
+            recover_projections().unwrap().total_projected,
+            0,
+            "recovery is idempotent"
+        );
+    }
+
+    // ---- T03: fail loud on DB/FK/commit errors, quarantine only corruption --
+
+    /// A plain DB error (constraint/fk failure injected via a trigger) must
+    /// fail the run and NOT be treated as a quarantine; the watermark stays
+    /// untouched and the next recovery succeeds after the fault clears.
+    #[test]
+    fn recovery_fails_on_db_failure_and_retries_after_fault_clears() {
+        let ((conv, run), _dir) = setup();
+        let events = typed_turn_events(&run, "t1");
+        // Seed the events into the log so recovery sees a target run.
+        {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            for event in &events {
+                conn.execute(
+                    "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        run,
+                        event.effective_run_sequence() as i64,
+                        event.payload.type_name(),
+                        serde_json::to_string(event).unwrap(),
+                        event.timestamp.to_rfc3339(),
+                        event.event_id,
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        // Inject a mid-transaction FK-style failure: every message_block insert
+        // aborts, which rolls the whole per-turn transaction back.
+        {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER proj_test_fk_fail BEFORE INSERT ON message_block
+                 BEGIN
+                     SELECT RAISE(ABORT, 'FOREIGN KEY constraint failed');
+                 END;",
+            )
+            .unwrap();
+        }
+        let failure = recover_projections().unwrap_err();
+        assert!(
+            failure.contains("projection recovery failed"),
+            "recovery must fail loudly on a DB error, got: {failure}"
+        );
+        assert!(
+            failure.contains("FOREIGN KEY constraint failed") || failure.contains("constraint"),
+            "the injected FK failure must be surfaced, got: {failure}"
+        );
+        // Atomic rollback: nothing may become provider history.
+        assert!(
+            conversation_store::load_agent_messages(&conv)
+                .unwrap()
+                .is_empty(),
+            "a failed per-turn transaction must leave no partial rows"
+        );
+        // The retry watermark was NOT advanced.
+        let store = conversation_store::store().unwrap();
+        let conn = store.conn().unwrap();
+        let watermark: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM projection_watermark WHERE projector='conversation' AND run_id=?1",
+                params![run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(watermark, 0, "retry watermark must be preserved");
+        // Fault clears -> recovery succeeds and materializes the full turn.
+        conn.execute_batch("DROP TRIGGER proj_test_fk_fail;")
+            .unwrap();
+        drop(conn);
+        let report = recover_projections().unwrap();
+        assert_eq!(
+            report.total_projected, 1,
+            "the next recovery continues after the fault clears"
+        );
+        assert_eq!(
+            conversation_store::load_agent_messages(&conv)
+                .unwrap()
+                .len(),
+            2,
+            "assistant + tool result after the successful retry"
+        );
+    }
+
+    /// A busy database aborts recovery with a retryable failure; after the
+    /// lock is released the same recovery succeeds.
+    #[test]
+    fn recovery_fails_on_busy_db_and_retries_after_lock_release() {
+        let _guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("projector-busy.db");
+        // Short busy timeout so the held write lock surfaces SQLITE_BUSY
+        // immediately instead of parking the test for 30s.
+        std::env::set_var("NATIVES_TEST_BUSY_TIMEOUT_MS", "0");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        let conv = format!("proj-busy-conv-{}", uuid::Uuid::new_v4());
+        let run = format!("proj-busy-run-{}", uuid::Uuid::new_v4());
+        {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES (?1, 'chat', 'Busy Test', 'prov-1', 'model-1')",
+                params![conv],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES (?1, ?2, 'completed', 'prov-1', 'model-1')",
+                params![run, conv],
+            )
+            .unwrap();
+            for event in typed_turn_events(&run, "t1") {
+                conn.execute(
+                    "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        run,
+                        event.effective_run_sequence() as i64,
+                        event.payload.type_name(),
+                        serde_json::to_string(&event).unwrap(),
+                        event.timestamp.to_rfc3339(),
+                        event.event_id,
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        // Hold the SQLite write lock from a second connection.
+        let lock_conn = rusqlite::Connection::open(&db).unwrap();
+        lock_conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        std::env::remove_var("NATIVES_TEST_BUSY_TIMEOUT_MS");
+        let failure = recover_projections().unwrap_err();
+        assert!(
+            failure.contains("projection recovery failed") || failure.contains("busy"),
+            "recovery must fail on a busy database, got: {failure}"
+        );
+        assert!(
+            conversation_store::load_agent_messages(&conv)
+                .unwrap()
+                .is_empty(),
+            "busy failure must not leave partial rows"
+        );
+        // Release the lock; the retry watermark was preserved, so the same
+        // recovery re-attempts and succeeds.
+        drop(lock_conn);
+        let report = recover_projections().unwrap();
+        assert_eq!(
+            report.total_projected, 1,
+            "retry after lock release succeeds"
+        );
+    }
+
+    /// The classifier must map busy/locked/disk-full to retryable and
+    /// constraint (FK) to fatal — the load-bearing distinction for the retry
+    /// watermark.
+    #[test]
+    fn db_error_classifier_maps_busy_full_to_retryable_and_fk_to_fatal() {
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::DatabaseBusy,
+                extended_code: 5,
+            },
+            None,
+        );
+        let locked = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::DatabaseLocked,
+                extended_code: 6,
+            },
+            None,
+        );
+        let full = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::DiskFull,
+                extended_code: 13,
+            },
+            None,
+        );
+        let fk = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::ConstraintViolation,
+                extended_code: 787, // SQLITE_CONSTRAINT_FOREIGNKEY
+            },
+            None,
+        );
+        for transient in [&busy, &locked, &full] {
+            assert!(
+                classify_db_error(transient),
+                "{transient:?} must be retryable"
+            );
+        }
+        assert!(
+            !classify_db_error(&fk),
+            "an FK violation is permanent, never retryable"
+        );
+    }
+
+    /// Kill/restart atomicity (T03): when the per-turn transaction fails
+    /// mid-write, no partial rows become provider history, and a later restart
+    /// re-projects cleanly.
+    #[test]
+    fn failed_turn_never_leaves_partial_provider_history() {
+        fn seed(run: &str, events: &[RunEventV2]) {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            for event in events {
+                conn.execute(
+                    "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        run,
+                        event.effective_run_sequence() as i64,
+                        event.payload.type_name(),
+                        serde_json::to_string(event).unwrap(),
+                        event.timestamp.to_rfc3339(),
+                        event.event_id,
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        let ((conv, run), _dir) = setup();
+        let events_t1 = typed_turn_events(&run, "t1");
+        // Second turn carries the next sequence range so the recovery query
+        // (event_sequence > watermark) still sees it as unprojected.
+        let events_t2: Vec<RunEventV2> = typed_turn_events(&run, "t2")
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut e)| {
+                e.sequence += 7;
+                e.run_sequence += 7;
+                e.global_sequence += 7;
+                e.event_id = format!("evt-{run}-{}", 8 + i as u64);
+                e
+            })
+            .collect();
+        // First projection succeeds fully and is durable in the log.
+        seed(&run, &events_t1);
+        assert_eq!(
+            project_run_from_events(&conv, &run, &events_t1)
+                .unwrap()
+                .projected,
+            1
+        );
+        let baseline = conversation_store::load_agent_messages(&conv).unwrap();
+        // Add the second turn, then inject a fault at its message insert.
+        seed(&run, &events_t2);
+        {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER proj_test_fk_fail2 BEFORE INSERT ON message_block
+                 BEGIN
+                     SELECT RAISE(ABORT, 'FOREIGN KEY constraint failed');
+                 END;",
+            )
+            .unwrap();
+        }
+        let mut events2 = events_t1.clone();
+        events2.extend(events_t2);
+        let failure = project_run_from_events(&conv, &run, &events2).unwrap_err();
+        assert!(
+            !failure.retryable || failure.message.contains("constraint"),
+            "an FK-style abort is a fatal failure, got: {failure}"
+        );
+        let after_failure = conversation_store::load_agent_messages(&conv).unwrap();
+        assert_eq!(
+            baseline, after_failure,
+            "the failed second turn must not alter the transcript"
+        );
+        // Restart (fault cleared): recovery completes the second turn.
+        {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            conn.execute_batch("DROP TRIGGER proj_test_fk_fail2;")
+                .unwrap();
+        }
+        assert_eq!(
+            recover_projections().unwrap().total_projected,
+            1,
+            "restart re-projects the failed turn"
+        );
+        assert_eq!(
+            conversation_store::load_agent_messages(&conv)
+                .unwrap()
+                .len(),
+            baseline.len() + 2,
+            "second turn materialized after restart"
+        );
     }
 }

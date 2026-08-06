@@ -2883,7 +2883,7 @@ pub async fn handle_rpc(
         // Method disposition: known→unsupported, unknown→unsupported (invalid only for bad shape).
         // promptQueue.* is handled above via prompt_queue_store (daemon DB + harness).
         "run.rewindPreview" | "run.rewind" | "workspace.restorePreview" | "workspace.restore" => {
-            match handle_rewind_rpc(&request.method, &request.params) {
+            match handle_rewind_rpc(&request.method, &request.params).await {
                 Ok(value) => {
                     send_success(
                         writer,
@@ -3260,7 +3260,7 @@ fn discover_agent_profiles(project_root: Option<&std::path::Path>) -> Vec<serde_
         .collect()
 }
 
-fn handle_rewind_rpc(
+async fn handle_rewind_rpc(
     method: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -3332,7 +3332,9 @@ fn handle_rewind_rpc(
             }))
         }
         "workspace.restorePreview" => {
-            let preview = mgr.rewind_preview(run_id, &project_path, paths.as_deref())?;
+            let preview = mgr
+                .rewind_preview_async(run_id, &project_path, paths.as_deref())
+                .await?;
             let mut value = serde_json::to_value(preview)
                 .map_err(|e| format!("serialize restore preview: {e}"))?;
             if let Some(obj) = value.as_object_mut() {
@@ -3351,13 +3353,15 @@ fn handle_rewind_rpc(
                 .get("conflict_policy")
                 .and_then(|v| v.as_str())
                 .unwrap_or("fail");
-            let restored = mgr.workspace_restore(
-                run_id,
-                checkpoint_id,
-                &project_path,
-                paths.as_deref(),
-                policy,
-            )?;
+            let restored = mgr
+                .workspace_restore_async(
+                    run_id,
+                    checkpoint_id,
+                    &project_path,
+                    paths.as_deref(),
+                    policy,
+                )
+                .await?;
             // Restore audit event — does not alter old Run terminal status.
             crate::run_manager::global_run_manager().events().append(
                 run_id,

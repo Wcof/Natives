@@ -22,27 +22,28 @@ pub use harness_core::hooks::{
 #[serde(rename_all = "snake_case")]
 pub enum HookDecision {
     Allow,
-    Deny {
-        reason: String,
-    },
-    Modify {
-        payload: Value,
-    },
-    Inject {
-        messages: Vec<String>,
-    },
-    /// Historical variant with **no engine implementation**.
-    ///
-    /// Nothing constructs this any more: `parse_hook_stdout` used to turn
-    /// `{"decision":"rewake"}` into it and the engine matched it into an empty
-    /// arm, so a hook asking to resume a finished Run was silently discarded.
-    /// A promise the runtime does not keep is worse than a missing feature, so
-    /// the producer was removed and `rewake` is now refused out loud (see
-    /// `hook_handlers::parse_hook_stdout`).
-    ///
-    /// The variant itself survives only so the engine's match arm keeps
-    /// compiling while the removal is coordinated; do not add producers.
-    Rewake,
+    Deny { reason: String },
+    Modify { payload: Value },
+    Inject { messages: Vec<String> },
+}
+
+/// The only result an observation-only (post-event) hook may produce.
+///
+/// `PostToolUse`, `PostToolUseFailure` and `PostCompact` fire AFTER the outcome
+/// they observe is already committed (the tool executed, the context
+/// compacted). The engine has no channel to rewrite that outcome, so the
+/// contract is frozen: a post hook observes, and any decision that claims to
+/// alter the outcome (`Deny`/`Modify`/`Inject`) is refused at the dispatch
+/// boundary instead of silently ignored (T03).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserveResult {
+    /// The hook observed the committed outcome and raises no objection.
+    Observe,
+    /// The hook refused to observe (infrastructure failure) or returned a
+    /// decision the post-event contract cannot honour; the caller fails the
+    /// run loudly rather than dropping the objection.
+    Failed { reason: String },
 }
 
 /// What a hook wants to happen to a permission prompt.
@@ -385,6 +386,38 @@ impl HookRegistry {
             .into_iter()
             .map(HookOutcome::into_response)
             .collect()
+    }
+
+    /// Dispatch an observation-only post event (PostToolUse, PostToolUseFailure,
+    /// PostCompact). The observed outcome is immutable, so the only accepted
+    /// decision is `Allow`; a hook that returns anything else is refused loudly
+    /// (T03) — the caller fails the run rather than silently ignoring the hook's
+    /// objection. Infrastructure failures were already resolved through each
+    /// hook's failure policy by [`Self::dispatch_outcomes`].
+    pub async fn observe(&self, request: HookRequest) -> Result<(), ObserveResult> {
+        for outcome in self.dispatch_outcomes(request).await {
+            match outcome {
+                HookOutcome::Decided(HookResponse {
+                    decision: HookDecision::Allow,
+                })
+                | HookOutcome::Permission(_) => {}
+                HookOutcome::Decided(HookResponse { decision }) => {
+                    return Err(ObserveResult::Failed {
+                        reason: format!(
+                            "post-event hook returned {decision:?}, which cannot be honoured \
+                             after the observed outcome is committed; refusing loudly instead \
+                             of silently ignoring"
+                        ),
+                    });
+                }
+                HookOutcome::Failed { reason } => {
+                    return Err(ObserveResult::Failed {
+                        reason: format!("post-event hook observation failed: {reason}"),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Aggregate: any Deny wins (fail-closed for PreToolUse / PermissionRequest).
@@ -1081,5 +1114,87 @@ mod tests {
             .await;
         assert_eq!(responses.len(), 1);
         assert!(matches!(responses[0].decision, HookDecision::Deny { .. }));
+    }
+
+    // ---- post-event observation-only contract (T03) ------------------------
+
+    /// A post hook that only observes (Allow) must not disturb the run.
+    #[tokio::test]
+    async fn observe_accepts_allow_and_permission() {
+        let mut reg = HookRegistry::new();
+        reg.register(HookEvent::PostToolUse, Box::new(AllowAllHook));
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "verdict", HookFailurePolicy::Fail),
+            Box::new(VerdictHook(PermissionVerdict::Allow {
+                reason: "observed".into(),
+            })),
+        );
+        assert!(reg.observe(request(HookEvent::PostToolUse)).await.is_ok());
+    }
+
+    /// A post hook that tries to deny an already-executed outcome must be
+    /// refused loudly, not silently dropped.
+    #[tokio::test]
+    async fn observe_refuses_deny_loudly() {
+        let mut reg = HookRegistry::new();
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "blocker", HookFailurePolicy::Fail),
+            Box::new(MatcherDenyHook {
+                tool_pattern: "*".into(),
+                reason: "too late to block".into(),
+            }),
+        );
+        let result = reg.observe(request(HookEvent::PostToolUse)).await;
+        match result {
+            Err(ObserveResult::Failed { reason }) => {
+                assert!(
+                    reason.contains("cannot be honoured"),
+                    "refusal must explain the contract, got: {reason}"
+                );
+            }
+            Err(ObserveResult::Observe) => {
+                unreachable!("observe() only errors with Failed")
+            }
+            Ok(()) => panic!("a Deny at a post event must not be silently observed"),
+        }
+    }
+
+    /// A post hook that tries to modify the input at a post point is refused the
+    /// same way — the outcome is immutable after the tool executed.
+    #[tokio::test]
+    async fn observe_refuses_modify_loudly() {
+        struct Modifier;
+        #[async_trait::async_trait]
+        impl HookHandler for Modifier {
+            async fn handle(&self, _: HookRequest) -> HookResponse {
+                HookResponse {
+                    decision: HookDecision::Modify {
+                        payload: serde_json::json!({"rewritten": true}),
+                    },
+                }
+            }
+        }
+        let mut reg = HookRegistry::new();
+        reg.register(HookEvent::PostToolUse, Box::new(Modifier));
+        assert!(reg.observe(request(HookEvent::PostToolUse)).await.is_err());
+    }
+
+    /// An infrastructure failure is resolved by the failure policy; a `Skip`
+    /// policy drops the hook entirely, so observation sees no objection.
+    #[tokio::test]
+    async fn observe_resolves_failure_through_policy() {
+        let mut reg = HookRegistry::new();
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "broken", HookFailurePolicy::Skip),
+            Box::new(FailingHook),
+        );
+        assert!(reg.observe(request(HookEvent::PostToolUse)).await.is_ok());
+        // With Fail policy the resolved failure is a Deny -> refused loudly.
+        let mut reg = HookRegistry::new();
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "broken", HookFailurePolicy::Fail),
+            Box::new(FailingHook),
+        );
+        assert!(reg.observe(request(HookEvent::PostToolUse)).await.is_err());
     }
 }

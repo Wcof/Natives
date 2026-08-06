@@ -496,6 +496,12 @@ pub enum EngineError {
     /// code so a later resume never assumes a side effect it cannot prove.
     #[error("recovery_blocked: {0}")]
     RecoveryBlocked(String),
+    /// An observation-only post hook (PostToolUse / PostToolUseFailure /
+    /// PostCompact) returned a decision that cannot be honoured after the
+    /// observed outcome was committed. The refusal is surfaced loudly instead
+    /// of being silently ignored (T03).
+    #[error("hook_refused: {0}")]
+    HookRefused(String),
 }
 
 impl EngineError {
@@ -507,6 +513,7 @@ impl EngineError {
             Self::MaxSteps => "max_steps",
             Self::Message(_) => "provider",
             Self::RecoveryBlocked(_) => "recovery_blocked",
+            Self::HookRefused(_) => "hook_refused",
         }
     }
 
@@ -890,6 +897,10 @@ impl AgentEngine {
             .run_inner(config, provider, tools, tool_schemas, typed_transcript)
             .await;
         if let Err(error) = &result {
+            // Terminal telemetry: the run already failed; a hook decision here
+            // cannot be honoured, and the outcome must not be re-decided by a
+            // telemetry event. The frozen post-contract (T03) therefore treats
+            // Error as observation-only and records rather than acts.
             let _ = self
                 .hooks
                 .dispatch(HookRequest {
@@ -903,6 +914,9 @@ impl AgentEngine {
                 })
                 .await;
         }
+        // Terminal telemetry: the session is over, so a decision cannot alter
+        // the committed outcome. Observation-only by the frozen post-contract
+        // (T03); the dispatch result is intentionally dropped.
         let _ = self
             .hooks
             .dispatch(HookRequest {
@@ -2024,15 +2038,22 @@ impl AgentEngine {
                     } else {
                         HookEvent::PostToolUse
                     };
-                    let _ = self
-                        .hooks
-                        .dispatch(HookRequest {
+                    self.hooks
+                        .observe(HookRequest {
                             event: post_event,
                             run_id: run_id.to_string(),
                             tool_name: Some(call.name.clone()),
                             input: json!({ "input": call.input, "output": result.output }),
                         })
-                        .await;
+                        .await
+                        .map_err(|refusal| match refusal {
+                            crate::hooks::ObserveResult::Failed { reason } => {
+                                EngineError::HookRefused(reason)
+                            }
+                            crate::hooks::ObserveResult::Observe => {
+                                EngineError::HookRefused("post-hook observation failed".into())
+                            }
+                        })?;
                     let result_message_id = crate::MessageId::new().to_string();
                     if let Err(error) = self.append_critical(
                         run_id,
@@ -2094,15 +2115,22 @@ impl AgentEngine {
             } else {
                 HookEvent::PostToolUse
             };
-            let _ = self
-                .hooks
-                .dispatch(HookRequest {
+            self.hooks
+                .observe(HookRequest {
                     event: post_event,
                     run_id: run_id.to_string(),
                     tool_name: Some(call.name.clone()),
                     input: json!({ "input": call.input, "output": result.output }),
                 })
-                .await;
+                .await
+                .map_err(|refusal| match refusal {
+                    crate::hooks::ObserveResult::Failed { reason } => {
+                        EngineError::HookRefused(reason)
+                    }
+                    crate::hooks::ObserveResult::Observe => {
+                        EngineError::HookRefused("post-hook observation failed".into())
+                    }
+                })?;
             let result_message_id = crate::MessageId::new().to_string();
             if let Err(error) = self.append_critical(
                 run_id,
@@ -2160,7 +2188,7 @@ impl AgentEngine {
         let values = agent_messages_to_values(&messages);
         let compacted = self
             .maybe_compact_values(run_id, model, provider, values)
-            .await;
+            .await?;
         if compacted != agent_messages_to_values(&messages) {
             let summary_message_id = compacted.iter().find_map(|message| {
                 let content = message.get("content").and_then(Value::as_str)?;
@@ -2195,7 +2223,7 @@ impl AgentEngine {
         model: &str,
         provider: &dyn EngineProvider,
         messages: Vec<Value>,
-    ) -> Vec<Value> {
+    ) -> Result<Vec<Value>, EngineError> {
         let history_limit = self.history_compact_chars.unwrap_or(HISTORY_COMPACT_CHARS);
         let tool_limit = self.tool_output_max_chars.unwrap_or(TOOL_OUTPUT_MAX_CHARS);
         let before_chars: usize = messages
@@ -2206,9 +2234,9 @@ impl AgentEngine {
             // Still repair dangling pairs cheaply.
             let (fixed, repaired) = repair_dangling_tool_calls(&messages);
             if repaired == 0 {
-                return messages;
+                return Ok(messages);
             }
-            return fixed;
+            return Ok(fixed);
         }
 
         let pre_compact = self
@@ -2225,7 +2253,10 @@ impl AgentEngine {
             })
             .await;
         if HookRegistry::aggregate_allow(&pre_compact).is_err() {
-            return messages;
+            // PreCompact is a pre-event: a Deny aborts compaction (the
+            // transcript is returned untouched) — a deterministic, honest
+            // outcome, unlike the post-event observation points.
+            return Ok(messages);
         }
 
         let result = match self
@@ -2255,12 +2286,11 @@ impl AgentEngine {
             },
         );
 
-        // PostCompact carries the full compaction record. The dispatch result is
-        // intentionally ignored: HookDecision has no channel for writing history
-        // back, so a hook cannot (and must not appear to) alter the outcome.
-        let _ = self
-            .hooks
-            .dispatch(HookRequest {
+        // PostCompact is an observation point: the compaction already applied
+        // and a hook cannot rewind it. A hook that tries to alter the outcome
+        // (Deny/Modify/Inject) is refused loudly rather than silently ignored.
+        self.hooks
+            .observe(HookRequest {
                 event: HookEvent::PostCompact,
                 run_id: run_id.to_string(),
                 tool_name: None,
@@ -2274,9 +2304,15 @@ impl AgentEngine {
                     "summary": result.summary,
                 }),
             })
-            .await;
+            .await
+            .map_err(|refusal| match refusal {
+                crate::hooks::ObserveResult::Failed { reason } => EngineError::HookRefused(reason),
+                crate::hooks::ObserveResult::Observe => {
+                    EngineError::HookRefused("post-hook observation failed".into())
+                }
+            })?;
 
-        result.messages
+        Ok(result.messages)
     }
 
     /// Model-backed compaction: `Some` only when a usable summary came back.
@@ -2412,7 +2448,7 @@ fn apply_prompt_hook_responses(
             HookDecision::Inject { messages } => {
                 injected.extend(messages);
             }
-            HookDecision::Allow | HookDecision::Rewake => {}
+            HookDecision::Allow => {}
         }
     }
     Ok(injected)

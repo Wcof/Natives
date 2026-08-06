@@ -1150,7 +1150,8 @@ impl EngineToolRuntime for PermissionGatedTools {
         for trusted in &trusted_paths {
             if let Err(error) = self
                 .checkpoint_manager()
-                .capture_before(&self.parent_run_id, trusted)
+                .capture_before_async(&self.parent_run_id, trusted)
+                .await
             {
                 return ToolExecutionResult {
                     output: serde_json::json!({
@@ -1218,7 +1219,8 @@ impl EngineToolRuntime for PermissionGatedTools {
                 for trusted in &trusted_paths {
                     if let Err(error) = self
                         .checkpoint_manager()
-                        .capture_after(&self.parent_run_id, trusted)
+                        .capture_after_async(&self.parent_run_id, trusted)
+                        .await
                     {
                         checkpoint_error = Some(error);
                         break;

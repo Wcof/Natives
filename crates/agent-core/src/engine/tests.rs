@@ -3128,3 +3128,145 @@ fn engine_public_types_have_expected_sizes() {
     assert!(size_of::<ToolExecutionResult>() > 0);
     assert!(size_of::<ToolProgressUpdate>() > 0);
 }
+
+#[tokio::test]
+async fn post_tool_use_deny_fails_run_loudly() {
+    // T03: a PostToolUse hook that denies after the tool already executed must
+    // fail the run with a `hook_refused` error — never be silently ignored.
+    struct DenyPostHook;
+    #[async_trait::async_trait]
+    impl crate::hooks::HookHandler for DenyPostHook {
+        async fn handle(&self, _: HookRequest) -> crate::hooks::HookResponse {
+            crate::hooks::HookResponse {
+                decision: HookDecision::Deny {
+                    reason: "too late to block".into(),
+                },
+            }
+        }
+    }
+    let mut hooks = HookRegistry::new();
+    hooks.register(HookEvent::PostToolUse, Box::new(DenyPostHook));
+    let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+    let provider = FakeProvider {
+        rounds: Mutex::new(vec![
+            vec![
+                EngineProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("post-deny-1".into()),
+                    name: Some("echo".into()),
+                    arguments_delta: r#"{"ok":true}"#.into(),
+                },
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::ToolUse,
+                },
+            ],
+            vec![
+                EngineProviderEvent::TextDelta("done".into()),
+                EngineProviderEvent::Completed,
+            ],
+        ]),
+    };
+    let run_id = format!("post-deny-{}", uuid::Uuid::new_v4());
+    let error = engine
+        .run(
+            EngineRunConfig {
+                run_id: run_id.clone(),
+                conversation_id: "post-deny-conversation".into(),
+                model: "m".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "use echo".into(),
+                max_steps: 3,
+            },
+            &provider,
+            &FakeTools,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "hook_refused");
+    assert!(
+        error.to_string().contains("cannot be honoured"),
+        "the refusal must explain the post-event contract: {error}"
+    );
+    // The refusal aborts BEFORE the completion fact is appended, so the tool's
+    // effect stays unsettled (the ledger/resume gate treats it as uncertain —
+    // fail-closed, never replay-safe).
+    let completed: Vec<_> = engine
+        .events
+        .replay_after(&run_id, 0)
+        .into_iter()
+        .filter(|event| matches!(event.payload, RunEventKind::ToolCallCompleted { .. }))
+        .collect();
+    assert_eq!(
+        completed.len(),
+        0,
+        "a refused post hook must not settle the tool's effect"
+    );
+}
+
+#[tokio::test]
+async fn post_tool_use_observe_continues_run() {
+    // T03: an observation-only PostToolUse hook (Allow) must not disturb the
+    // run; the follow-up turn still completes.
+    struct ObservePostHook;
+    #[async_trait::async_trait]
+    impl crate::hooks::HookHandler for ObservePostHook {
+        async fn handle(&self, _: HookRequest) -> crate::hooks::HookResponse {
+            crate::hooks::HookResponse {
+                decision: HookDecision::Allow,
+            }
+        }
+    }
+    let mut hooks = HookRegistry::new();
+    hooks.register(HookEvent::PostToolUse, Box::new(ObservePostHook));
+    let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+    let provider = FakeProvider {
+        rounds: Mutex::new(vec![
+            vec![
+                EngineProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("post-obs-1".into()),
+                    name: Some("echo".into()),
+                    arguments_delta: r#"{"ok":true}"#.into(),
+                },
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::ToolUse,
+                },
+            ],
+            vec![
+                EngineProviderEvent::TextDelta("after observe".into()),
+                EngineProviderEvent::Completed,
+            ],
+        ]),
+    };
+    let run_id = format!("post-obs-{}", uuid::Uuid::new_v4());
+    engine
+        .run(
+            EngineRunConfig {
+                run_id: run_id.clone(),
+                conversation_id: "post-obs-conversation".into(),
+                model: "m".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "use echo".into(),
+                max_steps: 3,
+            },
+            &provider,
+            &FakeTools,
+        )
+        .await
+        .unwrap();
+    let text: Vec<_> = engine
+        .events
+        .replay_after(&run_id, 0)
+        .into_iter()
+        .filter_map(|event| match event.payload {
+            RunEventKind::TextDelta { text } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        text.iter().any(|t| t.contains("after observe")),
+        "the run must continue past an observing post hook"
+    );
+}
