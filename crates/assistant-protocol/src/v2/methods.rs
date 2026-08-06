@@ -163,6 +163,10 @@ pub const ALL_METHODS: &[&str] = &[
     "conversation.getCapabilities",
     // Local-creative AI analysis (P0): Host → Daemon controlled provider call.
     "creative.local.analyze",
+    // Creative proposal facts (T06): the Daemon persists a typed proposal fact
+    // when a `creative_proposal` tool call completes; the Host pulls pending
+    // facts over UDS to validate and persist its pending approval inbox.
+    "proposal.listPending",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -325,6 +329,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "conversation.updateCapabilities",
     "conversation.getCapabilities",
     "creative.local.analyze",
+    "proposal.listPending",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -529,6 +534,7 @@ pub mod names {
     pub const CONVERSATION_UPDATE_CAPABILITIES: &str = "conversation.updateCapabilities";
     pub const CONVERSATION_GET_CAPABILITIES: &str = "conversation.getCapabilities";
     pub const CREATIVE_LOCAL_ANALYZE: &str = "creative.local.analyze";
+    pub const PROPOSAL_LIST_PENDING: &str = "proposal.listPending";
 }
 
 /// Every advertised Harness method, in the order the design lists them.

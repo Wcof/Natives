@@ -688,6 +688,10 @@ export type AssistantMethod =
   | 'conversation.getCapabilities'
   // Local-creative AI analysis (P0): Host → Daemon controlled provider call.
   | 'creative.local.analyze'
+  // Creative proposal facts (T06): the Daemon persists a typed proposal fact
+  // when a `creative_proposal` tool call completes and the Host pulls pending
+  // facts over UDS to validate and persist its pending approval inbox.
+  | 'proposal.listPending'
   // Harness control plane (Native execution engine). Read surface first, then
   // the Draft → Validate → Diff → Publish → Rollback lifecycle, bindings, and
   // the per-Run evidence lookup.
@@ -732,4 +736,63 @@ export interface CapabilitySelection {
   mcp_servers?: string[];
   expert_id?: string | null;
   team_id?: string | null;
+}
+
+// ─── Creative proposal (T06) ─────────────────────────────────────────
+//
+// Wire types for the proposal fact bridge (Daemon → Host over UDS). Field
+// names mirror the Rust `crates/assistant-protocol/src/v2/creative.rs`
+// serde(camelCase) serialization — `environmentKeys`, never `envKeys`. The
+// proposal payload must NOT carry a trusted `approved` flag or an
+// authoritative executable hash: the Host recomputes file identity and records
+// approval at the user's explicit action.
+
+export type CreativeProposalDriver =
+  | {
+      kind: 'python';
+      schemaVersion: number;
+      interpreter: string;
+      entry: string;
+      args: string[];
+      cwdRelative: string;
+      environmentKeys: string[];
+      openPath: string;
+      healthPath: string;
+      startupTimeoutMs: number;
+    }
+  | {
+      kind: 'binary';
+      schemaVersion: number;
+      executablePath: string;
+      args: string[];
+      cwdRelative: string;
+      environmentKeys: string[];
+      openPath: string;
+      healthPath: string;
+      startupTimeoutMs: number;
+    }
+  | { kind: 'staticHttp' }
+  | { kind: 'compose'; command?: string[] | null; privileged: boolean };
+
+export interface CreativeProposalPayload {
+  schemaVersion: number;
+  kind: 'create' | 'start';
+  ownership: 'managed' | 'attached' | 'remote';
+  title: string;
+  projectRoot: string;
+  driver: CreativeProposalDriver;
+  openPath: string;
+  healthPath: string;
+  environmentKeys: string[];
+}
+
+/** Stable proposal fact: Daemon-generated id + run/turn/tool-call lineage. */
+export interface CreativeProposalEnvelope {
+  proposalId: string;
+  envelopeVersion: number;
+  runId: string;
+  turnId?: string | null;
+  toolCallId: string;
+  createdAt: string;
+  payload: CreativeProposalPayload;
 }

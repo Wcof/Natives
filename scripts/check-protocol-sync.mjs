@@ -121,6 +121,20 @@ for (const s of ['waiting_permission', 'waiting_subagent', 'cancelling', 'interr
   if (!typesSrc.includes(`'${s}'`)) fail(`TS RunStatus missing ${s}`);
 }
 
+// Creative proposal field contract (T06): the wire payload must use the Rust
+// serde(camelCase) name `environmentKeys`. A hand-written `envKeys` twin
+// silently drops the field at runtime (Rust serializes one, TS reads the
+// other) — the original bug this gate exists to prevent.
+if (!typesSrc.includes('environmentKeys')) {
+  fail('TS CreativeProposalPayload must declare environmentKeys (Rust serde camelCase)');
+}
+if (/\benvKeys\s*[:;,]/.test(typesSrc)) {
+  fail('TS proposal types must use environmentKeys, never envKeys (field silently drops otherwise)');
+}
+if (!typesSrc.includes('proposalId')) {
+  fail('TS CreativeProposalEnvelope must declare proposalId (stable Daemon-generated id)');
+}
+
 console.log('[protocol-sync] OK — TS types aligned with assistant-protocol core surface');
 console.log(`[protocol-sync] Rust methods catalogued: ${rustMethods.size}`);
 process.exit(0);

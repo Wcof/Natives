@@ -1967,6 +1967,39 @@ pub async fn handle_rpc(
                 }
             }
         }
+        names::PROPOSAL_LIST_PENDING => {
+            // T06: serve pending proposal facts to the Host. The Host pulls
+            // these over UDS, validates each, and persists its approval inbox.
+            // A fact is only served while its status is `pending`, so a decided
+            // fact is never re-served after a Host restart.
+            let store = crate::run_manager::global_run_manager()
+                .data_store_ref()
+                .ok_or_else(|| "no data store available for proposal facts".to_string());
+            match store.and_then(|s| crate::proposal_fact::list_pending_proposal_facts(&s)) {
+                Ok(facts) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        serde_json::json!({ "proposals": facts }),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INTERNAL_ERROR,
+                            ErrorCategory::Internal,
+                            true,
+                            format!("proposal.listPending: {e}"),
+                        ),
+                    )
+                    .await;
+                }
+            }
+        }
         names::MCP_LIST => {
             let mcp = crate::mcp_runtime::global_mcp();
             let servers = mcp.list_servers();
