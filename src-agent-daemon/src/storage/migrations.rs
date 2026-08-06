@@ -51,6 +51,7 @@ pub const ALL: &[(i64, &str)] = &[
     (33, MIGRATION_033),
     (34, MIGRATION_034),
     (35, MIGRATION_035),
+    (36, MIGRATION_036),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1211,8 +1212,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_side_effect_run_sequence
 /// proposal fact here — durable across restart, so the Host can pull pending
 /// facts over UDS and rebuild its approval inbox even after the daemon or the
 /// Host restarted. `proposal_id` is the stable Daemon-generated id (never
-/// agent-supplied); `status` tracks the fact lifecycle (pending/approved/
-/// rejected/expired/failed) so a fact is never re-served after it is decided.
+/// agent-supplied); `status` tracks the fact lifecycle (pending/approved//// rejected/expired/failed) so a fact is never re-served after it is decided.
 const MIGRATION_035: &str = "
 CREATE TABLE IF NOT EXISTS creative_proposal_fact (
     proposal_id TEXT PRIMARY KEY,
@@ -1226,6 +1226,34 @@ CREATE TABLE IF NOT EXISTS creative_proposal_fact (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_proposal_fact_status ON creative_proposal_fact(status);
+";
+
+/// Migration 036 (T05): durable subagent budget / reservation ledger.
+///
+/// Reservation lifecycle, used tokens/cost, max budgets, failure policy,
+/// retry accounting, and the spawn-time scope snapshot all live on the
+/// `subagent_session` row so a daemon restart restores them exactly. The
+/// `reservation_released` flag makes slot release exactly-once (a terminal
+/// child or a restart marks it, never twice). `scope_snapshot_json` is the
+/// full spawn-time scope for tightening checks on route restarts.
+const MIGRATION_036: &str = "
+ALTER TABLE subagent_session ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE subagent_session ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+ALTER TABLE subagent_session ADD COLUMN max_tokens INTEGER;
+ALTER TABLE subagent_session ADD COLUMN max_cost_usd REAL;
+ALTER TABLE subagent_session ADD COLUMN failure_policy TEXT NOT NULL DEFAULT 'isolate';
+ALTER TABLE subagent_session ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE subagent_session ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE subagent_session ADD COLUMN reservation_released INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE subagent_session ADD COLUMN reserved_at TEXT;
+ALTER TABLE subagent_session ADD COLUMN released_at TEXT;
+ALTER TABLE subagent_session ADD COLUMN tree_root_run_id TEXT;
+ALTER TABLE subagent_session ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE subagent_session ADD COLUMN scope_snapshot_json TEXT NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_subagent_session_reservation
+    ON subagent_session(parent_run_id, reservation_released);
+CREATE INDEX IF NOT EXISTS idx_subagent_session_tree_usage
+    ON subagent_session(tree_root_run_id, reservation_released);
 ";
 
 #[cfg(test)]
