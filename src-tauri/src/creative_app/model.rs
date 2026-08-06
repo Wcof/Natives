@@ -1148,7 +1148,8 @@ pub struct RuntimeEndpoint {
 }
 
 /// A window instance is a Tauri WebView (or WebviewWindow) that displays
-/// a surface. Each window maps 1:1 to a Tauri WebView object.
+/// a surface. Each window maps 1:1 to a Tauri WebView object; the WebView
+/// label is derived from the window id (`creative-window-{id}`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowInstance {
@@ -1158,12 +1159,22 @@ pub struct WindowInstance {
     /// The runtime instance this window is bound to, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_instance_id: Option<String>,
-    /// Tauri WebView label, e.g. "creative-app-my-app".
+    /// Tauri WebView label, e.g. "creative-window-{windowId}".
     pub label: String,
     /// Window state: open, minimized, closed, background.
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds_json: Option<String>,
+    /// Content URL the window is currently showing (NULL when closed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Reconcile/operation detail so the UI can show why a window is closed
+    /// (honest state — never a fabricated value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Reconcile outcome: "ok" | "missing" | "orphaned".
+    #[serde(default)]
+    pub reconcile_state: String,
     pub created_at: String,
     pub updated_at: String,
 }

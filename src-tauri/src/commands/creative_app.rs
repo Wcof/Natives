@@ -15,10 +15,11 @@ use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
 use crate::creative_app::surface_store;
+use crate::creative_app::window;
 use crate::db::DbPool;
 use crate::emit_db_state_changed;
 use crate::{Error, Result};
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::AppState;
 
@@ -90,6 +91,25 @@ fn operation_application_id(conn: &rusqlite::Connection, id: &str) -> Option<Str
             .ok()
             .flatten()
     })
+}
+
+/// Resolve the unified application identity for a source row (read-only).
+/// Returns a typed error when the app is not registered.
+fn resolve_application_id(conn: &rusqlite::Connection, app_id: &str) -> Result<String> {
+    let source = adapters::resolve(conn, app_id)?;
+    runtime_store::application_id_for(conn, source.as_source(), app_id)?
+        .ok_or_else(|| Error::InvalidInput("app has no registered identity".into()))
+}
+
+/// WebView labels of every non-closed window of an application (window-id labels).
+fn open_window_labels(conn: &rusqlite::Connection, application_id: &str) -> Result<Vec<String>> {
+    let mut labels = Vec::new();
+    for w in surface_store::list_windows(conn, application_id)? {
+        if w.state != WindowInstance::STATE_CLOSED {
+            labels.push(browser::window_label(&w.id));
+        }
+    }
+    Ok(labels)
 }
 
 /// Redacted input snapshot for the journal. Never stores env values or secrets.
@@ -257,6 +277,7 @@ pub async fn creative_app_stop(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
 ) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
@@ -305,7 +326,19 @@ pub async fn creative_app_stop(
 
     match result {
         Ok(summary) => {
-            let c = conn(&pool)?;
+            let mut c = conn(&pool)?;
+            // T07: a stopped runtime has no live preview — close its windows so
+            // the UI never shows dead content (offline policy). A window-close
+            // failure must not hide the successful stop; the next reconcile
+            // sweep closes any leftover orphaned WebView.
+            if let Ok(application_id) = resolve_application_id(&c, &id) {
+                let gw = window::RealWebviewGateway::new(&ctx.app, &browser);
+                if let Err(e) =
+                    window::WindowController::close_app_windows(&gw, &mut c, &application_id)
+                {
+                    eprintln!("warning: close windows after stop failed: {e}");
+                }
+            }
             settle_success(&ctx.app, &c, op_id)?;
             Ok(MutationResult {
                 operation_id: op_id,
@@ -331,13 +364,11 @@ pub async fn creative_app_delete(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-    browser: State<'_, BrowserStateHandle>,
 ) -> Result<DeleteMutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let browser = browser.inner();
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
     let opts = options.unwrap_or_default();
 
@@ -367,7 +398,7 @@ pub async fn creative_app_delete(
         let ctx_inner = ctx.clone();
         tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Handle::current();
-            let c = conn(&pool_inner)?;
+            let mut c = conn(&pool_inner)?;
             journal(
                 &app,
                 &c,
@@ -375,6 +406,15 @@ pub async fn creative_app_delete(
                 &[op::PHASE_WAITING, op::PHASE_PENDING],
                 op::PHASE_RUNNING,
             )?;
+            // T07: prove every child WebView is closed before the app references
+            // are removed. A close failure keeps the delete failed so resources
+            // are never silently orphaned. The app identity is resolved from the
+            // still-present source row; window rows cascade-delete with it.
+            if let Ok(application_id) = resolve_application_id(&c, &id_inner) {
+                let browser_state = app.state::<BrowserStateHandle>();
+                let gw = window::RealWebviewGateway::new(&app, browser_state.inner());
+                window::WindowController::close_app_windows(&gw, &mut c, &application_id)?;
+            }
             rt.block_on(adapters::facade::delete(
                 &c, &ctx_inner, &id_inner, opts_inner,
             ))
@@ -385,16 +425,10 @@ pub async fn creative_app_delete(
 
     match result {
         Ok(delete_result) => {
-            // CR-303: a delete must not leave a child WebView showing the removed
-            // app — close it when it was showing this app (audit #09).
-            let showing = browser::browser_current(browser, &id)
-                .ok()
-                .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
-            if showing.as_deref() == Some(id.as_str()) {
-                let _ = browser::browser_close(&ctx.app, browser, &id);
-            }
             // On success the application row is gone; the operation survives with
-            // application_id NULL via the FK (audit trail).
+            // application_id NULL via the FK (audit trail). Window rows are
+            // cascade-deleted with the application; any orphaned WebView is
+            // closed by the reconcile sweep on the next Host start.
             let c = conn(&pool)?;
             settle_success(&ctx.app, &c, op_id)?;
             Ok(DeleteMutationResult {
@@ -680,7 +714,13 @@ pub async fn creative_app_reconcile(
         ))?;
         let docker_n = rt.block_on(install::reconcile_all(&c, Some(&handle)))? as u32;
         let local_n = local::lifecycle::reconcile_local_apps(&c, Some(&handle))?;
-        Ok(docker_n.saturating_add(local_n).saturating_add(exits))
+        // T07: also sweep windows vs real child WebViews (missing → closed,
+        // orphaned → closed) so a manual reconcile converges window truth too.
+        let window_n = crate::creative_app::window::reconcile_all(&handle, &c)?;
+        Ok(docker_n
+            .saturating_add(local_n)
+            .saturating_add(exits)
+            .saturating_add(window_n))
     })
     .await
     .map_err(|e| Error::Internal(format!("reconcile join: {e}")))?
@@ -724,29 +764,23 @@ pub fn creative_app_browser_show(
     app_handle: tauri::AppHandle,
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
-) -> Result<()> {
-    // CR-303: never show a preview for an app without an active running
-    // instance — a stopped app's URL must not become visible in a WebView.
-    let active_instance = {
-        let c = conn(&state.db)?;
-        let source = adapters::resolve(&c, &app_id)?;
-        let app_identity = runtime_store::application_id_for(&c, source.as_source(), &app_id)?
-            .ok_or_else(|| Error::InvalidInput("app has no registered identity".into()))?;
-        runtime_store::active_instance_id(&c, &app_identity)?
-            .ok_or_else(|| Error::InvalidInput("app is not running; cannot open preview".into()))?
-    };
-    // External action first: show the WebView. A show failure must not leave a
-    // DB preview bind behind (audit #02: DB / BrowserState must not diverge).
-    browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)?;
-    // Commit the preview bind; on DB failure compensate by hiding the WebView.
-    let c = conn(&state.db)?;
-    if let Err(e) =
-        runtime_store::upsert_preview_target(&c, &active_instance, &url, "child_webview")
-    {
-        let _ = browser::browser_hide(&app_handle, &app_id);
-        return Err(e);
-    }
-    Ok(())
+) -> Result<WindowInstance> {
+    // T07: preview opens go through the WindowController (single window
+    // authority) — journal → WebView show → verify → Window/Preview commit.
+    let mut c = conn(&state.db)?;
+    let application_id = resolve_application_id(&c, &app_id)?;
+    let surface_id = surface_store::find_main_surface(&c, &application_id)?
+        .ok_or_else(|| Error::Internal(format!("no main surface for app {application_id}")))?;
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::open(
+        &gw,
+        &mut c,
+        &app_id,
+        &application_id,
+        &surface_id,
+        &url,
+        bounds,
+    )
 }
 
 #[tauri::command]
@@ -754,28 +788,80 @@ pub fn creative_app_browser_set_bounds(
     app_id: String,
     bounds: BrowserBounds,
     app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<()> {
-    browser::browser_set_bounds(&app_handle, &app_id, bounds)
+    let c = conn(&state.db)?;
+    // A deleted app has no window rows to resize; ResizeObserver callbacks can
+    // fire after delete, so a missing identity is a no-op, not an error.
+    let Some(application_id) = resolve_application_id(&c, &app_id).ok() else {
+        return Ok(());
+    };
+    for label in open_window_labels(&c, &application_id)? {
+        browser::browser_set_bounds(&app_handle, &label, bounds.clone())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn creative_app_browser_back(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_back(&app_handle, &app_id)
+pub fn creative_app_browser_back(
+    app_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    let Some(application_id) = resolve_application_id(&c, &app_id).ok() else {
+        return Ok(());
+    };
+    for label in open_window_labels(&c, &application_id)? {
+        browser::browser_back(&app_handle, &label)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn creative_app_browser_forward(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_forward(&app_handle, &app_id)
+pub fn creative_app_browser_forward(
+    app_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    let Some(application_id) = resolve_application_id(&c, &app_id).ok() else {
+        return Ok(());
+    };
+    for label in open_window_labels(&c, &application_id)? {
+        browser::browser_forward(&app_handle, &label)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn creative_app_browser_reload(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_reload(&app_handle, &app_id)
+pub fn creative_app_browser_reload(
+    app_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    let Some(application_id) = resolve_application_id(&c, &app_id).ok() else {
+        return Ok(());
+    };
+    for label in open_window_labels(&c, &application_id)? {
+        browser::browser_reload(&app_handle, &label)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn creative_app_browser_hide(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_hide(&app_handle, &app_id)
+pub fn creative_app_browser_hide(
+    app_id: String,
+    app_handle: tauri::AppHandle,
+    browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut c = conn(&state.db)?;
+    let application_id = resolve_application_id(&c, &app_id)?;
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::minimize_app_windows(&gw, &mut c, &application_id)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -785,22 +871,16 @@ pub fn creative_app_browser_close(
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // CR-303: close the WebView FIRST (external action); only on success clear
-    // the DB preview bind. A close failure must not lose the bind while the
-    // WebView is still open (audit #02).
-    browser::browser_close(&app_handle, &browser, &app_id)?;
-    // The `app_id` is passed from the frontend — clear the DB bind for this app.
-    if let Ok(c) = conn(&state.db) {
-        if let Ok(source) = adapters::resolve(&c, &app_id) {
-            if let Ok(Some(app_identity)) =
-                runtime_store::application_id_for(&c, source.as_source(), &app_id)
-            {
-                if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
-                    let _ = runtime_store::clear_preview_targets(&c, &iid);
-                }
-            }
-        }
-    }
+    // T07: close the app's real WebViews (missing → reconciled closed) and
+    // commit the closed state + clear the preview bind. When the app identity
+    // is already gone (deleted), its window rows are cascade-deleted with it
+    // and any orphaned WebView is the reconcile sweep's job — nothing to close.
+    let mut c = conn(&state.db)?;
+    let Some(application_id) = resolve_application_id(&c, &app_id).ok() else {
+        return Ok(());
+    };
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::close_app_windows(&gw, &mut c, &application_id)?;
     Ok(())
 }
 
@@ -808,8 +888,19 @@ pub fn creative_app_browser_close(
 pub fn creative_app_browser_current(
     app_id: String,
     browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
 ) -> Result<serde_json::Value> {
-    browser::browser_current(&browser, &app_id)
+    let c = conn(&state.db)?;
+    let Ok(application_id) = resolve_application_id(&c, &app_id) else {
+        return Ok(serde_json::json!({ "appId": null, "url": null }));
+    };
+    for label in open_window_labels(&c, &application_id)? {
+        let v = browser::browser_current(&browser, &label)?;
+        if v.get("url").and_then(|u| u.as_str()).is_some() {
+            return Ok(v);
+        }
+    }
+    Ok(serde_json::json!({ "appId": null, "url": null }))
 }
 
 /// List all surfaces for the given application (CR-501).
@@ -832,48 +923,71 @@ pub fn creative_app_window_list(
     surface_store::list_windows(&c, &application_id)
 }
 
-/// Open a window for the given application (CR-501).
-/// Creates a window instance if one doesn't exist for the surface.
+/// Open a window for the given application surface (CR-501, T07).
+/// Requires the app to be running; drives the real WebView and commits the
+/// Window / Preview bind through the WindowController.
 #[tauri::command]
 pub fn creative_app_window_open(
     application_id: String,
     surface_id: String,
-    label: String,
+    url: String,
+    bounds: BrowserBounds,
+    app_handle: tauri::AppHandle,
+    browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<WindowInstance> {
-    let c = conn(&state.db)?;
-    // Check if a window with this label already exists
-    if let Some(existing) = surface_store::find_window_by_label(&c, &label)? {
-        // Re-open it
-        surface_store::update_window_state(&c, &existing.id, WindowInstance::STATE_OPEN)?;
-        return Ok(existing);
-    }
-    let wid = surface_store::create_window(&c, &application_id, &surface_id, None, &label)?;
-    let w = surface_store::find_window_by_label(&c, &label)?
-        .ok_or_else(|| Error::Internal("window vanished after create".into()))?;
-    surface_store::update_window_state(&c, &wid, WindowInstance::STATE_OPEN)?;
-    Ok(w)
+    let mut c = conn(&state.db)?;
+    let app_id = runtime_store::source_id_for_application(&c, &application_id)?
+        .ok_or_else(|| Error::InvalidInput("application has no source row".into()))?;
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::open(
+        &gw,
+        &mut c,
+        &app_id,
+        &application_id,
+        &surface_id,
+        &url,
+        bounds,
+    )
 }
 
-/// Close a window (CR-501).
+/// Close a window (CR-501, T07): close the real WebView then commit closed.
 #[tauri::command]
-pub fn creative_app_window_close(window_id: String, state: State<'_, AppState>) -> Result<()> {
-    let c = conn(&state.db)?;
-    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_CLOSED)
+pub fn creative_app_window_close(
+    window_id: String,
+    app_handle: tauri::AppHandle,
+    browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut c = conn(&state.db)?;
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::close(&gw, &mut c, &window_id)
 }
 
-/// Minimize a window (CR-501).
+/// Minimize a window (CR-501, T07): hide the real WebView then commit minimized.
 #[tauri::command]
-pub fn creative_app_window_minimize(window_id: String, state: State<'_, AppState>) -> Result<()> {
-    let c = conn(&state.db)?;
-    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_MINIMIZED)
+pub fn creative_app_window_minimize(
+    window_id: String,
+    app_handle: tauri::AppHandle,
+    browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut c = conn(&state.db)?;
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::minimize(&gw, &mut c, &window_id)
 }
 
-/// Restore a window (CR-501).
+/// Restore a window (CR-501, T07): re-show the real WebView then commit open.
 #[tauri::command]
-pub fn creative_app_window_restore(window_id: String, state: State<'_, AppState>) -> Result<()> {
-    let c = conn(&state.db)?;
-    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_OPEN)
+pub fn creative_app_window_restore(
+    window_id: String,
+    app_handle: tauri::AppHandle,
+    browser: State<'_, BrowserStateHandle>,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let mut c = conn(&state.db)?;
+    let gw = window::RealWebviewGateway::new(&app_handle, &browser);
+    window::WindowController::restore(&gw, &mut c, &window_id, None)
 }
 
 // ── Local project (third source) ───────────────────────────────────

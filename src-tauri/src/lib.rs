@@ -338,6 +338,12 @@ pub fn run() {
                                 // Renderer never sees an eternally-busy app (CR-201).
                                 let _ =
                                     crate::creative_app::operation::settle_stale_on_startup(&conn);
+                                // T07: reconcile DB windows vs real child WebViews —
+                                // a window whose WebView died with the old process is
+                                // explicitly marked missing/closed; a WebView with no
+                                // DB row is closed as an orphan. Never fabricates an
+                                // open state.
+                                let _ = crate::creative_app::window::reconcile_all(&handle, &conn);
                                 let _ = creative_app::install::reconcile_all(&conn, Some(&handle))
                                     .await;
                                 let _ = creative_app::local::lifecycle::reconcile_local_apps(

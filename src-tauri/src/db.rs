@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "22";
+pub const SCHEMA_VERSION: &str = "23";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1350,6 +1350,44 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         if let Err(e) = crate::creative_app::service_store::backfill_v22(conn) {
             eprintln!("warning: service backfill failed: {e}");
         }
+    }
+
+    // Migration v22→v23 (T07): window_instances gets URL + reconcile truth.
+    //
+    // url: the content URL a window is currently showing (NULL when closed).
+    // last_error: reconcile/operation detail so the UI can show why a window is
+    //   closed (honest state — never a fabricated value, R-F2).
+    // reconcile_state: 'ok' | 'missing' | 'orphaned' — explicit outcome of the
+    //   DB↔WebView reconcile sweep on Host restart.
+    if current_version < 23 {
+        let cols = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(window_instances)")
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(Error::Database)?;
+            rows.filter_map(|r| r.ok()).collect::<Vec<_>>()
+        };
+        if !cols.iter().any(|c| c == "url") {
+            conn.execute_batch("ALTER TABLE window_instances ADD COLUMN url TEXT;")
+                .map_err(Error::Database)?;
+        }
+        if !cols.iter().any(|c| c == "last_error") {
+            conn.execute_batch("ALTER TABLE window_instances ADD COLUMN last_error TEXT;")
+                .map_err(Error::Database)?;
+        }
+        if !cols.iter().any(|c| c == "reconcile_state") {
+            conn.execute_batch(
+                "ALTER TABLE window_instances ADD COLUMN reconcile_state TEXT NOT NULL DEFAULT 'ok';",
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23')",
+            [],
+        )
+        .map_err(Error::Database)?;
     }
 
     // Repair path for v9 tables when a database carries an advanced marker.
