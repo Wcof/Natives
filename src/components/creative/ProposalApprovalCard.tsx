@@ -8,15 +8,66 @@
 //! error; a success toast is only ever shown for a real success.
 
 import React, { useState } from 'react';
+import { Check, Copy } from 'lucide-react';
 import { useLocale, t } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
 import type { CreativeAppProposal } from '@/lib/tauri-adapter';
 
 export interface ProposalApprovalCardProps {
   proposal: CreativeAppProposal;
-  onApprove: (proposal: CreativeAppProposal) => Promise<void>;
-  onReject: (proposal: CreativeAppProposal) => Promise<void>;
+  /**
+   * Resolves `true` when the decision actually changed (approved). A duplicate
+   * `already_decided` event resolves `false` — the card must not toast a fresh
+   * success for a decision the host already settled. Failures reject.
+   */
+  onApprove: (proposal: CreativeAppProposal) => Promise<boolean>;
+  onReject: (proposal: CreativeAppProposal) => Promise<boolean>;
   onToast: (message: string) => void;
+}
+
+/** Long values are visually truncated but always fully copyable. */
+function CopyableValue({
+  value,
+  onToast,
+  dataAttr,
+}: {
+  value: string;
+  onToast: (message: string) => void;
+  dataAttr?: string;
+}) {
+  const locale = useLocale();
+  const [copied, setCopied] = useState(false);
+  const MAX = 160;
+  const truncated = value.length > MAX ? `${value.slice(0, MAX)}…` : value;
+  const copy = () => {
+    void window.nativesAPI?.clipboard
+      ?.write?.(value)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      })
+      .catch((err) => onToast(classifyError(err).userMessage));
+  };
+  return (
+    <span className="flex items-center gap-1 min-w-0" data-copyable-value>
+      <span
+        className="font-mono break-all text-right truncate"
+        title={value}
+        {...(dataAttr ? { [`data-${dataAttr}`]: true } : {})}
+      >
+        {truncated}
+      </span>
+      <button
+        type="button"
+        aria-label={`${t(locale, 'workshop.copyFullValue')} ${value}`}
+        title={t(locale, 'workshop.copyFullValue')}
+        onClick={copy}
+        className="shrink-0 p-0.5 rounded text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)]"
+      >
+        {copied ? <Check size={10} /> : <Copy size={10} />}
+      </button>
+    </span>
+  );
 }
 
 /** Human-readable driver summary for the card. */
@@ -71,8 +122,8 @@ export default function ProposalApprovalCard({
     setBusy(true);
     setError(null);
     try {
-      await onApprove(proposal);
-      onToast(t(locale, 'workshop.proposalApproved'));
+      const changed = await onApprove(proposal);
+      if (changed) onToast(t(locale, 'workshop.proposalApproved'));
     } catch (err) {
       // Failure keeps the proposal visible — never fake success.
       const classified = classifyError(err);
@@ -87,8 +138,8 @@ export default function ProposalApprovalCard({
     setBusy(true);
     setError(null);
     try {
-      await onReject(proposal);
-      onToast(t(locale, 'workshop.proposalRejected'));
+      const changed = await onReject(proposal);
+      if (changed) onToast(t(locale, 'workshop.proposalRejected'));
     } catch (err) {
       const classified = classifyError(err);
       setError(classified.userMessage);
@@ -128,22 +179,18 @@ export default function ProposalApprovalCard({
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.projectRoot')}</span>
-          <span className="text-[var(--text)] font-mono truncate" data-proposal-root>{proposal.projectRoot}</span>
+          <CopyableValue value={proposal.projectRoot} onToast={onToast} dataAttr="proposal-root" />
         </div>
         {executable && (
           <div className="flex justify-between gap-4">
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalExecutable')}</span>
-            <span className="text-[var(--text)] font-mono break-all text-right" data-proposal-executable>
-              {executable}
-            </span>
+            <CopyableValue value={executable} onToast={onToast} dataAttr="proposal-executable" />
           </div>
         )}
         {args && args.length > 0 && (
           <div className="flex justify-between gap-4">
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalArgs')}</span>
-            <span className="text-[var(--text)] font-mono break-all text-right" data-proposal-args>
-              {args.join(' ')}
-            </span>
+            <CopyableValue value={args.join(' ')} onToast={onToast} dataAttr="proposal-args" />
           </div>
         )}
         {proposal.driver.kind !== 'staticHttp' && (
@@ -169,9 +216,11 @@ export default function ProposalApprovalCard({
         {proposal.environmentKeys.length > 0 && (
           <div className="flex justify-between gap-4">
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalEnvKeys')}</span>
-            <span className="text-[var(--text)] font-mono" data-proposal-env-keys>
-              {proposal.environmentKeys.join(', ')}
-            </span>
+            <CopyableValue
+              value={proposal.environmentKeys.join(', ')}
+              onToast={onToast}
+              dataAttr="proposal-env-keys"
+            />
           </div>
         )}
         {proposal.driver.kind === 'compose' && proposal.driver.privileged && (

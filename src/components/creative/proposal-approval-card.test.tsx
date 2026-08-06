@@ -66,8 +66,8 @@ function render(input: CreativeAppProposal, locale = 'en'): string {
   return renderToStaticMarkup(
     React.createElement(ProposalApprovalCard, {
       proposal: input,
-      onApprove: async () => {},
-      onReject: async () => {},
+      onApprove: async () => false,
+      onReject: async () => false,
       onToast: () => {},
     }),
   );
@@ -186,5 +186,36 @@ describe('ProposalApprovalCard failure contract', () => {
     // The inbox only dismisses on an explicit `approved`/`rejected` result.
     assert.match(inboxSource, /result\?\.status === 'approved'/);
     assert.match(inboxSource, /result\?\.status === 'rejected'/);
+  });
+
+  it('a duplicate event (already_decided) never resolves as a fresh success', () => {
+    // Repeat clicks / a decision made in another window return `already_decided`
+    // — an idempotent no-op. The inbox must signal "no state change" (false) so
+    // the card skips its success toast. Only an explicit `approved` is true.
+    const approveBody = inboxSource.slice(
+      inboxSource.indexOf('const approve'),
+      inboxSource.indexOf('const reject'),
+    );
+    assert.match(approveBody, /status === 'approved'/);
+    const decisionReturn = approveBody.slice(
+      approveBody.indexOf("status === 'approved'"),
+      approveBody.indexOf('} finally'),
+    );
+    assert.match(decisionReturn, /return true/, 'approved resolves true');
+    assert.match(
+      decisionReturn,
+      /return false/,
+      'already_decided resolves false (no success toast)',
+    );
+
+    // The card only toasts success when the decision actually changed.
+    const cardApproveStart = cardSource.indexOf('const handleApprove');
+    const cardApproveEnd = cardSource.indexOf('const handleReject');
+    const cardApproveBody = cardSource.slice(cardApproveStart, cardApproveEnd);
+    assert.match(
+      cardApproveBody,
+      /if \(changed\) onToast\(/,
+      'success toast gated on a real state change',
+    );
   });
 });
