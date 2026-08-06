@@ -1,0 +1,668 @@
+[
+  {
+    "id": "A01",
+    "title": "Agent Runtime 巨型控制器形成跨域耦合",
+    "status": "CONFIRMED",
+    "priority": "P2",
+    "risk_score": 17,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 1, "crash_recovery": 2, "ux": 2, "performance": 2, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 1, "line_end": 6043, "description": "同时承担生命周期 CAS、恢复、retry/continue/resume、运行时分派和测试 seam"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 1, "line_end": 5717, "description": "同时承担 Provider attempt、Turn、工具调度、Hook、队列和 Compaction"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 1, "line_end": 4434, "description": "同时承担权限、Gateway、Ledger、Checkpoint、MCP、Sub Agent 和 Progress"}
+    ],
+    "impact": ["修改一个执行不变量需要跨多个状态域", "故障注入和独立测试成本高"],
+    "recommendation": "只在可靠性不变量稳定后按职责抽取 lifecycle、turn driver、tool orchestration；禁止机械按行数拆分。",
+    "acceptance_criteria": ["RunManager 不再直接组装 AgentEngine/Gateway", "engine.rs 的 Provider、Turn、Tool batch 测试可独立运行"]
+  },
+  {
+    "id": "A02",
+    "title": "部分状态仍由数据库、内存 Actor 和事件多点结算",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 21,
+    "risk": {"data_corruption": 3, "duplicate_side_effect": 2, "security": 1, "crash_recovery": 4, "ux": 2, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/interaction_store.rs", "line_start": 225, "line_end": 297, "description": "Interaction 先置 resolved，随后非检查事件 append 与 best-effort waiter 唤醒"},
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 2602, "line_end": 2695, "description": "Run terminal 已通过事务 CAS 收敛，是正向对照"}
+    ],
+    "impact": ["审批、Queue、Checkpoint 的数据库事实与活体状态可短暂或永久分叉"],
+    "recommendation": "保留 RunLifecycleAuthority；为 interaction/queue/checkpoint 定义单写入事务和可重放投影。",
+    "acceptance_criteria": ["审批决策持久化、权威事件和 waiter 交付具有单一幂等事务边界"]
+  },
+  {
+    "id": "A03",
+    "title": "原生主链已收敛但 CLI 兼容运行时仍绕过 AgentEngine",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 14,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 2, "crash_recovery": 2, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 4},
+    "evidence": [
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 1900, "line_end": 2033, "description": "claude_cli 进入 cli_runtime_bridge；native 才进入 ProductionRuntime/AgentEngine"},
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 2100, "line_end": 2156, "description": "start_with_seams 使用 legacy run_with_tool_schemas，主要为测试/高级 seam"}
+    ],
+    "impact": ["仓库级行为不具备完全统一的 Turn、Gateway、Ledger 语义"],
+    "recommendation": "明确 CLI 为隔离 compatibility runtime，并禁止其宣称 Native Core 能力；不要为统一而嵌入 Pi。",
+    "acceptance_criteria": ["所有 runtime 在协议能力中声明 native_core_authority=true/false", "Native 产品默认不落入 CLI runtime"]
+  },
+  {
+    "id": "B01",
+    "title": "Typed Message 已进入原生主链但 Legacy EngineMessage 仍是公共双轨",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 15,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 2, "ux": 2, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production.rs", "line_start": 688, "line_end": 778, "description": "生产优先 load_agent_messages 并调用 run_with_typed_messages"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 289, "line_end": 420, "description": "EngineProvider 和 EngineRunConfig 仍暴露 legacy message/默认转换入口"},
+      {"file": "src-agent-daemon/src/routing.rs", "line_start": 240, "line_end": 315, "description": "Typed AgentMessage 到 provider HistoryMessage 的 Thinking/Text 合并存在语义损失"}
+    ],
+    "impact": ["兼容/测试调用可能丢 Thinking 签名、自定义块和精确工具语义"],
+    "recommendation": "将 EngineMessage 限制到 compat 模块；原生生产 API 只接受 ProviderTurnRequest/AgentMessage。",
+    "acceptance_criteria": ["非 compat 生产模块中 EngineMessage 引用为 0", "所有有损转换有显式拒绝或测试"]
+  },
+  {
+    "id": "B02",
+    "title": "旧协议和数据库兼容分支缺少退出门槛",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 13,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 2, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production.rs", "line_start": 688, "line_end": 730, "description": "typed history 为空时退回 legacy_history 转换"},
+      {"file": "src-agent-daemon/src/conversation_store.rs", "line_start": 1426, "line_end": 1505, "description": "legacy-turn、缺少 result_message_id 等兼容逻辑与生产投影混在一起"}
+    ],
+    "impact": ["同一数据在新旧库状态下获得不同重放语义"],
+    "recommendation": "集中到一次性 compat reader，记录命中指标和删除版本。",
+    "acceptance_criteria": ["兼容分支只有 compat 模块可调用", "连续两个发布版本命中为 0 后删除"]
+  },
+  {
+    "id": "C01",
+    "title": "Turn 已成为原生执行单位",
+    "status": "RESOLVED",
+    "priority": "P3",
+    "risk_score": 0,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 0, "ux": 0, "performance": 0, "maintenance": 0, "likelihood": 0},
+    "evidence": [{"file": "crates/agent-core/src/engine.rs", "line_start": 1016, "line_end": 1815, "description": "每个 loop step 创建 TurnId；Provider retry 复用 Turn；工具结果完成后 TurnCompleted"}],
+    "impact": [],
+    "recommendation": "保持当前边界并补异常矩阵。",
+    "acceptance_criteria": ["每个 TurnStarted 恰有一个 TurnCompleted"]
+  },
+  {
+    "id": "C02",
+    "title": "Steering/Follow-up 已耐久化但 DrainMode 混合语义仍需收紧",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 16,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 1, "security": 0, "crash_recovery": 3, "ux": 3, "performance": 0, "maintenance": 2, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/prompt_queue_store.rs", "line_start": 470, "line_end": 700, "description": "durable lease/ack、重启回收和 queue-derived message 幂等落库"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 771, "line_end": 817, "description": "只在 BeforeProvider/AfterToolBatch 安全点注入"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 1460, "line_end": 1495, "description": "Core 对 steering/follow-up 请求 DrainMode::All，实际 one/all 依赖首行策略"}
+    ],
+    "impact": ["混合 one/all 队列可能一次消费多于用户预期"],
+    "recommendation": "将 drain policy 固定为队列级配置或按行逐项事务消费，不由首条记录隐式决定。",
+    "acceptance_criteria": ["混合模式 FIFO 表驱动测试覆盖重启、abort、ack 丢失"]
+  },
+  {
+    "id": "C03",
+    "title": "Compaction 有快照但预算估算和 Overflow 恢复不完整",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 17,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 2, "ux": 3, "performance": 2, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/agent-core/src/context.rs", "line_start": 190, "line_end": 260, "description": "预算由 provider window 约束但消息 token 仍主要按字符估算"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 2061, "line_end": 2295, "description": "model summary 失败退回机械压缩且不使 Run 失败"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 1033, "line_end": 1368, "description": "Provider retry 未识别 context overflow 并触发有界重压缩"}
+    ],
+    "impact": ["临界上下文可能重复失败或过度裁剪 Tool Result"],
+    "recommendation": "增加 provider-neutral ContextOverflow 分类和每用户输入最多一次 overflow-compaction retry。",
+    "acceptance_criteria": ["各 Provider overflow fixture 统一映射", "NothingToCompact 立即失败且无循环"]
+  },
+  {
+    "id": "C04",
+    "title": "截断和无 Final 的 Tool Call 已 fail closed",
+    "status": "RESOLVED",
+    "priority": "P3",
+    "risk_score": 0,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 0, "ux": 0, "performance": 0, "maintenance": 0, "likelihood": 0},
+    "evidence": [{"file": "crates/agent-core/src/engine.rs", "line_start": 1328, "line_end": 1580, "description": "Length/Unknown/无 Final 的候选调用不执行并生成同 ID Tool Result"}],
+    "impact": [],
+    "recommendation": "保留 Pi conformance fixture。",
+    "acceptance_criteria": ["所有 Provider stop reason contract 测试持续通过"]
+  },
+  {
+    "id": "D01",
+    "title": "JSON/Schema 执行边界已建立但注册工具名未拒绝冲突",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 12,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 2, "crash_recovery": 0, "ux": 1, "performance": 0, "maintenance": 2, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/capability-gateway/src/lib.rs", "line_start": 335, "line_end": 341, "description": "register 直接 push，get_tool 取第一个同名项"},
+      {"file": "crates/capability-gateway/src/lib.rs", "line_start": 381, "line_end": 400, "description": "执行前按真实注册 Schema 校验"}
+    ],
+    "impact": ["扩展/MCP 名称冲突时广告与实际执行可能选择不同定义"],
+    "recommendation": "冻结工具面时拒绝重复 canonical name，并报告冲突来源。",
+    "acceptance_criteria": ["重复名字启动前失败", "广告 schema 与执行 schema identity 一致"]
+  },
+  {
+    "id": "D02",
+    "title": "Gateway 能力已驱动批次调度但 Exclusive/Conflict 只限单批次",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 18,
+    "risk": {"data_corruption": 3, "duplicate_side_effect": 2, "security": 1, "crash_recovery": 1, "ux": 2, "performance": 2, "maintenance": 2, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/capability-gateway/src/lib.rs", "line_start": 244, "line_end": 370, "description": "Gateway 声明 ParallelSafe/Sequential/Exclusive/conflict_key"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 1840, "line_end": 1994, "description": "只有全批 ParallelSafe 且 key 唯一才并行，结果按源序"}
+    ],
+    "impact": ["不同 Run 的同一 Exclusive/conflict_key 工具仍可并行", "并行完成事件不是完成顺序"],
+    "recommendation": "先增加 Daemon 级 conflict lease；不要重写 Scheduler。",
+    "acceptance_criteria": ["相同 conflict_key 跨 Run 最大并发为 1", "Result 保持源序，Completed 按完成序"]
+  },
+  {
+    "id": "D03",
+    "title": "Side-effect Ledger 已进生产但语义仍不完备",
+    "status": "PARTIAL",
+    "priority": "P0",
+    "risk_score": 26,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 5, "security": 2, "crash_recovery": 5, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/side_effect_ledger.rs", "line_start": 74, "line_end": 149, "description": "started/completed/failed/cancelled/uncertain 持久化，但 idempotency_key/external_reference 始终 NULL"},
+      {"file": "src-agent-daemon/src/side_effect_ledger.rs", "line_start": 184, "line_end": 191, "description": "副作用分类仍按工具名硬编码"}
+    ],
+    "impact": ["无法将外部确认/idempotency 与一次调用绑定", "未知工具一律 external，恢复决策粗糙"],
+    "recommendation": "Ledger 采用 Gateway capability 的 side_effect/replay contract，并记录外部幂等键/引用。",
+    "acceptance_criteria": ["每个 side-effect ToolCallStarted 前存在 planned/started 行", "外部可重试操作必须有 idempotency_key 或 hard-block"]
+  },
+  {
+    "id": "D04",
+    "title": "工具成功后事实写入失败仍无法保证 durable uncertain",
+    "status": "CONFIRMED",
+    "priority": "P0",
+    "risk_score": 28,
+    "risk": {"data_corruption": 5, "duplicate_side_effect": 5, "security": 2, "crash_recovery": 5, "ux": 3, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 1960, "line_end": 1981, "description": "ToolCallCompleted append 失败后调用 mark_tool_call_uncertain，但接口无返回值"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 502, "line_end": 518, "description": "mark_tool_call_uncertain 明确丢弃 Ledger 写入结果"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 1198, "line_end": 1215, "description": "completion 写失败后第二次 uncertain 写仍为 best effort"}
+    ],
+    "impact": ["数据库故障同时吞掉 completed 和 uncertain 时，Resume 看不到未知副作用并可能继续"],
+    "recommendation": "将副作用状态、ToolCompleted fact 和 Run blocked_uncertain 置于可证明的单事务/恢复日志；写失败时禁止产生可恢复 checkpoint。",
+    "acceptance_criteria": ["指定 crash point 后 Resume 必为 Blocked", "uncertain 持久化失败使 Run 进入不可自动恢复终态"]
+  },
+  {
+    "id": "D05",
+    "title": "Hook 面已扩展但 Post Hook 决策和幂等性没有统一契约",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 15,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 1, "security": 2, "crash_recovery": 1, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/agent-core/src/hooks.rs", "line_start": 249, "line_end": 345, "description": "Hook telemetry checked，但 invocation_id 每次随机且 handler 后 telemetry 可能失败"},
+      {"file": "crates/agent-core/src/engine.rs", "line_start": 1945, "line_end": 1958, "description": "PostToolUse dispatch 结果被忽略"}
+    ],
+    "impact": ["Post Hook 不能可靠改变/阻断后处理；重放无法去重 Hook 副作用"],
+    "recommendation": "安全 Hook 保持 fail closed；Post Hook 只允许纯转换或要求稳定 invocation id。",
+    "acceptance_criteria": ["每类 Hook 的可变更字段和失败策略有契约测试"]
+  },
+  {
+    "id": "E01",
+    "title": "子 Agent 权限和工具面在创建时只收紧",
+    "status": "RESOLVED",
+    "priority": "P3",
+    "risk_score": 0,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 0, "ux": 0, "performance": 0, "maintenance": 0, "likelihood": 0},
+    "evidence": [{"file": "crates/agent-core/src/subagents.rs", "line_start": 15, "line_end": 119, "description": "permission cap 和 allowlist intersection"}],
+    "impact": [],
+    "recommendation": "补生产多层嵌套测试。",
+    "acceptance_criteria": ["三层 child 不能扩大 path/profile/tool/key"]
+  },
+  {
+    "id": "E02",
+    "title": "子 Agent 配额仅内存化且 Token 超限结果被忽略",
+    "status": "CONFIRMED",
+    "priority": "P1",
+    "risk_score": 21,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 2, "security": 1, "crash_recovery": 4, "ux": 2, "performance": 3, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/agent-core/src/subagents.rs", "line_start": 181, "line_end": 255, "description": "ReservationLedger 全部位于进程内存"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 3221, "line_end": 3239, "description": "child 完成后才 settle_tokens，返回 Err 被丢弃"}
+    ],
+    "impact": ["重启后深度/并发/总量重置", "Token budget 不会中止或标失败"],
+    "recommendation": "将 reservation/usage 绑定 child run durable row，运行中按 UsageUpdated 增量结算。",
+    "acceptance_criteria": ["重启前后预算连续", "超限 child 在下一安全点取消并返回标准结果"]
+  },
+  {
+    "id": "E03",
+    "title": "Sub Agent FailurePolicy 仅类型和测试存在",
+    "status": "CONFIRMED",
+    "priority": "P1",
+    "risk_score": 16,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 0, "crash_recovery": 2, "ux": 3, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "crates/agent-core/src/subagents.rs", "line_start": 122, "line_end": 176, "description": "Isolate/FailFast/RequireAll 被定义和解析，生产 watcher 无分支消费"}],
+    "impact": ["配置宣称的 FailFast/RequireAll 不生效"],
+    "recommendation": "在 Task batch watcher 实现或从公共配置中删除未接线选项。",
+    "acceptance_criteria": ["每种策略有两个 child 的生产路径测试"]
+  },
+  {
+    "id": "E04",
+    "title": "子 Agent 创建失败可留下持久 Session 或 Queued Run",
+    "status": "NEW_FINDING",
+    "priority": "P1",
+    "risk_score": 19,
+    "risk": {"data_corruption": 3, "duplicate_side_effect": 1, "security": 1, "crash_recovery": 3, "ux": 2, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 2892, "line_end": 2972, "description": "先创建 hidden session 和 scope，SubagentStart hook deny 时未关闭 session"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 2975, "line_end": 3041, "description": "先 create_run，后 SubAgentManager::register；配额拒绝时新 Run 未结算"}
+    ],
+    "impact": ["产生不可见持久孤儿、错误并发计数和后续恢复歧义"],
+    "recommendation": "先做无副作用 preflight/reservation/hook，再事务创建 session+run；失败统一补偿。",
+    "acceptance_criteria": ["每个创建失败点后无 active/queued orphan row"]
+  },
+  {
+    "id": "F01",
+    "title": "Daemon SQLite 单连接同步 Mutex 阻塞异步执行",
+    "status": "CONFIRMED",
+    "priority": "P1",
+    "risk_score": 19,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 0, "crash_recovery": 3, "ux": 3, "performance": 3, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/storage/mod.rs", "line_start": 103, "line_end": 136, "description": "DataStore 持有 std::sync::Mutex<rusqlite::Connection>"},
+      {"file": "crates/agent-core/src/event_seq.rs", "line_start": 178, "line_end": 220, "description": "Core std Mutex 内同步调用 EventPersistence/SQLite"}
+    ],
+    "impact": ["多 Run、Progress、权限和工具写入互相串行并阻塞 Tokio worker", "WAL 对单连接无并发帮助"],
+    "recommendation": "先把 DB 调用移入 bounded storage actor/spawn_blocking；再评估单写多读连接。",
+    "acceptance_criteria": ["async worker 不直接持 rusqlite guard", "并发 10 Run 的 event append p99 有预算"]
+  },
+  {
+    "id": "F02",
+    "title": "关键跨表事实的事务边界不完整",
+    "status": "PARTIAL",
+    "priority": "P0",
+    "risk_score": 24,
+    "risk": {"data_corruption": 5, "duplicate_side_effect": 3, "security": 1, "crash_recovery": 5, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/conversation_store.rs", "line_start": 1428, "line_end": 1494, "description": "Turn、Assistant、每个 ToolResult 分多个事务写入"},
+      {"file": "src-agent-daemon/src/event_log.rs", "line_start": 110, "line_end": 214, "description": "Usage event 插入后多个 projection 更新 best effort 且无统一事务"},
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 2602, "line_end": 2695, "description": "Run status+terminal event 已事务化，是保留基线"}
+    ],
+    "impact": ["崩溃可留下部分会话投影或 usage 漂移"],
+    "recommendation": "以 event 为事实源，投影按 event_id 幂等；Turn+messages 使用单事务。",
+    "acceptance_criteria": ["Turn projection 任一 crash point 重启后收敛到完整或不存在"]
+  },
+  {
+    "id": "F03",
+    "title": "Run Event Sequence 已持久化、按 Run 单调且唯一",
+    "status": "RESOLVED",
+    "priority": "P3",
+    "risk_score": 0,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 0, "ux": 0, "performance": 0, "maintenance": 0, "likelihood": 0},
+    "evidence": [{"file": "crates/agent-core/src/event_seq.rs", "line_start": 178, "line_end": 299, "description": "persist-first、锁内分配 sequence、replay/subscribe"}],
+    "impact": [],
+    "recommendation": "补多实例和 DB failure 测试。",
+    "acceptance_criteria": ["同 run_id sequence 唯一严格递增"]
+  },
+  {
+    "id": "F04",
+    "title": "SQLite 故障矩阵缺少真实 fault injection",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 18,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 2, "security": 0, "crash_recovery": 4, "ux": 2, "performance": 1, "maintenance": 2, "likelihood": 3},
+    "evidence": [{"file": "src-agent-daemon/src", "line_start": 1, "line_end": 1, "description": "存在 PERSISTENCE_FAILED 精准单测，但未找到 disk full/corrupt/WAL checkpoint/partial migration 系统故障注入"}],
+    "impact": ["Fail-closed 声明未覆盖真实 SQLite 失效模式"],
+    "recommendation": "增加可注入 Event/Projection/Ledger store 和进程 kill crash matrix。",
+    "acceptance_criteria": ["10 个指定 crash point 和 SQLITE_FULL/BUSY/CORRUPT fixture"]
+  },
+  {
+    "id": "G01",
+    "title": "Checkpoint ledger cursor 实际写入 Event sequence",
+    "status": "NEW_FINDING",
+    "priority": "P0",
+    "risk_score": 25,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 5, "security": 1, "crash_recovery": 5, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production.rs", "line_start": 801, "line_end": 818, "description": "event_cursor 取最后 run event sequence 后写入 side_effect_ledger_cursor"},
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 45, "line_end": 115, "description": "Resume 只校验 cursor 非空，不验证 Ledger 水位"}
+    ],
+    "impact": ["Checkpoint 看似绑定 Ledger，实际上不能证明包含哪些副作用"],
+    "recommendation": "改为单调 Ledger record id/commit sequence；旧 checkpoint 标记 legacy_unverifiable。",
+    "acceptance_criteria": ["checkpoint cursor 可查询出精确 Ledger 前缀", "event sequence 不再写入 ledger cursor"]
+  },
+  {
+    "id": "G02",
+    "title": "Resume 能从快照新建 Run，但未闭合所有 crash-gap",
+    "status": "PARTIAL",
+    "priority": "P0",
+    "risk_score": 25,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 5, "security": 1, "crash_recovery": 5, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 2354, "line_end": 2478, "description": "Resume 不恢复 Future，按 uncertain 分类创建新 Run"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 502, "line_end": 518, "description": "uncertain 写入失败不可被 Resume 看见"}
+    ],
+    "impact": ["恢复算法正确依赖 Ledger 完整性，但该前提尚不成立"],
+    "recommendation": "先修 Ledger/Checkpoint 事实闭环，再开放自动 Resume。",
+    "acceptance_criteria": ["started 无 terminal 的每项副作用都使 Resume Blocked/Confirm"]
+  },
+  {
+    "id": "G03",
+    "title": "Continue/Retry/Resume 已分 API 但 Retry 未绑定精确快照",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 14,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 2, "security": 0, "crash_recovery": 2, "ux": 2, "performance": 0, "maintenance": 2, "likelihood": 4},
+    "evidence": [{"file": "src-agent-daemon/src/production.rs", "line_start": 690, "line_end": 735, "description": "只有 continued_from/resume_of 走 exact snapshot，retry_of 不走"}],
+    "impact": ["用户对 Retry 的上下文边界可能与实际最新会话历史不同"],
+    "recommendation": "文档明确 Retry=新 Run 重试原输入；若需 exact retry，新增显式语义而非复用。",
+    "acceptance_criteria": ["五种操作各有 lineage/context/side-effect contract 测试"]
+  },
+  {
+    "id": "G04",
+    "title": "Fork 复制 Transcript 但分支资源继承契约不完整",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 14,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 2, "security": 1, "crash_recovery": 2, "ux": 1, "performance": 0, "maintenance": 2, "likelihood": 4},
+    "evidence": [{"file": "src-agent-daemon/src/conversation_store.rs", "line_start": 405, "line_end": 587, "description": "Transcript 事务复制并清除 run/turn，permission 重置 ask；未复制 queue/credential"}],
+    "impact": ["Usage、budget、checkpoint 和外部副作用与新分支的关系仅隐式"],
+    "recommendation": "Fork 仅继承 immutable transcript，并写清不继承 queue/grant/ledger/budget。",
+    "acceptance_criteria": ["Fork 后无 pending permission/queue/credential lease 共享"]
+  },
+  {
+    "id": "H01",
+    "title": "核心生命周期事件完整但非关键流事件可丢失",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 15,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 2, "ux": 3, "performance": 1, "maintenance": 2, "likelihood": 5},
+    "evidence": [{"file": "crates/agent-core/src/engine.rs", "line_start": 1018, "line_end": 1312, "description": "Turn/Message/Tool critical 使用 checked；delta、attempt、usage 多使用 unchecked append"}],
+    "impact": ["UI 可重建 committed message，但进度/usage/attempt 观测可能不完整"],
+    "recommendation": "明确事实事件和展示事件等级；usage 若用于计费应升级为 critical。",
+    "acceptance_criteria": ["协议为每类 event 标注 durability_class"]
+  },
+  {
+    "id": "H02",
+    "title": "事件与会话/usage 投影不是统一提交",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 21,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 1, "security": 0, "crash_recovery": 4, "ux": 3, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/event_log.rs", "line_start": 110, "line_end": 214, "description": "event 持久后 usage/run/message projection best effort"},
+      {"file": "src-agent-daemon/src/production.rs", "line_start": 787, "line_end": 829, "description": "Run engine 完成后才批量投影 Conversation"}
+    ],
+    "impact": ["UI 实时事件与 reload 后 conversation/usage 可不一致"],
+    "recommendation": "以 run_event 为 outbox；幂等 projector 使用 event_id watermark。",
+    "acceptance_criteria": ["重复投影不重复 usage", "崩溃后 projector 自动补齐 assistant turn"]
+  },
+  {
+    "id": "H03",
+    "title": "Terminal Progress 使用无界 channel",
+    "status": "CONFIRMED",
+    "priority": "P1",
+    "risk_score": 14,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 1, "ux": 3, "performance": 3, "maintenance": 2, "likelihood": 5},
+    "evidence": [{"file": "src-agent-daemon/src/production_tools.rs", "line_start": 1097, "line_end": 1136, "description": "run_terminal progress 使用 tokio::mpsc::unbounded_channel"}],
+    "impact": ["高速 stdout 在消费者/SQLite 变慢时可无界增长内存"],
+    "recommendation": "使用按字节有界 channel，合并 stdout/stderr 并记录 dropped_bytes。",
+    "acceptance_criteria": ["固定容量下 100MB 输出内存有界", "Result 后 update 全部拒绝"]
+  },
+  {
+    "id": "H04",
+    "title": "Agent Runtime 缺少结构化 OTel/延迟/背压指标",
+    "status": "CONFIRMED",
+    "priority": "P2",
+    "risk_score": 13,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 1, "ux": 2, "performance": 2, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "crates/agent-core/src", "line_start": 1, "line_end": 1, "description": "未发现 tracing/opentelemetry/metrics；现有主要为 Event 和 println/eprintln"}],
+    "impact": ["无法量化 DB append、queue wait、uncertain、dropped progress 和恢复质量"],
+    "recommendation": "在 Daemon 装配层增加 metrics sink，不让 Core 依赖具体 OTel SDK。",
+    "acceptance_criteria": ["列出的 12 项延迟/计数可从一次测试 Run 查询"]
+  },
+  {
+    "id": "I01",
+    "title": "Provider 流已统一但 typed block 到 wire 仍有有损映射",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 14,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 1, "ux": 2, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production.rs", "line_start": 1384, "line_end": 1646, "description": "RealProvider 统一映射 Adapter Event/StopReason/Usage"},
+      {"file": "src-agent-daemon/src/routing.rs", "line_start": 240, "line_end": 315, "description": "部分 content block 被合并为 provider history string"}
+    ],
+    "impact": ["reasoning signature、custom block 的 provider round-trip 不完整"],
+    "recommendation": "Provider-neutral request 保留结构块；Adapter 单独声明不能表达的降级。",
+    "acceptance_criteria": ["Thinking/Image/ToolResult round-trip contract 按 Provider 覆盖"]
+  },
+  {
+    "id": "I02",
+    "title": "Provider Retry 有界且可取消但缺少请求幂等/计费相关标识",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 12,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 1, "security": 0, "crash_recovery": 1, "ux": 2, "performance": 1, "maintenance": 2, "likelihood": 5},
+    "evidence": [{"file": "crates/agent-core/src/engine.rs", "line_start": 1033, "line_end": 1312, "description": "最多 3 attempt、Retry-After、可取消 backoff；只有无 delta 可 retry"}],
+    "impact": ["网络边界不明确时 Provider 可能已经计费但客户端重试"],
+    "recommendation": "Provider 支持时传 request id/idempotency key，并在 attempt event 记录 provider request id。",
+    "acceptance_criteria": ["同一 Turn attempt 可审计到 provider request id"]
+  },
+  {
+    "id": "I03",
+    "title": "Context Overflow 未形成统一可恢复错误",
+    "status": "CONFIRMED",
+    "priority": "P1",
+    "risk_score": 15,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 1, "ux": 3, "performance": 2, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "crates/agent-core/src/engine.rs", "line_start": 1033, "line_end": 1368, "description": "错误按 retryable 处理，未见 ContextOverflow→compact→单次重试分支"}],
+    "impact": ["模型上下文估算偏差直接导致 Run 失败"],
+    "recommendation": "Adapter 统一识别 overflow；Core 每用户输入只允许一次恢复。",
+    "acceptance_criteria": ["OpenAI/Anthropic/Gemini overflow fixture 进入同一分支"]
+  },
+  {
+    "id": "J01",
+    "title": "Native 工具调用无 Gateway 旁路，CLI compatibility 例外仍存在",
+    "status": "PARTIAL",
+    "priority": "P2",
+    "risk_score": 14,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 3, "crash_recovery": 1, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 4},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 1147, "line_end": 1151, "description": "Native local tool 统一 gateway.execute"},
+      {"file": "src-agent-daemon/src/rpc.rs", "line_start": 1968, "line_end": 1986, "description": "direct MCP RPC 已禁用"},
+      {"file": "src-agent-daemon/src/cli_runtime_bridge.rs", "line_start": 1, "line_end": 850, "description": "CLI compatibility 子进程拥有自身工具语义，不经过 Native Gateway"}
+    ],
+    "impact": ["产品若切 CLI runtime，Native Permission/Ledger 能力不再成立"],
+    "recommendation": "能力声明和 UI 清晰区分 native 与 compatibility runtime。",
+    "acceptance_criteria": ["Native runtime 所有 ToolCallRequested 均有 Gateway preparation 证据"]
+  },
+  {
+    "id": "J02",
+    "title": "Shell Supervisor 在子进程退出前不读取管道并存在 Unicode panic",
+    "status": "NEW_FINDING",
+    "priority": "P0",
+    "risk_score": 20,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 2, "security": 0, "crash_recovery": 3, "ux": 3, "performance": 3, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/capability-gateway/src/process_supervisor.rs", "line_start": 130, "line_end": 165, "description": "只有 try_wait 返回 exited 后才 read_to_end stdout/stderr；大输出可填满 pipe 阻止退出"},
+      {"file": "crates/capability-gateway/src/process_supervisor.rs", "line_start": 311, "line_end": 342, "description": "按字节索引 UTF-8 字符串切片，边界可能 panic"}
+    ],
+    "impact": ["输出超过 pipe buffer 的命令可永久 background/hang", "多字节输出接近 cap/tail 边界可使任务 panic"],
+    "recommendation": "spawn 后立即并发 drain 两个 pipe 到有界缓冲；所有截断使用 char boundary/bytes lossy。",
+    "acceptance_criteria": ["10MB stdout/stderr 命令可完成", "CJK/emoji 跨 cap 边界无 panic", "cancel 后 child 已 wait/reap"]
+  },
+  {
+    "id": "J03",
+    "title": "MCP 有统一权限/Ledger 路径但取消和进度仍是 best effort",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 18,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 3, "security": 1, "crash_recovery": 3, "ux": 2, "performance": 2, "maintenance": 2, "likelihood": 4},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 2470, "line_end": 2610, "description": "MCP started/completed/uncertain Ledger 和 cancel 传播"},
+      {"file": "src-agent-daemon/src/runtime/mcp_invocation.rs", "line_start": 1, "line_end": 260, "description": "blocking transport 通过 abort handle/stop server 取消，底层闭包本身不可强制停止"}
+    ],
+    "impact": ["远端可能完成但本地得到 cancel；进度 callback spawn 可积压"],
+    "recommendation": "为 MCP request id 建立 pending registry/late response discard，并把取消后状态标 uncertain。",
+    "acceptance_criteria": ["Fake MCP late success 不得变 completed", "取消后 pending registry quiet"]
+  },
+  {
+    "id": "J04",
+    "title": "Permission 持久化与执行唤醒不原子且重复响应非幂等",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 22,
+    "risk": {"data_corruption": 3, "duplicate_side_effect": 2, "security": 4, "crash_recovery": 3, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "src-agent-daemon/src/interaction_store.rs", "line_start": 225, "line_end": 297, "description": "先 CAS resolved，再 unchecked 事件和 best-effort PermissionManager response；重复点击返回 already_resolved"}],
+    "impact": ["审批已落库但 waiter 未唤醒，或执行已继续但审计事件缺失"],
+    "recommendation": "决策写入 outbox；waiter 按 interaction id 幂等消费，重复相同响应返回原结果。",
+    "acceptance_criteria": ["断线/重复点击/事件写失败均恰好执行 0 或 1 次"]
+  },
+  {
+    "id": "K01",
+    "title": "agent-core 不能作为低依赖稳定 SDK 独立使用",
+    "status": "CONFIRMED",
+    "priority": "P2",
+    "risk_score": 9,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 0, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "crates/agent-core/Cargo.toml", "line_start": 1, "line_end": 25, "description": "无 license/repository/publish 元数据，依赖 harness-core/assistant-protocol/reqwest"},
+      {"file": "crates/agent-core/src/lib.rs", "line_start": 1, "line_end": 55, "description": "导出大量内部模块，无 AgentRuntimeBuilder/InMemorySession Quick Start"}
+    ],
+    "impact": ["外部 Rust 用户需理解 Daemon、EventSequencer 和多个 crate"],
+    "recommendation": "可靠性收敛后再加薄 facade；不要现在新建插件生态。",
+    "acceptance_criteria": ["独立示例只依赖一个公开 crate 可注册两工具并订阅结果"]
+  },
+  {
+    "id": "K02",
+    "title": "与 Pi 的易用 Agent facade 存在明显差距",
+    "status": "CONFIRMED",
+    "priority": "P2",
+    "risk_score": 10,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 0, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "References/pi/packages/agent/src/agent.ts", "line_start": 171, "line_end": 470, "description": "Pi Agent 提供 prompt/steer/followUp/abort/waitForIdle/subscribe 的薄状态 facade"}],
+    "impact": ["嵌入式测试和第三方使用成本高"],
+    "recommendation": "吸收 facade 思想，不复制 TS Session/CLI；底层仍用 Rust Core/Daemon authority。",
+    "acceptance_criteria": ["Facade 不建立第二套 loop 或 store authority"]
+  },
+  {
+    "id": "L01",
+    "title": "当前 Commit 未获得独立全量验证",
+    "status": "UNVERIFIED",
+    "priority": "P1",
+    "risk_score": 16,
+    "risk": {"data_corruption": 1, "duplicate_side_effect": 1, "security": 1, "crash_recovery": 2, "ux": 2, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "docs/audit/natives-agent-problem-verification.md", "line_start": 246, "line_end": 264, "description": "fmt 与 workspace check 已通过；workspace tests、clippy、前端检查和 native verifier 未获得完整有效结果"}],
+    "impact": ["静态结论不等于当前 checkout 全量编译/测试通过"],
+    "recommendation": "在修复分支 CI 中使用共享 target 执行一次剩余验证矩阵，并保留真实 exit code。",
+    "acceptance_criteria": ["fmt/check/workspace test/typecheck/lint/verify-native-engine 有真实 exit code"]
+  },
+  {
+    "id": "L02",
+    "title": "测试数量多但生产故障与真实外部边界覆盖不足",
+    "status": "PARTIAL",
+    "priority": "P1",
+    "risk_score": 17,
+    "risk": {"data_corruption": 2, "duplicate_side_effect": 2, "security": 1, "crash_recovery": 3, "ux": 1, "performance": 1, "maintenance": 3, "likelihood": 4},
+    "evidence": [{"file": "crates/agent-core/src/engine.rs", "line_start": 3200, "line_end": 5717, "description": "大量 FakeProvider/FakeTool 精准逻辑测试；缺少进程 kill、真实 DB 故障、跨 Run 系统测试"}],
+    "impact": ["接口和单元测试通过不能证明 Daemon crash/SQLite 故障闭环"],
+    "recommendation": "优先补 10 个 crash point，而非继续增加类型测试。",
+    "acceptance_criteria": ["测试报告区分 unit/component/store/daemon/system/live"]
+  },
+  {
+    "id": "L03",
+    "title": "Rust crate 发布和供应链成熟度不足",
+    "status": "CONFIRMED",
+    "priority": "P2",
+    "risk_score": 10,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 1, "crash_recovery": 0, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "crates/agent-core/Cargo.toml", "line_start": 1, "line_end": 25, "description": "缺 license/repository/rust-version/publish 策略；未发现 SBOM/API semver smoke example"}],
+    "impact": ["不能把当前内部 crate 当成稳定 Agent SDK 发布"],
+    "recommendation": "在 SDK Phase 才补发布元数据、SBOM、semver 和外部示例。",
+    "acceptance_criteria": ["cargo package dry-run 和 release smoke 通过"]
+  },
+  {
+    "id": "N01",
+    "title": "Checkpoint 在 Gateway 路径校验前读取绝对路径",
+    "status": "NEW_FINDING",
+    "priority": "P0",
+    "risk_score": 25,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 1, "security": 5, "crash_recovery": 4, "ux": 2, "performance": 1, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 1049, "line_end": 1065, "description": "extract_write_paths 后先 capture_before，再调用 gateway.execute"},
+      {"file": "src-agent-daemon/src/checkpoint.rs", "line_start": 164, "line_end": 196, "description": "只拒绝包含 '..'；PathBuf::join(absolute) 会替换 project_root 并读取文件"},
+      {"file": "src-agent-daemon/src/production_tools.rs", "line_start": 1535, "line_end": 1565, "description": "extract_write_paths 接受绝对 path"}
+    ],
+    "impact": ["模型提出项目外绝对路径时，Gateway 最终拒绝前 Checkpoint 已读取并可能持久化敏感内容"],
+    "recommendation": "路径 normalize/scope validation 必须先于任何 checkpoint I/O；Checkpoint 只接收 Gateway 返回的 canonical relative path。",
+    "acceptance_criteria": ["绝对路径、..、symlink escape 在任何 read/checkpoint 前拒绝", "被拒绝调用不产生文件快照"]
+  },
+  {
+    "id": "N02",
+    "title": "Assistant Turn 事件到 Conversation 的 crash-gap 无自动回填",
+    "status": "NEW_FINDING",
+    "priority": "P0",
+    "risk_score": 23,
+    "risk": {"data_corruption": 5, "duplicate_side_effect": 2, "security": 0, "crash_recovery": 5, "ux": 3, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/production.rs", "line_start": 787, "line_end": 829, "description": "Engine 完成后 replay events 再 append_assistant_turn_from_events"},
+      {"file": "src-agent-daemon/src/conversation_store.rs", "line_start": 1428, "line_end": 1494, "description": "固定 message id 分多事务 INSERT；部分重试会撞唯一键"},
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 187, "line_end": 201, "description": "启动只 backfill context snapshot，未回填 assistant turn"}
+    ],
+    "impact": ["Run events/Renderer 当时显示成功，但重启后 provider history 丢失该 assistant/tool result"],
+    "recommendation": "将完整 Turn 作为幂等 projector；使用 event watermark，单事务 upsert Turn+messages+blocks。",
+    "acceptance_criteria": ["在每个 projection 写点 kill 后重启，Provider history 与 event commit 一致"]
+  },
+  {
+    "id": "N03",
+    "title": "真实 Run ID 以 run- 前缀时会被当作测试 fixture 丢弃 FK",
+    "status": "NEW_FINDING",
+    "priority": "P2",
+    "risk_score": 12,
+    "risk": {"data_corruption": 3, "duplicate_side_effect": 0, "security": 0, "crash_recovery": 2, "ux": 1, "performance": 0, "maintenance": 2, "likelihood": 4},
+    "evidence": [{"file": "src-agent-daemon/src/conversation_store.rs", "line_start": 2016, "line_end": 2028, "description": "按 run-/turn- 字符串前缀过滤 durable FK，而非显式 fixture mode"}],
+    "impact": ["合法自定义/idempotent run identity 可失去 run/turn lineage"],
+    "recommendation": "fixture 通过显式 test adapter，不在生产存储按命名猜测。",
+    "acceptance_criteria": ["任意合法 ID 均保持 FK；fixture 使用独立 builder"]
+  },
+  {
+    "id": "N04",
+    "title": "RPC 逐行读取没有帧大小上限",
+    "status": "NEW_FINDING",
+    "priority": "P1",
+    "risk_score": 16,
+    "risk": {"data_corruption": 0, "duplicate_side_effect": 0, "security": 3, "crash_recovery": 1, "ux": 2, "performance": 3, "maintenance": 2, "likelihood": 5},
+    "evidence": [{"file": "src-agent-daemon/src/rpc.rs", "line_start": 164, "line_end": 291, "description": "BufReader::read_line 持续扩张 String；握手和 RPC 均无 MAX_FRAME_BYTES"}],
+    "impact": ["本机同用户恶意/失控客户端可发送超大无换行帧耗尽 Daemon 内存"],
+    "recommendation": "使用有最大长度的 codec/read_until 限制，超限断开。",
+    "acceptance_criteria": ["超过上限的握手/RPC 在分配受控内存下被拒绝"]
+  },
+  {
+    "id": "N05",
+    "title": "Subagent scope 把 project path 写入 project_id 且忽略持久化错误",
+    "status": "NEW_FINDING",
+    "priority": "P1",
+    "risk_score": 18,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 0, "security": 2, "crash_recovery": 3, "ux": 1, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [{"file": "src-agent-daemon/src/production_tools.rs", "line_start": 2920, "line_end": 2935, "description": "project_id=self.gateway.project_root，identity_version=None，persist 结果 let _"}],
+    "impact": ["项目身份审计字段错误；重启恢复依赖的 scope 写失败仍继续创建 child"],
+    "recommendation": "从父 Run 的 ProjectIdentity 复制真实 id/version，持久化失败在 child 创建前 fail closed。",
+    "acceptance_criteria": ["child scope id/path/version 与父绑定一致且写失败不创建 Run"]
+  },
+  {
+    "id": "N06",
+    "title": "Context snapshot 启动回填跳过损坏事件且失败仅打印",
+    "status": "NEW_FINDING",
+    "priority": "P1",
+    "risk_score": 19,
+    "risk": {"data_corruption": 4, "duplicate_side_effect": 1, "security": 0, "crash_recovery": 4, "ux": 2, "performance": 0, "maintenance": 3, "likelihood": 5},
+    "evidence": [
+      {"file": "src-agent-daemon/src/conversation_store.rs", "line_start": 1767, "line_end": 1814, "description": "serde_json 失败的 run_event 被静默跳过"},
+      {"file": "src-agent-daemon/src/run_manager.rs", "line_start": 187, "line_end": 198, "description": "backfill 失败只 eprintln 后继续启动"}
+    ],
+    "impact": ["关键快照事件损坏时恢复能力悄然降级"],
+    "recommendation": "损坏事件返回稳定错误并隔离受影响 Run；Daemon 可启动但不得将该 Run 判为可恢复。",
+    "acceptance_criteria": ["损坏 snapshot event 使对应 Resume Blocked 且可观测"]
+  }
+]

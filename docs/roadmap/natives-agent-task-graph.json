@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "audit": "docs/audit/natives-agent-problem-verification.md",
+    "issues": "docs/audit/natives-agent-issues.json"
+  },
+  "baseline_branch": "deploy",
+  "baseline_commit": "9584c3c263c1e83b1066e4208e1ab2d678a9deeb",
+  "integration_branch": "codex/agent-runtime-upgrade-20260804",
+  "shared_build": {
+    "cargo_target_dir": "/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared",
+    "package_manager": "npm",
+    "lockfile": "package-lock.json",
+    "reuse_node_modules": true,
+    "node_modules_workspace": "/Users/ldh/Downloads/project/AiNative/Natives",
+    "max_worktrees": 2,
+    "max_parallel_task_agents": 2,
+    "full_workspace_test_stage": "final_only",
+    "tauri_release_stage": "final_only",
+    "cargo_clean_allowed": false
+  },
+  "start_commit_resolution": {
+    "rule": "Before dispatch, the batch integration agent resolves the named stable tag to an exact SHA and writes that SHA into the task handoff. Task agents must not start from a floating branch.",
+    "stable_tags": [
+      "natives-runtime/b00-baseline",
+      "natives-runtime/b01-safety",
+      "natives-runtime/b02-effects",
+      "natives-runtime/b03-projection",
+      "natives-runtime/b04-backpressure",
+      "natives-runtime/b05-authorities",
+      "natives-runtime/b06-core",
+      "natives-runtime/b07-operability"
+    ]
+  },
+  "implementation_batches": [
+    {
+      "id": "B00",
+      "name": "可信基线与资源门禁",
+      "reason": "所有开发任务必须共享同一源码、测试和磁盘基线；该批次不改生产行为。",
+      "depends_on": [],
+      "tasks": [
+        {
+          "id": "TASK-000",
+          "title": "冻结能力、故障与构建基线",
+          "priority": "P1",
+          "issue_ids": ["L01", "L02", "F04"],
+          "depends_on": [],
+          "parallel_with": [],
+          "conflicts_with": [],
+          "start_commit": "9584c3c263c1e83b1066e4208e1ab2d678a9deeb",
+          "workspace_mode": "main",
+          "allowed_paths": ["docs/architecture/NATIVE_ENGINE_FULL_REMEDIATION.md", "scripts/", ".github/workflows/"],
+          "forbidden_paths": ["crates/**/src/**", "src-agent-daemon/src/**", "src-tauri/src/**", "src/**"],
+          "targeted_tests": ["cargo fmt --check", "cargo check --workspace --jobs 2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["记录精确 HEAD、工具链、磁盘和缓存大小", "列出十个可复现 crash points", "生成 natives-runtime/b00-baseline 稳定 SHA 标签"]
+        }
+      ]
+    },
+    {
+      "id": "B01",
+      "name": "信任边界与进程安全",
+      "reason": "Checkpoint 越界读取和 Shell/RPC 无界资源是进入持久化改造前的独立安全前置；路径任务先串行，Shell 与 RPC 可在不同文件域并行。",
+      "depends_on": ["B00"],
+      "tasks": [
+        {
+          "id": "TASK-001",
+          "title": "Gateway 授权路径先于 Checkpoint I/O",
+          "priority": "P0",
+          "issue_ids": ["N01"],
+          "depends_on": ["TASK-000"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-002", "TASK-004", "TASK-007", "TASK-009", "TASK-012"],
+          "start_commit": "natives-runtime/b00-baseline",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/capability-gateway/src/lib.rs", "crates/capability-gateway/src/manifest.rs", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/src/checkpoint.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["crates/agent-core/src/engine.rs", "src/**", "src-tauri/**"],
+          "targeted_tests": ["cargo test -p capability-gateway path_scope", "cargo test -p natives-agent-daemon checkpoint_path -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["absolute、dotdot、symlink escape 在任何 checkpoint/handler I/O 前拒绝", "Checkpoint 只接受 Gateway 返回的 canonical project-relative path"]
+        },
+        {
+          "id": "TASK-002",
+          "title": "Shell 持续 Drain、Unicode 截断与资源回收",
+          "priority": "P0",
+          "issue_ids": ["J02"],
+          "depends_on": ["TASK-001"],
+          "parallel_with": ["TASK-003"],
+          "conflicts_with": ["TASK-007"],
+          "start_commit": "TASK-001_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/capability-gateway/src/process_supervisor.rs", "crates/capability-gateway/src/tools/**", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["crates/assistant-protocol/**", "src/**", "src-tauri/**"],
+          "targeted_tests": ["cargo test -p capability-gateway process_supervisor", "cargo test -p capability-gateway shell -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["10MB stdout/stderr 不 hang", "CJK/emoji 任意 cap 边界不 panic", "cancel/timeout 后 child 已 kill、wait、reap 且 reader task quiet"]
+        },
+        {
+          "id": "TASK-003",
+          "title": "UDS 请求帧与连接资源有界化",
+          "priority": "P1",
+          "issue_ids": ["N04"],
+          "depends_on": ["TASK-001"],
+          "parallel_with": ["TASK-002"],
+          "conflicts_with": ["TASK-008", "TASK-009"],
+          "start_commit": "TASK-001_MERGED_SHA",
+          "workspace_mode": "worktree",
+          "allowed_paths": ["src-agent-daemon/src/rpc.rs", "src-agent-daemon/src/client.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["crates/agent-core/**", "crates/capability-gateway/**", "src/**"],
+          "targeted_tests": ["cargo test -p natives-agent-daemon rpc_frame -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo check --workspace", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["无换行 oversized frame 在固定上限终止", "invalid UTF-8/JSON、slowloris 和 client drop 均回收 session"]
+        }
+      ]
+    },
+    {
+      "id": "B02",
+      "name": "副作用事实单一权威",
+      "reason": "Ledger、Tool fact、Checkpoint cursor 和 Resume 决策共享同一事务与恢复语义，拆给多个 Agent 会产生不可恢复的中间状态。",
+      "depends_on": ["B01"],
+      "tasks": [
+        {
+          "id": "TASK-004",
+          "title": "Tool Effect 原子结算与真实 Ledger Cursor",
+          "priority": "P0",
+          "issue_ids": ["D03", "D04", "D05", "F02", "G01", "G02", "H01"],
+          "depends_on": ["TASK-001", "TASK-002", "TASK-003"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-005", "TASK-006", "TASK-007", "TASK-008", "TASK-009", "TASK-012", "TASK-013"],
+          "start_commit": "natives-runtime/b01-safety",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/assistant-protocol/src/v2/**", "crates/agent-core/src/engine.rs", "crates/agent-core/src/hooks.rs", "src-agent-daemon/src/side_effect_ledger.rs", "src-agent-daemon/src/event_log.rs", "src-agent-daemon/src/event_seq.rs", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/src/checkpoint.rs", "src-agent-daemon/src/run_manager.rs", "src-agent-daemon/src/storage/**", "src-agent-daemon/tests/**", "src/types/generated/**"],
+          "forbidden_paths": ["src/components/**", "src/app/**", "src-tauri/src/**"],
+          "targeted_tests": ["cargo test -p agent-core tool_result", "cargo test -p natives-agent-daemon side_effect -- --test-threads=2", "npm run protocol:check"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["started side effect 恰有 terminal 或 durable uncertain", "Checkpoint cursor 可查询为 ledger watermark 而非 event sequence", "无法证明 safe 时自动 Resume 调用 handler 次数为 0", "Post Hook 具有稳定调用 ID 和明确的结果影响契约"]
+        }
+      ]
+    },
+    {
+      "id": "B03",
+      "name": "Typed Conversation 恢复闭环",
+      "reason": "Conversation projection 必须消费 B02 的稳定事件/事务契约；Projector、watermark、回填和坏记录策略不可拆分。",
+      "depends_on": ["B02"],
+      "tasks": [
+        {
+          "id": "TASK-005",
+          "title": "Typed Turn 幂等 Conversation Projector",
+          "priority": "P0",
+          "issue_ids": ["B01", "F02", "H02", "N02", "N03", "N06"],
+          "depends_on": ["TASK-004"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-006", "TASK-013"],
+          "start_commit": "natives-runtime/b02-effects",
+          "workspace_mode": "main",
+          "allowed_paths": ["src-agent-daemon/src/conversation_store.rs", "src-agent-daemon/src/conversation_projector.rs", "src-agent-daemon/src/event_log.rs", "src-agent-daemon/src/production.rs", "src-agent-daemon/src/run_manager.rs", "src-agent-daemon/src/storage/**", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["crates/provider-adapters/**", "src/**", "src-tauri/**"],
+          "targeted_tests": ["cargo test -p natives-agent-daemon conversation_projector -- --test-threads=2", "cargo test -p natives-agent-daemon snapshot_recovery -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["任意指定 crash point 后 event-derived transcript 与 reload AgentMessage 等价", "下一 Provider request 保留完整 tool pair 和 block order", "损坏 event 显式隔离，禁止静默跳过", "FK 判断不依赖 run-/turn- 名称"]
+        }
+      ]
+    },
+    {
+      "id": "B04",
+      "name": "存储与流式背压",
+      "reason": "先用 B02/B03 的事务命令建立 bounded storage actor，再把 Progress/MCP 接入有界通道；反序会重复改写队列与 Store 接口。",
+      "depends_on": ["B03"],
+      "tasks": [
+        {
+          "id": "TASK-006",
+          "title": "同步 SQLite 迁移到 Bounded Storage Actor",
+          "priority": "P1",
+          "issue_ids": ["F01", "F04", "H02"],
+          "depends_on": ["TASK-005"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-007", "TASK-008", "TASK-009"],
+          "start_commit": "natives-runtime/b03-projection",
+          "workspace_mode": "main",
+          "allowed_paths": ["src-agent-daemon/src/storage/**", "src-agent-daemon/src/event_log.rs", "src-agent-daemon/src/conversation_store.rs", "src-agent-daemon/src/interaction_store.rs", "src-agent-daemon/src/prompt_queue_store.rs", "src-agent-daemon/src/checkpoint.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["crates/agent-core/src/engine.rs", "src/**", "src-tauri/**"],
+          "targeted_tests": ["cargo test -p natives-agent-daemon storage_actor -- --test-threads=2", "cargo test -p natives-agent-daemon sqlite_fault -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["async 请求路径无直接 Mutex<Connection> 阻塞", "队列容量、critical saturation 行为和 shutdown drain 固定", "SQLITE_BUSY/FULL 不丢 critical fact"]
+        },
+        {
+          "id": "TASK-007",
+          "title": "Progress 与 MCP Late Update 全链路有界化",
+          "priority": "P1",
+          "issue_ids": ["H03", "J03"],
+          "depends_on": ["TASK-006"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-008", "TASK-009", "TASK-012"],
+          "start_commit": "TASK-006_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/engine.rs", "crates/capability-gateway/src/lib.rs", "crates/capability-gateway/src/tools/**", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/src/mcp_runtime.rs", "src-agent-daemon/src/event_log.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/**", "src-tauri/**"],
+          "targeted_tests": ["cargo test -p capability-gateway progress", "cargo test -p natives-agent-daemon progress_backpressure -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["Progress channel 固定容量且超限语义明确", "100MB producer 下 RSS 有界", "Result/cancel 后 late update 丢弃且不写事件"]
+        }
+      ]
+    },
+    {
+      "id": "B05",
+      "name": "交互、子 Agent 与队列权威",
+      "reason": "Permission、Sub Agent 和 Prompt Queue 均跨 SQLite 与内存 actor；它们共享 production_tools/run_manager 高冲突文件，必须依次收敛而不能并行重写。",
+      "depends_on": ["B04"],
+      "tasks": [
+        {
+          "id": "TASK-008",
+          "title": "Permission Decision Outbox 与幂等响应",
+          "priority": "P1",
+          "issue_ids": ["A02", "J04"],
+          "depends_on": ["TASK-006", "TASK-007"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-009", "TASK-010"],
+          "start_commit": "natives-runtime/b04-backpressure",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/assistant-protocol/src/v2/**", "src-agent-daemon/src/interaction_store.rs", "src-agent-daemon/src/runtime.rs", "src-agent-daemon/src/rpc.rs", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/tests/**", "src/types/generated/**"],
+          "forbidden_paths": ["src/components/**", "src/app/**", "crates/provider-adapters/**"],
+          "targeted_tests": ["cargo test -p natives-agent-daemon interaction_idempotency -- --test-threads=2", "npm run protocol:check"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["同决策重复响应幂等，冲突响应拒绝", "决策、权威事件与 waiter 交付可由 outbox 重放", "event failure 时 handler 不抢跑"]
+        },
+        {
+          "id": "TASK-009",
+          "title": "Sub Agent Durable Reservation、补偿与失败策略",
+          "priority": "P1",
+          "issue_ids": ["E02", "E03", "E04", "N05"],
+          "depends_on": ["TASK-008"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-010", "TASK-012", "TASK-013"],
+          "start_commit": "TASK-008_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/subagents.rs", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/src/run_manager.rs", "src-agent-daemon/src/conversation_store.rs", "src-agent-daemon/src/storage/**", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/**", "src-tauri/**", "crates/provider-adapters/**"],
+          "targeted_tests": ["cargo test -p agent-core subagent", "cargo test -p natives-agent-daemon subagent_lifecycle -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["创建失败无 session/run/budget orphan", "重启后 reservation 与 token/tool budget 连续", "FailurePolicy 要么生产生效要么删除", "child project_id、root、credential、permission 互不越权"]
+        },
+        {
+          "id": "TASK-010",
+          "title": "Steering/Follow-up Lease 与 DrainMode 契约收紧",
+          "priority": "P1",
+          "issue_ids": ["C02"],
+          "depends_on": ["TASK-009"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-011", "TASK-013"],
+          "start_commit": "TASK-009_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/engine.rs", "src-agent-daemon/src/prompt_queue_store.rs", "src-agent-daemon/src/run_manager.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/**", "src-tauri/**", "crates/provider-adapters/**"],
+          "targeted_tests": ["cargo test -p agent-core steering", "cargo test -p natives-agent-daemon prompt_queue_crash -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["one/all 在混合队列中定义且 FIFO 可证明", "lease 后/ack 前崩溃不丢失且不重复提交模型上下文", "Steering 不插入半个 Assistant Message"]
+        }
+      ]
+    },
+    {
+      "id": "B06",
+      "name": "Core 语义与兼容面收敛",
+      "reason": "Context、Scheduler、Typed/compat 都修改 engine.rs/production.rs/run_manager.rs；按策略、调度、入口顺序串行，避免三个 Agent同时改主循环。",
+      "depends_on": ["B05"],
+      "tasks": [
+        {
+          "id": "TASK-011",
+          "title": "Context Overflow 有界恢复与 Turn Policy",
+          "priority": "P1",
+          "issue_ids": ["C03", "I03"],
+          "depends_on": ["TASK-010"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-012", "TASK-013"],
+          "start_commit": "natives-runtime/b05-authorities",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/context.rs", "crates/agent-core/src/compaction.rs", "crates/agent-core/src/engine.rs", "src-agent-daemon/src/production.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/**", "src-tauri/**", "crates/capability-gateway/**"],
+          "targeted_tests": ["cargo test -p agent-core context_overflow", "cargo test -p agent-core compaction"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["每个输入最多一次 compaction retry", "cancel/summary failure/tool pairing 明确", "Provider context window 与 active snapshot 一致"]
+        },
+        {
+          "id": "TASK-012",
+          "title": "跨 Run Conflict Lease 与工具注册确定性",
+          "priority": "P1",
+          "issue_ids": ["D01", "D02"],
+          "depends_on": ["TASK-011"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-013"],
+          "start_commit": "TASK-011_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/engine.rs", "crates/capability-gateway/src/lib.rs", "crates/capability-gateway/src/manifest.rs", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/src/runtime.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/**", "src-tauri/**", "crates/provider-adapters/**"],
+          "targeted_tests": ["cargo test -p capability-gateway registry", "cargo test -p agent-core tool_scheduler", "cargo test -p natives-agent-daemon conflict_lease -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["重复工具名启动时拒绝", "相同 conflict key 跨 Run 不重叠", "Result 保持源序、completion event 保持完成序", "cancel 释放 lease"]
+        },
+        {
+          "id": "TASK-013",
+          "title": "Typed Provider、Lineage 与 Compatibility Runtime 收敛",
+          "priority": "P2",
+          "issue_ids": ["A03", "B01", "B02", "G03", "G04", "I01", "I02", "J01"],
+          "depends_on": ["TASK-012"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-014"],
+          "start_commit": "TASK-012_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/engine.rs", "crates/agent-core/src/message.rs", "crates/provider-adapters/src/**", "src-agent-daemon/src/production.rs", "src-agent-daemon/src/routing.rs", "src-agent-daemon/src/conversation_store.rs", "src-agent-daemon/src/run_manager.rs", "src-agent-daemon/src/cli_runtime_bridge.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/components/**", "src/app/**", "src-tauri/src/**"],
+          "targeted_tests": ["cargo test -p agent-core typed_message", "cargo test -p provider-adapters", "cargo test -p natives-agent-daemon lineage_compat -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["非 compat production EngineMessage 引用为 0", "Native Provider 只经 ProviderTurnRequest", "Thinking/Image/Custom 转换无静默损失", "Retry/Continue/Fork/Resume lineage 与 snapshot 契约明确", "CLI capability 明示非 native authority"]
+        }
+      ]
+    },
+    {
+      "id": "B07",
+      "name": "模块边界、可观测性与 Facade",
+      "reason": "只有行为与恢复契约稳定后才能移动代码或冻结公开 API；先做无行为拆分，再允许 Metrics 和 Facade 从同一稳定 Commit 有限并行。",
+      "depends_on": ["B06"],
+      "tasks": [
+        {
+          "id": "TASK-014",
+          "title": "按状态权威拆分巨型控制器",
+          "priority": "P2",
+          "issue_ids": ["A01"],
+          "depends_on": ["TASK-013"],
+          "parallel_with": [],
+          "conflicts_with": ["TASK-015", "TASK-016"],
+          "start_commit": "natives-runtime/b06-core",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/**", "src-agent-daemon/src/run_manager.rs", "src-agent-daemon/src/production.rs", "src-agent-daemon/src/production_tools.rs", "src-agent-daemon/src/**/mod.rs"],
+          "forbidden_paths": ["crates/assistant-protocol/src/v2/**", "src/**", "src-tauri/**", "src-agent-daemon/src/storage/migrations/**"],
+          "targeted_tests": ["cargo check -p agent-core -p natives-agent-daemon", "cargo test -p agent-core", "cargo test -p natives-agent-daemon production_runtime -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["纯移动 commit 无协议/DB/行为 diff", "Run terminal authority、Turn driver、Tool orchestration 各只有一个所有者", "禁止 part1/utils 式机械拆分"]
+        },
+        {
+          "id": "TASK-015",
+          "title": "Bounded Runtime Metrics Sink",
+          "priority": "P2",
+          "issue_ids": ["H04"],
+          "depends_on": ["TASK-014"],
+          "parallel_with": ["TASK-016"],
+          "conflicts_with": [],
+          "start_commit": "TASK-014_MERGED_SHA",
+          "workspace_mode": "main",
+          "allowed_paths": ["crates/agent-core/src/metrics.rs", "src-agent-daemon/src/metrics.rs", "src-agent-daemon/src/runtime.rs", "src-agent-daemon/tests/**"],
+          "forbidden_paths": ["src/**", "src-tauri/**", "Cargo.lock"],
+          "targeted_tests": ["cargo test -p agent-core metrics", "cargo test -p natives-agent-daemon metrics -- --test-threads=2"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build"],
+          "acceptance_criteria": ["Run/Turn/Provider/Tool/Queue/Storage 指标存在", "label cardinality 固定且不含 prompt/path/credential", "metrics sink 故障不改变执行事实"]
+        },
+        {
+          "id": "TASK-016",
+          "title": "最小 Rust AgentRuntime Facade 与发布元数据",
+          "priority": "P2",
+          "issue_ids": ["K01", "K02", "L03"],
+          "depends_on": ["TASK-014"],
+          "parallel_with": ["TASK-015"],
+          "conflicts_with": [],
+          "start_commit": "TASK-014_MERGED_SHA",
+          "workspace_mode": "worktree",
+          "allowed_paths": ["crates/agent-core/src/lib.rs", "crates/agent-core/src/facade.rs", "crates/agent-core/Cargo.toml", "examples/**", "docs/architecture/NATIVE_ENGINE_FULL_REMEDIATION.md"],
+          "forbidden_paths": ["src-agent-daemon/src/run_manager.rs", "src-agent-daemon/src/storage/**", "src/**", "src-tauri/**"],
+          "targeted_tests": ["cargo test -p agent-core facade", "cargo check --manifest-path examples/minimal-agent/Cargo.toml"],
+          "forbidden_heavy_commands": ["cargo clean", "cargo test --workspace", "npm ci", "npm run tauri:build", "cargo publish"],
+          "acceptance_criteria": ["Facade 复用现有 AgentEngine，不建立第二套 loop/store", "外部示例仅依赖公开 facade", "In-memory 模式明确不宣称 crash-safe", "license/repository/rust-version/semver 有效"]
+        }
+      ]
+    },
+    {
+      "id": "B08",
+      "name": "生产链最终验收",
+      "reason": "完整 workspace、前端、迁移、真实生产链和 Tauri 重型验证只能在所有代码批次合并后执行一次。",
+      "depends_on": ["B07"],
+      "tasks": [
+        {
+          "id": "TASK-017",
+          "title": "最终故障矩阵、全仓验证与发布门禁",
+          "priority": "RELEASE_BLOCKER",
+          "issue_ids": ["C01", "C04", "E01", "F03", "L01", "L02", "F04"],
+          "depends_on": ["TASK-015", "TASK-016"],
+          "parallel_with": [],
+          "conflicts_with": [],
+          "start_commit": "natives-runtime/b07-operability",
+          "workspace_mode": "main",
+          "allowed_paths": ["tests/**", "scripts/**", ".github/workflows/**", "docs/architecture/NATIVE_ENGINE_FULL_REMEDIATION.md"],
+          "forbidden_paths": ["production source except a separately reviewed defect-fix commit"],
+          "targeted_tests": ["cargo fmt --check", "cargo check --workspace", "cargo clippy --workspace --all-targets -- -D warnings", "cargo test --workspace", "npm run typecheck", "npm run lint", "npm run test", "npm run build", "npm run protocol:check", "npm run verify:native-engine", "npm run tauri:build"],
+          "forbidden_heavy_commands": ["cargo clean", "npm ci unless package-lock verification requires one controlled install", "parallel cargo workspace commands"],
+          "acceptance_criteria": ["所有纳入 P0/P1 验收项有生产链或 crash test", "全量命令保存真实 exit code", "Release smoke 通过", "共享缓存和磁盘增长可解释", "同时 Worktree 不超过 2 且任务 Worktree 已清理"]
+        }
+      ]
+    }
+  ]
+}
