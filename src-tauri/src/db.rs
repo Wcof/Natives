@@ -1647,6 +1647,7 @@ pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
 
 /// Insert an immutable audit/report row for a creative identity repair.
 /// Deterministic `id` keeps re-runs idempotent (INSERT OR IGNORE).
+#[allow(clippy::too_many_arguments)] // pre-existing parameter list
 fn insert_identity_report(
     conn: &Connection,
     id: &str,
@@ -2160,6 +2161,7 @@ pub(crate) fn upgrade_startup_plans_v1(conn: &Connection) -> Result<usize> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // 该文件 test 模块后仍有生产 CRUD 代码（历史结构）
 mod tests {
     use super::*;
 
@@ -3017,6 +3019,7 @@ pub fn seed_builtin_tool(conn: &Connection, id: &str, driver: &str) -> Result<()
 // ──────────────────────────────────────────────
 
 /// Upsert a daily model usage stat row with source breadcrumb.
+#[allow(clippy::too_many_arguments)] // pre-existing parameter list
 pub fn upsert_usage_stat(
     conn: &Connection,
     date: &str,

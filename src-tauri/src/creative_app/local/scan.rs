@@ -94,9 +94,7 @@ pub fn inspect_local_project(
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            if name == "index.html" && rel == "index.html"
-                || name == "index.html" && !rel.contains('/')
-            {
+            if name == "index.html" && (rel == "index.html" || !rel.contains('/')) {
                 has_index_html = true;
             }
             if name == "index.html" {
@@ -131,12 +129,7 @@ pub fn inspect_local_project(
                 has_makefile = true;
             }
             if name == "package.json" && package_json_path.is_none() {
-                // prefer root package.json
-                if rel == "package.json" {
-                    package_json_path = Some(path.to_path_buf());
-                } else if package_json_path.is_none() {
-                    package_json_path = Some(path.to_path_buf());
-                }
+                package_json_path = Some(path.to_path_buf());
             }
             if name == "package-lock.json" {
                 lock_npm = true;
@@ -198,7 +191,7 @@ pub fn inspect_local_project(
                     .iter()
                     .any(|d| d == "vite" || d.starts_with("@vitejs/"))
                 {
-                    vite_config = vite_config || true;
+                    vite_config = true;
                 }
             }
             Err(e) => {

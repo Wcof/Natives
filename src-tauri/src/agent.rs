@@ -247,7 +247,7 @@ pub fn scan_sessions(project_path: &str) -> Result<Vec<SessionInfo>> {
         });
     }
 
-    sessions.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.mtime_ms));
     sessions.truncate(MAX_SESSIONS);
     for session in &mut sessions {
         session.title = session_title(Path::new(&session.path));
@@ -276,7 +276,10 @@ fn skill_frontmatter(txt: &str) -> Option<String> {
     for line in fm_normalized.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("description:") {
-            let val = trimmed["description:".len()..].trim();
+            let val = trimmed
+                .strip_prefix("description:")
+                .map(str::trim)
+                .unwrap_or("");
             // 处理块标量前缀（|, >, |+, >- 等）
             let val = if val.starts_with('|') || val.starts_with('>') {
                 // 块标量：取后续行的缩进内容（简化处理，取第一行非空内容）
@@ -314,8 +317,8 @@ fn check_skill_health(content: &str) -> (bool, Vec<String>) {
     }
 
     let mut end_fm_idx = None;
-    for i in 1..lines.len() {
-        if lines[i].trim() == "---" {
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if line.trim() == "---" {
             end_fm_idx = Some(i);
             break;
         }
@@ -642,7 +645,7 @@ fn parse_codex_skill_events(cutoff: i64) -> std::collections::HashMap<String, Sk
 
     let mut files: Vec<(std::path::PathBuf, i64)> = Vec::new();
     collect_jsonl_files(&codex_sessions, 0, &mut files);
-    files.sort_by(|a, b| b.1.cmp(&a.1)); // 按 mtime 降序
+    files.sort_by_key(|f| std::cmp::Reverse(f.1)); // 按 mtime 降序
     files.truncate(60); // 封顶控 IO
 
     // 匹配模式：<skill>\n<name>X</name>（Codex rollout 中 skill 激活标记）

@@ -133,13 +133,11 @@ pub fn plugin_install(name: String, app_handle: tauri::AppHandle) -> Result<()> 
         let name_stdout = name_clone.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = app_stdout.emit(
-                        "plugin:install-log",
-                        serde_json::json!({ "name": name_stdout, "log": format!("{}\n", l) }),
-                    );
-                }
+            for l in reader.lines().map_while(|l| l.ok()) {
+                let _ = app_stdout.emit(
+                    "plugin:install-log",
+                    serde_json::json!({ "name": name_stdout, "log": format!("{}\n", l) }),
+                );
             }
         });
 
@@ -149,13 +147,11 @@ pub fn plugin_install(name: String, app_handle: tauri::AppHandle) -> Result<()> 
         let name_stderr = name_clone.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = app_stderr.emit(
-                        "plugin:install-log",
-                        serde_json::json!({ "name": name_stderr, "log": format!("{}\n", l) }),
-                    );
-                }
+            for l in reader.lines().map_while(|l| l.ok()) {
+                let _ = app_stderr.emit(
+                    "plugin:install-log",
+                    serde_json::json!({ "name": name_stderr, "log": format!("{}\n", l) }),
+                );
             }
         });
 
@@ -235,13 +231,11 @@ pub fn plugin_uninstall(name: String, app_handle: tauri::AppHandle) -> Result<()
                 let name_stdout = name_clone.clone();
                 std::thread::spawn(move || {
                     let reader = BufReader::new(stdout);
-                    for line in reader.lines() {
-                        if let Ok(l) = line {
-                            let _ = app_stdout.emit(
-                                "plugin:install-log",
-                                serde_json::json!({ "name": name_stdout, "log": format!("{}\n", l) })
-                            );
-                        }
+                    for l in reader.lines().map_while(|l| l.ok()) {
+                        let _ = app_stdout.emit(
+                            "plugin:install-log",
+                            serde_json::json!({ "name": name_stdout, "log": format!("{}\n", l) }),
+                        );
                     }
                 });
 
@@ -251,13 +245,11 @@ pub fn plugin_uninstall(name: String, app_handle: tauri::AppHandle) -> Result<()
                 let name_stderr = name_clone.clone();
                 std::thread::spawn(move || {
                     let reader = BufReader::new(stderr);
-                    for line in reader.lines() {
-                        if let Ok(l) = line {
-                            let _ = app_stderr.emit(
-                                "plugin:install-log",
-                                serde_json::json!({ "name": name_stderr, "log": format!("{}\n", l) })
-                            );
-                        }
+                    for l in reader.lines().map_while(|l| l.ok()) {
+                        let _ = app_stderr.emit(
+                            "plugin:install-log",
+                            serde_json::json!({ "name": name_stderr, "log": format!("{}\n", l) }),
+                        );
                     }
                 });
 

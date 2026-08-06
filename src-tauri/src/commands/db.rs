@@ -16,7 +16,7 @@ pub fn db_get(key: String, state: State<'_, AppState>) -> Result<Option<JsonValu
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::db_get(conn, &key)
 }
 
@@ -31,7 +31,7 @@ pub fn db_set(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::db_set(conn, &key, &value)?;
 
     // Broadcast change to all webviews so live theme/locale/config updates are reflected
@@ -53,7 +53,7 @@ pub fn db_delete(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::db_delete(conn, &key)?;
 
     // Broadcast deletion event
@@ -71,6 +71,6 @@ pub fn db_list(prefix: Option<String>, state: State<'_, AppState>) -> Result<Vec
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::db_list(conn, prefix.as_deref())
 }

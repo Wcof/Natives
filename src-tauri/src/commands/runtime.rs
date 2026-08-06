@@ -40,7 +40,7 @@ pub fn runtime_set_capability_enabled(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     let mut settings: ExecutorSettings = db::get_setting(conn, EXECUTOR_KEY)?
         .and_then(|s| serde_json::from_str(&s).ok())

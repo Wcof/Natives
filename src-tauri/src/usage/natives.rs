@@ -119,6 +119,7 @@ pub fn scan_natives_db(start_ms: i64, end_ms: i64) -> NativesScanResult {
     }
 }
 
+#[allow(clippy::type_complexity)] // pre-existing type shape
 fn candidate_db_openers() -> Vec<(
     String,
     Box<dyn Fn() -> Result<rusqlite::Connection, String>>,
@@ -502,11 +503,7 @@ fn scan_legacy_assistant_tables(
                         project_id: conv,
                         terminal_id: None,
                         input_tokens: if has_input { Some(input) } else { None },
-                        output_tokens: if has_input {
-                            Some(output)
-                        } else {
-                            Some(output)
-                        },
+                        output_tokens: Some(output),
                         cache_creation_tokens: None,
                         cache_read_tokens: None,
                         total_tokens: Some(total),

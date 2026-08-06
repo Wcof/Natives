@@ -43,7 +43,7 @@ pub fn create_creative_draft(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     // 种子读取放在 INSERT 之前：读失败时不得留下无事件、UI 不可见的孤儿草稿行。
     // 同时校验 origin_module_id 形状——它拼进文件路径，不能包含路径分隔符。
@@ -177,7 +177,7 @@ pub fn publish_creative_draft(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     let outcome = store::publish(
         conn,

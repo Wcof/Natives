@@ -16,7 +16,7 @@ pub fn notification_send(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let lvl = level.as_deref().unwrap_or("info");
     let id = db::create_notification(conn, &title, &body, lvl, None)?;
     emit_db_state_changed(
@@ -36,7 +36,7 @@ pub fn notification_list(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::list_notifications(conn, unread_only.unwrap_or(false))
 }
 
@@ -50,7 +50,7 @@ pub fn notification_mark_read(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::mark_notification_read(conn, id)?;
     emit_db_state_changed(
         &app_handle,
@@ -69,7 +69,7 @@ pub fn notification_mark_all_read(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::mark_all_notifications_read(conn)?;
     emit_db_state_changed(
         &app_handle,

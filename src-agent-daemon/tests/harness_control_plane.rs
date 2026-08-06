@@ -151,6 +151,7 @@ fn migration_creates_every_harness_table() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // serial() 串行化 guard 跨 await 持有
 async fn subscribe_replays_persisted_notices_with_a_cursor() {
     let _serial = serial();
     call(
@@ -198,6 +199,7 @@ async fn subscribe_replays_persisted_notices_with_a_cursor() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // serial() 串行化 guard 跨 await 持有
 async fn hook_run_events_create_replayable_trace_notices() {
     let _serial = serial();
     let before = harness::request(

@@ -136,7 +136,7 @@ pub fn check_for_updates(state: &AppState) -> Result<serde_json::Value> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     let muted = get_muted_versions(conn)?;
     let dismissed = get_dismissed_versions(conn)?;

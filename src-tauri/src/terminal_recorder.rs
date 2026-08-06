@@ -226,7 +226,7 @@ impl Recorder {
             });
         }
 
-        recordings.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        recordings.sort_by_key(|r| std::cmp::Reverse(r.created_at));
         Ok(recordings)
     }
 
@@ -239,7 +239,7 @@ impl Recorder {
         let reader = BufReader::new(file);
         let lines: Vec<String> = reader
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(|l| l.ok())
             .filter(|l| !l.trim().is_empty())
             .collect();
 
@@ -463,7 +463,7 @@ impl Recorder {
         }
 
         // Sort by mtime descending (newest first)
-        recordings.sort_by(|a, b| b.1.cmp(&a.1));
+        recordings.sort_by_key(|r| std::cmp::Reverse(r.1));
 
         const MAX_COUNT: usize = 60;
         const MAX_SIZE: u64 = 800 * 1024 * 1024; // 800MB

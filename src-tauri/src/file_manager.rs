@@ -1132,7 +1132,7 @@ pub fn clipboard_copy_files(paths: &[String]) -> Result<serde_json::Value> {
                 "clipboard copy files failed: {err}"
             )));
         }
-        return Ok(serde_json::json!({ "ok": true, "count": abs.len(), "platform": "macos" }));
+        Ok(serde_json::json!({ "ok": true, "count": abs.len(), "platform": "macos" }))
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1228,7 +1228,7 @@ end run
                 return Err(Error::Internal(format!("copy image failed: {err}")));
             }
         }
-        return Ok(serde_json::json!({ "ok": true, "path": path.to_string_lossy() }));
+        Ok(serde_json::json!({ "ok": true, "path": path.to_string_lossy() }))
     }
 
     #[cfg(not(target_os = "macos"))]

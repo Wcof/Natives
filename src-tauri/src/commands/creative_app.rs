@@ -194,7 +194,6 @@ pub async fn creative_app_start(
     // WITHOUT the lock so a concurrent stop can cancel a long start.
     let spawned = {
         let _guard = lock.acquire_app(&id).await;
-        let op_id = op_id;
         let pool_spawn = pool.clone();
         let id_spawn = id.clone();
         let app = ctx.app.clone();
@@ -284,7 +283,6 @@ pub async fn creative_app_stop(
 
     let result = {
         let _guard = lock.acquire_app(&id).await;
-        let op_id = op_id;
         let app = ctx.app.clone();
         let pool_inner = pool.clone();
         let id_inner = id.clone();
@@ -362,7 +360,6 @@ pub async fn creative_app_delete(
 
     let result = {
         let _guard = lock.acquire_app(&id).await;
-        let op_id = op_id;
         let app = ctx.app.clone();
         let pool_inner = pool.clone();
         let id_inner = id.clone();
@@ -390,11 +387,11 @@ pub async fn creative_app_delete(
         Ok(delete_result) => {
             // CR-303: a delete must not leave a child WebView showing the removed
             // app — close it when it was showing this app (audit #09).
-            let showing = browser::browser_current(&browser, &id)
+            let showing = browser::browser_current(browser, &id)
                 .ok()
                 .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
             if showing.as_deref() == Some(id.as_str()) {
-                let _ = browser::browser_close(&ctx.app, &browser, &id);
+                let _ = browser::browser_close(&ctx.app, browser, &id);
             }
             // On success the application row is gone; the operation survives with
             // application_id NULL via the FK (audit trail).
@@ -446,7 +443,6 @@ pub async fn creative_app_restart(
 
     let result = {
         let _guard = lock.acquire_app(&id).await;
-        let op_id = op_id;
         let app = ctx.app.clone();
         let pool_inner = pool.clone();
         let id_inner = id.clone();
@@ -550,11 +546,10 @@ pub async fn creative_app_install_github(
             let _ = runtime_store::upsert_active_plan(&c, &app_id, &rec.runtime_config_json);
         }
         let _ = op::set_application(&c, op_id, &app_id);
-        Ok(runtime_store::attach_identity(&c, summary)?)
+        runtime_store::attach_identity(&c, summary)
     })
     .await
-    .map_err(|e| Error::Internal(format!("install join: {e}")))?
-    .map_err(|e| crate::Error::from(e));
+    .map_err(|e| Error::Internal(format!("install join: {e}")))?;
 
     match inner {
         Ok(summary) => {
@@ -1017,7 +1012,7 @@ fn register_proposal_app(
                 script_runner: None,
                 args: vec![],
                 environment_keys: proposal.environment_keys.clone(),
-                port: proposal_port(&proposal),
+                port: proposal_port(proposal),
                 open_path: proposal.open_path.clone(),
                 health_path: proposal.health_path.clone(),
                 startup_timeout_ms: 60_000,
@@ -1454,7 +1449,7 @@ fn create_local_app(
     let summary = local::summary_from_local(
         &local::get_app(conn, &id)?.ok_or_else(|| Error::Internal("insert vanished".into()))?,
     );
-    Ok(runtime_store::attach_identity(conn, summary)?)
+    runtime_store::attach_identity(conn, summary)
 }
 
 fn update_local_app(
@@ -1538,10 +1533,7 @@ fn update_local_app(
     let app_id =
         runtime_store::find_or_create_application(conn, CreativeAppSource::LocalProject, &rec.id)?;
     let _ = runtime_store::upsert_active_plan(conn, &app_id, &rec.launch_plan_json);
-    Ok(runtime_store::attach_identity(
-        conn,
-        local::summary_from_local(&rec),
-    )?)
+    runtime_store::attach_identity(conn, local::summary_from_local(&rec))
 }
 
 #[tauri::command]

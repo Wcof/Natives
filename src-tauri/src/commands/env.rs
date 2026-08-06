@@ -10,7 +10,7 @@ pub fn env_get_variables(profile_id: String, state: State<'_, AppState>) -> Resu
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let encryption_key = env_manager::get_encryption_key(conn)?;
     let id: i64 = profile_id
         .parse()
@@ -25,7 +25,7 @@ pub fn env_get_default_profile(state: State<'_, AppState>) -> Result<String> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     match env_manager::get_default_profile(conn)? {
         Some(profile) => Ok(profile.name),
         None => Ok(String::new()),
@@ -38,7 +38,7 @@ pub fn env_list_profiles(state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let profiles = env_manager::list_profiles(conn)?;
     serde_json::to_value(profiles)
         .map(|v| {
@@ -61,7 +61,7 @@ pub fn env_create_profile(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     env_manager::create_profile(conn, &name)?;
     emit_db_state_changed(
         &app_handle,
@@ -81,7 +81,7 @@ pub fn env_delete_profile(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     env_manager::delete_profile(conn, &name)?;
     emit_db_state_changed(
         &app_handle,
@@ -101,7 +101,7 @@ pub fn env_set_default_profile(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     env_manager::set_default_profile(conn, &name)?;
     emit_db_state_changed(
         &app_handle,
@@ -123,7 +123,7 @@ pub fn env_set_variable(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let encryption_key = env_manager::get_encryption_key(conn)?;
     let id: i64 = profile_id
         .parse()
@@ -148,7 +148,7 @@ pub fn env_delete_variable(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let id: i64 = profile_id
         .parse()
         .map_err(|_| Error::InvalidInput("invalid profile id".into()))?;
@@ -167,7 +167,7 @@ pub fn env_encrypt(text: String, state: State<'_, AppState>) -> Result<String> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let encryption_key = env_manager::get_encryption_key(conn)?;
     env_manager::encrypt(&text, &encryption_key)
 }

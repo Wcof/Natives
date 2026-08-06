@@ -397,8 +397,11 @@ fn should_replace_claude_usage(existing: &ParsedEvent, candidate: &ParsedEvent) 
 
 fn build_claude_daily(events: &[ParsedEvent]) -> Vec<UsageDailyRecord> {
     // Group by (date, model, project) to aggregate daily tokens
-    let mut groups: HashMap<(String, Option<String>, Option<String>), (i64, i64, i64, i64, i64)> =
-        HashMap::new();
+    #[allow(clippy::type_complexity)] // pre-existing type shape
+    let mut groups: HashMap<
+        (String, Option<String>, Option<String>),
+        (i64, i64, i64, i64, i64),
+    > = HashMap::new();
 
     for event in events {
         let key = (
@@ -440,6 +443,7 @@ fn build_claude_daily(events: &[ParsedEvent]) -> Vec<UsageDailyRecord> {
     records
 }
 
+#[allow(clippy::type_complexity)] // pre-existing type shape
 fn build_claude_activity(events: &[ParsedEvent]) -> Vec<UsageActivityBucket> {
     // (hour, source, model, project) -> (token sum, event timestamps for gap duration)
     let mut groups: HashMap<(i64, String, Option<String>, Option<String>), (i64, Vec<i64>)> =
@@ -600,14 +604,14 @@ fn ts_to_date_str(ts_ms: i64) -> String {
 
 pub fn claude_source_status(
     state: &UsageSourceState,
-    breadcrumbs: &Vec<UsageBreadcrumb>,
+    breadcrumbs: &[UsageBreadcrumb],
 ) -> UsageSourceStatus {
     UsageSourceStatus {
         id: "claude".into(),
         label: "Claude".into(),
         kind: UsageSourceKind::External,
         state: state.clone(),
-        breadcrumbs: breadcrumbs.clone(),
+        breadcrumbs: breadcrumbs.to_vec(),
         capabilities: SourceCapabilities {
             total_tokens: true,    // actual message.usage tokens
             token_breakdown: true, // input/output from message.usage

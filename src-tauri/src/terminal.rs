@@ -137,7 +137,7 @@ impl TerminalManager {
             if let Some(pos) = line.find("\x1b]7;") {
                 let after_prefix = &line[pos + 5..];
                 let end = after_prefix
-                    .find(|c: char| c == '\x07' || c == '\x1b')
+                    .find(['\x07', '\x1b'])
                     .unwrap_or(after_prefix.len());
                 let content = &after_prefix[..end];
                 // 格式: file://hostname/path 或裸路径
@@ -175,7 +175,7 @@ impl TerminalManager {
                 if let Some(pos) = line.find(&pattern) {
                     let after_prefix = &line[pos + pattern.len()..];
                     let end = after_prefix
-                        .find(|c: char| c == '\x07' || c == '\x1b')
+                        .find(['\x07', '\x1b'])
                         .unwrap_or(after_prefix.len());
                     let title = &after_prefix[..end];
                     if !title.is_empty() {
@@ -292,10 +292,10 @@ fi
             if key.starts_with("__NEXT_PRIVATE_") {
                 continue;
             }
-            if key == "LC_ALL" || key == "LC_CTYPE" || key == "LANG" {
-                if value.contains("UTF-8") || value.contains("utf8") || value.contains("utf-8") {
-                    has_utf8_locale = true;
-                }
+            if (key == "LC_ALL" || key == "LC_CTYPE" || key == "LANG")
+                && (value.contains("UTF-8") || value.contains("utf8") || value.contains("utf-8"))
+            {
+                has_utf8_locale = true;
             }
             cmd.env(&key, &value);
         }
@@ -813,8 +813,7 @@ fi
         let mut last_n_line = None;
         for line in stdout_str.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with('n') {
-                let path_part = &trimmed[1..];
+            if let Some(path_part) = trimmed.strip_prefix('n') {
                 if std::path::Path::new(path_part).is_dir() {
                     last_n_line = Some(path_part.to_string());
                 }
@@ -917,11 +916,7 @@ fi
         }
         let stdout = String::from_utf8_lossy(&pgrep.stdout);
         // 取最后一个（最新创建的子进程）
-        let child_pid = stdout
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .last()?;
+        let child_pid = stdout.lines().map(|l| l.trim()).rfind(|l| !l.is_empty())?;
         let name = Self::get_process_name(child_pid.parse().ok()?)?;
         // 去掉路径前缀（macOS comm 可能是全路径）
         let base = name.rsplit('/').next().unwrap_or(&name).to_string();

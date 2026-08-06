@@ -129,12 +129,12 @@ mod tests {
     #[test]
     fn test_search_grep_binary_file() {
         let dir = test_dir("sg_bin");
-        std::fs::write(dir.join("data.bin"), &[0u8, 159, 0x00, 0xFF]).unwrap();
+        std::fs::write(dir.join("data.bin"), [0u8, 159, 0x00, 0xFF]).unwrap();
         // Binary content should not crash grep — should return empty or error gracefully
         let r = search_grep("test".into(), dir.to_string_lossy().into(), None);
-        match r {
-            Ok(results) => assert!(results.is_empty(), "binary file should match nothing"),
-            Err(_) => {} // binary grep error is acceptable
+        if let Ok(results) = r {
+            assert!(results.is_empty(), "binary file should match nothing");
         }
+        // Err is acceptable: binary grep error is graceful
     }
 }

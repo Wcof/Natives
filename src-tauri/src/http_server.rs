@@ -847,7 +847,7 @@ fn route_bridge(
                         .ok()?;
                     stmt.query_row([], |row| row.get::<_, String>(0)).ok()
                 })
-                .unwrap_or_else(|| "".to_string());
+                .unwrap_or_default();
             serde_json::json!({ "result": locale }).to_string()
         }
         ("lifecycle", "ready") => {
@@ -895,7 +895,7 @@ fn route_bridge(
                     stmt.query_row(rusqlite::params![module_id], |row| row.get::<_, String>(0))
                         .ok()
                 })
-                .unwrap_or_else(|| "".to_string());
+                .unwrap_or_default();
             let natives_version = conn
                 .as_ref()
                 .and_then(|c| {
@@ -904,7 +904,7 @@ fn route_bridge(
                         .ok()?;
                     stmt.query_row([], |row| row.get::<_, String>(0)).ok()
                 })
-                .unwrap_or_else(|| "".to_string());
+                .unwrap_or_default();
             serde_json::json!({ "moduleId": module_id, "version": version, "nativesVersion": natives_version }).to_string()
         }
         _ => serde_json::json!({ "error": format!("Unknown bridge method: {namespace}.{method}") })
@@ -1268,6 +1268,7 @@ mod tests {
 
     // ── CR-402: HTTP security — body limits, CSP partitioning, host validation ──
 
+    #[allow(dead_code)] // 测试辅助：保留供后续 bridge 测试使用
     fn http_post(port: u16, path: &str, body: &str, extra_headers: &[&str]) -> String {
         use std::io::{Read, Write};
         let mut stream =

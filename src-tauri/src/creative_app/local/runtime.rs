@@ -225,6 +225,7 @@ impl LocalRuntimeManager {
     /// Start a node_dev_server plan. Caller must hold app-level mutation lock.
     /// The runtime is keyed by `runtime_id` (CR-301) so a restart of the same app
     /// gets a fresh slot and old exit/health events cannot reach the new run.
+    #[allow(clippy::too_many_arguments)] // pre-existing parameter list
     pub async fn start_node_dev(
         &self,
         app: &AppHandle,

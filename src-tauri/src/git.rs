@@ -408,7 +408,7 @@ pub fn git_status(dir_path: &str) -> Result<GitStatus> {
         if line.len() < 3 {
             continue;
         }
-        let index_status = line.chars().nth(0).unwrap_or(' ');
+        let index_status = line.chars().next().unwrap_or(' ');
         let worktree_status = line.chars().nth(1).unwrap_or(' ');
         let file_path = line[3..].trim().to_string();
 

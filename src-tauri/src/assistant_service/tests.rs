@@ -130,6 +130,7 @@ async fn implemented_daemon_method_is_not_rejected_by_legacy_dispatch() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // 序列化 env 变更，避免并行测试互相覆盖
 async fn conversation_permission_and_attachments_round_trip() {
     // Serialise env mutations so parallel natives tests cannot clobber the
     // embedded daemon DB path mid-flight.
@@ -272,6 +273,7 @@ async fn conversation_permission_and_attachments_round_trip() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // 序列化 env 变更，避免并行测试互相覆盖
 async fn structured_assistant_blocks_round_trip() {
     let _env_guard = daemon_env_lock();
     let previous_daemon_mode = std::env::var("NATIVES_DAEMON_MODE").ok();

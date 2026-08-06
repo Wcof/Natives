@@ -209,7 +209,7 @@ pub fn install_module(conn: &Connection, modules_dir: &Path, source: &str) -> Re
 
     let source_path = Path::new(source);
     let manifest = if source_path.is_dir() {
-        read_manifest_from_dir(source_path).map_err(|e| Error::InvalidInput(e))?
+        read_manifest_from_dir(source_path).map_err(Error::InvalidInput)?
     } else if source.ends_with(".zip") {
         // Extract zip to temp dir
         let temp_dir = modules_dir.join(format!(
@@ -223,7 +223,7 @@ pub fn install_module(conn: &Connection, modules_dir: &Path, source: &str) -> Re
 
         // Find manifest in extracted content
         let actual_dir = get_actual_manifest_dir(&temp_dir);
-        let manifest = read_manifest_from_dir(&actual_dir).map_err(|e| Error::InvalidInput(e))?;
+        let manifest = read_manifest_from_dir(&actual_dir).map_err(Error::InvalidInput)?;
 
         // Move to final location
         let dest = modules_dir.join(&manifest.id);
@@ -309,7 +309,7 @@ pub fn update_module(
     // 1. Read new manifest from source
     let source_path = Path::new(source);
     let (manifest, extracted_temp) = if source_path.is_dir() {
-        let m = read_manifest_from_dir(source_path).map_err(|e| Error::InvalidInput(e))?;
+        let m = read_manifest_from_dir(source_path).map_err(Error::InvalidInput)?;
         (m, None)
     } else if source.ends_with(".zip") {
         let temp_dir = modules_dir.join(format!(
@@ -321,7 +321,7 @@ pub fn update_module(
         ));
         extract_zip(source_path, &temp_dir)?;
         let actual_dir = get_actual_manifest_dir(&temp_dir);
-        let m = read_manifest_from_dir(&actual_dir).map_err(|e| Error::InvalidInput(e))?;
+        let m = read_manifest_from_dir(&actual_dir).map_err(Error::InvalidInput)?;
         (m, Some((temp_dir, actual_dir)))
     } else {
         return Err(Error::InvalidInput(
@@ -390,10 +390,8 @@ pub fn update_module(
                 Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
             })
             .map_err(Error::Database)?;
-        for row in rows {
-            if let Ok((perm, granted)) = row {
-                map.insert(perm, granted);
-            }
+        for (perm, granted) in rows.flatten() {
+            map.insert(perm, granted);
         }
         map
     };
@@ -711,7 +709,7 @@ pub fn rollback_module_html(modules_dir: &Path, module_id: &str, old_content: &s
     atomic_write(&html_path, old_content)?;
     // 重新同步注册表（content_hash 已变，但 contract_id 不变 —— 非破坏性修改）
     let pool_conn = crate::db::get_assistant_db_conn()?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     sync_modules_to_db(conn, modules_dir)?;
     Ok(())
 }

@@ -46,7 +46,7 @@ pub fn load_executor_settings() -> ExecutorSettings {
     let Ok(pool_conn) = db::get_main_conn() else {
         return defaults;
     };
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     match db::get_setting(conn, EXECUTOR_KEY) {
         Ok(Some(json)) => serde_json::from_str::<ExecutorSettings>(&json).unwrap_or(defaults),
         _ => defaults,
@@ -59,7 +59,7 @@ pub fn executor_get_settings(state: State<'_, AppState>) -> Result<ExecutorSetti
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let defaults = ExecutorSettings {
         enabled_tools: crate::executor_catalog::default_enabled_tools(),
         max_self_heal: 3,
@@ -80,7 +80,7 @@ pub fn executor_save_settings(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let json = serde_json::to_string(&settings).map_err(|e| Error::Internal(e.to_string()))?;
     db::set_setting(conn, EXECUTOR_KEY, &json)?;
     emit_db_state_changed(

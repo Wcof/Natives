@@ -170,7 +170,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     ensure_tables(conn)?;
 
@@ -179,6 +179,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         "SELECT id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at FROM user_providers ORDER BY created_at DESC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let providers: Vec<(
         String,
         String,
@@ -208,10 +209,12 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         .collect();
 
     // Fetch all keys
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let mut kstmt = conn.prepare(
         "SELECT id, provider_id, label, masked_key, is_primary, is_active, test_status, last_test_at, last_error_code, last_error_message, created_at FROM provider_api_keys ORDER BY created_at ASC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let all_keys: Vec<(
         String,
         String,
@@ -466,7 +469,7 @@ pub fn add_provider_key(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     ensure_tables(conn)?;
 
@@ -589,7 +592,7 @@ pub fn delete_provider_key(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     ensure_tables(conn)?;
 
@@ -625,7 +628,7 @@ pub fn delete_provider(state: State<'_, AppState>, provider_id: String) -> Resul
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     conn.execute(
         "DELETE FROM provider_api_keys WHERE provider_id = ?1",
@@ -1040,7 +1043,7 @@ pub async fn provider_discover_models_saved(
             .db
             .get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-        let conn: &rusqlite::Connection = &*pool_conn;
+        let conn: &rusqlite::Connection = &pool_conn;
         ensure_tables(conn)?;
         let (encrypted, dek, api_protocol, base_url): (String, Option<String>, String, String) =
             conn.query_row(
@@ -1426,7 +1429,7 @@ pub async fn provider_test(
             .db
             .get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-        let conn: &rusqlite::Connection = &*pool_conn;
+        let conn: &rusqlite::Connection = &pool_conn;
         ensure_tables(conn)?;
         let (encrypted, dek, provider_type, api_protocol, base_url, default_model): (String, Option<String>, String, String, String, Option<String>) = conn
             .query_row(
@@ -1673,6 +1676,7 @@ fn chrono_now() -> String {
 /// Mirror a settings-owned provider into assistant.db tables used by
 /// `provider.list` / `run.start`. Settings writes natives.db; assistant reads
 /// assistant.db — without this mirror the picker stays empty after add.
+#[allow(clippy::too_many_arguments)] // pre-existing parameter list
 fn mirror_provider_to_assistant(
     provider_id: &str,
     provider_type: &str,
@@ -2155,7 +2159,6 @@ mod tests {
 
     /// Verify that the ProviderKey DTO struct used for frontend communication
     /// has masked_key instead of an api_key field.
-
     /// Regression: chat-completions 429 must surface a structured rate-limit error.
     /// Spins a local HTTP server that returns 429, then asserts the exact error
     /// shape currently shown in the UI (protocol/model/http_status/retryable/message).

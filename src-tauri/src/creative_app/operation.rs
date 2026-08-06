@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn prune_keeps_newest_terminal_rows_and_all_active() {
         let conn = mem();
-        for i in 0..600 {
+        for _ in 0..600 {
             let op = create_operation(&conn, None, KIND_START, "user", None).unwrap();
             finish_success(&conn, op).unwrap();
         }

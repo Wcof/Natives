@@ -141,6 +141,7 @@ fn i111_manifest_valid() {
     );
 }
 #[test]
+#[allow(clippy::assertions_on_constants)] // 回归：硬编码的重试上限与断路器阈值常量对比
 fn i111_circuit_breaker() {
     const MAX: u32 = 3;
     assert_eq!(MAX, 3);
@@ -169,6 +170,7 @@ fn i113_four_commands() {
     }
 }
 #[test]
+#[allow(clippy::assertions_on_constants)] // 占位：无项目时禁用指令的回归记录
 fn i113_disabled_no_project() {
     assert!(true);
 }

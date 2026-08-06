@@ -273,7 +273,7 @@ pub fn run() {
                 let pool_conn = pool
                     .get()
                     .map_err(|e| format!("failed to get DB connection for env key init: {e}"))?;
-                let conn: &rusqlite::Connection = &*pool_conn;
+                let conn: &rusqlite::Connection = &pool_conn;
                 env_manager::init_env_encryption_key(conn)
                     .map_err(|e| format!("failed to init env encryption key: {e}"))?;
             }
@@ -332,7 +332,7 @@ pub fn run() {
                             .enable_all()
                             .build();
                         if let Ok(rt) = rt {
-                            let _ = rt.block_on(async {
+                            rt.block_on(async {
                                 // Any operation still in flight when the previous
                                 // Host process died is stale; settle it so the
                                 // Renderer never sees an eternally-busy app (CR-201).
@@ -403,10 +403,10 @@ pub fn run() {
                 let rt = tokio::runtime::Runtime::new()
                     .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
                 // 注册 Claude CLI + Codex CLI runtime（独立产品能力，不承载 Native Assistant）。
-                let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                rt.block_on(runtime::registry::register(std::sync::Arc::new(
                     runtime::claude_cli::ClaudeCliRuntime::new(),
                 )));
-                let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                rt.block_on(runtime::registry::register(std::sync::Arc::new(
                     runtime::codex_cli::CodexCliRuntime::new(),
                 )));
             }
@@ -434,7 +434,7 @@ pub fn run() {
                 {
                     let handle = window.app_handle().clone();
                     let rt = local_rt.inner().clone();
-                    let _ = tauri::async_runtime::block_on(async move {
+                    tauri::async_runtime::block_on(async move {
                         creative_app::local::shutdown_all(rt.as_ref(), Some(&handle)).await;
                     });
                 }

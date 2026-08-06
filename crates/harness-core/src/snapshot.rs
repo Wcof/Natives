@@ -290,8 +290,10 @@ mod tests {
         let hook = http_hook();
         let mut overlay = crate::blueprint::HookOverlay::new(hook.id.clone());
         overlay.enabled = Some(false);
-        let mut document = HarnessBlueprint::default();
-        document.hooks = vec![overlay];
+        let document = HarnessBlueprint {
+            hooks: vec![overlay],
+            ..HarnessBlueprint::default()
+        };
         let resolution = resolve(&[hook], &[(ProfileLayer::Project, document)]);
         let snapshot = ResolvedHarnessSnapshot::new(
             "run-1",

@@ -166,8 +166,8 @@ fn test_session_token_isolation() {
     );
 
     // Each client can only use their own token
-    let client1_sessions = vec![client1_token.to_string()];
-    let client2_sessions = vec![client2_token.to_string()];
+    let client1_sessions = [client1_token.to_string()];
+    let client2_sessions = [client2_token.to_string()];
 
     assert!(client1_sessions.contains(&client1_token.to_string()));
     assert!(!client1_sessions.contains(&client2_token.to_string()));

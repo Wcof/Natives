@@ -90,6 +90,11 @@ impl PortLeaseRegistry {
         let st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         st.leases.len()
     }
+
+    /// Whether there are no active leases.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl Default for PortLeaseRegistry {
@@ -185,8 +190,10 @@ struct mach_time_value_t {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(non_camel_case_types)] // 与 macOS 系统类型名保持一致
 type natural_t = u32;
 #[cfg(target_os = "macos")]
+#[allow(non_camel_case_types)] // 与 macOS 系统类型名保持一致
 type mach_port_t = u32;
 #[cfg(target_os = "macos")]
 const MACH_TASK_BASIC_INFO: u32 = 20;

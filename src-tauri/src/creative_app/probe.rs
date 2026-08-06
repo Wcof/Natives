@@ -237,7 +237,7 @@ pub fn probe_release(release: &GhRelease, release_dir: Option<&Path>) -> Result<
     }
 
     // Sort by confidence desc
-    candidates.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.confidence));
 
     // One-click eligibility: single top candidate without manual/hard blockers,
     // clear port, no competing equal confidence.

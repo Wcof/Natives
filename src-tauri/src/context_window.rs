@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 /// Token estimation and context window management for AI conversations.
 /// Handles budget calculation, message trimming, and summary generation.
-
 // Rough token estimation: ~4 characters per token for English, ~1.5 for CJK
 const CHARS_PER_TOKEN_EN: usize = 4;
 const CHARS_PER_TOKEN_CJK: usize = 2;
@@ -31,7 +30,7 @@ pub fn estimate_tokens(text: &str) -> usize {
     let mut other_chars = 0;
 
     for c in text.chars() {
-        if c >= '\u{4E00}' && c <= '\u{9FFF}' || c >= '\u{3000}' && c <= '\u{303F}' {
+        if ('\u{4E00}'..='\u{9FFF}').contains(&c) || ('\u{3000}'..='\u{303F}').contains(&c) {
             cjk_chars += 1;
         } else if !c.is_whitespace() {
             other_chars += 1;

@@ -254,7 +254,7 @@ pub fn library_list_folders(state: State<'_, AppState>) -> Result<Vec<Folder>> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let mut stmt = conn
         .prepare(
@@ -290,7 +290,7 @@ pub fn library_create_folder(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let id = uuid_v4();
     let now = chrono_now();
@@ -368,7 +368,7 @@ pub fn library_list_tags(state: State<'_, AppState>) -> Result<Vec<Tag>> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let mut stmt = conn
         .prepare("SELECT id, name, color, created_at FROM library_tags ORDER BY name")
@@ -395,7 +395,7 @@ pub fn library_create_tag(state: State<'_, AppState>, input: CreateTagInput) -> 
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let id = uuid_v4();
     let now = chrono_now();
@@ -475,7 +475,7 @@ pub fn library_list_items(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let limit = filter.limit.unwrap_or(50).min(200);
     let offset = filter.offset.unwrap_or(0);
@@ -552,7 +552,7 @@ pub fn library_list_items(
         .map_err(|e| Error::Internal(e.to_string()))?
         .filter_map(|r| r.ok())
         .map(|mut item| {
-            item.tags = load_tags_for_item(&*conn, &item.id);
+            item.tags = load_tags_for_item(&conn, &item.id);
             item
         })
         .collect();
@@ -566,7 +566,7 @@ pub fn library_get_item(state: State<'_, AppState>, id: String) -> Result<Option
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let mut stmt = conn
         .prepare(
@@ -581,7 +581,7 @@ pub fn library_get_item(state: State<'_, AppState>, id: String) -> Result<Option
         .map_err(|e| Error::Internal(e.to_string()))?;
 
     if let Some(Ok(mut item)) = rows.next() {
-        item.tags = load_tags_for_item(&*conn, &item.id);
+        item.tags = load_tags_for_item(&conn, &item.id);
         Ok(Some(item))
     } else {
         Ok(None)
@@ -597,7 +597,7 @@ pub fn library_create_item(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let id = uuid_v4();
     let now = chrono_now();
@@ -818,7 +818,7 @@ pub fn library_get_stats(state: State<'_, AppState>) -> Result<LibraryStats> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let total_items: i64 = conn
         .query_row("SELECT COUNT(*) FROM library_items", [], |row| row.get(0))

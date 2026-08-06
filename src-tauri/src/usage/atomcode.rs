@@ -438,14 +438,14 @@ fn sessions(turns: &[Turn]) -> Vec<UsageSessionRecord> {
 
 pub fn atomcode_source_status(
     state: &UsageSourceState,
-    breadcrumbs: &Vec<UsageBreadcrumb>,
+    breadcrumbs: &[UsageBreadcrumb],
 ) -> UsageSourceStatus {
     UsageSourceStatus {
         id: "atomcode".into(),
         label: "Atomcode".into(),
         kind: UsageSourceKind::External,
         state: state.clone(),
-        breadcrumbs: breadcrumbs.clone(),
+        breadcrumbs: breadcrumbs.to_vec(),
         capabilities: SourceCapabilities {
             total_tokens: true,
             token_breakdown: true,

@@ -18,8 +18,8 @@ pub fn sanitize(msg: &str) -> String {
     let s = redact_bearer(&s);
     let s = redact_api_keys(&s);
     let s = redact_long_tokens(&s);
-    let s = redact_home_dir(&s);
-    s
+
+    redact_home_dir(&s)
 }
 
 /// Redact `Bearer <token>` patterns.
