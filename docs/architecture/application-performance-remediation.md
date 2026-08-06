@@ -23,6 +23,31 @@
 
 当前实测：`/page` 183.2KB、`/modules/page` 215.2KB、`/files/page` 199.1KB gzip，全部通过 350KB 门禁。
 
+## T11 性能与可观测性验收（2026-08-07）
+
+同设备、debug 构建、标准数据集（500 会话×2000 消息、20000 运行事件）的 daemon-side
+证据已落地，复现命令与完整样本见 `scripts/perf/daemon-evidence.sh`（产出
+`perf-evidence.json` + `idle-evidence.json`）。核心结论：
+
+- **wire replay 有界化（新增）**：`run.getEvents` / `run.subscribe` 的响应此前对一个
+  长 run 会超过 `MAX_FRAME_BYTES`（2MB）而被客户端拒绝（20000 事件全量 replay 实测
+  报 `response frame exceeds 2097152 bytes`）。现在 UDS 边界按
+  `MAX_WIRE_REPLAY_EVENTS = 2000` 截断（保留最旧 N 条，游标单调前进），内存侧
+  `replay_after_checked` 仍返回全量供 resume/subagent 使用。20000 事件 run 的
+  `run.getEvents` 从「报错」变为「返回 2000 条、无错误」，尾部窗口 p95 从约 219ms
+  降为约 4ms（此前 oversized 帧阻塞了同连接后续请求）。
+- **live WebView 上限（新增）**：`WindowController::open` 增加
+  `MAX_LIVE_WINDOWS = 10` 上限（R-P9），超过时返回带说明的 typed error；复开已开
+  窗口不计数。10 WebView 支持上限因此有明确落点。
+- **daemon 空闲基线**：60 秒空闲 RSS 中位约 20.7MB、CPU 中位 0%（p95 0.3%），低于
+  2% 预算。
+- **checkpoint 1GiB 流式哈希**：内存有界断言成立（content 不缓冲、hash 64 字符）。
+  debug 构建约 49–51s（SHA-256 未优化）；release 等价吞吐（系统 `shasum -a 256`
+  同文件）约 3.4s。Release 绝对值需在目标机 release 构建复测。
+- 仍需真机验证：GUI 冷启动到可交互、交互 p95/主线程 long task、30 分钟导航
+  RSS 增长、WebView RSS、Docker/Python/Binary start/stop 资源清零（Docker 本机无
+  executable，如实标注 blocked）。
+
 ## Release 证据
 
 验收命令（Apple Silicon/macOS 工作区，2026-07-24）：
