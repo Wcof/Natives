@@ -1551,4 +1551,153 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&cwd);
     }
+
+    /// T09: the Python driver runs a REAL python HTTP server through the
+    /// Host-trusted interpreter (T06) and releases everything on stop.
+    #[tokio::test]
+    async fn python_driver_e2e_runs_real_server_via_trusted_interpreter() {
+        let Ok(_) = std::process::Command::new("python3").arg("--version").output() else {
+            eprintln!("[skip] python3 not available");
+            return;
+        };
+        // The trusted interpreter must resolve (real python, not a shell).
+        let interpreter = match crate::creative_app::process_driver::resolve_python_interpreter(
+            "python3",
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[skip] python3 not resolvable: {e}");
+                return;
+            }
+        };
+
+        let conn = mem();
+        let rt = new_runtime_manager();
+        let cwd = std::env::temp_dir().join(format!("natives-t09-py-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("server.py"),
+            "from http.server import HTTPServer, BaseHTTPRequestHandler\n\
+             import os\n\
+             class H(BaseHTTPRequestHandler):\n\
+             \x20   def do_GET(self):\n\
+             \x20       self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n\
+             \x20   def log_message(self, *a): pass\n\
+             HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n",
+        )
+        .unwrap();
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Ai,
+            project_kind: LocalProjectKind::Unknown,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: Some("server.py".into()),
+            entry_file: Some("server.py".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "t09 python".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: Some(crate::creative_app::model::ProcessProfile::Python(
+                crate::creative_app::model::PythonLaunchProfile {
+                    schema_version: 1,
+                    interpreter: interpreter.clone(),
+                    entry: "server.py".into(),
+                    args: vec![],
+                    cwd_relative: ".".into(),
+                    environment_keys: vec![],
+                    port: LaunchPort {
+                        mode: LaunchPortMode::Auto,
+                        value: None,
+                    },
+                    open_path: "/".into(),
+                    health_path: "/".into(),
+                    startup_timeout_ms: 15_000,
+                    is_venv: false,
+                },
+            )),
+        };
+        let t = now();
+        let rec = LocalCreativeAppRecord {
+            id: "loc-py".into(),
+            title: "Python".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: cwd.to_string_lossy().to_string(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Unknown,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: plan.to_json().unwrap(),
+            plan_fingerprint: "fp-py".into(),
+            state: CreativeAppState::InstalledStopped,
+            status_detail_json: None,
+            open_url: None,
+            current_port: None,
+            process_identity_json: None,
+            volume_identity: String::new(),
+            auto_open: false,
+            startup_timeout_ms: 15_000,
+            last_started_at: None,
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        };
+        store::insert_app(&conn, &rec).unwrap();
+        let app_id = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc-py",
+        )
+        .unwrap();
+        let instance_id = crate::creative_app::runtime_store::create_instance(
+            &conn,
+            &app_id,
+            None,
+            "local_process",
+        )
+        .unwrap();
+        crate::creative_app::service_store::upsert_main_service(&conn, &instance_id).unwrap();
+
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+        let _spawned = start_app(&conn, &handle, &rt, 18080, "loc-py", &instance_id)
+            .await
+            .expect("python spawn");
+        let summary = await_start_ready(&conn, &handle, &rt, "loc-py", &instance_id)
+            .await
+            .expect("python healthy");
+        assert_eq!(summary.state, CreativeAppState::Running);
+        let port = store::get_app(&conn, "loc-py")
+            .unwrap()
+            .unwrap()
+            .current_port
+            .expect("python port");
+        assert!(super::runtime::port_listening(port), "python server must listen");
+
+        let services = crate::creative_app::service_store::list_services(&conn, &instance_id)
+            .unwrap();
+        assert_eq!(services[0].readiness, "ready");
+
+        let stopped = stop_app(&conn, &handle, &rt, "loc-py", &instance_id)
+            .await
+            .expect("python stop");
+        assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
+        assert!(!super::runtime::port_listening(port), "python port released");
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
 }
