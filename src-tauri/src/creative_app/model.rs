@@ -1240,6 +1240,23 @@ impl AppGrant {
     pub const POLICY_PERSISTENT: &'static str = "persistent";
 }
 
+/// A grant lifecycle event (set / consumed / revoked) for the permission
+/// history UI. `policy`/`path` snapshot the values at the time of the event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantEvent {
+    pub id: String,
+    pub application_id: String,
+    pub kind: String,
+    /// "set" | "consumed" | "revoked"
+    pub event: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub created_at: String,
+}
+
 // ── Service Instance (batch 7 CR-701) ────────────────────────────────
 
 /// A service instance is a single running unit inside a runtime instance.

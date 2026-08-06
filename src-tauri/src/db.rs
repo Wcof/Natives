@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "22";
+pub const SCHEMA_VERSION: &str = "23";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1349,6 +1349,74 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         // Backfill a "main" service row for active runtimes (idempotent).
         if let Err(e) = crate::creative_app::service_store::backfill_v22(conn) {
             eprintln!("warning: service backfill failed: {e}");
+        }
+    }
+
+    // Migration v22→v23 (T08 CR-601/602/603): real browser profiles + grant history.
+    //
+    // browser_profile_bindings: per-app profile selection. A profile maps to a
+    // real per-profile WebKit data store (`platform_store_key` = 32-hex of the
+    // 16-byte WKWebsiteDataStore identifier; macOS 14+). Profiles created before
+    // v23 used a placeholder key, so existing rows are repaired to a
+    // deterministic identifier derived from the profile id (stable across
+    // restarts — a profile's cookies survive relaunch).
+    //
+    // grant_events: lifecycle audit log (set / consumed / revoked) powering the
+    // permission-history UI. Independent of T07 window_instances and T02
+    // assistant.db — Host natives.db only.
+    if current_version < 23 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS browser_profile_bindings (
+                application_id TEXT PRIMARY KEY REFERENCES applications(id) ON DELETE CASCADE,
+                profile_id TEXT NOT NULL REFERENCES browser_profiles(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS grant_events (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                event TEXT NOT NULL,
+                policy TEXT,
+                path TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_grant_events_app
+                ON grant_events(application_id, created_at);
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23');
+            ",
+        )
+        .map_err(Error::Database)?;
+        // Repair non-hex platform_store_key rows (pre-v23 placeholders like
+        // 'default') to a deterministic 16-byte identifier from the profile id.
+        let profiles: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, platform_store_key FROM browser_profiles")
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(Error::Database)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(Error::Database)?);
+            }
+            out
+        };
+        let is_hex_key = |key: &str| key.len() == 32 && key.chars().all(|c| c.is_ascii_hexdigit());
+        for (id, key) in profiles {
+            if !is_hex_key(&key) {
+                let repaired = crate::creative_app::profile_store::store_key_for_id(&id);
+                conn.execute(
+                    "UPDATE browser_profiles SET platform_store_key = ?1 WHERE id = ?2",
+                    rusqlite::params![repaired, id],
+                )
+                .map_err(Error::Database)?;
+            }
         }
     }
 

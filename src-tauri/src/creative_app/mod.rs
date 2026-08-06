@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod browser;
 pub mod docker;
+pub mod downloads;
 pub mod driver;
 pub mod github;
 pub mod grant_store;
@@ -15,6 +16,7 @@ pub mod install;
 pub mod local;
 pub mod model;
 pub mod non_owned;
+pub mod oauth;
 pub mod operation;
 pub mod paths;
 pub mod port_lease;
