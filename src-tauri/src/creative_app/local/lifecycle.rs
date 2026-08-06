@@ -395,9 +395,9 @@ pub async fn await_start_ready<R: tauri::Runtime>(
 ) -> Result<CreativeAppSummary> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
-    // Compose start is fully synchronous in start_app (up + health + Running),
-    // so the health phase is a no-op for it (batch 5).
-    if plan.runtime == LocalLaunchRuntime::DockerCompose {
+    // Static HTTP and Compose starts are fully synchronous in start_app
+    // (Running is settled there), so the health phase is a no-op for them.
+    if runtime::plan_is_static(&plan) || plan.runtime == LocalLaunchRuntime::DockerCompose {
         let summary = store::summary_from_local(&rec);
         record_ready_endpoint(conn, id, runtime_id, &summary);
         return Ok(summary);
@@ -1373,7 +1373,7 @@ mod tests {
         let handle = mock.handle().clone();
 
         // Phase 1: spawn (port lease held until the child binds).
-        let spawned = start_app(&conn, &handle, &rt, 18080, "loc-e2e", &instance_id)
+        let _spawned = start_app(&conn, &handle, &rt, 18080, "loc-e2e", &instance_id)
             .await
             .expect("spawn");
         // Phase 2: health → Running + endpoint write.
@@ -1427,6 +1427,127 @@ mod tests {
         let endpoints_after =
             crate::creative_app::surface_store::list_endpoints(&conn, &instance_id).unwrap();
         assert!(endpoints_after.is_empty(), "endpoints cleared after stop");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    /// T09: the LocalStatic driver completes synchronously (no process) and
+    /// still writes a real ServiceInstance + RuntimeEndpoint projection.
+    #[tokio::test]
+    async fn local_static_driver_e2e_writes_services_and_endpoint() {
+        let conn = mem();
+        let rt = new_runtime_manager();
+        let cwd = std::env::temp_dir().join(format!("natives-t09-static-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("index.html"), "<html><body>hi</body></html>").unwrap();
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Rule,
+            project_kind: LocalProjectKind::Html,
+            runtime: LocalLaunchRuntime::StaticHttp,
+            program: LaunchProgram::Internal,
+            cwd_relative: ".".into(),
+            script: None,
+            entry_file: Some("index.html".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "t09 static".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: None,
+        };
+        let t = now();
+        let rec = LocalCreativeAppRecord {
+            id: "loc-static".into(),
+            title: "Static".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: cwd.to_string_lossy().to_string(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Html,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: plan.to_json().unwrap(),
+            plan_fingerprint: "fp-static".into(),
+            state: CreativeAppState::InstalledStopped,
+            status_detail_json: None,
+            open_url: None,
+            current_port: None,
+            process_identity_json: None,
+            volume_identity: String::new(),
+            auto_open: false,
+            startup_timeout_ms: 15_000,
+            last_started_at: None,
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        };
+        store::insert_app(&conn, &rec).unwrap();
+        let app_id = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc-static",
+        )
+        .unwrap();
+        let instance_id = crate::creative_app::runtime_store::create_instance(
+            &conn,
+            &app_id,
+            None,
+            "host_http",
+        )
+        .unwrap();
+        crate::creative_app::service_store::upsert_main_service(&conn, &instance_id).unwrap();
+
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+
+        let spawned = start_app(&conn, &handle, &rt, 18081, "loc-static", &instance_id)
+            .await
+            .expect("static spawn");
+        assert_eq!(spawned.state, CreativeAppState::Running);
+        let summary = await_start_ready(&conn, &handle, &rt, "loc-static", &instance_id)
+            .await
+            .expect("static ready");
+        assert_eq!(summary.state, CreativeAppState::Running);
+
+        // Service + endpoint rows are real.
+        let services = crate::creative_app::service_store::list_services(&conn, &instance_id)
+            .unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].readiness, "ready");
+        let endpoints =
+            crate::creative_app::surface_store::list_endpoints(&conn, &instance_id).unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert!(
+            endpoints[0].url.contains("local-projects"),
+            "static endpoint must point at the host HTTP local-projects route: {}",
+            endpoints[0].url
+        );
+
+        let stopped = stop_app(&conn, &handle, &rt, "loc-static", &instance_id)
+            .await
+            .expect("static stop");
+        assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
+        let services_after = crate::creative_app::service_store::list_services(&conn, &instance_id)
+            .unwrap();
+        assert_eq!(services_after[0].readiness, "stopped");
+        assert!(
+            crate::creative_app::surface_store::list_endpoints(&conn, &instance_id)
+                .unwrap()
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(&cwd);
     }

@@ -522,4 +522,50 @@ mod tests {
             assert_eq!(v.as_str(), "super-secret-value");
         }
     }
+
+    /// T09: Compose safety is structural — the compose commands never pass a
+    /// privileged flag, never run a global prune, and stop never removes user
+    /// volumes. Guarded at the source so a future edit can't silently relax it.
+    #[test]
+    fn compose_commands_never_privileged_or_global_prune_or_volume_drop() {
+        let src = include_str!("docker.rs");
+        for (name, body) in [
+            ("compose_up", "pub async fn compose_up"),
+            ("compose_up_override", "pub async fn compose_up_override"),
+            ("compose_stop", "pub async fn compose_stop"),
+            ("compose_down", "pub async fn compose_down"),
+        ] {
+            let start = src.find(body).unwrap_or_else(|| panic!("{name} not found"));
+            let end = src[start..]
+                .find("\n    }\n")
+                .map(|i| start + i)
+                .unwrap_or(src.len());
+            let func = &src[start..end];
+            assert!(
+                !func.contains("--privileged"),
+                "{name} must never pass --privileged"
+            );
+            assert!(
+                !func.contains("system prune") && !func.contains("prune"),
+                "{name} must never run a global/system prune"
+            );
+        }
+        // Stop must not remove user volumes (no -v / --volumes).
+        let stop_src = include_str!("docker.rs");
+        let stop_start = stop_src.find("pub async fn compose_stop").unwrap();
+        let stop_end = stop_src[stop_start..].find("\n    }\n").unwrap() + stop_start;
+        let stop_fn = &stop_src[stop_start..stop_end];
+        assert!(
+            !stop_fn.contains("-v") && !stop_fn.contains("--volumes"),
+            "compose_stop must never delete user volumes"
+        );
+        // Delete only drops volumes when the user explicitly opts in.
+        let down_start = stop_src.find("pub async fn compose_down").unwrap();
+        let down_end = stop_src[down_start..].find("\n    }\n").unwrap() + down_start;
+        let down_fn = &stop_src[down_start..down_end];
+        assert!(
+            down_fn.contains("remove_volumes"),
+            "compose_down must gate volume deletion behind the user option"
+        );
+    }
 }

@@ -128,7 +128,7 @@ pub fn browser_show_non_owned(
         .ok_or_else(|| Error::Internal("main window not found".into()))?;
     use tauri::webview::WebviewBuilder;
     use tauri::{LogicalPosition, LogicalSize};
-    let mut builder = WebviewBuilder::new(label, tauri::WebviewUrl::External(parsed))
+    let builder = WebviewBuilder::new(label, tauri::WebviewUrl::External(parsed))
         .on_navigation(move |nav_url| nav_fn(nav_url.as_str()));
     let window = main.as_ref().window();
     let _webview = window
@@ -140,9 +140,7 @@ pub fn browser_show_non_owned(
         .map_err(|e| Error::Internal(format!("add_child webview: {e}")))?;
     set_active(state, label, app_id, url)?;
     Ok(())
-}
-
-/// Open a grant-approved popup: a child webview in the main window with a
+}/// Open a grant-approved popup: a child webview in the main window with a
 /// unique label, the app's profile data store (shared cookies), loopback-only
 /// navigation, and no Tauri capability. Returns the new webview's label.
 ///

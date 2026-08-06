@@ -314,7 +314,10 @@ pub fn driver_for(conn: &Connection, id: &str) -> Result<Arc<dyn RuntimeDriver>>
     match source {
         ResolvedSource::Internal => Ok(WorkshopDriver::new()),
         ResolvedSource::ExternalGithub => {
-            let _ = runtime_store::external_owner_kind(conn, id)?;
+            // The precise docker kind (compose vs run) is resolved from the
+            // record config, but a stale/unparseable config must not prevent
+            // the driver from being resolved (delete/stop still work).
+            let _ = runtime_store::external_owner_kind(conn, id);
             Ok(DockerDriver::new())
         }
         ResolvedSource::LocalProject => {
@@ -488,7 +491,6 @@ pub fn static_entry_path(project_root: &std::path::Path, plan: &LaunchPlan) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::creative_app::local::LocalRuntimeManager;
 
     #[test]
     fn driver_kind_matches_runtime() {

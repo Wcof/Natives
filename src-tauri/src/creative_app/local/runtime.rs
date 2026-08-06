@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -1126,6 +1126,174 @@ mod tests {
         );
     }
 
+    /// T06/T09: the Host-trusted binary identity is recomputed at spawn —
+    /// `build_command` returns the canonical path only when the current content
+    /// hash still matches the recorded approval; a swap invalidates it.
+    #[test]
+    fn build_command_verifies_binary_identity_at_spawn() {
+        use crate::creative_app::model::{BinaryLaunchProfile, ProcessProfile};
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("myapp");
+        std::fs::write(&bin, b"#!/bin/sh\necho v1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (canonical, hash) = crate::creative_app::process_driver::resolve_binary_identity(
+            bin.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let base_plan = LaunchPlan {
+            schema_version: 1,
+            source: crate::creative_app::model::LaunchPlanSource::Ai,
+            project_kind: crate::creative_app::model::LocalProjectKind::Unknown,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: crate::creative_app::model::LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: None,
+            entry_file: None,
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            auto_open: false,
+            confidence: None,
+            reason: "test".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: Some(ProcessProfile::Binary(BinaryLaunchProfile {
+                schema_version: 1,
+                executable_path: canonical.clone(),
+                executable_hash: hash.clone(),
+                approved: true,
+                args: vec![],
+                cwd_relative: ".".into(),
+                environment_keys: vec![],
+                port: crate::creative_app::model::LaunchPort {
+                    mode: crate::creative_app::model::LaunchPortMode::Auto,
+                    value: None,
+                },
+                open_path: "/".into(),
+                health_path: "/".into(),
+                startup_timeout_ms: 60_000,
+            })),
+        };
+
+        // Same content → the canonical path is returned (spawnable).
+        let (program, _) = build_command(&base_plan, 0).unwrap();
+        assert_eq!(program, canonical);
+
+        // Content swap → the identity no longer matches → refused at spawn.
+        std::fs::write(&bin, b"#!/bin/sh\necho v2-swapped\n").unwrap();
+        let err = build_command(&base_plan, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("changed since approval"),
+            "a swapped binary must fail identity verification: {err}"
+        );
+
+        // Restore content → passes again (hash is content-based).
+        std::fs::write(&bin, b"#!/bin/sh\necho v1\n").unwrap();
+        let (program2, _) = build_command(&base_plan, 0).unwrap();
+        assert_eq!(program2, canonical);
+    }
+
+    /// T06/T09: the Python interpreter is re-resolved to its Host-trusted
+    /// canonical path at spawn; a shell interpreter is never executed.
+    #[test]
+    fn build_command_requires_python_interpreter_identity() {
+        use crate::creative_app::model::{ProcessProfile, PythonLaunchProfile};
+        let tmp = tempfile::tempdir().unwrap();
+        let py = tmp.path().join("python3");
+        std::fs::write(&py, b"#!/usr/bin/env python3\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&py, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let canonical = crate::creative_app::process_driver::resolve_python_interpreter(
+            py.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: crate::creative_app::model::LaunchPlanSource::Ai,
+            project_kind: crate::creative_app::model::LocalProjectKind::Unknown,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: crate::creative_app::model::LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: Some("app.py".into()),
+            entry_file: Some("app.py".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            auto_open: false,
+            confidence: None,
+            reason: "test".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: Some(ProcessProfile::Python(PythonLaunchProfile {
+                schema_version: 1,
+                interpreter: canonical.clone(),
+                entry: "app.py".into(),
+                args: vec![],
+                cwd_relative: ".".into(),
+                environment_keys: vec![],
+                port: crate::creative_app::model::LaunchPort {
+                    mode: crate::creative_app::model::LaunchPortMode::Auto,
+                    value: None,
+                },
+                open_path: "/".into(),
+                health_path: "/".into(),
+                startup_timeout_ms: 60_000,
+                is_venv: true,
+            })),
+        };
+
+        // The trusted interpreter resolves; argv starts with the entry module.
+        let (program, args) = build_command(&plan, 0).unwrap();
+        assert_eq!(program, canonical);
+        assert_eq!(args[0], "app.py");
+
+        // A shell interpreter is refused at the spawn point.
+        let mut shell = plan.clone();
+        shell.process_profile = Some(ProcessProfile::Python(PythonLaunchProfile {
+            schema_version: 1,
+            interpreter: "/bin/sh".into(),
+            entry: "app.py".into(),
+            args: vec![],
+            cwd_relative: ".".into(),
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            is_venv: false,
+        }));
+        assert!(
+            build_command(&shell, 0).is_err(),
+            "a shell pseudo-python must never reach the spawn point"
+        );
+    }
+
     /// Batch 6: URL candidates follow the documented priority (explicit plan
     /// port first, framework default last) and always target loopback.
     #[test]
@@ -1471,5 +1639,188 @@ mod tests {
             let _ = libc::kill(-(pid as i32), libc::SIGKILL);
         }
         let _ = child.wait().await;
+    }
+
+    /// T09 acceptance: two projects run in parallel on distinct ports and never
+    /// share resources — stopping one leaves the other untouched.
+    #[tokio::test]
+    async fn two_projects_do_not_share_resources() {
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+        let mgr = LocalRuntimeManager::new();
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+
+        let mk_plan = || LaunchPlan {
+            schema_version: 1,
+            source: crate::creative_app::model::LaunchPlanSource::Rule,
+            project_kind: crate::creative_app::model::LocalProjectKind::Vite,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: crate::creative_app::model::LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: Some("server.js".into()),
+            entry_file: Some("server.js".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "two-projects".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: None,
+        };
+        let mk_dir = |tag: &str| {
+            let d = std::env::temp_dir().join(format!("natives-t09-two-{tag}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(
+                d.join("server.js"),
+                "require('http').createServer((q,s)=>s.end('ok')).listen(process.env.PORT,'127.0.0.1');",
+            )
+            .unwrap();
+            d
+        };
+
+        let dir_a = mk_dir("a");
+        let dir_b = mk_dir("b");
+        let (port_a, url_a, _id_a) = mgr
+            .start_node_dev(
+                &handle,
+                "run-a",
+                "app-a",
+                &dir_a,
+                &mk_plan(),
+                "fp-a",
+                &[],
+                None,
+                None,
+            )
+            .await
+            .expect("start a");
+        let (port_b, url_b, _id_b) = mgr
+            .start_node_dev(
+                &handle,
+                "run-b",
+                "app-b",
+                &dir_b,
+                &mk_plan(),
+                "fp-b",
+                &[],
+                None,
+                None,
+            )
+            .await
+            .expect("start b");
+
+        assert_ne!(port_a, port_b, "two projects must bind distinct ports");
+        assert!(url_a.contains(&port_a.to_string()));
+        assert!(url_b.contains(&port_b.to_string()));
+        assert!(mgr.is_running("run-a").await && mgr.is_running("run-b").await);
+
+        // Stop A — B stays live on its own port.
+        mgr.stop::<tauri::test::MockRuntime>("run-a", Some(&handle))
+            .await
+            .expect("stop a");
+        assert!(!mgr.is_running("run-a").await);
+        assert!(mgr.is_running("run-b").await);
+        assert!(
+            !port_listening(port_a),
+            "project A port must be released"
+        );
+        assert!(
+            port_listening(port_b),
+            "project B port must stay live"
+        );
+
+        mgr.stop::<tauri::test::MockRuntime>("run-b", Some(&handle))
+            .await
+            .expect("stop b");
+        assert!(
+            mgr.live_runtime_ids().await.is_empty(),
+            "no live resources after stopping both projects"
+        );
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
+    /// T09 acceptance: a process that ignores SIGTERM is still reaped by the
+    /// TERM → grace → KILL chain; stop verifies the port is released.
+    #[tokio::test]
+    async fn stop_reaps_term_ignoring_child() {
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+        let mgr = LocalRuntimeManager::new();
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+
+        let dir = std::env::temp_dir().join(format!("natives-t09-term-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("server.js"),
+            "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});\
+             require('http').createServer((q,s)=>s.end('ok')).listen(process.env.PORT,'127.0.0.1');\
+             setInterval(()=>{},1000);",
+        )
+        .unwrap();
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: crate::creative_app::model::LaunchPlanSource::Rule,
+            project_kind: crate::creative_app::model::LocalProjectKind::Vite,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: crate::creative_app::model::LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: Some("server.js".into()),
+            entry_file: Some("server.js".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "term-ignore".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: None,
+        };
+        let (port, _url, _identity) = mgr
+            .start_node_dev(
+                &handle, "run-term", "app-term", &dir, &plan, "fp-term", &[], None, None,
+            )
+            .await
+            .expect("spawn term-ignoring server");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !port_listening(port) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "server never bound port"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // The child ignores TERM; stop must still reap it (grace → KILL) and
+        // verify the port is released.
+        mgr.stop::<tauri::test::MockRuntime>("run-term", Some(&handle))
+            .await
+            .expect("stop reaps TERM-ignoring child");
+        assert!(!mgr.is_running("run-term").await);
+        assert!(!port_listening(port), "port must be released after stop");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
