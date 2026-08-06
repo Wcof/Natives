@@ -1,4 +1,4 @@
-# 0017. Versioned Native Builtin Prompt Replacement
+# 0018. Versioned Native Builtin Prompt Replacement
 
 - **Status**: Accepted
 - **Date**: 2026-07-28
