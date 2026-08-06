@@ -68,8 +68,8 @@ pub use ghostty_vt::GhosttyTerminal;
 ///
 /// The payload carries `version + sequence_id` so consumers can reconcile state
 /// and discard out-of-order events.
-pub fn emit_db_state_changed(
-    app_handle: &tauri::AppHandle,
+pub fn emit_db_state_changed<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
     channel: &str,
     data: serde_json::Value,
 ) {

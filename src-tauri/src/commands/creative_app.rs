@@ -1341,9 +1341,12 @@ pub async fn creative_app_proposal_approve(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<crate::creative_app::proposal_inbox::ProposalApproveResult> {
     use crate::creative_app::proposal_inbox::{self, ProposalApproveResult};
     let pool = state.db.clone();
+    let host_port = host_http_port(&state);
+    let local_runtime = local_runtime.inner().clone();
     if let Err(e) = proposal_inbox::sync_pending_from_daemon(&pool).await {
         eprintln!("[proposal] sync before approve failed (continuing): {e}");
     }
@@ -1413,22 +1416,58 @@ pub async fn creative_app_proposal_approve(
                 });
             }
 
-            match register_proposal_app(&mut c, &verified_proposal) {
-                Ok(summary) => Ok(ProposalApproveResult::Approved {
+            // T09: kind=create registers only; kind=start also launches the app
+            // through start→health→endpoint. A kind=start on an already
+            // registered root reuses the existing app instead of duplicating.
+            let register_only = !proposal_inbox::proposal_should_start(&verified_proposal);
+            // Registration failure (including a duplicate path for kind=create)
+            // CASes approved → failed (terminal) so the card never sees a
+            // silent success.
+            let app_id = (|| -> crate::Result<String> {
+                match proposal_inbox::start_target_for_proposal(&c, &verified_proposal)? {
+                    Some(existing) => Ok(existing),
+                    None => register_proposal_app(&mut c, &verified_proposal).map(|s| s.id),
+                }
+            })()
+            .map_err(|e| {
+                let _ = proposal_inbox::cas_status(
+                    &c,
+                    &proposal_id,
+                    proposal_inbox::STATUS_APPROVED,
+                    proposal_inbox::STATUS_FAILED,
+                );
+                e
+            })?;
+            if register_only {
+                let summary = crate::creative_app::adapters::get_summary(&c, &app_id)?;
+                return Ok(ProposalApproveResult::Approved {
                     proposal_id: proposal_id.clone(),
                     app: summary,
-                }),
-                Err(e) => {
-                    // Registration failed — CAS approved → failed (terminal).
-                    let _ = proposal_inbox::cas_status(
-                        &c,
-                        &proposal_id,
-                        proposal_inbox::STATUS_APPROVED,
-                        proposal_inbox::STATUS_FAILED,
-                    );
-                    Err(e)
-                }
+                });
             }
+            // Launch start→health→endpoint. A start failure keeps the proposal
+            // approved and the app retryable (its state honestly reflects the
+            // outcome); only a registration failure is terminal for the card.
+            let summary = match start_approved_app(
+                &handle,
+                &local_runtime,
+                host_port,
+                &pool,
+                &app_id,
+                &lock,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    // The app is registered; return its honest current state
+                    // (StartFailed) so the approval card reflects reality and
+                    // the user can retry from the catalog.
+                    crate::creative_app::adapters::get_summary(&c, &app_id).map_err(|_| e)?
+                }
+            };
+            Ok(ProposalApproveResult::Approved {
+                proposal_id: proposal_id.clone(),
+                app: summary,
+            })
         })();
 
         match decision {
@@ -1882,6 +1921,27 @@ fn proposal_port(
         mode: crate::creative_app::model::LaunchPortMode::Auto,
         value: None,
     }
+}
+
+/// Launch a proposal-approved app through start→health→endpoint (T09).
+///
+/// Runs under the per-app mutation lock. A start failure returns Err; the
+/// caller keeps the proposal approved and the app's honest state (StartFailed)
+/// so a retry stays possible from the catalog.
+fn start_approved_app(
+    handle: &tauri::AppHandle,
+    local_runtime: &LocalRuntimeHandle,
+    host_port: u16,
+    pool: &DbPool,
+    app_id: &str,
+    lock: &MutationLock,
+) -> Result<CreativeAppSummary> {
+    let ctx = lifecycle_ctx(handle.clone(), local_runtime.clone(), host_port);
+    let rt = tokio::runtime::Handle::current();
+    let c = conn(pool)?;
+    let _guard = rt.block_on(lock.acquire_app(app_id));
+    let summary = rt.block_on(adapters::facade::start(&c, &ctx, app_id))?;
+    runtime_store::attach_identity(&c, summary)
 }
 
 #[tauri::command]
@@ -2374,7 +2434,7 @@ pub async fn creative_app_diagnose_local_with_ai(
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
         // Also apply any process exits observed while diagnosing.
-        let _ = rt.block_on(local::lifecycle::poll_and_reconcile_exits(
+        let _ = rt.block_on(local::lifecycle::poll_and_reconcile_exits::<tauri::Wry>(
             &c,
             None,
             local_runtime.as_ref(),

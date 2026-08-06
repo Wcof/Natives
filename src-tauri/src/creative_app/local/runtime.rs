@@ -150,7 +150,7 @@ impl LocalRuntimeManager {
         map.get(runtime_id).map(|p| p.identity.clone())
     }
 
-    pub async fn stop_all(&self, app: Option<&AppHandle>) {
+    pub async fn stop_all<R: tauri::Runtime>(&self, app: Option<&tauri::AppHandle<R>>) {
         let ids: Vec<String> = {
             let map = self.procs.lock().await;
             map.keys().cloned().collect()
@@ -166,7 +166,11 @@ impl LocalRuntimeManager {
     /// still accepting connections after TERM→grace→KILL→reap. Callers must NOT
     /// write `stopped` on `Err` — the identity/port must be preserved so a retry
     /// stop stays possible.
-    pub async fn stop(&self, runtime_id: &str, app: Option<&AppHandle>) -> Result<()> {
+    pub async fn stop<R: tauri::Runtime>(
+        &self,
+        runtime_id: &str,
+        app: Option<&tauri::AppHandle<R>>,
+    ) -> Result<()> {
         let mut map = self.procs.lock().await;
         let Some(mut live) = map.remove(runtime_id) else {
             // Nothing live to stop; make sure no tracked tasks linger either.
@@ -231,9 +235,9 @@ impl LocalRuntimeManager {
     /// The runtime is keyed by `runtime_id` (CR-301) so a restart of the same app
     /// gets a fresh slot and old exit/health events cannot reach the new run.
     #[allow(clippy::too_many_arguments)] // pre-existing parameter list
-    pub async fn start_node_dev(
+    pub async fn start_node_dev<R: tauri::Runtime>(
         &self,
-        app: &AppHandle,
+        app: &tauri::AppHandle<R>,
         runtime_id: &str,
         app_id: &str,
         project_root: &Path,
@@ -530,9 +534,9 @@ impl LocalRuntimeManager {
     /// Wait until health check passes or timeout. On failure leaves process running
     /// (caller may stop or mark start_unhealthy). Cancellable: a stop preempts the
     /// wait via the instance's cancelled flag (batch 2).
-    pub async fn wait_healthy(
+    pub async fn wait_healthy<R: tauri::Runtime>(
         &self,
-        app: &AppHandle,
+        app: &tauri::AppHandle<R>,
         runtime_id: &str,
         app_id: &str,
         health_path: &str,
@@ -620,7 +624,7 @@ impl LocalRuntimeManager {
     }
 }
 
-fn emit_log(app: &AppHandle, runtime_id: &str, app_id: &str, line: &LogLine) {
+fn emit_log<R: tauri::Runtime>(app: &tauri::AppHandle<R>, runtime_id: &str, app_id: &str, line: &LogLine) {
     let ev = CreativeAppLogEvent {
         runtime_id: runtime_id.to_string(),
         app_id: app_id.to_string(),
@@ -632,7 +636,7 @@ fn emit_log(app: &AppHandle, runtime_id: &str, app_id: &str, line: &LogLine) {
     let _ = app.emit("creative-app-log", &ev);
 }
 
-fn emit_progress(app: &AppHandle, app_id: &str, stage: &str, message: &str) {
+fn emit_progress<R: tauri::Runtime>(app: &tauri::AppHandle<R>, app_id: &str, stage: &str, message: &str) {
     let ev = CreativeAppOperationProgress {
         app_id: app_id.to_string(),
         stage: stage.to_string(),
@@ -1274,7 +1278,7 @@ mod tests {
                 .insert("a-run".into(), vec![task_handle]);
         }
 
-        mgr.stop("a-run", None).await.expect("stop succeeds");
+        mgr.stop::<tauri::Wry>("a-run", None).await.expect("stop succeeds");
         assert!(
             cancelled.load(Ordering::SeqCst),
             "stop must set the cancel flag before reaping"
@@ -1319,7 +1323,7 @@ mod tests {
         ids.sort();
         assert_eq!(ids, vec!["run-1".to_string(), "run-2".to_string()]);
         // Stopping run 1 must not touch run 2.
-        mgr.stop("run-1", None).await.expect("stop run-1");
+        mgr.stop::<tauri::Wry>("run-1", None).await.expect("stop run-1");
         assert_eq!(mgr.live_runtime_ids().await, vec!["run-2".to_string()]);
         mgr.purge_app_logs("app-iso");
     }
@@ -1353,7 +1357,7 @@ mod tests {
                 },
             );
         }
-        let err = mgr.stop("run-1", None).await.unwrap_err();
+        let err = mgr.stop::<tauri::Wry>("run-1", None).await.unwrap_err();
         assert!(err.to_string().contains("stop incomplete"), "{err}");
         assert!(err.to_string().contains("port"), "{err}");
         drop(listener);
@@ -1386,9 +1390,9 @@ mod tests {
                 },
             );
         }
-        mgr.stop("run-1", None).await.expect("first stop");
+        mgr.stop::<tauri::Wry>("run-1", None).await.expect("first stop");
         assert!(
-            mgr.stop("run-1", None).await.is_ok(),
+            mgr.stop::<tauri::Wry>("run-1", None).await.is_ok(),
             "second stop is idempotent"
         );
         mgr.purge_app_logs("app-r");

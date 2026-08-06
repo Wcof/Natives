@@ -227,10 +227,9 @@ pub async fn await_ready(
                         .unwrap_or((None, None, None));
                     let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
                     let _ = super::runtime_store::mark_running(conn, iid, &urls, hint.0, hint.1, hint.2);
-                    // T09: persist the REAL endpoint + service readiness from the
-                    // health pass.
-                    let _ =
-                        super::service_store::record_instance_ready(conn, iid, &urls, hint.0);
+                    // ServiceInstance/Endpoint rows are written by the local
+                    // driver itself (await_start_ready) — the adapter only
+                    // settles the runtime instance CAS.
                 }
             }
             // Not running here means stop preempted the start; the instance
