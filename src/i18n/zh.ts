@@ -1136,7 +1136,7 @@ export const zh = {
     terminalHeight: '终端高度',
     themeDescTerminal: '适合低光环境的深色界面',
     themeDescJasmine: '清爽克制的浅色界面',
-    aboutVersion: 'Natives v0.1.0 - AI 时代的桌面应用容器',
+    aboutVersion: 'Natives v0.1.0 - 本机个人全能 AI 工作台',
     tabModules: '模块配置',
     builtinTools: '内置工具',
     toolEnabled: '启用',

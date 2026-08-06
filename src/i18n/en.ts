@@ -1144,7 +1144,7 @@ export const en = {
     terminalHeight: 'Terminal Height',
     themeDescTerminal: 'A focused dark interface for low-light work.',
     themeDescJasmine: 'A clean light interface with restrained contrast.',
-    aboutVersion: 'Natives v0.1.0 - AI Steam Base',
+    aboutVersion: 'Natives v0.1.0 - Personal All-in-One AI Workbench',
     tabModules: 'Module Config',
     builtinTools: 'Builtin Tools',
     toolEnabled: 'Enabled',

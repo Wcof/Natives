@@ -1,7 +1,7 @@
 {
   "name": "natives",
   "version": "0.1.0",
-  "description": "AI Steam Base — Tauri Desktop Application Container",
+  "description": "Natives — Personal All-in-One AI Workbench (Tauri Desktop Application)",
   "private": true,
   "scripts": {
     "web:dev": "node scripts/ensure-port.mjs && NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
