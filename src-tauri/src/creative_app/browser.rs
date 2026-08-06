@@ -8,11 +8,17 @@
 //! hook and absence of capability inheritance keep each instance isolated
 //! from the main app's Tauri permissions.
 
+use super::downloads;
+use super::grant_store;
+use super::model::AppGrant;
 use super::model::BrowserBounds;
+use super::oauth::{self, NewWindowDecision};
+use super::profile_store;
 use super::service::navigation_allowed;
-use crate::{Error, Result};
+use crate::{db, Error, Result};
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tauri::webview::DownloadEvent;
 use tauri::{AppHandle, Manager};
 
 /// Label prefix for child WebViews. Each gets `{PREFIX}{sanitized_app_id}`.
@@ -68,6 +74,36 @@ impl BrowserState {
 
 pub type BrowserStateHandle = Mutex<BrowserState>;
 
+/// If `url` targets an allowlisted OAuth domain, spawn a temp OAuth surface
+/// for it and return `true` (the caller must cancel the original
+/// navigation/window). Returns `false` for every other URL.
+fn divert_oauth(
+    app: &AppHandle,
+    registry: &Option<std::sync::Arc<oauth::OAuthFlowRegistry>>,
+    app_id: &str,
+    url: &tauri::Url,
+) -> bool {
+    let Ok(conn) = db::get_main_conn() else {
+        return false;
+    };
+    if !matches!(
+        oauth::decide_new_window(&conn, app_id, url),
+        Ok(NewWindowDecision::OAuthDivert)
+    ) {
+        return false;
+    }
+    let Some(registry) = registry else {
+        return false;
+    };
+    match oauth::start_oauth_surface(app, &conn, registry.clone(), app_id, url.as_str()) {
+        Ok(start) => {
+            oauth::spawn_background_flow(app.clone(), registry.clone(), start);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Show or create a child webview for the given app at the given URL.
 ///
 /// Multi-label (CR-401): each app gets its own label `"creative-app-{appId}"`,
@@ -107,12 +143,124 @@ pub fn browser_show(
         .get_webview_window("main")
         .ok_or_else(|| Error::Internal("main window not found".into()))?;
 
+    // T08: per-profile WebKit data store isolation (macOS 14+). Resolve the
+    // app's profile and hand its identifier to the builder — cookies,
+    // localStorage, IndexedDB and service workers are then profile-scoped.
+    let store_identifier = db::get_main_conn()
+        .ok()
+        .and_then(|conn| profile_store::profile_for_app(&conn, app_id).ok())
+        .and_then(|profile| profile_store::data_store_identifier(&profile));
+
+    // T08: the OAuth flow registry (managed in lib.rs) powers `window.open`
+    // divert to a temp OAuth surface. Absent in tests → new windows just deny.
+    let oauth_registry = app
+        .try_state::<std::sync::Arc<oauth::OAuthFlowRegistry>>()
+        .map(|s| s.inner().clone());
+
     // Window::add_child is gated on unstable; call via window handle.
     use tauri::webview::WebviewBuilder;
     use tauri::{LogicalPosition, LogicalSize};
 
-    let builder = WebviewBuilder::new(label.clone(), tauri::WebviewUrl::External(parsed))
-        .on_navigation(|nav_url| navigation_allowed(nav_url.as_str()));
+    let nav_app_handle = app.clone();
+    let nav_app_id = app_id.to_string();
+    let nav_registry = oauth_registry.clone();
+    let mut builder = WebviewBuilder::new(label.clone(), tauri::WebviewUrl::External(parsed))
+        .on_navigation(move |nav_url| {
+            if navigation_allowed(nav_url.as_str()) {
+                return true;
+            }
+            // An allowlisted OAuth domain navigated directly (full-page OAuth
+            // redirect) is diverted to a temp surface; the Embed surface stays
+            // on loopback. Everything else is blocked.
+            divert_oauth(&nav_app_handle, &nav_registry, &nav_app_id, nav_url);
+            false
+        });
+    if let Some(identifier) = store_identifier {
+        builder = builder.data_store_identifier(identifier);
+    }
+    builder = builder.on_new_window({
+        let app_id_owned = app_id.to_string();
+        let app_handle = app.clone();
+        let win_registry = oauth_registry.clone();
+        move |url, _features| {
+            let decision = db::get_main_conn()
+                .ok()
+                .and_then(|conn| oauth::decide_new_window(&conn, &app_id_owned, &url).ok());
+            match decision {
+                Some(NewWindowDecision::OAuthDivert) => {
+                    // Divert to a controlled temp OAuth surface; the popup
+                    // itself is denied so it can never outlive the flow.
+                    divert_oauth(&app_handle, &win_registry, &app_id_owned, &url);
+                    tauri::webview::NewWindowResponse::Deny
+                }
+                Some(NewWindowDecision::GrantAllow) => tauri::webview::NewWindowResponse::Allow,
+                _ => {
+                    // Default deny — surface the denial so the Renderer can
+                    // offer a grant. No window is created, no side effect.
+                    crate::emit_db_state_changed(
+                        &app_handle,
+                        "creative-grant-requested",
+                        serde_json::json!({
+                            "appId": app_id_owned,
+                            "kind": AppGrant::KIND_WINDOW_OPEN,
+                            "target": url.to_string(),
+                        }),
+                    );
+                    tauri::webview::NewWindowResponse::Deny
+                }
+            }
+        }
+    });
+    builder = builder.on_download({
+        let app_id_owned = app_id.to_string();
+        let app_handle = app.clone();
+        move |_webview, event| match event {
+            DownloadEvent::Requested { url, destination } => {
+                let Ok(conn) = db::get_main_conn() else {
+                    return false;
+                };
+                // Resolve the Host-chosen destination first (grant scope dir or
+                // the managed per-app dir) and a sanitized filename, then gate
+                // it with the download grant against that directory.
+                match downloads::safe_download_destination(
+                    &conn,
+                    &app_id_owned,
+                    &url,
+                    destination,
+                ) {
+                    Some(path) => {
+                        let dir = path.parent().and_then(|p| p.to_str());
+                        match grant_store::check_grant(
+                            &conn,
+                            &app_id_owned,
+                            AppGrant::KIND_DOWNLOAD,
+                            dir,
+                        ) {
+                            Ok(outcome) if outcome.allowed() => {
+                                *destination = path;
+                                true
+                            }
+                            _ => {
+                                crate::emit_db_state_changed(
+                                    &app_handle,
+                                    "creative-grant-requested",
+                                    serde_json::json!({
+                                        "appId": app_id_owned,
+                                        "kind": AppGrant::KIND_DOWNLOAD,
+                                        "target": url.to_string(),
+                                    }),
+                                );
+                                false
+                            }
+                        }
+                    }
+                    None => false,
+                }
+            }
+            DownloadEvent::Finished { .. } => true,
+            _ => true,
+        }
+    });
 
     let window = main.as_ref().window();
     let _webview = window
