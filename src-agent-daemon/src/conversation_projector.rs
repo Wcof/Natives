@@ -834,6 +834,12 @@ mod tests {
     /// Shared test store (migrations run once per test on a fresh temp DB);
     /// each test uses unique run/conv ids. Returns the tempdir so it stays
     /// alive for the whole test.
+    ///
+    /// Note: like the rest of the daemon test suite, the NATIVES_* env
+    /// mutations here are intentionally NOT restored — several production
+    /// fixtures (e.g. `subagent_persona_tests`) rely on `NATIVES_ASSISTANT_DB_PATH`
+    /// being present and recreate the path on demand. Restoring it here breaks
+    /// those tests (pre-existing coupling, T01 hermeticity debt).
     fn setup() -> ((String, String), tempfile::TempDir) {
         let _guard = crate::storage::DataStore::env_test_lock();
         let dir = tempfile::tempdir().unwrap();
@@ -1351,10 +1357,11 @@ mod tests {
                 .unwrap();
             }
         }
-        // Hold the SQLite write lock from a second connection.
+        // Hold the SQLite write lock from a second connection. The short busy
+        // timeout (still set) makes the projector's next write surface
+        // SQLITE_BUSY immediately instead of parking for the default 30s.
         let lock_conn = rusqlite::Connection::open(&db).unwrap();
         lock_conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
-        std::env::remove_var("NATIVES_TEST_BUSY_TIMEOUT_MS");
         let failure = recover_projections().unwrap_err();
         assert!(
             failure.contains("projection recovery failed") || failure.contains("busy"),
@@ -1374,6 +1381,8 @@ mod tests {
             report.total_projected, 1,
             "retry after lock release succeeds"
         );
+        // Remove the test-only knob so it never leaks into a later test.
+        std::env::remove_var("NATIVES_TEST_BUSY_TIMEOUT_MS");
     }
 
     /// The classifier must map busy/locked/disk-full to retryable and
