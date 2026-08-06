@@ -59,6 +59,89 @@ pub fn is_window_label(label: &str) -> bool {
 /// the `main` capability filter.
 const POPUP_LABEL_PREFIX: &str = "creative-popup-";
 
+/// Label prefix for non-owned (attached/remote) child WebViews (T09). The label
+/// never matches the `main` webview capability filter, so a non-owned app never
+/// receives Tauri Host capability.
+pub const NON_OWNED_LABEL_PREFIX: &str = "creative-nonowned-";
+
+/// Build a unique child-WebView label for a non-owned app record.
+pub fn non_owned_label(id: &str) -> String {
+    format!("{}{}", NON_OWNED_LABEL_PREFIX, sanitize_label(id))
+}
+
+/// Open a non-owned app in a child WebView restricted to its trust domain
+/// (T09).
+///
+/// - Attached (`approved_origins` is `None`): loopback-only navigation, same as
+///   managed Embed surfaces.
+/// - Remote (`Some(origins)`): navigation restricted to the approved origins.
+///   The child label never matches the `main` capability filter, so the remote
+///   app never gets a Tauri capability. There is no download/grant/OAuth wiring
+///   because a non-owned driver has no Host capability to grant.
+pub fn browser_show_non_owned(
+    app: &AppHandle,
+    state: &BrowserStateHandle,
+    label: &str,
+    app_id: &str,
+    url: &str,
+    bounds: BrowserBounds,
+    approved_origins: Option<&[String]>,
+) -> Result<()> {
+    let nav_fn: Box<dyn Fn(&str) -> bool + Send + Sync> = match approved_origins {
+        Some(origins) => {
+            if !crate::creative_app::non_owned::remote_navigation_allowed(url, origins) {
+                return Err(Error::InvalidInput(
+                    "navigation blocked: URL is not in the app's approved origins".into(),
+                ));
+            }
+            let origins = origins.to_vec();
+            Box::new(move |nav_url: &str| {
+                crate::creative_app::non_owned::remote_navigation_allowed(nav_url, &origins)
+            })
+        }
+        None => {
+            if !navigation_allowed(url) {
+                return Err(Error::InvalidInput(
+                    "navigation blocked: only loopback http/https allowed".into(),
+                ));
+            }
+            Box::new(navigation_allowed)
+        }
+    };
+
+    let parsed: tauri::Url = url
+        .parse()
+        .map_err(|e| Error::InvalidInput(format!("url parse: {e}")))?;
+
+    if let Some(wv) = app.get_webview(label) {
+        wv.navigate(parsed)
+            .map_err(|e| Error::Internal(format!("webview navigate: {e}")))?;
+        set_bounds_webview(&wv, &bounds)?;
+        wv.show()
+            .map_err(|e| Error::Internal(format!("webview show: {e}")))?;
+        set_active(state, label, app_id, url)?;
+        return Ok(());
+    }
+
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| Error::Internal("main window not found".into()))?;
+    use tauri::webview::WebviewBuilder;
+    use tauri::{LogicalPosition, LogicalSize};
+    let mut builder = WebviewBuilder::new(label, tauri::WebviewUrl::External(parsed))
+        .on_navigation(move |nav_url| nav_fn(nav_url.as_str()));
+    let window = main.as_ref().window();
+    let _webview = window
+        .add_child(
+            builder,
+            LogicalPosition::new(bounds.x, bounds.y),
+            LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0)),
+        )
+        .map_err(|e| Error::Internal(format!("add_child webview: {e}")))?;
+    set_active(state, label, app_id, url)?;
+    Ok(())
+}
+
 /// Open a grant-approved popup: a child webview in the main window with a
 /// unique label, the app's profile data store (shared cookies), loopback-only
 /// navigation, and no Tauri capability. Returns the new webview's label.

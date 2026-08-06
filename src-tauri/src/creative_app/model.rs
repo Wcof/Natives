@@ -138,6 +138,19 @@ pub struct CreativeAppActions {
 }
 
 impl CreativeAppActions {
+    /// Honest actions for a non-owned app (T09): open + delete-record only.
+    /// A non-owned driver never advertises start/stop — Natives does not own
+    /// the external service's lifecycle.
+    pub fn for_non_owned(_ownership: OwnershipMode) -> Self {
+        Self {
+            can_open: true,
+            can_start: false,
+            can_stop: false,
+            can_delete: true,
+            can_retry: false,
+        }
+    }
+
     pub fn for_state(source: CreativeAppSource, state: CreativeAppState) -> Self {
         match source {
             CreativeAppSource::Internal => match state {
@@ -1433,6 +1446,23 @@ pub struct NonOwnedApp {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Catalog projection for a non-owned app (T09). Carries the record plus an
+/// honest action matrix — `can_open` / `can_delete` only, never start/stop.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NonOwnedAppSummary {
+    #[serde(flatten)]
+    pub app: NonOwnedApp,
+    pub actions: CreativeAppActions,
+}
+
+impl NonOwnedAppSummary {
+    pub fn project(app: NonOwnedApp) -> Self {
+        let actions = CreativeAppActions::for_non_owned(app.ownership);
+        Self { app, actions }
+    }
 }
 
 /// Probe result for a non-owned app — does the origin currently respond?
