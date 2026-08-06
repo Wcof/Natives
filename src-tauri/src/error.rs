@@ -19,6 +19,13 @@ pub enum Error {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// A state transition or DB CAS was rejected because the entity already
+    /// holds a conflicting state (e.g. a second active runtime instance, or a
+    /// transition from an unexpected status). Distinct from `NotFound` so a
+    /// 0-row update on an existing row is observable instead of silent success.
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 

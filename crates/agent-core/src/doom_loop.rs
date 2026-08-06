@@ -244,7 +244,7 @@ fn find_periodic_cycle(
 /// True when `block` is not itself a repetition of a shorter block.
 fn is_primitive(block: &[&str]) -> bool {
     let k = block.len();
-    (1..k).all(|d| !k.is_multiple_of(d) || (0..k).any(|i| block[i] != block[i % d]))
+    (1..k).all(|d| k % d != 0 || (0..k).any(|i| block[i] != block[i % d]))
 }
 
 fn truncate_pattern(block: &[&str]) -> Vec<String> {

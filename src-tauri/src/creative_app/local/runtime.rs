@@ -22,6 +22,9 @@ const GRACEFUL_WAIT_MS: u64 = 5_000;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreativeAppLogEvent {
+    /// Runtime instance id owning this log line (CR-301). Empty for legacy /
+    /// aggregate lines that predate runtime-scoped logs.
+    pub runtime_id: String,
     pub app_id: String,
     pub seq: u64,
     pub ts_ms: i64,
@@ -39,6 +42,8 @@ pub struct CreativeAppOperationProgress {
 
 #[allow(dead_code)]
 struct LiveLocalProcess {
+    runtime_id: String,
+    app_id: String,
     child: Option<Child>,
     identity: ProcessIdentity,
     plan_fingerprint: String,
@@ -53,6 +58,9 @@ struct LiveLocalProcess {
     cancelled: Arc<AtomicBool>,
 }
 
+/// Live local process registry, keyed by RUNTIME INSTANCE id (CR-301). Two
+/// consecutive runs of the same app never share a slot, so a late exit/health
+/// event from run 1 cannot land on run 2's resources.
 pub struct LocalRuntimeManager {
     procs: Mutex<HashMap<String, LiveLocalProcess>>,
     logs: LogRegistry,
@@ -80,10 +88,16 @@ impl LocalRuntimeManager {
         &self.logs
     }
 
+    /// Runtime ids with a live managed child (used to heartbeat each instance).
+    pub async fn live_runtime_ids(&self) -> Vec<String> {
+        let map = self.procs.lock().await;
+        map.keys().cloned().collect()
+    }
+
     /// True while a managed child is still alive.
-    pub async fn is_running(&self, app_id: &str) -> bool {
+    pub async fn is_running(&self, runtime_id: &str) -> bool {
         let mut map = self.procs.lock().await;
-        if let Some(p) = map.get_mut(app_id) {
+        if let Some(p) = map.get_mut(runtime_id) {
             if let Some(child) = p.child.as_mut() {
                 match child.try_wait() {
                     Ok(Some(_)) => {
@@ -99,36 +113,36 @@ impl LocalRuntimeManager {
     }
 
     /// Register a task owned by an instance so stop can end it.
-    async fn track_task(&self, app_id: &str, handle: JoinHandle<()>) {
+    async fn track_task(&self, runtime_id: &str, handle: JoinHandle<()>) {
         let mut map = self.task_handles.lock().await;
-        map.entry(app_id.to_string()).or_default().push(handle);
+        map.entry(runtime_id.to_string()).or_default().push(handle);
     }
 
-    /// Abort all tracked tasks for an app (log readers / health). Called after
-    /// the process tree is gone so a reader can never linger on a dead pipe.
-    async fn end_tracked_tasks(&self, app_id: &str) {
+    /// Abort all tracked tasks for an instance (log readers / health). Called
+    /// after the process tree is gone so a reader can never linger on a dead pipe.
+    async fn end_tracked_tasks(&self, runtime_id: &str) {
         let handles = {
             let mut map = self.task_handles.lock().await;
-            map.remove(app_id).unwrap_or_default()
+            map.remove(runtime_id).unwrap_or_default()
         };
         for h in handles {
             h.abort();
         }
     }
 
-    pub async fn current_port(&self, app_id: &str) -> Option<u16> {
+    pub async fn current_port(&self, runtime_id: &str) -> Option<u16> {
         let map = self.procs.lock().await;
-        map.get(app_id).and_then(|p| p.port)
+        map.get(runtime_id).and_then(|p| p.port)
     }
 
-    pub async fn open_url(&self, app_id: &str) -> Option<String> {
+    pub async fn open_url(&self, runtime_id: &str) -> Option<String> {
         let map = self.procs.lock().await;
-        map.get(app_id).and_then(|p| p.open_url.clone())
+        map.get(runtime_id).and_then(|p| p.open_url.clone())
     }
 
-    pub async fn identity(&self, app_id: &str) -> Option<ProcessIdentity> {
+    pub async fn identity(&self, runtime_id: &str) -> Option<ProcessIdentity> {
         let map = self.procs.lock().await;
-        map.get(app_id).map(|p| p.identity.clone())
+        map.get(runtime_id).map(|p| p.identity.clone())
     }
 
     pub async fn stop_all(&self, app: Option<&AppHandle>) {
@@ -147,12 +161,12 @@ impl LocalRuntimeManager {
     /// still accepting connections after TERM→grace→KILL→reap. Callers must NOT
     /// write `stopped` on `Err` — the identity/port must be preserved so a retry
     /// stop stays possible.
-    pub async fn stop(&self, app_id: &str, app: Option<&AppHandle>) -> Result<()> {
+    pub async fn stop(&self, runtime_id: &str, app: Option<&AppHandle>) -> Result<()> {
         let mut map = self.procs.lock().await;
-        let Some(mut live) = map.remove(app_id) else {
+        let Some(mut live) = map.remove(runtime_id) else {
             // Nothing live to stop; make sure no tracked tasks linger either.
             drop(map);
-            self.end_tracked_tasks(app_id).await;
+            self.end_tracked_tasks(runtime_id).await;
             return Ok(());
         };
         let pgid = live.identity.process_group_id;
@@ -185,7 +199,7 @@ impl LocalRuntimeManager {
         }
 
         drop(map);
-        self.end_tracked_tasks(app_id).await;
+        self.end_tracked_tasks(runtime_id).await;
 
         if !problems.is_empty() {
             live.log.append(
@@ -193,7 +207,7 @@ impl LocalRuntimeManager {
                 &format!("stop incomplete: {}", problems.join("; ")),
             );
             if let Some(app) = app {
-                emit_progress(app, app_id, "stop_failed", &problems.join("; "));
+                emit_progress(app, &live.app_id, "stop_failed", &problems.join("; "));
             }
             return Err(Error::Internal(format!(
                 "stop incomplete: {}",
@@ -203,15 +217,18 @@ impl LocalRuntimeManager {
 
         live.log.append(LogStream::System, "stopped");
         if let Some(app) = app {
-            emit_progress(app, app_id, "stopped", "process stopped");
+            emit_progress(app, &live.app_id, "stopped", "process stopped");
         }
         Ok(())
     }
 
     /// Start a node_dev_server plan. Caller must hold app-level mutation lock.
+    /// The runtime is keyed by `runtime_id` (CR-301) so a restart of the same app
+    /// gets a fresh slot and old exit/health events cannot reach the new run.
     pub async fn start_node_dev(
         &self,
         app: &AppHandle,
+        runtime_id: &str,
         app_id: &str,
         project_root: &Path,
         plan: &LaunchPlan,
@@ -219,7 +236,7 @@ impl LocalRuntimeManager {
         env: &[(String, String)],
         preferred_port: Option<u16>,
     ) -> Result<(u16, String, ProcessIdentity)> {
-        if self.is_running(app_id).await {
+        if self.is_running(runtime_id).await {
             return Err(Error::InvalidInput("already running".into()));
         }
 
@@ -278,7 +295,7 @@ impl LocalRuntimeManager {
             args.extend(super::plan::runner_port_flags(runner, port));
         }
 
-        let log = self.logs.get_or_open(app_id);
+        let log = self.logs.get_or_open(app_id, runtime_id);
         // Inject this app's env values so live + persisted logs redact them by value.
         log.set_secrets(env.iter().map(|(_, v)| v.clone()).collect());
         log.append(
@@ -352,6 +369,7 @@ impl LocalRuntimeManager {
         let stderr = child.stderr.take();
         let app_handle = app.clone();
         let app_id_out = app_id.to_string();
+        let runtime_id_out = runtime_id.to_string();
         let log_out = log.clone();
         let stdout_secrets = secret_values.clone();
         if let Some(out) = stdout {
@@ -364,13 +382,14 @@ impl LocalRuntimeManager {
                         &line,
                         &stdout_secrets,
                     );
-                    emit_log(&app_handle, &app_id_out, &entry);
+                    emit_log(&app_handle, &runtime_id_out, &app_id_out, &entry);
                 }
             });
-            self.track_task(app_id, handle).await;
+            self.track_task(runtime_id, handle).await;
         }
         let app_handle = app.clone();
         let app_id_err = app_id.to_string();
+        let runtime_id_err = runtime_id.to_string();
         let log_err = log.clone();
         let stderr_secrets = secret_values;
         if let Some(err) = stderr {
@@ -383,10 +402,10 @@ impl LocalRuntimeManager {
                         &line,
                         &stderr_secrets,
                     );
-                    emit_log(&app_handle, &app_id_err, &entry);
+                    emit_log(&app_handle, &runtime_id_err, &app_id_err, &entry);
                 }
             });
-            self.track_task(app_id, handle).await;
+            self.track_task(runtime_id, handle).await;
         }
 
         let open_path = if plan.open_path.starts_with('/') {
@@ -399,8 +418,10 @@ impl LocalRuntimeManager {
         {
             let mut map = self.procs.lock().await;
             map.insert(
-                app_id.to_string(),
+                runtime_id.to_string(),
                 LiveLocalProcess {
+                    runtime_id: runtime_id.to_string(),
+                    app_id: app_id.to_string(),
                     child: Some(child),
                     identity: identity.clone(),
                     plan_fingerprint: plan_fingerprint.to_string(),
@@ -434,9 +455,9 @@ impl LocalRuntimeManager {
     }
 
     /// If the managed process has exited, remove it and return exit info.
-    pub async fn take_if_exited(&self, app_id: &str) -> Option<i32> {
+    pub async fn take_if_exited(&self, runtime_id: &str) -> Option<i32> {
         let mut map = self.procs.lock().await;
-        let live = map.get_mut(app_id)?;
+        let live = map.get_mut(runtime_id)?;
         let child = live.child.as_mut()?;
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -444,14 +465,15 @@ impl LocalRuntimeManager {
                 live.child = None;
                 live.log
                     .append(LogStream::System, &format!("process exited (code {code})"));
-                map.remove(app_id);
+                map.remove(runtime_id);
                 Some(code)
             }
             _ => None,
         }
     }
 
-    /// Poll all live processes; return app_ids that exited with codes.
+    /// Poll all live processes; return `(runtime_id, exit_code)` pairs so a late
+    /// exit can be attributed to the exact run that produced it (CR-301 #22).
     pub async fn poll_exits(&self) -> Vec<(String, i32)> {
         let ids: Vec<String> = {
             let map = self.procs.lock().await;
@@ -472,6 +494,7 @@ impl LocalRuntimeManager {
     pub async fn wait_healthy(
         &self,
         app: &AppHandle,
+        runtime_id: &str,
         app_id: &str,
         health_path: &str,
         timeout_ms: u32,
@@ -484,7 +507,7 @@ impl LocalRuntimeManager {
         };
         let cancelled = {
             let map = self.procs.lock().await;
-            map.get(app_id).map(|p| p.cancelled.clone())
+            map.get(runtime_id).map(|p| p.cancelled.clone())
         };
         emit_progress(app, app_id, "health_check", "waiting for server");
 
@@ -496,11 +519,11 @@ impl LocalRuntimeManager {
             {
                 return Err(Error::Cancelled("start cancelled by stop".into()));
             }
-            if !self.is_running(app_id).await {
+            if !self.is_running(runtime_id).await {
                 return Err(Error::Internal("process exited before healthy".into()));
             }
             let port = self
-                .current_port(app_id)
+                .current_port(runtime_id)
                 .await
                 .ok_or_else(|| Error::Internal("missing port".into()))?;
             if port_listening(port) {
@@ -519,21 +542,46 @@ impl LocalRuntimeManager {
         }
     }
 
-    pub fn recent_logs(&self, app_id: &str, limit: usize) -> Vec<LogLine> {
-        self.logs.get_or_open(app_id).recent_memory(limit)
+    /// Per-runtime memory lines newer than `cursor`, limited to `limit`.
+    pub fn recent_logs(
+        &self,
+        app_id: &str,
+        runtime_id: &str,
+        cursor: u64,
+        limit: usize,
+    ) -> Vec<LogLine> {
+        self.logs
+            .get_or_open(app_id, runtime_id)
+            .recent_memory_after(cursor, limit)
     }
 
-    pub fn persisted_tail(&self, app_id: &str, max_bytes: usize) -> String {
-        self.logs.get_or_open(app_id).read_persisted_tail(max_bytes)
+    /// Per-runtime persisted tail.
+    pub fn persisted_tail(&self, app_id: &str, runtime_id: &str, max_bytes: usize) -> String {
+        self.logs
+            .get_or_open(app_id, runtime_id)
+            .read_persisted_tail(max_bytes)
     }
 
-    pub fn purge_logs(&self, app_id: &str) {
-        self.logs.remove(app_id);
+    /// App-level aggregate tail (legacy app log + every per-runtime run), for the
+    /// read-only "old app logs" view (CR-301 dual-read).
+    pub fn app_aggregate_tail(&self, app_id: &str, max_bytes: usize) -> String {
+        self.logs.app_aggregate_tail(app_id, max_bytes)
+    }
+
+    /// Drop a runtime's live log store (no purge — logs stay on disk).
+    pub fn purge_logs(&self, runtime_id: &str) {
+        self.logs.remove(runtime_id);
+    }
+
+    /// Drop every log store of an app and purge its whole log directory.
+    pub fn purge_app_logs(&self, app_id: &str) {
+        self.logs.remove_app(app_id);
     }
 }
 
-fn emit_log(app: &AppHandle, app_id: &str, line: &LogLine) {
+fn emit_log(app: &AppHandle, runtime_id: &str, app_id: &str, line: &LogLine) {
     let ev = CreativeAppLogEvent {
+        runtime_id: runtime_id.to_string(),
         app_id: app_id.to_string(),
         seq: line.seq,
         ts_ms: line.ts_ms,
@@ -556,6 +604,19 @@ fn emit_progress(app: &AppHandle, app_id: &str, stage: &str, message: &str) {
 }
 
 fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)> {
+    // Managed-process profile (batch 10 CR-1002): Python/Binary WebUI.
+    // Dispatch on the profile before the legacy program map.
+    if let Some(profile) = &plan.process_profile {
+        use crate::creative_app::model::ProcessProfile;
+        return match profile {
+            ProcessProfile::Python(p) => {
+                let mut args = vec![p.entry.clone()];
+                args.extend(p.args.iter().cloned());
+                Ok((p.interpreter.clone(), args))
+            }
+            ProcessProfile::Binary(b) => Ok((b.executable_path.clone(), b.args.clone())),
+        };
+    }
     match plan.program {
         crate::creative_app::model::LaunchProgram::Npm => {
             let script = plan
@@ -858,13 +919,23 @@ async fn terminate_tree_with_grace(child: &mut Child, pgid: Option<i32>, grace: 
 }
 
 /// Static local apps do not spawn a process; open_url is built from host HTTP port.
-pub fn static_open_url(host_http_port: u16, creative_id: &str, open_path: &str) -> String {
+///
+/// CR-303: the URL is instance-scoped — the runtime instance id is part of the
+/// path (`/local-projects/{runtimeId}/{creativeId}/…`), so a stopped (or
+/// superseded) run's URL is no longer servable and the HTTP route can validate
+/// the active runtime before serving any file.
+pub fn static_open_url(
+    host_http_port: u16,
+    creative_id: &str,
+    runtime_id: &str,
+    open_path: &str,
+) -> String {
     let path = if open_path.starts_with('/') {
         open_path.to_string()
     } else {
         format!("/{open_path}")
     };
-    format!("http://127.0.0.1:{host_http_port}/local-projects/{creative_id}{path}")
+    format!("http://127.0.0.1:{host_http_port}/local-projects/{runtime_id}/{creative_id}{path}")
 }
 
 /// A preview URL candidate with its provenance (batch 6). The runtime probes
@@ -883,6 +954,7 @@ pub fn resolve_preview_urls(
     plan: &LaunchPlan,
     host_http_port: u16,
     app_id: &str,
+    runtime_id: &str,
 ) -> Vec<PreviewUrlCandidate> {
     let mut out = Vec::new();
     let open = |p: u16| -> String {
@@ -896,7 +968,7 @@ pub fn resolve_preview_urls(
     match plan.runtime {
         LocalLaunchRuntime::StaticHttp => {
             out.push(PreviewUrlCandidate {
-                url: static_open_url(host_http_port, app_id, &plan.open_path),
+                url: static_open_url(host_http_port, app_id, runtime_id, &plan.open_path),
                 source: "framework_default",
             });
         }
@@ -973,8 +1045,8 @@ mod tests {
 
     #[test]
     fn static_url_shape() {
-        let u = static_open_url(1234, "abc", "/");
-        assert_eq!(u, "http://127.0.0.1:1234/local-projects/abc/");
+        let u = static_open_url(1234, "abc", "run-1", "/");
+        assert_eq!(u, "http://127.0.0.1:1234/local-projects/run-1/abc/");
     }
 
     /// Batch 5: the Compose project name is stable per app and unique across apps.
@@ -1020,13 +1092,14 @@ mod tests {
             reason: "t".into(),
             compose: None,
             trade_approval: None,
+            process_profile: None,
         };
-        let cands = resolve_preview_urls(&node, 1234, "app");
+        let cands = resolve_preview_urls(&node, 1234, "app", "run-1");
         assert_eq!(cands[0].source, "explicit_plan");
         assert_eq!(cands[0].url, "http://127.0.0.1:5173/");
 
         node.port.value = None;
-        let cands = resolve_preview_urls(&node, 1234, "app");
+        let cands = resolve_preview_urls(&node, 1234, "app", "run-1");
         assert!(
             cands.is_empty(),
             "no fixed port → no deterministic candidate"
@@ -1120,8 +1193,10 @@ mod tests {
         {
             let mut map = mgr.procs.lock().await;
             map.insert(
-                "a".into(),
+                "a-run".into(),
                 LiveLocalProcess {
+                    runtime_id: "a-run".into(),
+                    app_id: "a".into(),
                     child: None,
                     identity: ProcessIdentity::default(),
                     plan_fingerprint: String::new(),
@@ -1130,25 +1205,205 @@ mod tests {
                     open_url: None,
                     program: "x".into(),
                     cwd: PathBuf::from("/"),
-                    log: mgr.logs.get_or_open("a"),
+                    log: mgr.logs.get_or_open("a", "a-run"),
                     cancelled: cancelled.clone(),
                 },
             );
             mgr.task_handles
                 .lock()
                 .await
-                .insert("a".into(), vec![task_handle]);
+                .insert("a-run".into(), vec![task_handle]);
         }
 
-        mgr.stop("a", None).await.expect("stop succeeds");
+        mgr.stop("a-run", None).await.expect("stop succeeds");
         assert!(
             cancelled.load(Ordering::SeqCst),
             "stop must set the cancel flag before reaping"
         );
         let handles = mgr.task_handles.lock().await;
         assert!(
-            !handles.contains_key("a"),
+            !handles.contains_key("a-run"),
             "stop must drain tracked reader/health tasks"
         );
+    }
+
+    /// CR-301 (#05/#22): two runs of the same app live in separate runtime slots.
+    /// live_runtime_ids / stop are keyed by runtime id, so a late event from run 1
+    /// can never touch run 2's resources.
+    #[tokio::test]
+    async fn two_runs_of_same_app_are_isolated() {
+        let mgr = LocalRuntimeManager::new();
+        let mk = |rt: &str, pid: u32| LiveLocalProcess {
+            runtime_id: rt.into(),
+            app_id: "app-iso".into(),
+            child: None,
+            identity: ProcessIdentity {
+                pid: Some(pid),
+                ..ProcessIdentity::default()
+            },
+            plan_fingerprint: String::new(),
+            started_at: Instant::now(),
+            port: None,
+            open_url: None,
+            program: "x".into(),
+            cwd: PathBuf::from("/"),
+            log: mgr.logs.get_or_open("app-iso", rt),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert("run-1".into(), mk("run-1", 101));
+            map.insert("run-2".into(), mk("run-2", 202));
+        }
+        let mut ids = mgr.live_runtime_ids().await;
+        ids.sort();
+        assert_eq!(ids, vec!["run-1".to_string(), "run-2".to_string()]);
+        // Stopping run 1 must not touch run 2.
+        mgr.stop("run-1", None).await.expect("stop run-1");
+        assert_eq!(mgr.live_runtime_ids().await, vec!["run-2".to_string()]);
+        mgr.purge_app_logs("app-iso");
+    }
+
+    /// CR-302: stop must return Err (never claim released) when the port stays
+    /// bound after the tree is gone. The caller preserves the identity so a retry
+    /// stop stays possible and never writes stopped.
+    #[tokio::test]
+    async fn stop_fails_when_port_not_released() {
+        let mgr = LocalRuntimeManager::new();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert(
+                "run-1".into(),
+                LiveLocalProcess {
+                    runtime_id: "run-1".into(),
+                    app_id: "app-p".into(),
+                    child: None,
+                    identity: ProcessIdentity::default(),
+                    plan_fingerprint: String::new(),
+                    started_at: Instant::now(),
+                    port: Some(port),
+                    open_url: None,
+                    program: "x".into(),
+                    cwd: PathBuf::from("/"),
+                    log: mgr.logs.get_or_open("app-p", "run-1"),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        }
+        let err = mgr.stop("run-1", None).await.unwrap_err();
+        assert!(err.to_string().contains("stop incomplete"), "{err}");
+        assert!(err.to_string().contains("port"), "{err}");
+        drop(listener);
+        mgr.purge_app_logs("app-p");
+    }
+
+    /// CR-302: repeated stop is idempotent — a second stop on an already-stopped
+    /// runtime is Ok and drains nothing.
+    #[tokio::test]
+    async fn repeated_stop_is_idempotent() {
+        let mgr = LocalRuntimeManager::new();
+        {
+            let mut map = mgr.procs.lock().await;
+            map.insert(
+                "run-1".into(),
+                LiveLocalProcess {
+                    runtime_id: "run-1".into(),
+                    app_id: "app-r".into(),
+                    child: None,
+                    identity: ProcessIdentity::default(),
+                    plan_fingerprint: String::new(),
+                    started_at: Instant::now(),
+                    port: None,
+                    open_url: None,
+                    program: "x".into(),
+                    cwd: PathBuf::from("/"),
+                    log: mgr.logs.get_or_open("app-r", "run-1"),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        }
+        mgr.stop("run-1", None).await.expect("first stop");
+        assert!(
+            mgr.stop("run-1", None).await.is_ok(),
+            "second stop is idempotent"
+        );
+        mgr.purge_app_logs("app-r");
+    }
+
+    /// CR-302: a reused PID (different start time) must NOT match the persisted
+    /// identity — an unknown process is never killed by stop/reconcile (#10).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pid_reuse_is_rejected_by_strict_identity() {
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+        let mut cmd = Command::new("node");
+        cmd.arg("-e")
+            .arg("setInterval(()=>{},1000)")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: pre_exec runs in the forked child before exec; setpgid is the
+        // standard new-process-group pattern used elsewhere in this module.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn node");
+        let pid = child.id().expect("pid");
+        let started = process_start_time_unix(Some(pid)).expect("start time");
+
+        let good = ProcessIdentity {
+            pid: Some(pid),
+            started_at_unix: Some(started),
+            executable: Some("node".into()),
+            cwd: Some(
+                std::env::current_dir()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            plan_fingerprint: Some("fp".into()),
+            process_group_id: Some(pid as i32),
+        };
+        assert!(
+            identity_matches_live_strict(&good),
+            "the correct identity must match the live process"
+        );
+        // A different process now owns the same PID (reuse): start time differs.
+        let reused = ProcessIdentity {
+            started_at_unix: Some(started + 10_000),
+            ..good.clone()
+        };
+        assert!(
+            !identity_matches_live_strict(&reused),
+            "a reused PID with a different start time must be rejected"
+        );
+        // Unknown PID / missing fingerprint are also rejected (fail closed).
+        assert!(!identity_matches_live_strict(&ProcessIdentity {
+            pid: Some(pid),
+            started_at_unix: Some(started),
+            executable: Some("node".into()),
+            cwd: Some(
+                std::env::current_dir()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            ),
+            plan_fingerprint: None,
+            process_group_id: None,
+        }));
+
+        unsafe {
+            let _ = libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        let _ = child.wait().await;
     }
 }

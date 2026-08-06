@@ -1,11 +1,15 @@
 //! Rotating file logs + in-memory ring buffer for local creative apps.
 //!
-//! Layout:
-//!   ~/.natives/logs/local-creative/{creativeId}/current.log
-//!   ~/.natives/logs/local-creative/{creativeId}/current.log.1
-//!   ~/.natives/logs/local-creative/{creativeId}/current.log.2
+//! Layout (CR-301: logs are runtime-instance scoped):
+//!   ~/.natives/logs/local-creative/{appId}/current.log            legacy app log (read-only aggregate)
+//!   ~/.natives/logs/local-creative/{appId}/runs/{runtimeId}/current.log     per-runtime log
+//!   ~/.natives/logs/local-creative/{appId}/runs/{runtimeId}/current.log.1   rotated
+//!   ~/.natives/logs/local-creative/{appId}/runs/{runtimeId}/current.log.2   rotated
 //!
 //! Single file ≤ 5 MiB, keep 3 files. Memory ring keeps last ~1 MiB.
+//! The legacy app-level `current.log` is only READ (aggregate view); new writes
+//! always target the per-runtime directory so two runs of the same app can never
+//! interleave (audit #22).
 
 use crate::creative_app::paths::natives_home;
 use std::collections::VecDeque;
@@ -51,6 +55,7 @@ struct RingState {
 
 pub struct LocalLogStore {
     app_id: String,
+    runtime_id: String,
     dir: PathBuf,
     ring: Mutex<RingState>,
     /// Approximate size of current.log (best-effort).
@@ -60,14 +65,15 @@ pub struct LocalLogStore {
 }
 
 impl LocalLogStore {
-    pub fn open(app_id: &str) -> std::io::Result<Self> {
-        let dir = log_dir(app_id);
+    pub fn open(app_id: &str, runtime_id: &str) -> std::io::Result<Self> {
+        let dir = log_dir(app_id, runtime_id);
         fs::create_dir_all(&dir)?;
         let size = fs::metadata(dir.join("current.log"))
             .map(|m| m.len())
             .unwrap_or(0);
         Ok(Self {
             app_id: app_id.to_string(),
+            runtime_id: runtime_id.to_string(),
             dir,
             ring: Mutex::new(RingState {
                 seq: 0,
@@ -81,6 +87,10 @@ impl LocalLogStore {
 
     pub fn app_id(&self) -> &str {
         &self.app_id
+    }
+
+    pub fn runtime_id(&self) -> &str {
+        &self.runtime_id
     }
 
     /// Inject this app's concrete env values so live + persisted log lines
@@ -122,10 +132,18 @@ impl LocalLogStore {
     }
 
     pub fn recent_memory(&self, limit: usize) -> Vec<LogLine> {
+        self.recent_memory_after(0, limit)
+    }
+
+    /// Lines newer than `cursor` (seq), newest-limited to `limit`. Used by the
+    /// `logs(runtime_id, cursor)` contract so a reader can poll incrementally
+    /// without re-fetching everything (CR-301).
+    pub fn recent_memory_after(&self, cursor: u64, limit: usize) -> Vec<LogLine> {
         let ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         let n = limit.min(ring.lines.len());
         ring.lines
             .iter()
+            .filter(|l| l.seq > cursor)
             .rev()
             .take(n)
             .cloned()
@@ -185,10 +203,26 @@ impl LocalLogStore {
     }
 }
 
-pub fn log_dir(app_id: &str) -> PathBuf {
-    // sanitize id for path segment
-    let safe: String = app_id
-        .chars()
+/// Per-runtime log directory: `.../local-creative/{appId}/runs/{runtimeId}`.
+pub fn log_dir(app_id: &str, runtime_id: &str) -> PathBuf {
+    app_log_dir(app_id)
+        .join("runs")
+        .join(safe_segment(runtime_id))
+}
+
+/// Legacy / aggregate app-level log directory: `.../local-creative/{appId}`.
+/// The old `current.log` here is read-only after CR-301 (dual-read aggregation);
+/// per-runtime logs live under its `runs/` subdirectory.
+pub fn app_log_dir(app_id: &str) -> PathBuf {
+    natives_home()
+        .join("logs")
+        .join("local-creative")
+        .join(safe_segment(app_id))
+}
+
+/// Sanitize an id for use as a path segment.
+fn safe_segment(id: &str) -> String {
+    id.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
                 c
@@ -196,15 +230,12 @@ pub fn log_dir(app_id: &str) -> PathBuf {
                 '_'
             }
         })
-        .collect();
-    natives_home()
-        .join("logs")
-        .join("local-creative")
-        .join(safe)
+        .collect()
 }
 
+/// Delete the whole app log directory (legacy aggregate + all per-runtime runs).
 pub fn purge_app_logs(app_id: &str) {
-    let _ = fs::remove_dir_all(log_dir(app_id));
+    let _ = fs::remove_dir_all(app_log_dir(app_id));
 }
 
 /// Best-effort redaction of secrets in log lines.
@@ -318,7 +349,8 @@ fn read_tail(path: &Path, max_bytes: usize) -> std::io::Result<String> {
     Ok(buf)
 }
 
-/// Process-global registry of open log stores (lazy).
+/// Process-global registry of open log stores (lazy), keyed by runtime id so
+/// two runs of the same app never share a store (CR-301 #22).
 #[derive(Clone, Default)]
 pub struct LogRegistry {
     inner: Arc<Mutex<std::collections::HashMap<String, Arc<LocalLogStore>>>>,
@@ -329,16 +361,19 @@ impl LogRegistry {
         Self::default()
     }
 
-    pub fn get_or_open(&self, app_id: &str) -> Arc<LocalLogStore> {
+    /// Open (or reuse) the per-runtime log store for `(app_id, runtime_id)`.
+    /// The store owns its app_id so events and purge know the owning app.
+    pub fn get_or_open(&self, app_id: &str, runtime_id: &str) -> Arc<LocalLogStore> {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = map.get(app_id) {
+        if let Some(s) = map.get(runtime_id) {
             return s.clone();
         }
-        let store = Arc::new(LocalLogStore::open(app_id).unwrap_or_else(|_| {
-            // fallback: still construct with temp path semantics
+        let store = Arc::new(LocalLogStore::open(app_id, runtime_id).unwrap_or_else(|_| {
+            // fallback: still construct with the intended dir semantics
             LocalLogStore {
                 app_id: app_id.to_string(),
-                dir: log_dir(app_id),
+                runtime_id: runtime_id.to_string(),
+                dir: log_dir(app_id, runtime_id),
                 ring: Mutex::new(RingState {
                     seq: 0,
                     bytes: 0,
@@ -348,17 +383,67 @@ impl LogRegistry {
                 secrets: Mutex::new(Vec::new()),
             }
         }));
-        map.insert(app_id.to_string(), store.clone());
+        map.insert(runtime_id.to_string(), store.clone());
         store
     }
 
-    pub fn remove(&self, app_id: &str) {
+    /// Drop a runtime's live store (no purge — the user may still read its logs).
+    pub fn remove(&self, runtime_id: &str) {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = map.remove(app_id) {
-            s.purge_files();
-        } else {
-            purge_app_logs(app_id);
+        map.remove(runtime_id);
+    }
+
+    /// Drop every store of an app and purge its whole log directory.
+    pub fn remove_app(&self, app_id: &str) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_rt, store| store.app_id != app_id);
+        drop(map);
+        purge_app_logs(app_id);
+    }
+
+    /// App-level aggregate tail: the legacy app log plus every per-runtime run,
+    /// newest run last. Read-only — never writes to the legacy file (dual-read,
+    /// no long-term dual-write, CR-301).
+    pub fn app_aggregate_tail(&self, app_id: &str, max_bytes: usize) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let mut run_dirs: Vec<PathBuf> = Vec::new();
+        let app_dir = app_log_dir(app_id);
+        if let Ok(rd) = fs::read_dir(app_dir.join("runs")) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    run_dirs.push(p);
+                }
+            }
         }
+        run_dirs.sort_by_key(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string()
+        });
+        // Per-runtime tails in run order.
+        for dir in run_dirs {
+            let tail = read_tail(&dir.join("current.log"), max_bytes).unwrap_or_default();
+            if !tail.is_empty() {
+                parts.push(tail);
+            }
+        }
+        // Legacy app-level log (pre-CR-301) last so it reads oldest-first.
+        let legacy = read_tail(&app_dir.join("current.log"), max_bytes).unwrap_or_default();
+        if !legacy.is_empty() {
+            parts.push(legacy);
+        }
+        if parts.is_empty() {
+            return String::new();
+        }
+        // Join in chronological order (runs are chronological; legacy is oldest).
+        let mut out = parts.join("\n");
+        let cap = max_bytes;
+        if out.len() > cap {
+            out = out[out.len() - cap..].to_string();
+        }
+        out
     }
 
     pub fn clone_registry(&self) -> LogRegistry {
@@ -409,6 +494,7 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let store = LocalLogStore {
             app_id: "s".into(),
+            runtime_id: "s-run".into(),
             dir: dir.clone(),
             ring: Mutex::new(RingState {
                 seq: 0,
@@ -440,6 +526,7 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let store = LocalLogStore {
             app_id: "t".into(),
+            runtime_id: "t-run".into(),
             dir: dir.clone(),
             ring: Mutex::new(RingState {
                 seq: 0,
@@ -455,5 +542,77 @@ mod tests {
         let ring = store.ring.lock().unwrap();
         assert!(ring.bytes <= MEMORY_CAP_BYTES + 20_000);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn temp_store(app_id: &str, runtime_id: &str) -> (tempfile::TempDir, LocalLogStore) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = LocalLogStore {
+            app_id: app_id.into(),
+            runtime_id: runtime_id.into(),
+            dir: dir.path().to_path_buf(),
+            ring: Mutex::new(RingState {
+                seq: 0,
+                bytes: 0,
+                lines: VecDeque::new(),
+            }),
+            current_size: Mutex::new(0),
+            secrets: Mutex::new(Vec::new()),
+        };
+        (dir, store)
+    }
+
+    /// CR-301 (#22): two runs of the same app must never share one ring/seq —
+    /// each runtime gets its own store, so late events from run 1 can't land in
+    /// run 2's log.
+    #[test]
+    fn per_runtime_stores_are_isolated() {
+        let (_d1, run1) = temp_store("app-a", "run-1");
+        let (_d2, run2) = temp_store("app-a", "run-2");
+        run1.append(LogStream::System, "first run");
+        run2.append(LogStream::System, "second run");
+
+        assert_eq!(run1.recent_memory(10).len(), 1);
+        assert_eq!(run2.recent_memory(10).len(), 1);
+        assert_eq!(run1.recent_memory(10)[0].text, "first run");
+        assert_eq!(run2.recent_memory(10)[0].text, "second run");
+        // Independent rings: each run's line is invisible to the other.
+        assert!(
+            !run1.recent_memory(10)[0].text.contains("second"),
+            "run 1 must not see run 2's lines"
+        );
+        assert!(
+            !run2.recent_memory(10)[0].text.contains("first"),
+            "run 2 must not see run 1's lines"
+        );
+    }
+
+    /// CR-301: `logs(runtime_id, cursor)` returns only lines newer than cursor.
+    #[test]
+    fn recent_memory_after_filters_by_cursor() {
+        let (_d, store) = temp_store("app-a", "run-1");
+        for i in 0..5 {
+            store.append(LogStream::Stdout, &format!("line {i}"));
+        }
+        // 5 lines → seq 1..=5. cursor 2 → seq 3,4,5.
+        let after2 = store.recent_memory_after(2, 100);
+        assert_eq!(after2.len(), 3, "only lines with seq > 2 are newer");
+        assert_eq!(after2[0].text, "line 2");
+        assert_eq!(after2[1].text, "line 3");
+        assert_eq!(after2[2].text, "line 4");
+        let all = store.recent_memory_after(0, 100);
+        assert_eq!(all.len(), 5);
+        let none = store.recent_memory_after(99, 100);
+        assert!(none.is_empty());
+    }
+
+    /// CR-301: runtime log paths are instance-scoped under the app dir.
+    #[test]
+    fn runtime_log_dir_shape() {
+        let p = log_dir("app-a", "run-1");
+        assert_eq!(p, app_log_dir("app-a").join("runs").join("run-1"));
+        // Unsafe id segments are sanitized so paths never escape the app dir.
+        let safe = log_dir("app/../..", "x/y");
+        assert!(safe.to_string_lossy().contains("local-creative"));
+        assert!(!safe.to_string_lossy().contains(".."));
     }
 }

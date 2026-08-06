@@ -36,6 +36,7 @@ pub struct CompiledPromptPlan {
     pub effective_full_text: String,
 }
 
+#[derive(Default)]
 pub struct PromptPlanBuilder {
     layers: Vec<(String, PromptLayerKind, String, String)>,
 }

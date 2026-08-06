@@ -45,6 +45,10 @@ pub const ALL: &[(i64, &str)] = &[
     (27, MIGRATION_027),
     (28, MIGRATION_028),
     (29, MIGRATION_029),
+    (30, MIGRATION_030),
+    (31, MIGRATION_031),
+    (32, MIGRATION_032),
+    (33, MIGRATION_033),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1105,6 +1109,87 @@ ALTER TABLE subagent_session ADD COLUMN permission_profile TEXT;
 ALTER TABLE subagent_session ADD COLUMN agent_profile_id TEXT;
 ALTER TABLE subagent_session ADD COLUMN max_steps INTEGER;
 ALTER TABLE subagent_session ADD COLUMN tool_allowlist_json TEXT;
+";
+
+/// Migration 030 (TASK-004 / G01): per-run ledger sequence so the checkpoint
+/// cursor can store a real side-effect watermark instead of the last event
+/// sequence. Existing rows keep a NULL sequence (legacy) and are never claimed
+/// safe; `continue_run` already fails closed without a ledger watermark.
+const MIGRATION_030: &str = "
+ALTER TABLE side_effect_record ADD COLUMN ledger_sequence INTEGER;
+CREATE INDEX IF NOT EXISTS idx_side_effect_ledger_sequence ON side_effect_record(run_id, ledger_sequence);
+";
+
+/// Migration 031: D03/G01 — add the per-row `replay_contract` and backfill it.
+///
+/// New intents populate `replay_contract` at write time
+/// (`side_effect_ledger::replay_contract_for`). Rows already in the table get:
+/// - `legacy_unverifiable` when they predate `ledger_sequence` (MIGRATION_030),
+///   so they are never claimed safe — their ledger prefix is unprovable;
+/// - `never` for checkpoint-covered workspace files;
+/// - `confirm` for everything else (external outcome unknown without the
+///   original handler).
+const MIGRATION_031: &str = "
+ALTER TABLE side_effect_record ADD COLUMN replay_contract TEXT;
+UPDATE side_effect_record
+   SET replay_contract = CASE
+       WHEN ledger_sequence IS NULL THEN 'legacy_unverifiable'
+       WHEN side_effect_class = 'workspace_file' THEN 'never'
+       ELSE 'confirm'
+   END;
+";
+
+/// Migration 032: TASK-005 (B03) — idempotent conversation projection.
+///
+/// `projection_watermark` tracks how far a run's committed turns have been
+/// projected into the conversation tables; `projection_quarantine` records
+/// events/turns the projector explicitly isolated instead of silently
+/// skipping or overwriting.
+const MIGRATION_032: &str = "
+CREATE TABLE IF NOT EXISTS projection_watermark (
+    projector TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+    event_sequence INTEGER NOT NULL,
+    turn_count INTEGER NOT NULL DEFAULT 0,
+    digest TEXT NOT NULL,
+    compat_hits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (projector, run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_projection_watermark_run ON projection_watermark(projector, run_id);
+
+CREATE TABLE IF NOT EXISTS projection_quarantine (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    projector TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    turn_id TEXT,
+    message_id TEXT,
+    reason TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+";
+
+/// Migration 033: TASK-008 (B05) — permission decision outbox.
+///
+/// A resolved decision writes its authoritative event delivery intent here in
+/// the SAME transaction as the `interaction` row; the RPC/delivery step then
+/// appends the run event and wakes the waiter, and marks the row delivered. An
+/// undelivered row is replayed at daemon start, so a decision is never lost
+/// and the waiter is never woken ahead of its durable event.
+const MIGRATION_033: &str = "
+CREATE TABLE IF NOT EXISTS interaction_outbox (
+    id TEXT PRIMARY KEY,
+    interaction_id TEXT NOT NULL,
+    run_id TEXT,
+    conversation_id TEXT,
+    kind TEXT NOT NULL,
+    response TEXT NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_interaction_outbox_delivered ON interaction_outbox(delivered);
 ";
 
 #[cfg(test)]

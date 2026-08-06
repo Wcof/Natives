@@ -55,6 +55,7 @@ fn sample_local(id: &str, root: &str, auto_open: bool) -> LocalCreativeAppRecord
         reason: "test".into(),
         compose: None,
         trade_approval: None,
+        process_profile: None,
     };
     let now = chrono::Utc::now().to_rfc3339();
     LocalCreativeAppRecord {
@@ -272,20 +273,120 @@ fn disabled_internal_cannot_open() {
     assert!(open_target(&conn, "mod-off").is_err());
 }
 
-/// Batch 3: after a user publishes a module, every catalog read returns the SAME
-/// application_id — the assistant card and the Personal Creations list agree on
-/// one identity (no per-read UUID churn).
+/// Batch 1 CR-101: catalog reads NEVER fabricate an application identity, even
+/// when the source has no identity row yet. The old browser show/close path used
+/// find-or-create and produced fake `local_project` rows for GitHub apps (#01).
 #[test]
-fn published_module_application_id_is_stable_across_catalog_reads() {
+fn reads_never_create_application_identity() {
     let conn = mem();
     insert_module(&conn, "mod-1", 1);
+    let mut loc = sample_local("loc-1", "/tmp/loc-1", true);
+    loc.state = CreativeAppState::Running;
+    loc.open_url = Some("http://127.0.0.1:19000/".into());
+    crate::creative_app::local::insert_app(&conn, &loc).unwrap();
+    crate::creative_app::store::insert_app(
+        &conn,
+        &sample_external("ext-1", CreativeAppState::InstalledStopped),
+    )
+    .unwrap();
+
+    let apps_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM applications", [], |r| r.get(0))
+        .unwrap();
+
+    // list + get_summary + open_target are all reads and must not add rows.
+    let _ = list_all(&conn).unwrap();
+    let _ = get_summary(&conn, "ext-1").unwrap();
+    let _ = open_target(&conn, "loc-1").unwrap();
+
+    let apps_after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM applications", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        apps_after, apps_before,
+        "reads must never create application identities"
+    );
+
+    // A source without an identity row simply projects an empty application_id
+    // instead of fabricating one.
+    let ext = list_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == "ext-1")
+        .expect("ext in catalog");
+    assert!(
+        ext.application_id.is_empty(),
+        "unregistered source must not get a fabricated application_id"
+    );
+}
+
+/// Batch 1 CR-101: browser open/close must resolve a GitHub app to its real
+/// source and never mint a fake `local_project` identity for it.
+#[test]
+fn browser_style_resolution_never_creates_local_project_ghost() {
+    let conn = mem();
+    crate::creative_app::store::insert_app(
+        &conn,
+        &sample_external("ext-1", CreativeAppState::Running),
+    )
+    .unwrap();
+
+    // The old browser show flow would resolve LocalProject FIRST and create a
+    // ghost. The fix resolves the real source (external_github) and looks up the
+    // identity read-only.
+    let source = resolve(&conn, "ext-1").unwrap();
+    assert_eq!(source, ResolvedSource::ExternalGithub);
+    let identity =
+        crate::creative_app::runtime_store::application_id_for(&conn, source.as_source(), "ext-1")
+            .unwrap();
+    // ext-1 was inserted AFTER migration (no backfill ran for it), so it has no
+    // identity row — and the lookup must NOT create one.
+    assert!(identity.is_none());
+    let ghost_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM applications WHERE source = 'local_project' AND source_id = 'ext-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        ghost_count, 0,
+        "browser resolution must not fabricate a local_project identity"
+    );
+    // Registration (the write path) then provides the stable identity.
+    let reg = crate::creative_app::runtime_store::find_or_create_application(
+        &conn,
+        CreativeAppSource::ExternalGithub,
+        "ext-1",
+    )
+    .unwrap();
+    let identity2 =
+        crate::creative_app::runtime_store::application_id_for(&conn, source.as_source(), "ext-1")
+            .unwrap()
+            .expect("registered identity now exists");
+    assert_eq!(identity2, reg);
+}
+
+/// Batch 1 CR-101: after a module is registered (install / enable write path),
+/// every catalog read returns the SAME application_id — no per-read UUID churn.
+#[test]
+fn registered_module_application_id_is_stable_across_catalog_reads() {
+    let conn = mem();
+    insert_module(&conn, "mod-1", 1);
+    // Registration is the write path that creates the unified identity.
+    crate::creative_app::runtime_store::find_or_create_application(
+        &conn,
+        CreativeAppSource::Internal,
+        "mod-1",
+    )
+    .unwrap();
     let l1 = list_all(&conn).unwrap();
     let l2 = list_all(&conn).unwrap();
     let a1 = l1.iter().find(|a| a.id == "mod-1").expect("module in list");
     let a2 = l2.iter().find(|a| a.id == "mod-1").expect("module in list");
     assert!(
         !a1.application_id.is_empty(),
-        "published module must carry a unified application_id"
+        "registered module must carry a unified application_id"
     );
     assert_eq!(
         a1.application_id, a2.application_id,
@@ -318,5 +419,24 @@ fn external_restart_propagates_stop_failure_contract() {
     assert!(
         install.contains("stop failed") || install.contains("stop_failed"),
         "stop_app must surface stop failure to callers"
+    );
+}
+
+/// CR-302: a local stop that cannot verify release must return Err — the adapter
+/// then marks the instance cleanup_failed (active-like), which blocks restart
+/// until a retry stop succeeds. It must never return a happy Ok(summary) that the
+/// adapter could turn into a false stopped.
+#[test]
+fn local_stop_surfaces_release_failure() {
+    let lifecycle = include_str!("../local/lifecycle.rs");
+    assert!(
+        lifecycle.contains("if released {") && lifecycle.contains("Err(Error::Internal(msg))"),
+        "stop_app must return Err on unverified release, never a false stopped"
+    );
+    // The adapter contract: stop Err → cleanup_failed (not stopped).
+    let adapters = include_str!("mod.rs");
+    assert!(
+        adapters.contains("mark_cleanup_failed") && adapters.contains("Err(e)"),
+        "adapter stop must map failure to cleanup_failed"
     );
 }

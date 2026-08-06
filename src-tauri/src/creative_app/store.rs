@@ -424,7 +424,11 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(ver, "8");
+        assert_eq!(
+            ver,
+            crate::db::SCHEMA_VERSION,
+            "schema version must reflect the current migration head"
+        );
         let local: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='local_creative_apps'",

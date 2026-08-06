@@ -98,7 +98,7 @@ impl PermissionManager {
             )),
             PermissionProfile::Autonomous => {
                 // Auto-approve for non-hard-policy actions
-                return Ok("auto-approved".to_string());
+                Ok("auto-approved".to_string())
             }
             PermissionProfile::ConfirmEach => {
                 // Create a pending request

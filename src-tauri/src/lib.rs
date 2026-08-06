@@ -325,11 +325,6 @@ pub fn run() {
 
             // Converge leftover installing/starting/stopping/deleting vs Docker labels
             {
-                let pool_for_reconcile = {
-                    // pool already moved into AppState — use global main pool
-                    ()
-                };
-                let _ = pool_for_reconcile;
                 if let Ok(conn) = db::get_main_conn() {
                     let handle = app.handle().clone();
                     std::thread::spawn(move || {
@@ -338,6 +333,11 @@ pub fn run() {
                             .build();
                         if let Ok(rt) = rt {
                             let _ = rt.block_on(async {
+                                // Any operation still in flight when the previous
+                                // Host process died is stale; settle it so the
+                                // Renderer never sees an eternally-busy app (CR-201).
+                                let _ =
+                                    crate::creative_app::operation::settle_stale_on_startup(&conn);
                                 let _ = creative_app::install::reconcile_all(&conn, Some(&handle))
                                     .await;
                                 let _ = creative_app::local::lifecycle::reconcile_local_apps(
@@ -364,12 +364,10 @@ pub fn run() {
                             .state::<creative_app::local::LocalRuntimeHandle>()
                             .inner()
                             .clone();
-                        let lock = watchdog_handle
-                            .state::<creative_app::service::MutationLock>()
-                            .inner()
-                            .clone();
                         let handle = watchdog_handle.clone();
-                        let _guard = lock.lock().await;
+                        // No mutation lock: exit polling writes are DB-CAS-guarded
+                        // (batch 1 CR-102), so a long lifecycle op on one app must
+                        // not stall the watchdog (batch 2 CR-202 #04).
                         let _ = tokio::task::spawn_blocking(move || {
                             let c = pool
                                 .get()
@@ -550,6 +548,17 @@ pub fn run() {
             commands::creative_app::creative_app_browser_hide,
             commands::creative_app::creative_app_browser_close,
             commands::creative_app::creative_app_browser_current,
+            // CR-501: Surface / Endpoint / Window
+            commands::creative_app::creative_app_surface_list,
+            commands::creative_app::creative_app_window_list,
+            commands::creative_app::creative_app_window_open,
+            commands::creative_app::creative_app_window_close,
+            commands::creative_app::creative_app_window_minimize,
+            commands::creative_app::creative_app_window_restore,
+            // CR-1001/1002: Agent proposal gate
+            commands::creative_app::creative_app_proposal_validate,
+            commands::creative_app::creative_app_proposal_reject,
+            commands::creative_app::creative_app_proposal_approve,
             commands::creative_app::creative_app_inspect_local,
             commands::creative_app::creative_app_create_local,
             commands::creative_app::creative_app_update_local,

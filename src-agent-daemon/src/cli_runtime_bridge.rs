@@ -270,7 +270,7 @@ pub fn translate_cli_line(line: &str) -> TranslatedLine {
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let output = block.get("content").cloned().unwrap_or_else(|| json!(null));
+                        let output = block.get("content").cloned().unwrap_or(json!(null));
                         out.push(RunEventKind::ToolCallCompleted {
                             id,
                             name: "tool".into(),
@@ -291,7 +291,7 @@ pub fn translate_cli_line(line: &str) -> TranslatedLine {
                     .get("is_error")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                let output = val.get("content").cloned().unwrap_or_else(|| json!(null));
+                let output = val.get("content").cloned().unwrap_or(json!(null));
                 out.push(RunEventKind::ToolCallCompleted {
                     id,
                     name: "tool".into(),
@@ -561,6 +561,7 @@ fn write_cli_mcp_config(run_id: &str, server_ids: &[String]) -> Result<CliMcpCon
 /// execution backend: capabilities are injected through CLI flags and executed
 /// by the Claude CLI's own harness — approvals do NOT pass through the native
 /// capability gateway (run row `runtime_id` + capability matrix say so).
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub async fn run_claude_cli_turn(
     runtime: &ProductionRuntime,
     run_id: &str,

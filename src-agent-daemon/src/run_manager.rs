@@ -1,4 +1,55 @@
 //! RunManager — Daemon-side sole Run Authority (production path).
+//!
+//! # Lineage Contract: Retry / Continue / Fork / Resume
+//!
+//! Every operation that creates a new run from a prior run's checkpoint
+//! records a durable `resume_plan` row and inherits the source snapshot's
+//! typed transcript (AgentMessage), not the legacy EngineMessage history.
+//!
+//! ## Retry
+//! - Creates a new run in the same conversation with a distinct `run_id`.
+//! - Re-executes the last turn: the new run starts from the checkpoint
+//!   whose `turn_id` matches the retry source, and the user content is
+//!   the original input that triggered that turn.
+//! - `retry_of_turn_id` on the checkpoint row links the new run to the
+//!   exact turn being retried.
+//! - Blocked if the source run has `uncertain` side effects.
+//!
+//! ## Continue
+//! - Creates a new run from a durable checkpoint (the caller selects which
+//!   checkpoint via `checkpoint_id`).
+//! - The new run share the conversation_id but has a distinct run_id.
+//! - User content may be provided by the caller; if absent, the last known
+//!   content is used.
+//! - A `resume_plan` row with action `'continue'` and decision
+//!   `'SafeToContinue'` is persisted before the run is returned.
+//! - Blocked if the source run has `uncertain` side effects.
+//!
+//! ## Fork (not a separate API — equivalent to Continue with new content)
+//! - Fork is logically the same as Continue: a new run from a checkpoint.
+//! - The caller provides new user content to diverge from the source path.
+//! - No separate `fork` action — `resume_plan.action = 'continue'` covers
+//!   both continuation and divergence from a checkpoint.
+//!
+//! ## Resume
+//! - Creates a new run from a durable checkpoint after a crash/interrupt.
+//! - The resume decision is recorded in a `resume_plan` row with action
+//!   `'retry'` or `'continue'` and a decision of `'SafeToContinue'`,
+//!   `'ConfirmationRequired'`, or `'Blocked'`.
+//! - `ConfirmationRequired` means the caller must explicitly confirm before
+//!   the run can proceed (e.g., uncertain side effects exist).
+//! - `Blocked` means the run cannot resume (e.g., unresolved side effects).
+//!
+//! ## Snapshot lineage
+//! - Every checkpoint captures the typed transcript (AgentMessage) at the
+//!   point of commit. The typed transcript is the single source of truth
+//!   for the provider context — the legacy EngineMessage is never used
+//!   for checkpoint-based lineage operations.
+//! - A new run created from a checkpoint inherits the snapshot's typed
+//!   transcript, not the legacy EngineMessage history.
+//! - The `resume_plan` table is the authoritative lineage record: it links
+//!   `source_run_id` → `new_run_id` with the action, checkpoint, and
+//!   decision.
 
 use crate::production::{FixtureMode, FixtureProvider, ProductionRuntime};
 use crate::storage::DataStore;
@@ -45,6 +96,7 @@ pub struct RunManager {
 /// Load a checkpoint and verify it carries the committed snapshot, turn, and
 /// ledger watermarks a resumable restore needs. Returns
 /// `(id, turn_id, active_context_snapshot_id, side_effect_ledger_cursor)`.
+#[allow(clippy::type_complexity)] // pre-existing: factored type alias deferred
 fn load_resumable_checkpoint(
     conn: &rusqlite::Connection,
     run_id: &str,
@@ -196,11 +248,20 @@ impl RunManager {
         if let Err(error) = crate::conversation_store::backfill_context_snapshots() {
             eprintln!("[run_manager] context snapshot backfill failed: {error}");
         }
+        // B03: idempotent conversation projection recovery — any committed
+        // turn whose events are not yet covered by the projector watermark is
+        // re-projected at startup. Best-effort like the snapshot backfill: a
+        // corrupt event quarantines its run, the daemon still starts and the
+        // remaining runs recover.
+        if let Err(error) = crate::conversation_projector::recover_projections() {
+            eprintln!("[run_manager] conversation projection recovery failed: {error}");
+        }
         // Expire any in-memory waiters (oneshot futures are never restored).
         // InteractionHub starts empty on new process — no action required.
         Ok(mgr)
     }
 
+    #[allow(clippy::needless_return)] // cfg(test)/cfg(not(test)) branches make the tail ambiguous
     fn store_from_env() -> Option<Arc<DataStore>> {
         // Phase 0: authority store is assistant.db (NATIVES_ASSISTANT_DB_PATH).
         // Fall back to NATIVES_DB_PATH only for legacy test fixtures that still
@@ -249,9 +310,7 @@ impl RunManager {
                         .ok()
                         .filter(|s| !s.trim().is_empty())
                 });
-            let Some(db_path) = explicit else {
-                return None;
-            };
+            let db_path = explicit?;
             // Prefer temp paths in tests; still allow absolute explicit fixtures.
             let db_path = std::path::PathBuf::from(db_path);
             if let Some(parent) = db_path.parent() {
@@ -965,7 +1024,24 @@ impl RunManager {
     }
 
     pub fn capabilities() -> DaemonCapabilities {
-        DaemonCapabilities::current()
+        let mut caps = DaemonCapabilities::current();
+        // TASK-013: the Claude CLI bridge is NOT a native daemon authority —
+        // runs it executes are controlled by the CLI, outside the daemon's
+        // execution/side-effect ledger. Mark it explicitly (Undetermined) so a
+        // caller can never mistake the CLI for a native runtime.
+        if crate::cli_runtime_bridge::claude_cli_available() {
+            caps.runtimes.push(assistant_protocol::v2::RuntimeCapability {
+                id: "cli".into(),
+                display_name: "Claude CLI (bridge)".into(),
+                status: assistant_protocol::v2::RuntimeAvailability::Undetermined,
+                reason: Some(
+                    "CLI executes externally; not a native daemon authority over runs, side effects, or ledger"
+                        .into(),
+                ),
+                methods: Vec::new(),
+            });
+        }
+        caps
     }
 
     pub fn create_run(&self, req: CreateRunRequest) -> Result<RunV2, String> {
@@ -1954,7 +2030,7 @@ impl RunManager {
             let tools = crate::production::PermissionGatedTools {
                 gateway: {
                     let mut g = capability_gateway::CapabilityGateway::new();
-                    g.register_builtins();
+                    let _ = g.register_builtins();
                     if let Some(root) = request_project_path
                         .as_deref()
                         .or(run.project_path.as_deref())
@@ -2024,7 +2100,7 @@ impl RunManager {
                 Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
             };
             self.runtime.remove_engine(&run.id).await;
-            crate::conversation_store::append_assistant_turn_from_events(
+            crate::conversation_projector::project_run_from_events(
                 &run.conversation_id,
                 &run.id,
                 &self.runtime.events.replay_after_checked(&run.id, 0)?,
@@ -2118,26 +2194,31 @@ impl RunManager {
             RunStatusV2::Preparing,
             TransitionMetadata::empty().with_lifecycle_hint("preparing"),
         );
+        // Production path: load typed messages directly instead of legacy
+        // EngineMessage. The typed transcript is the single source of truth for
+        // the provider context; the config.messages field (Vec<EngineMessage>) is
+        // unused when typed_transcript is provided.
+        let typed_history = crate::conversation_store::load_agent_messages(&run.conversation_id)?;
         let config = EngineRunConfig {
             run_id: run.id.clone(),
             conversation_id: run.conversation_id.clone(),
             model: req.model_id.unwrap_or_else(|| run.model_id.clone()),
             system_prompt: None,
-            messages: crate::conversation_store::engine_history(&run.conversation_id)?,
+            messages: Vec::new(),
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
         let tool_schemas = tools.list_tool_schemas().await;
         crate::production_tools::validate_tool_limit(tool_schemas.len())?;
         let outcome = match engine
-            .run_with_tool_schemas(config, provider, tools, tool_schemas)
+            .run_with_typed_messages(config, provider, tools, tool_schemas, typed_history)
             .await
         {
             Ok(o) => o,
             Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
         let outcome = if matches!(outcome, EngineOutcome::Completed { .. })
-            && crate::conversation_store::append_assistant_turn_from_events(
+            && crate::conversation_projector::project_run_from_events(
                 &run.conversation_id,
                 &run.id,
                 &self.runtime.events.replay_after_checked(&run.id, 0)?,
@@ -2367,16 +2448,18 @@ impl RunManager {
         let conn = store.conn()?;
         let checkpoint =
             load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
-        // Scan the side-effect ledger for uncertain effects. A restore is only
-        // SafeToContinue when nothing is uncertain; uncertain effects that are
-        // not replay-safe hard-block resume (Blocked), while replay-safe ones
-        // require an explicit caller confirmation (ConfirmationRequired). No
-        // provider or tool is invoked until that confirmation arrives.
+        // Scan the side-effect ledger for unresolved effects. A restore is only
+        // SafeToContinue when nothing is unresolved; an effect left `started`
+        // (crash before a terminal) or `uncertain` means the external outcome
+        // is unknown, so auto-resume must not invoke the handler again.
+        // Non-replay-safe unresolved effects hard-block (Blocked), while
+        // replay-safe ones require an explicit caller confirmation
+        // (ConfirmationRequired). No provider or tool is invoked until then.
         let mut stmt = conn
             .prepare(
                 "SELECT id, tool_call_id, category, replay_safe
                  FROM side_effect_record
-                 WHERE run_id = ?1 AND status = 'uncertain'",
+                 WHERE run_id = ?1 AND status IN ('started', 'uncertain')",
             )
             .map_err(|e| e.to_string())?;
         let uncertain_effects: Vec<serde_json::Value> = stmt
@@ -2414,6 +2497,7 @@ impl RunManager {
             return Ok(ResumeRunResponse {
                 decision: ResumeDecision::Blocked,
                 reason: "side-effect ledger has uncertain effects that are not replay-safe; resume is not possible".into(),
+                reason_code: "uncertain_side_effects_blocked".into(),
                 unresolved_effects: uncertain_effects,
                 new_run_id: None,
             });
@@ -2433,6 +2517,7 @@ impl RunManager {
             return Ok(ResumeRunResponse {
                 decision: ResumeDecision::ConfirmationRequired,
                 reason: "run has uncertain side effects; confirm before resume".into(),
+                reason_code: "uncertain_side_effects_confirmation_required".into(),
                 unresolved_effects: uncertain_effects,
                 new_run_id: None,
             });
@@ -2473,6 +2558,7 @@ impl RunManager {
         Ok(ResumeRunResponse {
             decision: ResumeDecision::SafeToContinue,
             reason: "resume approved".into(),
+            reason_code: "safe_to_continue".into(),
             unresolved_effects: Vec::new(),
             new_run_id: Some(new_run.id),
         })
@@ -4047,6 +4133,74 @@ mod tests {
         });
     }
 
+    #[test]
+    fn side_effect_resume_gate_blocks_started_effect() {
+        // TASK-004 (G02): a crash after `started` (intent recorded, no
+        // terminal) leaves an unknown side effect. Auto-resume must NOT invoke
+        // the handler again: it must hard-block instead of creating a run.
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-started', ?1, 'process', 'started', 0)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::Blocked,
+                "started (non-terminal) side effect must hard-block resume"
+            );
+            assert!(
+                response.new_run_id.is_none(),
+                "Blocked resume must not create a run for an unknown side effect"
+            );
+        });
+    }
+
+    #[test]
+    fn side_effect_resume_gate_allows_settled_effects() {
+        // Regression guard: fully settled effects must not block resume.
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
+                     VALUES ('effect-settled', ?1, 'process', 'completed', 1)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::SafeToContinue,
+                "settled effects must not block resume"
+            );
+        });
+    }
+
     #[tokio::test]
     async fn start_detached_returns_preparing_before_terminal() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
@@ -4761,8 +4915,6 @@ mod tests {
                 }
             }
             struct CancelAwareTools {
-                engines:
-                    Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<AgentEngine>>>>,
                 run_id: String,
                 seen: Arc<std::sync::atomic::AtomicBool>,
             }
@@ -4830,7 +4982,6 @@ mod tests {
                 }
             }
             let tools = CancelAwareTools {
-                engines: rm_start.runtime.engine_handles().await,
                 run_id: rid.clone(),
                 seen: cancel_flag_seen_bg,
             };
@@ -4957,7 +5108,7 @@ mod tests {
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rm.runtime.permissions.clone(),
@@ -4982,7 +5133,6 @@ mod tests {
             mode: FixtureMode::RequestPermissionPath,
         };
         // Ensure ConfirmEach profile so side-effect tools ask.
-        rm.runtime.set_permission_profile("ask").await;
 
         let rm_bg = rm.clone();
         let rid = run.id.clone();
@@ -5162,11 +5312,10 @@ mod tests {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rt = crate::production::ProductionRuntime::new();
         // Task is Process/ProjectWrite — under ConfirmEach it asks; use autonomous for identity unit test.
-        rt.set_permission_profile("full_access").await;
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),
@@ -5290,11 +5439,10 @@ mod tests {
             rt.block_on(async {
                 let parent_id = format!("parent-dual-{}", uuid::Uuid::new_v4());
                 let prt = crate::production::ProductionRuntime::new();
-                prt.set_permission_profile("full_access").await;
                 let tools = crate::production::PermissionGatedTools {
                     gateway: {
                         let mut g = capability_gateway::CapabilityGateway::new();
-                        g.register_builtins();
+                        let _ = g.register_builtins();
                         Arc::new(g)
                     },
                     permissions: prt.permissions.clone(),
@@ -5415,6 +5563,10 @@ mod tests {
         let db = dir.path().join("id.db");
         let artifacts = dir.path().join("art");
         std::fs::create_dir_all(&artifacts).unwrap();
+        // Install the test DB override so RunManager recovery (which calls
+        // conversation_store::store / prompt_queue_store::store) sees the same
+        // temp store instead of requiring NATIVES_DB_PATH.
+        crate::storage::set_test_db_override(Some(db.clone()), Some(artifacts.clone()));
         let store = std::sync::Arc::new(crate::storage::DataStore::new(&db, &artifacts).unwrap());
         // Install as global so PermissionGatedTools sees data_store_ref.
         let rm = std::sync::Arc::new(RunManager::new_with_store(store.clone()));
@@ -5444,7 +5596,6 @@ mod tests {
     async fn mcp_call_through_permission_gate_emits_events() {
         // Register mock tool without live session → structured error + events.
         let rt = crate::production::ProductionRuntime::new();
-        rt.set_permission_profile("full_access").await;
         crate::mcp_runtime::global_mcp()
             .register_server(agent_core::McpServerConfig {
                 id: "gate-test".into(),
@@ -5468,7 +5619,7 @@ mod tests {
         let tools = crate::production::PermissionGatedTools {
             gateway: {
                 let mut g = capability_gateway::CapabilityGateway::new();
-                g.register_builtins();
+                let _ = g.register_builtins();
                 Arc::new(g)
             },
             permissions: rt.permissions.clone(),
@@ -6039,5 +6190,33 @@ mod tests {
             "some runs had != 1 terminal lifecycle event"
         );
         assert_eq!(terminal_mismatch, 0, "some runs had event/status mismatch");
+    }
+
+    /// TASK-013: the native runtime is the daemon's executable authority and
+    /// the CLI bridge, when present, is never advertised as a native authority.
+    #[test]
+    fn lineage_compat_capabilities_mark_cli_as_non_native() {
+        let caps = RunManager::capabilities();
+        let native = caps
+            .runtimes
+            .iter()
+            .find(|r| r.id == "native")
+            .expect("native runtime is always advertised");
+        assert_eq!(
+            native.status,
+            assistant_protocol::v2::RuntimeAvailability::Executable
+        );
+        if crate::cli_runtime_bridge::claude_cli_available() {
+            let cli = caps
+                .runtimes
+                .iter()
+                .find(|r| r.id == "cli")
+                .expect("CLI runtime is advertised when the CLI is available");
+            assert_ne!(
+                cli.status,
+                assistant_protocol::v2::RuntimeAvailability::Executable,
+                "the CLI must never claim native execution authority"
+            );
+        }
     }
 }

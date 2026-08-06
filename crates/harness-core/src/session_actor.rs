@@ -369,10 +369,8 @@ impl SessionCoordinator {
             }
             let mut leftovers: Vec<QueueItem> = by_id.into_values().collect();
             leftovers.sort_by_key(|i| i.position);
-            let mut pos = ordered.len() as i64;
-            for mut item in leftovers {
+            for (pos, mut item) in (ordered.len() as i64..).zip(leftovers) {
                 item.position = pos;
-                pos += 1;
                 ordered.push_back(item);
             }
             actor.prompt_queue = ordered;

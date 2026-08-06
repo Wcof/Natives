@@ -8,16 +8,27 @@
 pub mod adapters;
 pub mod browser;
 pub mod docker;
+pub mod driver;
 pub mod github;
+pub mod grant_store;
 pub mod install;
 pub mod local;
 pub mod model;
+pub mod non_owned;
+pub mod operation;
 pub mod paths;
+pub mod port_lease;
 pub mod probe;
+pub mod process_driver;
+pub mod profile_store;
+pub mod proposal;
 pub mod runtime_store;
 pub mod service;
+pub mod service_store;
 pub mod state_machine;
 pub mod store;
+pub mod surface_store;
+pub mod window;
 
 pub use adapters::{LifecycleCtx, ResolvedSource};
 pub use model::*;

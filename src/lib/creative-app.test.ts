@@ -6,15 +6,21 @@ import assert from 'node:assert/strict';
 import {
   defaultDeleteOptions,
   deleteNeedsDockerOptions,
+  deriveBusyIds,
   isActionBusy,
+  isOperationActive,
+  isOperationTerminal,
   mergeActionsWithBusy,
   openSurfaceKind,
+  operationLabelKey,
+  operationPhaseLabelKey,
   shouldAutoOpenAfterStart,
   shouldReloadCreativeCatalog,
   sortCreativeApps,
   sourceBadge,
+  upsertOperation,
 } from './creative-app';
-import type { CreativeAppSummary } from './tauri-adapter';
+import type { CreativeAppOperation, CreativeAppSummary } from './tauri-adapter';
 
 describe('creative-app catalog channel', () => {
   it('accepts creative-app and module', () => {
@@ -174,5 +180,72 @@ describe('creative-app lifecycle matrix helpers', () => {
     assert.equal(deleteNeedsDockerOptions('external_github'), true);
     assert.equal(deleteNeedsDockerOptions('local_project'), false);
     assert.equal(deleteNeedsDockerOptions('internal'), false);
+  });
+});
+
+describe('creative-app operation projection (batch 2 CR-203)', () => {
+  function op(partial: Partial<CreativeAppOperation> & Pick<CreativeAppOperation, 'id' | 'phase'>): CreativeAppOperation {
+    return {
+      kind: 'start',
+      actor: 'user',
+      startedAt: 't',
+      updatedAt: 't',
+      ...partial,
+    };
+  }
+
+  it('classifies active vs terminal phases', () => {
+    assert.equal(isOperationActive(op({ id: 1, phase: 'pending' })), true);
+    assert.equal(isOperationActive(op({ id: 2, phase: 'waiting' })), true);
+    assert.equal(isOperationActive(op({ id: 3, phase: 'running' })), true);
+    assert.equal(isOperationActive(op({ id: 4, phase: 'compensating' })), true);
+    assert.equal(isOperationActive(op({ id: 5, phase: 'succeeded' })), false);
+    assert.equal(isOperationActive(op({ id: 6, phase: 'failed' })), false);
+    assert.equal(isOperationActive(op({ id: 7, phase: 'cancelled' })), false);
+    assert.equal(isOperationTerminal(op({ id: 8, phase: 'failed' })), true);
+    assert.equal(isOperationTerminal(op({ id: 9, phase: 'running' })), false);
+  });
+
+  it('upsert merges operations immutably', () => {
+    const base = new Map<number, CreativeAppOperation>();
+    const a = op({ id: 1, phase: 'running', applicationId: 'app-a' });
+    const one = upsertOperation(base, a);
+    assert.equal(one.size, 1);
+    assert.equal(base.size, 0, 'original map is not mutated');
+    const two = upsertOperation(one, op({ id: 2, phase: 'waiting', applicationId: 'app-b' }));
+    assert.equal(two.size, 2);
+    const updated = upsertOperation(two, op({ id: 1, phase: 'succeeded', applicationId: 'app-a' }));
+    assert.equal(updated.size, 2, 'terminal replaces the active entry');
+    assert.equal(updated.get(1)?.phase, 'succeeded');
+  });
+
+  it('deriveBusyIds maps active operations to source ids', () => {
+    const apps = [
+      summary({ id: 'l1', source: 'local_project', state: 'running', applicationId: 'app-l1' }),
+      summary({ id: 'e1', source: 'external_github', state: 'running', runtime: 'docker_run', applicationId: 'app-e1' }),
+    ];
+    const operations = [
+      op({ id: 1, phase: 'running', applicationId: 'app-l1' }),
+      op({ id: 2, phase: 'waiting', applicationId: 'app-e1' }),
+      op({ id: 3, phase: 'succeeded', applicationId: 'app-l1' }), // terminal → not busy
+      op({ id: 4, phase: 'running', applicationId: 'unknown-app' }), // no matching summary → not busy
+    ];
+    const busy = deriveBusyIds(apps, operations);
+    assert.equal(busy.has('l1'), true);
+    assert.equal(busy.has('e1'), true);
+    assert.equal(busy.size, 2);
+  });
+
+  it('deriveBusyIds ignores operations with no application link', () => {
+    const apps = [summary({ id: 'l1', source: 'local_project', state: 'running', applicationId: 'app-l1' })];
+    const busy = deriveBusyIds(apps, [op({ id: 1, phase: 'running', applicationId: null })]);
+    assert.equal(busy.size, 0);
+  });
+
+  it('label keys point into creative.operation', () => {
+    assert.equal(operationLabelKey('start'), 'creative.operation.start');
+    assert.equal(operationLabelKey('install'), 'creative.operation.install');
+    assert.equal(operationPhaseLabelKey('running'), 'creative.operation.running');
+    assert.equal(operationPhaseLabelKey('failed'), 'creative.operation.failed');
   });
 });

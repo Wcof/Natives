@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc::UnboundedSender, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
@@ -196,6 +196,22 @@ pub struct DaemonToolProgressSink {
     pending: Arc<Mutex<HashMap<String, (Instant, ToolProgressUpdate)>>>,
     scheduled_flushes: Arc<Mutex<HashSet<String>>>,
     sequence: Arc<AtomicU64>,
+}
+
+/// Process-wide registry of in-flight MCP tool calls (J03). A call enters when
+/// its invocation starts and leaves when it settles, so after a cancel the
+/// registry is quiet — there is no lingering request whose late response could
+/// be mistaken for a completed effect.
+static PENDING_MCP_CALLS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+fn pending_mcp_calls() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    PENDING_MCP_CALLS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Number of in-flight MCP calls; must be zero after every settle.
+pub fn pending_mcp_call_count() -> usize {
+    pending_mcp_calls().lock().unwrap().len()
 }
 
 impl DaemonToolProgressSink {
@@ -1036,56 +1052,17 @@ impl EngineToolRuntime for PermissionGatedTools {
 
         // Inject project cwd for terminal when missing (sandbox).
         let mut input = input;
-        if name == "run_terminal" {
-            if input.get("cwd").and_then(|v| v.as_str()).is_none() {
-                if let Some(root) = &self.gateway.project_root {
-                    if let Some(obj) = input.as_object_mut() {
-                        obj.insert("cwd".into(), Value::String(root.clone()));
-                    }
+        if name == "run_terminal" && input.get("cwd").and_then(|v| v.as_str()).is_none() {
+            if let Some(root) = &self.gateway.project_root {
+                if let Some(obj) = input.as_object_mut() {
+                    obj.insert("cwd".into(), Value::String(root.clone()));
                 }
             }
         }
 
-        // Phase 3: lazy before-image for write tools (write_file / apply_patch).
-        let write_paths = extract_write_paths(name, &input);
-        for rel in &write_paths {
-            if let Err(error) = self
-                .checkpoint_manager()
-                .capture_before(&self.parent_run_id, rel)
-            {
-                return ToolExecutionResult {
-                    output: serde_json::json!({
-                        "error_code": "PERSISTENCE_FAILED",
-                        "error": format!("checkpoint before-image could not be persisted: {error}"),
-                    }),
-                    is_error: true,
-                    duration_ms: 0,
-                };
-            }
-        }
-
-        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
-            &self.parent_run_id,
-            &stream_tool_call_id,
-            name,
-            crate::side_effect_ledger::category_for_tool(name),
-            "started",
-            false,
-            turn_id,
-            &input,
-        ) {
-            return ToolExecutionResult {
-                output: serde_json::json!({
-                    "error_code": "PERSISTENCE_FAILED",
-                    "error": format!("tool side-effect ledger could not be started: {error}"),
-                }),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
         let started = Instant::now();
-        // Create tool call context
+        // Create tool call context FIRST so Gateway path preflight can
+        // authorize write paths before any checkpoint I/O (N01).
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
@@ -1095,9 +1072,14 @@ impl EngineToolRuntime for PermissionGatedTools {
             cancel.clone()
         };
         let live_settled = Arc::new(AtomicBool::new(false));
+        let live_dropped_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let live_forwarder = if name == "run_terminal" {
-            let (tx, mut rx) =
-                tokio::sync::mpsc::unbounded_channel::<capability_gateway::ToolProgressChunk>();
+            // H03: bounded live-output channel. Overflow drops at the producer
+            // and is counted in `live_dropped_bytes`; a slow consumer can never
+            // grow memory unboundedly.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<capability_gateway::ToolProgressChunk>(
+                capability_gateway::TERMINAL_PROGRESS_CAPACITY,
+            );
             let run_id = self.parent_run_id.clone();
             let call_id = stream_tool_call_id.clone();
             let turn_id = turn_id.map(str::to_string);
@@ -1139,10 +1121,90 @@ impl EngineToolRuntime for PermissionGatedTools {
                 stream_tool_call_id.clone(),
                 cancel.clone(),
                 progress_tx,
+                live_dropped_bytes.clone(),
                 turn_id.map(str::to_string),
                 message_id.map(str::to_string),
             )
             .await;
+
+        // Phase 3: Gateway path preflight MUST precede any checkpoint I/O (N01).
+        // A rejected path returns before the ledger and the handler, so it
+        // causes zero I/O. Checkpoint only ever receives Gateway-authorized
+        // canonical paths (`TrustedPath`); it no longer accepts raw strings.
+        let trusted_paths = match self
+            .gateway
+            .preflight_write_paths(name, &input, &tool_context)
+        {
+            Ok(paths) => paths,
+            Err(e) => {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": e.code,
+                        "error": e.message,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                }
+            }
+        };
+        for trusted in &trusted_paths {
+            if let Err(error) = self
+                .checkpoint_manager()
+                .capture_before(&self.parent_run_id, trusted)
+            {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error_code": "PERSISTENCE_FAILED",
+                        "error": format!("checkpoint before-image could not be persisted: {error}"),
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
+        if let Err(error) = crate::side_effect_ledger::record_tool_effect_state(
+            &self.parent_run_id,
+            &stream_tool_call_id,
+            name,
+            crate::side_effect_ledger::category_for_tool(name),
+            "started",
+            false,
+            turn_id,
+            &input,
+        ) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "PERSISTENCE_FAILED",
+                    "error": format!("tool side-effect ledger could not be started: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
+        // D02: hold the cross-run conflict lease for the duration of the
+        // handler. The RAII guard releases it on every exit path, so a cancel
+        // or failure never leaves the conflict key leased.
+        let conflict_key = self.gateway.conflict_key_for(name);
+        let _conflict_lease = match conflict_key {
+            Some(key) => match crate::runtime::conflict_lease::global_conflict_leases()
+                .acquire_guard(&key, &self.parent_run_id)
+            {
+                Ok(guard) => Some(guard),
+                Err(error) => {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error_code": "CONFLICT_LEASE_DENIED",
+                            "error": error,
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+            },
+            None => None,
+        };
 
         let result = match self
             .gateway
@@ -1153,57 +1215,26 @@ impl EngineToolRuntime for PermissionGatedTools {
                 let mut output = out.result;
                 attach_tool_output_artifact(&self.parent_run_id, &stream_tool_call_id, &mut output);
                 let mut checkpoint_error = None;
-                for rel in &write_paths {
+                for trusted in &trusted_paths {
                     if let Err(error) = self
                         .checkpoint_manager()
-                        .capture_after(&self.parent_run_id, rel)
+                        .capture_after(&self.parent_run_id, trusted)
                     {
                         checkpoint_error = Some(error);
                         break;
                     }
                 }
-                let checkpoint_failed = checkpoint_error.is_some();
-                // Side-effect ledger for restore coverage honesty.
-                let cat = crate::side_effect_ledger::category_for_tool(name);
-                let reversible = cat == "workspace_file";
-                let ledger_result = if checkpoint_failed {
-                    crate::side_effect_ledger::record_tool_effect_state(
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        name,
-                        cat,
-                        "uncertain",
-                        false,
-                        turn_id,
-                        &input,
-                    )
-                } else {
-                    crate::side_effect_ledger::record_tool_effect_state(
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        name,
-                        cat,
-                        "completed",
-                        reversible,
-                        turn_id,
-                        &input,
-                    )
-                };
                 if let Some(error) = checkpoint_error.as_deref() {
-                    output = serde_json::json!({
-                        "error_code": "PERSISTENCE_FAILED",
-                        "error": format!("checkpoint after-image could not be persisted: {error}"),
-                    });
-                }
-                if let Err(error) = ledger_result {
-                    // The handler already ran, so a failed completion write is
-                    // an unknown side effect. Keep the ledger conservative even
-                    // when the first completion update failed.
+                    // The handler already ran but the after-image could not be
+                    // persisted, so the effect outcome is not fully known:
+                    // surface a durable `uncertain` mark. If even that write
+                    // fails, the intent stays `started`, which the resume gate
+                    // treats as unresolved — never replay-safe (D04).
                     let _ = crate::side_effect_ledger::record_tool_effect_state(
                         &self.parent_run_id,
                         &stream_tool_call_id,
                         name,
-                        cat,
+                        crate::side_effect_ledger::category_for_tool(name),
                         "uncertain",
                         false,
                         turn_id,
@@ -1211,9 +1242,15 @@ impl EngineToolRuntime for PermissionGatedTools {
                     );
                     output = serde_json::json!({
                         "error_code": "PERSISTENCE_FAILED",
-                        "error": format!("tool side-effect ledger could not be completed: {error}"),
+                        "error": format!("checkpoint after-image could not be persisted: {error}"),
                     });
                 }
+                // On success the ledger intent stays `started`: the daemon
+                // event log settles it to a terminal status in the same
+                // transaction that appends the ToolCallCompleted fact (D04).
+                // A crash between the handler returning and that append leaves
+                // the effect unresolved, so resume blocks instead of re-running
+                // it.
                 if name == "run_terminal" && live_forwarder.is_none() {
                     emit_terminal_output_deltas(
                         &self.events,
@@ -1260,14 +1297,15 @@ impl EngineToolRuntime for PermissionGatedTools {
                         }
                     }
                 }
-                if !checkpoint_failed {
-                    for rel in &write_paths {
+                if checkpoint_error.is_none() {
+                    for trusted in &trusted_paths {
+                        let rel = trusted.project_relative.to_string_lossy().into_owned();
                         // Best-effort FileChanged with before/after from checkpoint live map.
                         if let Ok(preview) = self
                             .checkpoint_manager()
                             .checkpoint_for_run_public(&self.parent_run_id)
                         {
-                            if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
+                            if let Some(snap) = preview.files.iter().find(|f| f.path == rel) {
                                 self.events.append(
                                     &self.parent_run_id,
                                     RunEventKind::FileChanged {
@@ -1532,37 +1570,6 @@ fn emit_terminal_output_deltas(
         }
     }
 }
-fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
-    let mut paths = Vec::new();
-    match name {
-        "write_file" | "edit_file" => {
-            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
-                if !p.is_empty() && !p.contains("..") {
-                    // Prefer project-relative: strip absolute if possible is caller's job.
-                    paths.push(p.to_string());
-                }
-            }
-        }
-        "apply_patch" => {
-            if let Some(arr) = input.get("files").and_then(|v| v.as_array()) {
-                for f in arr {
-                    if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
-                        if !p.is_empty() && !p.contains("..") {
-                            paths.push(p.to_string());
-                        }
-                    }
-                }
-            }
-            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
-                if !p.is_empty() && !p.contains("..") {
-                    paths.push(p.to_string());
-                }
-            }
-        }
-        _ => {}
-    }
-    paths
-}
 fn tool_pattern(name: &str, input: &Value) -> String {
     if name == "run_terminal" {
         input
@@ -1657,7 +1664,8 @@ impl PermissionGatedTools {
         &self,
         tool_call_id: String,
         cancel: CancellationToken,
-        progress: Option<UnboundedSender<capability_gateway::ToolProgressChunk>>,
+        progress: Option<tokio::sync::mpsc::Sender<capability_gateway::ToolProgressChunk>>,
+        progress_dropped_bytes: Arc<std::sync::atomic::AtomicU64>,
         turn_id: Option<String>,
         message_id: Option<String>,
     ) -> capability_gateway::ToolCallContext {
@@ -1673,7 +1681,7 @@ impl PermissionGatedTools {
                     self.permission_profile.clone(),
                     cancel,
                 );
-            context.progress = progress;
+            context.set_progress(progress, progress_dropped_bytes);
             context.turn_id = turn_id;
             context.message_id = message_id;
             return context;
@@ -1682,7 +1690,7 @@ impl PermissionGatedTools {
             .gateway
             .project_root
             .as_ref()
-            .map(|s| std::path::PathBuf::from(s))
+            .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let mut context = capability_gateway::ToolCallContext::with_cancel(
             project_root,
@@ -1692,7 +1700,7 @@ impl PermissionGatedTools {
             self.permission_profile.clone(),
             cancel,
         );
-        context.progress = progress;
+        context.set_progress(progress, progress_dropped_bytes);
         context.turn_id = turn_id;
         context.message_id = message_id;
         context
@@ -1821,7 +1829,7 @@ impl PermissionGatedTools {
             .request_permission_for_profile(
                 profile,
                 &self.parent_run_id,
-                &tool_call_id,
+                tool_call_id,
                 name,
                 format!("Approve {name}?"),
                 input.clone(),
@@ -2071,7 +2079,14 @@ impl PermissionGatedTools {
             CancellationToken::new()
         };
         let context = self
-            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel, None, None, None)
+            .build_tool_call_context(
+                uuid::Uuid::new_v4().to_string(),
+                cancel,
+                None,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                None,
+                None,
+            )
             .await;
         match self
             .gateway
@@ -2403,6 +2418,7 @@ impl PermissionGatedTools {
     }
 
     /// Route `mcp_call` / namespaced `mcp__server__tool` through daemon MCP runtime.
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
     async fn execute_mcp_call(
         &self,
         name: &str,
@@ -2527,7 +2543,8 @@ impl PermissionGatedTools {
                 }
             })
         };
-        match crate::runtime::mcp_invocation::invoke_mcp_tool_with_progress(
+        pending_mcp_calls().lock().unwrap().insert(call_id.clone());
+        let outcome = crate::runtime::mcp_invocation::invoke_mcp_tool_with_progress(
             &server_id,
             &tool_name,
             arguments,
@@ -2535,17 +2552,28 @@ impl PermissionGatedTools {
             Some(&self.parent_run_id),
             Some(progress_callback),
         )
-        .await
-        {
+        .await;
+        // J03: the pending registry is quiet once the call settles — no
+        // lingering request can later be mistaken for a fresh effect.
+        pending_mcp_calls().lock().unwrap().remove(&call_id);
+        match outcome {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
+                // J03: a late success that lands after the run was cancelled is
+                // never recorded as completed — the external outcome is
+                // unknowable while we are tearing the call down.
+                let status = if cancel.is_cancelled() {
+                    "uncertain"
+                } else {
+                    "completed"
+                };
                 // MCP is not auto-rollbackable — record for restore coverage honesty.
                 let ledger_result = crate::side_effect_ledger::record_tool_effect_state(
                     &self.parent_run_id,
                     &call_id,
                     "mcp_call",
                     "mcp",
-                    "completed",
+                    status,
                     false,
                     turn_id,
                     &ledger_summary,
@@ -2918,21 +2946,37 @@ impl PermissionGatedTools {
                 }
             };
         // Persist the child scope so a route restart restores it exactly
-        // (migration 029). Without this the durable session only carries
-        // provider/key/model and a restart would guess ask/max_steps=15 and
-        // drop project identity, profile, and allowlist.
-        let _ = crate::subagent_store::persist_subagent_scope(
+        // (migration 029). N05: bind the child to the parent's REAL project
+        // identity (id + version) — never write the project path into
+        // project_id. A persist failure fails closed BEFORE any child run is
+        // created.
+        let identity = self.verified_project_identity().await;
+        if let Err(error) = crate::subagent_store::persist_subagent_scope(
             &session_id,
             &crate::subagent_store::SubagentScope {
                 project_path: self.gateway.project_root.clone(),
-                project_id: self.gateway.project_root.clone(),
-                project_identity_version: None,
+                project_id: identity
+                    .as_ref()
+                    .map(|i| i.project_id.clone())
+                    .or_else(|| self.gateway.project_root.clone()),
+                project_identity_version: identity.as_ref().map(|i| i.identity_version as i64),
                 permission_profile: Some(child_perm.clone()),
                 agent_profile_id: child_profile_id.clone(),
                 max_steps: Some(child_max_steps as i64),
                 tool_allowlist: child_allowlist.clone(),
             },
-        );
+        ) {
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&error));
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": format!("persist child scope failed: {error}"),
+                    "code": "PERSISTENCE_FAILED",
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
         let project_path = self.gateway.project_root.clone();
@@ -2962,6 +3006,10 @@ impl PermissionGatedTools {
             })
             .await;
         if let Err(reason) = HookRegistry::aggregate_allow(&start_responses) {
+            // E04: the hidden session was created before the hook ran — close
+            // it so a denied spawn leaves no persistent session orphan.
+            let _ =
+                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&reason));
             return ToolExecutionResult {
                 output: serde_json::json!({
                     "error": format!("subagent hook denied: {reason}"),
@@ -3034,6 +3082,14 @@ impl PermissionGatedTools {
             Err(e) => {
                 let _ =
                     crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
+                // E04: the child run was already created (queued) before the
+                // reservation — settle it so a failed registration leaves no
+                // queued orphan run behind.
+                crate::global_run_manager().fail_run_if_active(
+                    &child_run_id,
+                    format!("subagent reservation failed: {e}"),
+                    "SUBAGENT_REGISTER_FAILED",
+                );
                 return ToolExecutionResult {
                     output: serde_json::json!({"error": e}),
                     is_error: true,
@@ -3394,7 +3450,7 @@ impl PermissionGatedTools {
                     let _ = crate::subagent_store::upsert_route_policy(
                         &self.conversation_id,
                         "default",
-                        &[default_binding.clone()],
+                        std::slice::from_ref(&default_binding),
                     );
                     let mut map = HashMap::new();
                     for (call_id, _, _) in tasks {
@@ -3673,10 +3729,8 @@ impl PermissionGatedTools {
             for b in &bindings {
                 crate::production::validate_route_binding(b)?;
             }
-            let mut pi = 0usize;
-            for (call_id, _, _) in tasks {
+            for (pi, (call_id, _, _)) in tasks.iter().enumerate() {
                 map.insert(call_id.clone(), bindings[pi % bindings.len()].clone());
-                pi += 1;
             }
         }
 
@@ -3689,6 +3743,8 @@ impl PermissionGatedTools {
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or_default();
             let mut pi = 0usize;
+            #[allow(clippy::explicit_counter_loop)]
+            // pi counts only processed items (continue skips)
             for (call_id, _, _) in tasks {
                 if map.contains_key(call_id) || pool.is_empty() {
                     continue;
@@ -4043,6 +4099,53 @@ mod tests {
             HookPermissionGate::Prompt
         );
     }
+
+    /// TASK-007 (H03): after a tool call settles, a flood of late progress
+    /// updates is rejected — zero events appended (terminal is authoritative).
+    #[tokio::test]
+    async fn progress_backpressure_rejects_updates_after_terminal() {
+        let captured = Arc::new(CapturedEvents::default());
+        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        sink.mark_tool_call_settled("late-call").await;
+        for i in 0..100 {
+            sink.publish(ToolProgressUpdate {
+                run_id: "bp-run".into(),
+                tool_call_id: "late-call".into(),
+                tool_name: "run_terminal".into(),
+                stream: "stdout".into(),
+                text: format!("late line {i}"),
+                final_update: false,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: 0,
+            })
+            .await;
+        }
+        let events = captured.0.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(&e.payload, RunEventKind::ToolOutputDelta { .. })),
+            "no progress event may be appended after the call settles"
+        );
+    }
+
+    /// TASK-007 (J03): the in-flight MCP registry returns to zero once a call
+    /// settles — no lingering request can be mistaken for a fresh effect.
+    #[test]
+    fn progress_backpressure_mcp_registry_quiet_after_settle() {
+        pending_mcp_calls()
+            .lock()
+            .unwrap()
+            .insert("mcp-call-1".to_string());
+        assert_eq!(pending_mcp_call_count(), 1);
+        pending_mcp_calls().lock().unwrap().remove("mcp-call-1");
+        assert_eq!(
+            pending_mcp_call_count(),
+            0,
+            "registry is quiet after settle"
+        );
+    }
 }
 
 /// Plan Mode as the tool runtime actually enforces it.
@@ -4060,7 +4163,7 @@ mod plan_mode_runtime_tests {
         let rt = ProductionRuntime::new();
         let mut gateway = CapabilityGateway::new();
         gateway.set_project_root(root.to_string_lossy().to_string());
-        gateway.register_builtins();
+        let _ = gateway.register_builtins();
         PermissionGatedTools {
             gateway: Arc::new(gateway),
             permissions: rt.permissions.clone(),
@@ -4424,7 +4527,10 @@ mod plan_mode_runtime_tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tools.interactions.cancel_runs(&[id.clone()]).await;
+        tools
+            .interactions
+            .cancel_runs(std::slice::from_ref(&id))
+            .await;
         let out = submitting.await.unwrap();
 
         assert_eq!(out.output["approved"], false);

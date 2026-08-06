@@ -23,7 +23,7 @@ use provider_adapters::capabilities::{
 use provider_adapters::stream::ProviderEvent;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -43,6 +43,63 @@ pub mod harness;
 
 /// Active session: maps session_token -> client_id.
 type SessionMap = Arc<Mutex<HashMap<String, String>>>;
+
+/// Maximum size of a single UDS frame (handshake or RPC), including the
+/// trailing newline. Frames larger than this are rejected and the connection
+/// closed before more bytes are buffered (N04). Public so the frame-boundary
+/// contract is testable from integration tests.
+pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+
+/// Deadline for a peer to deliver one full frame. Bounds slowloris / stalled
+/// connections without affecting normal local request latency (N04).
+pub(crate) const FRAME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Result of a bounded frame read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrameError {
+    /// Frame exceeded the configured byte cap (no newline within the cap).
+    Oversize,
+    /// Peer failed to deliver a full frame before the deadline.
+    Timeout,
+    /// Underlying I/O error.
+    Io,
+}
+
+/// Read one newline-terminated frame with a hard byte cap and a read deadline.
+///
+/// - `Ok(None)` on EOF (peer closed).
+/// - `Ok(Some(bytes))` when a frame within `max_frame` bytes was read.
+/// - `Err(FrameError::Oversize)` when a frame exceeds `max_frame` bytes.
+/// - `Err(FrameError::Timeout)` when the peer stalls without delivering a full
+///   frame within `timeout`.
+///
+/// `take(max_frame + 1)` bounds the read so a newline-less frame cannot grow
+/// the buffer without limit (replaces the unbounded `read_line`).
+pub(crate) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_frame: usize,
+    timeout: std::time::Duration,
+) -> Result<Option<Vec<u8>>, FrameError> {
+    let mut frame = Vec::with_capacity(1024);
+    let outcome = tokio::time::timeout(timeout, async {
+        let mut capped = reader.take((max_frame + 1) as u64);
+        let n = capped.read_until(b'\n', &mut frame).await?;
+        Ok::<_, std::io::Error>(n)
+    })
+    .await;
+    let n = match outcome {
+        Ok(Ok(n)) => n,
+        Ok(Err(_)) => return Err(FrameError::Io),
+        Err(_) => return Err(FrameError::Timeout),
+    };
+    if n == 0 {
+        return Ok(None);
+    }
+    if frame.len() > max_frame {
+        return Err(FrameError::Oversize);
+    }
+    Ok(Some(frame))
+}
 
 /// Reject handshake with a stable HandshakeResponse shape (always includes session_token).
 async fn write_handshake_reject(
@@ -120,6 +177,14 @@ impl RpcServer {
 
         println!("Listening on {}", self.socket_path);
 
+        // B05 (TASK-008): replay undelivered permission decisions from the
+        // outbox. A decision whose event/waiter delivery never completed after
+        // a crash is delivered here; the handler is never woken ahead of its
+        // durable event.
+        if let Err(error) = crate::interaction_store::recover_interaction_outbox().await {
+            eprintln!("[rpc] interaction outbox recovery failed: {error}");
+        }
+
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
@@ -173,27 +238,52 @@ async fn handle_connection(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let mut line = String::new();
 
-    // --- Step 1: Handshake ---
-    line.clear();
-    reader.read_line(&mut line).await?;
-    if line.trim().is_empty() {
-        return Ok(());
-    }
-
-    // Deserialize handshake request
-    let handshake_req: HandshakeRequest = match serde_json::from_str(line.trim()) {
-        Ok(req) => req,
-        Err(e) => {
+    // --- Step 1: Handshake (bounded frame, read deadline; N04) ---
+    let handshake_frame = match read_frame(&mut reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+        Ok(Some(frame)) => frame,
+        Ok(None) => return Ok(()), // peer closed before sending a handshake
+        Err(FrameError::Oversize) => {
             write_handshake_reject(
                 &mut writer,
                 &protocol_version.to_string(),
                 &daemon_version,
-                format!("Invalid handshake JSON: {e}"),
+                format!("Handshake frame exceeds {MAX_FRAME_BYTES} bytes"),
             )
             .await?;
             return Ok(());
+        }
+        Err(FrameError::Timeout) => {
+            write_handshake_reject(
+                &mut writer,
+                &protocol_version.to_string(),
+                &daemon_version,
+                "Handshake frame read timed out".to_string(),
+            )
+            .await?;
+            return Ok(());
+        }
+        Err(FrameError::Io) => return Err("handshake read failed".into()),
+    };
+
+    // Deserialize handshake request
+    let handshake_req: HandshakeRequest = {
+        let line = String::from_utf8_lossy(&handshake_frame);
+        if line.trim().is_empty() {
+            return Ok(());
+        }
+        match serde_json::from_str(line.trim()) {
+            Ok(req) => req,
+            Err(e) => {
+                write_handshake_reject(
+                    &mut writer,
+                    &protocol_version.to_string(),
+                    &daemon_version,
+                    format!("Invalid handshake JSON: {e}"),
+                )
+                .await?;
+                return Ok(());
+            }
         }
     };
 
@@ -262,15 +352,37 @@ async fn handle_connection(
     writer.write_all(resp_json.as_bytes()).await?;
     writer.write_all(b"\n").await?;
 
-    // --- Step 2: Handle RPC requests ---
+    // --- Step 2: Handle RPC requests (bounded frame, read deadline; N04) ---
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
-            // Client disconnected
-            break;
-        }
+        let frame = match read_frame(&mut reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break, // Client disconnected
+            Err(FrameError::Oversize) => {
+                let err = DaemonError::new(
+                    error_codes::INVALID_INPUT,
+                    ErrorCategory::Validation,
+                    false,
+                    format!("RPC frame exceeds {MAX_FRAME_BYTES} bytes"),
+                );
+                send_error(&mut writer, &err).await;
+                // A connection that overran the frame cap is unusable; close it
+                // so the session is cleaned up (finally-style teardown below).
+                break;
+            }
+            Err(FrameError::Timeout) => {
+                let err = DaemonError::new(
+                    error_codes::TIMEOUT,
+                    ErrorCategory::Timeout,
+                    false,
+                    "RPC frame read timed out".to_string(),
+                );
+                send_error(&mut writer, &err).await;
+                break;
+            }
+            Err(FrameError::Io) => break,
+        };
 
+        let line = String::from_utf8_lossy(&frame);
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -1163,6 +1275,7 @@ pub async fn handle_rpc(
                 .get("run_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            #[allow(clippy::needless_return)] // return exits the outer method dispatch
             match run_manager().replay_checked(ReplayRunRequest {
                 run_id: run_id.to_string(),
                 after_sequence: after,
@@ -1591,7 +1704,7 @@ pub async fn handle_rpc(
         }
         names::TOOL_LIST => {
             let mut gateway = capability_gateway::CapabilityGateway::new();
-            gateway.register_builtins();
+            let _ = gateway.register_builtins();
             let tools = gateway
                 .list_tools()
                 .into_iter()
@@ -3144,9 +3257,10 @@ fn handle_rewind_rpc(
             let b = bound.canonicalize().unwrap_or_else(|_| bound.clone());
             let c = caller_p.canonicalize().unwrap_or(caller_p);
             if b != c {
-                return Err(format!(
+                return Err(
                     "workspace.restore refused: caller project_path does not match run identity; restored=0"
-                ));
+                        .into(),
+                );
             }
         }
         bound
@@ -3560,5 +3674,94 @@ mod tests {
             let sessions = sessions.lock().await;
             assert!(!sessions.contains_key(&forged_token));
         }
+    }
+}
+
+#[cfg(test)]
+mod rpc_frame_tests {
+    //! TASK-003 (N04): bounded UDS frames — fixed max size, read deadline,
+    //! structured error, and clean connection teardown. These fail against the
+    //! pre-fix `read_line` (unbounded growth on newline-less frames).
+    use super::*;
+    use std::io::Cursor;
+    use std::pin::Pin;
+    use std::task::Poll;
+    use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
+    use tokio::time::Duration;
+
+    const SHORT_TIMEOUT: Duration = Duration::from_millis(50);
+
+    #[tokio::test]
+    async fn rpc_frame_accepts_exact_max_boundary() {
+        let mut payload = vec![b'x'; MAX_FRAME_BYTES - 1];
+        payload.push(b'\n');
+        let mut cur = Cursor::new(payload);
+        let frame = read_frame(&mut cur, MAX_FRAME_BYTES, SHORT_TIMEOUT)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame.len(), MAX_FRAME_BYTES);
+        assert_eq!(frame.last(), Some(&b'\n'));
+    }
+
+    #[tokio::test]
+    async fn rpc_frame_rejects_oversize_plus_one() {
+        // MAX+1 bytes with no newline: the cap must stop the read and reject.
+        let payload = vec![b'x'; MAX_FRAME_BYTES + 1];
+        let mut cur = Cursor::new(payload);
+        let err = read_frame(&mut cur, MAX_FRAME_BYTES, SHORT_TIMEOUT)
+            .await
+            .unwrap_err();
+        assert_eq!(err, FrameError::Oversize);
+    }
+
+    #[tokio::test]
+    async fn rpc_frame_rejects_newline_less_oversize() {
+        // A single line larger than the cap without any newline byte.
+        let payload = vec![b'x'; MAX_FRAME_BYTES + 10];
+        let mut cur = Cursor::new(payload);
+        let err = read_frame(&mut cur, MAX_FRAME_BYTES, SHORT_TIMEOUT)
+            .await
+            .unwrap_err();
+        assert_eq!(err, FrameError::Oversize);
+    }
+
+    #[tokio::test]
+    async fn rpc_frame_eof_returns_none() {
+        let mut cur = Cursor::new(Vec::<u8>::new());
+        assert!(read_frame(&mut cur, MAX_FRAME_BYTES, SHORT_TIMEOUT)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn rpc_frame_slowloris_times_out() {
+        // A peer that trickles nothing and stalls must hit the read deadline.
+        let mut reader = StallReader;
+        let err = read_frame(&mut reader, MAX_FRAME_BYTES, SHORT_TIMEOUT)
+            .await
+            .unwrap_err();
+        assert_eq!(err, FrameError::Timeout);
+    }
+
+    struct StallReader;
+    impl AsyncRead for StallReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+    impl AsyncBufRead for StallReader {
+        fn poll_fill_buf(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> Poll<std::io::Result<&[u8]>> {
+            Poll::Pending
+        }
+        fn consume(self: Pin<&mut Self>, _amt: usize) {}
     }
 }

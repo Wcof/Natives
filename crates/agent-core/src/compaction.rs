@@ -5,9 +5,9 @@
 //!   repair dangling tool calls. Cheap, offline, always available.
 //! - **Model-backed** ([`choose_summary_split`] + [`render_transcript_for_summary`]
 //!   + [`apply_model_summary`]) — replace an old prefix of the history with a
-//!   structured summary written by the model. The provider round trip itself is
-//!   driven by the engine; this module owns the pure parts so they stay testable
-//!   without a provider.
+//!     structured summary written by the model. The provider round trip itself is
+//!     driven by the engine; this module owns the pure parts so they stay testable
+//!     without a provider.
 //!
 //! Guarantees for tool-call integrity (providers hard-error when these break):
 //! - Never drop an assistant message that contains tool_calls without its
@@ -348,7 +348,7 @@ fn render_message_line(message: &Value, max_message_chars: usize) -> String {
                 .unwrap_or("tool");
             format!("tool:{name}")
         }
-        other if other.is_empty() => "unknown".to_string(),
+        "" => "unknown".to_string(),
         other => other.to_string(),
     };
     format!("{label}: {}", truncate_chars(&body, max_message_chars))

@@ -4,12 +4,14 @@ mod apply_patch_parser;
 pub mod creative_draft;
 mod extra;
 pub mod plan;
+pub mod proposal;
 mod ssrf;
 pub mod web_search;
 
 pub use apply_patch_parser::{parse_patch_input, PatchOp};
 pub use creative_draft::{creative_draft_tools, creative_handoff_tool, CREATIVE_DRAFT_TOOL_NAMES};
 pub use plan::plan_mode_tools;
+pub use proposal::creative_proposal_tool;
 pub use ssrf::validate_fetch_url;
 pub use web_search::{web_search_tool, SearchBackend, SearchProvider};
 
@@ -69,7 +71,7 @@ impl ToolHandler for ReadFileTool {
             retryable: true,
         })?;
         head.truncate(n);
-        let is_binary = head.iter().any(|&b| b == 0);
+        let is_binary = head.contains(&0);
         if is_binary {
             return Ok(ToolOutput {
                 result: serde_json::json!({
@@ -583,19 +585,28 @@ impl ToolHandler for RunTerminalTool {
         // state or the caller drops the channel.
         let progress_task = context.progress.as_ref().map(|tx| {
             let tx = tx.clone();
+            let dropped = context.progress_dropped_bytes.clone();
             let task_id = task_id.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 for _ in 0..12_000 {
                     for chunk in supervisor.drain_output(&task_id).await {
-                        if tx
-                            .send(crate::ToolProgressChunk {
-                                stream: chunk.stream.to_string(),
-                                text: chunk.text,
-                            })
-                            .is_err()
-                        {
-                            return;
+                        let chunk = crate::ToolProgressChunk {
+                            stream: chunk.stream.to_string(),
+                            text: chunk.text,
+                        };
+                        // H03: the live-output channel is bounded. Overflow is
+                        // dropped and counted — never buffered unboundedly and
+                        // never allowed to stall the shell.
+                        match tx.try_send(chunk) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(full)) => {
+                                dropped.fetch_add(
+                                    full.text.len() as u64,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
                         }
                     }
                     match supervisor.poll(&task_id).await {
@@ -681,6 +692,7 @@ impl ToolHandler for RunTerminalTool {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // terminal output fields are fixed
 fn terminal_result(
     display: String,
     description: &str,
@@ -822,6 +834,10 @@ pub fn builtin_tools() -> Vec<Tool> {
         // draft-scoped, so it ships in the default surface; the creative-session
         // writing tools stay out of it.
         creative_handoff_tool(),
+        // Agent creative proposal (batch 10 CR-1001): structurally validates and
+        // forwards an app-creation/start proposal for user approval. The Host
+        // gate is the real security boundary; this tool never registers anything.
+        creative_proposal_tool(),
         Tool {
             name: "read_file",
             description: "Read a text file (supports offset/limit; binary returns metadata only)",

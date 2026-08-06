@@ -168,6 +168,49 @@ export interface CreativeAppDeleteResult {
   warnings: string[];
 }
 
+/**
+ * Operation journal (batch 2 CR-201): every lifecycle mutation records a
+ * durable operation row so the Renderer projects busy/error/retry from Host
+ * facts instead of frontend booleans (CR-203).
+ */
+export type CreativeAppOperationKind = 'start' | 'stop' | 'restart' | 'delete' | 'install';
+export type CreativeAppOperationPhase =
+  | 'pending'
+  | 'waiting'
+  | 'running'
+  | 'compensating'
+  | 'succeeded'
+  | 'failed'
+  | 'compensated'
+  | 'cancelled';
+
+export interface CreativeAppOperation {
+  id: number;
+  applicationId?: string | null;
+  runtimeInstanceId?: string | null;
+  kind: CreativeAppOperationKind;
+  phase: CreativeAppOperationPhase;
+  actor: string;
+  redactedInput?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  startedAt: string;
+  finishedAt?: string | null;
+  updatedAt: string;
+}
+
+/** Lifecycle mutation result: journaled operation id + current projection. */
+export interface CreativeAppMutationResult {
+  operationId: number;
+  summary: CreativeAppSummary;
+}
+
+/** Delete mutation result (the app is gone, so there is no summary). */
+export interface CreativeAppDeleteMutationResult {
+  operationId: number;
+  result: CreativeAppDeleteResult;
+}
+
 export type CreativeAppOpenTarget =
   | { kind: 'workshop_module'; moduleId: string }
   | { kind: 'local_url'; url: string; appId: string };
@@ -279,11 +322,61 @@ export interface CreativeAppProgressEvent {
 }
 
 export interface CreativeAppLogEvent {
+  runtimeId: string | null;
   appId: string;
   seq: number;
   tsMs: number;
   stream: 'stdout' | 'stderr' | 'system' | string;
   text: string;
+}
+
+// CR-501: Surface / Endpoint / Window
+export interface CreativeAppSurface {
+  id: string;
+  applicationId: string;
+  kind: string;
+  label: string;
+  title?: string | null;
+  url?: string | null;
+  boundsJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreativeAppWindow {
+  id: string;
+  applicationId: string;
+  surfaceId: string;
+  runtimeInstanceId?: string | null;
+  label: string;
+  state: string;
+  boundsJson?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// CR-1001/1002: Agent proposal (versioned, Host-gated)
+export interface CreativeAppProposal {
+  schemaVersion: number;
+  kind: 'create' | 'start';
+  ownership: 'managed' | 'attached' | 'remote';
+  title: string;
+  projectRoot: string;
+  driver: CreativeAppProposedDriver;
+  openPath: string;
+  healthPath: string;
+  envKeys: string[];
+}
+
+export type CreativeAppProposedDriver =
+  | { kind: 'python'; schemaVersion: number; interpreter: string; entry: string; args: string[]; cwdRelative: string; environmentKeys: string[]; port: { mode: 'auto' | 'fixed'; value?: number | null }; openPath: string; healthPath: string; startupTimeoutMs: number; isVenv: boolean }
+  | { kind: 'binary'; schemaVersion: number; executablePath: string; executableHash: string; approved: boolean; args: string[]; cwdRelative: string; environmentKeys: string[]; port: { mode: 'auto' | 'fixed'; value?: number | null }; openPath: string; healthPath: string; startupTimeoutMs: number }
+  | { kind: 'staticHttp' }
+  | { kind: 'compose'; command?: string[] | null; privileged: boolean };
+
+export interface CreativeAppValidatedProposal {
+  proposal: CreativeAppProposal;
+  redacted: string;
 }
 
 export interface LaunchPlan {
@@ -629,33 +722,48 @@ export interface NativesAPI {
   /** Multi-source Personal Creations (internal + GitHub + local project). */
   creativeApp: {
     list: () => Promise<CreativeAppSummary[]>;
-    start: (id: string) => Promise<CreativeAppSummary>;
-    stop: (id: string) => Promise<CreativeAppSummary>;
-    delete: (id: string, options?: CreativeAppDeleteOptions) => Promise<CreativeAppDeleteResult>;
+    start: (id: string) => Promise<CreativeAppMutationResult>;
+    stop: (id: string) => Promise<CreativeAppMutationResult>;
+    delete: (id: string, options?: CreativeAppDeleteOptions) => Promise<CreativeAppDeleteMutationResult>;
     getOpenTarget: (id: string) => Promise<CreativeAppOpenTarget>;
     inspectGithub: (request: CreativeAppInspectRequest) => Promise<CreativeAppInspectResult>;
-    installGithub: (request: CreativeAppInstallRequest) => Promise<CreativeAppSummary>;
-    logs: (id: string, tail?: number) => Promise<string>;
+    installGithub: (request: CreativeAppInstallRequest) => Promise<CreativeAppMutationResult>;
+    operations: () => Promise<CreativeAppOperation[]>;
+    getOperation: (id: number) => Promise<CreativeAppOperation>;
+    cancelOperation: (id: number) => Promise<CreativeAppOperation>;
+    onOperationChanged: (callback: (op: CreativeAppOperation) => void) => () => void;
+    logs: (id: string, tail?: number, cursor?: number) => Promise<string>;
     reconcile: () => Promise<number>;
     githubTokenStatus: () => Promise<CreativeAppGithubTokenStatus>;
     githubTokenSet: (token: string) => Promise<CreativeAppGithubTokenStatus>;
     githubTokenClear: () => Promise<CreativeAppGithubTokenStatus>;
     dockerStatus: () => Promise<CreativeAppDockerStatus>;
     browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
-    browserSetBounds: (bounds: CreativeAppBrowserBounds) => Promise<void>;
-    browserBack: () => Promise<void>;
-    browserForward: () => Promise<void>;
-    browserReload: () => Promise<void>;
-    browserHide: () => Promise<void>;
-    browserClose: () => Promise<void>;
-    browserCurrent: () => Promise<{ appId?: string | null; url?: string | null }>;
+    browserSetBounds: (appId: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
+    browserBack: (appId: string) => Promise<void>;
+    browserForward: (appId: string) => Promise<void>;
+    browserReload: (appId: string) => Promise<void>;
+    browserHide: (appId: string) => Promise<void>;
+    browserClose: (appId: string) => Promise<void>;
+    browserCurrent: (appId: string) => Promise<{ appId?: string | null; url?: string | null }>;
+    // CR-501: Surface / Endpoint / Window
+    surfaceList: (applicationId: string) => Promise<CreativeAppSurface[]>;
+    windowList: (applicationId: string) => Promise<CreativeAppWindow[]>;
+    windowOpen: (applicationId: string, surfaceId: string, label: string) => Promise<CreativeAppWindow>;
+    windowClose: (windowId: string) => Promise<void>;
+    windowMinimize: (windowId: string) => Promise<void>;
+    windowRestore: (windowId: string) => Promise<void>;
+    // CR-1001/1002: Agent proposal gate
+    proposalValidate: (proposal: CreativeAppProposal) => Promise<CreativeAppValidatedProposal>;
+    proposalApprove: (proposal: CreativeAppProposal) => Promise<CreativeAppSummary>;
+    proposalReject: (proposal: CreativeAppProposal) => Promise<number>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
     onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
     inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
     createLocal: (request: CreateLocalCreativeRequest) => Promise<CreativeAppSummary>;
     updateLocal: (request: UpdateLocalCreativeRequest) => Promise<CreativeAppSummary>;
     rescanLocal: (id: string) => Promise<LocalProjectScanResult>;
-    restart: (id: string) => Promise<CreativeAppSummary>;
+    restart: (id: string) => Promise<CreativeAppMutationResult>;
     resolveOrphan: (id: string, restart: boolean) => Promise<CreativeAppSummary>;
     getLocalLogs: (
       id: string,
@@ -1231,17 +1339,35 @@ const nativesAPI: NativesAPI = {
   // Creative App (multi-source)
   creativeApp: {
     list: () => cmd<CreativeAppSummary[]>('creative_app_list'),
-    start: (id: string) => cmd<CreativeAppSummary>('creative_app_start', { id }),
-    stop: (id: string) => cmd<CreativeAppSummary>('creative_app_stop', { id }),
+    start: (id: string) => cmd<CreativeAppMutationResult>('creative_app_start', { id }),
+    stop: (id: string) => cmd<CreativeAppMutationResult>('creative_app_stop', { id }),
     delete: (id: string, options?: CreativeAppDeleteOptions) =>
-      cmd<CreativeAppDeleteResult>('creative_app_delete', { id, options }),
+      cmd<CreativeAppDeleteMutationResult>('creative_app_delete', { id, options }),
     getOpenTarget: (id: string) =>
       cmd<CreativeAppOpenTarget>('creative_app_get_open_target', { id }),
     inspectGithub: (request: CreativeAppInspectRequest) =>
       cmd<CreativeAppInspectResult>('creative_app_inspect_github', { request }),
     installGithub: (request: CreativeAppInstallRequest) =>
-      cmd<CreativeAppSummary>('creative_app_install_github', { request }),
-    logs: (id: string, tail?: number) => cmd<string>('creative_app_logs', { id, tail }),
+      cmd<CreativeAppMutationResult>('creative_app_install_github', { request }),
+    operations: () => cmd<CreativeAppOperation[]>('creative_app_operations'),
+    getOperation: (id: number) =>
+      cmd<CreativeAppOperation>('creative_app_operation_get', { id }),
+    cancelOperation: (id: number) =>
+      cmd<CreativeAppOperation>('creative_app_operation_cancel', { id }),
+    onOperationChanged: (callback: (op: CreativeAppOperation) => void) => {
+      const unlisten = listen<{ channel: string; data: CreativeAppOperation }>(
+        'db-state-changed',
+        (event) => {
+          if (event.payload?.channel !== 'creative-operation') return;
+          if (event.payload?.data) callback(event.payload.data);
+        },
+      );
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    },
+    logs: (id: string, tail?: number, cursor?: number) =>
+      cmd<string>('creative_app_logs', { runtimeId: id, tail, cursor }),
     reconcile: () => cmd<number>('creative_app_reconcile'),
     githubTokenStatus: () =>
       cmd<CreativeAppGithubTokenStatus>('creative_app_github_token_status'),
@@ -1252,15 +1378,35 @@ const nativesAPI: NativesAPI = {
     dockerStatus: () => cmd<CreativeAppDockerStatus>('creative_app_docker_status'),
     browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) =>
       cmd('creative_app_browser_show', { appId, url, bounds }),
-    browserSetBounds: (bounds: CreativeAppBrowserBounds) =>
-      cmd('creative_app_browser_set_bounds', { bounds }),
-    browserBack: () => cmd('creative_app_browser_back'),
-    browserForward: () => cmd('creative_app_browser_forward'),
-    browserReload: () => cmd('creative_app_browser_reload'),
-    browserHide: () => cmd('creative_app_browser_hide'),
-    browserClose: () => cmd('creative_app_browser_close'),
-    browserCurrent: () =>
-      cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current'),
+    browserSetBounds: (appId: string, bounds: CreativeAppBrowserBounds) =>
+      cmd('creative_app_browser_set_bounds', { appId, bounds }),
+    browserBack: (appId: string) => cmd('creative_app_browser_back', { appId }),
+    browserForward: (appId: string) => cmd('creative_app_browser_forward', { appId }),
+    browserReload: (appId: string) => cmd('creative_app_browser_reload', { appId }),
+    browserHide: (appId: string) => cmd('creative_app_browser_hide', { appId }),
+    browserClose: (appId: string) => cmd('creative_app_browser_close', { appId }),
+    browserCurrent: (appId: string) =>
+      cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current', { appId }),
+    // CR-501: Surface / Endpoint / Window
+    surfaceList: (applicationId: string) =>
+      cmd<CreativeAppSurface[]>('creative_app_surface_list', { applicationId }),
+    windowList: (applicationId: string) =>
+      cmd<CreativeAppWindow[]>('creative_app_window_list', { applicationId }),
+    windowOpen: (applicationId: string, surfaceId: string, label: string) =>
+      cmd<CreativeAppWindow>('creative_app_window_open', { applicationId, surfaceId, label }),
+    windowClose: (windowId: string) =>
+      cmd('creative_app_window_close', { windowId }),
+    windowMinimize: (windowId: string) =>
+      cmd('creative_app_window_minimize', { windowId }),
+    windowRestore: (windowId: string) =>
+      cmd('creative_app_window_restore', { windowId }),
+    // CR-1001/1002: Agent proposal gate
+    proposalValidate: (proposal: CreativeAppProposal) =>
+      cmd<CreativeAppValidatedProposal>('creative_app_proposal_validate', { proposal }),
+    proposalApprove: (proposal: CreativeAppProposal) =>
+      cmd<CreativeAppSummary>('creative_app_proposal_approve', { proposal }),
+    proposalReject: (proposal: CreativeAppProposal) =>
+      cmd<number>('creative_app_proposal_reject', { proposal }),
     onProgress: (callback) => {
       const unlisten = listen<CreativeAppProgressEvent>('creative-app-progress', (event) => {
         callback(event.payload);
@@ -1285,7 +1431,7 @@ const nativesAPI: NativesAPI = {
       cmd<CreativeAppSummary>('creative_app_update_local', { request }),
     rescanLocal: (id: string) =>
       cmd<LocalProjectScanResult>('creative_app_rescan_local', { id }),
-    restart: (id: string) => cmd<CreativeAppSummary>('creative_app_restart', { id }),
+    restart: (id: string) => cmd<CreativeAppMutationResult>('creative_app_restart', { id }),
     resolveOrphan: (id: string, restart: boolean) =>
       cmd<CreativeAppSummary>('creative_app_resolve_orphan', { id, restart }),
     getLocalLogs: (id: string, limit?: number) =>

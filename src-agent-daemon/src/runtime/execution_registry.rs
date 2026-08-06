@@ -308,9 +308,7 @@ impl ExecutionRegistry {
             tree.iter()
                 .filter_map(|id| {
                     runs.get(id).and_then(|e| {
-                        if e.join.is_none() {
-                            return None;
-                        }
+                        e.join.as_ref()?;
                         let term = e.terminal.clone();
                         Some(async move {
                             term.notified().await;
@@ -598,16 +596,10 @@ mod tests {
     async fn force_abort_awaits_join_handle() {
         let reg = ExecutionRegistry::with_grace_ms(5);
         reg.register_root("p").await.unwrap();
-        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let finished_bg = finished.clone();
         let handle = tokio::spawn(async move {
             // Park until aborted.
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;
-            }
-            #[allow(unreachable_code)]
-            {
-                finished_bg.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
         reg.attach_join("p", handle).await.unwrap();
@@ -615,7 +607,6 @@ mod tests {
         assert!(out.quiet, "{out:?}");
         // Join was awaited after abort — registry entry gone and no residual.
         assert_eq!(reg.active_count().await, 0);
-        let _ = finished;
     }
 
     #[tokio::test]

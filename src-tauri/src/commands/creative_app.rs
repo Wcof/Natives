@@ -10,10 +10,13 @@ use crate::creative_app::docker;
 use crate::creative_app::install;
 use crate::creative_app::local::{self, LocalRuntimeHandle};
 use crate::creative_app::model::*;
+use crate::creative_app::operation as op;
 use crate::creative_app::runtime_store;
 use crate::creative_app::service::{self, MutationLock};
 use crate::creative_app::store;
+use crate::creative_app::surface_store;
 use crate::db::DbPool;
+use crate::emit_db_state_changed;
 use crate::{Error, Result};
 use tauri::State;
 
@@ -42,6 +45,107 @@ fn lifecycle_ctx(
     LifecycleCtx::new(app, modules_dir(), Some(local_runtime), host_http_port)
 }
 
+/// Resolve which per-runtime log to read for a caller-supplied id (CR-301).
+///
+/// `id` may be a source id (app-scoped: read the active runtime; aggregate when
+/// stopped) or a runtime instance id (runtime-scoped). Returns
+/// `(source, runtime_id_to_read, app_id_for_dir)`.
+fn resolve_log_scope(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<(ResolvedSource, Option<String>, String)> {
+    if let Ok(ResolvedSource::LocalProject) = adapters::resolve(conn, id) {
+        let app_id = runtime_store::application_id_for(conn, CreativeAppSource::LocalProject, id)?
+            .unwrap_or_default();
+        let active = if app_id.is_empty() {
+            None
+        } else {
+            runtime_store::active_instance_id(conn, &app_id)?
+        };
+        return Ok((ResolvedSource::LocalProject, active, id.to_string()));
+    }
+    if let Ok(Some(app_id)) = runtime_store::instance_application_id(conn, id) {
+        // `id` is a runtime instance id belonging to a local process source.
+        let src = runtime_store::source_id_for_application(conn, &app_id)?
+            .unwrap_or_else(|| id.to_string());
+        return Ok((ResolvedSource::LocalProject, Some(id.to_string()), src));
+    }
+    let source = adapters::resolve(conn, id)?;
+    Ok((source, None, id.to_string()))
+}
+
+fn format_local_log_lines(mem: &[crate::creative_app::local::logs::LogLine]) -> String {
+    mem.iter()
+        .map(|l| format!("[{}] {}: {}", l.ts_ms, l.stream.as_str(), l.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ── Operation journal helpers (batch 2 CR-201) ──────────────────────────
+
+/// Unified application id for a source row, read-only (never fabricates a row).
+fn operation_application_id(conn: &rusqlite::Connection, id: &str) -> Option<String> {
+    adapters::resolve(conn, id).ok().and_then(|s| {
+        runtime_store::application_id_for(conn, s.as_source(), id)
+            .ok()
+            .flatten()
+    })
+}
+
+/// Redacted input snapshot for the journal. Never stores env values or secrets.
+fn redacted_for(kind: &str, id: &str) -> String {
+    serde_json::json!({ "kind": kind, "appId": id }).to_string()
+}
+
+fn emit_operation(app: &tauri::AppHandle, conn: &rusqlite::Connection, op_id: i64) -> Result<()> {
+    if let Some(operation) = op::get_operation(conn, op_id)? {
+        emit_db_state_changed(
+            app,
+            "creative-operation",
+            serde_json::to_value(&operation).unwrap_or_else(|_| serde_json::json!({ "id": op_id })),
+        );
+    }
+    Ok(())
+}
+
+/// Guarded phase change + emit (called from the DB scopes of each mutation).
+fn journal(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+    op_id: i64,
+    from: &[&str],
+    to: &str,
+) -> Result<()> {
+    op::transition(conn, op_id, from, to)?;
+    emit_operation(app, conn, op_id)
+}
+
+fn settle_success(app: &tauri::AppHandle, conn: &rusqlite::Connection, op_id: i64) -> Result<()> {
+    op::finish_success(conn, op_id)?;
+    emit_operation(app, conn, op_id)
+}
+
+fn settle_failure(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+    op_id: i64,
+    code: &str,
+    message: &str,
+) -> Result<()> {
+    op::finish_failure(conn, op_id, Some(code), message)?;
+    emit_operation(app, conn, op_id)
+}
+
+fn settle_cancelled(
+    app: &tauri::AppHandle,
+    conn: &rusqlite::Connection,
+    op_id: i64,
+    reason: &str,
+) -> Result<()> {
+    op::finish_cancelled(conn, op_id, Some(reason))?;
+    emit_operation(app, conn, op_id)
+}
+
 #[tauri::command]
 pub fn creative_app_list(state: State<'_, AppState>) -> Result<Vec<CreativeAppSummary>> {
     let c = conn(&state.db)?;
@@ -55,36 +159,96 @@ pub async fn creative_app_start(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    // Phase 1 (spawn) holds the mutation lock so installs/lifecycle stay serial;
-    // it is fast. Phase 2 (health) runs WITHOUT the lock so a concurrent stop can
-    // cancel a long start (batch 2).
-    let pool_spawn = pool.clone();
-    let id_spawn = id.clone();
+
+    // Journal: create the operation BEFORE the app lock so `waiting` is visible
+    // to the Renderer while the mutation waits its turn (CR-201 + CR-202).
+    let (op_id, op_app_id) = {
+        let c = conn(&pool)?;
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_START, &id);
+        (
+            op::create_operation(
+                &c,
+                app_id.as_deref(),
+                op::KIND_START,
+                "user",
+                Some(&redacted),
+            )?,
+            app_id,
+        )
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+    let _ = op_app_id;
+
+    // Phase 1 (spawn) holds the per-application lock so the same app stays
+    // exclusive; other apps proceed in parallel (CR-202). Phase 2 (health) runs
+    // WITHOUT the lock so a concurrent stop can cancel a long start.
     let spawned = {
-        let _guard = lock.lock().await;
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let pool_spawn = pool.clone();
+        let id_spawn = id.clone();
+        let app = ctx.app.clone();
         let ctx2 = ctx.clone();
         tokio::task::spawn_blocking(move || {
             let rt = tokio::runtime::Handle::current();
             let c = conn(&pool_spawn)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
             rt.block_on(adapters::spawn_start(&c, &ctx2, &id_spawn))
         })
         .await
         .map_err(|e| Error::Internal(format!("start join: {e}")))?
     }?;
+
     let ctx3 = ctx;
-    tokio::task::spawn_blocking(move || {
+    let settle = tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(adapters::await_ready(&c, &ctx3, &id, &spawned))
+        let result = rt.block_on(adapters::await_ready(&c, &ctx3, &id, &spawned));
+        match result {
+            Ok(summary) if summary.state == CreativeAppState::Running => {
+                settle_success(&ctx3.app, &c, op_id)?;
+                Ok(summary)
+            }
+            Ok(summary) => {
+                // Stop preempted the health wait; the instance is owned by the
+                // stop path and the start operation is cancelled.
+                let _ = settle_cancelled(
+                    &ctx3.app,
+                    &c,
+                    op_id,
+                    "start superseded by a concurrent stop",
+                );
+                Ok(summary)
+            }
+            Err(e) => {
+                let _ = settle_failure(&ctx3.app, &c, op_id, "start_failed", &e.to_string());
+                Err(e)
+            }
+        }
     })
     .await
-    .map_err(|e| Error::Internal(format!("start health join: {e}")))?
+    .map_err(|e| Error::Internal(format!("start health join: {e}")))??;
+
+    Ok(MutationResult {
+        operation_id: op_id,
+        summary: settle,
+    })
 }
 
 #[tauri::command]
@@ -94,20 +258,71 @@ pub async fn creative_app_stop(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+
+    let op_id = {
         let c = conn(&pool)?;
-        rt.block_on(adapters::stop(&c, &ctx, &id))
-    })
-    .await
-    .map_err(|e| Error::Internal(format!("stop join: {e}")))?
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_STOP, &id);
+        op::create_operation(
+            &c,
+            app_id.as_deref(),
+            op::KIND_STOP,
+            "user",
+            Some(&redacted),
+        )?
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+
+    let result = {
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let app = ctx.app.clone();
+        let pool_inner = pool.clone();
+        let id_inner = id.clone();
+        let ctx_inner = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_inner)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
+            rt.block_on(adapters::facade::stop(&c, &ctx_inner, &id_inner))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("stop join: {e}")))?
+    };
+
+    match result {
+        Ok(summary) => {
+            let c = conn(&pool)?;
+            settle_success(&ctx.app, &c, op_id)?;
+            Ok(MutationResult {
+                operation_id: op_id,
+                summary,
+            })
+        }
+        Err(e) => {
+            // Stop failure leaves the instance cleanup_failed (active-like);
+            // the operation itself is failed — resources are NOT verified
+            // released, so restart stays blocked until a retry stop succeeds.
+            let c = conn(&pool)?;
+            settle_failure(&ctx.app, &c, op_id, "stop_failed", &e.to_string())?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -118,21 +333,84 @@ pub async fn creative_app_delete(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<DeleteResult> {
+    browser: State<'_, BrowserStateHandle>,
+) -> Result<DeleteMutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
-    let opts = options.unwrap_or_default();
+    let browser = browser.inner();
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+    let opts = options.unwrap_or_default();
+
+    let op_id = {
         let c = conn(&pool)?;
-        rt.block_on(adapters::delete(&c, &ctx, &id, opts))
-    })
-    .await
-    .map_err(|e| Error::Internal(format!("delete join: {e}")))?
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_DELETE, &id);
+        op::create_operation(
+            &c,
+            app_id.as_deref(),
+            op::KIND_DELETE,
+            "user",
+            Some(&redacted),
+        )?
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+
+    let result = {
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let app = ctx.app.clone();
+        let pool_inner = pool.clone();
+        let id_inner = id.clone();
+        let opts_inner = opts.clone();
+        let ctx_inner = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_inner)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
+            rt.block_on(adapters::facade::delete(
+                &c, &ctx_inner, &id_inner, opts_inner,
+            ))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("delete join: {e}")))?
+    };
+
+    match result {
+        Ok(delete_result) => {
+            // CR-303: a delete must not leave a child WebView showing the removed
+            // app — close it when it was showing this app (audit #09).
+            let showing = browser::browser_current(&browser, &id)
+                .ok()
+                .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
+            if showing.as_deref() == Some(id.as_str()) {
+                let _ = browser::browser_close(&ctx.app, &browser, &id);
+            }
+            // On success the application row is gone; the operation survives with
+            // application_id NULL via the FK (audit trail).
+            let c = conn(&pool)?;
+            settle_success(&ctx.app, &c, op_id)?;
+            Ok(DeleteMutationResult {
+                operation_id: op_id,
+                result: delete_result,
+            })
+        }
+        Err(e) => {
+            let c = conn(&pool)?;
+            settle_failure(&ctx.app, &c, op_id, "delete_failed", &e.to_string())?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -142,20 +420,68 @@ pub async fn creative_app_restart(
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+
+    let op_id = {
         let c = conn(&pool)?;
-        rt.block_on(adapters::restart(&c, &ctx, &id))
-    })
-    .await
-    .map_err(|e| Error::Internal(format!("restart join: {e}")))?
+        let app_id = operation_application_id(&c, &id);
+        let redacted = redacted_for(op::KIND_RESTART, &id);
+        op::create_operation(
+            &c,
+            app_id.as_deref(),
+            op::KIND_RESTART,
+            "user",
+            Some(&redacted),
+        )?
+    };
+    {
+        let c = conn(&pool)?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_WAITING)?;
+    }
+
+    let result = {
+        let _guard = lock.acquire_app(&id).await;
+        let op_id = op_id;
+        let app = ctx.app.clone();
+        let pool_inner = pool.clone();
+        let id_inner = id.clone();
+        let ctx_inner = ctx.clone();
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            let c = conn(&pool_inner)?;
+            journal(
+                &app,
+                &c,
+                op_id,
+                &[op::PHASE_WAITING, op::PHASE_PENDING],
+                op::PHASE_RUNNING,
+            )?;
+            rt.block_on(adapters::restart(&c, &ctx_inner, &id_inner))
+        })
+        .await
+        .map_err(|e| Error::Internal(format!("restart join: {e}")))?
+    };
+
+    match result {
+        Ok(summary) => {
+            let c = conn(&pool)?;
+            settle_success(&ctx.app, &c, op_id)?;
+            Ok(MutationResult {
+                operation_id: op_id,
+                summary,
+            })
+        }
+        Err(e) => {
+            let c = conn(&pool)?;
+            settle_failure(&ctx.app, &c, op_id, "restart_failed", &e.to_string())?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -186,15 +512,34 @@ pub async fn creative_app_install_github(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
-) -> Result<CreativeAppSummary> {
+) -> Result<MutationResult> {
     let pool = state.db.clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
     let handle = app_handle.clone();
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+
+    // No application identity exists yet — the operation is created without one
+    // and bound after install (CR-201). Install is bounded by the shared
+    // install/Docker semaphore instead of a per-app lock (CR-202).
+    let op_id = {
         let c = conn(&pool)?;
-        let summary = rt.block_on(install::install_github(&c, &handle, request))?;
+        let redacted = serde_json::json!({ "kind": op::KIND_INSTALL }).to_string();
+        op::create_operation(&c, None, op::KIND_INSTALL, "user", Some(&redacted))?
+    };
+    let _permit = lock.acquire_install().await;
+
+    let pool_inner = pool.clone();
+    let handle_inner = handle.clone();
+    let inner = tokio::task::spawn_blocking(move || -> crate::Result<CreativeAppSummary> {
+        let rt = tokio::runtime::Handle::current();
+        let c = conn(&pool_inner)?;
+        journal(
+            &handle_inner,
+            &c,
+            op_id,
+            &[op::PHASE_PENDING],
+            op::PHASE_RUNNING,
+        )?;
+        let summary = rt.block_on(install::install_github(&c, &handle_inner, request))?;
         // Unified identity + startup plan for the newly installed external app.
         let app_id = runtime_store::find_or_create_application(
             &c,
@@ -204,45 +549,96 @@ pub async fn creative_app_install_github(
         if let Ok(Some(rec)) = store::get_app(&c, &summary.id) {
             let _ = runtime_store::upsert_active_plan(&c, &app_id, &rec.runtime_config_json);
         }
-        runtime_store::attach_identity(&c, summary)
+        let _ = op::set_application(&c, op_id, &app_id);
+        Ok(runtime_store::attach_identity(&c, summary)?)
     })
     .await
     .map_err(|e| Error::Internal(format!("install join: {e}")))?
+    .map_err(|e| crate::Error::from(e));
+
+    match inner {
+        Ok(summary) => {
+            let c = conn(&pool)?;
+            settle_success(&handle, &c, op_id)?;
+            Ok(MutationResult {
+                operation_id: op_id,
+                summary,
+            })
+        }
+        Err(e) => {
+            let c = conn(&pool)?;
+            let _ = settle_failure(&handle, &c, op_id, "install_failed", &e.to_string());
+            Err(e)
+        }
+    }
+}
+
+/// Snapshot of all non-terminal operations (renderer projection, CR-203).
+#[tauri::command]
+pub fn creative_app_operations(state: State<'_, AppState>) -> Result<Vec<op::Operation>> {
+    let c = conn(&state.db)?;
+    op::active_operations(&c)
+}
+
+#[tauri::command]
+pub fn creative_app_operation_get(id: i64, state: State<'_, AppState>) -> Result<op::Operation> {
+    let c = conn(&state.db)?;
+    op::get_operation_or(&c, id)
+}
+
+/// Cancel an operation that has not started any side effect (pending/waiting).
+#[tauri::command]
+pub fn creative_app_operation_cancel(
+    id: i64,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<op::Operation> {
+    let c = conn(&state.db)?;
+    let operation = op::cancel(&c, id)?;
+    emit_db_state_changed(
+        &app_handle,
+        "creative-operation",
+        serde_json::to_value(&operation).unwrap_or_default(),
+    );
+    Ok(operation)
 }
 
 #[tauri::command]
 pub async fn creative_app_logs(
-    id: String,
+    runtime_id: String,
     tail: Option<u32>,
+    cursor: Option<u64>,
     state: State<'_, AppState>,
     local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<String> {
     let pool = state.db.clone();
     let tail = tail.unwrap_or(200) as usize;
+    let cursor = cursor.unwrap_or(0);
     let local_runtime = local_runtime.inner().clone();
 
-    let source = {
+    let (source, rt_to_read, app_scope) = {
         let c = conn(&pool)?;
-        adapters::resolve(&c, &id)?
+        resolve_log_scope(&c, &runtime_id)?
     };
 
     match source {
         ResolvedSource::LocalProject => {
-            let mem = local_runtime.recent_logs(&id, tail);
-            if !mem.is_empty() {
-                let body = mem
-                    .into_iter()
-                    .map(|l| format!("[{}] {}: {}", l.ts_ms, l.stream.as_str(), l.text))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Ok(body);
+            if let Some(rt) = &rt_to_read {
+                // Runtime-scoped: the exact run the caller asked for (CR-301).
+                let mem = local_runtime.recent_logs(&app_scope, rt, cursor, tail);
+                if !mem.is_empty() {
+                    return Ok(format_local_log_lines(&mem));
+                }
+                return Ok(local_runtime.persisted_tail(&app_scope, rt, 256 * 1024));
             }
-            Ok(local_runtime.persisted_tail(&id, 256 * 1024))
+            // Stopped app (or pre-runtime legacy): app-level aggregate (dual-read).
+            Ok(local_runtime.app_aggregate_tail(&app_scope, 256 * 1024))
         }
         ResolvedSource::ExternalGithub => {
             let cfg_json = {
                 let c = conn(&pool)?;
-                let rec = store::get_app(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
+                let rec = store::get_app(&c, &app_scope)?
+                    .ok_or_else(|| Error::NotFound(app_scope.clone()))?;
                 rec.runtime_config_json
             };
             let cfg = store::parse_runtime_config(&cfg_json)?;
@@ -334,97 +730,512 @@ pub fn creative_app_browser_show(
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // Bind the preview to the app's active runtime instance (batch 6).
-    if let Ok(c) = conn(&state.db) {
-        if let Ok(app_identity) =
-            runtime_store::find_or_create_application(&c, CreativeAppSource::LocalProject, &app_id)
-                .or_else(|_| {
-                    runtime_store::find_or_create_application(
-                        &c,
-                        CreativeAppSource::ExternalGithub,
-                        &app_id,
-                    )
-                })
-        {
-            if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
-                let _ = runtime_store::upsert_preview_target(&c, &iid, &url, "child_webview");
-            }
-        }
+    // CR-303: never show a preview for an app without an active running
+    // instance — a stopped app's URL must not become visible in a WebView.
+    let active_instance = {
+        let c = conn(&state.db)?;
+        let source = adapters::resolve(&c, &app_id)?;
+        let app_identity = runtime_store::application_id_for(&c, source.as_source(), &app_id)?
+            .ok_or_else(|| Error::InvalidInput("app has no registered identity".into()))?;
+        runtime_store::active_instance_id(&c, &app_identity)?
+            .ok_or_else(|| Error::InvalidInput("app is not running; cannot open preview".into()))?
+    };
+    // External action first: show the WebView. A show failure must not leave a
+    // DB preview bind behind (audit #02: DB / BrowserState must not diverge).
+    browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)?;
+    // Commit the preview bind; on DB failure compensate by hiding the WebView.
+    let c = conn(&state.db)?;
+    if let Err(e) =
+        runtime_store::upsert_preview_target(&c, &active_instance, &url, "child_webview")
+    {
+        let _ = browser::browser_hide(&app_handle, &app_id);
+        return Err(e);
     }
-    browser::browser_show(&app_handle, &browser, &app_id, &url, bounds)
+    Ok(())
 }
 
 #[tauri::command]
 pub fn creative_app_browser_set_bounds(
+    app_id: String,
     bounds: BrowserBounds,
     app_handle: tauri::AppHandle,
 ) -> Result<()> {
-    browser::browser_set_bounds(&app_handle, bounds)
+    browser::browser_set_bounds(&app_handle, &app_id, bounds)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_back(app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_back(&app_handle)
+pub fn creative_app_browser_back(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
+    browser::browser_back(&app_handle, &app_id)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_forward(app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_forward(&app_handle)
+pub fn creative_app_browser_forward(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
+    browser::browser_forward(&app_handle, &app_id)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_reload(app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_reload(&app_handle)
+pub fn creative_app_browser_reload(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
+    browser::browser_reload(&app_handle, &app_id)
 }
 
 #[tauri::command]
-pub fn creative_app_browser_hide(app_handle: tauri::AppHandle) -> Result<()> {
-    browser::browser_hide(&app_handle)
+pub fn creative_app_browser_hide(app_id: String, app_handle: tauri::AppHandle) -> Result<()> {
+    browser::browser_hide(&app_handle, &app_id)
 }
 
 #[tauri::command]
 pub fn creative_app_browser_close(
+    app_id: String,
     app_handle: tauri::AppHandle,
     browser: State<'_, BrowserStateHandle>,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    // Clear the preview target for the app being closed (batch 6).
-    let closed_app = browser::browser_current(&browser)
-        .ok()
-        .and_then(|v| v.get("appId").and_then(|x| x.as_str()).map(str::to_string));
-    if let Some(app_id) = closed_app {
-        if let Ok(c) = conn(&state.db) {
-            if let Ok(app_identity) = runtime_store::find_or_create_application(
-                &c,
-                CreativeAppSource::LocalProject,
-                &app_id,
-            )
-            .or_else(|_| {
-                runtime_store::find_or_create_application(
-                    &c,
-                    CreativeAppSource::ExternalGithub,
-                    &app_id,
-                )
-            }) {
+    // CR-303: close the WebView FIRST (external action); only on success clear
+    // the DB preview bind. A close failure must not lose the bind while the
+    // WebView is still open (audit #02).
+    browser::browser_close(&app_handle, &browser, &app_id)?;
+    // The `app_id` is passed from the frontend — clear the DB bind for this app.
+    if let Ok(c) = conn(&state.db) {
+        if let Ok(source) = adapters::resolve(&c, &app_id) {
+            if let Ok(Some(app_identity)) =
+                runtime_store::application_id_for(&c, source.as_source(), &app_id)
+            {
                 if let Ok(Some(iid)) = runtime_store::active_instance_id(&c, &app_identity) {
                     let _ = runtime_store::clear_preview_targets(&c, &iid);
                 }
             }
         }
     }
-    browser::browser_close(&app_handle, &browser)
+    Ok(())
 }
 
 #[tauri::command]
 pub fn creative_app_browser_current(
+    app_id: String,
     browser: State<'_, BrowserStateHandle>,
 ) -> Result<serde_json::Value> {
-    browser::browser_current(&browser)
+    browser::browser_current(&browser, &app_id)
+}
+
+/// List all surfaces for the given application (CR-501).
+#[tauri::command]
+pub fn creative_app_surface_list(
+    application_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ApplicationSurface>> {
+    let c = conn(&state.db)?;
+    surface_store::list_surfaces(&c, &application_id)
+}
+
+/// List all windows for the given application (CR-501).
+#[tauri::command]
+pub fn creative_app_window_list(
+    application_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<WindowInstance>> {
+    let c = conn(&state.db)?;
+    surface_store::list_windows(&c, &application_id)
+}
+
+/// Open a window for the given application (CR-501).
+/// Creates a window instance if one doesn't exist for the surface.
+#[tauri::command]
+pub fn creative_app_window_open(
+    application_id: String,
+    surface_id: String,
+    label: String,
+    state: State<'_, AppState>,
+) -> Result<WindowInstance> {
+    let c = conn(&state.db)?;
+    // Check if a window with this label already exists
+    if let Some(existing) = surface_store::find_window_by_label(&c, &label)? {
+        // Re-open it
+        surface_store::update_window_state(&c, &existing.id, WindowInstance::STATE_OPEN)?;
+        return Ok(existing);
+    }
+    let wid = surface_store::create_window(&c, &application_id, &surface_id, None, &label)?;
+    let w = surface_store::find_window_by_label(&c, &label)?
+        .ok_or_else(|| Error::Internal("window vanished after create".into()))?;
+    surface_store::update_window_state(&c, &wid, WindowInstance::STATE_OPEN)?;
+    Ok(w)
+}
+
+/// Close a window (CR-501).
+#[tauri::command]
+pub fn creative_app_window_close(window_id: String, state: State<'_, AppState>) -> Result<()> {
+    let c = conn(&state.db)?;
+    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_CLOSED)
+}
+
+/// Minimize a window (CR-501).
+#[tauri::command]
+pub fn creative_app_window_minimize(window_id: String, state: State<'_, AppState>) -> Result<()> {
+    let c = conn(&state.db)?;
+    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_MINIMIZED)
+}
+
+/// Restore a window (CR-501).
+#[tauri::command]
+pub fn creative_app_window_restore(window_id: String, state: State<'_, AppState>) -> Result<()> {
+    let c = conn(&state.db)?;
+    surface_store::update_window_state(&c, &window_id, WindowInstance::STATE_OPEN)
 }
 
 // ── Local project (third source) ───────────────────────────────────
 
-/// 同上：本地项目扫描要遍历目录树，同步执行会卡住整个 UI。
+// ── Agent proposal gate (batch 10 CR-1001/1002) ───────────────────
+
+/// Validate an agent proposal through the Host gate. Returns the proposal
+/// (if valid) with a redacted journal snapshot. Never registers anything.
+#[tauri::command]
+pub fn creative_app_proposal_validate(
+    proposal: crate::creative_app::proposal::AgentProposal,
+) -> Result<crate::creative_app::proposal::ValidatedProposal> {
+    proposal.validate()?;
+    Ok(crate::creative_app::proposal::ValidatedProposal {
+        redacted: crate::creative_app::proposal::redacted_proposal_input(&proposal),
+        proposal,
+    })
+}
+
+/// Reject an agent proposal: record a `rejected` operation in the journal.
+/// No application is registered; the proposal is left untouched on the client.
+#[tauri::command]
+pub async fn creative_app_proposal_reject(
+    proposal: crate::creative_app::proposal::AgentProposal,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<i64> {
+    // Host gate still applies on reject: an invalid proposal is journaled as
+    // a failed rejection attempt so the audit trail is complete.
+    let validation = proposal.validate();
+    let pool = state.db.clone();
+    let app = app_handle.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        let redacted = crate::creative_app::proposal::redacted_proposal_input(&proposal);
+        let op_id = op::create_operation(&c, None, "proposal_reject", "user", Some(&redacted))?;
+        match validation {
+            Ok(_) => {
+                op::finish_success(&c, op_id)?;
+                emit_operation(&app, &c, op_id)?;
+            }
+            Err(e) => {
+                op::finish_failure(&c, op_id, Some("proposal_invalid"), &e.to_string())?;
+                emit_operation(&app, &c, op_id)?;
+            }
+        }
+        Ok(op_id)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("proposal_reject join: {e}")))?
+}
+
+/// Approve an agent proposal: the Host validates it, journals the approval,
+/// and registers the application. Returns the registered app summary.
+/// Drivers without a registration path return a clear error — never fake success.
+#[tauri::command]
+pub async fn creative_app_proposal_approve(
+    proposal: crate::creative_app::proposal::AgentProposal,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    lock: State<'_, MutationLock>,
+) -> Result<CreativeAppSummary> {
+    let pool = state.db.clone();
+    let lock = lock.inner().clone();
+    let _guard = lock.acquire_app("__registration__").await;
+
+    let handle = app_handle.clone();
+    tokio::task::spawn_blocking(move || {
+        // Host gate: reject dangerous inputs before anything is registered.
+        proposal.validate()?;
+
+        let mut c = conn(&pool)?;
+        let redacted = crate::creative_app::proposal::redacted_proposal_input(&proposal);
+        let op_id = op::create_operation(&c, None, "proposal_approve", "user", Some(&redacted))?;
+        op::transition(&c, op_id, &[op::PHASE_PENDING], op::PHASE_RUNNING)?;
+
+        let result = register_proposal_app(&mut c, &proposal);
+        match result {
+            Ok(summary) => {
+                op::finish_success(&c, op_id)?;
+                emit_operation(&handle, &c, op_id)?;
+                crate::emit_db_state_changed(
+                    &handle,
+                    "creative-app",
+                    serde_json::json!({ "action": "proposal_approved", "id": summary.id }),
+                );
+                Ok(summary)
+            }
+            Err(e) => {
+                op::finish_failure(&c, op_id, Some("proposal_register_failed"), &e.to_string())?;
+                emit_operation(&handle, &c, op_id)?;
+                Err(e)
+            }
+        }
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("proposal_approve join: {e}")))?
+}
+
+/// Register an approved proposal as a real application. Only drivers with a
+/// concrete registration path are supported; others return a clear error.
+fn register_proposal_app(
+    c: &mut rusqlite::Connection,
+    proposal: &crate::creative_app::proposal::AgentProposal,
+) -> Result<CreativeAppSummary> {
+    use crate::creative_app::local;
+    use crate::creative_app::model::{
+        LaunchMode, LaunchPlanSource, LaunchProgram, LocalLaunchRuntime, LocalProjectKind,
+    };
+    use crate::creative_app::proposal::ProposedDriver;
+
+    match &proposal.driver {
+        ProposedDriver::StaticHttp => {
+            // Static HTTP app inside the proposed project root.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            let kind = if root.join("index.html").is_file() {
+                LocalProjectKind::Html
+            } else {
+                LocalProjectKind::Unknown
+            };
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: kind,
+                runtime: LocalLaunchRuntime::StaticHttp,
+                program: LaunchProgram::Internal,
+                cwd_relative: ".".into(),
+                script: None,
+                entry_file: Some("index.html".into()),
+                script_runner: None,
+                args: vec![],
+                environment_keys: proposal.environment_keys.clone(),
+                port: proposal_port(&proposal),
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: 60_000,
+                auto_open: true,
+                confidence: Some(0.9),
+                reason: "agent proposal approved".into(),
+                compose: None,
+                process_profile: None,
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(60_000),
+                },
+            )?;
+            Ok(summary)
+        }
+        ProposedDriver::Python(p) => {
+            // Python WebUI: build a managed-process plan carrying the profile.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            crate::creative_app::process_driver::validate_python_profile(p)?;
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: LocalProjectKind::Unknown,
+                runtime: LocalLaunchRuntime::NodeDevServer, // managed-process family
+                program: LaunchProgram::Node,
+                cwd_relative: p.cwd_relative.clone(),
+                script: Some(p.entry.clone()),
+                entry_file: Some(p.entry.clone()),
+                script_runner: None,
+                args: p.args.clone(),
+                environment_keys: proposal.environment_keys.clone(),
+                port: p.port.clone(),
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: p.startup_timeout_ms,
+                auto_open: true,
+                confidence: Some(0.85),
+                reason: "agent proposal: python webui".into(),
+                compose: None,
+                process_profile: Some(crate::creative_app::model::ProcessProfile::Python(
+                    p.clone(),
+                )),
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(p.startup_timeout_ms),
+                },
+            )?;
+            Ok(summary)
+        }
+        ProposedDriver::Binary(b) => {
+            // Binary WebUI: build a managed-process plan carrying the profile.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            crate::creative_app::process_driver::validate_binary_profile(b)?;
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: LocalProjectKind::Unknown,
+                runtime: LocalLaunchRuntime::NodeDevServer, // managed-process family
+                program: LaunchProgram::Node,
+                cwd_relative: b.cwd_relative.clone(),
+                script: None,
+                entry_file: None,
+                script_runner: None,
+                args: b.args.clone(),
+                environment_keys: proposal.environment_keys.clone(),
+                port: b.port.clone(),
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: b.startup_timeout_ms,
+                auto_open: true,
+                confidence: Some(0.85),
+                reason: "agent proposal: binary webui".into(),
+                compose: None,
+                process_profile: Some(crate::creative_app::model::ProcessProfile::Binary(
+                    b.clone(),
+                )),
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(b.startup_timeout_ms),
+                },
+            )?;
+            Ok(summary)
+        }
+        ProposedDriver::Compose {
+            command,
+            privileged: _,
+        } => {
+            // Compose app: derive the compose file from the project root.
+            // The proposal gate already rejected privileged containers and
+            // command overrides (validate), so `command` here is empty.
+            let root = local::canonical_project_root(&proposal.project_root)?;
+            let root_s = root.to_string_lossy().to_string();
+            if local::get_app_by_root(c, &root_s)?.is_some() {
+                return Err(Error::InvalidInput(
+                    "path already registered as local creative app".into(),
+                ));
+            }
+            let compose_file = [
+                "docker-compose.yml",
+                "docker-compose.yaml",
+                "compose.yml",
+                "compose.yaml",
+            ]
+            .iter()
+            .find(|f| root.join(f).is_file())
+            .map(|f| f.to_string())
+            .ok_or_else(|| {
+                Error::InvalidInput(
+                    "no docker-compose.yml / compose.yml found in project root".into(),
+                )
+            })?;
+            let plan = LaunchPlan {
+                schema_version: 1,
+                source: LaunchPlanSource::Ai,
+                project_kind: LocalProjectKind::Unknown,
+                runtime: LocalLaunchRuntime::DockerCompose,
+                program: LaunchProgram::Internal,
+                cwd_relative: ".".into(),
+                script: None,
+                entry_file: None,
+                script_runner: None,
+                args: vec![],
+                environment_keys: proposal.environment_keys.clone(),
+                port: crate::creative_app::model::LaunchPort {
+                    mode: crate::creative_app::model::LaunchPortMode::Auto,
+                    value: None,
+                },
+                open_path: proposal.open_path.clone(),
+                health_path: proposal.health_path.clone(),
+                startup_timeout_ms: 60_000,
+                auto_open: true,
+                confidence: Some(0.8),
+                reason: "agent proposal: docker compose".into(),
+                compose: Some(crate::creative_app::model::ComposePlanDetail {
+                    compose_file,
+                    project_seed: "agent".into(),
+                    service: None,
+                    command: command.clone().unwrap_or_default(),
+                    health_path: proposal.health_path.clone(),
+                    host_port: None,
+                }),
+                process_profile: None,
+                trade_approval: None,
+            };
+            let summary = create_local_app(
+                c,
+                CreateLocalRequest {
+                    project_root: root_s,
+                    title: proposal.title.clone(),
+                    description: None,
+                    icon: None,
+                    launch_mode: LaunchMode::Custom,
+                    launch_plan: Some(plan),
+                    env: vec![],
+                    auto_open: Some(true),
+                    startup_timeout_ms: Some(60_000),
+                },
+            )?;
+            Ok(summary)
+        }
+    }
+}
+
+/// Derive a LaunchPort from a proposal's intended open path (auto port).
+fn proposal_port(
+    _proposal: &crate::creative_app::proposal::AgentProposal,
+) -> crate::creative_app::model::LaunchPort {
+    crate::creative_app::model::LaunchPort {
+        mode: crate::creative_app::model::LaunchPortMode::Auto,
+        value: None,
+    }
+}
+
 #[tauri::command]
 pub async fn creative_app_inspect_local(
     request: InspectLocalRequest,
@@ -448,7 +1259,9 @@ pub async fn creative_app_create_local(
 ) -> Result<CreativeAppSummary> {
     let pool = state.db.clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    // New registration: serialize registrations against each other, but do not
+    // block lifecycle ops on unrelated apps (CR-202).
+    let _guard = lock.acquire_app("__registration__").await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let mut c = conn(&pool)?;
@@ -473,7 +1286,7 @@ pub async fn creative_app_update_local(
 ) -> Result<CreativeAppSummary> {
     let pool = state.db.clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    let _guard = lock.acquire_app(&request.id).await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let mut c = conn(&pool)?;
@@ -744,19 +1557,27 @@ pub async fn creative_app_resolve_orphan(
     let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    let _guard = lock.acquire_app(&id).await;
     let handle = app_handle.clone();
+    let ctx = lifecycle_ctx(app_handle, local_runtime.clone(), host_port);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
+        // Kill the verified orphan, clear identity, settle the orphaned instance
+        // (never auto-takeover pipes; CR-302 proof chain).
         let summary = rt.block_on(local::resolve_orphan(
             &c,
             &handle,
             local_runtime.as_ref(),
-            host_port,
             &id,
-            restart,
         ))?;
+        if restart {
+            // Restart is a fresh start on a NEW runtime instance (the resolved
+            // orphan is already settled to stopped, so the instance CAS passes).
+            // Routes through the driver facade (CR-702).
+            let summary = rt.block_on(adapters::facade::start(&c, &ctx, &id))?;
+            return runtime_store::attach_identity(&c, summary);
+        }
         runtime_store::attach_identity(&c, summary)
     })
     .await
@@ -767,10 +1588,27 @@ pub async fn creative_app_resolve_orphan(
 pub async fn creative_app_get_local_logs(
     id: String,
     limit: Option<u32>,
+    state: State<'_, AppState>,
     local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<Vec<serde_json::Value>> {
     let limit = limit.unwrap_or(200) as usize;
-    let lines = local_runtime.recent_logs(&id, limit);
+    let local_runtime = local_runtime.inner().clone();
+    let (rt_to_read, app_scope) = {
+        let c = conn(&state.db)?;
+        let (source, rt, scope) = resolve_log_scope(&c, &id)?;
+        if source != ResolvedSource::LocalProject {
+            return Err(Error::InvalidInput(
+                "getLocalLogs is for local project sources only".into(),
+            ));
+        }
+        (rt, scope)
+    };
+    // Runtime-scoped structured lines; empty when the app is stopped (the
+    // Renderer then falls back to the app-level aggregate via `logs`).
+    let Some(rt) = rt_to_read else {
+        return Ok(Vec::new());
+    };
+    let lines = local_runtime.recent_logs(&app_scope, &rt, 0, limit);
     Ok(lines
         .into_iter()
         .map(|l| {
@@ -795,7 +1633,7 @@ pub async fn creative_app_install_local_dependencies(
     let pool = state.db.clone();
     let logs = local_runtime.logs().clone_registry();
     let lock = lock.inner().clone();
-    let _guard = lock.lock().await;
+    let _guard = lock.acquire_app(&id).await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
@@ -885,7 +1723,8 @@ pub async fn creative_app_diagnose_local_with_ai(
 ) -> Result<local::ai::AiDiagnosisResult> {
     let pool = state.db.clone();
     let local_runtime = local_runtime.inner().clone();
-    let tail = local_runtime.persisted_tail(&id, 12_000);
+    // App-level aggregate tail (legacy + per-runtime runs) for AI context.
+    let tail = local_runtime.app_aggregate_tail(&id, 12_000);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
@@ -932,4 +1771,230 @@ pub async fn creative_app_poll_local_exits(
     })
     .await
     .map_err(|e| Error::Internal(format!("poll exits join: {e}")))?
+}
+
+#[cfg(test)]
+mod proposal_tests {
+    use super::*;
+    use crate::creative_app::model::OwnershipMode;
+    use crate::creative_app::proposal::{AgentProposal, ProposalKind, ProposedDriver};
+
+    fn static_proposal(root: &str) -> AgentProposal {
+        AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Create,
+            ownership: OwnershipMode::Managed,
+            title: "Approved App".into(),
+            project_root: root.into(),
+            driver: ProposedDriver::StaticHttp,
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec!["PORT".into()],
+        }
+    }
+
+    #[test]
+    fn static_proposal_registers_local_app() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), "<html>hi</html>").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = static_proposal(&root_s);
+        proposal.validate().unwrap();
+
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Approved App");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+        assert_eq!(summary.runtime, CreativeAppRuntime::LocalStatic);
+    }
+
+    #[test]
+    fn duplicate_proposal_path_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.html"), "<html>hi</html>").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = static_proposal(&root_s);
+        proposal.validate().unwrap();
+        let _first = register_proposal_app(&mut conn, &proposal).unwrap();
+
+        // Registering the same path again must fail.
+        let err = register_proposal_app(&mut conn, &proposal).unwrap_err();
+        assert!(err.to_string().contains("already registered"));
+    }
+
+    #[test]
+    fn compose_proposal_registers_local_app() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("composeproj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("compose.yml"),
+            "services:\n  web:\n    image: nginx\n",
+        )
+        .unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Start,
+            ownership: OwnershipMode::Managed,
+            title: "Compose".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Compose {
+                command: None,
+                privileged: false,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        proposal.validate().unwrap();
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Compose");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+    }
+
+    #[test]
+    fn compose_proposal_without_compose_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("nocompose");
+        std::fs::create_dir_all(&root).unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Start,
+            ownership: OwnershipMode::Managed,
+            title: "Compose".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Compose {
+                command: None,
+                privileged: false,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        proposal.validate().unwrap();
+        let err = register_proposal_app(&mut conn, &proposal).unwrap_err();
+        assert!(err.to_string().contains("compose.yml"), "got: {err}");
+    }
+
+    #[test]
+    fn python_proposal_registers_local_app() {
+        use crate::creative_app::model::{LaunchPort, LaunchPortMode, PythonLaunchProfile};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("pyproj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("app.py"), "from flask import Flask\n").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let py = PythonLaunchProfile {
+            schema_version: 1,
+            interpreter: "/usr/bin/python3".into(),
+            entry: "app.py".into(),
+            args: vec![],
+            cwd_relative: ".".into(),
+            environment_keys: vec!["PORT".into()],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            is_venv: false,
+        };
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Create,
+            ownership: OwnershipMode::Managed,
+            title: "Python App".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Python(py),
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec!["PORT".into()],
+        };
+        proposal.validate().unwrap();
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Python App");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+    }
+
+    #[test]
+    fn binary_proposal_registers_local_app() {
+        use crate::creative_app::model::{BinaryLaunchProfile, LaunchPort, LaunchPortMode};
+        use crate::creative_app::process_driver::sha256_hex;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("binproj");
+        std::fs::create_dir_all(&root).unwrap();
+        // A real executable file so the hash is computed from actual content.
+        let bin_path = root.join("myapp");
+        std::fs::write(&bin_path, "#!/bin/sh\necho hi\n").unwrap();
+        let hash = sha256_hex(&bin_path).unwrap();
+        let bin_s = bin_path.to_string_lossy().to_string();
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::create_tables(&conn).unwrap();
+        crate::db::apply_migrations(&conn).unwrap();
+
+        let b = BinaryLaunchProfile {
+            schema_version: 1,
+            executable_path: bin_s,
+            executable_hash: hash,
+            approved: true,
+            args: vec![],
+            cwd_relative: ".".into(),
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+        };
+        let proposal = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Create,
+            ownership: OwnershipMode::Managed,
+            title: "Binary App".into(),
+            project_root: root_s,
+            driver: ProposedDriver::Binary(b),
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        proposal.validate().unwrap();
+        let summary = register_proposal_app(&mut conn, &proposal).unwrap();
+        assert_eq!(summary.title, "Binary App");
+        assert_eq!(summary.source, CreativeAppSource::LocalProject);
+    }
 }

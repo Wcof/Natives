@@ -5,6 +5,7 @@
 //! these adapters; shared list/get/start/stop/delete/open semantics live here.
 
 pub mod external;
+pub mod facade;
 pub mod internal;
 pub mod local;
 
@@ -159,7 +160,7 @@ pub async fn spawn_start(
         ResolvedSource::ExternalGithub => external::start(conn, &ctx.app, id).await,
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
-            local::start(conn, &ctx.app, rt, ctx.host_http_port, id).await
+            local::start(conn, &ctx.app, rt, ctx.host_http_port, id, &instance_id).await
         }
         ResolvedSource::Internal => unreachable!(),
     };
@@ -202,8 +203,9 @@ pub async fn await_ready(
         ResolvedSource::Internal | ResolvedSource::ExternalGithub => Ok(spawned.clone()),
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
-            let result = local::await_start_ready(conn, &ctx.app, rt, id).await;
             let instance_id = spawned.runtime_instance_id.clone();
+            let rt_ref = instance_id.as_deref().unwrap_or_default();
+            let result = local::await_start_ready(conn, &ctx.app, rt, id, rt_ref).await;
             match result {
                 Ok(summary) => {
                     if summary.state == CreativeAppState::Running {
@@ -246,7 +248,8 @@ pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cre
         ResolvedSource::ExternalGithub => external::stop(conn, &ctx.app, id).await,
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
-            local::stop(conn, &ctx.app, rt, id).await
+            let rt_id = instance_id.as_deref().unwrap_or_default();
+            local::stop(conn, &ctx.app, rt, id, rt_id).await
         }
         ResolvedSource::Internal => unreachable!(),
     };
@@ -254,6 +257,9 @@ pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cre
         Ok(summary) => {
             if let Some(iid) = &instance_id {
                 super::runtime_store::mark_stopped(conn, iid)?;
+                // CR-303: a stopped instance has no live preview; drop its bind
+                // so DB preview state matches the dead endpoint.
+                let _ = super::runtime_store::clear_preview_targets(conn, iid);
             }
             Ok(super::runtime_store::attach_identity(conn, summary)?)
         }
@@ -278,7 +284,12 @@ pub async fn delete(
         ResolvedSource::ExternalGithub => external::delete(conn, &ctx.app, id, opts).await,
         ResolvedSource::LocalProject => {
             let rt = ctx.require_local_runtime()?;
-            local::delete(conn, &ctx.app, rt, id).await
+            // The active runtime id (may be empty when the app is not running).
+            let app_id =
+                super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+            let rt_id =
+                super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
+            local::delete(conn, &ctx.app, rt, id, &rt_id).await
         }
     };
     if result.is_ok() {

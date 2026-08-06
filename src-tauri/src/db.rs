@@ -7,6 +7,11 @@ use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use std::path::Path;
 
+/// Current host schema version after all incremental migrations. Kept in sync
+/// with the last `_schema_version` write in `apply_migrations`; tests assert
+/// against it so a future migration does not leave a stale literal behind.
+pub const SCHEMA_VERSION: &str = "22";
+
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
 fn instance_status_for_state(state: &str) -> Option<&'static str> {
@@ -1106,6 +1111,247 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v14→v15 (batch 1 CR-101): repair ghost `applications` identities.
+    //
+    // Older read paths used find-or-create on the browser open/close flow, which
+    // fabricated a fake `local_project` application row for a GitHub app. This
+    // migration only deletes rows with NO source row AND no dependent
+    // startup_plans/runtime_instances (double gate); every deleted row JSON is
+    // backed up to `creative_identity_reports`. Rows with dependencies or
+    // cross-source collisions are reported and left untouched.
+    if current_version < 15 {
+        repair_creative_identity_ghosts(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '15')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v15→v16 (batch 1 CR-102): one active runtime instance and one
+    // active startup plan per application as DATABASE invariants.
+    //
+    // Existing duplicates (from the old double-start race) are reconciled first:
+    // the newest active row is kept, the rest are demoted (runtime duplicates →
+    // orphaned, plan duplicates → is_active=0) and each demotion is audited in
+    // `creative_identity_reports`. Only then are the partial unique indexes
+    // created, so a concurrent second start is rejected by the DB (#06/#07).
+    if current_version < 16 {
+        repair_creative_active_invariants(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '16')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v16→v17 (batch 1 CR-103): promote `startup_plans` to a versioned
+    // LaunchProfile base.
+    //
+    // Adds nullable schema_version / driver_kind / ownership_mode columns,
+    // backfills them from the stored plan JSON (read/write both derive them; the
+    // columns are the persisted mirror), and repairs the earlier Compose backfill
+    // that classified a local docker_compose instance as `local_process`.
+    if current_version < 17 {
+        upgrade_startup_plans_v1(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '17')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v17→v18 (batch 2 CR-201): operation journal for lifecycle
+    // mutations.
+    //
+    // install/start/stop/restart/delete each record a durable operation row
+    // (kind / phase / redacted input / error / timestamps) so every external
+    // side effect is traceable to an operation and partial failures have a
+    // recovery carrier. Additive and idempotent — no source detail is touched.
+    // `application_id` is nullable with ON DELETE SET NULL so a delete
+    // operation survives the removal of its own application row (audit trail).
+    if current_version < 18 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+                runtime_instance_id TEXT REFERENCES runtime_instances(id) ON DELETE SET NULL,
+                kind TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT 'user',
+                redacted_input_json TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_operations_application_active
+                ON operations(application_id, phase);
+            CREATE INDEX IF NOT EXISTS idx_operations_updated_at
+                ON operations(updated_at);
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '18');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v18→v19 (batch 5 CR-501): Surface, Endpoint, Window tables.
+    //
+    // application_surfaces: each app has one main surface (backfilled from
+    // existing applications) and optionally embed surfaces for child WebViews.
+    //
+    // runtime_endpoints: each runtime instance can have zero or more endpoints
+    // (preview URL, API, health check). Backfilled from preview_targets.
+    //
+    // window_instances: each window maps 1:1 to a Tauri WebView/WebviewWindow.
+    // Backfilled from active browser_show entries.
+    if current_version < 19 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS application_surfaces (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL DEFAULT 'main',
+                label TEXT NOT NULL DEFAULT 'Main',
+                title TEXT,
+                url TEXT,
+                bounds_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_surfaces_application
+                ON application_surfaces(application_id);
+
+            CREATE TABLE IF NOT EXISTS runtime_endpoints (
+                id TEXT PRIMARY KEY,
+                runtime_instance_id TEXT NOT NULL REFERENCES runtime_instances(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL DEFAULT 'preview',
+                url TEXT NOT NULL,
+                port INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_endpoints_runtime
+                ON runtime_endpoints(runtime_instance_id);
+
+            CREATE TABLE IF NOT EXISTS window_instances (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                surface_id TEXT NOT NULL REFERENCES application_surfaces(id) ON DELETE CASCADE,
+                runtime_instance_id TEXT REFERENCES runtime_instances(id) ON DELETE SET NULL,
+                label TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'closed',
+                bounds_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_windows_application
+                ON window_instances(application_id);
+            CREATE INDEX IF NOT EXISTS idx_windows_surface
+                ON window_instances(surface_id);
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '19');
+            ",
+        )
+        .map_err(Error::Database)?;
+        // Backfill main surfaces for existing applications and preview
+        // endpoints for active runtimes (idempotent, additive).
+        if let Err(e) = crate::creative_app::surface_store::backfill_v19(conn) {
+            eprintln!("warning: surface backfill failed: {e}");
+        }
+    }
+
+    // Migration v19→v20 (batch 6 CR-601): BrowserProfile table.
+    //
+    // Profiles store metadata only — never cookie content. The platform_store_key
+    // identifies the WKWebsiteDataStore for future use when per-profile isolation
+    // becomes possible on the platform.
+    if current_version < 20 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS browser_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                platform_store_key TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            -- Seed the default profile
+            INSERT OR IGNORE INTO browser_profiles (id, name, platform_store_key, is_default, created_at, updated_at)
+                VALUES ('default', 'Default', 'default', 1, datetime('now'), datetime('now'));
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '20');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v20→v21 (batch 6 CR-602/603): OAuth allowlist + app grants.
+    //
+    // oauth_allowlist: per-app domain allowlist for OAuth popup windows.
+    // app_grants: per-app capability grants (upload, download, clipboard, window_open).
+    if current_version < 21 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS oauth_allowlist (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                domain TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(application_id, domain)
+            );
+
+            CREATE TABLE IF NOT EXISTS app_grants (
+                id TEXT PRIMARY KEY,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                policy TEXT NOT NULL DEFAULT 'default_deny',
+                path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(application_id, kind)
+            );
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '21');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v21→v22 (batch 7 CR-701): service_instances table.
+    //
+    // A runtime can expose multiple services (e.g. Compose web + db); each
+    // service gets a row with its readiness state. Single-service runtimes get
+    // a "main" service row.
+    if current_version < 22 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS service_instances (
+                id TEXT PRIMARY KEY,
+                runtime_instance_id TEXT NOT NULL REFERENCES runtime_instances(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                readiness TEXT NOT NULL DEFAULT 'starting',
+                required INTEGER NOT NULL DEFAULT 1,
+                endpoint_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(runtime_instance_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_services_runtime
+                ON service_instances(runtime_instance_id);
+
+                        INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '22');
+            ",
+        )
+        .map_err(Error::Database)?;
+        // Backfill a "main" service row for active runtimes (idempotent).
+        if let Err(e) = crate::creative_app::service_store::backfill_v22(conn) {
+            eprintln!("warning: service backfill failed: {e}");
+        }
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
@@ -1293,10 +1539,12 @@ pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
                         .and_then(|r| r.as_str())
                         .map(str::to_string)
                 });
-            let owner_kind = if runtime.as_deref() == Some("static_http") {
-                "host_http"
-            } else {
-                "local_process"
+            let owner_kind = match runtime.as_deref() {
+                Some("static_http") => "host_http",
+                // Local Compose plans own a docker_compose project, NOT a local
+                // process (batch 1 CR-103 fixes the earlier misclassification).
+                Some("docker_compose") => "docker_compose",
+                _ => "local_process",
             };
             let urls = open_url
                 .as_deref()
@@ -1395,6 +1643,520 @@ pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Insert an immutable audit/report row for a creative identity repair.
+/// Deterministic `id` keeps re-runs idempotent (INSERT OR IGNORE).
+fn insert_identity_report(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    application_id: Option<&str>,
+    source: Option<&str>,
+    source_id: Option<&str>,
+    action: &str,
+    payload_json: &str,
+    ts: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO creative_identity_reports
+            (id, kind, application_id, source, source_id, action, payload_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id,
+            kind,
+            application_id,
+            source,
+            source_id,
+            action,
+            payload_json,
+            ts
+        ],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Batch 1 CR-101: delete confirmed ghost `applications` rows and audit the rest.
+///
+/// A ghost is an applications row whose source detail row is gone (no matching
+/// row in `modules` / `external_creative_apps` / `local_creative_apps`). We only
+/// delete ghosts with no dependent `startup_plans` / `runtime_instances` /
+/// `preview_targets` (double gate per upgrade plan T01); every deletion backs
+/// up the full row JSON into `creative_identity_reports`. Ghosts that still
+/// carry dependent data are quarantined (reported, kept), and a ghost whose
+/// source_id collides with a real row of another source is also reported.
+/// Idempotent: after the first run the deletable set is empty.
+pub(crate) fn repair_creative_identity_ghosts(conn: &Connection) -> Result<usize> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_identity_reports (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            application_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+    let ts = chrono::Utc::now().to_rfc3339();
+
+    let candidates: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.id, a.source, a.source_id
+                 FROM applications a
+                 WHERE NOT EXISTS (SELECT 1 FROM modules m WHERE m.id = a.source_id AND a.source = 'internal')
+                   AND NOT EXISTS (SELECT 1 FROM external_creative_apps e WHERE e.id = a.source_id AND a.source = 'external_github')
+                   AND NOT EXISTS (SELECT 1 FROM local_creative_apps l WHERE l.id = a.source_id AND a.source = 'local_project')",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(Error::Database)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(Error::Database)?);
+        }
+        out
+    };
+
+    let mut deleted = 0usize;
+    for (id, source, source_id) in candidates {
+        let row_json: String = conn
+            .query_row(
+                "SELECT json_object('id', id, 'source', source, 'source_id', source_id,
+                                    'title', title, 'version', version,
+                                    'created_at', created_at, 'updated_at', updated_at)
+                 FROM applications WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        // Double gate: dependent rows must be empty before we may delete.
+        let has_deps: i64 = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM startup_plans sp WHERE sp.application_id = ?1)
+                  + (SELECT COUNT(*) FROM runtime_instances ri WHERE ri.application_id = ?1)
+                  + (SELECT COUNT(*) FROM preview_targets pt
+                        JOIN runtime_instances ri2 ON ri2.id = pt.runtime_instance_id
+                     WHERE ri2.application_id = ?1)",
+                params![id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        if has_deps > 0 {
+            insert_identity_report(
+                conn,
+                &format!("ghost-quarantine-{id}"),
+                "ghost_application_with_dependencies",
+                Some(&id),
+                Some(&source),
+                Some(&source_id),
+                "quarantined",
+                &row_json,
+                &ts,
+            )?;
+            continue;
+        }
+        // Cross-source collision: the same source_id exists as a REAL row in a
+        // different source table. The real row lives in its own table, so
+        // deletion is still safe, but the collision is worth an audit record.
+        let cross: i64 = conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM modules m WHERE m.id = ?2 AND ?1 <> 'internal')
+                  + (SELECT COUNT(*) FROM external_creative_apps e WHERE e.id = ?2 AND ?1 <> 'external_github')
+                  + (SELECT COUNT(*) FROM local_creative_apps l WHERE l.id = ?2 AND ?1 <> 'local_project')",
+                params![source, source_id],
+                |r| r.get(0),
+            )
+            .map_err(Error::Database)?;
+        if cross > 0 {
+            insert_identity_report(
+                conn,
+                &format!("collision-{id}"),
+                "cross_source_collision",
+                Some(&id),
+                Some(&source),
+                Some(&source_id),
+                "reported",
+                &row_json,
+                &ts,
+            )?;
+        }
+        insert_identity_report(
+            conn,
+            &format!("ghost-{id}"),
+            "ghost_application",
+            Some(&id),
+            Some(&source),
+            Some(&source_id),
+            "deleted",
+            &row_json,
+            &ts,
+        )?;
+        conn.execute("DELETE FROM applications WHERE id = ?1", params![id])
+            .map_err(Error::Database)?;
+        deleted += 1;
+    }
+    Ok(deleted)
+}
+
+/// Batch 1 CR-102: reconcile duplicate active runtime/plan rows, then create the
+/// partial unique indexes that make "one active per application" a DB invariant.
+///
+/// Duplicates are NOT deleted and NOT silently marked stopped (invariant #8):
+/// the newest active row is kept and older runtime duplicates are demoted to
+/// `orphaned` (outside the index scope), while older plan duplicates get
+/// `is_active=0`. Every demotion is audited in `creative_identity_reports`.
+/// Idempotent: after the first run there are no duplicates left to demote.
+pub(crate) fn repair_creative_active_invariants(conn: &Connection) -> Result<usize> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_identity_reports (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            application_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+    let ts = chrono::Utc::now().to_rfc3339();
+    let mut fixed = 0usize;
+
+    // 1) One active startup_plan per application.
+    let dup_plan_apps: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT application_id FROM startup_plans WHERE is_active = 1
+                 GROUP BY application_id HAVING COUNT(*) > 1",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(Error::Database)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
+    };
+    for app in dup_plan_apps {
+        let ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM startup_plans
+                     WHERE application_id = ?1 AND is_active = 1
+                     ORDER BY updated_at DESC, id",
+                )
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map(params![app], |r| r.get::<_, String>(0))
+                .map_err(Error::Database)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::Database)?
+        };
+        for id in ids.into_iter().skip(1) {
+            let row_json: String = conn
+                .query_row(
+                    "SELECT json_object('id', id, 'application_id', application_id,
+                                        'plan_version', plan_version, 'is_active', is_active,
+                                        'updated_at', updated_at)
+                     FROM startup_plans WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(Error::Database)?;
+            conn.execute(
+                "UPDATE startup_plans SET is_active = 0, updated_at = ?2 WHERE id = ?1",
+                params![id, ts],
+            )
+            .map_err(Error::Database)?;
+            insert_identity_report(
+                conn,
+                &format!("plan-dedup-{id}"),
+                "duplicate_active_plan",
+                Some(&app),
+                None,
+                None,
+                "demoted",
+                &row_json,
+                &ts,
+            )?;
+            fixed += 1;
+        }
+    }
+
+    // 2) One active runtime_instance per application (over the index scope).
+    let dup_runtime_apps: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT application_id FROM runtime_instances
+                 WHERE status IN ('starting','running','stopping')
+                 GROUP BY application_id HAVING COUNT(*) > 1",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(Error::Database)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
+    };
+    for app in dup_runtime_apps {
+        let ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM runtime_instances
+                     WHERE application_id = ?1 AND status IN ('starting','running','stopping')
+                     ORDER BY updated_at DESC, id",
+                )
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map(params![app], |r| r.get::<_, String>(0))
+                .map_err(Error::Database)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Error::Database)?
+        };
+        for id in ids.into_iter().skip(1) {
+            let row_json: String = conn
+                .query_row(
+                    "SELECT json_object('id', id, 'application_id', application_id,
+                                        'status', status, 'owner_kind', owner_kind,
+                                        'updated_at', updated_at)
+                     FROM runtime_instances WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(Error::Database)?;
+            // Demote to orphaned (NOT stopped — the resource is unproven; see
+            // invariant #8). Orphaned is outside the index scope so the partial
+            // unique index below remains satisfiable.
+            conn.execute(
+                "UPDATE runtime_instances
+                 SET status = 'orphaned', cleanup_status = NULL, updated_at = ?2
+                 WHERE id = ?1",
+                params![id, ts],
+            )
+            .map_err(Error::Database)?;
+            insert_identity_report(
+                conn,
+                &format!("runtime-dedup-{id}"),
+                "duplicate_active_runtime",
+                Some(&app),
+                None,
+                None,
+                "orphaned",
+                &row_json,
+                &ts,
+            )?;
+            fixed += 1;
+        }
+    }
+
+    // 3) Partial unique indexes — safe now that duplicates are gone.
+    conn.execute_batch(
+        "
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_instances_one_active
+            ON runtime_instances(application_id)
+            WHERE status IN ('starting','running','stopping');
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_startup_plans_one_active
+            ON startup_plans(application_id) WHERE is_active = 1;
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    Ok(fixed)
+}
+
+/// Derive a LaunchProfile `driver_kind` from a stored plan JSON. Handles the
+/// local LaunchPlan shape (`runtime`, camelCase) and the external RuntimeConfig
+/// shape (`kind`, snake_case). Kept self-contained because migrations must run
+/// against historical schemas without depending on domain modules.
+fn plan_driver_kind_from_json(json: &str) -> &'static str {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return "unknown";
+    };
+    if let Some(r) = v.get("runtime").and_then(|r| r.as_str()) {
+        return match r {
+            "static_http" => "local_static",
+            "docker_compose" => "docker_compose",
+            _ => "node_dev_server",
+        };
+    }
+    if let Some(k) = v.get("kind").and_then(|k| k.as_str()) {
+        return if k == "docker_compose" {
+            "docker_compose"
+        } else {
+            "docker_run"
+        };
+    }
+    "unknown"
+}
+
+/// Batch 1 CR-103: promote `startup_plans` to the versioned LaunchProfile base.
+///
+/// Adds nullable `schema_version` / `driver_kind` / `ownership_mode` columns
+/// (read-upgrader derives them from plan_json when NULL), backfills existing
+/// rows, and repairs the Compose backfill that misclassified a local
+/// docker_compose instance as `local_process`. Additive and idempotent: the
+/// column adds are PRAGMA-guarded and the backfill only touches NULL rows.
+pub(crate) fn upgrade_startup_plans_v1(conn: &Connection) -> Result<usize> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_identity_reports (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            application_id TEXT,
+            source TEXT,
+            source_id TEXT,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    // 1) Add the versioned columns (guarded so re-running is safe).
+    let plan_cols: Vec<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(startup_plans)")
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(Error::Database)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Database)?
+    };
+    if !plan_cols.iter().any(|c| c == "schema_version") {
+        conn.execute(
+            "ALTER TABLE startup_plans ADD COLUMN schema_version INTEGER",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+    if !plan_cols.iter().any(|c| c == "driver_kind") {
+        conn.execute("ALTER TABLE startup_plans ADD COLUMN driver_kind TEXT", [])
+            .map_err(Error::Database)?;
+    }
+    if !plan_cols.iter().any(|c| c == "ownership_mode") {
+        conn.execute(
+            "ALTER TABLE startup_plans ADD COLUMN ownership_mode TEXT",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // 2) Backfill columns for legacy rows (only those still missing them).
+    let ts = chrono::Utc::now().to_rfc3339();
+    let mut fixed = 0usize;
+    let missing: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, plan_json FROM startup_plans
+                 WHERE schema_version IS NULL OR driver_kind IS NULL OR ownership_mode IS NULL",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(Error::Database)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(Error::Database)?);
+        }
+        out
+    };
+    for (id, plan_json) in missing {
+        let dk = plan_driver_kind_from_json(&plan_json);
+        let sv = serde_json::from_str::<serde_json::Value>(&plan_json)
+            .ok()
+            .and_then(|v| v.get("schemaVersion").and_then(|s| s.as_u64()))
+            .unwrap_or(1);
+        conn.execute(
+            "UPDATE startup_plans
+             SET schema_version = ?2, driver_kind = ?3, ownership_mode = 'managed', updated_at = ?4
+             WHERE id = ?1",
+            params![id, sv as i64, dk, ts],
+        )
+        .map_err(Error::Database)?;
+        insert_identity_report(
+            conn,
+            &format!("plan-upgrade-{id}"),
+            "plan_versioned_columns",
+            None,
+            None,
+            None,
+            "backfilled",
+            &serde_json::json!({ "driverKind": dk, "schemaVersion": sv }).to_string(),
+            &ts,
+        )?;
+        fixed += 1;
+    }
+
+    // 3) Repair the earlier Compose backfill that classified local docker_compose
+    //    instances as `local_process` (#34).
+    let misclassified: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT ri.id, ri.application_id, l.launch_plan_json
+                 FROM runtime_instances ri
+                 JOIN applications a ON a.id = ri.application_id
+                 JOIN local_creative_apps l ON l.id = a.source_id AND a.source = 'local_project'
+                 WHERE ri.owner_kind = 'local_process'
+                   AND json_extract(l.launch_plan_json, '$.runtime') = 'docker_compose'",
+            )
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(Error::Database)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(Error::Database)?);
+        }
+        out
+    };
+    for (rid, app_id, plan_json) in misclassified {
+        conn.execute(
+            "UPDATE runtime_instances SET owner_kind = 'docker_compose', updated_at = ?2 WHERE id = ?1",
+            params![rid, ts],
+        )
+        .map_err(Error::Database)?;
+        insert_identity_report(
+            conn,
+            &format!("owner-repair-{rid}"),
+            "plan_owner_repaired",
+            Some(&app_id),
+            None,
+            None,
+            "repaired",
+            &serde_json::json!({ "instanceId": rid, "driverKind": plan_driver_kind_from_json(&plan_json) })
+                .to_string(),
+            &ts,
+        )?;
+        fixed += 1;
+    }
+
+    Ok(fixed)
 }
 
 #[cfg(test)]
@@ -1512,6 +2274,461 @@ mod tests {
         backfill_creative_identity(&conn).expect("third backfill");
         assert_eq!(count("SELECT COUNT(*) FROM applications"), 3);
         assert_eq!(count("SELECT COUNT(*) FROM runtime_instances"), 2);
+    }
+
+    /// Batch 1 CR-101: a ghost application (no source row, no dependent rows)
+    /// is deleted and its full row JSON is backed up to the report table.
+    #[test]
+    fn repair_ghost_identity_deletes_and_backs_up() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // A fake local_project identity the old browser show path would fabricate
+        // for a GitHub app (no matching source row anywhere).
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('ghost-1', 'local_project', 'ext-ghost', 'Ghost', '1', 't', 't')",
+            [],
+        )
+        .expect("insert ghost");
+
+        let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
+        assert_eq!(deleted, 1);
+
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM applications WHERE id = 'ghost-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(remaining, 0);
+
+        // The row JSON was backed up with an audit record.
+        let (kind, action, payload): (String, String, String) = conn
+            .query_row(
+                "SELECT kind, action, payload_json FROM creative_identity_reports WHERE id = 'ghost-ghost-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("report row");
+        assert_eq!(kind, "ghost_application");
+        assert_eq!(action, "deleted");
+        assert!(payload.contains("ext-ghost"));
+
+        // Idempotent: a second run finds nothing new and adds no duplicate rows.
+        let deleted2 = repair_creative_identity_ghosts(&conn).expect("repair again");
+        assert_eq!(deleted2, 0);
+        let reports: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports WHERE kind = 'ghost_application'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(reports, 1);
+    }
+
+    /// Batch 1 CR-101: a ghost with dependent rows is quarantined, never deleted.
+    #[test]
+    fn repair_quarantines_ghost_with_dependencies() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('ghost-2', 'local_project', 'ext-ghost', 'Ghost', '1', 't', 't')",
+            [],
+        )
+        .expect("insert ghost");
+        // Dependent startup_plan keeps the row from being deletable.
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-ghost', 'ghost-2', 1, '{}', 1, 't', 't')",
+            [],
+        )
+        .expect("insert dependent plan");
+
+        let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
+        assert_eq!(deleted, 0, "ghost with dependencies must not be deleted");
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM applications WHERE id = 'ghost-2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(remaining, 1);
+        let quarantined: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports
+                 WHERE kind = 'ghost_application_with_dependencies' AND action = 'quarantined'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(quarantined, 1);
+    }
+
+    /// Batch 1 CR-101: a ghost whose source_id collides with a real row of a
+    /// different source is deleted (the real row lives in its own table) but the
+    /// collision is recorded for audit.
+    #[test]
+    fn repair_reports_cross_source_collision() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // A real external GitHub app.
+        conn.execute(
+            "INSERT INTO external_creative_apps
+                (id, title, version, owner, repo, repository_url, release_tag, runtime, state, runtime_config_json, created_at, updated_at)
+             VALUES ('ext-1', 'Ext', '1', 'o', 'r', 'http://x', 'v1', 'docker_compose', 'installed_stopped', '{}', 't', 't')",
+            [],
+        )
+        .expect("insert external");
+        // The ghost local_project identity the old browser path created for it.
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('ghost-3', 'local_project', 'ext-1', 'Ghost', '1', 't', 't')",
+            [],
+        )
+        .expect("insert ghost");
+
+        let deleted = repair_creative_identity_ghosts(&conn).expect("repair");
+        assert_eq!(deleted, 1);
+        let collision: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports WHERE kind = 'cross_source_collision'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(collision, 1);
+        // The real external app row is untouched.
+        let ext: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM external_creative_apps WHERE id = 'ext-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(ext, 1);
+    }
+
+    /// Batch 1 CR-102: the v16 migration leaves the two active unique indexes in
+    /// place so a second active instance / plan is a DB-level violation.
+    #[test]
+    fn migration_creates_active_unique_indexes() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        let index = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                rusqlite::params![name],
+                |r| r.get(0),
+            )
+            .expect("index exists")
+        };
+        assert_eq!(index("idx_runtime_instances_one_active"), 1);
+        assert_eq!(index("idx_startup_plans_one_active"), 1);
+
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-1', 'local_project', 'loc1', 'L', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-1', 'app-1', 'starting', 'local_process', 't', 't')",
+            [],
+        )
+        .expect("insert active instance");
+        // A second active instance violates the partial unique index.
+        let err = conn
+            .execute(
+                "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+                 VALUES ('ri-2', 'app-1', 'starting', 'local_process', 'u', 'u')",
+                [],
+            )
+            .expect_err("second active instance must be rejected by the DB");
+        assert!(
+            matches!(&err, rusqlite::Error::SqliteFailure(f, _)
+                if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+            "expected UNIQUE constraint violation, got {err:?}"
+        );
+
+        // Same for active plans.
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-1', 'app-1', 1, '{}', 1, 't', 't')",
+            [],
+        )
+        .expect("insert active plan");
+        let err = conn
+            .execute(
+                "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+                 VALUES ('plan-2', 'app-1', 1, '{}', 1, 'u', 'u')",
+                [],
+            )
+            .expect_err("second active plan must be rejected by the DB");
+        assert!(matches!(&err, rusqlite::Error::SqliteFailure(..)));
+    }
+
+    /// Batch 1 CR-102: the repair reconciles pre-existing duplicate active rows
+    /// (kept newest, demoted rest audited) before the indexes are recreated, and
+    /// never fabricates a stopped status for an unproven resource.
+    #[test]
+    fn repair_active_invariants_dedups_duplicates() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // Simulate a pre-v16 database: no active unique indexes yet.
+        conn.execute("DROP INDEX idx_runtime_instances_one_active", [])
+            .expect("drop runtime index");
+        conn.execute("DROP INDEX idx_startup_plans_one_active", [])
+            .expect("drop plan index");
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-1', 'local_project', 'loc1', 'L', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        // Two active instances + two active plans for the same app.
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-old', 'app-1', 'running', 'local_process', 't', 't')",
+            [],
+        )
+        .expect("insert older running instance");
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-new', 'app-1', 'starting', 'local_process', 'u', 'u')",
+            [],
+        )
+        .expect("insert newer starting instance");
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-old', 'app-1', 1, '{}', 1, 't', 't')",
+            [],
+        )
+        .expect("insert older active plan");
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-new', 'app-1', 1, '{}', 1, 'u', 'u')",
+            [],
+        )
+        .expect("insert newer active plan");
+
+        let fixed = repair_creative_active_invariants(&conn).expect("repair");
+        assert_eq!(fixed, 2, "one runtime + one plan duplicate demoted");
+
+        // The newest active rows were kept; the older ones were demoted (not
+        // deleted, not fabricated as stopped).
+        let kept_runtime: String = conn
+            .query_row(
+                "SELECT id FROM runtime_instances WHERE application_id='app-1'
+                 AND status IN ('starting','running','stopping')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("kept runtime");
+        assert_eq!(kept_runtime, "ri-new");
+        let old_runtime_status: String = conn
+            .query_row(
+                "SELECT status FROM runtime_instances WHERE id='ri-old'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("old runtime status");
+        assert_eq!(
+            old_runtime_status, "orphaned",
+            "unproven duplicate must be orphaned, never fabricated stopped"
+        );
+        let kept_plan: String = conn
+            .query_row(
+                "SELECT id FROM startup_plans WHERE application_id='app-1' AND is_active=1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("kept plan");
+        assert_eq!(kept_plan, "plan-new");
+        let old_plan_active: i64 = conn
+            .query_row(
+                "SELECT is_active FROM startup_plans WHERE id='plan-old'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("old plan active");
+        assert_eq!(old_plan_active, 0);
+
+        // The indexes were recreated and now reject a second active instance.
+        let err = conn
+            .execute(
+                "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+                 VALUES ('ri-3', 'app-1', 'starting', 'local_process', 'x', 'x')",
+                [],
+            )
+            .expect_err("index must reject a second active instance");
+        assert!(matches!(&err, rusqlite::Error::SqliteFailure(..)));
+
+        // Idempotent re-run: no further demotions, no duplicate report rows.
+        let fixed2 = repair_creative_active_invariants(&conn).expect("repair again");
+        assert_eq!(fixed2, 0);
+        let reports: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM creative_identity_reports WHERE kind IN
+                 ('duplicate_active_runtime','duplicate_active_plan')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count reports");
+        assert_eq!(reports, 2);
+    }
+
+    /// Batch 1 CR-103: migration v17 backfills the LaunchProfile v1 columns from
+    /// stored plan JSON and repairs the Compose backfill that classified a local
+    /// docker_compose instance as `local_process` (#34).
+    #[test]
+    fn upgrade_startup_plans_v1_backfills_and_repairs_compose_owner() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        // A local compose app whose backfilled instance was misclassified.
+        conn.execute(
+            "INSERT INTO local_creative_apps
+                (id, title, canonical_project_root, device_id, device_name, project_kind, launch_mode,
+                 launch_plan_json, plan_fingerprint, state, startup_timeout_ms, created_at, updated_at)
+             VALUES ('loc-compose', 'Compose', '/tmp/c', 'd', 'n', 'other', 'smart',
+                     '{\"schemaVersion\":1,\"runtime\":\"docker_compose\",\"program\":\"internal\",\"compose\":{\"composeFile\":\"docker-compose.yml\",\"projectSeed\":\"p\"}}',
+                     'fp', 'running', 60000, 't', 't')",
+            [],
+        )
+        .expect("insert local compose app");
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-compose', 'local_project', 'loc-compose', 'Compose', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        conn.execute(
+            "INSERT INTO startup_plans (id, application_id, plan_version, plan_json, is_active, created_at, updated_at)
+             VALUES ('plan-compose', 'app-compose', 1,
+                     '{\"schemaVersion\":1,\"runtime\":\"docker_compose\",\"program\":\"internal\"}',
+                     1, 't', 't')",
+            [],
+        )
+        .expect("insert plan with NULL versioned columns");
+        conn.execute(
+            "INSERT INTO runtime_instances (id, application_id, status, owner_kind, created_at, updated_at)
+             VALUES ('ri-compose', 'app-compose', 'running', 'local_process', 't', 't')",
+            [],
+        )
+        .expect("insert misclassified instance");
+
+        let fixed = upgrade_startup_plans_v1(&conn).expect("upgrade v17");
+        assert!(
+            fixed >= 2,
+            "expected plan backfill + owner repair, got {fixed}"
+        );
+
+        // Plan columns backfilled from JSON.
+        let (dk, sv, om): (String, i64, String) = conn
+            .query_row(
+                "SELECT driver_kind, schema_version, ownership_mode FROM startup_plans WHERE id = 'plan-compose'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("plan columns");
+        assert_eq!(dk, "docker_compose");
+        assert_eq!(sv, 1);
+        assert_eq!(om, "managed");
+
+        // The misclassified instance now owns a docker_compose project.
+        let kind: String = conn
+            .query_row(
+                "SELECT owner_kind FROM runtime_instances WHERE id = 'ri-compose'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("owner kind");
+        assert_eq!(kind, "docker_compose");
+
+        // Idempotent re-run finds nothing new.
+        let fixed2 = upgrade_startup_plans_v1(&conn).expect("upgrade again");
+        assert_eq!(fixed2, 0);
+    }
+
+    /// Batch 2 CR-201: migration v18 creates the `operations` journal table with
+    /// FK-linked app/instance columns and active-phase indexes, and is idempotent.
+    #[test]
+    fn migration_creates_operations_journal() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        apply_migrations(&conn).expect("apply migrations");
+
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = '_schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("schema version");
+        assert_eq!(
+            version, SCHEMA_VERSION,
+            "migration must bump the tracked version"
+        );
+
+        conn.execute(
+            "INSERT INTO operations (kind, phase, actor, started_at, updated_at)
+             VALUES ('start', 'pending', 'user', 't', 't')",
+            [],
+        )
+        .expect("operations table accepts a minimal journal row");
+
+        // Application id can be NULL (install before the app identity exists) and
+        // the FK is satisfied once an application row exists.
+        conn.execute(
+            "INSERT INTO applications (id, source, source_id, title, version, created_at, updated_at)
+             VALUES ('app-op', 'local_project', 'loc', 'L', '1', 't', 't')",
+            [],
+        )
+        .expect("insert app");
+        conn.execute(
+            "INSERT INTO operations (application_id, kind, phase, started_at, updated_at)
+             VALUES ('app-op', 'stop', 'running', 't', 't')",
+            [],
+        )
+        .expect("operation links to an application");
+
+        // Repeat migration is a no-op (no error, no duplicate table).
+        apply_migrations(&conn).expect("re-apply migrations");
+
+        // Deleting the application SET NULLs the operation's application_id so a
+        // delete operation journal survives its own app row (audit trail).
+        conn.execute(
+            "INSERT INTO operations (application_id, kind, phase, started_at, updated_at)
+             VALUES ('app-op', 'delete', 'succeeded', 't', 't')",
+            [],
+        )
+        .expect("insert delete operation");
+        conn.execute("DELETE FROM applications WHERE id = 'app-op'", [])
+            .expect("delete app");
+        let orphaned_app: Option<String> = conn
+            .query_row(
+                "SELECT application_id FROM operations WHERE kind = 'delete'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("delete operation row");
+        assert_eq!(orphaned_app, None, "FK SET NULL keeps the delete audit row");
     }
 }
 

@@ -93,6 +93,7 @@ pub async fn start_app(
     runtime: &LocalRuntimeManager,
     host_http_port: u16,
     id: &str,
+    runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
     let mut rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
@@ -118,9 +119,10 @@ pub async fn start_app(
         }
     };
 
-    // Orphan recovery gate: if DB says running but supervisor has no live child,
-    // surface orphaned when identity is present.
-    if matches!(rec.state, CreativeAppState::Running) && !runtime.is_running(id).await {
+    // Orphan recovery gate: if DB says running but the new runtime has no live
+    // child, surface orphaned when identity is present (identity is OS-based, so
+    // it is independent of which runtime id the caller holds).
+    if matches!(rec.state, CreativeAppState::Running) && !runtime.is_running(runtime_id).await {
         if let Some(ident_json) = &rec.process_identity_json {
             if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
                 if identity_looks_orphaned(&ident) {
@@ -153,7 +155,7 @@ pub async fn start_app(
     broadcast(app, "starting", id);
 
     if runtime::plan_is_static(&plan) {
-        let open_url = runtime::static_open_url(host_http_port, id, &plan.open_path);
+        let open_url = runtime::static_open_url(host_http_port, id, runtime_id, &plan.open_path);
         // Verify entry is readable via filesystem (HTTP route will serve it).
         let entry = plan.entry_file.as_deref().unwrap_or("index.html");
         let entry_path = if plan.cwd_relative == "." {
@@ -326,6 +328,7 @@ pub async fn start_app(
         match runtime
             .start_node_dev(
                 app,
+                runtime_id,
                 id,
                 &root,
                 &plan,
@@ -387,6 +390,7 @@ pub async fn await_start_ready(
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
     id: &str,
+    runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
@@ -396,7 +400,13 @@ pub async fn await_start_ready(
         return Ok(store::summary_from_local(&rec));
     }
     match runtime
-        .wait_healthy(app, id, &plan.health_path, rec.startup_timeout_ms)
+        .wait_healthy(
+            app,
+            runtime_id,
+            id,
+            &plan.health_path,
+            rec.startup_timeout_ms,
+        )
         .await
     {
         Ok(()) => {
@@ -480,6 +490,7 @@ pub async fn stop_app(
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
     id: &str,
+    runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let next = state_machine::transition(rec.state, CreativeAppState::Stopping)
@@ -516,8 +527,8 @@ pub async fn stop_app(
         }
     } else {
         // Prefer live child; if missing, only kill when persisted identity fully matches.
-        if runtime.is_running(id).await {
-            if let Err(e) = runtime.stop(id, Some(app)).await {
+        if runtime.is_running(runtime_id).await {
+            if let Err(e) = runtime.stop(runtime_id, Some(app)).await {
                 failures.push(e.to_string());
             }
         } else if let Some(ident_json) = &rec.process_identity_json {
@@ -543,22 +554,20 @@ pub async fn stop_app(
     } else {
         Some(failures.join("; "))
     };
+    let msg = error
+        .clone()
+        .unwrap_or_else(|| "stop did not verify resource release".to_string());
     rec = record_stop_outcome(rec, released, error);
     store::update_app(conn, &rec)?;
     broadcast(app, if released { "stopped" } else { "stop_failed" }, id);
-    Ok(store::summary_from_local(&rec))
-}
-
-pub async fn restart_app(
-    conn: &Connection,
-    app: &AppHandle,
-    runtime: &LocalRuntimeManager,
-    host_http_port: u16,
-    id: &str,
-) -> Result<CreativeAppSummary> {
-    // Stop failure must propagate — never start a new process on a half-stopped app.
-    stop_app(conn, app, runtime, id).await?;
-    start_app(conn, app, runtime, host_http_port, id).await
+    if released {
+        Ok(store::summary_from_local(&rec))
+    } else {
+        // CR-302: never claim stopped when resources were not verified released.
+        // The caller (adapter) marks the instance cleanup_failed (active-like),
+        // which blocks restart until a retry stop succeeds.
+        Err(Error::Internal(msg))
+    }
 }
 
 pub async fn delete_app(
@@ -566,6 +575,7 @@ pub async fn delete_app(
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
     id: &str,
+    runtime_id: &str,
 ) -> Result<DeleteResult> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
 
@@ -583,8 +593,8 @@ pub async fn delete_app(
             crate::creative_app::docker::compose_down(&project, &compose_file_abs, false, false)
                 .await?;
         }
-    } else if runtime.is_running(id).await {
-        runtime.stop(id, Some(app)).await?;
+    } else if runtime.is_running(runtime_id).await {
+        runtime.stop(runtime_id, Some(app)).await?;
     } else if let Some(ident_json) = &rec.process_identity_json {
         if let Ok(ident) = serde_json::from_str::<ProcessIdentity>(ident_json) {
             if identity_matches_live(&ident) {
@@ -597,7 +607,7 @@ pub async fn delete_app(
         }
     }
 
-    runtime.purge_logs(id);
+    runtime.purge_app_logs(id);
     store::delete_app(conn, id)?;
     broadcast(app, "deleted", id);
     Ok(DeleteResult {
@@ -738,14 +748,14 @@ fn pid_is_alive(pid: Option<u32>) -> bool {
     sys.process(Pid::from_u32(pid)).is_some()
 }
 
-/// Resolve orphaned process: stop only or stop+restart. Never auto-takeover pipes.
+/// Resolve an orphaned process: kill the verified identity (if it still matches
+/// live) and settle the orphaned instance to stopped. Never auto-takeover pipes.
+/// Restart is handled by the caller (adapter) as a fresh start after this.
 pub async fn resolve_orphan(
     conn: &Connection,
     app: &AppHandle,
     runtime: &LocalRuntimeManager,
-    host_http_port: u16,
     id: &str,
-    restart: bool,
 ) -> Result<CreativeAppSummary> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     if let Some(ident_json) = &rec.process_identity_json {
@@ -754,11 +764,24 @@ pub async fn resolve_orphan(
             if identity_matches_live(&ident) {
                 // On failure keep the orphaned identity so a retry stays possible.
                 force_kill_identity(&ident).await?;
-                let _ = runtime
-                    .logs()
-                    .get_or_open(id)
-                    .append(LogStream::System, "orphaned process terminated by user");
             }
+        }
+    }
+    // The user explicitly resolved the orphan: settle the orphaned instance to
+    // stopped so a retry stop / restart can proceed (mirrors "clear identity").
+    if let Ok(Some(app_id)) = crate::creative_app::runtime_store::application_id_for(
+        conn,
+        CreativeAppSource::LocalProject,
+        id,
+    ) {
+        if let Ok(Some(iid)) = crate::creative_app::runtime_store::active_instance_id(conn, &app_id)
+        {
+            let _ = runtime
+                .logs()
+                .get_or_open(id, &iid)
+                .append(LogStream::System, "orphaned process terminated by user");
+            let _ =
+                crate::creative_app::runtime_store::settle_instance_by_id(conn, &iid, "stopped");
         }
     }
     // Clear identity
@@ -769,12 +792,7 @@ pub async fn resolve_orphan(
     rec.updated_at = now();
     store::update_app(conn, &rec)?;
     broadcast(app, "orphan_resolved", id);
-
-    if restart {
-        start_app(conn, app, runtime, host_http_port, id).await
-    } else {
-        Ok(store::summary_from_local(&rec))
-    }
+    Ok(store::summary_from_local(&rec))
 }
 
 fn identity_looks_orphaned(ident: &ProcessIdentity) -> bool {
@@ -831,14 +849,36 @@ async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
     Ok(())
 }
 
-/// Apply exited process cleanup to DB (call after poll_exits).
+/// Apply an exited process cleanup to DB. `runtime_id` identifies the exact run
+/// that exited (CR-301): the instance is settled by id, and the source record is
+/// only touched when that run is still the app's ACTIVE instance — a late exit
+/// from a superseded run must never flip a newer running run to stopped.
 pub fn mark_process_exited(
     conn: &Connection,
     app: Option<&AppHandle>,
-    id: &str,
+    runtime_id: &str,
     exit_code: i32,
 ) -> Result<()> {
-    let Some(mut rec) = store::get_app(conn, id)? else {
+    let Some(app_id) =
+        crate::creative_app::runtime_store::instance_application_id(conn, runtime_id)?
+    else {
+        // Unknown / already-gone instance: nothing to settle.
+        return Ok(());
+    };
+    // Settle the exact instance (idempotent; guarded on running/starting).
+    let _ = crate::creative_app::runtime_store::mark_exited(conn, runtime_id, exit_code);
+
+    // Only mirror onto the source record when this run is still the active one.
+    let active = crate::creative_app::runtime_store::active_instance_id(conn, &app_id)?;
+    if active.as_deref() != Some(runtime_id) {
+        return Ok(());
+    }
+    let Some(source_id) =
+        crate::creative_app::runtime_store::source_id_for_application(conn, &app_id)?
+    else {
+        return Ok(());
+    };
+    let Some(mut rec) = store::get_app(conn, &source_id)? else {
         return Ok(());
     };
     if !matches!(
@@ -858,15 +898,8 @@ pub fn mark_process_exited(
     rec.status_detail_json = None;
     rec.updated_at = now();
     store::update_app(conn, &rec)?;
-    // Mirror the natural exit onto the runtime instance ledger.
-    let _ = crate::creative_app::runtime_store::mark_exited_for_source(
-        conn,
-        CreativeAppSource::LocalProject,
-        id,
-        exit_code,
-    );
     if let Some(a) = app {
-        broadcast(a, "process_exited", id);
+        broadcast(a, "process_exited", &source_id);
     }
     Ok(())
 }
@@ -879,23 +912,14 @@ pub async fn poll_and_reconcile_exits(
 ) -> Result<u32> {
     let exited = runtime.poll_exits().await;
     let mut n = 0u32;
-    for (id, code) in exited {
-        mark_process_exited(conn, app, &id, code)?;
+    for (runtime_id, code) in exited {
+        mark_process_exited(conn, app, &runtime_id, code)?;
         n += 1;
     }
-    // Refresh heartbeats for still-running local instances so the ledger never
-    // looks stale while the process is alive.
-    for rec in store::list_apps(conn)? {
-        if matches!(
-            rec.state,
-            CreativeAppState::Running | CreativeAppState::Starting
-        ) {
-            let _ = crate::creative_app::runtime_store::heartbeat_for_source(
-                conn,
-                CreativeAppSource::LocalProject,
-                &rec.id,
-            );
-        }
+    // Refresh heartbeats for still-running instances so the ledger never looks
+    // stale while the process is alive (keyed by runtime id, CR-301).
+    for runtime_id in runtime.live_runtime_ids().await {
+        let _ = crate::creative_app::runtime_store::heartbeat(conn, &runtime_id);
     }
     Ok(n)
 }
@@ -904,24 +928,25 @@ pub fn get_local_config(conn: &Connection, id: &str) -> Result<LocalCreativeConf
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
     let env_keys = store::list_env_keys(conn, id)?;
-    let dependency_install = if plan.runtime == LocalLaunchRuntime::NodeDevServer {
-        let root = PathBuf::from(&rec.canonical_project_root);
-        if !root.join("node_modules").is_dir() {
-            super::deps::preview_install_command(conn, id)
-                .ok()
-                .map(|(program, args, pm)| DependencyInstallPreview {
-                    display: format!("{program} {}", args.join(" ")),
-                    program,
-                    args,
-                    package_manager: pm,
-                    requires_confirmation: true,
-                })
+    let dependency_install =
+        if plan.runtime == LocalLaunchRuntime::NodeDevServer && plan.process_profile.is_none() {
+            let root = PathBuf::from(&rec.canonical_project_root);
+            if !root.join("node_modules").is_dir() {
+                super::deps::preview_install_command(conn, id)
+                    .ok()
+                    .map(|(program, args, pm)| DependencyInstallPreview {
+                        display: format!("{program} {}", args.join(" ")),
+                        program,
+                        args,
+                        package_manager: pm,
+                        requires_confirmation: true,
+                    })
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
     Ok(LocalCreativeConfig {
         summary: store::summary_from_local(&rec),
         launch_plan: plan,
@@ -987,6 +1012,64 @@ mod tests {
     fn identity_without_pid_not_orphan() {
         let id = ProcessIdentity::default();
         assert!(!identity_matches_live(&id));
+    }
+
+    /// Batch 3 CR-301 (#22): a late exit from a superseded run must settle only
+    /// that instance — a newer active run and the source record stay untouched.
+    #[test]
+    fn stale_run_exit_does_not_stop_newer_run() {
+        let conn = mem();
+        let app = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc1",
+        )
+        .unwrap();
+        // The source record mirrors the CURRENT (run 2) running state.
+        let mut rec = sample_rec();
+        rec.process_identity_json = None;
+        store::insert_app(&conn, &rec).unwrap();
+
+        let i1 =
+            crate::creative_app::runtime_store::create_instance(&conn, &app, None, "local_process")
+                .unwrap();
+        crate::creative_app::runtime_store::mark_running(&conn, &i1, &[], None, None, None)
+            .unwrap();
+        // Restart: run 1 is settled stopped, run 2 becomes active.
+        crate::creative_app::runtime_store::mark_stopping(&conn, &i1).unwrap();
+        crate::creative_app::runtime_store::mark_stopped(&conn, &i1).unwrap();
+        let i2 =
+            crate::creative_app::runtime_store::create_instance(&conn, &app, None, "local_process")
+                .unwrap();
+        crate::creative_app::runtime_store::mark_running(
+            &conn,
+            &i2,
+            &["http://127.0.0.1:5173/".into()],
+            Some(5173),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Run 1's exit arrives late (after run 2 is active).
+        mark_process_exited(&conn, None, &i1, 3).unwrap();
+
+        let (s1, s2): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT status FROM runtime_instances WHERE id = ?1),
+                        (SELECT status FROM runtime_instances WHERE id = ?2)",
+                [&i1, &i2],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(s1, "stopped", "run 1's instance settles with its exit");
+        assert_eq!(s2, "running", "run 2 must stay untouched");
+        let src = store::get_app(&conn, "loc1").unwrap().unwrap();
+        assert_eq!(
+            src.state,
+            CreativeAppState::Running,
+            "source record must stay running (it mirrors run 2)"
+        );
     }
 
     /// P0: a failed stop must never write installed_stopped and must preserve the

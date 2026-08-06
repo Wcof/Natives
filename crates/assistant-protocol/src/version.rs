@@ -46,7 +46,7 @@ impl From<&str> for ProtocolVersion {
     fn from(s: &str) -> Self {
         let parts: Vec<&str> = s.split('.').collect();
         ProtocolVersion {
-            major: parts.get(0).and_then(|p| p.parse().ok()).unwrap_or(0),
+            major: parts.first().and_then(|p| p.parse().ok()).unwrap_or(0),
             minor: parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0),
             patch: parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(0),
         }

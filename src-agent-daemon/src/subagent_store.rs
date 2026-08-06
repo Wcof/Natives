@@ -245,6 +245,7 @@ pub fn delete_route_policy(parent_conversation_id: &str) -> Result<(), String> {
 
 /// Create a hidden child conversation under parent + subagent_session row.
 /// Returns (session_id, child_conversation_id).
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub fn create_hidden_child_session(
     parent_conversation_id: &str,
     parent_run_id: Option<&str>,
@@ -1061,7 +1062,7 @@ mod tests {
             assert_eq!(p.bindings.len(), 2);
             let first = pick_binding(&p, &[]).unwrap();
             assert_eq!(first, b1);
-            let second = pick_binding(&p, &[b1.clone()]).unwrap();
+            let second = pick_binding(&p, std::slice::from_ref(&b1)).unwrap();
             assert_eq!(second, b2);
             assert!(pick_binding(&p, &[b1, b2]).is_err());
         });
@@ -1250,5 +1251,60 @@ mod tests {
         assert_eq!(out["ok"], true);
         assert_eq!(out["parent_heartbeat"], true);
         crate::storage::set_test_db_override(None, None);
+    }
+
+    /// TASK-009 (N05/E04): a child scope binds the parent's REAL project id +
+    /// version — never the project path masquerading as an id — and a closed
+    /// session leaves no active orphan.
+    #[test]
+    fn subagent_lifecycle_binds_real_identity_and_closes_without_orphan() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "key-1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _child) = create_hidden_child_session(
+                "parent-1",
+                None,
+                None,
+                "sub",
+                "task",
+                &binding,
+                Some("ask"),
+                Some("real-project-uuid"),
+            )
+            .unwrap();
+            persist_subagent_scope(
+                &sid,
+                &SubagentScope {
+                    project_path: Some("/tmp/proj".into()),
+                    project_id: Some("real-project-uuid".into()),
+                    project_identity_version: Some(7),
+                    permission_profile: Some("ask".into()),
+                    agent_profile_id: None,
+                    max_steps: Some(30),
+                    tool_allowlist: vec![],
+                },
+            )
+            .unwrap();
+            let loaded = get_subagent_session(&sid).unwrap().expect("session");
+            assert_eq!(loaded.project_id.as_deref(), Some("real-project-uuid"));
+            assert_ne!(
+                loaded.project_id.as_deref(),
+                loaded.project_path.as_deref(),
+                "the project path must never be stored as project_id"
+            );
+            assert_eq!(loaded.project_identity_version, Some(7));
+
+            // E04: closing the session settles it — no active orphan remains.
+            close_subagent_session(&sid, "completed", None).unwrap();
+            let closed = get_subagent_session(&sid).unwrap().expect("session");
+            assert_eq!(closed.status, "completed");
+            assert!(
+                closed.closed_at.is_some(),
+                "closed session records its close"
+            );
+        });
     }
 }
