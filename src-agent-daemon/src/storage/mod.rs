@@ -172,12 +172,21 @@ impl DataStore {
         let conn =
             Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
 
+        // Test-only knob: a short busy timeout lets hermetic tests surface
+        // SQLITE_BUSY quickly (a held write lock from a second connection)
+        // instead of parking on the production 30s timeout. Absent in
+        // production, the default is unchanged.
+        let busy_timeout_ms = std::env::var("NATIVES_TEST_BUSY_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(30_000);
+
         // Enable WAL mode, foreign keys, and busy timeout
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=30000;",
-        )
+             PRAGMA busy_timeout={busy_timeout_ms};"
+        ))
         .map_err(|e| format!("Failed to set pragmas: {e}"))?;
 
         let store = DataStore {
