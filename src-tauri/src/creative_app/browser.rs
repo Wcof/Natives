@@ -3,10 +3,12 @@
 //! Uses Tauri `unstable` child webview when available. Capability isolation:
 //! child is created without remote capability grants for the main app IPC.
 //!
-//! Multi-label support (CR-401): each app instance gets its own label
-//! `"creative-app-{appId}"` so multiple instances can coexist. The navigation
-//! hook and absence of capability inheritance keep each instance isolated
-//! from the main app's Tauri permissions.
+//! Window-id labels (T07): every window instance gets a unique label
+//! `"creative-window-{windowId}"` so one app can host multiple child WebViews.
+//! The legacy `child_label(app_id)` app-level label is kept for compatibility
+//! tests only — production window lifecycle always uses the window-id label.
+//! The navigation hook and absence of capability inheritance keep each
+//! instance isolated from the main app's Tauri permissions.
 
 use super::model::BrowserBounds;
 use super::service::navigation_allowed;
@@ -15,10 +17,12 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-/// Label prefix for child WebViews. Each gets `{PREFIX}{sanitized_app_id}`.
+/// Legacy label prefix for app-scoped child WebViews.
 const CHILD_LABEL_PREFIX: &str = "creative-app-";
+/// Label prefix for window-instance child WebViews (T07). One label per window.
+pub const WINDOW_LABEL_PREFIX: &str = "creative-window-";
 
-/// Sanitize an app id for use as a WebView label.
+/// Sanitize an id for use as a WebView label.
 /// Labels must be non-empty, <= 64 chars, and contain only
 /// alphanumeric, dash, underscore, and dot characters.
 fn sanitize_label(id: &str) -> String {
@@ -28,9 +32,20 @@ fn sanitize_label(id: &str) -> String {
         .collect()
 }
 
-/// Build the WebView label for a given app id.
+/// Build the legacy app-level WebView label for a given app id.
 pub fn child_label(app_id: &str) -> String {
     format!("{}{}", CHILD_LABEL_PREFIX, sanitize_label(app_id))
+}
+
+/// Build the WebView label for a window instance id. Unique per window — two
+/// windows of the same app never share a label (T07 multi-window).
+pub fn window_label(window_id: &str) -> String {
+    format!("{}{}", WINDOW_LABEL_PREFIX, sanitize_label(window_id))
+}
+
+/// True when a label belongs to the window-instance label family.
+pub fn is_window_label(label: &str) -> bool {
+    label.starts_with(WINDOW_LABEL_PREFIX)
 }
 
 #[derive(Default, Clone)]
@@ -68,14 +83,15 @@ impl BrowserState {
 
 pub type BrowserStateHandle = Mutex<BrowserState>;
 
-/// Show or create a child webview for the given app at the given URL.
+/// Show or create a child webview for the given window label at the given URL.
 ///
-/// Multi-label (CR-401): each app gets its own label `"creative-app-{appId}"`,
-/// so multiple Embed surfaces can coexist. The navigation hook restricts
-/// subsequent navigation to loopback addresses only.
+/// Window-id labels (T07): each window owns a unique `"creative-window-{id}"`
+/// label, so one app can host multiple Embed surfaces. The navigation hook
+/// restricts subsequent navigation to loopback addresses only.
 pub fn browser_show(
     app: &AppHandle,
     state: &BrowserStateHandle,
+    label: &str,
     app_id: &str,
     url: &str,
     bounds: BrowserBounds,
@@ -90,16 +106,14 @@ pub fn browser_show(
         .parse()
         .map_err(|e| Error::InvalidInput(format!("url parse: {e}")))?;
 
-    let label = child_label(app_id);
-
     // Prefer existing child webview reuse; propagate errors instead of swallowing them.
-    if let Some(wv) = app.get_webview(&label) {
+    if let Some(wv) = app.get_webview(label) {
         wv.navigate(parsed)
             .map_err(|e| Error::Internal(format!("webview navigate: {e}")))?;
         set_bounds_webview(&wv, &bounds)?;
         wv.show()
             .map_err(|e| Error::Internal(format!("webview show: {e}")))?;
-        set_active(state, app_id, url)?;
+        set_active(state, label, app_id, url)?;
         return Ok(());
     }
 
@@ -111,7 +125,7 @@ pub fn browser_show(
     use tauri::webview::WebviewBuilder;
     use tauri::{LogicalPosition, LogicalSize};
 
-    let builder = WebviewBuilder::new(label.clone(), tauri::WebviewUrl::External(parsed))
+    let builder = WebviewBuilder::new(label.to_string(), tauri::WebviewUrl::External(parsed))
         .on_navigation(|nav_url| navigation_allowed(nav_url.as_str()));
 
     let window = main.as_ref().window();
@@ -123,14 +137,19 @@ pub fn browser_show(
         )
         .map_err(|e| Error::Internal(format!("add_child webview: {e}")))?;
 
-    set_active(state, app_id, url)?;
+    set_active(state, label, app_id, url)?;
     Ok(())
 }
 
-fn set_active(state: &BrowserStateHandle, app_id: &str, url: &str) -> Result<()> {
+/// Whether a child WebView with the given label currently exists.
+pub fn browser_exists(app: &AppHandle, label: &str) -> bool {
+    app.get_webview(label).is_some()
+}
+
+fn set_active(state: &BrowserStateHandle, label: &str, app_id: &str, url: &str) -> Result<()> {
     let mut st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
     st.set_entry(
-        app_id.to_string(),
+        label.to_string(),
         ActiveEntry {
             app_id: app_id.to_string(),
             url: url.to_string(),
@@ -151,66 +170,60 @@ fn set_bounds_webview(wv: &tauri::Webview, bounds: &BrowserBounds) -> Result<()>
     Ok(())
 }
 
-pub fn browser_set_bounds(app: &AppHandle, app_id: &str, bounds: BrowserBounds) -> Result<()> {
-    let label = child_label(app_id);
-    if let Some(wv) = app.get_webview(&label) {
+pub fn browser_set_bounds(app: &AppHandle, label: &str, bounds: BrowserBounds) -> Result<()> {
+    if let Some(wv) = app.get_webview(label) {
         set_bounds_webview(&wv, &bounds)?;
     }
     Ok(())
 }
 
-pub fn browser_hide(app: &AppHandle, app_id: &str) -> Result<()> {
-    let label = child_label(app_id);
-    if let Some(wv) = app.get_webview(&label) {
+pub fn browser_hide(app: &AppHandle, label: &str) -> Result<()> {
+    if let Some(wv) = app.get_webview(label) {
         wv.hide()
             .map_err(|e| Error::Internal(format!("webview hide failed: {e}")))?;
     }
     Ok(())
 }
 
-pub fn browser_close(app: &AppHandle, state: &BrowserStateHandle, app_id: &str) -> Result<()> {
+pub fn browser_close(app: &AppHandle, state: &BrowserStateHandle, label: &str) -> Result<()> {
     // A close failure must stay observable: do NOT clear BrowserState if the
     // WebView could not actually be closed (P0: close failure swallowed).
-    let label = child_label(app_id);
-    if let Some(wv) = app.get_webview(&label) {
+    if let Some(wv) = app.get_webview(label) {
         wv.close()
             .map_err(|e| Error::Internal(format!("webview close failed: {e}")))?;
     }
     let mut st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
-    st.remove_entry(app_id);
+    st.remove_entry(label);
     Ok(())
 }
 
-pub fn browser_reload(app: &AppHandle, app_id: &str) -> Result<()> {
-    let label = child_label(app_id);
-    if let Some(wv) = app.get_webview(&label) {
+pub fn browser_reload(app: &AppHandle, label: &str) -> Result<()> {
+    if let Some(wv) = app.get_webview(label) {
         wv.reload()
             .map_err(|e| Error::Internal(format!("webview reload failed: {e}")))?;
     }
     Ok(())
 }
 
-pub fn browser_back(app: &AppHandle, app_id: &str) -> Result<()> {
-    let label = child_label(app_id);
-    if let Some(wv) = app.get_webview(&label) {
+pub fn browser_back(app: &AppHandle, label: &str) -> Result<()> {
+    if let Some(wv) = app.get_webview(label) {
         wv.eval("window.history.back()")
             .map_err(|e| Error::Internal(format!("webview back failed: {e}")))?;
     }
     Ok(())
 }
 
-pub fn browser_forward(app: &AppHandle, app_id: &str) -> Result<()> {
-    let label = child_label(app_id);
-    if let Some(wv) = app.get_webview(&label) {
+pub fn browser_forward(app: &AppHandle, label: &str) -> Result<()> {
+    if let Some(wv) = app.get_webview(label) {
         wv.eval("window.history.forward()")
             .map_err(|e| Error::Internal(format!("webview forward failed: {e}")))?;
     }
     Ok(())
 }
 
-pub fn browser_current(state: &BrowserStateHandle, app_id: &str) -> Result<serde_json::Value> {
+pub fn browser_current(state: &BrowserStateHandle, label: &str) -> Result<serde_json::Value> {
     let st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
-    let entry = st.get_entry(app_id);
+    let entry = st.get_entry(label);
     Ok(serde_json::json!({
         "appId": entry.map(|e| e.app_id.as_str()),
         "url": entry.map(|e| e.url.as_str()),
@@ -260,6 +273,21 @@ mod tests {
         let long = "a".repeat(100);
         let label = child_label(&long);
         assert!(label.len() <= 64, "long label must be truncated: {label}");
+    }
+
+    #[test]
+    fn window_label_is_unique_per_window() {
+        // Two windows of the same app must never share a label (T07).
+        let a = window_label("11111111-1111-4111-8111-111111111111");
+        let b = window_label("22222222-2222-4222-8222-222222222222");
+        assert_ne!(a, b, "window labels must be unique per window id");
+        assert!(a.starts_with(WINDOW_LABEL_PREFIX));
+        assert!(b.starts_with(WINDOW_LABEL_PREFIX));
+        assert!(is_window_label(&a));
+
+        // Window labels are distinct from the legacy app label family.
+        assert_ne!(window_label("app-1"), child_label("app-1"));
+        assert!(!is_window_label(&child_label("app-1")));
     }
 
     // ── BrowserState multi-instance ────────────────────────────────────

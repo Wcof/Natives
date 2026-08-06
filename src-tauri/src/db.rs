@@ -1353,10 +1353,8 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration v22→v23: creative proposal inbox + executable approval records
-    // (T06). The Host persists pending agent proposals here after validating
-    // daemon facts, and records each approved executable's canonical path +
-    // Host-recomputed SHA-256 so a later content change invalidates the
-    // authorization. Incremental tables only — no DROP, no user-data rebuild.
+    // (T06) and window_instances URL/reconcile truth (T07). Incremental
+    // tables/columns only — no DROP, no user-data rebuild.
     if current_version < 23 {
         conn.execute_batch(
             "
@@ -1384,9 +1382,42 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_executable_approval_path
                 ON creative_executable_approval(canonical_path);
-
-            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23');
             ",
+        )
+        .map_err(Error::Database)?;
+        // T07: window_instances gets URL + reconcile truth.
+        //
+        // url: the content URL a window is currently showing (NULL when closed).
+        // last_error: reconcile/operation detail so the UI can show why a
+        //   window is closed (honest state — never a fabricated value, R-F2).
+        // reconcile_state: 'ok' | 'missing' | 'orphaned' — explicit outcome of
+        //   the DB↔WebView reconcile sweep on Host restart.
+        let cols = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(window_instances)")
+                .map_err(Error::Database)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(Error::Database)?;
+            rows.filter_map(|r| r.ok()).collect::<Vec<_>>()
+        };
+        if !cols.iter().any(|c| c == "url") {
+            conn.execute_batch("ALTER TABLE window_instances ADD COLUMN url TEXT;")
+                .map_err(Error::Database)?;
+        }
+        if !cols.iter().any(|c| c == "last_error") {
+            conn.execute_batch("ALTER TABLE window_instances ADD COLUMN last_error TEXT;")
+                .map_err(Error::Database)?;
+        }
+        if !cols.iter().any(|c| c == "reconcile_state") {
+            conn.execute_batch(
+                "ALTER TABLE window_instances ADD COLUMN reconcile_state TEXT NOT NULL DEFAULT 'ok';",
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23')",
+            [],
         )
         .map_err(Error::Database)?;
     }

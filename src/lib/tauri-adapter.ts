@@ -767,7 +767,7 @@ export interface NativesAPI {
     githubTokenSet: (token: string) => Promise<CreativeAppGithubTokenStatus>;
     githubTokenClear: () => Promise<CreativeAppGithubTokenStatus>;
     dockerStatus: () => Promise<CreativeAppDockerStatus>;
-    browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
+    browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) => Promise<CreativeAppWindow>;
     browserSetBounds: (appId: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
     browserBack: (appId: string) => Promise<void>;
     browserForward: (appId: string) => Promise<void>;
@@ -778,7 +778,12 @@ export interface NativesAPI {
     // CR-501: Surface / Endpoint / Window
     surfaceList: (applicationId: string) => Promise<CreativeAppSurface[]>;
     windowList: (applicationId: string) => Promise<CreativeAppWindow[]>;
-    windowOpen: (applicationId: string, surfaceId: string, label: string) => Promise<CreativeAppWindow>;
+    windowOpen: (
+      applicationId: string,
+      surfaceId: string,
+      url: string,
+      bounds: CreativeAppBrowserBounds,
+    ) => Promise<CreativeAppWindow>;
     windowClose: (windowId: string) => Promise<void>;
     windowMinimize: (windowId: string) => Promise<void>;
     windowRestore: (windowId: string) => Promise<void>;
@@ -1407,7 +1412,7 @@ const nativesAPI: NativesAPI = {
       cmd<CreativeAppGithubTokenStatus>('creative_app_github_token_clear'),
     dockerStatus: () => cmd<CreativeAppDockerStatus>('creative_app_docker_status'),
     browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) =>
-      cmd('creative_app_browser_show', { appId, url, bounds }),
+      cmd<CreativeAppWindow>('creative_app_browser_show', { appId, url, bounds }),
     browserSetBounds: (appId: string, bounds: CreativeAppBrowserBounds) =>
       cmd('creative_app_browser_set_bounds', { appId, bounds }),
     browserBack: (appId: string) => cmd('creative_app_browser_back', { appId }),
@@ -1422,8 +1427,13 @@ const nativesAPI: NativesAPI = {
       cmd<CreativeAppSurface[]>('creative_app_surface_list', { applicationId }),
     windowList: (applicationId: string) =>
       cmd<CreativeAppWindow[]>('creative_app_window_list', { applicationId }),
-    windowOpen: (applicationId: string, surfaceId: string, label: string) =>
-      cmd<CreativeAppWindow>('creative_app_window_open', { applicationId, surfaceId, label }),
+    windowOpen: (applicationId: string, surfaceId: string, url: string, bounds: CreativeAppBrowserBounds) =>
+      cmd<CreativeAppWindow>('creative_app_window_open', {
+        applicationId,
+        surfaceId,
+        url,
+        bounds,
+      }),
     windowClose: (windowId: string) =>
       cmd('creative_app_window_close', { windowId }),
     windowMinimize: (windowId: string) =>
