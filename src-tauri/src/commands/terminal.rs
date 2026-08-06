@@ -65,7 +65,7 @@ fn resolve_env_overrides(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
 
     // Determine which profile to use
     let target_id: Option<i64> = if let Some(pid) = profile_id {
@@ -291,7 +291,7 @@ pub fn builtin_tool_list(state: State<'_, AppState>) -> Result<Vec<serde_json::V
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     crate::db::list_builtin_tools(conn)
 }
 
@@ -308,7 +308,7 @@ pub fn builtin_tool_update(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     crate::db::update_builtin_tool(conn, &id, enabled, &driver)?;
     drop(pool_conn);
     crate::emit_db_state_changed(
@@ -326,7 +326,7 @@ pub fn builtin_tool_seed(id: String, driver: String, state: State<'_, AppState>)
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     crate::db::seed_builtin_tool(conn, &id, &driver)
 }
 

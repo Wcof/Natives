@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// RTK gain data — parsed from `rtk gain` text output
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,7 +59,6 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
         let trimmed = line.trim();
         if let Some(val) = trimmed.strip_prefix("Total commands:") {
             total_commands = val
-                .trim()
                 .split_whitespace()
                 .next()
                 .and_then(|s| s.replace(',', "").parse().ok())
@@ -67,7 +66,7 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
         }
         if let Some(val) = trimmed.strip_prefix("Tokens saved:") {
             // e.g. "11.1M (65.4%)"
-            let raw = val.trim().split_whitespace().next().unwrap_or("");
+            let raw = val.split_whitespace().next().unwrap_or("");
             total_saved = parse_token_amount(raw);
         }
     }
@@ -106,10 +105,8 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
                         if count_idx.is_none() {
                             count_idx = Some(i);
                         }
-                    } else if part.ends_with('K') || part.ends_with('M') {
-                        if saved_idx.is_none() {
-                            saved_idx = Some(i);
-                        }
+                    } else if (part.ends_with('K') || part.ends_with('M')) && saved_idx.is_none() {
+                        saved_idx = Some(i);
                     }
                 }
 
@@ -149,14 +146,14 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
 /// Parse a token amount like "11.1M", "7.4M", "176.4K", "1234"
 fn parse_token_amount(s: &str) -> u64 {
     let s = s.trim();
-    if s.ends_with('M') {
-        let num: f64 = s[..s.len() - 1].parse().unwrap_or(0.0);
+    if let Some(rest) = s.strip_suffix('M') {
+        let num: f64 = rest.parse().unwrap_or(0.0);
         (num * 1_000_000.0) as u64
-    } else if s.ends_with('K') {
-        let num: f64 = s[..s.len() - 1].parse().unwrap_or(0.0);
+    } else if let Some(rest) = s.strip_suffix('K') {
+        let num: f64 = rest.parse().unwrap_or(0.0);
         (num * 1_000.0) as u64
-    } else if s.ends_with('B') {
-        let num: f64 = s[..s.len() - 1].parse().unwrap_or(0.0);
+    } else if let Some(rest) = s.strip_suffix('B') {
+        let num: f64 = rest.parse().unwrap_or(0.0);
         (num * 1_000_000_000.0) as u64
     } else {
         s.replace(',', "").parse().unwrap_or(0)
@@ -239,7 +236,7 @@ fn find_project_root() -> PathBuf {
 }
 
 /// Try to generate CodeGraph data using the `codegraph explore` CLI.
-fn generate_codegraph_via_cli(root: &PathBuf) -> Option<Vec<CodeGraphNode>> {
+fn generate_codegraph_via_cli(root: &Path) -> Option<Vec<CodeGraphNode>> {
     let output = std::process::Command::new("codegraph")
         .args([
             "explore",
@@ -265,7 +262,8 @@ fn generate_codegraph_via_cli(root: &PathBuf) -> Option<Vec<CodeGraphNode>> {
 }
 
 /// Recursively read a .codegraph/ directory into CodeGraphNode tree.
-fn read_codegraph_dir_tree(dir: &PathBuf, root: &PathBuf) -> Vec<CodeGraphNode> {
+#[allow(clippy::only_used_in_recursion)] // root 仅用于向下递归传递
+fn read_codegraph_dir_tree(dir: &Path, root: &Path) -> Vec<CodeGraphNode> {
     let mut children = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {

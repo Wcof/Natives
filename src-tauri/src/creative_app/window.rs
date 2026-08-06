@@ -103,7 +103,6 @@ pub fn cleanup_deleted_app_window(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
 
     #[test]
     fn child_label_generates_correct_window_label() {

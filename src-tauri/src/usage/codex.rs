@@ -254,7 +254,7 @@ pub fn scan_codex_logs(start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> CodexS
     // Per-session cumulative tracking
     let mut prev_total: HashMap<String, CodexTokenUsage> = HashMap::new();
 
-    for (_sid, path) in &session_files {
+    for path in session_files.values() {
         if let Ok(content) = fs::read_to_string(path) {
             let mut context = CodexFileContext::default();
             let mut lines: Vec<(usize, String)> = content
@@ -420,6 +420,7 @@ fn normalize_codex_input(input: i64, cache_read: i64) -> (i64, i64) {
 
 fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
     // Group by (date, model, project) to aggregate daily tokens
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let mut groups: HashMap<(String, Option<String>, Option<String>), (i64, i64, i64, i64)> =
         HashMap::new();
 
@@ -469,6 +470,7 @@ fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
     records
 }
 
+#[allow(clippy::type_complexity)] // pre-existing type shape
 fn build_codex_activity(events: &[ParsedCodexEvent]) -> Vec<UsageActivityBucket> {
     // (hour, source, model, project) -> (token sum, timestamps for gap duration)
     let mut groups: HashMap<(i64, String, Option<String>, Option<String>), (i64, Vec<i64>)> =
@@ -611,14 +613,14 @@ fn ts_to_date_str(ts_ms: i64) -> String {
 
 pub fn codex_source_status(
     state: &UsageSourceState,
-    breadcrumbs: &Vec<UsageBreadcrumb>,
+    breadcrumbs: &[UsageBreadcrumb],
 ) -> UsageSourceStatus {
     UsageSourceStatus {
         id: "codex".into(),
         label: "Codex".into(),
         kind: UsageSourceKind::External,
         state: state.clone(),
-        breadcrumbs: breadcrumbs.clone(),
+        breadcrumbs: breadcrumbs.to_vec(),
         capabilities: SourceCapabilities {
             total_tokens: true,
             token_breakdown: true,

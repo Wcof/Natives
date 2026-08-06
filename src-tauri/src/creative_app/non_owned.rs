@@ -57,9 +57,9 @@ pub fn validate_remote_url(url: &str, approved_origins: &[String]) -> Result<()>
             "remote app has no approved origins; navigation blocked".into(),
         ));
     }
-    let host_matches = approved_origins.iter().any(|origin| {
-        origin == host || origin.strip_prefix("https://").map_or(false, |h| h == host)
-    });
+    let host_matches = approved_origins
+        .iter()
+        .any(|origin| origin == host || origin.strip_prefix("https://").is_some_and(|h| h == host));
     if !host_matches {
         return Err(Error::InvalidInput(format!(
             "host {host} is not in the approved origin set"

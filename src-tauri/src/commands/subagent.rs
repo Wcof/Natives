@@ -141,7 +141,7 @@ pub fn subagent_list(state: State<'_, AppState>) -> Result<Vec<Subagent>> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let mut stmt = conn
         .prepare(
@@ -181,7 +181,7 @@ pub fn subagent_get(state: State<'_, AppState>, id: String) -> Result<Option<Sub
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
     let mut stmt = conn
         .prepare(
             "SELECT id, name, role, instructions, tools, provider_id, provider_key_id, model_id,
@@ -254,7 +254,7 @@ pub fn subagent_list_runs(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(&conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let mut stmt = conn
         .prepare(

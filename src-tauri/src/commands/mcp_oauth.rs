@@ -260,7 +260,7 @@ fn wait_for_callback(
             continue;
         }
 
-        let query = path.splitn(2, '?').nth(1).unwrap_or("");
+        let query = path.split_once('?').map(|x| x.1).unwrap_or("");
         let params = parse_query(query);
         let get = |key: &str| {
             params

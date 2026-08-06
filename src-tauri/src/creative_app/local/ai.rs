@@ -469,9 +469,11 @@ mod tests {
 
     #[test]
     fn mode_normalization() {
-        let mut st = LocalAiSettings::default();
-        st.mode = "always".into();
-        st.timeout_ms = 1;
+        let mut st = LocalAiSettings {
+            mode: "always".into(),
+            timeout_ms: 1,
+            ..LocalAiSettings::default()
+        };
         normalize_settings(&mut st).unwrap();
         assert_eq!(st.timeout_ms, 5_000);
         st.mode = "nope".into();

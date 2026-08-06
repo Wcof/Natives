@@ -666,10 +666,8 @@ impl DataStore {
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .map_err(|e| crate::Error::Internal(format!("Failed to read stale runs: {e}")))?;
             let mut result = Vec::new();
-            for row in rows {
-                if let Ok(row) = row {
-                    result.push(row);
-                }
+            for row in rows.flatten() {
+                result.push(row);
             }
             result
         };
@@ -687,10 +685,8 @@ impl DataStore {
                         crate::Error::Internal(format!("Failed to read stale run events: {e}"))
                     })?;
                 let mut result = Vec::new();
-                for row in rows {
-                    if let Ok(row) = row {
-                        result.push(row);
-                    }
+                for row in rows.flatten() {
+                    result.push(row);
                 }
                 result
             };

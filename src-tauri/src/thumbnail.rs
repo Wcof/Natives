@@ -80,7 +80,10 @@ pub fn generate_thumbnail(file_path: &str, width: u32) -> Result<Option<(Vec<u8>
 
     // ponytail: scan the cache once per 64 writes; per-write eviction made a large
     // directory pay an O(n) filesystem walk for every visible image.
-    if EVICTION_COUNTER.fetch_add(1, Ordering::Relaxed) % 64 == 0 {
+    if EVICTION_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(64)
+    {
         evict_cache_if_needed(&cache_dir);
     }
 

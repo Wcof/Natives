@@ -57,7 +57,7 @@ pub fn get_disk_usage(dir_path: &str) -> Result<Vec<DiskUsageItem>> {
     }
 
     // Sort descending by size
-    items.sort_by(|a, b| b.size.cmp(&a.size));
+    items.sort_by_key(|i| std::cmp::Reverse(i.size));
 
     Ok(items)
 }

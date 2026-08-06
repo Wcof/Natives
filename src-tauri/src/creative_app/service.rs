@@ -103,6 +103,12 @@ impl MutationLockRegistry {
     }
 }
 
+impl Default for MutationLockRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Tauri-managed shared handle.
 pub type MutationLock = Arc<MutationLockRegistry>;
 

@@ -12,7 +12,7 @@ pub fn get_theme(state: State<'_, AppState>) -> Result<String> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     Ok(db::get_setting(conn, THEME_KEY)?.unwrap_or_else(|| DEFAULT_THEME.to_string()))
 }
 
@@ -26,7 +26,7 @@ pub fn set_theme(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::set_setting(conn, THEME_KEY, &theme)?;
     emit_db_state_changed(&app_handle, "theme", serde_json::json!({ "theme": theme }));
 
@@ -43,7 +43,7 @@ pub fn builtin_tool_ghostty_sync_theme(state: State<'_, AppState>) -> Result<Str
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let theme = db::get_setting(conn, THEME_KEY)?.unwrap_or_else(|| DEFAULT_THEME.to_string());
     let path = crate::ghostty_config::write_config(&theme)?;
     Ok(path.to_string_lossy().to_string())

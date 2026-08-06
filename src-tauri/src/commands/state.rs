@@ -17,7 +17,7 @@ pub fn state_save(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let key = format!("_state:{module_id}");
     let json_val = serde_json::Value::String(state_value);
     db::db_set_module_data(conn, SYSTEM_MODULE_ID, &key, &json_val)
@@ -30,7 +30,7 @@ pub fn state_load(module_id: String, state: State<'_, AppState>) -> Result<Optio
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let key = format!("_state:{module_id}");
     match db::db_get_module_data(conn, SYSTEM_MODULE_ID, &key)? {
         Some(serde_json::Value::String(s)) => Ok(Some(s)),
@@ -46,7 +46,7 @@ pub fn state_clear(module_id: String, state: State<'_, AppState>) -> Result<()> 
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let key = format!("_state:{module_id}");
     db::db_delete_module_data(conn, SYSTEM_MODULE_ID, &key)
 }

@@ -205,10 +205,10 @@ pub fn slice_response_with_custom(
         })
         .filter(|r| {
             // Apply project filter
-            project_path.map_or(true, |proj| {
+            project_path.is_none_or(|proj| {
                 r.project_id
                     .as_ref()
-                    .map_or(false, |pid| is_project_match(pid, proj))
+                    .is_some_and(|pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -221,10 +221,10 @@ pub fn slice_response_with_custom(
         .iter()
         .filter(|a| a.hour_start_ms >= start_ms && a.hour_start_ms < end_ms)
         .filter(|a| {
-            project_path.map_or(true, |proj| {
+            project_path.is_none_or(|proj| {
                 a.project_id
                     .as_ref()
-                    .map_or(false, |pid| is_project_match(pid, proj))
+                    .is_some_and(|pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -237,10 +237,10 @@ pub fn slice_response_with_custom(
         .iter()
         .filter(|s| s.started_at_ms >= start_ms && s.started_at_ms < end_ms)
         .filter(|s| {
-            project_path.map_or(true, |proj| {
+            project_path.is_none_or(|proj| {
                 s.project_id
                     .as_ref()
-                    .map_or(false, |pid| is_project_match(pid, proj))
+                    .is_some_and(|pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -264,10 +264,10 @@ pub fn slice_response_with_custom(
             .daily
             .iter()
             .filter(|r| {
-                project_path.map_or(true, |proj| {
+                project_path.is_none_or(|proj| {
                     r.project_id
                         .as_ref()
-                        .map_or(false, |pid| is_project_match(pid, proj))
+                        .is_some_and(|pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -277,10 +277,10 @@ pub fn slice_response_with_custom(
             .activity
             .iter()
             .filter(|a| {
-                project_path.map_or(true, |proj| {
+                project_path.is_none_or(|proj| {
                     a.project_id
                         .as_ref()
-                        .map_or(false, |pid| is_project_match(pid, proj))
+                        .is_some_and(|pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -290,10 +290,10 @@ pub fn slice_response_with_custom(
             .sessions
             .iter()
             .filter(|s| {
-                project_path.map_or(true, |proj| {
+                project_path.is_none_or(|proj| {
                     s.project_id
                         .as_ref()
-                        .map_or(false, |pid| is_project_match(pid, proj))
+                        .is_some_and(|pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -396,10 +396,10 @@ fn build_comparison(
             .daily
             .iter()
             .filter(|r| {
-                project_path.map_or(true, |proj| {
+                project_path.is_none_or(|proj| {
                     r.project_id
                         .as_ref()
-                        .map_or(false, |pid| is_project_match(pid, proj))
+                        .is_some_and(|pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -409,10 +409,10 @@ fn build_comparison(
             .activity
             .iter()
             .filter(|a| {
-                project_path.map_or(true, |proj| {
+                project_path.is_none_or(|proj| {
                     a.project_id
                         .as_ref()
-                        .map_or(false, |pid| is_project_match(pid, proj))
+                        .is_some_and(|pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -422,10 +422,10 @@ fn build_comparison(
             .sessions
             .iter()
             .filter(|s| {
-                project_path.map_or(true, |proj| {
+                project_path.is_none_or(|proj| {
                     s.project_id
                         .as_ref()
-                        .map_or(false, |pid| is_project_match(pid, proj))
+                        .is_some_and(|pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -451,10 +451,10 @@ fn build_comparison(
             date_ms >= comp_start_ms && date_ms < comp_end_ms
         })
         .filter(|r| {
-            project_path.map_or(true, |proj| {
+            project_path.is_none_or(|proj| {
                 r.project_id
                     .as_ref()
-                    .map_or(false, |pid| is_project_match(pid, proj))
+                    .is_some_and(|pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -465,10 +465,10 @@ fn build_comparison(
         .iter()
         .filter(|a| a.hour_start_ms >= comp_start_ms && a.hour_start_ms < comp_end_ms)
         .filter(|a| {
-            project_path.map_or(true, |proj| {
+            project_path.is_none_or(|proj| {
                 a.project_id
                     .as_ref()
-                    .map_or(false, |pid| is_project_match(pid, proj))
+                    .is_some_and(|pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -479,10 +479,10 @@ fn build_comparison(
         .iter()
         .filter(|s| s.started_at_ms >= comp_start_ms && s.started_at_ms < comp_end_ms)
         .filter(|s| {
-            project_path.map_or(true, |proj| {
+            project_path.is_none_or(|proj| {
                 s.project_id
                     .as_ref()
-                    .map_or(false, |pid| is_project_match(pid, proj))
+                    .is_some_and(|pid| is_project_match(pid, proj))
             })
         })
         .cloned()

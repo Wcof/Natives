@@ -113,12 +113,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // 常量能力矩阵回归检查
     fn capabilities_are_driver_specific() {
-        assert_eq!(
-            DriverCapabilities::LOCAL_PROCESS.supports_verified_stop,
-            true
-        );
-        assert_eq!(DriverCapabilities::HOST_HTTP.supports_reconcile, false);
-        assert_eq!(DriverCapabilities::DOCKER.supports_reconcile, true);
+        assert!(DriverCapabilities::LOCAL_PROCESS.supports_verified_stop);
+        assert!(!DriverCapabilities::HOST_HTTP.supports_reconcile);
+        assert!(DriverCapabilities::DOCKER.supports_reconcile);
     }
 }

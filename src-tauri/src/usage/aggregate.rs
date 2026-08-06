@@ -15,7 +15,7 @@ use crate::usage::{
     opencode::{opencode_db_path, opencode_source_status, scan_opencode_db},
     RtkSummary, UsageActivityBucket, UsageDailyRecord, UsageDashboardRange, UsageDashboardRequest,
     UsageDashboardResponse, UsagePeriodData, UsageQuality, UsageSessionRecord, UsageSourceState,
-    UsageSourceStatus, UsageWarning, UsageWarningCode,
+    UsageWarning, UsageWarningCode,
 };
 use chrono::{TimeZone, Utc};
 use chrono_tz::Tz;
@@ -289,22 +289,12 @@ pub async fn build_dashboard_response(req: &UsageDashboardRequest) -> UsageDashb
     };
 
     // 6. Build source statuses (only show sources actually detected/configured)
-    let mut sources: Vec<UsageSourceStatus> = Vec::new();
-
-    // Add Claude/Codex/Natives always (since they are core builtins)
-    sources.push(claude_source_status(
-        &claude_native.state,
-        &claude_native.breadcrumbs,
-    ));
-    sources.push(codex_source_status(
-        &codex_native.state,
-        &codex_native.breadcrumbs,
-    ));
-    sources.push(atomcode_source_status(
-        &atomcode_native.state,
-        &atomcode_native.breadcrumbs,
-    ));
-    sources.push(natives_source_status(&natives_native.state));
+    let mut sources = vec![
+        claude_source_status(&claude_native.state, &claude_native.breadcrumbs),
+        codex_source_status(&codex_native.state, &codex_native.breadcrumbs),
+        atomcode_source_status(&atomcode_native.state, &atomcode_native.breadcrumbs),
+        natives_source_status(&natives_native.state),
+    ];
     if let Some(result) = &opencode_native {
         sources.push(opencode_source_status(result));
     }
@@ -441,7 +431,7 @@ fn reconcile_source(
                         },
                     });
                     // Push unmodified native records
-                    reconciled_records.extend(natives.drain(..));
+                    reconciled_records.append(natives);
                 } else {
                     // Match - allocate cost
                     if let Some(total_cost) = cc.cost {
@@ -491,12 +481,12 @@ fn reconcile_source(
                             }
                         }
                     }
-                    reconciled_records.extend(natives.drain(..));
+                    reconciled_records.append(natives);
                 }
             }
             (Some(natives), None) => {
                 // ccusage has no data, just push native records
-                reconciled_records.extend(natives.drain(..));
+                reconciled_records.append(natives);
             }
             (None, Some(cc)) => {
                 // Native scanner is empty but ccusage has daily record - use ccusage as fallback

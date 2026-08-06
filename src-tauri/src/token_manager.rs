@@ -83,7 +83,7 @@ impl TokenManager {
 
         let mut outer = Sha256::new();
         outer.update(&opad);
-        outer.update(&inner_hash);
+        outer.update(inner_hash);
         hex::encode(outer.finalize())
     }
 

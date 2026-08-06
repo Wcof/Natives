@@ -55,7 +55,7 @@ fn test_run_status_serialization() {
     ];
 
     for (status, expected) in cases {
-        let json = serde_json::to_value(&status).unwrap();
+        let json = serde_json::to_value(status).unwrap();
         assert_eq!(
             json, expected,
             "RunStatus::{:?} should serialize to '{}'",
@@ -265,7 +265,7 @@ fn test_provider_type_serialization() {
     ];
 
     for (pt, expected) in cases {
-        let json = serde_json::to_value(&pt).unwrap();
+        let json = serde_json::to_value(pt).unwrap();
         assert_eq!(
             json, expected,
             "ProviderType::{:?} should serialize to '{}'",

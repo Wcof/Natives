@@ -24,7 +24,7 @@ pub fn module_scan(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     module_manager::sync_modules_to_db(conn, &dir)?;
     emit_db_state_changed(
         &app_handle,
@@ -52,7 +52,7 @@ pub fn module_install(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let module_id = module_manager::install_module(conn, &modules_dir(), &path_or_zip)?;
     // Register the unified creative identity for the newly installed workshop
     // module. Catalog reads never fabricate identity (#01), so install is the
@@ -73,7 +73,7 @@ pub fn module_install(
 #[tauri::command]
 pub fn module_read_manifest(source: String) -> Result<JsonValue> {
     let manifest = module_manager::read_manifest_from_source(&modules_dir(), &source)
-        .map_err(|e| Error::InvalidInput(e))?;
+        .map_err(Error::InvalidInput)?;
     serde_json::to_value(manifest).map_err(|e| Error::Internal(e.to_string()))
 }
 
@@ -87,7 +87,7 @@ pub fn module_grant_permission(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     permission_center::grant_permission(conn, &module_id, &permission, None)
 }
 
@@ -101,7 +101,7 @@ pub fn module_revoke_permission(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     permission_center::revoke_permission(conn, &module_id, &permission, None)
 }
 
@@ -114,7 +114,7 @@ pub fn module_list_permissions(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let records = permission_center::list_permissions(conn, &module_id)?;
     serde_json::to_value(records)
         .map(|v| {
@@ -137,7 +137,7 @@ pub fn module_get_audit_log(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let entries =
         permission_center::get_audit_log(conn, module_id.as_deref(), limit.unwrap_or(50))?;
     serde_json::to_value(entries)
@@ -157,7 +157,7 @@ pub fn module_approve_all_permissions(module_id: String, state: State<'_, AppSta
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     permission_center::approve_all_permissions(conn, &module_id, None)
 }
 
@@ -171,7 +171,7 @@ pub fn module_uninstall(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     module_manager::uninstall_module(conn, &modules_dir(), &module_id)?;
     emit_db_state_changed(
         &app_handle,
@@ -187,7 +187,7 @@ pub fn module_list(state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let modules = module_manager::list_modules(conn)?;
     serde_json::to_value(modules)
         .map(|v| {
@@ -210,7 +210,7 @@ pub fn module_enable(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     module_manager::enable_module(conn, &module_id)?;
     emit_db_state_changed(
         &app_handle,
@@ -230,7 +230,7 @@ pub fn module_disable(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     module_manager::disable_module(conn, &module_id)?;
     emit_db_state_changed(
         &app_handle,
@@ -251,7 +251,7 @@ pub fn module_update(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let mdir = modules_dir();
     if let Some(src) = source {
         // Full update: read new manifest → replace files → re-sync permissions
@@ -290,7 +290,7 @@ pub fn write_generated_module(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     let outcome = module_manager::write_generated_module(
         conn,
         &modules_dir(),
@@ -343,6 +343,6 @@ mod tests {
     fn test_module_dir_resolves_without_crash() {
         // Verify the modules directory helper returns a path
         let path = modules_dir();
-        assert!(path.to_string_lossy().len() > 0);
+        assert!(!path.to_string_lossy().is_empty());
     }
 }

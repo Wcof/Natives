@@ -88,7 +88,10 @@ pub fn convert_image_preview(file_path: &str) -> Result<ConvertImageResult> {
     std::fs::rename(&tmp_path, &cache_path).map_err(Error::Io)?;
 
     // 周期性裁剪（参考 thumbnail.rs：避免每次写入都付 O(n) 目录扫描）
-    if EVICTION_COUNTER.fetch_add(1, Ordering::Relaxed) % EVICTION_INTERVAL == 0 {
+    if EVICTION_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(EVICTION_INTERVAL)
+    {
         evict_cache_if_needed(&cache_dir);
     }
 

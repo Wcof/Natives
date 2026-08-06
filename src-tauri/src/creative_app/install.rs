@@ -10,7 +10,7 @@ use super::store;
 use crate::{emit_db_state_changed, Error, Result};
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
@@ -68,13 +68,10 @@ pub fn inspect(conn: &Connection, req: &InspectGithubRequest) -> Result<InspectG
     } else {
         let list = github::list_releases(&repo.owner, &repo.repo, token_ref)?;
         let tags = github::manual_release_tags(&list);
-        let rel = list
-            .into_iter()
-            .find(|r| !r.draft && !r.prerelease)
-            .or_else(|| {
-                // allow first non-draft if only prereleases
-                None
-            });
+        let rel = list.into_iter().find(|r| !r.draft && !r.prerelease).or({
+            // allow first non-draft if only prereleases
+            None
+        });
         let rel = rel.ok_or_else(|| Error::NotFound("no installable release found".into()))?;
         (rel, tags)
     };
@@ -416,11 +413,12 @@ pub async fn install_github(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // pre-existing parameter list
 async fn install_compose(
     app: &AppHandle,
     app_id: &str,
-    release_dir: &PathBuf,
-    runtime_dir: &PathBuf,
+    release_dir: &Path,
+    runtime_dir: &Path,
     candidate: &InstallCandidate,
     service: &str,
     host_port: u16,
@@ -490,6 +488,7 @@ async fn install_compose(
     })
 }
 
+#[allow(clippy::too_many_arguments)] // pre-existing parameter list
 async fn install_run(
     app: &AppHandle,
     app_id: &str,
@@ -535,10 +534,7 @@ async fn install_run(
         .as_ref()
         .map(|h| format!("http://127.0.0.1:{host_port}{h}"))
         .unwrap_or_else(|| format!("http://127.0.0.1:{host_port}{open_path}"));
-    if let Err(e) = docker::wait_ready(&health, Duration::from_secs(60)).await {
-        // leave container for logs; surface start_failed
-        return Err(e);
-    }
+    docker::wait_ready(&health, Duration::from_secs(60)).await?;
     Ok(RuntimeConfig::DockerRun {
         container_name: name,
         image: image.to_string(),
@@ -550,7 +546,7 @@ async fn install_run(
     })
 }
 
-fn find_compose_in_dir(dir: &PathBuf) -> Option<PathBuf> {
+fn find_compose_in_dir(dir: &Path) -> Option<PathBuf> {
     for name in [
         "docker-compose.yml",
         "docker-compose.yaml",
@@ -897,20 +893,9 @@ pub async fn reconcile_all(conn: &Connection, app: Option<&AppHandle>) -> Result
             }
         };
 
-        let exists = match &cfg {
-            RuntimeConfig::DockerRun { container_name, .. } => {
-                docker::docker_exists(container_name).await.unwrap_or(false)
-            }
-            RuntimeConfig::DockerCompose { .. } => true,
-        };
-
         let target = if rec.state.is_transient() {
             if running {
                 CreativeAppState::Running
-            } else if matches!(rec.state, CreativeAppState::Deleting) {
-                state_machine::converge_orphan(rec.state)
-            } else if exists {
-                state_machine::converge_orphan(rec.state)
             } else {
                 state_machine::converge_orphan(rec.state)
             }
@@ -925,13 +910,11 @@ pub async fn reconcile_all(conn: &Connection, app: Option<&AppHandle>) -> Result
             rec.state
         };
 
-        if target != rec.state {
-            if state_machine::transition(rec.state, target).is_ok() {
-                store::set_state(conn, &rec.id, target, rec.last_error.as_deref(), &ts)?;
-                n += 1;
-                if let Some(a) = app {
-                    broadcast(a, "reconcile", &rec.id);
-                }
+        if target != rec.state && state_machine::transition(rec.state, target).is_ok() {
+            store::set_state(conn, &rec.id, target, rec.last_error.as_deref(), &ts)?;
+            n += 1;
+            if let Some(a) = app {
+                broadcast(a, "reconcile", &rec.id);
             }
         }
     }

@@ -137,7 +137,7 @@ pub async fn compose_up(
         "--no-build",
         "--remove-orphans",
     ];
-    let env_slice: Vec<(&str, &str)> = env_refs.drain(..).collect();
+    let env_slice: Vec<(&str, &str)> = std::mem::take(&mut env_refs);
     let (code, _, stderr) = run_capture("docker", &args, &env_slice).await?;
     if code != 0 {
         return Err(fail_cmd("docker", &args, code, &stderr));
@@ -185,7 +185,7 @@ pub async fn compose_up_override(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let env_slice: Vec<(&str, &str)> = env_refs.drain(..).collect();
+    let env_slice: Vec<(&str, &str)> = std::mem::take(&mut env_refs);
     let (code, _, stderr) = run_capture("docker", &args, &env_slice).await?;
     if code != 0 {
         return Err(fail_cmd("docker", &args, code, &stderr));
@@ -281,7 +281,7 @@ pub async fn compose_host_port(project: &str, compose_file: &Path) -> Result<Opt
 
 /// Verify a Compose project has no running containers (post-stop check).
 pub async fn compose_has_running(project: &str, compose_file: &Path) -> Result<bool> {
-    Ok(compose_ps_running(project, compose_file).await?)
+    compose_ps_running(project, compose_file).await
 }
 
 // ── Docker Run ─────────────────────────────────────────────────

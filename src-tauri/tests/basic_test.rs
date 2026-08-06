@@ -1,5 +1,4 @@
 use natives_lib::Error;
-use serde_json;
 
 // ── Error type tests ──
 

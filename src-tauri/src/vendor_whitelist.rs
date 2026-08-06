@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 /// Vendor whitelist management for CSP enforcement.
 /// Controls which pre-vendored libraries are available at `tauri://assets/vendor/`.
-
 const VENDOR_DB_KEY: &str = "vendor:whitelist";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

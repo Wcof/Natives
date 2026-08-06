@@ -382,7 +382,7 @@ mod tests {
         project_layer.timeout_ms = Some(2_000);
 
         let resolved = resolve(
-            &[hook.clone()],
+            std::slice::from_ref(&hook),
             &[
                 (ProfileLayer::Global, doc(vec![global])),
                 (ProfileLayer::Project, doc(vec![project_layer])),
@@ -422,7 +422,7 @@ mod tests {
             o
         };
         let resolved = resolve(
-            &[hook.clone()],
+            std::slice::from_ref(&hook),
             &[
                 (ProfileLayer::Global, doc(vec![over(1)])),
                 (ProfileLayer::Project, doc(vec![over(2)])),
@@ -450,7 +450,7 @@ mod tests {
         overlay.enabled = Some(false);
         overlay.timeout_ms = Some(1);
         let resolved = resolve(
-            &[hook.clone()],
+            std::slice::from_ref(&hook),
             &[(ProfileLayer::Global, doc(vec![overlay]))],
         );
 
@@ -511,8 +511,10 @@ mod tests {
             builtin("allow-all", HookEvent::PostToolUse, 0),
             project(".claude/b.json", HookEvent::PostToolUse, 0, 0, 1),
         ];
-        let mut document = HarnessBlueprint::default();
-        document.hook_semantics_version = HookSemanticsVersion::SequentialV2;
+        let document = HarnessBlueprint {
+            hook_semantics_version: HookSemanticsVersion::SequentialV2,
+            ..HarnessBlueprint::default()
+        };
         let resolved = resolve(&discovered, &[(ProfileLayer::Global, document)]);
         assert_eq!(
             resolved
@@ -530,8 +532,10 @@ mod tests {
 
     #[test]
     fn the_strongest_layer_decides_the_semantics_version() {
-        let mut session = HarnessBlueprint::default();
-        session.hook_semantics_version = HookSemanticsVersion::SequentialV2;
+        let session = HarnessBlueprint {
+            hook_semantics_version: HookSemanticsVersion::SequentialV2,
+            ..HarnessBlueprint::default()
+        };
         let resolved = resolve(
             &[],
             &[

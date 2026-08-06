@@ -12,7 +12,7 @@ pub fn get_locale(state: State<'_, AppState>) -> Result<String> {
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     Ok(db::get_setting(conn, LOCALE_KEY)?.unwrap_or_else(|| DEFAULT_LOCALE.to_string()))
 }
 
@@ -26,7 +26,7 @@ pub fn set_locale(
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let conn: &rusqlite::Connection = &pool_conn;
     db::set_setting(conn, LOCALE_KEY, &locale)?;
     emit_db_state_changed(
         &app_handle,

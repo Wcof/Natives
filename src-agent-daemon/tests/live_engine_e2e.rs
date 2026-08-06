@@ -10,6 +10,10 @@
 //! cargo test -p natives-agent-daemon --test live_engine_e2e -- --nocapture --ignored
 //! ```
 
+// 集成测试显式调用 legacy fixture 兼容的 profile setter（no-op 验证路径），
+// 与 production.rs 内部测试一致，允许使用 deprecated 方法。
+#![allow(deprecated)]
+
 use agent_core::{AgentEngine, EngineRunConfig, EngineToolRuntime};
 use natives_agent_daemon::production::{FixtureMode, FixtureProvider, RealProvider};
 use natives_agent_daemon::{PermissionGatedTools, ProductionRuntime};
@@ -48,7 +52,7 @@ async fn live_engine_text_turn() {
             if let Ok(cwd) = std::env::current_dir() {
                 g.set_project_root(cwd.to_string_lossy().to_string());
             }
-            g.register_builtins();
+            g.register_builtins().expect("register builtins");
             Arc::new(g)
         },
         permissions: rt.permissions.clone(),
@@ -145,7 +149,7 @@ async fn live_engine_tool_loop() {
             if let Ok(cwd) = std::env::current_dir() {
                 g.set_project_root(cwd.to_string_lossy().to_string());
             }
-            g.register_builtins();
+            g.register_builtins().expect("register builtins");
             Arc::new(g)
         },
         permissions: rt.permissions.clone(),
@@ -262,7 +266,7 @@ async fn live_subagent_task_completes() {
             if let Ok(cwd) = std::env::current_dir() {
                 g.set_project_root(cwd.to_string_lossy().to_string());
             }
-            g.register_builtins();
+            g.register_builtins().expect("register builtins");
             Arc::new(g)
         },
         permissions: rt.permissions.clone(),
@@ -445,7 +449,7 @@ async fn live_engine_cancel_stream() {
                 if let Ok(cwd) = std::env::current_dir() {
                     g.set_project_root(cwd.to_string_lossy().to_string());
                 }
-                g.register_builtins();
+                g.register_builtins().expect("register builtins");
                 Arc::new(g)
             },
             permissions: rt_for_task.permissions.clone(),
@@ -558,7 +562,7 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
             if let Ok(cwd) = std::env::current_dir() {
                 g.set_project_root(cwd.to_string_lossy().to_string());
             }
-            g.register_builtins();
+            g.register_builtins().expect("register builtins");
             Arc::new(g)
         },
         permissions: rt.permissions.clone(),
@@ -698,7 +702,7 @@ async fn dual_provider_engine_fixture_subagent() {
     let tools = PermissionGatedTools {
         gateway: {
             let mut g = capability_gateway::CapabilityGateway::new();
-            g.register_builtins();
+            g.register_builtins().expect("register builtins");
             g.set_project_root(project_root.to_string_lossy().into_owned());
             Arc::new(g)
         },
@@ -814,7 +818,7 @@ async fn fixture_engine_still_works_without_live() {
     let tools = PermissionGatedTools {
         gateway: {
             let mut g = capability_gateway::CapabilityGateway::new();
-            g.register_builtins();
+            g.register_builtins().expect("register builtins");
             Arc::new(g)
         },
         permissions: rt.permissions.clone(),

@@ -17,7 +17,6 @@ use tauri::State;
 use crate::AppState;
 
 /// ── New IPC Contract Types ──
-
 /// Preset for the requested time range.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,7 +262,7 @@ pub async fn usage_sync(
     };
 
     // ── 4. Persist to SQLite ──
-    snapshot::write_snapshot(&snapshot).map_err(|e| Error::from(e))?;
+    snapshot::write_snapshot(&snapshot).map_err(Error::from)?;
 
     // ── 5. Update memory cache ──
     state.usage_cache.set_snapshot(tz_str, snapshot.clone());

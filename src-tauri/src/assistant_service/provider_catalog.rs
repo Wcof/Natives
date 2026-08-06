@@ -32,6 +32,7 @@ pub(crate) async fn handle_provider_list(
         Err(e) => return error_response("DB_ERROR", &e.to_string()),
     };
 
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let provider_rows: Vec<(
         String,
         String,
@@ -147,6 +148,7 @@ pub(crate) async fn handle_provider_list(
 pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>, String> {
     let natives = crate::db::get_main_conn().map_err(|e| e.to_string())?;
 
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let mut pstmt = natives
         .prepare(
             "SELECT id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at
@@ -154,6 +156,7 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
         )
         .map_err(|e| e.to_string())?;
 
+    #[allow(clippy::type_complexity)] // pre-existing type shape
     let provider_rows: Vec<(
         String,
         String,
@@ -239,6 +242,7 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
     ))
 }
 
+#[allow(clippy::type_complexity)] // pre-existing type shape
 pub(crate) fn assemble_natives_providers(
     provider_rows: Vec<(
         String,

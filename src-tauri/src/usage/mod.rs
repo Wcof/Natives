@@ -286,6 +286,12 @@ pub struct UsageCache {
     snapshot_cache: Mutex<HashMap<String, crate::usage::snapshot::UsageDashboardSnapshot>>,
 }
 
+impl Default for UsageCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UsageCache {
     pub fn new() -> Self {
         Self {

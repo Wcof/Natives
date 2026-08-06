@@ -624,7 +624,7 @@ mod tests {
         for bad in [0, 1, MAX_TIMEOUT_MS + 1] {
             let mut overlay = HookOverlay::new(hook.id.clone());
             overlay.timeout_ms = Some(bad);
-            let report = validate(&doc(vec![overlay]), &[hook.clone()]);
+            let report = validate(&doc(vec![overlay]), std::slice::from_ref(&hook));
             assert!(!report.is_publishable(), "{bad} should be rejected");
         }
         let mut ok = HookOverlay::new(hook.id.clone());
@@ -785,8 +785,10 @@ mod tests {
 
     #[test]
     fn diff_reports_a_semantics_move_first() {
-        let mut after = HarnessBlueprint::default();
-        after.hook_semantics_version = HookSemanticsVersion::SequentialV2;
+        let after = HarnessBlueprint {
+            hook_semantics_version: HookSemanticsVersion::SequentialV2,
+            ..HarnessBlueprint::default()
+        };
         let changes = diff(&HarnessBlueprint::default(), &after);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].field, "hook_semantics_version");

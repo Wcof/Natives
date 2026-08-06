@@ -380,9 +380,9 @@ pub fn create_instance(
     );
     match res {
         Ok(_) => Ok(id),
-        Err(e) if is_unique_constraint(&e) => Err(Error::Conflict(format!(
-            "this app already has an active runtime instance; stop it first"
-        ))),
+        Err(e) if is_unique_constraint(&e) => Err(Error::Conflict(
+            "this app already has an active runtime instance; stop it first".to_string(),
+        )),
         Err(e) => Err(Error::Database(e)),
     }
 }
@@ -685,6 +685,79 @@ pub fn attach_identity(
         summary.runtime_instance_id = active_instance_id(conn, &summary.application_id)?;
     }
     Ok(summary)
+}
+
+/// Owner kind for an external app row (docker_compose vs docker_run).
+pub fn external_owner_kind(conn: &Connection, source_id: &str) -> Result<&'static str> {
+    let cfg_json: String = conn
+        .query_row(
+            "SELECT runtime_config_json FROM external_creative_apps WHERE id = ?1",
+            params![source_id],
+            |r| r.get(0),
+        )
+        .map_err(Error::Database)?;
+    let kind = serde_json::from_str::<serde_json::Value>(&cfg_json)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string));
+    Ok(if kind.as_deref() == Some("docker_compose") {
+        "docker_compose"
+    } else {
+        "docker_run"
+    })
+}
+
+/// Owner kind for a local app row (host_http vs local_process).
+pub fn local_owner_kind(conn: &Connection, source_id: &str) -> Result<&'static str> {
+    let plan_json: String = conn
+        .query_row(
+            "SELECT launch_plan_json FROM local_creative_apps WHERE id = ?1",
+            params![source_id],
+            |r| r.get(0),
+        )
+        .map_err(Error::Database)?;
+    let runtime = serde_json::from_str::<serde_json::Value>(&plan_json)
+        .ok()
+        .and_then(|v| {
+            v.get("runtime")
+                .and_then(|r| r.as_str())
+                .map(str::to_string)
+        });
+    Ok(match runtime.as_deref() {
+        Some("static_http") => "host_http",
+        Some("docker_compose") => "docker_compose",
+        _ => "local_process",
+    })
+}
+
+/// Port / pgid / pid hint for a local app row (mirrored onto the instance).
+pub fn local_instance_hint(
+    conn: &Connection,
+    source_id: &str,
+) -> Result<(Option<u16>, Option<i32>, Option<u32>)> {
+    let row: (Option<i64>, Option<String>) = conn
+        .query_row(
+            "SELECT current_port, process_identity_json FROM local_creative_apps WHERE id = ?1",
+            params![source_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(Error::Database)?;
+    let (pgid, pid) = crate::db::parse_identity(row.1.as_deref());
+    Ok((row.0.map(|p| p as u16), pgid, pid))
+}
+
+/// Port hint for an external app row.
+pub fn external_instance_hint(
+    conn: &Connection,
+    source_id: &str,
+) -> Result<(Option<u16>, Option<i32>, Option<u32>)> {
+    let port: Option<i64> = conn
+        .query_row(
+            "SELECT host_port FROM external_creative_apps WHERE id = ?1",
+            params![source_id],
+            |r| r.get(0),
+        )
+        .map_err(Error::Database)?;
+    Ok((port.map(|p| p as u16), None, None))
 }
 
 #[cfg(test)]
@@ -1270,77 +1343,4 @@ mod tests {
                 .is_none()
         );
     }
-}
-
-/// Owner kind for an external app row (docker_compose vs docker_run).
-pub fn external_owner_kind(conn: &Connection, source_id: &str) -> Result<&'static str> {
-    let cfg_json: String = conn
-        .query_row(
-            "SELECT runtime_config_json FROM external_creative_apps WHERE id = ?1",
-            params![source_id],
-            |r| r.get(0),
-        )
-        .map_err(Error::Database)?;
-    let kind = serde_json::from_str::<serde_json::Value>(&cfg_json)
-        .ok()
-        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string));
-    Ok(if kind.as_deref() == Some("docker_compose") {
-        "docker_compose"
-    } else {
-        "docker_run"
-    })
-}
-
-/// Owner kind for a local app row (host_http vs local_process).
-pub fn local_owner_kind(conn: &Connection, source_id: &str) -> Result<&'static str> {
-    let plan_json: String = conn
-        .query_row(
-            "SELECT launch_plan_json FROM local_creative_apps WHERE id = ?1",
-            params![source_id],
-            |r| r.get(0),
-        )
-        .map_err(Error::Database)?;
-    let runtime = serde_json::from_str::<serde_json::Value>(&plan_json)
-        .ok()
-        .and_then(|v| {
-            v.get("runtime")
-                .and_then(|r| r.as_str())
-                .map(str::to_string)
-        });
-    Ok(match runtime.as_deref() {
-        Some("static_http") => "host_http",
-        Some("docker_compose") => "docker_compose",
-        _ => "local_process",
-    })
-}
-
-/// Port / pgid / pid hint for a local app row (mirrored onto the instance).
-pub fn local_instance_hint(
-    conn: &Connection,
-    source_id: &str,
-) -> Result<(Option<u16>, Option<i32>, Option<u32>)> {
-    let row: (Option<i64>, Option<String>) = conn
-        .query_row(
-            "SELECT current_port, process_identity_json FROM local_creative_apps WHERE id = ?1",
-            params![source_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(Error::Database)?;
-    let (pgid, pid) = crate::db::parse_identity(row.1.as_deref());
-    Ok((row.0.map(|p| p as u16), pgid, pid))
-}
-
-/// Port hint for an external app row.
-pub fn external_instance_hint(
-    conn: &Connection,
-    source_id: &str,
-) -> Result<(Option<u16>, Option<i32>, Option<u32>)> {
-    let port: Option<i64> = conn
-        .query_row(
-            "SELECT host_port FROM external_creative_apps WHERE id = ?1",
-            params![source_id],
-            |r| r.get(0),
-        )
-        .map_err(Error::Database)?;
-    Ok((port.map(|p| p as u16), None, None))
 }
