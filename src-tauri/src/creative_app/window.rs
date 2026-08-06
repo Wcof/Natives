@@ -258,16 +258,20 @@ impl WindowController {
                 let _ = op::finish_failure(conn, op_id, Some("window_hide_failed"), &e.to_string());
                 e
             })?;
-            surface_store::update_window_state(conn, window_id, WindowInstance::STATE_MINIMIZED)
-                .map_err(|e| {
-                    let _ = op::finish_failure(
-                        conn,
-                        op_id,
-                        Some("window_commit_failed"),
-                        &e.to_string(),
-                    );
-                    e
-                })?;
+            if let Err(e) =
+                surface_store::update_window_state(conn, window_id, WindowInstance::STATE_MINIMIZED)
+            {
+                // Deterministic compensation: re-show the WebView we just hid so
+                // the DB row and the real WebView do not diverge.
+                let app_id =
+                    runtime_store::source_id_for_application(conn, &window.application_id)?
+                        .unwrap_or_else(|| window.application_id.clone());
+                let url = window.url.as_deref().unwrap_or_default();
+                let _ = gw.show(&label, &app_id, url, stored_bounds(&window));
+                let _ =
+                    op::finish_failure(conn, op_id, Some("window_commit_failed"), &e.to_string());
+                return Err(e);
+            }
         } else {
             surface_store::reconcile_window_missing(
                 conn,
@@ -341,13 +345,15 @@ impl WindowController {
             return Err(Error::Internal(msg));
         }
 
-        surface_store::update_window_state(conn, window_id, WindowInstance::STATE_OPEN).map_err(
-            |e| {
-                let _ =
-                    op::finish_failure(conn, op_id, Some("window_commit_failed"), &e.to_string());
-                e
-            },
-        )?;
+        if let Err(e) =
+            surface_store::update_window_state(conn, window_id, WindowInstance::STATE_OPEN)
+        {
+            // Deterministic compensation: hide the WebView we just restored so
+            // the DB row and the real WebView do not diverge.
+            let _ = gw.hide(&label);
+            let _ = op::finish_failure(conn, op_id, Some("window_commit_failed"), &e.to_string());
+            return Err(e);
+        }
 
         let _ = op::finish_success(conn, op_id);
         Ok(())
@@ -449,6 +455,10 @@ mod tests {
     use std::cell::RefCell;
 
     /// Hermetic WebView seam: records every call, exposes a configurable live set.
+    ///
+    /// `delete_row_on_next_hide` / `delete_row_on_next_show` simulate the DB
+    /// row vanishing right after a WebView mutation (via a second connection to
+    /// the same file DB), so the compensation path can be exercised hermetically.
     #[derive(Default)]
     struct FakeGateway {
         live: RefCell<std::collections::HashSet<String>>,
@@ -456,6 +466,20 @@ mod tests {
         closed: RefCell<Vec<String>>,
         hidden: RefCell<Vec<String>>,
         close_fails: bool,
+        db2: RefCell<Option<rusqlite::Connection>>,
+        delete_row_on_next_hide: bool,
+        delete_row_on_next_show: bool,
+    }
+
+    impl FakeGateway {
+        fn delete_window_row(&self, label: &str) {
+            if let (Some(conn), Some(id)) = (
+                &*self.db2.borrow(),
+                label.strip_prefix(browser::WINDOW_LABEL_PREFIX),
+            ) {
+                let _ = conn.execute("DELETE FROM window_instances WHERE id = ?1", params![id]);
+            }
+        }
     }
 
     impl WebviewGateway for FakeGateway {
@@ -474,6 +498,9 @@ mod tests {
         ) -> Result<()> {
             self.live.borrow_mut().insert(label.to_string());
             self.shown.borrow_mut().push(label.to_string());
+            if self.delete_row_on_next_show {
+                self.delete_window_row(label);
+            }
             Ok(())
         }
         fn close(&self, label: &str) -> Result<()> {
@@ -486,6 +513,9 @@ mod tests {
         }
         fn hide(&self, label: &str) -> Result<()> {
             self.hidden.borrow_mut().push(label.to_string());
+            if self.delete_row_on_next_hide {
+                self.delete_window_row(label);
+            }
             Ok(())
         }
     }
@@ -495,6 +525,17 @@ mod tests {
         db::create_tables(&conn).unwrap();
         db::apply_migrations(&conn).unwrap();
         conn
+    }
+
+    /// A file-backed fixture so a second connection can observe the same rows.
+    fn file_fixture() -> (Connection, Connection, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let conn = Connection::open(&path).unwrap();
+        db::create_tables(&conn).unwrap();
+        db::apply_migrations(&conn).unwrap();
+        let second = Connection::open(&path).unwrap();
+        (conn, second, dir)
     }
 
     /// Seed an application + main surface + a running runtime instance.
@@ -1015,6 +1056,82 @@ mod tests {
         // Closing the last window drops the runtime preview.
         WindowController::close(&gw, &mut c, &w2.id).unwrap();
         assert_eq!(count_previews(&c, &iid), 0);
+    }
+
+    #[test]
+    fn minimize_compensates_by_reshowing_when_commit_fails() {
+        let (conn, second, _dir) = file_fixture();
+        let (surface_id, _iid) = seed_running_app(&conn, "app-1");
+        let mut gw = FakeGateway::default();
+        gw.db2.borrow_mut().replace(second);
+        let mut c = conn;
+        let w = WindowController::open(
+            &gw,
+            &mut c,
+            "app-1",
+            "app-1",
+            &surface_id,
+            "http://127.0.0.1:8080/",
+            bounds(),
+        )
+        .unwrap();
+
+        // The DB row vanishes right after the hide (out-of-band delete).
+        gw.delete_row_on_next_hide = true;
+        let err = WindowController::minimize(&gw, &mut c, &w.id).unwrap_err();
+        assert!(
+            matches!(err, Error::Conflict(_)),
+            "commit failure must surface as a typed error, got {err}"
+        );
+
+        // Deterministic compensation: the WebView we just hid is shown again.
+        assert_eq!(gw.hidden.borrow().len(), 1);
+        assert_eq!(
+            gw.shown.borrow().len(),
+            2,
+            "compensation re-shows the webview"
+        );
+        assert!(gw.live.borrow().contains(&w.label), "webview stays live");
+    }
+
+    #[test]
+    fn restore_compensates_by_hiding_when_commit_fails() {
+        let (conn, second, _dir) = file_fixture();
+        let (surface_id, _iid) = seed_running_app(&conn, "app-1");
+        let mut gw = FakeGateway::default();
+        gw.db2.borrow_mut().replace(second);
+        let mut c = conn;
+        let w = WindowController::open(
+            &gw,
+            &mut c,
+            "app-1",
+            "app-1",
+            &surface_id,
+            "http://127.0.0.1:8080/",
+            bounds(),
+        )
+        .unwrap();
+        WindowController::minimize(&gw, &mut c, &w.id).unwrap();
+
+        // The DB row vanishes right after the restore show (out-of-band delete).
+        gw.delete_row_on_next_show = true;
+        let err = WindowController::restore(&gw, &mut c, &w.id, None).unwrap_err();
+        assert!(
+            matches!(err, Error::Conflict(_)),
+            "commit failure must surface as a typed error, got {err}"
+        );
+
+        // Deterministic compensation: the WebView we just restored is hidden again.
+        assert_eq!(
+            gw.shown.borrow().len(),
+            2,
+            "restore show ran once after open"
+        );
+        assert_eq!(
+            gw.hidden.borrow().len(),
+            2,
+            "compensation hides the webview again"
+        );
     }
 
     #[test]
