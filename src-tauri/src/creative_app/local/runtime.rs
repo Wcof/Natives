@@ -5,6 +5,7 @@
 
 use super::logs::{append_with_secrets, LocalLogStore, LogLine, LogRegistry, LogStream};
 use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, ProcessIdentity};
+use crate::creative_app::port_lease::{PortLease, PortLeaseRegistryHandle};
 use crate::{Error, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,10 @@ struct LiveLocalProcess {
     program: String,
     cwd: PathBuf,
     log: Arc<LocalLogStore>,
+    /// Port lease held until the child proves it bound the port (T09). Kept
+    /// with the live process so the reservation spans spawn → health and is
+    /// released on exit/stop.
+    lease: Option<PortLease>,
     /// Set when the instance is being stopped. Reader / health tasks observe it
     /// so stop can preempt an in-flight start (P0 / batch 2).
     cancelled: Arc<AtomicBool>,
@@ -236,6 +241,7 @@ impl LocalRuntimeManager {
         plan_fingerprint: &str,
         env: &[(String, String)],
         preferred_port: Option<u16>,
+        leases: Option<PortLeaseRegistryHandle>,
     ) -> Result<(u16, String, ProcessIdentity)> {
         if self.is_running(runtime_id).await {
             return Err(Error::InvalidInput("already running".into()));
@@ -253,21 +259,35 @@ impl LocalRuntimeManager {
             )));
         }
 
+        // Port selection through a held lease (T09). A bound listener reserves
+        // the port at the OS level until we release the hold right before
+        // spawn, closing the pick-free-port → spawn TOCTOU window.
+        let registry = leases.unwrap_or_else(|| Arc::new(crate::creative_app::port_lease::PortLeaseRegistry::new()));
+        let op_key = format!("start:{app_id}:{runtime_id}");
         let port = match plan.port.mode {
             crate::creative_app::model::LaunchPortMode::Fixed => {
                 let p = plan
                     .port
                     .value
                     .ok_or_else(|| Error::InvalidInput("fixed port missing".into()))?;
-                if port_in_use(p) {
-                    return Err(Error::InvalidInput(format!("port {p} is already in use")));
-                }
-                p
+                // Registry acquire also verifies the port is free at OS level.
+                registry.acquire(p, &op_key).map_err(|_| {
+                    Error::InvalidInput(format!("port {p} is already in use"))
+                })?
             }
             crate::creative_app::model::LaunchPortMode::Auto => {
-                preferred_port.unwrap_or_else(pick_free_port)
+                let p = preferred_port.unwrap_or(0);
+                if p != 0 {
+                    registry.acquire(p, &op_key).map_err(|_| {
+                        Error::InvalidInput(format!("port {p} is already in use"))
+                    })?
+                } else {
+                    registry.acquire_auto(&op_key)?
+                }
             }
         };
+        let mut lease = port;
+        let port = lease.port();
 
         let (program, mut args) = build_command(plan, port)?;
         // P0: never spawn a command that can place real trades without explicit
@@ -339,6 +359,11 @@ impl LocalRuntimeManager {
         {
             cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
         }
+
+        // The child must be able to bind the port: drop the OS-level hold at
+        // the LAST moment before spawn. The registry reservation stays alive in
+        // `lease` (stored with the live process) until health proves the bind.
+        lease.release_hold();
 
         let mut child = cmd
             .spawn()
@@ -432,6 +457,7 @@ impl LocalRuntimeManager {
                     program: executable,
                     cwd: cwd.clone(),
                     log: log.clone(),
+                    lease: Some(lease),
                     cancelled,
                 },
             );
@@ -453,6 +479,18 @@ impl LocalRuntimeManager {
         }
 
         Ok((port, open_url, identity))
+    }
+
+    /// Confirm the port lease for a runtime after health proved the child bound
+    /// it (T09). Releases the reservation — the child's own socket is now the
+    /// durable protection.
+    pub async fn confirm_port_lease(&self, runtime_id: &str) {
+        let mut map = self.procs.lock().await;
+        if let Some(live) = map.get_mut(runtime_id) {
+            if let Some(lease) = live.lease.take() {
+                lease.confirm_bound();
+            }
+        }
     }
 
     /// If the managed process has exited, remove it and return exit info.
@@ -531,6 +569,8 @@ impl LocalRuntimeManager {
                 let url = format!("http://127.0.0.1:{port}{health_path}");
                 if http_reachable(&url).await {
                     emit_progress(app, app_id, "ready", "health check passed");
+                    // The child proved it bound the port — release the lease.
+                    self.confirm_port_lease(runtime_id).await;
                     return Ok(());
                 }
             }
@@ -611,11 +651,28 @@ fn build_command(plan: &LaunchPlan, _port: u16) -> Result<(String, Vec<String>)>
         use crate::creative_app::model::ProcessProfile;
         return match profile {
             ProcessProfile::Python(p) => {
+                // T06/T09: use the Host-trusted interpreter. Re-resolve at
+                // start (canonical path + python identity) so a swapped/shell
+                // interpreter is refused — the agent's stored string is never
+                // trusted at the spawn point.
+                let interpreter =
+                    crate::creative_app::process_driver::resolve_python_interpreter(
+                        &p.interpreter,
+                    )?;
                 let mut args = vec![p.entry.clone()];
                 args.extend(p.args.iter().cloned());
-                Ok((p.interpreter.clone(), args))
+                Ok((interpreter, args))
             }
-            ProcessProfile::Binary(b) => Ok((b.executable_path.clone(), b.args.clone())),
+            ProcessProfile::Binary(b) => {
+                // T09: recompute identity at launch. A content change since
+                // approval invalidates the authorization and refuses to spawn.
+                let canonical =
+                    crate::creative_app::process_driver::verify_binary_identity(
+                        &b.executable_path,
+                        &b.executable_hash,
+                    )?;
+                Ok((canonical, b.args.clone()))
+            }
         };
     }
     match plan.program {
@@ -1207,6 +1264,7 @@ mod tests {
                     program: "x".into(),
                     cwd: PathBuf::from("/"),
                     log: mgr.logs.get_or_open("a", "a-run"),
+                    lease: None,
                     cancelled: cancelled.clone(),
                 },
             );
@@ -1249,6 +1307,7 @@ mod tests {
             program: "x".into(),
             cwd: PathBuf::from("/"),
             log: mgr.logs.get_or_open("app-iso", rt),
+            lease: None,
             cancelled: Arc::new(AtomicBool::new(false)),
         };
         {
@@ -1289,6 +1348,7 @@ mod tests {
                     program: "x".into(),
                     cwd: PathBuf::from("/"),
                     log: mgr.logs.get_or_open("app-p", "run-1"),
+                    lease: None,
                     cancelled: Arc::new(AtomicBool::new(false)),
                 },
             );
@@ -1321,6 +1381,7 @@ mod tests {
                     program: "x".into(),
                     cwd: PathBuf::from("/"),
                     log: mgr.logs.get_or_open("app-r", "run-1"),
+                    lease: None,
                     cancelled: Arc::new(AtomicBool::new(false)),
                 },
             );

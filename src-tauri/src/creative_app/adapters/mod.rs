@@ -138,37 +138,46 @@ async fn begin_instance(conn: &Connection, source: ResolvedSource, id: &str) -> 
         ResolvedSource::LocalProject => super::runtime_store::local_owner_kind(conn, id)?,
         ResolvedSource::Internal => unreachable!("internal has no runtime instance"),
     };
-    super::runtime_store::create_instance(conn, &app_id, plan_id.as_deref(), owner_kind)
+    let instance_id =
+        super::runtime_store::create_instance(conn, &app_id, plan_id.as_deref(), owner_kind)?;
+    // T09: every runtime instance gets a real "main" ServiceInstance row from
+    // the moment its lifecycle starts (no store-only dead table).
+    let _ = super::service_store::upsert_main_service(conn, &instance_id);
+    Ok(instance_id)
 }
 
 /// Phase 1 of start (caller holds the mutation lock): create the runtime
-/// instance and spawn the runtime. Fast for local (spawn only); external /
-/// internal finish entirely here. Returns the summary in its current state with
-/// `runtime_instance_id` bound, so phase 2 knows which instance to settle.
+/// instance and spawn the runtime through the RuntimeDriver. Fast for local
+/// (spawn only); external / internal finish entirely here. Returns the summary
+/// in its current state with `runtime_instance_id` bound, so phase 2 knows
+/// which instance to settle.
 pub async fn spawn_start(
     conn: &Connection,
     ctx: &LifecycleCtx,
     id: &str,
 ) -> Result<CreativeAppSummary> {
     let source = resolve(conn, id)?;
+    let driver = facade::driver_for(conn, id)?;
     if source == ResolvedSource::Internal {
-        let summary = internal::start(conn, &ctx.app, id)?;
+        let summary = driver.start(conn, ctx, id, "").await?;
         return super::runtime_store::attach_identity(conn, summary);
     }
     let instance_id = begin_instance(conn, source, id).await?;
-    let result = match source {
-        ResolvedSource::ExternalGithub => external::start(conn, &ctx.app, id).await,
-        ResolvedSource::LocalProject => {
-            let rt = ctx.require_local_runtime()?;
-            local::start(conn, &ctx.app, rt, ctx.host_http_port, id, &instance_id).await
+    // Driver prepare: port lease, interpreter/binary identity, engine check.
+    if driver.capabilities().supports_prepare {
+        if let Err(e) = driver.prepare(conn, ctx, id, &instance_id).await {
+            let _ = super::runtime_store::mark_failed(conn, &instance_id, &e.to_string());
+            let _ = super::service_store::mark_instance_unhealthy(conn, &instance_id, &e.to_string());
+            return Err(e);
         }
-        ResolvedSource::Internal => unreachable!(),
-    };
+    }
+    let result = driver.start(conn, ctx, id, &instance_id).await;
     match result {
         Ok(mut summary) => {
             summary.runtime_instance_id = Some(instance_id.clone());
             if source == ResolvedSource::ExternalGithub {
-                // External start includes its own health pass; settle the instance now.
+                // External start includes its own health pass; settle the
+                // instance and record the real endpoint now.
                 let hint = super::runtime_store::external_instance_hint(conn, id)
                     .unwrap_or((None, None, None));
                 let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
@@ -180,11 +189,14 @@ pub async fn spawn_start(
                     hint.1,
                     hint.2,
                 );
+                let _ = super::service_store::record_instance_ready(conn, &instance_id, &urls, hint.0);
             }
             Ok(super::runtime_store::attach_identity(conn, summary)?)
         }
         Err(e) => {
             let _ = super::runtime_store::mark_failed(conn, &instance_id, &e.to_string());
+            let _ =
+                super::service_store::mark_instance_unhealthy(conn, &instance_id, &e.to_string());
             Err(e)
         }
     }
@@ -199,44 +211,47 @@ pub async fn await_ready(
     id: &str,
     spawned: &CreativeAppSummary,
 ) -> Result<CreativeAppSummary> {
-    match resolve(conn, id)? {
-        ResolvedSource::Internal | ResolvedSource::ExternalGithub => Ok(spawned.clone()),
-        ResolvedSource::LocalProject => {
-            let rt = ctx.require_local_runtime()?;
-            let instance_id = spawned.runtime_instance_id.clone();
-            let rt_ref = instance_id.as_deref().unwrap_or_default();
-            let result = local::await_start_ready(conn, &ctx.app, rt, id, rt_ref).await;
-            match result {
-                Ok(summary) => {
-                    if summary.state == CreativeAppState::Running {
-                        if let Some(iid) = &instance_id {
-                            let hint = super::runtime_store::local_instance_hint(conn, id)
-                                .unwrap_or((None, None, None));
-                            let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
-                            let _ = super::runtime_store::mark_running(
-                                conn, iid, &urls, hint.0, hint.1, hint.2,
-                            );
-                        }
-                    }
-                    // Not running here means stop preempted the start; the instance
-                    // is owned by the stop path and is left untouched.
-                    Ok(super::runtime_store::attach_identity(conn, summary)?)
-                }
-                Err(e) => {
-                    if let Some(iid) = &instance_id {
-                        let _ = super::runtime_store::mark_failed(conn, iid, &e.to_string());
-                    }
-                    Err(e)
+    let source = resolve(conn, id)?;
+    let driver = facade::driver_for(conn, id)?;
+    if source == ResolvedSource::Internal || source == ResolvedSource::ExternalGithub {
+        return Ok(spawned.clone());
+    }
+    let instance_id = spawned.runtime_instance_id.clone();
+    let rt_ref = instance_id.as_deref().unwrap_or_default();
+    let result = driver.probe(conn, ctx, id, rt_ref, spawned).await;
+    match result {
+        Ok(summary) => {
+            if summary.state == CreativeAppState::Running {
+                if let Some(iid) = &instance_id {
+                    let hint = super::runtime_store::local_instance_hint(conn, id)
+                        .unwrap_or((None, None, None));
+                    let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
+                    let _ = super::runtime_store::mark_running(conn, iid, &urls, hint.0, hint.1, hint.2);
+                    // T09: persist the REAL endpoint + service readiness from the
+                    // health pass.
+                    let _ =
+                        super::service_store::record_instance_ready(conn, iid, &urls, hint.0);
                 }
             }
+            // Not running here means stop preempted the start; the instance
+            // is owned by the stop path and is left untouched.
+            Ok(super::runtime_store::attach_identity(conn, summary)?)
+        }
+        Err(e) => {
+            if let Some(iid) = &instance_id {
+                let _ = super::runtime_store::mark_failed(conn, iid, &e.to_string());
+                let _ = super::service_store::mark_instance_unhealthy(conn, iid, &e.to_string());
+            }
+            Err(e)
         }
     }
 }
 
 pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<CreativeAppSummary> {
     let source = resolve(conn, id)?;
+    let driver = facade::driver_for(conn, id)?;
     if source == ResolvedSource::Internal {
-        let summary = internal::stop(conn, &ctx.app, id)?;
+        let summary = driver.stop(conn, ctx, id, "").await?;
         return super::runtime_store::attach_identity(conn, summary);
     }
     let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
@@ -244,15 +259,8 @@ pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cre
     if let Some(iid) = &instance_id {
         let _ = super::runtime_store::mark_stopping(conn, iid);
     }
-    let result = match source {
-        ResolvedSource::ExternalGithub => external::stop(conn, &ctx.app, id).await,
-        ResolvedSource::LocalProject => {
-            let rt = ctx.require_local_runtime()?;
-            let rt_id = instance_id.as_deref().unwrap_or_default();
-            local::stop(conn, &ctx.app, rt, id, rt_id).await
-        }
-        ResolvedSource::Internal => unreachable!(),
-    };
+    let rt_id = instance_id.as_deref().unwrap_or_default();
+    let result = driver.stop(conn, ctx, id, rt_id).await;
     match result {
         Ok(summary) => {
             if let Some(iid) = &instance_id {
@@ -260,12 +268,16 @@ pub async fn stop(conn: &Connection, ctx: &LifecycleCtx, id: &str) -> Result<Cre
                 // CR-303: a stopped instance has no live preview; drop its bind
                 // so DB preview state matches the dead endpoint.
                 let _ = super::runtime_store::clear_preview_targets(conn, iid);
+                // T09: the runtime has no live endpoint after a verified stop.
+                let _ = super::service_store::mark_instance_stopped(conn, iid);
             }
             Ok(super::runtime_store::attach_identity(conn, summary)?)
         }
         Err(e) => {
             if let Some(iid) = &instance_id {
                 let _ = super::runtime_store::mark_cleanup_failed(conn, iid, &e.to_string());
+                let _ =
+                    super::service_store::mark_instance_unhealthy(conn, iid, &e.to_string());
             }
             Err(e)
         }
@@ -279,17 +291,18 @@ pub async fn delete(
     opts: DeleteOptions,
 ) -> Result<DeleteResult> {
     let source = resolve(conn, id)?;
+    let driver = facade::driver_for(conn, id)?;
     let result = match source {
-        ResolvedSource::Internal => internal::delete(conn, &ctx.app, ctx.modules_dir(), id),
-        ResolvedSource::ExternalGithub => external::delete(conn, &ctx.app, id, opts).await,
+        ResolvedSource::Internal => driver.delete(conn, ctx, id, "", opts).await,
+        ResolvedSource::ExternalGithub => {
+            let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+            let rt_id = super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
+            driver.delete(conn, ctx, id, &rt_id, opts).await
+        }
         ResolvedSource::LocalProject => {
-            let rt = ctx.require_local_runtime()?;
-            // The active runtime id (may be empty when the app is not running).
-            let app_id =
-                super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
-            let rt_id =
-                super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
-            local::delete(conn, &ctx.app, rt, id, &rt_id).await
+            let app_id = super::runtime_store::find_or_create_application(conn, source.as_source(), id)?;
+            let rt_id = super::runtime_store::active_instance_id(conn, &app_id)?.unwrap_or_default();
+            driver.delete(conn, ctx, id, &rt_id, opts).await
         }
     };
     if result.is_ok() {

@@ -335,6 +335,7 @@ pub async fn start_app(
                 &rec.plan_fingerprint,
                 &env,
                 plan.port.value,
+                None,
             )
             .await
         {

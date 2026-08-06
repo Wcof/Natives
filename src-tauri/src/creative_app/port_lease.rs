@@ -1,12 +1,19 @@
-//! Port lease registry (batch 7 CR-703).
+//! Port lease registry (batch 7 CR-703, T09 TOCTOU fix).
 //!
-//! Operation-scoped short leases for host ports. Prevents TOCTOU "port is
-//! free" races: a port is reserved (leased) before a process starts, so two
-//! concurrent starts never claim the same port. Leases expire on drop or TTL.
+//! Operation-scoped short leases for host ports. A lease HOLDS the port at the
+//! OS level (a live `TcpListener` bound to `127.0.0.1:{port}`) from `acquire`
+//! until the caller proves the child/compose bound it. This closes the TOCTOU
+//! window the old `bind(:0)` → drop → later `spawn` had: while the lease is
+//! held, no other process can bind the port.
+//!
+//! The caller drops the hold (`release_hold`) at the last moment before
+//! spawning the child, then confirms the bind (`confirm_bound`) once the child
+//! proves it listens — only then is the reservation actually released.
 
 use crate::{Error, Result};
 use std::collections::HashMap;
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 /// Default lease TTL (seconds). A lease that outlives its operation is a leak.
@@ -18,7 +25,13 @@ struct LeaseEntry {
     expires_at: i64,
 }
 
-/// Port lease registry — thread-safe, bounded to a max number of leases.
+/// Port lease registry — thread-safe.
+///
+/// The registry records which ports are reserved by in-flight start
+/// operations. The actual OS-level reservation lives in the returned
+/// [`PortLease`] guard, which holds a bound `TcpListener` until `release_hold`
+/// (right before the child binds) and a registry entry until `confirm_bound`
+/// (the child proved it is listening).
 pub struct PortLeaseRegistry {
     inner: Mutex<LeaseState>,
 }
@@ -37,15 +50,19 @@ impl PortLeaseRegistry {
     }
 
     /// Acquire a lease on the given port for an operation.
-    /// Fails if the port is already leased by a different operation or is
-    /// actually in use (TCP bind attempt).
-    pub fn acquire(&self, port: u16, op_key: &str) -> Result<()> {
-        let now = crate::creative_app::runtime_store::now();
-        let _ = now;
-        let expires = unix_now() + DEFAULT_LEASE_TTL_SECS;
+    ///
+    /// The port is reserved twice: the registry records the reservation and a
+    /// live `TcpListener` holds the port at the OS level so no other process
+    /// (Natives or external) can grab it between now and the child's bind.
+    /// Fails when the port is already leased by a different operation or is
+    /// actually in use.
+    ///
+    /// Takes `self: &Arc<Self>` so the returned lease can share the registry
+    /// handle and remove its entry on drop / confirm.
+    pub fn acquire(self: &Arc<Self>, port: u16, op_key: &str) -> Result<PortLease> {
         let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Expire stale leases
+        // Expire stale leases.
         st.leases.retain(|_, e| e.expires_at > unix_now());
 
         if let Some(existing) = st.leases.get(&port) {
@@ -55,13 +72,12 @@ impl PortLeaseRegistry {
             )));
         }
 
-        // Verify the port is actually free on the OS level.
-        if TcpListener::bind(("127.0.0.1", port)).is_err() {
-            return Err(Error::InvalidInput(format!(
-                "port {port} is in use by another process"
-            )));
-        }
-
+        // Bind and KEEP the listener: while it is alive no other process can
+        // bind 127.0.0.1:{port} (verified on Linux/macOS/BSD).
+        let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|_| {
+            Error::InvalidInput(format!("port {port} is in use by another process"))
+        })?;
+        let expires = unix_now() + DEFAULT_LEASE_TTL_SECS;
         st.leases.insert(
             port,
             LeaseEntry {
@@ -70,16 +86,56 @@ impl PortLeaseRegistry {
                 expires_at: expires,
             },
         );
-        Ok(())
+        Ok(PortLease {
+            port,
+            listener: Some(listener),
+            op_key: op_key.to_string(),
+            confirmed: false,
+            registry: self.clone(),
+        })
     }
 
-    /// Release a lease. Idempotent — releasing an unknown port is a no-op.
-    pub fn release(&self, port: u16) {
+    /// Acquire a lease on an OS-selected free port (bind `127.0.0.1:0`).
+    ///
+    /// The returned port is the REAL bound address of a live listener, so the
+    /// random port is derived from an actual bind — never a guessed value.
+    pub fn acquire_auto(self: &Arc<Self>, op_key: &str) -> Result<PortLease> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
+            Error::InvalidInput(format!("could not allocate a free port: {e}"))
+        })?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| Error::InvalidInput(format!("could not read allocated port: {e}")))?
+            .port();
         let mut st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        st.leases.remove(&port);
+        st.leases.retain(|_, e| e.expires_at > unix_now());
+        if let Some(existing) = st.leases.get(&port) {
+            // Kernel just handed us this port, but never silently share a
+            // reserved port.
+            return Err(Error::InvalidInput(format!(
+                "port {port} already leased by operation {}",
+                existing.op_key
+            )));
+        }
+        let expires = unix_now() + DEFAULT_LEASE_TTL_SECS;
+        st.leases.insert(
+            port,
+            LeaseEntry {
+                _port: port,
+                op_key: op_key.to_string(),
+                expires_at: expires,
+            },
+        );
+        Ok(PortLease {
+            port,
+            listener: Some(listener),
+            op_key: op_key.to_string(),
+            confirmed: false,
+            registry: self.clone(),
+        })
     }
 
-    /// Check whether a port is currently leased.
+    /// Check whether a port is currently reserved by an in-flight lease.
     pub fn is_leased(&self, port: u16) -> bool {
         let st = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         st.leases.contains_key(&port)
@@ -103,11 +159,84 @@ impl Default for PortLeaseRegistry {
     }
 }
 
+/// Shared registry handle.
+pub type PortLeaseRegistryHandle = Arc<PortLeaseRegistry>;
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// A held port reservation (T09). While the guard lives:
+/// - the registry records the reservation (`is_leased`),
+/// - a live `TcpListener` holds the port at the OS level.
+///
+/// Drop without `confirm_bound` releases the reservation. `confirm_bound` must
+/// be called once the child/compose proved it is bound.
+pub struct PortLease {
+    port: u16,
+    listener: Option<TcpListener>,
+    op_key: String,
+    confirmed: bool,
+    registry: Arc<PortLeaseRegistry>,
+}
+
+impl PortLease {
+    /// The reserved port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// True while the OS-level hold (bound listener) is still alive.
+    pub fn is_held(&self) -> bool {
+        self.listener.is_some()
+    }
+
+    /// Drop the OS-level hold right before spawning the child so the child can
+    /// bind the port. The registry reservation persists until `confirm_bound`
+    /// (or drop) so no second Natives start claims the port during the
+    /// spawn→bind window.
+    pub fn release_hold(&mut self) {
+        self.listener = None;
+    }
+
+    /// Confirm the child/compose proved it bound the port, releasing the
+    /// reservation (the child's own socket is the durable protection from now
+    /// on).
+    pub fn confirm_bound(mut self) {
+        self.confirmed = true;
+        self.remove_entry();
+    }
+
+    fn remove_entry(&self) {
+        let mut st = self.registry.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(key) = st.leases.get(&self.port) {
+            if key.op_key == self.op_key {
+                st.leases.remove(&self.port);
+            }
+        }
+    }
+}
+
+impl Drop for PortLease {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.remove_entry();
+        }
+    }
+}
+
+impl std::fmt::Debug for PortLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PortLease")
+            .field("port", &self.port)
+            .field("op_key", &self.op_key)
+            .field("held", &self.listener.is_some())
+            .field("confirmed", &self.confirmed)
+            .finish()
+    }
 }
 
 // ── Resource snapshot (CR-703: on-demand, graceful degradation) ──────
@@ -211,60 +340,92 @@ unsafe extern "C" {
 mod tests {
     use super::*;
 
-    #[test]
-    fn acquire_and_release_lease() {
-        let registry = PortLeaseRegistry::new();
-        // Find a free port
-        let free_port = {
-            let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            l.local_addr().unwrap().port()
-        };
-        // Drop the listener to free the port
-        drop(std::net::TcpListener::bind(("127.0.0.1", free_port)).unwrap());
+    fn reg() -> PortLeaseRegistryHandle {
+        Arc::new(PortLeaseRegistry::new())
+    }
 
-        registry.acquire(free_port, "op-1").unwrap();
-        assert!(registry.is_leased(free_port));
+    #[test]
+    fn acquire_holds_port_at_os_level() {
+        let registry = reg();
+        let lease = registry.acquire_auto("op-1").unwrap();
+        let port = lease.port();
+        assert!(lease.is_held());
+        assert!(registry.is_leased(port));
         assert_eq!(registry.len(), 1);
 
-        registry.release(free_port);
-        assert!(!registry.is_leased(free_port));
+        // While the lease holds the listener, no other bind on 127.0.0.1:port
+        // can succeed — the TOCTOU window is closed at the OS level.
+        assert!(
+            TcpListener::bind(("127.0.0.1", port)).is_err(),
+            "a live lease must hold the port at the OS level"
+        );
+
+        // A second acquire for the same port is rejected by the registry too.
+        assert!(registry.acquire(port, "op-2").is_err());
+
+        // Release the hold; the port is bindable again.
+        let mut lease = lease;
+        lease.release_hold();
+        assert!(!lease.is_held());
+        assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+    }
+
+    #[test]
+    fn confirm_bound_releases_reservation() {
+        let registry = reg();
+        let lease = registry.acquire_auto("op-1").unwrap();
+        let port = lease.port();
+        assert!(registry.is_leased(port));
+
+        lease.confirm_bound();
+        assert!(!registry.is_leased(port), "confirmed lease is released");
         assert_eq!(registry.len(), 0);
     }
 
     #[test]
-    fn concurrent_acquire_conflicts() {
-        let registry = PortLeaseRegistry::new();
-        let free_port = {
-            let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            l.local_addr().unwrap().port()
-        };
-
-        registry.acquire(free_port, "op-1").unwrap();
-        // Second acquire for the same port must fail
-        assert!(registry.acquire(free_port, "op-2").is_err());
-    }
-
-    #[test]
-    fn release_is_idempotent() {
-        let registry = PortLeaseRegistry::new();
-        let free_port = {
-            let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            l.local_addr().unwrap().port()
-        };
-        registry.acquire(free_port, "op-1").unwrap();
-        registry.release(free_port);
-        registry.release(free_port); // no-op
-        assert_eq!(registry.len(), 0);
+    fn drop_without_confirm_releases_reservation() {
+        let registry = reg();
+        {
+            let lease = registry.acquire_auto("op-1").unwrap();
+            assert_eq!(registry.len(), 1);
+            drop(lease);
+        }
+        assert_eq!(
+            registry.len(),
+            0,
+            "a dropped, unconfirmed lease must release its reservation"
+        );
     }
 
     #[test]
     fn acquire_rejects_in_use_port() {
-        let registry = PortLeaseRegistry::new();
-        // Bind a real listener to a port
+        let registry = reg();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        // The port is genuinely in use — acquire must fail
         assert!(registry.acquire(port, "op-1").is_err());
+    }
+
+    #[test]
+    fn fixed_acquire_holds_listener() {
+        let registry = reg();
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let lease = registry.acquire(port, "op-1").unwrap();
+        assert_eq!(lease.port(), port);
+        assert!(lease.is_held());
+        assert!(registry.is_leased(port));
+        lease.confirm_bound();
+        assert!(!registry.is_leased(port));
+    }
+
+    #[test]
+    fn concurrent_acquire_conflicts() {
+        let registry = reg();
+        let lease = registry.acquire_auto("op-1").unwrap();
+        let port = lease.port();
+        assert!(registry.acquire(port, "op-2").is_err());
     }
 
     #[test]
