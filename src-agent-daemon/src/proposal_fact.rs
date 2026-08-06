@@ -321,12 +321,13 @@ mod tests {
 
         let mut line = String::new();
         let mut reader = BufReader::new(client);
-        tokio::time::timeout(
+        let _line_read = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             reader.read_line(&mut line),
         )
         .await
-        .expect("read rpc response");
+        .expect("read rpc response")
+        .expect("read line");
         let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         let proposals = value["data"]["proposals"].as_array().unwrap();
         assert_eq!(proposals.len(), 1);

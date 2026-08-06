@@ -3332,7 +3332,7 @@ impl PermissionGatedTools {
                 .subagents
                 .update_status(&session_id, SubAgentStatus::Failed(e.clone()))
                 .await;
-            let _ = crate::global_run_manager().fail_run_if_active(
+            crate::global_run_manager().fail_run_if_active(
                 &child_run_id,
                 format!("start child run failed: {e}"),
                 "SUBAGENT_START_FAILED",
@@ -4505,16 +4505,16 @@ async fn finalize_child_failure(
     // FailFast fails the parent immediately; RequireAll waits until every
     // sibling has settled, then fails the parent on the aggregate failure.
     let (all_terminal, _any_failed) = sibling_settled_state(task_outputs, task_id).await;
-    match failure_policy.on_child_failed(all_terminal, 0) {
-        ChildFailureEffect::FailParent => {
-            fail_parent_and_cancel_siblings(
-                subagents,
-                parent_run_id,
-                &format!("subagent failed under {:?}: {message}", failure_policy),
-            )
-            .await;
-        }
-        _ => {}
+    if matches!(
+        failure_policy.on_child_failed(all_terminal, 0),
+        ChildFailureEffect::FailParent
+    ) {
+        fail_parent_and_cancel_siblings(
+            subagents,
+            parent_run_id,
+            &format!("subagent failed under {:?}: {message}", failure_policy),
+        )
+        .await;
     }
     task_outputs.lock().await.insert(
         task_id.to_string(),
@@ -4548,7 +4548,7 @@ async fn requeue_child_run(
     let prompt = if session.task.trim().is_empty() {
         format!("Retry (attempt {retry_number}) after: {reason}")
     } else {
-        format!("{}", session.task)
+        session.task.to_string()
     };
     let created =
         crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
