@@ -173,6 +173,52 @@ fn load_resumable_checkpoint(
     Ok(checkpoint)
 }
 
+/// Effects that a resume/continue from a given checkpoint cannot prove safe:
+/// unresolved effects (`started`/`uncertain`) plus effects recorded **after**
+/// the checkpoint's side-effect ledger cursor — the checkpoint was captured
+/// before them, so their external outcome is unknown and must not be silently
+/// replayed (G01). Returns the effects and whether any is non-replay-safe
+/// (external/process/network/MCP), which hard-blocks resume.
+fn unresolved_effects_for_checkpoint(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    checkpoint_ledger_cursor: Option<&str>,
+) -> Result<(Vec<serde_json::Value>, bool), String> {
+    let cursor: i64 = checkpoint_ledger_cursor
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, tool_call_id, category, replay_safe
+             FROM side_effect_record
+             WHERE run_id = ?1
+               AND (
+                   status IN ('started', 'uncertain')
+                   OR (status = 'completed' AND (ledger_sequence IS NULL OR ledger_sequence > ?2))
+               )",
+        )
+        .map_err(|e| e.to_string())?;
+    let effects: Vec<serde_json::Value> = stmt
+        .query_map(rusqlite::params![run_id, cursor], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "tool_call_id": row.get::<_, Option<String>>(1)?,
+                "category": row.get::<_, String>(2)?,
+                "replay_safe": row.get::<_, i64>(3)? != 0,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let hard_blocked = effects.iter().any(|effect| {
+        effect
+            .get("replay_safe")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+    });
+    Ok((effects, hard_blocked))
+}
+
 /// Process-wide Run Authority for the **current process only**.
 ///
 /// - Independent sidecar binary: this is the sole authority inside the daemon.
@@ -2422,32 +2468,35 @@ impl RunManager {
         let conn = store.conn()?;
         let checkpoint =
             load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
-        let uncertain: i64 = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM side_effect_record
-                 WHERE run_id = ?1 AND status = 'uncertain')",
-                rusqlite::params![&source.id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if uncertain != 0 {
+        let (unresolved, hard_blocked) =
+            unresolved_effects_for_checkpoint(&conn, &source.id, checkpoint.3.as_deref())?;
+        if !unresolved.is_empty() {
+            let decision = if hard_blocked {
+                "Blocked"
+            } else {
+                "ConfirmationRequired"
+            };
             conn.execute(
                 "INSERT INTO resume_plan
                  (id, source_run_id, action, checkpoint_id, status, decision, unresolved_effects_json)
-                 VALUES (?1, ?2, 'continue', ?3, 'blocked', 'Blocked', ?4)",
+                 VALUES (?1, ?2, 'continue', ?3, 'blocked', ?4, ?5)",
                 rusqlite::params![
                     Uuid::new_v4().to_string(),
                     &source.id,
                     &checkpoint.0,
-                    serde_json::json!({"reason": "uncertain_side_effect"}).to_string(),
+                    decision,
+                    serde_json::to_string(&unresolved).unwrap_or_default(),
                 ],
             )
             .map_err(|error| {
                 format!(
-                    "run has uncertain side effects and blocked resume plan could not be persisted: {error}"
+                    "run has unresolved side effects and blocked resume plan could not be persisted: {error}"
                 )
             })?;
-            return Err("run has uncertain side effects; continue requires confirmation".into());
+            return Err(format!(
+                "run has side effects not covered by the checkpoint (cursor {}); continue requires confirmation",
+                checkpoint.3.as_deref().unwrap_or("0")
+            ));
         }
         drop(conn);
         let content = match req.content {
@@ -2498,40 +2547,15 @@ impl RunManager {
         let conn = store.conn()?;
         let checkpoint =
             load_resumable_checkpoint(&conn, &source.id, req.checkpoint_id.as_deref())?;
-        // Scan the side-effect ledger for unresolved effects. A restore is only
-        // SafeToContinue when nothing is unresolved; an effect left `started`
-        // (crash before a terminal) or `uncertain` means the external outcome
-        // is unknown, so auto-resume must not invoke the handler again.
-        // Non-replay-safe unresolved effects hard-block (Blocked), while
-        // replay-safe ones require an explicit caller confirmation
-        // (ConfirmationRequired). No provider or tool is invoked until then.
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, tool_call_id, category, replay_safe
-                 FROM side_effect_record
-                 WHERE run_id = ?1 AND status IN ('started', 'uncertain')",
-            )
-            .map_err(|e| e.to_string())?;
-        let uncertain_effects: Vec<serde_json::Value> = stmt
-            .query_map(rusqlite::params![&source.id], |row| {
-                Ok(serde_json::json!({
-                    "id": row.get::<_, String>(0)?,
-                    "tool_call_id": row.get::<_, Option<String>>(1)?,
-                    "category": row.get::<_, String>(2)?,
-                    "replay_safe": row.get::<_, i64>(3)? != 0,
-                }))
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+        // Resolve every effect the checkpoint cannot prove safe: `started`/
+        // `uncertain` effects plus effects recorded after the checkpoint's
+        // ledger cursor (the checkpoint predates their external outcome).
+        // Non-replay-safe unresolved effects hard-block (Blocked), replay-safe
+        // ones require explicit caller confirmation (ConfirmationRequired).
+        // No provider or tool is invoked until then.
+        let (uncertain_effects, hard_blocked) =
+            unresolved_effects_for_checkpoint(&conn, &source.id, checkpoint.3.as_deref())?;
         let has_uncertain = !uncertain_effects.is_empty();
-        let hard_blocked = has_uncertain
-            && uncertain_effects.iter().any(|effect| {
-                effect
-                    .get("replay_safe")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(false)
-            });
         if hard_blocked {
             let _ = conn.execute(
                 "INSERT INTO resume_plan
@@ -2546,8 +2570,8 @@ impl RunManager {
             );
             return Ok(ResumeRunResponse {
                 decision: ResumeDecision::Blocked,
-                reason: "side-effect ledger has uncertain effects that are not replay-safe; resume is not possible".into(),
-                reason_code: "uncertain_side_effects_blocked".into(),
+                reason: "side-effect ledger has effects not covered by the checkpoint cursor that are not replay-safe; resume is not possible".into(),
+                reason_code: "uncovered_side_effects_blocked".into(),
                 unresolved_effects: uncertain_effects,
                 new_run_id: None,
             });
@@ -2566,13 +2590,14 @@ impl RunManager {
             );
             return Ok(ResumeRunResponse {
                 decision: ResumeDecision::ConfirmationRequired,
-                reason: "run has uncertain side effects; confirm before resume".into(),
-                reason_code: "uncertain_side_effects_confirmation_required".into(),
+                reason:
+                    "run has effects not covered by the checkpoint cursor; confirm before resume"
+                        .into(),
+                reason_code: "uncovered_side_effects_confirmation_required".into(),
                 unresolved_effects: uncertain_effects,
                 new_run_id: None,
             });
         }
-        drop(stmt);
         drop(conn);
         // Safe or explicitly confirmed: create a fresh independent run. This
         // revives no old Future, permission waiter, or credential lease.
@@ -4239,16 +4264,136 @@ mod tests {
     }
 
     #[test]
-    fn side_effect_resume_gate_allows_settled_effects() {
-        // Regression guard: fully settled effects must not block resume.
+    fn resume_blocks_on_external_effect_after_checkpoint_cursor() {
+        // G01: a checkpoint covers only the ledger prefix it was captured at.
+        // A completed EXTERNAL effect recorded after the checkpoint cursor has
+        // an unknown outcome — resuming from the old checkpoint and re-running
+        // would silently replay that side effect. Resume must hard-block even
+        // when the caller confirms, because the external outcome is unprovable.
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            // Make the checkpoint cursor a real integer ledger watermark (the
+            // fixture placeholder 'ledger-1' is not a sequence).
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "UPDATE checkpoint SET side_effect_ledger_cursor = '1' WHERE run_id = ?1",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record
+                     (id, run_id, tool_call_id, category, status, replay_safe, ledger_sequence)
+                     VALUES
+                       ('effect-covered', ?1, 'call-a', 'workspace_file', 'completed', 1, 1),
+                       ('effect-after-cursor', ?1, 'call-b', 'process', 'completed', 0, 2)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: true,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::Blocked,
+                "an external effect after the checkpoint cursor must hard-block resume"
+            );
+            assert!(
+                response.new_run_id.is_none(),
+                "Blocked resume must not create a run"
+            );
+        });
+    }
+
+    #[test]
+    fn resume_confirmation_required_for_workspace_effect_after_cursor() {
+        // G01: even a replay-safe (workspace) effect recorded after the
+        // checkpoint cursor is not covered by the checkpoint; without explicit
+        // confirmation resume must not silently continue. Confirming turns it
+        // into a safe continue (the checkpoint captures the file before-image).
         with_env_lock(|| {
             let (store, source_id) = resume_fixture();
             store
                 .conn()
                 .unwrap()
                 .execute(
-                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe)
-                     VALUES ('effect-settled', ?1, 'process', 'completed', 1)",
+                    "UPDATE checkpoint SET side_effect_ledger_cursor = '1' WHERE run_id = ?1",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record
+                     (id, run_id, tool_call_id, category, status, replay_safe, ledger_sequence)
+                     VALUES
+                       ('effect-covered', ?1, 'call-a', 'workspace_file', 'completed', 1, 1),
+                       ('effect-after-cursor-ws', ?1, 'call-c', 'workspace_file', 'completed', 1, 2)",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let response = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: false,
+                })
+                .unwrap();
+            assert_eq!(
+                response.decision,
+                ResumeDecision::ConfirmationRequired,
+                "a post-cursor workspace effect needs explicit confirmation, not silent resume"
+            );
+            assert!(response.new_run_id.is_none());
+            // With explicit confirmation the workspace effect is safe to cover.
+            let confirmed = rm
+                .resume_run(ResumeRunRequest {
+                    run_id: source_id.clone(),
+                    checkpoint_id: None,
+                    content: None,
+                    confirmed: true,
+                })
+                .unwrap();
+            assert!(
+                confirmed.new_run_id.is_some(),
+                "confirmed resume of a workspace post-cursor effect continues"
+            );
+        });
+    }
+
+    #[test]
+    fn side_effect_resume_gate_allows_settled_effects() {
+        // Regression guard: fully settled effects AT or BEFORE the checkpoint
+        // cursor are covered by the checkpoint and must not block resume.
+        with_env_lock(|| {
+            let (store, source_id) = resume_fixture();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "UPDATE checkpoint SET side_effect_ledger_cursor = '1' WHERE run_id = ?1",
+                    rusqlite::params![&source_id],
+                )
+                .unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO side_effect_record (id, run_id, category, status, replay_safe, ledger_sequence)
+                     VALUES ('effect-settled', ?1, 'process', 'completed', 1, 1)",
                     rusqlite::params![&source_id],
                 )
                 .unwrap();
@@ -4264,7 +4409,7 @@ mod tests {
             assert_eq!(
                 response.decision,
                 ResumeDecision::SafeToContinue,
-                "settled effects must not block resume"
+                "settled effects covered by the checkpoint cursor must not block resume"
             );
         });
     }

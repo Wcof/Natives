@@ -195,14 +195,18 @@ pub trait EngineToolRuntime: Send + Sync {
 
     /// Called when a handler returned but the authoritative completion fact
     /// could not be persisted. Production runtimes record this as `uncertain`
-    /// so resume code cannot replay an unknown side effect.
+    /// so resume code cannot replay an unknown side effect. Returns Err when
+    /// the uncertain fact itself could not be persisted — the caller must then
+    /// fail the run with a `recovery_blocked` terminal so a later resume can
+    /// never assume a side effect it cannot prove.
     async fn mark_tool_call_uncertain(
         &self,
         _call_id: &str,
         _name: &str,
         _turn_id: Option<&str>,
         _input: &Value,
-    ) {
+    ) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -487,6 +491,11 @@ pub enum EngineError {
     DoomLoop(crate::doom_loop::DoomLoopReason),
     #[error("max steps exceeded")]
     MaxSteps,
+    /// The authoritative completion fact AND the uncertain ledger recording
+    /// both failed to persist. The run must terminate with a `recovery_blocked`
+    /// code so a later resume never assumes a side effect it cannot prove.
+    #[error("recovery_blocked: {0}")]
+    RecoveryBlocked(String),
 }
 
 impl EngineError {
@@ -497,6 +506,7 @@ impl EngineError {
             Self::DoomLoop(_) => "doom_loop",
             Self::MaxSteps => "max_steps",
             Self::Message(_) => "provider",
+            Self::RecoveryBlocked(_) => "recovery_blocked",
         }
     }
 
@@ -1931,10 +1941,24 @@ impl AgentEngine {
                         result_message_id: Some(result_message_id),
                     },
                 ) {
+                    let uncertain = tools
+                        .mark_tool_call_uncertain(
+                            &prepared[i].id,
+                            &prepared[i].name,
+                            Some(turn_id),
+                            &serde_json::from_str(&prepared[i].args)
+                                .unwrap_or(Value::String(prepared[i].args.clone())),
+                        )
+                        .await;
                     self.cancel.cancel();
                     self.progress_sink
                         .mark_tool_call_settled(&prepared[i].id)
                         .await;
+                    if let Err(uncertain_error) = uncertain {
+                        return Err(EngineError::RecoveryBlocked(format!(
+                            "completion fact AND uncertain ledger recording both failed: completion={error}; uncertain={uncertain_error}"
+                        )));
+                    }
                     return Err(error);
                 }
                 if !keeps_progress {
@@ -2021,7 +2045,7 @@ impl AgentEngine {
                             result_message_id: Some(result_message_id.clone()),
                         },
                     ) {
-                        tools
+                        let uncertain = tools
                             .mark_tool_call_uncertain(
                                 &call.id,
                                 &call.name,
@@ -2031,6 +2055,11 @@ impl AgentEngine {
                             .await;
                         self.cancel.cancel();
                         self.progress_sink.mark_tool_call_settled(&call.id).await;
+                        if let Err(uncertain_error) = uncertain {
+                            return Err(EngineError::RecoveryBlocked(format!(
+                                "completion fact AND uncertain ledger recording both failed: completion={error}; uncertain={uncertain_error}"
+                            )));
+                        }
                         return Err(error);
                     }
                     if !is_long_running_tool_result(&result) {
@@ -2086,11 +2115,16 @@ impl AgentEngine {
                     result_message_id: Some(result_message_id.clone()),
                 },
             ) {
-                tools
+                let uncertain = tools
                     .mark_tool_call_uncertain(&call.id, &call.name, Some(turn_id), &call.input)
                     .await;
                 self.cancel.cancel();
                 self.progress_sink.mark_tool_call_settled(&call.id).await;
+                if let Err(uncertain_error) = uncertain {
+                    return Err(EngineError::RecoveryBlocked(format!(
+                        "completion fact AND uncertain ledger recording both failed: completion={error}; uncertain={uncertain_error}"
+                    )));
+                }
                 return Err(error);
             }
             if !is_long_running_tool_result(&result) {

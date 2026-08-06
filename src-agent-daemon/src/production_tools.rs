@@ -521,8 +521,8 @@ impl EngineToolRuntime for PermissionGatedTools {
         name: &str,
         turn_id: Option<&str>,
         input: &Value,
-    ) {
-        let _ = crate::side_effect_ledger::record_tool_effect_state(
+    ) -> Result<(), String> {
+        crate::side_effect_ledger::record_tool_effect_state(
             &self.parent_run_id,
             call_id,
             name,
@@ -531,7 +531,7 @@ impl EngineToolRuntime for PermissionGatedTools {
             false,
             turn_id,
             input,
-        );
+        )
     }
 
     async fn execute_tool_with_progress(
@@ -4437,10 +4437,13 @@ mod plan_mode_runtime_tests {
         // interaction/session_actor rows reference conversation + run, so the
         // fixture must create the FK stubs before the prompt is raised.
         let conv_id = format!("conv-{id}");
-        crate::conversation_store::ensure_conversation_stub(&conv_id, "openai", "gpt-4o", None, None)
-            .unwrap();
+        crate::conversation_store::ensure_conversation_stub(
+            &conv_id, "openai", "gpt-4o", None, None,
+        )
+        .unwrap();
         {
-            let store = crate::storage::DataStore::new(&db, &env_dir.path().join("artifacts")).unwrap();
+            let store =
+                crate::storage::DataStore::new(&db, &env_dir.path().join("artifacts")).unwrap();
             store
                 .conn()
                 .unwrap()
@@ -4522,10 +4525,13 @@ mod plan_mode_runtime_tests {
         // interaction/session_actor rows reference conversation + run, so the
         // fixture must create the FK stubs before the prompt is raised.
         let conv_id = format!("conv-{id}");
-        crate::conversation_store::ensure_conversation_stub(&conv_id, "openai", "gpt-4o", None, None)
-            .unwrap();
+        crate::conversation_store::ensure_conversation_stub(
+            &conv_id, "openai", "gpt-4o", None, None,
+        )
+        .unwrap();
         {
-            let store = crate::storage::DataStore::new(&db, &env_dir.path().join("artifacts")).unwrap();
+            let store =
+                crate::storage::DataStore::new(&db, &env_dir.path().join("artifacts")).unwrap();
             store
                 .conn()
                 .unwrap()
