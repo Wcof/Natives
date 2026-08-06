@@ -49,6 +49,7 @@ pub const ALL: &[(i64, &str)] = &[
     (31, MIGRATION_031),
     (32, MIGRATION_032),
     (33, MIGRATION_033),
+    (34, MIGRATION_034),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -1190,6 +1191,17 @@ CREATE TABLE IF NOT EXISTS interaction_outbox (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_interaction_outbox_delivered ON interaction_outbox(delivered);
+";
+
+/// T02 (G01): make ledger sequences unique per run so concurrent tool effects
+/// can never collide on the same watermark. The per-run allocation serializes
+/// on the DataStore connection mutex; this partial unique index backstops any
+/// cross-connection race while leaving legacy NULL-sequence rows (already
+/// `legacy_unverifiable`) exempt.
+const MIGRATION_034: &str = "
+CREATE UNIQUE INDEX IF NOT EXISTS idx_side_effect_run_sequence
+    ON side_effect_record(run_id, ledger_sequence)
+    WHERE ledger_sequence IS NOT NULL;
 ";
 
 #[cfg(test)]

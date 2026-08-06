@@ -958,6 +958,100 @@ async fn critical_turn_event_persistence_failure_stops_provider_call() {
 }
 
 #[tokio::test]
+async fn recovery_blocked_when_completion_and_uncertain_both_fail() {
+    // T02: when the ToolCallCompleted fact CANNOT be persisted AND the
+    // runtime's uncertain recording ALSO fails, the engine must terminate the
+    // run with a distinct `recovery_blocked` code — a later resume must never
+    // assume a side effect it cannot prove.
+    struct FailsOnToolCallCompleted;
+    impl EventPersistence for FailsOnToolCallCompleted {
+        fn append(&self, event: &assistant_protocol::v2::RunEventV2) -> Result<(), String> {
+            if matches!(
+                event.payload,
+                assistant_protocol::v2::RunEventKind::ToolCallCompleted { .. }
+            ) {
+                return Err("disk unavailable".into());
+            }
+            Ok(())
+        }
+        fn replay_after(
+            &self,
+            _: &str,
+            _: u64,
+        ) -> Result<Vec<assistant_protocol::v2::RunEventV2>, String> {
+            Ok(Vec::new())
+        }
+        fn last_sequence(&self, _: &str) -> Result<u64, String> {
+            Ok(0)
+        }
+    }
+    struct FailingUncertainTools;
+    #[async_trait::async_trait]
+    impl EngineToolRuntime for FailingUncertainTools {
+        async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+            vec![ToolSchema {
+                name: "echo".into(),
+                description: "echo".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }]
+        }
+        async fn execute_tool(
+            &self,
+            name: &str,
+            input: Value,
+            _cancel: &CancellationToken,
+        ) -> ToolExecutionResult {
+            ToolExecutionResult {
+                output: serde_json::json!({"tool": name, "input": input}),
+                is_error: false,
+                duration_ms: 1,
+            }
+        }
+        async fn mark_tool_call_uncertain(
+            &self,
+            _call_id: &str,
+            _name: &str,
+            _turn_id: Option<&str>,
+            _input: &Value,
+        ) -> Result<(), String> {
+            Err("uncertain recording also failed".into())
+        }
+    }
+    let provider = FakeProvider {
+        rounds: Mutex::new(vec![vec![
+            EngineProviderEvent::ToolCallDelta {
+                index: 0,
+                id: Some("t1".into()),
+                name: Some("echo".into()),
+                arguments_delta: r#"{"x":1}"#.into(),
+            },
+            EngineProviderEvent::Completed,
+        ]]),
+    };
+    let result = AgentEngine::new(EventSequencer::with_persistence(Arc::new(
+        FailsOnToolCallCompleted,
+    )))
+    .run(
+        EngineRunConfig {
+            run_id: "recovery-blocked".into(),
+            conversation_id: "conversation".into(),
+            model: "model".into(),
+            system_prompt: None,
+            messages: Vec::new(),
+            user_content: "hello".into(),
+            max_steps: 1,
+        },
+        &provider,
+        &FailingUncertainTools,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(EngineError::RecoveryBlocked(_))),
+        "double persistence failure must surface recovery_blocked, got {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn executes_tool_then_completes() {
     let engine = AgentEngine::new(EventSequencer::new());
     let provider = FakeProvider {
