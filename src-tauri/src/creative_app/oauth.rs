@@ -67,7 +67,9 @@ pub enum NewWindowDecision {
 /// Decide what to do with a `window.open` URL.
 ///
 /// - Loopback + `window_open` grant → `GrantAllow` (atomic one-time consume
-///   or persistent). Without a grant → `Deny` (no side effect).
+///   or persistent). The caller re-homes the popup into a controlled child
+///   webview (loopback-only); the default OS popup is never allowed because
+///   its navigation would not be restricted.
 /// - Allowlisted OAuth host → `OAuthDivert` (the popup itself is denied; the
 ///   flow moves to a controlled temp surface).
 /// - Any other remote host → `Deny`, even with a grant — a grant never widens

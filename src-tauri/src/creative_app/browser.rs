@@ -39,6 +39,52 @@ pub fn child_label(app_id: &str) -> String {
     format!("{}{}", CHILD_LABEL_PREFIX, sanitize_label(app_id))
 }
 
+/// Label prefix for grant-approved popup webviews (window.open with a
+/// `window_open` grant). Distinct from the Embed and OAuth namespaces and from
+/// the `main` capability filter.
+const POPUP_LABEL_PREFIX: &str = "creative-popup-";
+
+/// Open a grant-approved popup: a child webview in the main window with a
+/// unique label, the app's profile data store (shared cookies), loopback-only
+/// navigation, and no Tauri capability. Returns the new webview's label.
+///
+/// The default OS popup (`NewWindowResponse::Allow`) is never used — its
+/// navigation would not be restricted. A granted window.open is re-homed into
+/// this controlled child surface instead.
+pub fn open_popup(app: &AppHandle, app_id: &str, url: &tauri::Url) -> Result<String> {
+    if !navigation_allowed(url.as_str()) {
+        return Err(Error::InvalidInput(
+            "popup must target a loopback address".into(),
+        ));
+    }
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| Error::Internal("main window not found".into()))?;
+    let store_identifier = db::get_main_conn()
+        .ok()
+        .and_then(|conn| profile_store::profile_for_app(&conn, app_id).ok())
+        .and_then(|profile| profile_store::data_store_identifier(&profile));
+
+    let label = format!("{POPUP_LABEL_PREFIX}{}", uuid::Uuid::new_v4());
+    let mut builder = tauri::webview::WebviewBuilder::new(
+        label.clone(),
+        tauri::WebviewUrl::External(url.clone()),
+    )
+    .on_navigation(|nav_url| navigation_allowed(nav_url.as_str()));
+    if let Some(identifier) = store_identifier {
+        builder = builder.data_store_identifier(identifier);
+    }
+    let window = main.as_ref().window();
+    window
+        .add_child(
+            builder,
+            tauri::LogicalPosition::new(160.0, 120.0),
+            tauri::LogicalSize::new(560.0, 480.0),
+        )
+        .map_err(|e| Error::Internal(format!("popup add_child: {e}")))?;
+    Ok(label)
+}
+
 #[derive(Default, Clone)]
 pub struct ActiveEntry {
     pub app_id: String,
@@ -193,7 +239,14 @@ pub fn browser_show(
                     divert_oauth(&app_handle, &win_registry, &app_id_owned, &url);
                     tauri::webview::NewWindowResponse::Deny
                 }
-                Some(NewWindowDecision::GrantAllow) => tauri::webview::NewWindowResponse::Allow,
+                Some(NewWindowDecision::GrantAllow) => {
+                    // Grant-approved loopback popup: re-home into a controlled
+                    // child webview (loopback-only, shared profile store) and
+                    // deny the default OS popup whose navigation would be
+                    // unrestricted.
+                    let _ = open_popup(&app_handle, &app_id_owned, &url);
+                    tauri::webview::NewWindowResponse::Deny
+                }
                 _ => {
                     // Default deny — surface the denial so the Renderer can
                     // offer a grant. No window is created, no side effect.
@@ -222,12 +275,8 @@ pub fn browser_show(
                 // Resolve the Host-chosen destination first (grant scope dir or
                 // the managed per-app dir) and a sanitized filename, then gate
                 // it with the download grant against that directory.
-                match downloads::safe_download_destination(
-                    &conn,
-                    &app_id_owned,
-                    &url,
-                    destination,
-                ) {
+                match downloads::safe_download_destination(&conn, &app_id_owned, &url, destination)
+                {
                     Some(path) => {
                         let dir = path.parent().and_then(|p| p.to_str());
                         match grant_store::check_grant(
@@ -401,6 +450,17 @@ mod tests {
     fn child_label_handles_empty_input() {
         let label = child_label("");
         assert_eq!(label, "creative-app-");
+    }
+
+    #[test]
+    fn popup_label_is_unique_and_distinct_from_embed_and_oauth() {
+        // A granted window.open is re-homed into a controlled popup surface
+        // whose label never matches the Embed child label or the "main" filter.
+        let label = format!("{POPUP_LABEL_PREFIX}{}", uuid::Uuid::new_v4());
+        assert!(label.starts_with("creative-popup-"));
+        assert!(!label.contains("main"));
+        assert!(!label.starts_with("creative-app-"));
+        assert!(!label.starts_with("creative-oauth-"));
     }
 
     #[test]

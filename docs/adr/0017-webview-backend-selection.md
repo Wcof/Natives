@@ -167,6 +167,7 @@ T08（Creative BrowserProfile / OAuth / grants）在 Tauri 2.11.5 + wry 0.55.1 �
 
 - `data_store_identifier` 是 per-WebView store 绑定，不是 per-process 隔离；多 WebView 仍共享进程。真正进程级隔离（`_WKProcessPool`）仍不可用，维持拒绝方案 C。
 - OAuth 回调判定为「临时 surface 内任意 loopback 导航」；多段 loopback 流程（本地登录页先于 callback）会把第一段 loopback 当作回调。T08 按「authorize → 一次性 callback」契约交付，超出契约的流程需后续 ADR 扩展。
+- **OAuth 凭证边界（R-S12/R-S13）**：T08 的 Host 边界是受控授权 surface（allowlist 导航 + 临时 incognito window + 完成/取消清理）。临时 surface 不持久化任何 token/refresh；回调仅携带授权 code 返回给发起方做 app 专属 exchange（Redirect URI 需与 app 在 Provider 注册的 loopback 回调一致，Host 无法替 app 构造 authorize URL）。exchange 得到的 refresh token 必须经现有 `capability_secrets`（AES-256-GCM envelope，R-S12）持久化，禁止明文落盘。Host 侧完整 exchange 路径由 `mcp_oauth_start`（ADR-0016 decision 7）提供，面向已知 token endpoint 的场景。
 
 ## 参考
 

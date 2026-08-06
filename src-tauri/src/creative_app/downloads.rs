@@ -53,12 +53,26 @@ pub fn safe_download_destination(
     url: &tauri::Url,
     suggested: &std::path::Path,
 ) -> Option<PathBuf> {
+    download_destination_in(conn, app_id, url, suggested, None)
+}
+
+/// [`safe_download_destination`] with an injectable managed-dir base so tests
+/// never touch the real convention root (`~/.natives`).
+fn download_destination_in(
+    conn: &Connection,
+    app_id: &str,
+    url: &tauri::Url,
+    suggested: &std::path::Path,
+    managed_base: Option<&std::path::Path>,
+) -> Option<PathBuf> {
     let dir = match grant_store::grant_scope(conn, app_id, AppGrant::KIND_DOWNLOAD)
         .ok()
         .flatten()
     {
         Some(scope) if !scope.trim().is_empty() => PathBuf::from(scope),
-        _ => default_download_dir(app_id)?,
+        _ => managed_base
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| default_download_dir(app_id))?,
     };
     std::fs::create_dir_all(&dir).ok()?;
 
@@ -116,14 +130,21 @@ mod tests {
     fn download_uses_managed_dir_when_no_scope() {
         let conn = fixture();
         ensure_app(&conn, "app-dl");
+        let base = tempfile::tempdir().unwrap();
         let url: tauri::Url = "http://127.0.0.1:8080/files/report.pdf".parse().unwrap();
-        let dest =
-            safe_download_destination(&conn, "app-dl", &url, Path::new("report.pdf")).unwrap();
+        let dest = download_destination_in(
+            &conn,
+            "app-dl",
+            &url,
+            Path::new("report.pdf"),
+            Some(base.path()),
+        )
+        .unwrap();
         assert!(dest.ends_with("report.pdf"));
-        let parent = dest.parent().unwrap();
-        assert!(
-            parent.to_string_lossy().contains(".natives"),
-            "Host-managed dir must live under the convention root: {parent:?}"
+        assert_eq!(
+            dest.parent().unwrap(),
+            base.path(),
+            "Host-managed dir must be the injected base"
         );
     }
 
@@ -131,28 +152,35 @@ mod tests {
     fn download_respects_grant_scope() {
         let conn = fixture();
         ensure_app(&conn, "app-dl");
+        let scope = tempfile::tempdir().unwrap();
         grant_store::set_grant(
             &conn,
             "app-dl",
             AppGrant::KIND_DOWNLOAD,
             AppGrant::POLICY_PERSISTENT,
-            Some("/tmp/app-dl-scope"),
+            scope.path().to_str(),
         )
         .unwrap();
         let url: tauri::Url = "http://127.0.0.1:8080/files/report.pdf".parse().unwrap();
         let dest =
             safe_download_destination(&conn, "app-dl", &url, Path::new("report.pdf")).unwrap();
-        let parent = dest.parent().unwrap();
-        assert_eq!(parent, Path::new("/tmp/app-dl-scope"));
+        assert_eq!(dest.parent().unwrap(), scope.path());
     }
 
     #[test]
     fn download_sanitizes_url_filename() {
         let conn = fixture();
         ensure_app(&conn, "app-dl");
+        let base = tempfile::tempdir().unwrap();
         let url: tauri::Url = "http://127.0.0.1:8080/../../etc/passwd".parse().unwrap();
-        let dest =
-            safe_download_destination(&conn, "app-dl", &url, Path::new("fallback.bin")).unwrap();
+        let dest = download_destination_in(
+            &conn,
+            "app-dl",
+            &url,
+            Path::new("fallback.bin"),
+            Some(base.path()),
+        )
+        .unwrap();
         let name = dest.file_name().unwrap().to_string_lossy().to_string();
         assert_eq!(name, "passwd");
     }

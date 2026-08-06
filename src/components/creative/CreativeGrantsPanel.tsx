@@ -206,6 +206,34 @@ export default function CreativeGrantsPanel({
                   {t(locale, 'creative.profile.bindHint')}
                 </span>
               </div>
+              <div className="flex items-center gap-1.5">
+                <input
+                  data-testid="new-profile-name"
+                  className="flex-1 h-7 px-2 text-xs rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                  placeholder={t(locale, 'creative.profile.createPlaceholder')}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    const name = e.currentTarget.value.trim();
+                    if (!name) return;
+                    e.currentTarget.value = '';
+                    void run('create-profile', () => window.nativesAPI!.creativeApp.profileCreate(name), 'creative.profile.createSuccess');
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={busy === 'create-profile'}
+                  className="h-7 px-2 rounded text-[11px] border border-[var(--border)] disabled:opacity-50"
+                  onClick={() => {
+                    const input = document.querySelector<HTMLInputElement>('[data-testid="new-profile-name"]');
+                    const name = input?.value.trim() ?? '';
+                    if (!name) return;
+                    if (input) input.value = '';
+                    void run('create-profile', () => window.nativesAPI!.creativeApp.profileCreate(name), 'creative.profile.createSuccess');
+                  }}
+                >
+                  {t(locale, 'creative.profile.create')}
+                </button>
+              </div>
             </section>
 
             {oauthDomains.length > 0 && (
