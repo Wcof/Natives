@@ -143,6 +143,16 @@ impl FailurePolicy {
         }
     }
 
+    /// Stable wire name for persistence (inverse of [`Self::parse`]).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Isolate => "isolate",
+            Self::FailFast => "fail_fast",
+            Self::RequireAll => "require_all",
+            Self::Retry => "retry",
+        }
+    }
+
     /// What a terminal child *failure* must do to the parent run.
     ///
     /// This is the single decision the production watcher consumes (T05).
@@ -664,6 +674,26 @@ impl SubAgentManager {
     /// Backward-compatible alias — metadata only (engines are cancelled by cancel_run_tree).
     pub async fn cascade_cancel(&self, parent_run_id: &str) -> usize {
         self.cascade_cancel_metadata(parent_run_id).await
+    }
+
+    /// Re-point a sub-agent's run id (Retry re-queue) without touching status
+    /// or the concurrent slot — the slot stays reserved across the retry.
+    pub async fn update_run_id(&self, id: &str, new_run_id: &str) -> Result<(), String> {
+        let mut agents = self.agents.lock().await;
+        let Some(agent) = agents.get_mut(id) else {
+            return Err(format!("Sub-agent '{}' not found", id));
+        };
+        let old_run = agent.run_id.clone();
+        if old_run == new_run_id {
+            return Ok(());
+        }
+        agent.run_id = new_run_id.to_string();
+        drop(agents);
+        let mut ledger = self.ledger.lock().await;
+        if let Some(depth) = ledger.depth_of.remove(&old_run) {
+            ledger.depth_of.insert(new_run_id.to_string(), depth);
+        }
+        Ok(())
     }
 
     /// Update sub-agent status.

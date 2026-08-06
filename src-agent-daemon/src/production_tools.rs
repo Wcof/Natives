@@ -6,10 +6,10 @@
 //! unchanged from the pre-split single-file version.
 
 use agent_core::{
-    default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime, EventSequencer, HookEvent,
-    HookRegistry, HookRequest, NoopToolProgressSink, PermissionAggregate, PermissionManager,
-    PermissionProfile, SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolProgressSink,
-    ToolProgressUpdate, ToolSchema,
+    default_subagent_tool_allowlist, AgentEngine, ChildFailureEffect, EngineToolRuntime,
+    EventSequencer, FailurePolicy, HookEvent, HookRegistry, HookRequest, NoopToolProgressSink,
+    PermissionAggregate, PermissionManager, PermissionProfile, SubAgentManager, SubAgentStatus,
+    ToolExecutionResult, ToolProgressSink, ToolProgressUpdate, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
@@ -33,6 +33,10 @@ pub const DEFAULT_CHILD_MAX_STEPS: u32 = 15;
 /// the tool-call and token ledgers in `SubAgentManager` bound cost too, this
 /// bounds wall-clock turns.
 pub const MAX_CHILD_MAX_STEPS: u32 = 100;
+
+/// Ceiling on `max_retries` for a Retry failure policy. Retries are bounded so
+/// a failing child cannot re-queue itself (or be re-queued by a parent) forever.
+pub const MAX_SUBAGENT_RETRIES: u32 = 5;
 
 /// Ceiling on the parent-authored child system prompt, in UTF-8 bytes. Long
 /// enough for a real persona brief, short enough that it cannot crowd out the
@@ -2900,6 +2904,32 @@ impl PermissionGatedTools {
             .unwrap_or(DEFAULT_CHILD_MAX_STEPS)
             .clamp(1, MAX_CHILD_MAX_STEPS);
 
+        // ── T05: failure policy + budget (persisted on the reservation) ──
+        //
+        // The policy decides what a terminal child failure does to the parent:
+        // Isolate (default) keeps the parent running, FailFast fails it and
+        // cancels siblings, RequireAll aggregates a batch failure, Retry
+        // re-queues transient provider failures up to `max_retries`. Budgets
+        // are capped by the daemon config so a parent can never buy a child
+        // bigger than the machine-wide ceiling.
+        let failure_policy = input
+            .get("failure_policy")
+            .and_then(|v| v.as_str())
+            .map(FailurePolicy::parse)
+            .unwrap_or(self.subagents.config().failure_policy);
+        let max_retries = input
+            .get("max_retries")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.min(MAX_SUBAGENT_RETRIES as u64) as u32)
+            .unwrap_or(0);
+        let child_max_tokens = input
+            .get("max_tokens")
+            .or_else(|| input.get("max_budget_tokens"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v.min(self.subagents.config().max_tokens_per_child))
+            .unwrap_or(self.subagents.config().max_tokens_per_child);
+        let child_max_cost = input.get("max_cost_usd").and_then(|v| v.as_f64());
+
         // Persisted on the child run row and reported to every observer of this
         // spawn. A roster member wins over a parent-named persona because child
         // capability resolve loads the member's skills from this id (ADR-0016);
@@ -2980,32 +3010,45 @@ impl PermissionGatedTools {
         // identity (id + version) — never write the project path into
         // project_id. A persist failure fails closed BEFORE any child run is
         // created.
+        //
+        // Fixture mode (offline tests) has no durable store: the session is a
+        // fake id and there is nothing to persist, so the DB steps are skipped
+        // to keep the fixture path hermetic.
         let identity = self.verified_project_identity().await;
-        if let Err(error) = crate::subagent_store::persist_subagent_scope(
-            &session_id,
-            &crate::subagent_store::SubagentScope {
-                project_path: self.gateway.project_root.clone(),
-                project_id: identity
-                    .as_ref()
-                    .map(|i| i.project_id.clone())
-                    .or_else(|| self.gateway.project_root.clone()),
-                project_identity_version: identity.as_ref().map(|i| i.identity_version as i64),
-                permission_profile: Some(child_perm.clone()),
-                agent_profile_id: child_profile_id.clone(),
-                max_steps: Some(child_max_steps as i64),
-                tool_allowlist: child_allowlist.clone(),
-            },
-        ) {
-            let _ =
-                crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&error));
-            return ToolExecutionResult {
-                output: serde_json::json!({
-                    "error": format!("persist child scope failed: {error}"),
-                    "code": "PERSISTENCE_FAILED",
-                }),
-                is_error: true,
-                duration_ms: 0,
-            };
+        let fixture_mode = use_fixture_flag(&input);
+        let project_id_for_scope = identity
+            .as_ref()
+            .map(|i| i.project_id.clone())
+            .or_else(|| self.gateway.project_root.clone());
+        if !fixture_mode {
+            if let Err(error) = crate::subagent_store::persist_subagent_scope(
+                &session_id,
+                &crate::subagent_store::SubagentScope {
+                    project_path: self.gateway.project_root.clone(),
+                    project_id: project_id_for_scope.clone(),
+                    project_identity_version: identity
+                        .as_ref()
+                        .map(|i| i.identity_version as i64),
+                    permission_profile: Some(child_perm.clone()),
+                    agent_profile_id: child_profile_id.clone(),
+                    max_steps: Some(child_max_steps as i64),
+                    tool_allowlist: child_allowlist.clone(),
+                },
+            ) {
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some(&error),
+                );
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": format!("persist child scope failed: {error}"),
+                        "code": "PERSISTENCE_FAILED",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
         }
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
@@ -3050,6 +3093,52 @@ impl PermissionGatedTools {
             };
         }
 
+        // T05 saga phase 1 — durable reservation BEFORE the child run exists.
+        // If anything after this fails, the compensation releases the slot and
+        // closes the session in reverse order, idempotently. Fixture mode has
+        // no durable store and skips the reservation (slot lives in-memory).
+        let depth = self.subagents.depth_for_child(&self.parent_run_id).await;
+        if !fixture_mode {
+            let scope_snapshot = serde_json::json!({
+                "project_path": self.gateway.project_root.clone(),
+                "project_id": project_id_for_scope.clone(),
+                "project_identity_version": identity.as_ref().map(|i| i.identity_version as i64),
+                "permission_profile": child_perm.clone(),
+                "agent_profile_id": child_profile_id.clone(),
+                "max_steps": child_max_steps,
+                "tool_allowlist": child_allowlist.clone(),
+                "failure_policy": failure_policy.as_str(),
+                "max_tokens": child_max_tokens,
+            });
+            if let Err(error) = crate::subagent_store::reserve_subagent_slot(
+                &crate::subagent_store::SubagentReservation {
+                    session_id: session_id.clone(),
+                    parent_run_id: self.parent_run_id.clone(),
+                    tree_root_run_id: self.parent_run_id.clone(),
+                    depth,
+                    max_tokens: Some(child_max_tokens),
+                    max_cost_usd: child_max_cost,
+                    failure_policy: failure_policy.as_str().to_string(),
+                    max_retries,
+                    scope_snapshot,
+                },
+            ) {
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some(&error),
+                );
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": format!("subagent reservation failed: {error}"),
+                        "code": "SUBAGENT_RESERVE_FAILED",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
         let created = match crate::global_run_manager().create_run(
             assistant_protocol::v2::CreateRunRequest {
                 // Child runs never inherit the parent conversation's selection;
@@ -3075,6 +3164,8 @@ impl PermissionGatedTools {
         ) {
             Ok(r) => r,
             Err(e) => {
+                // Saga compensation: release the reserved slot, close session.
+                let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&e));
                 let _ =
                     crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
                 return ToolExecutionResult {
@@ -3110,6 +3201,9 @@ impl PermissionGatedTools {
         {
             Ok(c) => c,
             Err(e) => {
+                // Saga compensation (reverse order, idempotent): release the
+                // durable slot, fail the queued child run, close the session.
+                let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&e));
                 let _ =
                     crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
                 // E04: the child run was already created (queued) before the
@@ -3155,11 +3249,18 @@ impl PermissionGatedTools {
                 task: prompt.clone(),
             },
         ) {
+            // Saga compensation: cancel the child, release both slot ledgers
+            // (in-memory via a terminal status, durable via release), close.
             let _ = crate::global_run_manager()
                 .cancel(assistant_protocol::v2::CancelRunRequest {
                     run_id: child_run_id.clone(),
                 })
                 .await;
+            let _ = self
+                .subagents
+                .update_status(&session_id, SubAgentStatus::Failed(error.clone()))
+                .await;
+            let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&error));
             let _ =
                 crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&error));
             return ToolExecutionResult {
@@ -3208,6 +3309,19 @@ impl PermissionGatedTools {
                 .runtime
                 .take_run_agent_directive(&child_run_id)
                 .await;
+            // Saga compensation (T05): a failed start must not leave a
+            // registered child holding its in-memory slot nor a durable
+            // reservation with no live run behind it.
+            let _ = self
+                .subagents
+                .update_status(&session_id, SubAgentStatus::Failed(e.clone()))
+                .await;
+            let _ = crate::global_run_manager().fail_run_if_active(
+                &child_run_id,
+                format!("start child run failed: {e}"),
+                "SUBAGENT_START_FAILED",
+            );
+            let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&e));
             let _ = crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
             if let Some(rec) = self.task_outputs.lock().await.get_mut(&task_id) {
                 rec.status = "failed".into();
@@ -3220,203 +3334,33 @@ impl PermissionGatedTools {
             };
         }
 
-        // Background watcher: when RunManager marks the run terminal, update session/task.
-        let session_id_bg = session_id.clone();
-        let task_id_bg = task_id.clone();
-        let child_run_id_bg = child_run_id.clone();
-        let parent_run_id = self.parent_run_id.clone();
-        let events = self.events.clone();
-        let subagents = self.subagents.clone();
-        let task_outputs = self.task_outputs.clone();
-        let mem_task_id_bg = child.id.clone();
-        let child_timeout_ms = self.subagents.config().child_timeout_ms.max(1);
-        let tree_root_for_budget = self.parent_run_id.clone();
-        let subagents_for_budget = self.subagents.clone();
-        // Rebuilt inside the watcher rather than moved: `HookRegistry` holds
-        // boxed handlers and is not `Clone`, and rebuilding costs one discovery
-        // pass on a path that already waited for a whole child run.
-        let stop_hook_project = project_path.clone();
-        tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_millis(child_timeout_ms);
-            for _ in 0..3_600 {
-                if tokio::time::Instant::now() >= deadline {
-                    // Timeout → unified cancel tree for the child.
-                    crate::global_run_manager()
-                        .runtime
-                        .cancel_run(&child_run_id_bg)
-                        .await;
-                    let _ = crate::global_run_manager()
-                        .cancel(assistant_protocol::v2::CancelRunRequest {
-                            run_id: child_run_id_bg.clone(),
-                        })
-                        .await;
-                    let _ = crate::global_run_manager()
-                        .runtime
-                        .take_run_agent_directive(&child_run_id_bg)
-                        .await;
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                let Some(run) = crate::global_run_manager().get_run(&child_run_id_bg) else {
-                    continue;
-                };
-                let status = run.status.as_str().to_string();
-                if !run.status.is_terminal() {
-                    continue;
-                }
-                let child_events = match events.replay_after_checked(&child_run_id_bg, 0) {
-                    Ok(events) => events,
-                    Err(error) => {
-                        let message = format!("child event replay failed: {error}");
-                        let _ = subagents
-                            .update_status(&mem_task_id_bg, SubAgentStatus::Failed(message.clone()))
-                            .await;
-                        let _ = crate::subagent_store::close_subagent_session(
-                            &session_id_bg,
-                            "failed",
-                            Some(&message),
-                        );
-                        let _ = events.append_checked(
-                            &parent_run_id,
-                            RunEventKind::SubagentFailed {
-                                sub_run_id: child_run_id_bg.clone(),
-                                error: message.clone(),
-                            },
-                        );
-                        task_outputs.lock().await.insert(
-                            task_id_bg,
-                            TaskRecord {
-                                run_id: child_run_id_bg.clone(),
-                                status: "failed".into(),
-                                output: Some(message),
-                            },
-                        );
-                        break;
-                    }
-                };
-                let text = child_events
-                    .iter()
-                    .filter_map(|e| match &e.payload {
-                        RunEventKind::TextDelta { text } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .collect::<String>();
-                let mut task_output = text.clone();
-                let mut final_status = status.clone();
-                if status == "completed" {
-                    // Best-effort token settle from usage events + text estimate.
-                    let usage_tokens: u64 = child_events
-                        .iter()
-                        .filter_map(|e| match &e.payload {
-                            RunEventKind::UsageUpdated {
-                                input_tokens,
-                                output_tokens,
-                                ..
-                            } => Some((*input_tokens).saturating_add(*output_tokens)),
-                            _ => None,
-                        })
-                        .max()
-                        .unwrap_or_else(|| (text.len() as u64 / 4).max(1));
-                    let _ = subagents_for_budget
-                        .settle_tokens(&child_run_id_bg, &tree_root_for_budget, usage_tokens)
-                        .await;
-                    let _ = subagents
-                        .update_status(&mem_task_id_bg, SubAgentStatus::Completed)
-                        .await;
-                    let _ = crate::subagent_store::update_subagent_session_status(
-                        &session_id_bg,
-                        "completed",
-                        None,
-                    );
-                    if let Err(error) = events.append_checked(
-                        &parent_run_id,
-                        RunEventKind::SubagentCompleted {
-                            sub_run_id: child_run_id_bg.clone(),
-                            result: text.clone(),
-                        },
-                    ) {
-                        final_status = "failed".into();
-                        task_output =
-                            format!("PERSISTENCE_FAILED: subagent completion event: {error}");
-                        let _ = subagents
-                            .update_status(
-                                &mem_task_id_bg,
-                                SubAgentStatus::Failed(task_output.clone()),
-                            )
-                            .await;
-                        let _ = crate::subagent_store::close_subagent_session(
-                            &session_id_bg,
-                            "failed",
-                            Some(&task_output),
-                        );
-                    }
-                } else {
-                    let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
-                    if task_output.is_empty() {
-                        task_output = err_msg.clone();
-                    }
-                    let _ = subagents
-                        .update_status(&mem_task_id_bg, SubAgentStatus::Failed(err_msg.clone()))
-                        .await;
-                    let _ = crate::subagent_store::close_subagent_session(
-                        &session_id_bg,
-                        if status == "cancelled" || status == "interrupted" {
-                            "cancelled"
-                        } else {
-                            "failed"
-                        },
-                        Some(&err_msg),
-                    );
-                    if let Err(error) = events.append_checked(
-                        &parent_run_id,
-                        RunEventKind::SubagentFailed {
-                            sub_run_id: child_run_id_bg.clone(),
-                            error: err_msg,
-                        },
-                    ) {
-                        task_output =
-                            format!("PERSISTENCE_FAILED: subagent failure event: {error}");
-                    }
-                }
-                // SubagentStop fires for every terminal outcome, not just
-                // success — a hook watching for children that died is exactly
-                // the one worth having, and firing only on the happy path
-                // would make its absence mean two different things. The
-                // decision is ignored on purpose: the child is already over,
-                // so there is nothing left to deny.
-                let _ = crate::production_hooks::build_production_hooks_for_project(
-                    stop_hook_project.as_deref().map(std::path::Path::new),
-                )
-                .dispatch(HookRequest {
-                    event: HookEvent::SubagentStop,
-                    run_id: parent_run_id.clone(),
-                    tool_name: Some("task".into()),
-                    input: serde_json::json!({
-                        "sub_run_id": child_run_id_bg.clone(),
-                        "status": final_status.clone(),
-                        "output": text.clone(),
-                    }),
-                })
-                .await;
-
-                let rec = TaskRecord {
-                    run_id: child_run_id_bg.clone(),
-                    status: final_status,
-                    output: if task_output.is_empty() {
-                        None
-                    } else {
-                        Some(task_output)
-                    },
-                };
-                task_outputs.lock().await.insert(task_id_bg, rec);
-                // Terminal: drop any directive a non-native start path left behind.
-                let _ = crate::global_run_manager()
-                    .runtime
-                    .take_run_agent_directive(&child_run_id_bg)
-                    .await;
-                break;
-            }
-        });
+        // Background watcher: when RunManager marks the run terminal, update
+        // session/task, settle usage against the durable budget, apply the
+        // failure policy, and release the slot exactly once.
+        spawn_subagent_watcher(
+            self.events.clone(),
+            self.subagents.clone(),
+            self.task_outputs.clone(),
+            self.parent_run_id.clone(),
+            session_id.clone(),
+            session_id.clone(),
+            child_conversation_id.clone(),
+            child.id.clone(),
+            child_run_id.clone(),
+            project_path.clone(),
+            self.subagents.config().child_timeout_ms.max(1),
+            self.parent_run_id.clone(),
+            self.subagents.config().max_tokens_per_tree,
+            child_max_tokens,
+            binding,
+            child_perm.clone(),
+            child_allowlist.clone(),
+            child_profile_id.clone(),
+            child_directive.clone(),
+            child_max_steps,
+            failure_policy,
+            max_retries,
+        );
 
         ToolExecutionResult {
             output: serde_json::json!({
@@ -3852,6 +3796,878 @@ impl PermissionGatedTools {
             .ok_or_else(|| "subagent assignment produced no binding".into())
     }
 }
+
+/// Launch the background watcher for one child run (T05).
+///
+/// It polls the child to a terminal status, settles provider usage against the
+/// *durable* budget incrementally (cancelling the child the moment the budget
+/// is exceeded), consumes the persisted failure policy, releases the slot
+/// exactly once, and re-enters itself when `Retry` re-queues the child.
+#[allow(clippy::too_many_arguments)] // watcher re-entry needs the full child scope
+fn spawn_subagent_watcher(
+    events: EventSequencer,
+    subagents: Arc<SubAgentManager>,
+    task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
+    parent_run_id: String,
+    session_id: String,
+    task_id: String,
+    child_conversation_id: String,
+    mem_task_id: String,
+    child_run_id: String,
+    project_path: Option<String>,
+    child_timeout_ms: u64,
+    tree_root_for_budget: String,
+    max_tokens_per_tree: u64,
+    child_max_tokens: u64,
+    binding: crate::subagent_store::RouteBinding,
+    child_perm: String,
+    child_allowlist: Vec<String>,
+    child_profile_id: Option<String>,
+    child_directive: Option<String>,
+    child_max_steps: u32,
+    failure_policy: FailurePolicy,
+    max_retries: u32,
+) {
+    tokio::spawn(async move {
+        watch_subagent_run(
+            events,
+            subagents,
+            task_outputs,
+            parent_run_id,
+            session_id,
+            task_id,
+            child_conversation_id,
+            mem_task_id,
+            project_path,
+            child_timeout_ms,
+            tree_root_for_budget,
+            max_tokens_per_tree,
+            child_max_tokens,
+            binding,
+            child_perm,
+            child_allowlist,
+            child_profile_id,
+            child_directive,
+            child_max_steps,
+            failure_policy,
+            max_retries,
+            child_run_id,
+            0,
+            None,
+        )
+        .await;
+    });
+}
+
+/// Re-enter the watcher for a Retry re-queue with a fresh child run id.
+/// Same `async move` pattern as [`spawn_subagent_watcher`] so the spawned
+/// future stays `Send` (EventSequencer is Send but not Sync, so a direct
+/// `tokio::spawn(watch_subagent_run(...))` from inside an async fn is not).
+#[allow(clippy::too_many_arguments)] // watcher re-entry needs the full child scope
+fn spawn_retry_watcher(
+    events: EventSequencer,
+    subagents: Arc<SubAgentManager>,
+    task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
+    parent_run_id: String,
+    session_id: String,
+    task_id: String,
+    child_conversation_id: String,
+    mem_task_id: String,
+    project_path: Option<String>,
+    tree_root_for_budget: String,
+    child_max_tokens: u64,
+    binding: crate::subagent_store::RouteBinding,
+    child_perm: String,
+    child_allowlist: Vec<String>,
+    child_profile_id: Option<String>,
+    child_directive: Option<String>,
+    child_max_steps: u32,
+    failure_policy: FailurePolicy,
+    max_retries: u32,
+    new_run_id: String,
+) {
+    tokio::spawn(async move {
+        let timeout_ms = subagents.config().child_timeout_ms.max(1);
+        let tree_cap = subagents.config().max_tokens_per_tree;
+        watch_subagent_run(
+            events,
+            subagents,
+            task_outputs,
+            parent_run_id,
+            session_id,
+            task_id,
+            child_conversation_id,
+            mem_task_id,
+            project_path,
+            timeout_ms,
+            tree_root_for_budget,
+            tree_cap,
+            child_max_tokens,
+            binding,
+            child_perm,
+            child_allowlist,
+            child_profile_id,
+            child_directive,
+            child_max_steps,
+            failure_policy,
+            max_retries,
+            new_run_id,
+            0,
+            None,
+        )
+        .await;
+    });
+}
+
+#[allow(clippy::too_many_arguments)] // watcher re-entry needs the full child scope
+async fn watch_subagent_run(
+    events: EventSequencer,
+    subagents: Arc<SubAgentManager>,
+    task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
+    parent_run_id: String,
+    session_id: String,
+    task_id: String,
+    child_conversation_id: String,
+    mem_task_id: String,
+    project_path: Option<String>,
+    child_timeout_ms: u64,
+    tree_root_for_budget: String,
+    max_tokens_per_tree: u64,
+    // Child max tokens is enforced by the durable `subagent_session` budget;
+    // the in-memory ledger is kept for the tool-call hook only.
+    _child_max_tokens: u64,
+    binding: crate::subagent_store::RouteBinding,
+    child_perm: String,
+    child_allowlist: Vec<String>,
+    child_profile_id: Option<String>,
+    child_directive: Option<String>,
+    child_max_steps: u32,
+    failure_policy: FailurePolicy,
+    max_retries: u32,
+    child_run_id: String,
+    mut cursor: u64,
+    mut budget_exceeded: Option<String>,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(child_timeout_ms.max(1));
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            // Timeout → unified cancel tree for the child, then fail it.
+            crate::global_run_manager()
+                .runtime
+                .cancel_run(&child_run_id)
+                .await;
+            let _ = crate::global_run_manager()
+                .cancel(assistant_protocol::v2::CancelRunRequest {
+                    run_id: child_run_id.clone(),
+                })
+                .await;
+            let _ = crate::global_run_manager()
+                .runtime
+                .take_run_agent_directive(&child_run_id)
+                .await;
+            let message = format!("subagent timed out after {}ms", child_timeout_ms.max(1));
+            let _ = crate::subagent_store::settle_subagent_usage(&session_id, 0, None);
+            child_failed_terminal(
+                events.clone(),
+                &subagents,
+                &task_outputs,
+                &parent_run_id,
+                &session_id,
+                &task_id,
+                &mem_task_id,
+                &child_run_id,
+                &project_path,
+                &message,
+                failure_policy,
+                max_retries,
+                &binding,
+                &child_conversation_id,
+                &child_perm,
+                &child_allowlist,
+                &child_profile_id,
+                &child_directive,
+                child_max_steps,
+            )
+            .await;
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let Some(run) = crate::global_run_manager().get_run(&child_run_id) else {
+            continue;
+        };
+        let status = run.status.as_str().to_string();
+
+        // Incremental usage settle: replay events after the cursor, feed every
+        // new UsageUpdated delta into the durable budget, and cancel the child
+        // the moment the budget is exceeded — not only at terminal.
+        match events.replay_after_checked(&child_run_id, cursor) {
+            Ok(replayed) => {
+                for e in &replayed {
+                    cursor = cursor.max(e.effective_run_sequence());
+                }
+                let delta = usage_delta_from_events(&replayed);
+                if delta > 0 && budget_exceeded.is_none() {
+                    // Keep the in-memory ledger aligned for tool-call hooks.
+                    let _ = subagents
+                        .settle_tokens(&child_run_id, &tree_root_for_budget, delta)
+                        .await;
+                    match crate::subagent_store::settle_subagent_usage(&session_id, delta, None) {
+                        Err(e) => {
+                            budget_exceeded = Some(e);
+                        }
+                        Ok(()) => {
+                            if let Ok(tree_used) =
+                                crate::subagent_store::subagent_tree_tokens_used(
+                                    &tree_root_for_budget,
+                                )
+                            {
+                                if tree_used > max_tokens_per_tree {
+                                    budget_exceeded = Some(format!(
+                                        "subagent tree token budget exceeded ({tree_used}/{max_tokens_per_tree})"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let message = format!("child event replay failed: {error}");
+                let _ = subagents
+                    .update_status(&mem_task_id, SubAgentStatus::Failed(message.clone()))
+                    .await;
+                let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&message));
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some(&message),
+                );
+                let _ = events.append_checked(
+                    &parent_run_id,
+                    RunEventKind::SubagentFailed {
+                        sub_run_id: child_run_id.clone(),
+                        error: message.clone(),
+                    },
+                );
+                task_outputs.lock().await.insert(
+                    task_id.clone(),
+                    TaskRecord {
+                        run_id: child_run_id.clone(),
+                        status: "failed".into(),
+                        output: Some(message),
+                    },
+                );
+                return;
+            }
+        }
+
+        if budget_exceeded.is_some() {
+            // Budget reached → the child cannot be Completed. Cancel any live
+            // run (idempotent when already terminal) and fail it.
+            crate::global_run_manager()
+                .runtime
+                .cancel_run(&child_run_id)
+                .await;
+            let _ = crate::global_run_manager()
+                .cancel(assistant_protocol::v2::CancelRunRequest {
+                    run_id: child_run_id.clone(),
+                })
+                .await;
+            let message = budget_exceeded.clone().unwrap_or_default();
+            child_failed_terminal(
+                events.clone(),
+                &subagents,
+                &task_outputs,
+                &parent_run_id,
+                &session_id,
+                &task_id,
+                &mem_task_id,
+                &child_run_id,
+                &project_path,
+                &message,
+                failure_policy,
+                0,
+                &binding,
+                &child_conversation_id,
+                &child_perm,
+                &child_allowlist,
+                &child_profile_id,
+                &child_directive,
+                child_max_steps,
+            )
+            .await;
+            return;
+        }
+
+        if !run.status.is_terminal() {
+            continue;
+        }
+
+        // ── Terminal handling ──
+        let child_events = match events.replay_after_checked(&child_run_id, cursor) {
+            Ok(events) => events,
+            Err(error) => {
+                let message = format!("child event replay failed: {error}");
+                let _ = subagents
+                    .update_status(&mem_task_id, SubAgentStatus::Failed(message.clone()))
+                    .await;
+                let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&message));
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some(&message),
+                );
+                let _ = events.append_checked(
+                    &parent_run_id,
+                    RunEventKind::SubagentFailed {
+                        sub_run_id: child_run_id.clone(),
+                        error: message.clone(),
+                    },
+                );
+                task_outputs.lock().await.insert(
+                    task_id.clone(),
+                    TaskRecord {
+                        run_id: child_run_id.clone(),
+                        status: "failed".into(),
+                        output: Some(message),
+                    },
+                );
+                return;
+            }
+        };
+        let final_delta = usage_delta_from_events(&child_events);
+        if final_delta > 0 && budget_exceeded.is_none() {
+            let _ = subagents
+                .settle_tokens(&child_run_id, &tree_root_for_budget, final_delta)
+                .await;
+            if let Err(e) =
+                crate::subagent_store::settle_subagent_usage(&session_id, final_delta, None)
+            {
+                budget_exceeded = Some(e);
+            }
+        }
+        if let Some(message) = budget_exceeded {
+            let _ = subagents
+                .update_status(&mem_task_id, SubAgentStatus::Failed(message.clone()))
+                .await;
+            let _ = crate::subagent_store::release_subagent_slot(&session_id, Some(&message));
+            let _ = crate::subagent_store::close_subagent_session(
+                &session_id,
+                "failed",
+                Some(&message),
+            );
+            let _ = events.append_checked(
+                &parent_run_id,
+                RunEventKind::SubagentFailed {
+                    sub_run_id: child_run_id.clone(),
+                    error: message.clone(),
+                },
+            );
+            task_outputs.lock().await.insert(
+                task_id.clone(),
+                TaskRecord {
+                    run_id: child_run_id.clone(),
+                    status: "failed".into(),
+                    output: Some(message.clone()),
+                },
+            );
+            fail_parent_and_cancel_siblings(
+                &subagents,
+                &parent_run_id,
+                &format!("subagent budget exceeded: {message}"),
+            )
+            .await;
+            return;
+        }
+
+        let text = child_events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                RunEventKind::TextDelta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<String>();
+        if status == "completed" {
+            child_completed_terminal(
+                events.clone(),
+                &subagents,
+                &task_outputs,
+                &parent_run_id,
+                &session_id,
+                &task_id,
+                &mem_task_id,
+                &child_run_id,
+                &project_path,
+                &text,
+                failure_policy,
+            )
+            .await;
+            return;
+        }
+
+        let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
+        let message = if text.trim().is_empty() {
+            err_msg
+        } else {
+            format!("{err_msg}: {text}")
+        };
+        child_failed_terminal(
+            events.clone(),
+            &subagents,
+            &task_outputs,
+            &parent_run_id,
+            &session_id,
+            &task_id,
+            &mem_task_id,
+            &child_run_id,
+            &project_path,
+            &message,
+            failure_policy,
+            max_retries,
+            &binding,
+            &child_conversation_id,
+            &child_perm,
+            &child_allowlist,
+            &child_profile_id,
+            &child_directive,
+            child_max_steps,
+        )
+        .await;
+        return;
+    }
+}
+
+/// Sum of input+output tokens in a batch of replayed events (provider deltas).
+fn usage_delta_from_events(events: &[assistant_protocol::v2::RunEventV2]) -> u64 {
+    events
+        .iter()
+        .filter_map(|e| match &e.payload {
+            RunEventKind::UsageUpdated {
+                input_tokens,
+                output_tokens,
+                ..
+            } => Some((*input_tokens).saturating_add(*output_tokens)),
+            _ => None,
+        })
+        .fold(0u64, u64::saturating_add)
+}
+
+/// Settle a child that reached `completed`: persist usage, release the slot
+/// exactly once, emit the parent event, and let RequireAll fail the parent
+/// when the batch aggregate failed.
+#[allow(clippy::too_many_arguments)] // terminal settlement needs full context
+async fn child_completed_terminal(
+    events: EventSequencer,
+    subagents: &Arc<SubAgentManager>,
+    task_outputs: &Arc<Mutex<HashMap<String, TaskRecord>>>,
+    parent_run_id: &str,
+    session_id: &str,
+    task_id: &str,
+    mem_task_id: &str,
+    child_run_id: &str,
+    project_path: &Option<String>,
+    text: &str,
+    failure_policy: FailurePolicy,
+) {
+    let _ = subagents
+        .update_status(mem_task_id, SubAgentStatus::Completed)
+        .await;
+    let _ = crate::subagent_store::release_subagent_slot(session_id, None);
+    let _ = crate::subagent_store::close_subagent_session(session_id, "completed", None);
+    let mut final_status = "completed".to_string();
+    let mut task_output = text.to_string();
+    if let Err(error) = events.append_checked(
+        parent_run_id,
+        RunEventKind::SubagentCompleted {
+            sub_run_id: child_run_id.to_string(),
+            result: text.to_string(),
+        },
+    ) {
+        final_status = "failed".into();
+        task_output = format!("PERSISTENCE_FAILED: subagent completion event: {error}");
+        let _ = subagents
+            .update_status(mem_task_id, SubAgentStatus::Failed(task_output.clone()))
+            .await;
+        let _ = crate::subagent_store::close_subagent_session(
+            session_id,
+            "failed",
+            Some(&task_output),
+        );
+    }
+    // RequireAll: the batch fails when every sibling is settled and any failed.
+    if failure_policy == FailurePolicy::RequireAll {
+        let (all_terminal, any_failed) = sibling_settled_state(task_outputs, task_id).await;
+        if all_terminal && any_failed {
+            fail_parent_and_cancel_siblings(
+                subagents,
+                parent_run_id,
+                "subagent batch failed under require_all policy",
+            )
+            .await;
+        }
+    }
+    task_outputs.lock().await.insert(
+        task_id.to_string(),
+        TaskRecord {
+            run_id: child_run_id.to_string(),
+            status: final_status,
+            output: if task_output.is_empty() {
+                None
+            } else {
+                Some(task_output)
+            },
+        },
+    );
+    fire_subagent_stop(project_path, parent_run_id, child_run_id, "completed", text).await;
+}
+
+/// Handle a child that failed (or was cancelled / interrupted / timed out /
+/// budget-exceeded). Consumes the failure policy: Isolate keeps the parent
+/// running, FailFast/RequireAll fail it, Retry re-queues transient failures.
+/// Returns true when a retry was launched (the caller must not release).
+#[allow(clippy::too_many_arguments)] // terminal settlement needs full context
+async fn child_failed_terminal(
+    events: EventSequencer,
+    subagents: &Arc<SubAgentManager>,
+    task_outputs: &Arc<Mutex<HashMap<String, TaskRecord>>>,
+    parent_run_id: &str,
+    session_id: &str,
+    task_id: &str,
+    mem_task_id: &str,
+    child_run_id: &str,
+    project_path: &Option<String>,
+    message: &str,
+    failure_policy: FailurePolicy,
+    max_retries: u32,
+    binding: &crate::subagent_store::RouteBinding,
+    child_conversation_id: &str,
+    child_perm: &str,
+    child_allowlist: &[String],
+    child_profile_id: &Option<String>,
+    child_directive: &Option<String>,
+    child_max_steps: u32,
+) -> bool {
+    let _ = subagents
+        .update_status(mem_task_id, SubAgentStatus::Failed(message.to_string()))
+        .await;
+    let retry_state = crate::subagent_store::get_subagent_session(session_id)
+        .ok()
+        .flatten();
+    let retries_remaining = retry_state
+        .as_ref()
+        .map(|s| s.max_retries.saturating_sub(s.retry_count))
+        .unwrap_or(0);
+    let retryable = crate::subagent_store::is_failover_eligible_error(message);
+    let effect = if retryable {
+        failure_policy.on_child_failed(false, retries_remaining)
+    } else {
+        // Budget / permission / max-steps / deadlock errors are not retried:
+        // re-queueing would just burn more budget on the same outcome.
+        failure_policy.on_child_failed(false, 0)
+    };
+
+    if effect == ChildFailureEffect::Retry {
+        // Keep the reservation and slot; re-queue a fresh run on the same
+        // hidden conversation. `requeue_child_run` bumps the retry counter.
+        let retry = retries_remaining.saturating_sub(1);
+        match requeue_child_run(
+            session_id,
+            child_conversation_id,
+            parent_run_id,
+            binding,
+            &retry,
+            message,
+            child_perm,
+            child_allowlist,
+            child_profile_id,
+            child_directive,
+            child_max_steps,
+        )
+        .await
+        {
+            Ok(new_run_id) => {
+                let _ = subagents.update_run_id(mem_task_id, &new_run_id).await;
+                let _ = crate::subagent_store::update_subagent_session_status(
+                    session_id,
+                    "running",
+                    None,
+                );
+                if let Some(rec) = task_outputs.lock().await.get_mut(task_id) {
+                    rec.run_id = new_run_id.clone();
+                    rec.status = "running".into();
+                    rec.output = None;
+                }
+                let _ = events.append_checked(
+                    parent_run_id,
+                    RunEventKind::Progress {
+                        message: format!("subagent retry #{retry} after: {message}"),
+                        percentage: None,
+                    },
+                );
+                spawn_retry_watcher(
+                    events.clone(),
+                    subagents.clone(),
+                    task_outputs.clone(),
+                    parent_run_id.to_string(),
+                    session_id.to_string(),
+                    task_id.to_string(),
+                    child_conversation_id.to_string(),
+                    mem_task_id.to_string(),
+                    project_path.clone(),
+                    parent_run_id.to_string(),
+                    subagents.config().max_tokens_per_child,
+                    binding.clone(),
+                    child_perm.to_string(),
+                    child_allowlist.to_vec(),
+                    child_profile_id.clone(),
+                    child_directive.clone(),
+                    child_max_steps,
+                    failure_policy,
+                    max_retries,
+                    new_run_id,
+                );
+                return true;
+            }
+            Err(requeue_error) => {
+                // Fall through to failure handling with the enriched message.
+                let enriched = format!("{message}; requeue failed: {requeue_error}");
+                let _ = subagents
+                    .update_status(mem_task_id, SubAgentStatus::Failed(enriched.clone()))
+                    .await;
+                finalize_child_failure(
+                    events,
+                    subagents,
+                    task_outputs,
+                    parent_run_id,
+                    session_id,
+                    task_id,
+                    child_run_id,
+                    project_path,
+                    &enriched,
+                    failure_policy,
+                )
+                .await;
+                return false;
+            }
+        }
+    }
+
+    finalize_child_failure(
+        events,
+        subagents,
+        task_outputs,
+        parent_run_id,
+        session_id,
+        task_id,
+        child_run_id,
+        project_path,
+        message,
+        failure_policy,
+    )
+    .await;
+    false
+}
+
+/// Shared tail of child failure: release slot + close session + emit parent
+/// event + apply FailFast/RequireAll parent action + update task record.
+#[allow(clippy::too_many_arguments)] // terminal settlement needs full context
+async fn finalize_child_failure(
+    events: EventSequencer,
+    subagents: &Arc<SubAgentManager>,
+    task_outputs: &Arc<Mutex<HashMap<String, TaskRecord>>>,
+    parent_run_id: &str,
+    session_id: &str,
+    task_id: &str,
+    child_run_id: &str,
+    project_path: &Option<String>,
+    message: &str,
+    failure_policy: FailurePolicy,
+) {
+    let _ = crate::subagent_store::release_subagent_slot(session_id, Some(message));
+    let _ = crate::subagent_store::close_subagent_session(session_id, "failed", Some(message));
+    let task_output = message.to_string();
+    let _ = events.append_checked(
+        parent_run_id,
+        RunEventKind::SubagentFailed {
+            sub_run_id: child_run_id.to_string(),
+            error: message.to_string(),
+        },
+    );
+    // FailFast fails the parent immediately; RequireAll waits until every
+    // sibling has settled, then fails the parent on the aggregate failure.
+    let (all_terminal, _any_failed) = sibling_settled_state(task_outputs, task_id).await;
+    match failure_policy.on_child_failed(all_terminal, 0) {
+        ChildFailureEffect::FailParent => {
+            fail_parent_and_cancel_siblings(
+                subagents,
+                parent_run_id,
+                &format!("subagent failed under {:?}: {message}", failure_policy),
+            )
+            .await;
+        }
+        _ => {}
+    }
+    task_outputs.lock().await.insert(
+        task_id.to_string(),
+        TaskRecord {
+            run_id: child_run_id.to_string(),
+            status: "failed".into(),
+            output: Some(task_output),
+        },
+    );
+    fire_subagent_stop(project_path, parent_run_id, child_run_id, "failed", message).await;
+}
+
+/// Create a fresh child run for a Retry re-queue and bump the retry counter.
+#[allow(clippy::too_many_arguments)] // re-queue needs the exact child scope
+async fn requeue_child_run(
+    session_id: &str,
+    child_conversation_id: &str,
+    parent_run_id: &str,
+    binding: &crate::subagent_store::RouteBinding,
+    retry_number: &u32,
+    reason: &str,
+    child_perm: &str,
+    child_allowlist: &[String],
+    child_profile_id: &Option<String>,
+    child_directive: &Option<String>,
+    child_max_steps: u32,
+) -> Result<String, String> {
+    let session = crate::subagent_store::get_subagent_session(session_id)?
+        .ok_or_else(|| format!("subagent session not found: {session_id}"))?;
+    let project_path = session.project_path.clone();
+    let prompt = if session.task.trim().is_empty() {
+        format!("Retry (attempt {retry_number}) after: {reason}")
+    } else {
+        format!("{}", session.task)
+    };
+    let created = crate::global_run_manager().create_run(
+        assistant_protocol::v2::CreateRunRequest {
+            capability_selection: None,
+            conversation_id: child_conversation_id.to_string(),
+            provider_id: binding.provider_id.clone(),
+            model_id: binding.model_id.clone(),
+            key_id: Some(binding.key_id.clone()),
+            agent_profile_id: child_profile_id.clone(),
+            permission_profile: Some(child_perm.to_string()),
+            content: Some(prompt.clone()),
+            attachments: None,
+            max_steps: Some(child_max_steps),
+            parent_run_id: Some(parent_run_id.to_string()),
+            project_path,
+            idempotency_key: None,
+            effort: None,
+            runtime_id: Some("native".into()),
+        },
+    )?;
+    crate::global_run_manager()
+        .runtime
+        .set_run_tool_allowlist(&created.id, child_allowlist.to_vec())
+        .await;
+    if let Some(directive) = child_directive.as_deref().filter(|s| !s.is_empty()) {
+        crate::global_run_manager()
+            .runtime
+            .set_run_agent_directive(&created.id, directive.to_string())
+            .await;
+    }
+    crate::run_manager::RunManager::start_detached_global(
+        assistant_protocol::v2::StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
+            run_id: Some(created.id.clone()),
+            conversation_id: Some(child_conversation_id.to_string()),
+            provider_id: Some(binding.provider_id.clone()),
+            model_id: Some(binding.model_id.clone()),
+            key_id: Some(binding.key_id.clone()),
+            content: Some(prompt),
+            attachments: None,
+            trigger_message_id: None,
+            permission_profile: Some(child_perm.to_string()),
+            max_steps: Some(child_max_steps),
+            project_path: session.project_path.clone(),
+            idempotency_key: None,
+            effort: None,
+            runtime_id: Some("native".into()),
+        },
+    )?;
+    let _ = crate::subagent_store::bump_subagent_retry(session_id);
+    Ok(created.id)
+}
+
+/// (all_other_siblings_terminal, any_other_sibling_failed) for the parent's
+/// task ledger. Used by RequireAll to detect the aggregate outcome.
+async fn sibling_settled_state(
+    task_outputs: &Arc<Mutex<HashMap<String, TaskRecord>>>,
+    exclude_task_id: &str,
+) -> (bool, bool) {
+    let map = task_outputs.lock().await;
+    let mut any_running = false;
+    let mut any_failed = false;
+    for (tid, rec) in map.iter() {
+        if tid == exclude_task_id {
+            continue;
+        }
+        if rec.status == "running" {
+            any_running = true;
+        }
+        if rec.status == "failed" {
+            any_failed = true;
+        }
+    }
+    (!any_running, any_failed)
+}
+
+/// FailFast / RequireAll aggregate action: cancel every sibling child's engine
+/// and metadata, then fail the parent run (idempotent).
+async fn fail_parent_and_cancel_siblings(
+    subagents: &Arc<SubAgentManager>,
+    parent_run_id: &str,
+    reason: &str,
+) {
+    for sibling in subagents.get_children(parent_run_id).await {
+        let _ = subagents
+            .update_status(&sibling.id, SubAgentStatus::Cancelled)
+            .await;
+        crate::global_run_manager()
+            .runtime
+            .cancel_run(&sibling.run_id)
+            .await;
+    }
+    let _ = crate::global_run_manager()
+        .runtime
+        .cancel_run(parent_run_id)
+        .await;
+    crate::global_run_manager().fail_run_if_active(
+        parent_run_id,
+        reason.to_string(),
+        "SUBAGENT_FAILFAST",
+    );
+}
+
+/// SubagentStop hook fired for every terminal outcome (matches prior behavior).
+async fn fire_subagent_stop(
+    project_path: &Option<String>,
+    parent_run_id: &str,
+    child_run_id: &str,
+    status: &str,
+    output: &str,
+) {
+    let _ = crate::production_hooks::build_production_hooks_for_project(
+        project_path.as_deref().map(std::path::Path::new),
+    )
+    .dispatch(HookRequest {
+        event: HookEvent::SubagentStop,
+        run_id: parent_run_id.to_string(),
+        tool_name: Some("task".into()),
+        input: serde_json::json!({
+            "sub_run_id": child_run_id,
+            "status": status,
+            "output": output,
+        }),
+    })
+    .await;
+}
+
 fn use_fixture_flag(input: &Value) -> bool {
     input
         .get("fixture")
