@@ -309,6 +309,30 @@ pub fn verify_driver_identity(proposal: &AgentProposal) -> crate::Result<(String
     Ok((canonical, hash))
 }
 
+/// True when an approved proposal must ALSO be started (kind=start), not just
+/// registered (kind=create). T09: create registers only; start runs
+/// start→health→endpoint after registration.
+pub fn proposal_should_start(proposal: &AgentProposal) -> bool {
+    proposal.kind == crate::creative_app::proposal::ProposalKind::Start
+}
+
+/// Resolve the source id a kind=start proposal should launch.
+///
+/// Returns `Some(source_id)` when the project root is already registered as a
+/// local creative app (reuse — do not duplicate), `None` when the app must be
+/// registered first. A kind=create proposal always returns `None`.
+pub fn start_target_for_proposal(
+    c: &rusqlite::Connection,
+    proposal: &AgentProposal,
+) -> crate::Result<Option<String>> {
+    if !proposal_should_start(proposal) {
+        return Ok(None);
+    }
+    let root = crate::creative_app::local::canonical_project_root(&proposal.project_root)?;
+    let root_s = root.to_string_lossy().to_string();
+    Ok(crate::creative_app::local::get_app_by_root(c, &root_s)?.map(|r| r.id))
+}
+
 /// Tagged approve result: `approved` with the registered app, or
 /// `already_decided` (idempotent no-op for a repeat click / concurrent click).
 #[derive(Debug, Clone, Serialize)]
@@ -546,5 +570,111 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("changed since"));
+    }
+
+    /// T09: a kind=start proposal on an already-registered path must target the
+    /// existing app (reuse), while a kind=create proposal has no target (it
+    /// registers). This drives "kind=start 对已有/新 app 走 start→health→endpoint".
+    #[test]
+    fn start_target_resolves_existing_app_and_create_has_none() {
+        use crate::creative_app::model::{
+            LaunchMode, LaunchPlan, LaunchPlanSource, LaunchProgram, LocalCreativeAppRecord,
+            LocalLaunchRuntime, LocalProjectKind, OwnershipMode,
+        };
+        use crate::creative_app::proposal::{AgentProposal, ProposalKind, ProposedDriver};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("index.html"), "<html></html>").unwrap();
+        let root_s = root.to_string_lossy().to_string();
+        // The record stores the CANONICAL root (same normalization the
+        // registration path uses), matching `start_target_for_proposal`.
+        let canonical_root = crate::creative_app::local::canonical_project_root(&root_s)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        let conn = mem_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Rule,
+            project_kind: LocalProjectKind::Html,
+            runtime: LocalLaunchRuntime::StaticHttp,
+            program: LaunchProgram::Internal,
+            cwd_relative: ".".into(),
+            script: None,
+            entry_file: Some("index.html".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: crate::creative_app::model::LaunchPort {
+                mode: crate::creative_app::model::LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            auto_open: false,
+            confidence: None,
+            reason: "test".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: None,
+        };
+        let rec = LocalCreativeAppRecord {
+            id: "loc-exists".into(),
+            title: "Existing".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: canonical_root.clone(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Html,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: plan.to_json().unwrap(),
+            plan_fingerprint: "fp".into(),
+            state: crate::creative_app::model::CreativeAppState::InstalledStopped,
+            status_detail_json: None,
+            open_url: None,
+            current_port: None,
+            process_identity_json: None,
+            volume_identity: String::new(),
+            auto_open: false,
+            startup_timeout_ms: 60_000,
+            last_started_at: None,
+            last_exit_reason: None,
+            last_error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        crate::creative_app::local::insert_app(&conn, &rec).unwrap();
+
+        let start = AgentProposal {
+            schema_version: 1,
+            kind: ProposalKind::Start,
+            ownership: OwnershipMode::Managed,
+            title: "Existing".into(),
+            project_root: root_s.clone(),
+            driver: ProposedDriver::StaticHttp,
+            open_path: "/".into(),
+            health_path: "/".into(),
+            environment_keys: vec![],
+        };
+        let target = start_target_for_proposal(&conn, &start).unwrap();
+        assert_eq!(
+            target.as_deref(),
+            Some("loc-exists"),
+            "kind=start on a registered path must reuse the existing app"
+        );
+
+        let create = AgentProposal {
+            kind: ProposalKind::Create,
+            ..start
+        };
+        assert!(
+            start_target_for_proposal(&conn, &create).unwrap().is_none(),
+            "kind=create has no start target — it registers only"
+        );
     }
 }

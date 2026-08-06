@@ -10,7 +10,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "23";
+pub const SCHEMA_VERSION: &str = "24";
 
 /// Map a source-table `state` string to a runtime_instances.status for the
 /// v12 backfill. Terminal / unknown states produce no instance.
@@ -1467,6 +1467,32 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '23')",
             [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v23→v24 (T09): non-owned app records.
+    //
+    // Attached / Remote apps are registrations Natives can inspect and open but
+    // does not own the lifecycle of. `non_owned_apps` stores the record only —
+    // never a start/stop authority. Approved origins are validated JSON so a
+    // remote app's navigation is restricted to its approved trust domain.
+    if current_version < 24 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS non_owned_apps (
+                id TEXT PRIMARY KEY,
+                ownership TEXT NOT NULL,
+                url TEXT NOT NULL,
+                approved_origins_json TEXT NOT NULL DEFAULT '[]',
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_non_owned_ownership
+                ON non_owned_apps(ownership);
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '24');
+            ",
         )
         .map_err(Error::Database)?;
     }

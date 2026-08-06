@@ -110,6 +110,72 @@ pub fn backfill_v22(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Create the "main" service for a runtime instance (idempotent). Called right
+/// after the instance is created so every running app has a real service row
+/// from the moment its lifecycle begins (T09).
+pub fn upsert_main_service(conn: &Connection, runtime_instance_id: &str) -> Result<String> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT id FROM service_instances WHERE runtime_instance_id = ?1 AND name = 'main'",
+            params![runtime_instance_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(Error::Database)?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    create_service(conn, runtime_instance_id, "main", true)
+}
+
+/// Record that a runtime instance became ready: create preview endpoint(s) from
+/// the resolved URLs, bind the main service to the first endpoint, and mark it
+/// `ready` (T09). The URL/port come from the REAL health pass — never guessed.
+pub fn record_instance_ready(
+    conn: &Connection,
+    runtime_instance_id: &str,
+    urls: &[String],
+    port: Option<u16>,
+) -> Result<()> {
+    let sid = upsert_main_service(conn, runtime_instance_id)?;
+    let mut bound = false;
+    for url in urls {
+        let eid =
+            super::surface_store::create_endpoint(conn, runtime_instance_id, "preview", url, port)?;
+        if !bound {
+            bind_service_endpoint(conn, &sid, &eid)?;
+            bound = true;
+        }
+    }
+    update_service_readiness(conn, &sid, ServiceInstance::READY_READY)?;
+    Ok(())
+}
+
+/// Mark a runtime instance's services stopped and drop its live endpoints
+/// (T09). Called after a verified stop.
+pub fn mark_instance_stopped(conn: &Connection, runtime_instance_id: &str) -> Result<()> {
+    super::surface_store::clear_endpoints(conn, runtime_instance_id)?;
+    let services = list_services(conn, runtime_instance_id)?;
+    for s in services {
+        update_service_readiness(conn, &s.id, ServiceInstance::READY_STOPPED)?;
+    }
+    Ok(())
+}
+
+/// Mark a runtime instance's main service unhealthy (start/stop failure) —
+/// honest state, never a fabricated ready/stopped (T09).
+pub fn mark_instance_unhealthy(
+    conn: &Connection,
+    runtime_instance_id: &str,
+    _reason: &str,
+) -> Result<()> {
+    let services = list_services(conn, runtime_instance_id)?;
+    for s in services {
+        update_service_readiness(conn, &s.id, ServiceInstance::READY_UNHEALTHY)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -68,8 +68,8 @@ pub use ghostty_vt::GhosttyTerminal;
 ///
 /// The payload carries `version + sequence_id` so consumers can reconcile state
 /// and discard out-of-order events.
-pub fn emit_db_state_changed(
-    app_handle: &tauri::AppHandle,
+pub fn emit_db_state_changed<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
     channel: &str,
     data: serde_json::Value,
 ) {
@@ -587,6 +587,13 @@ pub fn run() {
             commands::creative_app::creative_app_proposal_reject,
             commands::creative_app::creative_app_proposal_approve,
             commands::creative_app::creative_app_proposal_list,
+            // T09: non-owned (attached/remote) drivers
+            commands::creative_app::creative_app_attached_register,
+            commands::creative_app::creative_app_remote_register,
+            commands::creative_app::creative_app_non_owned_list,
+            commands::creative_app::creative_app_non_owned_probe,
+            commands::creative_app::creative_app_non_owned_open,
+            commands::creative_app::creative_app_non_owned_delete,
             commands::creative_app::creative_app_inspect_local,
             commands::creative_app::creative_app_create_local,
             commands::creative_app::creative_app_update_local,

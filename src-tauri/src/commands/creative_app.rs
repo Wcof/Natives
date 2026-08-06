@@ -1341,9 +1341,12 @@ pub async fn creative_app_proposal_approve(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     lock: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<crate::creative_app::proposal_inbox::ProposalApproveResult> {
     use crate::creative_app::proposal_inbox::{self, ProposalApproveResult};
     let pool = state.db.clone();
+    let host_port = host_http_port(&state);
+    let local_runtime = local_runtime.inner().clone();
     if let Err(e) = proposal_inbox::sync_pending_from_daemon(&pool).await {
         eprintln!("[proposal] sync before approve failed (continuing): {e}");
     }
@@ -1413,22 +1416,53 @@ pub async fn creative_app_proposal_approve(
                 });
             }
 
-            match register_proposal_app(&mut c, &verified_proposal) {
-                Ok(summary) => Ok(ProposalApproveResult::Approved {
+            // T09: kind=create registers only; kind=start also launches the app
+            // through start→health→endpoint. A kind=start on an already
+            // registered root reuses the existing app instead of duplicating.
+            let register_only = !proposal_inbox::proposal_should_start(&verified_proposal);
+            // Registration failure (including a duplicate path for kind=create)
+            // CASes approved → failed (terminal) so the card never sees a
+            // silent success.
+            let app_id = (|| -> crate::Result<String> {
+                match proposal_inbox::start_target_for_proposal(&c, &verified_proposal)? {
+                    Some(existing) => Ok(existing),
+                    None => register_proposal_app(&mut c, &verified_proposal).map(|s| s.id),
+                }
+            })()
+            .map_err(|e| {
+                let _ = proposal_inbox::cas_status(
+                    &c,
+                    &proposal_id,
+                    proposal_inbox::STATUS_APPROVED,
+                    proposal_inbox::STATUS_FAILED,
+                );
+                e
+            })?;
+            if register_only {
+                let summary = crate::creative_app::adapters::get_summary(&c, &app_id)?;
+                return Ok(ProposalApproveResult::Approved {
                     proposal_id: proposal_id.clone(),
                     app: summary,
-                }),
-                Err(e) => {
-                    // Registration failed — CAS approved → failed (terminal).
-                    let _ = proposal_inbox::cas_status(
-                        &c,
-                        &proposal_id,
-                        proposal_inbox::STATUS_APPROVED,
-                        proposal_inbox::STATUS_FAILED,
-                    );
-                    Err(e)
-                }
+                });
             }
+            // Launch start→health→endpoint. A start failure keeps the proposal
+            // approved and the app retryable (its state honestly reflects the
+            // outcome); only a registration failure is terminal for the card.
+            let summary =
+                match start_approved_app(&handle, &local_runtime, host_port, &pool, &app_id, &lock)
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // The app is registered; return its honest current state
+                        // (StartFailed) so the approval card reflects reality and
+                        // the user can retry from the catalog.
+                        crate::creative_app::adapters::get_summary(&c, &app_id).map_err(|_| e)?
+                    }
+                };
+            Ok(ProposalApproveResult::Approved {
+                proposal_id: proposal_id.clone(),
+                app: summary,
+            })
         })();
 
         match decision {
@@ -1487,6 +1521,151 @@ pub async fn creative_app_proposal_list(
     })
     .await
     .map_err(|e| Error::Internal(format!("proposal_list join: {e}")))?
+}
+
+// ── Non-owned apps (T09 CR-901/902): Attached Local / Remote ─────────
+
+/// Register an attached local service: a loopback URL Natives did not start.
+/// Natives records URL + ownership and can probe/open/delete the record only —
+/// never start/stop (no fake lifecycle).
+#[tauri::command]
+pub async fn creative_app_attached_register(
+    url: String,
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<crate::creative_app::model::NonOwnedAppSummary> {
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        let app = crate::creative_app::non_owned::register(
+            &c,
+            crate::creative_app::model::OwnershipMode::Attached,
+            &url,
+            &[],
+            &title,
+        )?;
+        Ok(crate::creative_app::model::NonOwnedAppSummary::project(app))
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("attached_register join: {e}")))?
+}
+
+/// Register a remote web app: an approved-origin URL. Natives records the
+/// origins and can probe/open/delete the record only; the app never gets a
+/// Tauri Host capability.
+#[tauri::command]
+pub async fn creative_app_remote_register(
+    url: String,
+    approved_origins: Vec<String>,
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<crate::creative_app::model::NonOwnedAppSummary> {
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        let app = crate::creative_app::non_owned::register(
+            &c,
+            crate::creative_app::model::OwnershipMode::Remote,
+            &url,
+            &approved_origins,
+            &title,
+        )?;
+        Ok(crate::creative_app::model::NonOwnedAppSummary::project(app))
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("remote_register join: {e}")))?
+}
+
+/// List all non-owned apps (attached + remote) with their honest action matrix.
+#[tauri::command]
+pub async fn creative_app_non_owned_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::creative_app::model::NonOwnedAppSummary>> {
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        let apps = crate::creative_app::non_owned::list(&c)?;
+        Ok(apps
+            .into_iter()
+            .map(crate::creative_app::model::NonOwnedAppSummary::project)
+            .collect())
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("non_owned_list join: {e}")))?
+}
+
+/// Probe a non-owned app: is its origin currently reachable? Attached/Remote
+/// probe is a read-only reachability check — never a lifecycle mutation.
+#[tauri::command]
+pub async fn creative_app_non_owned_probe(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::creative_app::model::NonOwnedProbe> {
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        crate::creative_app::non_owned::probe_record(&c, &id)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("non_owned_probe join: {e}")))?
+}
+
+/// Open a non-owned app in a child WebView restricted to its trust domain.
+/// Attached → loopback only; Remote → approved origins only. The child label
+/// never matches the `main` capability filter, so the app gets no Host
+/// capability.
+#[tauri::command]
+pub fn creative_app_non_owned_open(
+    id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    browser: State<'_, BrowserStateHandle>,
+) -> Result<()> {
+    let c = conn(&state.db)?;
+    let app =
+        crate::creative_app::non_owned::get(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
+    let url = crate::creative_app::non_owned::open_url_for(&app)?;
+    let label = browser::non_owned_label(&app.id);
+    let approved = match app.ownership {
+        crate::creative_app::model::OwnershipMode::Remote => Some(app.approved_origins.as_slice()),
+        _ => None,
+    };
+    let bounds = crate::creative_app::model::BrowserBounds {
+        x: 160.0,
+        y: 120.0,
+        width: 960.0,
+        height: 720.0,
+    };
+    browser::browser_show_non_owned(
+        &app_handle,
+        &browser,
+        &label,
+        &app.id,
+        &url,
+        bounds,
+        approved,
+    )
+}
+
+/// Delete a non-owned app record. This never stops or kills the external
+/// service — the record is the only thing Natives owns.
+#[tauri::command]
+pub async fn creative_app_non_owned_delete(
+    id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    browser: State<'_, BrowserStateHandle>,
+) -> Result<()> {
+    // Close any live child WebView bound to this record, then drop the record.
+    let label = browser::non_owned_label(&id);
+    let _ = browser::browser_close(&app_handle, &browser, &label);
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        crate::creative_app::non_owned::delete(&c, &id)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("non_owned_delete join: {e}")))?
 }
 
 /// Register an approved proposal as a real application. Only drivers with a
@@ -1745,6 +1924,27 @@ fn proposal_port(
         mode: crate::creative_app::model::LaunchPortMode::Auto,
         value: None,
     }
+}
+
+/// Launch a proposal-approved app through start→health→endpoint (T09).
+///
+/// Runs under the per-app mutation lock. A start failure returns Err; the
+/// caller keeps the proposal approved and the app's honest state (StartFailed)
+/// so a retry stays possible from the catalog.
+fn start_approved_app(
+    handle: &tauri::AppHandle,
+    local_runtime: &LocalRuntimeHandle,
+    host_port: u16,
+    pool: &DbPool,
+    app_id: &str,
+    lock: &MutationLock,
+) -> Result<CreativeAppSummary> {
+    let ctx = lifecycle_ctx(handle.clone(), local_runtime.clone(), host_port);
+    let rt = tokio::runtime::Handle::current();
+    let c = conn(pool)?;
+    let _guard = rt.block_on(lock.acquire_app(app_id));
+    let summary = rt.block_on(adapters::facade::start(&c, &ctx, app_id))?;
+    runtime_store::attach_identity(&c, summary)
 }
 
 #[tauri::command]
@@ -2237,7 +2437,7 @@ pub async fn creative_app_diagnose_local_with_ai(
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
         // Also apply any process exits observed while diagnosing.
-        let _ = rt.block_on(local::lifecycle::poll_and_reconcile_exits(
+        let _ = rt.block_on(local::lifecycle::poll_and_reconcile_exits::<tauri::Wry>(
             &c,
             None,
             local_runtime.as_ref(),

@@ -55,7 +55,7 @@ fn compose_abs_path(
     }
 }
 
-fn broadcast(app: &AppHandle, action: &str, id: &str) {
+fn broadcast<R: tauri::Runtime>(app: &tauri::AppHandle<R>, action: &str, id: &str) {
     emit_db_state_changed(
         app,
         "creative-app",
@@ -87,9 +87,9 @@ fn set_status_detail(
     store::set_state(conn, id, state, last_error, detail_json.as_deref(), &now())
 }
 
-pub async fn start_app(
+pub async fn start_app<R: tauri::Runtime>(
     conn: &Connection,
-    app: &AppHandle,
+    app: &tauri::AppHandle<R>,
     runtime: &LocalRuntimeManager,
     host_http_port: u16,
     id: &str,
@@ -335,6 +335,7 @@ pub async fn start_app(
                 &rec.plan_fingerprint,
                 &env,
                 plan.port.value,
+                None,
             )
             .await
         {
@@ -385,19 +386,21 @@ pub async fn start_app(
 
 /// Await the spawned node dev server's health and settle the DB state. Runs
 /// WITHOUT the global mutation lock so a concurrent stop can cancel the wait.
-pub async fn await_start_ready(
+pub async fn await_start_ready<R: tauri::Runtime>(
     conn: &Connection,
-    app: &AppHandle,
+    app: &tauri::AppHandle<R>,
     runtime: &LocalRuntimeManager,
     id: &str,
     runtime_id: &str,
 ) -> Result<CreativeAppSummary> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     let plan = parse_plan(&rec)?;
-    // Compose start is fully synchronous in start_app (up + health + Running),
-    // so the health phase is a no-op for it (batch 5).
-    if plan.runtime == LocalLaunchRuntime::DockerCompose {
-        return Ok(store::summary_from_local(&rec));
+    // Static HTTP and Compose starts are fully synchronous in start_app
+    // (Running is settled there), so the health phase is a no-op for them.
+    if runtime::plan_is_static(&plan) || plan.runtime == LocalLaunchRuntime::DockerCompose {
+        let summary = store::summary_from_local(&rec);
+        record_ready_endpoint(conn, id, runtime_id, &summary);
+        return Ok(summary);
     }
     match runtime
         .wait_healthy(
@@ -419,7 +422,11 @@ pub async fn await_start_ready(
             rec.updated_at = now();
             store::update_app(conn, &rec)?;
             broadcast(app, "started", id);
-            Ok(store::summary_from_local(&rec))
+            let summary = store::summary_from_local(&rec);
+            // T09: the driver owns the real endpoint + service rows once the
+            // health pass proved the runtime bound its port.
+            record_ready_endpoint(conn, id, runtime_id, &summary);
+            Ok(summary)
         }
         Err(Error::Cancelled(_)) => {
             // Stop preempted the start; return the stop-owned current state.
@@ -445,6 +452,33 @@ pub async fn await_start_ready(
             Err(e)
         }
     }
+}
+
+/// T09: persist the REAL preview endpoint + service readiness for a runtime
+/// instance whose health pass succeeded. Best-effort (never fails the start
+/// when the projection write fails) — the runtime instance CAS is the
+/// authoritative settle.
+fn record_ready_endpoint(
+    conn: &Connection,
+    id: &str,
+    runtime_id: &str,
+    summary: &CreativeAppSummary,
+) {
+    if runtime_id.is_empty() {
+        return;
+    }
+    let urls = summary.open_url.iter().cloned().collect::<Vec<_>>();
+    if urls.is_empty() {
+        return;
+    }
+    // The real port comes from the source record (settled by the health pass),
+    // never a guessed value.
+    let port = store::get_app(conn, id)
+        .ok()
+        .flatten()
+        .and_then(|r| r.current_port);
+    let _ =
+        crate::creative_app::service_store::record_instance_ready(conn, runtime_id, &urls, port);
 }
 
 /// Apply a stop outcome to the local record. On failure the record keeps its
@@ -485,9 +519,9 @@ fn record_stop_outcome(
     rec
 }
 
-pub async fn stop_app(
+pub async fn stop_app<R: tauri::Runtime>(
     conn: &Connection,
-    app: &AppHandle,
+    app: &tauri::AppHandle<R>,
     runtime: &LocalRuntimeManager,
     id: &str,
     runtime_id: &str,
@@ -559,6 +593,14 @@ pub async fn stop_app(
         .unwrap_or_else(|| "stop did not verify resource release".to_string());
     rec = record_stop_outcome(rec, released, error);
     store::update_app(conn, &rec)?;
+    // T09: the driver owns the endpoint/service lifecycle — a verified stop
+    // drops the live endpoints and marks the service stopped; an unverified
+    // stop leaves them marked unhealthy (honest, never a false stopped).
+    if released {
+        let _ = crate::creative_app::service_store::mark_instance_stopped(conn, runtime_id);
+    } else {
+        let _ = crate::creative_app::service_store::mark_instance_unhealthy(conn, runtime_id, &msg);
+    }
     broadcast(app, if released { "stopped" } else { "stop_failed" }, id);
     if released {
         Ok(store::summary_from_local(&rec))
@@ -570,9 +612,9 @@ pub async fn stop_app(
     }
 }
 
-pub async fn delete_app(
+pub async fn delete_app<R: tauri::Runtime>(
     conn: &Connection,
-    app: &AppHandle,
+    app: &tauri::AppHandle<R>,
     runtime: &LocalRuntimeManager,
     id: &str,
     runtime_id: &str,
@@ -751,9 +793,9 @@ fn pid_is_alive(pid: Option<u32>) -> bool {
 /// Resolve an orphaned process: kill the verified identity (if it still matches
 /// live) and settle the orphaned instance to stopped. Never auto-takeover pipes.
 /// Restart is handled by the caller (adapter) as a fresh start after this.
-pub async fn resolve_orphan(
+pub async fn resolve_orphan<R: tauri::Runtime>(
     conn: &Connection,
-    app: &AppHandle,
+    app: &tauri::AppHandle<R>,
     runtime: &LocalRuntimeManager,
     id: &str,
 ) -> Result<CreativeAppSummary> {
@@ -853,9 +895,9 @@ async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
 /// that exited (CR-301): the instance is settled by id, and the source record is
 /// only touched when that run is still the app's ACTIVE instance — a late exit
 /// from a superseded run must never flip a newer running run to stopped.
-pub fn mark_process_exited(
+pub fn mark_process_exited<R: tauri::Runtime>(
     conn: &Connection,
-    app: Option<&AppHandle>,
+    app: Option<&tauri::AppHandle<R>>,
     runtime_id: &str,
     exit_code: i32,
 ) -> Result<()> {
@@ -905,9 +947,9 @@ pub fn mark_process_exited(
 }
 
 /// Poll runtime exits and write DB. Safe to call frequently.
-pub async fn poll_and_reconcile_exits(
+pub async fn poll_and_reconcile_exits<R: tauri::Runtime>(
     conn: &Connection,
-    app: Option<&AppHandle>,
+    app: Option<&tauri::AppHandle<R>>,
     runtime: &LocalRuntimeManager,
 ) -> Result<u32> {
     let exited = runtime.poll_exits().await;
@@ -956,7 +998,10 @@ pub fn get_local_config(conn: &Connection, id: &str) -> Result<LocalCreativeConf
 }
 
 /// On normal app exit: stop all local processes.
-pub async fn shutdown_all(runtime: &LocalRuntimeManager, app: Option<&AppHandle>) {
+pub async fn shutdown_all<R: tauri::Runtime>(
+    runtime: &LocalRuntimeManager,
+    app: Option<&tauri::AppHandle<R>>,
+) {
     runtime.stop_all(app).await;
 }
 
@@ -1052,7 +1097,7 @@ mod tests {
         .unwrap();
 
         // Run 1's exit arrives late (after run 2 is active).
-        mark_process_exited(&conn, None, &i1, 3).unwrap();
+        mark_process_exited::<tauri::Wry>(&conn, None, &i1, 3).unwrap();
 
         let (s1, s2): (String, String) = conn
             .query_row(
@@ -1224,5 +1269,442 @@ mod tests {
             plan_fingerprint: Some(fp.to_string()),
             process_group_id: Some(pid as i32),
         }
+    }
+
+    /// T09 acceptance: a real fixture E2E through the local process driver.
+    ///
+    /// A real node HTTP server is spawned (hermetic temp dir, random port);
+    /// start→health→endpoint must write REAL ServiceInstance + RuntimeEndpoint
+    /// rows; stop must verify release and leave zero live resources (process,
+    /// port, reader/health/log tasks).
+    #[tokio::test]
+    async fn local_process_driver_e2e_writes_services_and_releases_resources() {
+        let Ok(_) = std::process::Command::new("node").arg("--version").output() else {
+            eprintln!("[skip] node not available");
+            return;
+        };
+
+        let conn = mem();
+        let rt = new_runtime_manager();
+        let cwd = std::env::temp_dir().join(format!("natives-t09-e2e-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("server.js"),
+            "require('http').createServer((q,s)=>s.end('ok')).listen(process.env.PORT,'127.0.0.1');",
+        )
+        .unwrap();
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Rule,
+            project_kind: LocalProjectKind::Vite,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: Some("server.js".into()),
+            entry_file: Some("server.js".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "t09 e2e".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: None,
+        };
+        let t = now();
+        let rec = LocalCreativeAppRecord {
+            id: "loc-e2e".into(),
+            title: "E2E".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: cwd.to_string_lossy().to_string(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Vite,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: plan.to_json().unwrap(),
+            plan_fingerprint: "fp-e2e".into(),
+            state: CreativeAppState::InstalledStopped,
+            status_detail_json: None,
+            open_url: None,
+            current_port: None,
+            process_identity_json: None,
+            volume_identity: String::new(),
+            auto_open: false,
+            startup_timeout_ms: 15_000,
+            last_started_at: None,
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        };
+        store::insert_app(&conn, &rec).unwrap();
+        let app_id = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc-e2e",
+        )
+        .unwrap();
+        let instance_id = crate::creative_app::runtime_store::create_instance(
+            &conn,
+            &app_id,
+            None,
+            "local_process",
+        )
+        .unwrap();
+        // The driver begins the lifecycle with a real service row (T09).
+        crate::creative_app::service_store::upsert_main_service(&conn, &instance_id).unwrap();
+
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+
+        // Phase 1: spawn (port lease held until the child binds).
+        let _spawned = start_app(&conn, &handle, &rt, 18080, "loc-e2e", &instance_id)
+            .await
+            .expect("spawn");
+        // Phase 2: health → Running + endpoint write.
+        let summary = await_start_ready(&conn, &handle, &rt, "loc-e2e", &instance_id)
+            .await
+            .expect("healthy");
+        assert_eq!(summary.state, CreativeAppState::Running);
+        let port = summary
+            .local_project
+            .as_ref()
+            .and_then(|_| {
+                store::get_app(&conn, "loc-e2e")
+                    .unwrap()
+                    .unwrap()
+                    .current_port
+            })
+            .expect("real port from health pass");
+
+        // ServiceInstance + RuntimeEndpoint rows are REAL, not store-only.
+        let services =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].name, "main");
+        assert_eq!(services[0].readiness, "ready");
+        let endpoints =
+            crate::creative_app::surface_store::list_endpoints(&conn, &instance_id).unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].kind, "preview");
+        assert!(endpoints[0].url.contains(&port.to_string()));
+        assert_eq!(
+            services[0].endpoint_id.as_deref(),
+            Some(endpoints[0].id.as_str())
+        );
+
+        // The child is live on the real port.
+        assert!(rt.is_running(&instance_id).await);
+        assert!(super::runtime::port_listening(port));
+
+        // Stop: verified release → zero live resources.
+        let stopped = stop_app(&conn, &handle, &rt, "loc-e2e", &instance_id)
+            .await
+            .expect("stop");
+        assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
+        assert!(!rt.is_running(&instance_id).await);
+        assert!(
+            !super::runtime::port_listening(port),
+            "port must be released after a verified stop"
+        );
+        assert!(
+            rt.live_runtime_ids().await.is_empty(),
+            "no live process slot may remain after stop"
+        );
+        let services_after =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
+        assert_eq!(
+            services_after[0].readiness,
+            crate::creative_app::model::ServiceInstance::READY_STOPPED
+        );
+        let endpoints_after =
+            crate::creative_app::surface_store::list_endpoints(&conn, &instance_id).unwrap();
+        assert!(endpoints_after.is_empty(), "endpoints cleared after stop");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    /// T09: the LocalStatic driver completes synchronously (no process) and
+    /// still writes a real ServiceInstance + RuntimeEndpoint projection.
+    #[tokio::test]
+    async fn local_static_driver_e2e_writes_services_and_endpoint() {
+        let conn = mem();
+        let rt = new_runtime_manager();
+        let cwd = std::env::temp_dir().join(format!("natives-t09-static-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("index.html"), "<html><body>hi</body></html>").unwrap();
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Rule,
+            project_kind: LocalProjectKind::Html,
+            runtime: LocalLaunchRuntime::StaticHttp,
+            program: LaunchProgram::Internal,
+            cwd_relative: ".".into(),
+            script: None,
+            entry_file: Some("index.html".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "t09 static".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: None,
+        };
+        let t = now();
+        let rec = LocalCreativeAppRecord {
+            id: "loc-static".into(),
+            title: "Static".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: cwd.to_string_lossy().to_string(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Html,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: plan.to_json().unwrap(),
+            plan_fingerprint: "fp-static".into(),
+            state: CreativeAppState::InstalledStopped,
+            status_detail_json: None,
+            open_url: None,
+            current_port: None,
+            process_identity_json: None,
+            volume_identity: String::new(),
+            auto_open: false,
+            startup_timeout_ms: 15_000,
+            last_started_at: None,
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        };
+        store::insert_app(&conn, &rec).unwrap();
+        let app_id = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc-static",
+        )
+        .unwrap();
+        let instance_id =
+            crate::creative_app::runtime_store::create_instance(&conn, &app_id, None, "host_http")
+                .unwrap();
+        crate::creative_app::service_store::upsert_main_service(&conn, &instance_id).unwrap();
+
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+
+        let spawned = start_app(&conn, &handle, &rt, 18081, "loc-static", &instance_id)
+            .await
+            .expect("static spawn");
+        assert_eq!(spawned.state, CreativeAppState::Running);
+        let summary = await_start_ready(&conn, &handle, &rt, "loc-static", &instance_id)
+            .await
+            .expect("static ready");
+        assert_eq!(summary.state, CreativeAppState::Running);
+
+        // Service + endpoint rows are real.
+        let services =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].readiness, "ready");
+        let endpoints =
+            crate::creative_app::surface_store::list_endpoints(&conn, &instance_id).unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert!(
+            endpoints[0].url.contains("local-projects"),
+            "static endpoint must point at the host HTTP local-projects route: {}",
+            endpoints[0].url
+        );
+
+        let stopped = stop_app(&conn, &handle, &rt, "loc-static", &instance_id)
+            .await
+            .expect("static stop");
+        assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
+        let services_after =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
+        assert_eq!(services_after[0].readiness, "stopped");
+        assert!(
+            crate::creative_app::surface_store::list_endpoints(&conn, &instance_id)
+                .unwrap()
+                .is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    /// T09: the Python driver runs a REAL python HTTP server through the
+    /// Host-trusted interpreter (T06) and releases everything on stop.
+    #[tokio::test]
+    async fn python_driver_e2e_runs_real_server_via_trusted_interpreter() {
+        let Ok(_) = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+        else {
+            eprintln!("[skip] python3 not available");
+            return;
+        };
+        // The trusted interpreter must resolve (real python, not a shell).
+        let interpreter =
+            match crate::creative_app::process_driver::resolve_python_interpreter("python3") {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[skip] python3 not resolvable: {e}");
+                    return;
+                }
+            };
+
+        let conn = mem();
+        let rt = new_runtime_manager();
+        let cwd = std::env::temp_dir().join(format!("natives-t09-py-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("server.py"),
+            "from http.server import HTTPServer, BaseHTTPRequestHandler\n\
+             import os\n\
+             class H(BaseHTTPRequestHandler):\n\
+             \x20   def do_GET(self):\n\
+             \x20       self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n\
+             \x20   def log_message(self, *a): pass\n\
+             HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n",
+        )
+        .unwrap();
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Ai,
+            project_kind: LocalProjectKind::Unknown,
+            runtime: LocalLaunchRuntime::NodeDevServer,
+            program: LaunchProgram::Node,
+            cwd_relative: ".".into(),
+            script: Some("server.py".into()),
+            entry_file: Some("server.py".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 15_000,
+            auto_open: false,
+            confidence: None,
+            reason: "t09 python".into(),
+            compose: None,
+            trade_approval: None,
+            process_profile: Some(crate::creative_app::model::ProcessProfile::Python(
+                crate::creative_app::model::PythonLaunchProfile {
+                    schema_version: 1,
+                    interpreter: interpreter.clone(),
+                    entry: "server.py".into(),
+                    args: vec![],
+                    cwd_relative: ".".into(),
+                    environment_keys: vec![],
+                    port: LaunchPort {
+                        mode: LaunchPortMode::Auto,
+                        value: None,
+                    },
+                    open_path: "/".into(),
+                    health_path: "/".into(),
+                    startup_timeout_ms: 15_000,
+                    is_venv: false,
+                },
+            )),
+        };
+        let t = now();
+        let rec = LocalCreativeAppRecord {
+            id: "loc-py".into(),
+            title: "Python".into(),
+            description: None,
+            icon: None,
+            canonical_project_root: cwd.to_string_lossy().to_string(),
+            device_id: "d".into(),
+            device_name: "n".into(),
+            project_kind: LocalProjectKind::Unknown,
+            launch_mode: LaunchMode::Smart,
+            launch_plan_json: plan.to_json().unwrap(),
+            plan_fingerprint: "fp-py".into(),
+            state: CreativeAppState::InstalledStopped,
+            status_detail_json: None,
+            open_url: None,
+            current_port: None,
+            process_identity_json: None,
+            volume_identity: String::new(),
+            auto_open: false,
+            startup_timeout_ms: 15_000,
+            last_started_at: None,
+            last_exit_reason: None,
+            last_error: None,
+            created_at: t.clone(),
+            updated_at: t,
+        };
+        store::insert_app(&conn, &rec).unwrap();
+        let app_id = crate::creative_app::runtime_store::find_or_create_application(
+            &conn,
+            CreativeAppSource::LocalProject,
+            "loc-py",
+        )
+        .unwrap();
+        let instance_id = crate::creative_app::runtime_store::create_instance(
+            &conn,
+            &app_id,
+            None,
+            "local_process",
+        )
+        .unwrap();
+        crate::creative_app::service_store::upsert_main_service(&conn, &instance_id).unwrap();
+
+        let mock = tauri::test::mock_app();
+        let handle = mock.handle().clone();
+        let _spawned = start_app(&conn, &handle, &rt, 18080, "loc-py", &instance_id)
+            .await
+            .expect("python spawn");
+        let summary = await_start_ready(&conn, &handle, &rt, "loc-py", &instance_id)
+            .await
+            .expect("python healthy");
+        assert_eq!(summary.state, CreativeAppState::Running);
+        let port = store::get_app(&conn, "loc-py")
+            .unwrap()
+            .unwrap()
+            .current_port
+            .expect("python port");
+        assert!(
+            super::runtime::port_listening(port),
+            "python server must listen"
+        );
+
+        let services =
+            crate::creative_app::service_store::list_services(&conn, &instance_id).unwrap();
+        assert_eq!(services[0].readiness, "ready");
+
+        let stopped = stop_app(&conn, &handle, &rt, "loc-py", &instance_id)
+            .await
+            .expect("python stop");
+        assert_eq!(stopped.state, CreativeAppState::InstalledStopped);
+        assert!(
+            !super::runtime::port_listening(port),
+            "python port released"
+        );
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }
