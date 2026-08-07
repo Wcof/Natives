@@ -341,3 +341,70 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | `cargo check --workspace --jobs 2` | **0（2026-08-04 实跑）** | 共享 Target；8 crates；19.56s（缓存热，同 SHA）。执行前等待 Creative OS B1 的 `cargo test -p natives --lib`（独立 `target/`）结束后错峰运行，未并发使用共享 Target |
 
 > 未运行：workspace test、clippy、npm/lint/typecheck、Tauri build（B00 禁止）；前端依赖验证属 TASK-017。
+
+---
+
+## 16. Pi-like 热路径整改（2026-08-08，A0–A8 真实完成状态）
+
+> 本轮整改基线 `4b8193cd`（deploy），集成分支 `perf/integration`，最终 HEAD `738dcb08`。
+> 只记录真实完成项与证据；**真网 Anthropic 与 GUI headed E2E 仍未验收**，不夸大为全量完成。
+
+### 16.1 完成项（代码 + 测试证据）
+
+| 任务 | 状态 | 证据 |
+|---|---|---|
+| A0 Baseline harness | done | `src-agent-daemon/tests/perf_baseline.rs`（#[ignore]）；`.runtime-evidence/baseline.json` |
+| A1 Live/Durable Event Split | done | `agent-core` 新增 `LiveEventBus`；TextDelta/ReasoningDelta/ToolCallDelta 走 live lane；删除累计 MessageDelta emit（保留 enum decode）；`live_text_delta_never_calls_durable_persistence` 测试（1000 delta → <10 durable calls） |
+| A2 Persistent Event Stream | done | daemon `run.watch`（after_sequence 增量 + 持续 push，newline V2EventEnvelope）；`event_stream_v1` 能力位；long-poll `run.subscribe` 保留为兼容；`stream_watch_*` 测试 2 项 |
+| A3 Persistent UDS Client | done | `UdsAuthority` 长连接 CommandClient（8 RPC = 1 handshake）+ 独立 EventClient（watch_events）；`DaemonClient::read_event`；`daemon-adapter.ts` 移除固定 poll sleep；`uds_authority_reuses_command_connection` 等测试 3 项 |
+| A6 Settings V2 Backend | done | `execution_engine:settings:v2` 持久化权威 + 迁移旧 `executor:settings`；Runtime snapshot/resolver；Codex fail-closed；disabledTools 只减法；`prepare_for_save` 纯策略层；6 项单测 |
+| A4 ReadOnly Tool Fast Path | done | `SideEffect::ReadOnly` 工具跳过 checkpoint/ledger/conflict lease，直达 handler；写类工具严格路径不变；`readonly_tool_does_not_create_side_effect_record` 测试 |
+| A5 PreparedAgentSession | done | `prepared_session.rs` 缓存静态 prompt/tool schema/skill 元数据 + digest 失效 + 有界（32 项）；`ContextStats` 增量字符/token 预算；3 项单测 + context 套件 |
+| A7 Settings UI | done | 设置 > 执行引擎 = [运行设置][Harness 编排] 双 tab；`ExecutionEngineSettingsPanel` 完全由 backend snapshot 驱动；Harness tab 复用 `NativeHarnessPanel`；tauri-adapter V2 API；i18n zh/en 同步 |
+| A8 Incremental Projector | done | `project_run_incremental` 只重放 watermark 之后事件；幂等/quarantine/partial-turn 安全不变；`projector_incremental_uses_watermark_prefix` 测试 |
+
+### 16.2 Barrier / Final Gate 实测
+
+- Wave1 Barrier（合并 A0→A1→A2→A3→A6）：`cargo fmt --check` 0、`cargo check --workspace --all-targets` 0 errors、`protocol:check` OK、`typecheck` OK。
+- Wave2 合并 A4→A5→A7→A8 后 Final Gate 全部通过：
+  `cargo fmt --check` / `cargo check --workspace --all-targets` / `protocol:check` / `verify:native-engine`（447 passed） / `typecheck` / `lint`（含 i18n 2550=2550、hardcoded colors 0 新增） / `test`（795 pass, 0 fail） / `perf:check`（bundle 预算内） / `tauri:build`（.app + .dmg 产出）。
+
+### 16.3 性能证据（A0 baseline → integration，同一 harness）
+
+| 指标 | Before | After |
+|---|---:|---:|
+| submit→completed（500 chunks） | 1612 ms | 738 ms |
+| submit→completed（2000 chunks） | 7852 ms | 2993 ms |
+| durable run_event rows（2000 chunks） | 4006 | 6（live delta SQLite writes = 0） |
+| run_event rows / 1000 chunks | 2003 | 3 |
+| payload bytes / 1000 chunks | 19.7 MB | 20.3 KB |
+| 新 MessageDelta emits | 2000 | 0 |
+
+详细 delta 见 `.runtime-evidence/after/delta.md`。
+
+### 16.4 未完成项（诚实边界）
+
+- 真网 Anthropic / OpenAI 桌面 headed E2E 性能采样（p95 delta→paint、cancel→engine、terminal tail 需真实 GUI 会话）。
+- B4 长会话、B5 reconnect 断开恢复、B6 daemon restart、B7 settings migration 的桌面级复测（B5/B6 已有 UDS 测试覆盖，非 headed 验收）。
+- A7 尚未移除 Scheduled Tasks 侧栏入口与旧 `RuntimePanel` 死代码（保留兼容周期）。
+- Codex app-server 未实现，保持 blocked（fail-closed 不变）。
+
+### 16.5 Rollback commit list
+
+单层可回滚（从 `perf/integration` HEAD `738dcb08` 依次 revert）：
+
+1. `738dcb08` fix(gate): hardcoded colors → theme tokens（可安全 revert，仅 UI 样式）
+2. `d203d0c6` fix(gate): audit-old-symbols 期望持久 UDS command/event client 拆分（与 A3 同层）
+3. `d60d3d7f` test(engine): fixture lifecycle 断言 TextDelta live-only（A1 契约测试调整）
+4. `5124882b` perf(projector): watermark-driven incremental projection [A8]
+5. `3b1f474e` feat(settings): execution engine settings UI [A7]
+6. `888ca5cb` perf(session): prepared agent session cache + incremental context stats [A5]
+7. `7ac0e122` perf(tools): read-only fast path [A4]
+8. `e5f5f6d8` fix(integration): barrier wiring（TS run.watch 类型同步，A2 依赖，勿单独回退）
+9. `fa1be1bb` refactor(settings): execution engine settings v2 backend [A6]
+10. `204449ff` perf(uds): reuse command client connection [A3]
+11. `72befba6` perf(daemon): add persistent run event stream [A2]
+12. `7c525542` perf(agent): split live events from durable facts [A1]
+13. `696ff035` perf(baseline): A0 baseline harness（无生产行为，可保留）
+
+回滚策略：A1 为架构分水岭，其上层（A2/A3/A4/A5/A8/A7/A6）依赖 live/durable 拆分；如需整体退回旧架构，从 #12 起 revert 并保留 A0 baseline 即可。旧 `MessageDelta`/`executor:settings`/localStorage runtimePref 读路径全部保留，可安全 downgrade。
