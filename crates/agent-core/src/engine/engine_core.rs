@@ -12,6 +12,7 @@ use crate::compaction::{
 use crate::doom_loop::DoomLoopDetector;
 use crate::event_seq::EventSequencer;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
+use crate::live_event::LiveEventBus;
 use assistant_protocol::v2::RunEventKind;
 use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
@@ -572,6 +573,9 @@ pub struct EngineRunConfig {
 /// Live run handle.
 pub struct AgentEngine {
     pub events: EventSequencer,
+    /// Ephemeral live event sink (memory-only, bounded broadcast).
+    /// High-frequency deltas go here, never to the durable store.
+    pub live: LiveEventBus,
     cancel: CancellationToken,
     hooks: HookRegistry,
     /// Optional session coordinator for interjection / safe-point drain.
@@ -594,6 +598,31 @@ impl AgentEngine {
     pub fn new(events: EventSequencer) -> Self {
         Self {
             events,
+            live: LiveEventBus::new(),
+            cancel: CancellationToken::new(),
+            hooks: HookRegistry::new(),
+            session_harness: None,
+            history_compact_chars: None,
+            tool_output_max_chars: None,
+            model_compaction: true,
+            summary_attempts: AtomicU32::new(0),
+            summary_failures: AtomicU32::new(0),
+            progress_sink: Arc::new(NoopToolProgressSink),
+            input_receiver: None,
+            safe_point_receiver: None,
+            provider_context_window: None,
+        }
+    }
+
+    /// Construct with an explicit live event bus.
+    ///
+    /// `AgentEngine::new` creates an internal default [`LiveEventBus`]; this
+    /// constructor lets a daemon share one live sink across engines or inject a
+    /// custom bounded broadcast.
+    pub fn with_live(events: EventSequencer, live: LiveEventBus) -> Self {
+        Self {
+            events,
+            live,
             cancel: CancellationToken::new(),
             hooks: HookRegistry::new(),
             session_harness: None,
@@ -1243,21 +1272,17 @@ impl AgentEngine {
                         EngineProviderEvent::TextDelta(t) => {
                             saw_generation_delta = true;
                             text_acc.push_str(&t);
-                            self.events
+                            // Live delta: ephemeral bus only, never durable.
+                            // The cumulative MessageDelta emit is deleted
+                            // (contract: live-durable-event-contract.md §Message).
+                            self.live
                                 .append(run_id, RunEventKind::TextDelta { text: t });
-                            self.events.append(
-                                run_id,
-                                RunEventKind::MessageDelta {
-                                    turn_id: turn_id.to_string(),
-                                    message_id: assistant_message_id.to_string(),
-                                    text: text_acc.clone(),
-                                },
-                            );
                         }
                         EngineProviderEvent::ReasoningDelta(t) => {
                             saw_generation_delta = true;
                             reasoning_acc.push_str(&t);
-                            self.events
+                            // Live delta: ephemeral bus only, never durable.
+                            self.live
                                 .append(run_id, RunEventKind::ReasoningDelta { text: t });
                         }
                         EngineProviderEvent::ToolCallDelta {
@@ -1281,7 +1306,8 @@ impl AgentEngine {
                                 }
                             }
                             entry.2.push_str(&arguments_delta);
-                            self.events.append(
+                            // Live delta: ephemeral bus only, never durable.
+                            self.live.append(
                                 run_id,
                                 RunEventKind::ToolCallDelta {
                                     index,
