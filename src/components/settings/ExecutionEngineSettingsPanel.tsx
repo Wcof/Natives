@@ -202,7 +202,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
                   {rt.version ? ` · ${rt.version}` : ''}
                 </div>
                 {rt.status === 'blocked' || rt.status === 'degraded' || rt.status === 'disabled' ? (
-                  <div style={{ fontSize: 12, color: 'var(--warning, #b45309)', marginTop: 4 }}>
+                  <div style={{ fontSize: 12, color: 'var(--warning)', marginTop: 4 }}>
                     {rt.reason}
                   </div>
                 ) : null}
@@ -316,7 +316,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           <tbody>
             {['streaming', 'tools', 'mcp', 'hooks', 'subagent', 'checkpoint_resume', 'side_effect_ledger', 'provider_routing'].map(
               (cap) => (
-                <tr key={cap} style={{ borderBottom: '1px solid var(--border-soft, #eee)' }}>
+                <tr key={cap} style={{ borderBottom: '1px solid var(--border-soft)' }}>
                   <td style={{ padding: 6 }}>{cap}</td>
                   {['native', 'claude_cli', 'codex_cli'].map((rid) => {
                     const value =
@@ -340,7 +340,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           style={{
             fontSize: 11,
             whiteSpace: 'pre-wrap',
-            background: 'var(--bg-soft, #f6f6f6)',
+            background: 'var(--bg-soft)',
             padding: 8,
             borderRadius: 6,
           }}
