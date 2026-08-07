@@ -226,9 +226,10 @@ pub fn resolve_binary_identity(executable_path: &str) -> Result<(String, String)
 pub fn verify_binary_identity(executable_path: &str, expected_hash: &str) -> Result<String> {
     let (canonical, current_hash) = resolve_binary_identity(executable_path)?;
     if current_hash != expected_hash {
-        return Err(Error::InvalidInput(format!(
+        return Err(Error::InvalidInput(
             "binary executable changed since approval (hash mismatch); re-approval required"
-        )));
+                .to_string(),
+        ));
     }
     Ok(canonical)
 }

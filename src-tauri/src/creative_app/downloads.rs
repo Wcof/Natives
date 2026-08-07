@@ -78,7 +78,7 @@ fn download_destination_in(
 
     let name = url
         .path_segments()
-        .and_then(|segments| segments.last())
+        .and_then(|mut segments| segments.next_back())
         .filter(|s| !s.is_empty())
         .map(sanitize_filename)
         .or_else(|| {

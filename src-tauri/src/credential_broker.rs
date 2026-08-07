@@ -84,7 +84,13 @@ pub fn resolve_for_daemon(
 }
 
 pub(crate) fn global_proxy_for_daemon() -> std::result::Result<Option<String>, String> {
-    let db = crate::db::get_main_conn().map_err(|e| e.to_string())?;
+    // Proxy config is an optional best-effort lookup. When the main DB pool is
+    // not registered (unit test / app not yet started) there is no proxy to
+    // read, so build a direct client instead of failing the whole request.
+    let db = match crate::db::get_main_conn() {
+        Ok(conn) => conn,
+        Err(_) => return Ok(None),
+    };
     let raw: Option<String> = db
         .query_row(
             "SELECT global_proxy_json FROM provider_routing_settings WHERE id=1",

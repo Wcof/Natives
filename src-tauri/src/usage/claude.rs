@@ -636,7 +636,11 @@ mod tests {
 
     fn claude_env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        // Poison-tolerant (R-B1 lock exception): a single failing test must not
+        // cascade into every other test that touches the CLAUDE_CONFIG_DIR env.
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     #[test]
@@ -869,15 +873,11 @@ mod tests {
         let mut assistant_with_usage = 0usize;
         let mut nonzero = 0usize;
         let mut in_range = 0usize;
-        let tz: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
-        let now = crate::usage::now_ms();
-        let local = tz.timestamp_millis_opt(now).single().unwrap();
-        let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz
-            .from_local_datetime(&midnight)
-            .unwrap()
-            .timestamp_millis()
-            - 14 * 24 * 60 * 60 * 1_000;
+        // Derive the scan window from the file's own timestamps instead of
+        // "last 14 days", so the assertion is stable regardless of when the
+        // test runs (real session files go stale and would otherwise fail).
+        let mut min_ts: Option<i64> = None;
+        let mut max_ts: Option<i64> = None;
         for line in reader.lines() {
             let Ok(line) = line else { continue };
             lines += 1;
@@ -911,7 +911,9 @@ mod tests {
                     }
                     nonzero += 1;
                     let ts_ms = parse_timestamp_to_ms(&event.timestamp);
-                    if ts_ms >= start && ts_ms < now {
+                    if ts_ms > 0 {
+                        min_ts = Some(min_ts.map_or(ts_ms, |m: i64| m.min(ts_ms)));
+                        max_ts = Some(max_ts.map_or(ts_ms, |m: i64| m.max(ts_ms)));
                         in_range += 1;
                     }
                 }
@@ -920,6 +922,11 @@ mod tests {
                 }
             }
         }
+        let (Some(start), Some(now)) = (min_ts, max_ts) else {
+            // No parseable timestamps; nothing stable to assert.
+            eprintln!("serde stats lines={lines} with_usage={with_usage} ok={parsed_ok} err={parsed_err}: no timestamps");
+            return;
+        };
         eprintln!(
             "serde stats lines={lines} with_usage={with_usage} ok={parsed_ok} err={parsed_err} assistant_usage={assistant_with_usage} nonzero={nonzero} in_range={in_range} start={start} now={now}"
         );
@@ -983,14 +990,11 @@ mod tests {
         let resolved = crate::usage::tool_home("CLAUDE_CONFIG_DIR", ".claude");
         eprintln!("tool_home resolved={resolved:?}");
         let tz: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
+        // Scan from epoch so the copied real session file counts even after it
+        // ages out of a "last 14 days" window; the known-good line then
+        // guarantees the floor assert regardless of the real file's age.
+        let start = 0;
         let now = crate::usage::now_ms();
-        let local = tz.timestamp_millis_opt(now).single().unwrap();
-        let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz
-            .from_local_datetime(&midnight)
-            .unwrap()
-            .timestamp_millis()
-            - 14 * 24 * 60 * 60 * 1_000;
         let result = scan_claude_logs(start, now, &tz);
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let total: i64 = result

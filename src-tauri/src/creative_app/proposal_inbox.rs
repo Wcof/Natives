@@ -56,8 +56,8 @@ pub struct ProposalInboxEntry {
     pub proposal: AgentProposal,
 }
 
-fn conn<'a>(
-    pool: &'a DbPool,
+fn conn(
+    pool: &DbPool,
 ) -> crate::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
     pool.get().map_err(|e| Error::Internal(format!("db: {e}")))
 }
@@ -340,7 +340,7 @@ pub fn start_target_for_proposal(
 pub enum ProposalApproveResult {
     Approved {
         proposal_id: String,
-        app: crate::creative_app::model::CreativeAppSummary,
+        app: Box<crate::creative_app::model::CreativeAppSummary>,
     },
     AlreadyDecided {
         proposal_id: String,

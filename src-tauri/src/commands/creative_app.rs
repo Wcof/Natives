@@ -1429,20 +1429,19 @@ pub async fn creative_app_proposal_approve(
                     None => register_proposal_app(&mut c, &verified_proposal).map(|s| s.id),
                 }
             })()
-            .map_err(|e| {
+            .inspect_err(|_| {
                 let _ = proposal_inbox::cas_status(
                     &c,
                     &proposal_id,
                     proposal_inbox::STATUS_APPROVED,
                     proposal_inbox::STATUS_FAILED,
                 );
-                e
             })?;
             if register_only {
                 let summary = crate::creative_app::adapters::get_summary(&c, &app_id)?;
                 return Ok(ProposalApproveResult::Approved {
                     proposal_id: proposal_id.clone(),
-                    app: summary,
+                    app: Box::new(summary),
                 });
             }
             // Launch start→health→endpoint. A start failure keeps the proposal
@@ -1461,7 +1460,7 @@ pub async fn creative_app_proposal_approve(
                 };
             Ok(ProposalApproveResult::Approved {
                 proposal_id: proposal_id.clone(),
-                app: summary,
+                app: Box::new(summary),
             })
         })();
 

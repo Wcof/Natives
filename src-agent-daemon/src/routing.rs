@@ -975,6 +975,16 @@ mod tests {
 
     #[test]
     fn circuit_opens_after_three_failures_and_recovers_after_success() {
+        // Hermetic: route health lives in assistant.db, and
+        // default_assistant_db_path() falls back to the real ~/.natives when
+        // NATIVES_ASSISTANT_DB_PATH is unset. Point it at a temp DB so the test
+        // never reads/writes the developer's real data and is deterministic
+        // under parallel execution.
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("route-health.db");
+        let prev_db = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         let target = RouteTarget {
             provider_id: "p".into(),
             credential_kind: "api_key".into(),
@@ -989,5 +999,9 @@ mod tests {
         assert!(circuit_open(&target));
         record_success(&target);
         assert!(!circuit_open(&target));
+        match prev_db {
+            Some(v) => std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v),
+            None => std::env::remove_var("NATIVES_ASSISTANT_DB_PATH"),
+        }
     }
 }

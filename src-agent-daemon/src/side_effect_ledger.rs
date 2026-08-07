@@ -453,6 +453,9 @@ mod tests {
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
         crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
         f();
+        // Clear the thread-local override so it cannot leak into the next test
+        // that runs on this worker thread (parallel-suite hermeticity).
+        crate::storage::set_test_db_override(None, None);
     }
 
     #[test]

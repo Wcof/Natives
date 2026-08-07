@@ -2169,7 +2169,12 @@ mod tests {
         let base = format!("http://{}:{}/v1", addr.ip(), addr.port());
 
         let handle = std::thread::spawn(move || {
-            let request = server.recv().expect("recv");
+            // Bounded receive: if the mock request never arrives, fail fast
+            // instead of hanging the whole workspace test suite.
+            let request = server
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("mock server recv failed")
+                .expect("mock server never received the provider-test request");
             assert_eq!(request.url(), "/v1/chat/completions");
             let response = tiny_http::Response::from_string(
                 r#"{"error":{"message":"Rate limit exceeded for model deepseek-v4-flash","type":"rate_limit_error"}}"#,

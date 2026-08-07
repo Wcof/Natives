@@ -455,6 +455,17 @@ pub fn web_search_tool() -> Tool {
 mod tests {
     use super::*;
 
+    /// Public IP literal endpoint so constructing a backend does not require a
+    /// real DNS lookup (tests must be hermetic; the SSRF validator still runs).
+    const TEST_ENDPOINT: &str = "http://8.8.8.8/search";
+
+    /// Serializes the tests that install/clear the process-global backend so
+    /// parallel test threads cannot observe each other's intermediate state.
+    fn backend_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
     #[test]
     fn provider_parsing_is_case_insensitive_and_closed() {
         assert_eq!(SearchProvider::parse("Brave"), Some(SearchProvider::Brave));
@@ -478,12 +489,14 @@ mod tests {
         assert!(
             SearchBackend::with_endpoint(SearchProvider::Brave, "k", "file:///etc/passwd").is_err()
         );
-        assert!(SearchBackend::new(SearchProvider::Brave, "k").is_ok());
+        assert!(SearchBackend::with_endpoint(SearchProvider::Brave, "k", TEST_ENDPOINT).is_ok());
     }
 
     #[test]
     fn debug_never_prints_the_key() {
-        let backend = SearchBackend::new(SearchProvider::Tavily, "tvly-supersecret").unwrap();
+        let backend =
+            SearchBackend::with_endpoint(SearchProvider::Tavily, "tvly-supersecret", TEST_ENDPOINT)
+                .unwrap();
         let rendered = format!("{backend:?}");
         assert!(!rendered.contains("supersecret"), "{rendered}");
         assert!(rendered.contains("[REDACTED]"));
@@ -531,6 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_call_is_a_hard_error_not_an_empty_result() {
+        let _lock = backend_lock().lock().await;
         clear_backend();
         // Guard against a developer machine that happens to export the vars.
         if std::env::var(ENV_PROVIDER).is_ok() {
@@ -553,7 +567,10 @@ mod tests {
 
     #[tokio::test]
     async fn configured_backend_still_rejects_an_empty_query() {
-        install_backend(SearchBackend::new(SearchProvider::Brave, "k").unwrap());
+        let _lock = backend_lock().lock().await;
+        install_backend(
+            SearchBackend::with_endpoint(SearchProvider::Brave, "k", TEST_ENDPOINT).unwrap(),
+        );
         let ctx = ToolCallContext::new(
             std::env::temp_dir(),
             "run-search".into(),
@@ -569,12 +586,15 @@ mod tests {
         clear_backend();
     }
 
-    #[test]
-    fn registration_follows_configuration() {
+    #[tokio::test]
+    async fn registration_follows_configuration() {
+        let _lock = backend_lock().lock().await;
         clear_backend();
         let env_configured = std::env::var(ENV_PROVIDER).is_ok();
         assert_eq!(is_configured(), env_configured);
-        install_backend(SearchBackend::new(SearchProvider::Tavily, "k").unwrap());
+        install_backend(
+            SearchBackend::with_endpoint(SearchProvider::Tavily, "k", TEST_ENDPOINT).unwrap(),
+        );
         assert!(is_configured());
         clear_backend();
     }

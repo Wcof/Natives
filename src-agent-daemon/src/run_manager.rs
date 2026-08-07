@@ -395,47 +395,11 @@ impl RunManager {
                 }
                 return None;
             }
-            let _env_guard = crate::storage::DataStore::env_test_lock();
-            let explicit = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| {
-                    std::env::var("NATIVES_DB_PATH")
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                });
-            let db_path = explicit?;
-            // Prefer temp paths in tests; still allow absolute explicit fixtures.
-            let db_path = std::path::PathBuf::from(db_path);
-            if let Some(parent) = db_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| {
-                    db_path
-                        .parent()
-                        .map(|p| p.join("artifacts"))
-                        .unwrap_or_else(std::env::temp_dir)
-                });
-            let store = DataStore::new(&db_path, &artifact_dir).ok()?;
-            // Reject empty/broken DBs so leaked env cannot poison pure unit tests.
-            let ok = store
-                .conn()
-                .ok()
-                .and_then(|conn| {
-                    conn.query_row(
-                        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='run_event'",
-                        [],
-                        |row| row.get::<_, bool>(0),
-                    )
-                    .ok()
-                })
-                .unwrap_or(false);
-            if !ok {
-                return None;
-            }
-            return Some(Arc::new(store));
+            // Tests must opt into a real store via set_test_db_override. Reading
+            // process-global NATIVES_* env vars here is a parallel-test race
+            // (one test's fixture leaks into another), so under cfg(test) the
+            // default is always in-memory.
+            return None;
         }
         #[cfg(not(test))]
         {
@@ -5077,6 +5041,18 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_mid_run_marks_interrupted() {
+        // Hermetic store: temp DB + thread-local override + env restore so the
+        // test never reads a leaked parallel-test env var or the real ~/.natives.
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let _env_restore = crate::storage::EnvRestore::capture();
+        let store_dir = tempfile::tempdir().unwrap();
+        let db_path = store_dir.path().join("cancel-mid.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_DB_PATH", &db_path);
+        crate::storage::set_test_db_override(
+            Some(db_path),
+            Some(store_dir.path().join("artifacts")),
+        );
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let runtime_dir = std::env::temp_dir().join(format!("natives-cancel-{}", Uuid::new_v4()));
         std::fs::create_dir_all(runtime_dir.join("runs")).unwrap();
@@ -5105,6 +5081,8 @@ mod tests {
 
         let cancel_flag_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancel_flag_seen_bg = cancel_flag_seen.clone();
+        let cancel_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_started_bg = cancel_started.clone();
 
         let rm_start = rm.clone();
         let rid = run.id.clone();
@@ -5138,6 +5116,7 @@ mod tests {
             struct CancelAwareTools {
                 run_id: String,
                 seen: Arc<std::sync::atomic::AtomicBool>,
+                started: Arc<std::sync::atomic::AtomicBool>,
             }
             #[async_trait::async_trait]
             impl agent_core::EngineToolRuntime for CancelAwareTools {
@@ -5150,6 +5129,10 @@ mod tests {
                     _input: serde_json::Value,
                     cancel: &CancellationToken,
                 ) -> agent_core::ToolExecutionResult {
+                    // Signal that tool execution has begun so the test cancels
+                    // mid-tool instead of racing the engine's startup loop.
+                    self.started
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     // Poll cancel token while "working".
                     for _ in 0..40 {
                         if cancel.is_cancelled() {
@@ -5205,6 +5188,7 @@ mod tests {
             let tools = CancelAwareTools {
                 run_id: rid.clone(),
                 seen: cancel_flag_seen_bg,
+                started: cancel_started_bg,
             };
             rm_start
                 .start_with_seams(
@@ -5242,6 +5226,19 @@ mod tests {
         assert!(
             rm.runtime.has_engine(&run.id).await,
             "engine must be registered before cancel"
+        );
+        // Wait until the tool is actually executing so cancel lands mid-tool,
+        // not in the engine-startup window where a cancelled token aborts the
+        // run before any tool runs (would make the flag assertion vacuous).
+        for _ in 0..200 {
+            if cancel_started.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            cancel_started.load(std::sync::atomic::Ordering::SeqCst),
+            "tool must start before cancel"
         );
         let cancelled = rm
             .cancel(CancelRunRequest {
@@ -5294,6 +5291,7 @@ mod tests {
         } else {
             std::env::remove_var("NATIVES_RUNTIME_DIR");
         }
+        crate::storage::set_test_db_override(None, None);
         let _ = std::fs::remove_dir_all(runtime_dir);
     }
 
@@ -6120,6 +6118,10 @@ mod tests {
         let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
         std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
         std::env::remove_var("NATIVES_DB_PATH");
+        // Hermetic: force in-memory RunManager so a leaked parallel-test
+        // thread-local test_db_override cannot route us into a real store.
+        let _prev_mem = std::env::var("NATIVES_RUN_MANAGER_MEMORY").ok();
+        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
@@ -6167,6 +6169,11 @@ mod tests {
             .filter(|e| matches!(&e.payload, RunEventKind::Failed { .. }))
             .count();
         assert_eq!(failed_count, 1);
+        if let Some(v) = _prev_mem {
+            std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", v);
+        } else {
+            std::env::remove_var("NATIVES_RUN_MANAGER_MEMORY");
+        }
     }
 
     #[test]

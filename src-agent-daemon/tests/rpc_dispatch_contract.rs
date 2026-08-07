@@ -63,6 +63,14 @@ fn isolate_env() {
     });
 }
 
+/// All daemon-touching tests in this file share one process-global temp DB and
+/// the cached global RunManager; running them in parallel contends on the same
+/// SQLite file ("database is locked"). Serialize them.
+fn dispatch_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 enum Probe {
     /// Handler was reached and produced a response.
     Responded { code: Option<String>, body: String },
@@ -122,6 +130,7 @@ fn is_fail_closed_miss(code: Option<&str>, body: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_advertised_daemon_method_has_real_dispatch() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     let mut offenders: Vec<String> = Vec::new();
@@ -152,6 +161,7 @@ async fn every_advertised_daemon_method_has_real_dispatch() {
 /// and must be dispatchable. Only `HOST_INTERCEPTED` is exempt, with a stated reason.
 #[tokio::test(flavor = "multi_thread")]
 async fn host_advertised_methods_are_dispatchable_unless_host_intercepted() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     let mut offenders: Vec<String> = Vec::new();
@@ -244,6 +254,7 @@ fn host_only_methods_are_actually_intercepted_by_the_tauri_host() {
 /// the first test stops us over-advertising, this one stops the red lines from drifting in.
 #[tokio::test(flavor = "multi_thread")]
 async fn deliberately_unsupported_methods_report_unsupported() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     // OAuth browser/redirect is an explicit product red line, not an oversight:
@@ -273,6 +284,7 @@ async fn deliberately_unsupported_methods_report_unsupported() {
 /// Naming them here makes removal a deliberate edit to this list.
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_protocol_surface_is_advertised_and_dispatchable() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     const MCP_SURFACE: &[&str] = &[
@@ -315,6 +327,7 @@ async fn mcp_protocol_surface_is_advertised_and_dispatchable() {
 /// which the generic fail-closed check cannot see.
 #[tokio::test(flavor = "multi_thread")]
 async fn harness_surface_is_advertised_and_really_routed() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     assert!(
@@ -347,6 +360,7 @@ async fn harness_surface_is_advertised_and_really_routed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn project_identity_surface_reaches_the_harness_control_plane() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     for method in ["project.identity.register", "project.identity.list"] {
@@ -369,6 +383,7 @@ async fn project_identity_surface_reaches_the_harness_control_plane() {
 /// advertised by a future edit.
 #[tokio::test(flavor = "multi_thread")]
 async fn server_driven_mcp_methods_are_not_advertised() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
 
     for method in ["mcp.sampling.createMessage", "mcp.elicitation.create"] {
@@ -393,6 +408,7 @@ async fn server_driven_mcp_methods_are_not_advertised() {
 /// Unknown names must also fail closed as `unsupported`, never `internal_error`.
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_methods_fail_closed_as_unsupported() {
+    let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
     match probe("totally.notAMethod").await {
         Probe::Blocked => panic!("unknown method should not reach a handler"),

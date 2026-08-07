@@ -332,7 +332,7 @@ pub fn delete_grant(conn: &Connection, grant_id: &str) -> Result<()> {
     };
     conn.execute("DELETE FROM app_grants WHERE id = ?1", params![grant_id])
         .map_err(Error::Database)?;
-    record_grant_event(&conn, &application_id, &kind, "revoked", None, None)?;
+    record_grant_event(conn, &application_id, &kind, "revoked", None, None)?;
     Ok(())
 }
 
