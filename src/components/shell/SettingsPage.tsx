@@ -12,6 +12,7 @@ import ProviderDetail from '@/components/settings/ProviderDetail';
 import { ProviderSettingsWorkspace } from '@/components/settings/provider-routing/ProviderSettingsWorkspace';
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
+import ExecutionEngineSettingsPanel from '@/components/settings/ExecutionEngineSettingsPanel';
 import PersonalOverview from '@/components/settings/PersonalOverview';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
@@ -28,6 +29,37 @@ const THEMES = [
   { id: 'light', labelKey: 'settings.themeJasmine', icon: <Sun size={20} /> },
   { id: 'dark', labelKey: 'settings.themeTerminal', icon: <Terminal size={20} /> },
 ];
+
+/** A7: 设置 > 执行引擎 = [运行设置] [Harness 编排] 双 tab。 */
+function ExecutionEngineSection({ locale }: { locale: Locale }) {
+  const [tab, setTab] = useState<'runtime' | 'harness'>('runtime');
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: '6px 14px',
+    borderRadius: 6,
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    background: active ? 'var(--accent-soft, transparent)' : 'transparent',
+    fontWeight: active ? 600 : 400,
+    cursor: 'pointer',
+    fontSize: 13,
+  });
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+        <button type="button" style={tabStyle(tab === 'runtime')} onClick={() => setTab('runtime')}>
+          {t(locale, 'executionEngine.tabRuntimeSettings')}
+        </button>
+        <button type="button" style={tabStyle(tab === 'harness')} onClick={() => setTab('harness')}>
+          {t(locale, 'executionEngine.tabHarness')}
+        </button>
+      </div>
+      {tab === 'runtime' ? (
+        <ExecutionEngineSettingsPanel locale={locale} />
+      ) : (
+        <NativeHarnessPanel locale={locale} />
+      )}
+    </div>
+  );
+}
 
 function CreativeRuntimeSettings({ locale }: { locale: Locale }) {
   const { toast } = useToast();
@@ -792,7 +824,7 @@ export default function SettingsPage({
       case 'providers':
         return renderProviders();
       case 'runtime':
-        return <NativeHarnessPanel locale={locale} />;
+        return <ExecutionEngineSection locale={locale} />;
       case 'plugins':
         return renderPlugins();
     }
