@@ -137,12 +137,15 @@ else
   fail=1
 fi
 
-# 6) UDS ordinary RPCs must not share one cached client; subscribe/slow RPC must not block cancel.
-if rg -n 'Mutex<.*DaemonClient|Option<DaemonClient>' src-agent-daemon/src/authority.rs 2>/dev/null; then
-  report "FAIL: UDS authority caches a DaemonClient"
-  fail=1
+# 6) UDS authority uses a LONG-LIVED command client (A3) plus an INDEPENDENT
+#    event client; a slow run.watch stream must never block command RPCs.
+#    Per-RPC connect+handshake was retired by the persistent-UDS remediation.
+if rg -n 'command: tokio::sync::Mutex<Option<DaemonClient>>' src-agent-daemon/src/authority.rs 2>/dev/null && \
+   rg -n 'watch_events' src-agent-daemon/src/authority.rs 2>/dev/null; then
+  report "OK: UDS authority reuses a command client and has an independent event client"
 else
-  report "OK: UDS authority uses per-RPC authenticated clients"
+  report "FAIL: UDS authority lacks the persistent command/event client split"
+  fail=1
 fi
 
 # 7) Provider protocol must be explicit; never infer from provider type / URL.
