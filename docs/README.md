@@ -75,6 +75,7 @@ docs/
 | 性能改动 | `standards/technical/04-performance.md` + `application-performance-remediation.md` |
 | Provider 路由 / 账号池 | `provider-routing-sub2api.md` |
 | Agent 引擎能力与整改 | `NATIVE_ENGINE_FULL_REMEDIATION.md` + `NATIVE-DAEMON-CAPABILITY-MAP.md` |
+| 发布门禁 / T12 验收 | `development/natives-agent-t12-release-gate-report.md` |
 | 引擎缺口定级 / 对标 Claude Code | `EXECUTION-ENGINE-CAPABILITY-AUDIT.md` |
 | 历史决策溯源 | `DESIGN_DISCUSSION.md`（以 ADR 修订为准） |
 
