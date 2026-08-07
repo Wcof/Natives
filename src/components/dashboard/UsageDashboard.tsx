@@ -13,7 +13,11 @@ import { classifyError } from '@/lib/error-classifier';
 import styles from './UsageDashboard.module.css';
 import { useToast } from '@/components/ui/Toast';
 
-export function UsageDashboard() {
+interface UsageDashboardProps {
+  children?: React.ReactNode;
+}
+
+export function UsageDashboard({ children }: UsageDashboardProps = {}) {
   const locale = useLocale();
   const { toast } = useToast();
   const requestIdRef = useRef(0);
@@ -242,6 +246,7 @@ export function UsageDashboard() {
           prevTotalSessions={0}
           lastSyncTime={lastSyncTime}
         />
+        {children}
       </div>
     );
   }
@@ -284,6 +289,7 @@ export function UsageDashboard() {
             <p className={styles.cacheError}>{errorMsg}</p>
           )}
         </div>
+        {children}
       </div>
     );
   }
@@ -372,6 +378,8 @@ export function UsageDashboard() {
         activity={filtered.activity}
         sources={data?.sources ?? []}
       /></Suspense>)}
+
+      {children}
 
       {data && (
         <div className={styles.sourcesSection}>
