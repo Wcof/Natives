@@ -81,3 +81,8 @@ References/
 !.claude/rules/performance.md
 !AGENTS.md
 !CLAUDE.md
+
+# A0 baseline evidence (large fixtures stay out of git; keep the small summaries)
+.runtime-evidence/*
+!.runtime-evidence/baseline.json
+!.runtime-evidence/baseline.md
