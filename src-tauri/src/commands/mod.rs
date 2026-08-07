@@ -11,6 +11,7 @@ pub mod creative_draft;
 pub mod db;
 pub mod disk;
 pub mod env;
+pub mod execution_engine;
 pub mod executor_settings;
 pub mod fs;
 pub mod git;

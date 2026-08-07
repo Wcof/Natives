@@ -170,7 +170,11 @@ async fn engine_hot_path(chunks: usize) -> Value {
         conn.execute(
             "INSERT INTO run (id, conversation_id, status, provider_id, model_id, created_at)
              VALUES (?1, ?2, 'running', 'prov-1', 'model-1', ?3)",
-            rusqlite::params!["baseline-run-1", "baseline-c1", chrono::Utc::now().to_rfc3339()],
+            rusqlite::params![
+                "baseline-run-1",
+                "baseline-c1",
+                chrono::Utc::now().to_rfc3339()
+            ],
         )
         .expect("insert baseline run");
     }
@@ -357,8 +361,10 @@ async fn uds_handshake_baseline() -> Value {
     std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
     let _seed = DataStore::new(&db, &art).expect("seed store");
 
-    let socket =
-        PathBuf::from(format!("/tmp/nbase-{}.sock", &uuid::Uuid::new_v4().to_string()[..8]));
+    let socket = PathBuf::from(format!(
+        "/tmp/nbase-{}.sock",
+        &uuid::Uuid::new_v4().to_string()[..8]
+    ));
     let _ = std::fs::remove_file(&socket);
     let bootstrap = format!("base-boot-{}", uuid::Uuid::new_v4());
     let sock_str = socket.to_string_lossy().to_string();
@@ -443,8 +449,11 @@ async fn perf_baseline() {
     });
 
     let evidence_path = scratch.join("baseline.json");
-    std::fs::write(&evidence_path, serde_json::to_string_pretty(&report).expect("json"))
-        .expect("write baseline.json");
+    std::fs::write(
+        &evidence_path,
+        serde_json::to_string_pretty(&report).expect("json"),
+    )
+    .expect("write baseline.json");
 
     let mut md = String::new();
     md.push_str("# A0 Baseline (pre-remediation)\n\n");
@@ -463,8 +472,12 @@ async fn perf_baseline() {
         ));
         md.push_str(&format!(
             "- delta → live publish p50/p95: {:.2}/{:.2} ms\n",
-            v["delta_publish_delay_ms"]["p50_ms"].as_f64().unwrap_or(0.0),
-            v["delta_publish_delay_ms"]["p95_ms"].as_f64().unwrap_or(0.0)
+            v["delta_publish_delay_ms"]["p50_ms"]
+                .as_f64()
+                .unwrap_or(0.0),
+            v["delta_publish_delay_ms"]["p95_ms"]
+                .as_f64()
+                .unwrap_or(0.0)
         ));
         md.push_str(&format!(
             "- terminal tail (last delta → run returned): {:.2} ms\n",
@@ -492,16 +505,15 @@ async fn perf_baseline() {
     md.push_str("\n## UDS handshake\n\n");
     md.push_str(&format!(
         "- connect+handshake p95: {:.2} ms (per RPC, current behavior)\n",
-        uds["connect_plus_handshake_ms"]["p95_ms"].as_f64().unwrap_or(0.0)
+        uds["connect_plus_handshake_ms"]["p95_ms"]
+            .as_f64()
+            .unwrap_or(0.0)
     ));
     md.push_str(&format!(
         "- handshakes per run (estimate): {}\n",
         uds["handshakes_per_run_estimate"].as_u64().unwrap_or(0)
     ));
-    md.push_str(&format!(
-        "- note: {}\n",
-        uds["note"].as_str().unwrap_or("")
-    ));
+    md.push_str(&format!("- note: {}\n", uds["note"].as_str().unwrap_or("")));
     std::fs::write(scratch.join("baseline.md"), &md).expect("write baseline.md");
 
     println!("\n===== A0 BASELINE =====");
