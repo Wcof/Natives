@@ -114,7 +114,12 @@ export class DaemonAssistantAdapter implements AssistantGateway {
           const sub = (await this.resolveRequest()('run.subscribe', {
             run_id: runId,
             after_sequence: seq,
-            wait_ms: Math.max(this.pollIntervalMs, 800),
+            // A3: the daemon blocks server-side up to wait_ms for new events
+            // (persistent push on the long-poll connection). No client-side
+            // fixed poll sleep — an empty round just means the wait window
+            // elapsed; we loop immediately. wait_ms is bounded by the daemon
+            // (30s) and cancel rides a separate connection.
+            wait_ms: Math.max(this.pollIntervalMs * 10, 5_000),
             mode: 'push',
           })) as { events?: unknown[]; terminal?: boolean };
           const raw = Array.isArray(sub?.events) ? sub.events : [];
@@ -175,10 +180,12 @@ export class DaemonAssistantAdapter implements AssistantGateway {
           throw new AuthoritativeEventMissing(runId);
         }
 
-        // Still active: keep polling. Do not exit after N empty rounds — long
-        // tool runs / slow providers are valid, and exiting only causes a fake
-        // reconnect loop in the workbench.
-        await new Promise((r) => setTimeout(r, this.pollIntervalMs));
+        // Still active. Do not sleep on a fixed client-side interval — the
+        // daemon already blocked server-side for new events (wait_ms above),
+        // so an empty round is a real wait window, not a polling tick. Loop
+        // immediately. Long tool runs / slow providers are valid, and exiting
+        // only causes a fake reconnect loop in the workbench. True transport
+        // errors are handled by the catch above (fallback + backoff).
       }
     } finally {
       this.abortControllers.delete(runId);

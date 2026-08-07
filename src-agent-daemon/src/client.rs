@@ -13,7 +13,7 @@ use crate::rpc::{read_frame, FrameError, FRAME_READ_TIMEOUT, MAX_FRAME_BYTES};
 use assistant_protocol::v1::daemon::{
     HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
 };
-use assistant_protocol::v2::PROTOCOL_V2;
+use assistant_protocol::v2::{RunEventV2, PROTOCOL_V2};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -340,6 +340,57 @@ impl DaemonClient {
             return Err(DaemonClientError::Rpc(msg));
         }
         Err(DaemonClientError::Rpc(resp_line.trim().to_string()))
+    }
+
+    /// Read the next event line on a `run.watch` connection (A3 EventClient).
+    ///
+    /// The server writes one `V2EventEnvelope` per line and closes the stream
+    /// on terminal / cancel / disconnect. Returns `None` on clean close and an
+    /// error on transport failure so the caller can decide whether to reconnect
+    /// with `after_sequence`.
+    pub async fn read_event(&mut self) -> Option<Result<RunEventV2, DaemonClientError>> {
+        use assistant_protocol::v2::RunEventV2;
+        let frame = match read_frame(&mut self.reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return None, // clean close
+            Err(FrameError::Oversize) => {
+                return Some(Err(DaemonClientError::Protocol(format!(
+                    "event frame exceeds {MAX_FRAME_BYTES} bytes"
+                ))))
+            }
+            Err(FrameError::Timeout) => {
+                return Some(Err(DaemonClientError::Protocol(
+                    "event frame read timed out".into(),
+                )))
+            }
+            Err(FrameError::Io) => {
+                return Some(Err(DaemonClientError::Io(std::io::Error::other(
+                    "event frame read failed",
+                ))))
+            }
+        };
+        let line = String::from_utf8_lossy(&frame);
+        // The server writes V2EventEnvelope lines. Decode into a RunEventV2
+        // shape (run_id/sequence/type/payload) so callers see one uniform view.
+        match serde_json::from_str::<serde_json::Value>(line.trim()) {
+            Ok(value) => {
+                let run_id = value
+                    .get("run_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let sequence = value.get("sequence").and_then(|v| v.as_u64()).unwrap_or(0);
+                let payload_value = value.get("payload").cloned().unwrap_or(Value::Null);
+                // A2's server serializes the RunEventKind payload with the
+                // serde `type` tag, so it decodes straight back into the enum.
+                match serde_json::from_value::<assistant_protocol::v2::RunEventKind>(payload_value)
+                {
+                    Ok(kind) => Some(Ok(RunEventV2::new(run_id, sequence, kind))),
+                    Err(e) => Some(Err(DaemonClientError::Json(e))),
+                }
+            }
+            Err(e) => Some(Err(DaemonClientError::Json(e))),
+        }
     }
 }
 
