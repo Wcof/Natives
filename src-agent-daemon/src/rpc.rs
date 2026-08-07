@@ -639,7 +639,7 @@ pub async fn handle_rpc(
     use assistant_protocol::v2::methods::names;
     use assistant_protocol::v2::{
         CancelRunRequest, ContinueRunRequest, CreateRunRequest, ReplayRunRequest, ResumeRunRequest,
-        RetryRunRequest, StartRunRequest,
+        RetryRunRequest, RunEventKind, StartRunRequest,
     };
     match request.method.as_str() {
         names::DAEMON_GET_STATUS => {
@@ -844,9 +844,11 @@ pub async fn handle_rpc(
         names::DAEMON_GET_CAPABILITIES => {
             let caps = crate::run_manager::RunManager::capabilities();
             let mut value = serde_json::to_value(&caps).unwrap_or_default();
-            // Per-runtime capability matrix (ADR-0016): which runtimes can
-            // honour expert/team/skills/mcp selections and by what mechanism.
+            // event_stream_v1: persistent run event stream (`run.watch`) with
+            // after_sequence reconnect; negotiated by the host, long-poll
+            // `run.subscribe` remains the compatibility fallback.
             if let Some(obj) = value.as_object_mut() {
+                obj.insert("event_stream_v1".into(), serde_json::json!(true));
                 obj.insert(
                     "runtime_capabilities".into(),
                     crate::capability_resolution::runtime_capability_matrix(),
@@ -1505,6 +1507,104 @@ pub async fn handle_rpc(
                 }),
             )
             .await;
+        }
+        names::RUN_WATCH => {
+            // Persistent event stream (event_stream_v1):
+            // 1) replay durable events > after_sequence (gap fill on reconnect)
+            // 2) keep the connection open, pushing NEW events as they arrive
+            // 3) clean close on terminal event / cancel / connection drop
+            //
+            // Each event is a newline-delimited V2EventEnvelope so a
+            // reconnecting client can resume with `after_sequence` and never
+            // re-receive an already-applied durable fact.
+            let after = request
+                .params
+                .get("after_sequence")
+                .or_else(|| request.params.get("last_sequence"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let run_id = request
+                .params
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let replayed = match run_manager().replay_checked(ReplayRunRequest {
+                run_id: run_id.clone(),
+                after_sequence: after,
+            }) {
+                Ok(events) => events,
+                Err(error) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INTERNAL_ERROR,
+                            ErrorCategory::Internal,
+                            false,
+                            format!("authoritative event replay failed: {error}"),
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            // R-P4 / T11: bound the replay batch exactly like run.getEvents so
+            // a long-lived run never produces an oversized frame; the client
+            // pages forward on reconnect.
+            let mut terminal_in_replay = false;
+            for event in cap_wire_replay(replayed) {
+                if write_event_envelope(writer, &event).await.is_err() {
+                    return; // client dropped — clean exit, no orphan task
+                }
+                if matches!(
+                    event.payload,
+                    RunEventKind::Completed { .. }
+                        | RunEventKind::TurnCompleted { .. }
+                        | RunEventKind::Cancelled { .. }
+                        | RunEventKind::Interrupted { .. }
+                        | RunEventKind::Failed { .. }
+                ) {
+                    terminal_in_replay = true;
+                }
+            }
+            // If the run was already terminal when the client connected (e.g.
+            // reconnect after completion), close cleanly — never hang waiting
+            // for a live broadcast that will not come.
+            if terminal_in_replay
+                || run_manager()
+                    .get_run(&run_id)
+                    .map(|r| r.status.is_terminal())
+                    .unwrap_or(false)
+            {
+                return;
+            }
+
+            // Live push phase: broadcast until terminal, cancel, or disconnect.
+            let mut rx = run_manager().events().subscribe(&run_id);
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        if event.effective_run_sequence() <= after {
+                            continue;
+                        }
+                        if write_event_envelope(writer, &event).await.is_err() {
+                            return; // client dropped
+                        }
+                        if matches!(
+                            event.payload,
+                            RunEventKind::Completed { .. }
+                                | RunEventKind::TurnCompleted { .. }
+                                | RunEventKind::Cancelled { .. }
+                                | RunEventKind::Interrupted { .. }
+                                | RunEventKind::Failed { .. }
+                        ) {
+                            return; // terminal — clean close
+                        }
+                    }
+                    Err(_) => return, // channel closed / lag
+                }
+            }
         }
         names::RUN_LIST => {
             let conversation_id = request
@@ -3510,6 +3610,27 @@ async fn send_success(
     let json = serde_json::to_string(&resp).unwrap_or_default();
     let _ = writer.write_all(json.as_bytes()).await;
     let _ = writer.write_all(b"\n").await;
+}
+
+/// Write one event as a newline-delimited `V2EventEnvelope` on a persistent
+/// event stream (`run.watch`). Returns the I/O result so the caller can exit
+/// cleanly when the client drops.
+async fn write_event_envelope(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    event: &RunEventV2,
+) -> std::io::Result<()> {
+    let envelope = assistant_protocol::v2::V2EventEnvelope {
+        protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
+        session_id: None,
+        run_id: event.run_id.clone(),
+        sequence: event.effective_run_sequence(),
+        event_type: event.payload.type_name().to_string(),
+        payload: serde_json::to_value(&event.payload).unwrap_or_default(),
+        emitted_at: Some(event.timestamp.to_rfc3339()),
+    };
+    let json = serde_json::to_string(&envelope).unwrap_or_default();
+    writer.write_all(json.as_bytes()).await?;
+    writer.write_all(b"\n").await
 }
 
 /// Send an error response.
