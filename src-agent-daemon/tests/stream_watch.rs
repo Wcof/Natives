@@ -117,7 +117,6 @@ async fn stream_watch_pushes_new_events_until_terminal() {
     let sock = temp_socket("watch");
     let _ = std::fs::remove_file(&sock);
     let bootstrap = format!("boot-{}", uuid::Uuid::new_v4());
-    let sock_str = sock.to_string_lossy().to_string();
     start_server(&sock, &bootstrap).await;
     assert!(sock.exists(), "server socket must appear");
 
@@ -241,7 +240,6 @@ async fn stream_watch_after_sequence_skips_old_events() {
     let sock = temp_socket("after");
     let _ = std::fs::remove_file(&sock);
     let bootstrap = format!("boot-{}", uuid::Uuid::new_v4());
-    let sock_str = sock.to_string_lossy().to_string();
     start_server(&sock, &bootstrap).await;
     assert!(sock.exists(), "server socket must appear");
 

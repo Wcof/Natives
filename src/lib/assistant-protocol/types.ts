@@ -590,6 +590,7 @@ export type AssistantMethod =
   | 'run.continue'
   | 'run.resume'
   | 'run.subscribe'
+  | 'run.watch'
   | 'run.replay'
   | 'run.list'
   | 'run.getEvents'

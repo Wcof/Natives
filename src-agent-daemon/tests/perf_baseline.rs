@@ -222,7 +222,7 @@ async fn engine_hot_path(chunks: usize) -> Value {
     let mut last_delta_seen_at: Option<Instant> = None;
     let mut terminal_seen_at: Option<Instant> = None;
 
-    let mut deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
     while terminal_seen_at.is_none() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
