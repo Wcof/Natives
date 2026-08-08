@@ -23,7 +23,6 @@ export default function MediaRenderer({ model }: { model: MediaModel }) {
     case 'image':
     default:
       return (
-        // eslint-disable-next-line @next/next/no-img-element
         <img src={model.src} alt={model.name} className="preview-media" data-preview-kind="image" style={{ maxWidth: '100%', objectFit: 'contain' }} />
       );
   }
