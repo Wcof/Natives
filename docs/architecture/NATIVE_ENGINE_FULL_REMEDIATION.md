@@ -346,7 +346,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 ## 16. Pi-like 热路径整改（2026-08-08，A0–A8 真实完成状态）
 
-> 本轮整改基线 `4b8193cd`（deploy），集成分支 `perf/integration`，最终 HEAD `738dcb08`。
+> 本轮整改基线 `4b8193cd`（deploy），集成分支 `perf/integration`，最终 HEAD `888a9a29`（含最终 benchmark 证据入库）。
 > 只记录真实完成项与证据；**真网 Anthropic 与 GUI headed E2E 仍未验收**，不夸大为全量完成。
 
 ### 16.1 完成项（代码 + 测试证据）
@@ -373,12 +373,15 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 | 指标 | Before | After |
 |---|---:|---:|
-| submit→completed（500 chunks） | 1612 ms | 738 ms |
-| submit→completed（2000 chunks） | 7852 ms | 2993 ms |
+| submit→completed（500 chunks） | 1612 ms | 736 ms |
+| submit→completed（2000 chunks） | 7852 ms | 2854 ms |
+| durable run_event rows（500 chunks） | 1006 | 6（live delta SQLite writes = 0） |
 | durable run_event rows（2000 chunks） | 4006 | 6（live delta SQLite writes = 0） |
 | run_event rows / 1000 chunks | 2003 | 3 |
 | payload bytes / 1000 chunks | 19.7 MB | 20.3 KB |
-| 新 MessageDelta emits | 2000 | 0 |
+| 新 MessageDelta emits | 500 | 0 |
+
+> 数字为 2026-08-08 对 `perf/integration` HEAD `888a9a29` 的最终重跑（同一 A0 harness）；原始证据与 delta 已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `888a9a29`）。
 
 详细 delta 见 `.runtime-evidence/after/delta.md`。
 
@@ -391,7 +394,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 ### 16.5 Rollback commit list
 
-单层可回滚（从 `perf/integration` HEAD `738dcb08` 依次 revert）：
+单层可回滚（从 `perf/integration` HEAD `888a9a29` 依次 revert）：
 
 1. `738dcb08` fix(gate): hardcoded colors → theme tokens（可安全 revert，仅 UI 样式）
 2. `d203d0c6` fix(gate): audit-old-symbols 期望持久 UDS command/event client 拆分（与 A3 同层）
