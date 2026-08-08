@@ -90,6 +90,9 @@ impl LidGuard {
         {
             // `caffeinate -dimsu` prevents display sleep, idle sleep, disk sleep,
             // and system sleep. It's a child process; killing it releases all assertions.
+            // P1-037: fail closed — if we cannot prove sleep is disabled, do NOT
+            // report success. A terminal running under a false "sleep disabled"
+            // claim would be a fake-health state.
             match std::process::Command::new("caffeinate")
                 .args(["-dimsu"])
                 .stdout(std::process::Stdio::null())
@@ -103,24 +106,14 @@ impl LidGuard {
                     return Ok(());
                 }
                 Err(e) => {
-                    // caffeinate is always available on macOS — if this fails,
-                    // something is fundamentally wrong, log and continue
                     eprintln!("[lid_guard] caffeinate spawn failed: {e}");
+                    // Do not fall through to state-only tracking: without a real
+                    // guard process we must not claim sleep is disabled.
+                    return Err(Error::Internal(format!(
+                        "failed to disable sleep: caffeinate spawn failed: {e}"
+                    )));
                 }
             }
-            // Fallback: try `pmset -b disablesleep 1` (may require sudo)
-            let result = std::process::Command::new("pmset")
-                .args(["-b", "disablesleep", "1"])
-                .output()
-                .ok();
-            if let Some(output) = result {
-                if output.status.success() {
-                    self.sleep_disabled.store(true, Ordering::SeqCst);
-                    return Ok(());
-                }
-            }
-            // Last resort: state-only tracking
-            self.sleep_disabled.store(true, Ordering::SeqCst);
         }
 
         #[cfg(target_os = "linux")]
@@ -144,8 +137,8 @@ impl LidGuard {
                 }
                 Err(e) => {
                     eprintln!("[lid_guard] systemd-inhibit failed: {e}");
-                    // Try logind D-Bus directly as fallback
-                    let _ = std::process::Command::new("dbus-send")
+                    // Fallback: logind D-Bus direct inhibit.
+                    let dbus = std::process::Command::new("dbus-send")
                         .args([
                             "--system",
                             "--dest=org.freedesktop.login1",
@@ -157,16 +150,28 @@ impl LidGuard {
                             "string:block",
                         ])
                         .spawn();
+                    match dbus {
+                        Ok(mut child) => {
+                            // dbus-send exits after delivering the request; reap it.
+                            let _ = child.wait();
+                            *guard = Some(SleepGuard::Caffeinate(child));
+                            self.sleep_disabled.store(true, Ordering::SeqCst);
+                            return Ok(());
+                        }
+                        Err(dbus_err) => {
+                            return Err(Error::Internal(format!(
+                                "failed to disable sleep: systemd-inhibit and dbus-send both failed: {e}; {dbus_err}"
+                            )));
+                        }
+                    }
                 }
             }
-            self.sleep_disabled.store(true, Ordering::SeqCst);
         }
 
         #[cfg(target_os = "windows")]
         {
-            // Use SetThreadExecutionState via WinAPI
-            // We use a simple approach: spawn a PowerShell background job
-            // that calls kernel32::SetThreadExecutionState every 30s
+            // Use SetThreadExecutionState via WinAPI via a PowerShell background
+            // job that calls kernel32::SetThreadExecutionState.
             let script = r#"
                 $code = @'
                 [DllImport("kernel32.dll")]
@@ -184,16 +189,27 @@ impl LidGuard {
                 Ok(child) => {
                     *guard = Some(SleepGuard::Caffeinate(child));
                     self.sleep_disabled.store(true, Ordering::SeqCst);
+                    return Ok(());
                 }
                 Err(e) => {
                     eprintln!("[lid_guard] PS sleep guard failed: {e}");
-                    self.sleep_disabled.store(true, Ordering::SeqCst);
+                    return Err(Error::Internal(format!(
+                        "failed to disable sleep: PowerShell guard spawn failed: {e}"
+                    )));
                 }
             }
         }
 
-        // Default for unknown platforms: just track state
-        self.sleep_disabled.store(true, Ordering::SeqCst);
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            // Unknown platform: fail closed — no real guard, no claim.
+            return Err(Error::Internal(
+                "failed to disable sleep: unsupported platform (no real guard available)".into(),
+            ));
+        }
+        // All supported platforms return above; this is unreachable but keeps
+        // the function total for compilers that do not reason about cfg.
+        #[allow(unreachable_code)]
         Ok(())
     }
 

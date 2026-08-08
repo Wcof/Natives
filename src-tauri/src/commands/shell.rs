@@ -29,11 +29,13 @@ pub fn show_item_in_folder(path: String) -> Result<()> {
         .to_string();
     #[cfg(target_os = "macos")]
     {
-        // macOS: `open -R` reveals the file in Finder
-        std::process::Command::new("open")
+        // macOS: `open -R` reveals the file in Finder. P1-038: reap the
+        // one-shot child so no zombie process is left behind.
+        let mut child = std::process::Command::new("open")
             .args(["-R", &canonical])
             .spawn()
             .map_err(|e| Error::Internal(e.to_string()))?;
+        let _ = child.wait();
         Ok(())
     }
     #[cfg(target_os = "linux")]
