@@ -1,0 +1,4 @@
+/* H0 fixture — root/styles/nested/more.css */
+.nested-box {
+  background-image: url('../../img/中文 空格.png');
+}
