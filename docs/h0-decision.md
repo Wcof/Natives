@@ -89,6 +89,51 @@ ls -la spikes/html-preview-case/root/encoded/
 本步已执行的实机结果：`readlink` → `../outside-secret.txt`；
 `cat root/link-out` → `TOP-SECRET-OUTSIDE`；两个媒体/图片文件为 0 字节。
 
+### 2.2 已执行证据（2026-08-08 复核，逐条实机输出）
+
+下列命令在 integration 树内真实执行，输出原样固化，作为 H0 fixture 真实性的可复核证据：
+
+```text
+$ git ls-files spikes/html-preview-case/            # fixture 全部入库
+"spikes/html-preview-case/root/img/中文 空格.png"
+spikes/html-preview-case/outside-secret.txt
+spikes/html-preview-case/root/data/demo.json
+spikes/html-preview-case/root/encoded/..%2F..%2Foutside-secret.txt
+spikes/html-preview-case/root/index.html
+spikes/html-preview-case/root/js/main.js
+spikes/html-preview-case/root/js/module.js
+spikes/html-preview-case/root/link-out
+spikes/html-preview-case/root/media/a.mp4
+spikes/html-preview-case/root/pages/nested.html
+spikes/html-preview-case/root/styles/nested/more.css
+spikes/html-preview-case/root/styles/site.css
+
+$ git ls-files -s spikes/html-preview-case/root/link-out   # 符号链接（120000）
+120000 89f9dc8998e232899a39a0a1a4cf202633b8cb39 0  spikes/html-preview-case/root/link-out
+
+$ readlink spikes/html-preview-case/root/link-out          # root 外逃逸目标
+../outside-secret.txt
+
+$ cat spikes/html-preview-case/outside-secret.txt          # 越界 secret 真实存在
+TOP-SECRET-OUTSIDE
+
+$ ls -la spikes/html-preview-case/root/encoded/            # encoded traversal 文件名
+..%2F..%2Foutside-secret.txt
+
+$ grep -o '\.\./img/中文 空格.png\|\.\./styles/nested/more.css' \
+    spikes/html-preview-case/root/pages/nested.html | sort -u   # 合法 ../ 引用
+../img/中文 空格.png
+../styles/nested/more.css
+```
+
+三态结论（与 §1 一致）：**H0 = BLOCKED**。fixture 真实性证据齐备（root 外
+secret、symlink escape、encoded traversal、合法 `../`、CJK 空格路径、nested
+CSS/module/fetch）；但本机无真实 Tauri/WebKit headed evidence（`src-tauri/target`
+从未构建、`out/` 不存在），未执行任何浏览器级相对资源加载验证 → 不得 PASS，
+也不构成 FAIL（尚无被证伪的实现），按规则记 **BLOCKED**，只冻结 HTML lane
+（T20/T21/T15），不阻塞 Markdown/JSON/Media/Browser/Host IO。
+
+
 ## 3. 候选方案对比（H0 BLOCKED 下的倾向性分析，纯文档，不实现）
 
 | 维度 | A. srcDoc + parser rewrite（现状 `src-tauri/src/html_preview.rs`） | B. opaque scoped served-root |
