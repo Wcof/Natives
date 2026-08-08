@@ -171,6 +171,9 @@
   --z-cmdk-overlay: 100;
   --z-toast: 200;
   --z-tooltip: 300;
+
+  /* ── Modal overlay scrim (R-U1: token, no raw rgba in components) ── */
+  --overlay: rgba(0, 0, 0, 0.5);
 }
 
 [data-theme="dark"] {
