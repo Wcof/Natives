@@ -411,3 +411,37 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 13. `696ff035` perf(baseline): A0 baseline harness（无生产行为，可保留）
 
 回滚策略：A1 为架构分水岭，其上层（A2/A3/A4/A5/A8/A7/A6）依赖 live/durable 拆分；如需整体退回旧架构，从 #12 起 revert 并保留 A0 baseline 即可。旧 `MessageDelta`/`executor:settings`/localStorage runtimePref 读路径全部保留，可安全 downgrade。
+
+---
+
+## 17. 05 验收报告（B1/B2/B3/B5/B7 + §7 模板）
+
+### Performance delta
+
+| Metric | Before | After | Change | Pass? |
+|---|---:|---:|---:|---|
+| submit→completed（500 chunks） | 1612 ms | 736 ms | −54% | ✅ |
+| submit→completed（2000 chunks） | 7852 ms | 2854 ms | −64% | ✅ |
+| SQLite writes / 1000 chunks | 2012 | 12（500 chunks）/ 3（2000 chunks） | −99%+ | ✅ |
+| live delta SQLite writes | 4006 rows | 6 rows（B1 500/2000 各 6） | **0** | ✅ |
+| 新 message_delta emits | 500 | 0 | **0** | ✅ |
+| active stream fixed sleep | 400 ms poll | 0 ms（server push） | — | ✅ |
+| handshakes / run（B5 稳定连接） | 1 per RPC | command 1 + event 1（8 RPC = 1） | — | ✅ |
+| readonly tool→next provider p95 | 受 checkpoint/ledger 拖累 | 快路径（无 ledger/checkpoint） | — | ⏳ headed 实测 |
+| delta→paint p95 | — | — | — | ⏳ headed 实测 |
+| terminal tail p95 | — | — | — | ⏳ headed 实测 |
+
+### Correctness
+
+- checkpoint invariant：写类工具 capture_before/after 严格保留（A4 仅 ReadOnly 跳过）；`readonly_coding_loop_does_not_create_ledger_or_checkpoint` 断言快照=0。
+- ledger invariant：B2 只读循环 side-effect ledger rows = 0；`settle_tool_effect_only_moves_started_rows` 原子 settle 保留。
+- resume invariant：checkpoint/ledger/watermark 语义未退化；projector 增量投影保持幂等/quarantine/partial-turn 安全。
+- permission invariant：`deny_wins_over_allow`、readonly profile 拒绝副作用、Settings 只收紧不扩权（`settings_disabled_tools_cannot_expand_capabilities`）。
+- reconnect invariant：`persistent_uds_reuses_handshake`（8 RPC = 1 handshake）+ `run.watch` after_sequence 恢复（`stream_watch_*`）。
+- migration invariant：B7 冲突 fixture —— 已持久化 V2 权威，legacy `executor:settings` 不覆盖（`b7_conflict_v2_is_authority_legacy_not_reapplied`）；无 DB 键时安全默认（`b7_no_db_keys_yields_safe_defaults`）。
+- codex fail-closed：`codex_stays_blocked_without_app_server`。
+- no embedded fallback：UDS 模式缺失 socket/bootstrap 即硬失败（`resolve_run_authority_mode` 生产默认 uds）。
+
+### 证据文件
+- `.runtime-evidence/after/baseline.json` + `delta.md`（提交 `888a9a29`）
+- 回归测试：`readonly_coding_loop_does_not_create_ledger_or_checkpoint`（production_tools.rs）、`execution_engine_settings_b7.rs`（提交 `36bfc93d`）
