@@ -2,10 +2,20 @@ use crate::storage::DataStore;
 use agent_core::{AgentMessage, ContentBlock, EngineMessage, ToolResultBlock};
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{AttachmentRef, RunEventKind, RunEventV2};
+use base64::Engine as _;
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+/// Max bytes of attachment content inlined into the model context (T209).
+/// Oversized attachments degrade to an explicit marker instead of being read.
+const MAX_ATTACHMENT_BYTES: usize = 256 * 1024;
+
+/// Standard base64 engine for attachment data URLs.
+fn base64_engine() -> base64::engine::GeneralPurpose {
+    base64::engine::general_purpose::STANDARD
+}
 
 pub async fn request(method: &str, params: Value) -> Result<Value, String> {
     match method {
@@ -1127,9 +1137,62 @@ fn parse_content_block(block: &Value) -> Result<ContentBlock, String> {
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(path);
-            Ok(ContentBlock::Text {
-                text: format!("[attachment: {name} at {path}]"),
-            })
+            let mime_type = content
+                .get("mime_type")
+                .or_else(|| content.get("mimeType"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            // T209 (P1-036): attachment content must actually reach the model,
+            // not a bare `[attachment: name at path]` marker. Images become an
+            // Image block (data URL); text/document attachments become a
+            // controlled text block. Oversized / unreadable / binary files are
+            // degraded explicitly — never silently dropped, never presented as
+            // the path alone.
+            if mime_type.starts_with("image/") {
+                match std::fs::read(path) {
+                    Ok(bytes) if bytes.len() <= MAX_ATTACHMENT_BYTES => {
+                        let b64 = base64_engine().encode(bytes);
+                        Ok(ContentBlock::Image {
+                            source: agent_core::ImageSource {
+                                url: format!("data:{mime_type};base64,{b64}"),
+                                media_type: Some(mime_type.to_string()),
+                                detail: None,
+                            },
+                        })
+                    }
+                    Ok(bytes) => Ok(ContentBlock::Text {
+                        text: format!(
+                            "[attachment {name}: image too large ({} bytes, limit {MAX_ATTACHMENT_BYTES})]",
+                            bytes.len()
+                        ),
+                    }),
+                    Err(e) => Ok(ContentBlock::Text {
+                        text: format!("[attachment {name}: unreadable image ({e})]"),
+                    }),
+                }
+            } else {
+                match std::fs::read(path) {
+                    Ok(bytes) if bytes.len() <= MAX_ATTACHMENT_BYTES => {
+                        let text = String::from_utf8_lossy(&bytes).to_string();
+                        if text.trim().is_empty() {
+                            Ok(ContentBlock::Text {
+                                text: format!("[attachment {name}: empty file]"),
+                            })
+                        } else {
+                            Ok(ContentBlock::Text { text })
+                        }
+                    }
+                    Ok(bytes) => Ok(ContentBlock::Text {
+                        text: format!(
+                            "[attachment {name}: too large ({} bytes, limit {MAX_ATTACHMENT_BYTES})]",
+                            bytes.len()
+                        ),
+                    }),
+                    Err(e) => Ok(ContentBlock::Text {
+                        text: format!("[attachment {name}: unreadable ({e})]"),
+                    }),
+                }
+            }
         }
         other => Err(format!("unsupported block type {other}")),
     }
@@ -2507,15 +2570,23 @@ mod tests {
 
     #[test]
     fn typed_loader_handles_attachments_and_rejects_malformed_tool_calls() {
+        // T209: file_reference must NOT become a bare `[attachment: name at
+        // path]` marker — the content is read and injected (here the file does
+        // not exist, so it degrades to an explicit unreadable marker, never a
+        // path-only fake).
         let attachment = parse_content_block(&serde_json::json!({
             "type": "file_reference",
-            "content": {"path": "/tmp/example.png", "name": "example.png"}
+            "content": {"path": "/tmp/nonexistent-natives-attach.txt", "name": "example.txt"}
         }))
         .unwrap();
-        assert!(matches!(
-            attachment,
-            ContentBlock::Text { text } if text == "[attachment: example.png at /tmp/example.png]"
-        ));
+        assert!(
+            matches!(attachment, ContentBlock::Text { ref text } if text.contains("[attachment example.txt: unreadable")),
+            "missing attachment must degrade explicitly, got {attachment:?}"
+        );
+        assert!(
+            !matches!(attachment, ContentBlock::Text { ref text } if text.contains("[attachment: example.txt at /tmp/nonexistent-natives-attach.txt]")),
+            "path-only marker must not be produced"
+        );
 
         let malformed = parse_content_block(&serde_json::json!({
             "type": "tool_call",
@@ -3188,7 +3259,7 @@ mod tests {
     }
 
     #[test]
-    fn file_reference_degrades_to_explicit_text_marker_at_single_boundary() {
+    fn file_reference_injects_content_or_degrades_explicitly() {
         let _guard = env_lock();
         let _restore = EnvRestore {
             db: std::env::var("NATIVES_DB_PATH").ok(),
@@ -3204,29 +3275,43 @@ mod tests {
         crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
         let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
         ensure_conversation_stub("attach-conv", "openai", "gpt-4o", None, None).unwrap();
+
+        // Create a real text attachment so its content is injected.
+        let real_path = dir.path().join("a.txt");
+        std::fs::write(&real_path, "hello attachment content").unwrap();
         append_trigger_message(
             "attach-conv",
             Some("look at this"),
             Some(&[AttachmentRef {
-                path: "/tmp/a.txt".into(),
+                path: real_path.to_string_lossy().to_string(),
                 name: Some("a.txt".into()),
-                mime_type: None,
+                mime_type: Some("text/plain".into()),
                 size: None,
             }]),
         )
         .unwrap();
         let loaded = load_agent_messages("attach-conv").unwrap();
-        // parse_content_block is the single conversion boundary for attachments:
-        // a file_reference block becomes this explicit text marker, never a
-        // silently dropped or re-invented structure. The test pins the boundary.
+        // T209 (P1-036): the attachment CONTENT must reach the model — not a
+        // bare `[attachment: name at path]` marker.
         assert!(matches!(
             &loaded[0],
             AgentMessage::User(user)
                 if user.content.iter().any(|block| matches!(
                     block,
-                    ContentBlock::Text { text } if text.contains("[attachment: a.txt at /tmp/a.txt]")
+                    ContentBlock::Text { text } if text.contains("hello attachment content")
                 ))
         ));
+        assert!(
+            !matches!(
+                &loaded[0],
+                AgentMessage::User(user)
+                    if user.content.iter().any(|block| matches!(
+                        block,
+                        ContentBlock::Text { text } if text.contains("[attachment: a.txt at")
+                    ))
+            ),
+            "path-only marker must not be produced for a readable attachment"
+        );
     }
 
     #[test]
