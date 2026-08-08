@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import { type FileEntry } from '@/types/file';
 import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
+import type { VirtualFileViewHandle } from '@/lib/preview/contracts';
 import FileRow from './FileRow';
+import { computeRowRange, rowScrollTop, VIRTUAL_ROW_HEIGHT } from './virtual-file-view-core';
 
 interface FileListProps {
   entries: FileEntry[];
@@ -23,22 +25,76 @@ interface FileListProps {
   onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
   dragPaths?: string[];
   flashPaths?: Set<string>;
+  /** T31 seam: 真实 scroll container（默认回退到 window） */
+  scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  /** T31 seam: 冻结的 VirtualFileViewHandle（scrollToIndex/getColumnCount） */
+  onViewHandleReady?: (handle: VirtualFileViewHandle) => void;
 }
 
-export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, selectedPaths, onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths, flashPaths }: FileListProps) {
+export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, selectedPaths, onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths, flashPaths, scrollContainerRef, onViewHandleReady }: FileListProps) {
   const [locale, setLocale] = useState<Locale>('zh');
-  const [count, setCount] = useState(200);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { setCount(200); }, [entries]);
+  const [scroll, setScroll] = useState({ scrollTop: 0, viewportHeight: 0 });
+
+  // 有界窗口：固定行高（R-P4，DOM 与 viewport 近似 O(viewport)）
+  const range = useMemo(
+    () => computeRowRange(scroll.scrollTop, scroll.viewportHeight || 800, entries.length, VIRTUAL_ROW_HEIGHT),
+    [scroll.scrollTop, scroll.viewportHeight, entries.length],
+  );
+
+  const getScroller = useCallback((): { scrollTop: number; viewportHeight: number } | null => {
+    const el = scrollContainerRef?.current;
+    if (el) return { scrollTop: el.scrollTop, viewportHeight: el.clientHeight };
+    if (typeof document === 'undefined') return null;
+    const se = document.scrollingElement;
+    if (!se) return null;
+    return { scrollTop: se.scrollTop, viewportHeight: window.innerHeight };
+  }, [scrollContainerRef]);
+
   useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node || typeof IntersectionObserver === 'undefined') return;
-    const observer = new IntersectionObserver(([item]) => {
-      if (item?.isIntersecting) setCount((value) => Math.min(value + 200, entries.length));
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [entries.length]);
+    const update = () => {
+      const s = getScroller();
+      if (s) setScroll(s);
+    };
+    update();
+    const el = scrollContainerRef?.current;
+    if (el) {
+      el.addEventListener('scroll', update, { passive: true });
+      return () => el.removeEventListener('scroll', update);
+    }
+    window.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, [getScroller, scrollContainerRef]);
+
+  // 冻结的 VirtualFileViewHandle 接缝（C0）
+  const handle = useMemo<VirtualFileViewHandle>(
+    () => ({
+      scrollToIndex(index, options) {
+        const target = rowScrollTop(index, 1, VIRTUAL_ROW_HEIGHT);
+        const el = scrollContainerRef?.current;
+        const align = options?.align ?? 'auto';
+        if (el) {
+          if (align === 'start') el.scrollTop = target;
+          else if (align === 'center') el.scrollTop = Math.max(0, target - el.clientHeight / 2);
+          else if (align === 'end') el.scrollTop = Math.max(0, target - el.clientHeight + VIRTUAL_ROW_HEIGHT);
+          else el.scrollTo({ top: target, behavior: 'auto' });
+        } else if (typeof window !== 'undefined') {
+          const doc = document.scrollingElement;
+          if (doc) doc.scrollTop = target;
+        }
+      },
+      getColumnCount() {
+        return 1;
+      },
+    }),
+    [scrollContainerRef],
+  );
+  useEffect(() => {
+    onViewHandleReady?.(handle);
+  }, [handle, onViewHandleReady]);
 
   useEffect(() => {
     async function loadLocale() {
@@ -55,6 +111,8 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
     mtime: t(locale, 'fileBrowser.modified'),
     size: t(locale, 'fileBrowser.size'),
   };
+
+  const visibleEntries = entries.slice(range.start, range.end);
 
   return (
     <div style={{ width: '100%', overflowX: 'auto' }} className="file-list-with-counters">
@@ -90,7 +148,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
         <div />
       </div>
 
-      {/* Rows */}
+      {/* Rows (windowed) */}
       {entries.length === 0 ? (
         <div style={{
           padding: 40,
@@ -101,25 +159,31 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           {t(locale, 'fileBrowser.empty')}
         </div>
       ) : (
-        entries.slice(0, count).map((entry, index) => (
-          <FileRow
-            key={entry.path}
-            entry={entry}
-            onSelect={(ent, ev) => onSelect(ent, ev)}
-            onContextMenu={onContextMenu}
-            showDir={showDir}
-            selected={selectedPaths ? selectedPaths.has(entry.path) : index === selectedIndex}
-            onDoubleClick={() => onEditRequest?.(entry)}
-            isFavorite={favorites?.includes(entry.path)}
-            onFavoriteToggle={onFavoriteToggle}
-            dimmed={cutPaths?.has(entry.path)}
-            onMoveDrop={onMoveDrop}
-            dragPaths={dragPaths}
-            flash={flashPaths?.has(entry.path)}
-          />
-        ))
+        <div style={{ position: 'relative', height: entries.length * VIRTUAL_ROW_HEIGHT }}>
+          {visibleEntries.map((entry, offset) => {
+            const index = range.start + offset;
+            return (
+              <div key={entry.path} style={{ position: 'absolute', top: index * VIRTUAL_ROW_HEIGHT, left: 0, right: 0 }}>
+                <FileRow
+                  entry={entry}
+                  onSelect={(ent, ev) => onSelect(ent, ev)}
+                  onContextMenu={onContextMenu}
+                  showDir={showDir}
+                  selected={selectedPaths ? selectedPaths.has(entry.path) : index === selectedIndex}
+                  onDoubleClick={() => onEditRequest?.(entry)}
+                  isFavorite={favorites?.includes(entry.path)}
+                  onFavoriteToggle={onFavoriteToggle}
+                  dimmed={cutPaths?.has(entry.path)}
+                  onMoveDrop={onMoveDrop}
+                  dragPaths={dragPaths}
+                  flash={flashPaths?.has(entry.path)}
+                />
+              </div>
+            );
+          })}
+        </div>
       )}
-      {count < entries.length && <div ref={sentinelRef} style={{ minHeight: 1 }} />}
+      <div aria-hidden data-virtual-window-start={range.start} data-virtual-window-end={range.end} style={{ display: 'none' }} />
     </div>
   );
 }
