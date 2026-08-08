@@ -7,7 +7,10 @@
  */
 
 import { useMemo, useState } from 'react';
+<<<<<<< HEAD
 import { t, useLocale, type Locale } from '@/i18n';
+=======
+>>>>>>> agent/resource-preview-v2/20260808-175539/t13-json-code
 import type { PreviewModel } from '@/lib/preview/contracts';
 
 export type JsonModel = Extract<PreviewModel, { kind: 'json' }>;
@@ -31,12 +34,19 @@ function renderLeaf(value: unknown): string {
   }
 }
 
+<<<<<<< HEAD
 function JsonNode({ label, value, depth, maxDepth, locale }: {
+=======
+function JsonNode({ label, value, depth, maxDepth }: {
+>>>>>>> agent/resource-preview-v2/20260808-175539/t13-json-code
   label: string | null;
   value: unknown;
   depth: number;
   maxDepth: number;
+<<<<<<< HEAD
   locale: Locale;
+=======
+>>>>>>> agent/resource-preview-v2/20260808-175539/t13-json-code
 }) {
   const [open, setOpen] = useState(depth < maxDepth);
   const canExpand = isExpandable(value);
@@ -64,20 +74,33 @@ function JsonNode({ label, value, depth, maxDepth, locale }: {
       {label !== null && <span className="json-key">{label}: </span>}
       <span className="json-type">{Array.isArray(value) ? `Array(${entries.length})` : 'Object'}</span>
       {open &&
+<<<<<<< HEAD
         visible.map(([k, v]) => <JsonNode key={k} label={k} value={v} depth={depth + 1} maxDepth={maxDepth} locale={locale} />)}
       {open && overflow > 0 && <div className="json-truncated">{t(locale, 'preview.jsonMore', { count: overflow })}</div>}
+=======
+        visible.map(([k, v]) => <JsonNode key={k} label={k} value={v} depth={depth + 1} maxDepth={maxDepth} />)}
+      {open && overflow > 0 && <div className="json-truncated">… {overflow} more (bounded)</div>}
+>>>>>>> agent/resource-preview-v2/20260808-175539/t13-json-code
     </div>
   );
 }
 
 export default function JsonRenderer({ model }: { model: JsonModel }) {
+<<<<<<< HEAD
   const locale = useLocale();
+=======
+>>>>>>> agent/resource-preview-v2/20260808-175539/t13-json-code
   const root = useMemo(() => (model.nodeCount > MAX_VISIBLE ? model.value : model.value), [model]);
   void root;
   return (
     <div className="json-tree" data-preview-kind="json">
+<<<<<<< HEAD
       {model.truncated && <div className="json-warning">{t(locale, 'preview.jsonTruncated', { count: model.nodeCount })}</div>}
       <JsonNode label={null} value={model.value} depth={0} maxDepth={4} locale={locale} />
+=======
+      {model.truncated && <div className="json-warning">JSON 超出节点/深度预算，已折叠展示（nodeCount={model.nodeCount}）</div>}
+      <JsonNode label={null} value={model.value} depth={0} maxDepth={4} />
+>>>>>>> agent/resource-preview-v2/20260808-175539/t13-json-code
     </div>
   );
 }
