@@ -64,6 +64,8 @@ pub struct Bridge {
     pub account: Option<ilink::Account>,
     pub state: ConnState,
     pub poll_abort: Arc<Mutex<bool>>,
+    /// T210: idempotency set of handled (from:msg_id) keys, bounded.
+    pub handled_msgs: std::collections::HashSet<String>,
 }
 
 impl Bridge {
@@ -79,6 +81,7 @@ impl Bridge {
             account: None,
             state: ConnState::Uninstalled,
             poll_abort: Arc::new(Mutex::new(false)),
+            handled_msgs: std::collections::HashSet::new(),
         }
     }
 
@@ -223,4 +226,126 @@ impl Bridge {
             json!({ "ok": true, "state": "uninstalled" })
         }
     }
+
+    /// T210 (P1-030): main orchestration — long-poll inbound messages and run
+    /// the message → Agent → reply chain. Controlled background lifecycle:
+    /// - `poll_abort` flips to stop polling (disconnect / drop).
+    /// - Inbound messages are de-duplicated by (from_user_id, msg_id) so a
+    ///   retried poll never re-runs the same Agent turn.
+    /// - Replies go back to the ORIGINAL sender conversation (explicit
+    ///   identity/session mapping), and send failures are returned, never
+    ///   swallowed into a fake `ok:true`.
+    ///
+    /// Returns `{ ok, processed, updates, errors }`; `ok:false` + `reason`
+    /// when the bridge is not connected.
+    pub fn poll_and_handle(
+        &mut self,
+        get_updates_buf: &str,
+        timeout_ms: u64,
+    ) -> Result<Value, String> {
+        if !self.is_connected() {
+            return Err("wechat bridge not connected — cannot poll messages".to_string());
+        }
+        let account = self
+            .account
+            .clone()
+            .ok_or_else(|| "wechat account missing".to_string())?;
+        if *self.poll_abort.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Err("wechat polling aborted".to_string());
+        }
+
+        let updates = ilink::get_updates(&account, get_updates_buf, timeout_ms)?;
+        let mut processed = 0usize;
+        let mut errors: Vec<Value> = Vec::new();
+
+        if let Some(msgs) = updates["data"].as_array() {
+            for msg in msgs {
+                let from = msg["from_user_id"].as_str().unwrap_or("");
+                let msg_id = msg["msg_id"].as_str().unwrap_or("");
+                if from.is_empty() || msg_id.is_empty() {
+                    continue;
+                }
+                // Idempotency: skip messages already handled in this session.
+                let dedup_key = format!("{from}:{msg_id}");
+                if self.handled_msgs.contains(&dedup_key) {
+                    continue;
+                }
+                self.handled_msgs.insert(dedup_key.clone());
+                while self.handled_msgs.len() > MAX_HANDLED_MSGS {
+                    if let Some(oldest) = self.handled_msgs.iter().next().cloned() {
+                        self.handled_msgs.remove(&oldest);
+                    }
+                }
+
+                let (text, _medias) = ilink::content_from_msg(msg);
+                if text.trim().is_empty() {
+                    continue;
+                }
+
+                // Explicit session mapping: reply goes back to the sender.
+                let cid = from.to_string();
+                let conv = self
+                    .conversations
+                    .entry(cid.clone())
+                    .or_insert_with(|| Conversation {
+                        id: cid.clone(),
+                        label: cid.clone(),
+                        messages: Vec::new(),
+                        context_token: String::new(),
+                    });
+                conv.messages.push(Message {
+                    role: "user".to_string(),
+                    text: text.clone(),
+                    time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                });
+
+                // Run the local agent (explicit target/cwd; failure surfaced).
+                let out = super::driver::launch(&self.target, &text, &self.cwd);
+                let reply = if out.get("ok").and_then(Value::as_bool) == Some(true) {
+                    out.get("out")
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no output)")
+                        .to_string()
+                } else {
+                    format!(
+                        "Agent 执行失败: {}",
+                        out.get("err").and_then(Value::as_str).unwrap_or("unknown")
+                    )
+                };
+
+                // Reply to the ORIGINAL sender; a send failure is explicit.
+                let send_ok = ilink::send_text(&account, &from, &reply, &conv.context_token);
+                match send_ok {
+                    Ok(_) => {
+                        conv.messages.push(Message {
+                            role: "assistant".to_string(),
+                            text: reply.clone(),
+                            time: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                        });
+                        processed += 1;
+                    }
+                    Err(e) => errors.push(json!({
+                        "from": from,
+                        "msg_id": msg_id,
+                        "error": e
+                    })),
+                }
+            }
+        }
+
+        Ok(json!({
+            "ok": true,
+            "processed": processed,
+            "errors": errors,
+        }))
+    }
 }
+
+/// Bound on the idempotency set (bounded memory, R-P9).
+const MAX_HANDLED_MSGS: usize = 512;
