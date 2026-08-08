@@ -366,22 +366,23 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 ### 16.2 Barrier / Final Gate 实测
 
 - Wave1 Barrier（合并 A0→A1→A2→A3→A6）：`cargo fmt --check` 0、`cargo check --workspace --all-targets` 0 errors、`protocol:check` OK、`typecheck` OK。
-- Wave2 合并 A4→A5→A7→A8 后 Final Gate 全部通过：
+- Wave2 合并 A4→A5→A7→A8 后 Final Gate 全部通过（9/9，2026-08-08 实跑，HEAD `f0c6ef11`）：
   `cargo fmt --check` / `cargo check --workspace --all-targets` / `protocol:check` / `verify:native-engine`（447 passed） / `typecheck` / `lint`（含 i18n 2550=2550、hardcoded colors 0 新增） / `test`（795 pass, 0 fail） / `perf:check`（bundle 预算内） / `tauri:build`（.app + .dmg 产出）。
+- 退出码与完整输出日志入库：`.runtime-evidence/gate/final-gate-2026-08-08.txt` + `.runtime-evidence/gate/logs/`（提交 `25055cee`、`cd5fa1f3`）。
 
 ### 16.3 性能证据（A0 baseline → integration，同一 harness）
 
 | 指标 | Before | After |
 |---|---:|---:|
-| submit→completed（500 chunks） | 1612 ms | 736 ms |
-| submit→completed（2000 chunks） | 7852 ms | 2854 ms |
+| submit→completed（500 chunks） | 1612 ms | 758 ms |
+| submit→completed（2000 chunks） | 7852 ms | 3671 ms |
 | durable run_event rows（500 chunks） | 1006 | 6（live delta SQLite writes = 0） |
 | durable run_event rows（2000 chunks） | 4006 | 6（live delta SQLite writes = 0） |
-| run_event rows / 1000 chunks | 2003 | 3 |
-| payload bytes / 1000 chunks | 19.7 MB | 20.3 KB |
+| run_event rows / 1000 chunks | 2012 | 12（500）/ 3（2000） |
+| payload bytes / 1000 chunks | 5.2 MB | 22.3 KB |
 | 新 MessageDelta emits | 500 | 0 |
 
-> 数字为 2026-08-08 对 `perf/integration` HEAD `888a9a29` 的最终重跑（同一 A0 harness）；原始证据与 delta 已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `888a9a29`）。
+> 数字为 2026-08-08 对 `perf/integration` HEAD `f0c6ef11` 的最终重跑（同一 A0 harness）；原始证据已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `888a9a29`、`f0c6ef11`）。
 
 详细 delta 见 `.runtime-evidence/after/delta.md`。
 
