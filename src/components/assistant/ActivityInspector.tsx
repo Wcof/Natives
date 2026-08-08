@@ -52,6 +52,7 @@ import {
   type TodoStatus,
 } from '@/lib/assistant-activity-view';
 import { t } from '@/i18n';
+import ArtifactPreviewSurface from '@/components/preview/ArtifactPreviewSurface';
 
 export interface ActivitySubagentView {
   id: string;
@@ -271,6 +272,8 @@ export default function ActivityInspector({
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
   const [artifactSubTab, setArtifactSubTab] = useState<'created' | 'modified'>('created');
+  /** T40：产物文件内联预览（Preview V2 artifact surface；普通 chat 不迁移） */
+  const [artifactPreviewPath, setArtifactPreviewPath] = useState<string | null>(null);
   const [auditStatus, setAuditStatus] = useState<{
     branch: string;
     entries: Array<{ path: string; status: string }>;
@@ -1029,6 +1032,26 @@ export default function ActivityInspector({
 
         {run && effectiveTab === 'artifacts' && (
           <div className="flex h-full flex-col gap-2" data-testid="artifacts-panel">
+            {artifactPreviewPath && (
+              <div className="flex h-1/2 min-h-0 flex-col rounded-lg border border-[var(--border)] overflow-hidden">
+                <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1">
+                  <span className="truncate font-mono text-[10px] text-[var(--text-secondary)]">{artifactPreviewPath}</span>
+                  <button
+                    type="button"
+                    onClick={() => setArtifactPreviewPath(null)}
+                    className="text-[10px] text-[var(--text-disabled)] hover:text-[var(--text)]"
+                  >
+                    {zh ? '关闭' : 'Close'}
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <ArtifactPreviewSurface
+                    source={{ type: 'file', path: artifactPreviewPath }}
+                    autoLoad
+                  />
+                </div>
+              </div>
+            )}
             {[
               { key: 'used' as const, titleZh: '使用文件', titleEn: 'Used Files', items: artifactBuckets.used },
               { key: 'modified' as const, titleZh: '编辑', titleEn: 'Modified', items: artifactBuckets.modified },
@@ -1049,7 +1072,10 @@ export default function ActivityInspector({
                       <button
                         key={item.path}
                         type="button"
-                        onClick={() => openArtifactPath(item)}
+                        onClick={() => {
+                          setArtifactPreviewPath(item.path);
+                          openArtifactPath(item);
+                        }}
                         className="flex w-full items-center gap-2 rounded px-2 py-1 text-left font-mono hover:bg-[var(--surface-hover)]"
                         data-testid={`artifact-file-${item.path}`}
                       >
