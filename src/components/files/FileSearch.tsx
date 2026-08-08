@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { type ContentSearchResult } from '@/types/file';
+import { type SearchResult as GeneratedSearchResult } from '@/types/generated/SearchResult';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t as tr } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
@@ -73,22 +74,25 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
       const search = searchApi();
 
       const root = await resolveRoot();
-      let data: any;
+      let data: GeneratedSearchResult[];
       if (nextMode === 'content') {
-        data = await search.grep(q, root, { maxResults: 80 });
+        data = (await search.grep(q, root, { maxResults: 80 })) as GeneratedSearchResult[];
       } else {
-        data = await search.files(q, root, { maxResults: 80 });
+        data = (await search.files(q, root, { maxResults: 80 })) as GeneratedSearchResult[];
       }
       if (rid !== requestIdRef.current) return;
 
+      // T217 (P2-001): consume the generated wire type directly — no `any`
+      // manual compatibility fields. UI-only fields are derived, never read
+      // from unknown/any.
       const items = Array.isArray(data)
-        ? data.map((item: any) => ({
+        ? data.map((item) => ({
             path: item.path ?? '',
-            name: item.name ?? item.path?.split('/').pop() ?? '',
+            name: item.path?.split('/').pop() ?? '',
             line: item.line ?? 0,
-            preview: item.preview ?? item.text ?? item.content ?? '',
-            matchStart: item.matchStart ?? 0,
-            matchEnd: item.matchEnd ?? 0,
+            preview: item.text ?? '',
+            matchStart: 0,
+            matchEnd: 0,
             score: item.score ?? undefined,
             mtime: item.mtime ?? undefined,
           }))
