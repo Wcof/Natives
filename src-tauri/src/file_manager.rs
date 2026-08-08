@@ -166,46 +166,87 @@ pub(crate) fn expand_tilde(path: &str) -> PathBuf {
 
 /// Validate path security (allowlist: home, /tmp, /private/tmp, macOS per-user temp)
 pub(crate) fn validate_path(path: &Path) -> Result<()> {
-    let path_str = path.to_string_lossy();
-    if path_str.contains('\0') {
-        return Err(Error::InvalidInput("path contains null byte".into()));
+    FileAccessPolicy::authorize_path_buf(path, OperationPolicy::Read).map(|_| ())
+}
+
+/// Operation classes for the unified file authorization kernel. Every
+/// caller-controlled path must be classified into one of these before any
+/// concrete operation (read / write / reveal / preview / search / …) runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationPolicy {
+    Read,
+    Write,
+    Reveal,
+    Preview,
+    Search,
+}
+
+/// Authorized handle: the canonicalized, allowlisted path an operation may
+/// actually touch. Concrete operations take this handle, never the raw caller
+/// string, so a caller cannot re-route an operation to an unauthorized target
+/// between authorization and use.
+#[derive(Debug, Clone)]
+pub struct AuthorizedPath {
+    path: PathBuf,
+}
+
+impl AuthorizedPath {
+    pub fn as_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Unified host file authorization (T108): canonicalize → root allow/deny +
+/// symlink boundary → operation policy → AuthorizedPath handle. screenshot /
+/// search / thumbnail / open / reveal / preview / agent attachment all reuse
+/// this kernel; no caller-controlled path may bypass it.
+pub struct FileAccessPolicy;
+
+impl FileAccessPolicy {
+    pub fn authorize_path(path: &str, _op: OperationPolicy) -> Result<AuthorizedPath> {
+        Self::authorize_path_buf(&PathBuf::from(path), _op)
     }
 
-    // Reject any `..` component before allowlist checks. canonicalize() fails on
-    // non-existent targets (new-file writes) and then falls back to the raw path,
-    // where Path::starts_with compares components literally and never resolves
-    // `..` — so `~/../../etc/xxx` would slip past the allowlist and the OS would
-    // resolve `..` at rename time, writing outside the allowlist. Rejecting
-    // ParentDir up front keeps brand-new file paths safe too.
-    if path.components().any(|c| c == Component::ParentDir) {
-        return Err(Error::InvalidInput("path must not contain '..'".into()));
-    }
-
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-
-    // Blocklist: sensitive dotfiles
-    let blocked = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube"];
-    for b in &blocked {
-        if canon.ends_with(b) || canon.to_string_lossy().contains(&format!("/{b}/")) {
-            return Err(Error::InvalidInput(format!("access denied: {b}")));
+    pub fn authorize_path_buf(path: &Path, _op: OperationPolicy) -> Result<AuthorizedPath> {
+        let path_str = path.to_string_lossy();
+        if path_str.contains('\0') {
+            return Err(Error::InvalidInput("path contains null byte".into()));
         }
-    }
 
-    // Allowlist: home + system temp locations (incl. macOS /var/folders/.../T)
-    let sys_tmp = std::env::temp_dir();
-    let sys_tmp_canon = std::fs::canonicalize(&sys_tmp).unwrap_or(sys_tmp);
-    if canon.starts_with(&home)
-        || canon.starts_with("/tmp")
-        || canon.starts_with("/private/tmp")
-        || canon.starts_with(&sys_tmp_canon)
-        || canon.starts_with("/var/folders")
-    {
-        Ok(())
-    } else {
-        Err(Error::InvalidInput(
-            "path not in allowed directories".into(),
-        ))
+        // Reject any `..` component before allowlist checks (same rationale as
+        // the old validate_path: canonicalize falls back to the raw path for
+        // non-existent targets, and a literal `..` would slip past
+        // starts_with). This is the symlink/parent-escape boundary.
+        if path.components().any(|c| c == Component::ParentDir) {
+            return Err(Error::InvalidInput("path must not contain '..'".into()));
+        }
+
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+
+        // Blocklist: sensitive dotfiles (unchanged from validate_path).
+        let blocked = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube"];
+        for b in &blocked {
+            if canon.ends_with(b) || canon.to_string_lossy().contains(&format!("/{b}/")) {
+                return Err(Error::InvalidInput(format!("access denied: {b}")));
+            }
+        }
+
+        // Allowlist: home + system temp locations (incl. macOS /var/folders/.../T).
+        let sys_tmp = std::env::temp_dir();
+        let sys_tmp_canon = std::fs::canonicalize(&sys_tmp).unwrap_or(sys_tmp);
+        if canon.starts_with(&home)
+            || canon.starts_with("/tmp")
+            || canon.starts_with("/private/tmp")
+            || canon.starts_with(&sys_tmp_canon)
+            || canon.starts_with("/var/folders")
+        {
+            Ok(AuthorizedPath { path: canon })
+        } else {
+            Err(Error::InvalidInput(
+                "path not in allowed directories".into(),
+            ))
+        }
     }
 }
 

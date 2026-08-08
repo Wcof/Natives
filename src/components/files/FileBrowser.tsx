@@ -894,15 +894,15 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (!entry.isDir) selfOpenedRef.current.mark(entry.path);
     try {
       const fs = fsApi();
-      if (typeof fs.openWith === 'function') {
-        await fs.openWith(entry.path, withApp);
+      if (typeof fs.openWith !== 'function') {
+        showToast(t(locale, 'fileBrowser.openDefault') + ': ' + entry.path);
         return;
       }
-    } catch { /* fall through */ }
-    const api = window.nativesAPI?.shell;
-    if (withApp === 'reveal' && api?.showItemInFolder) api.showItemInFolder(entry.path);
-    else if (api?.openPath) api.openPath(entry.path);
-  }, []);
+      await fs.openWith(entry.path, withApp);
+    } catch {
+      showToast(t(locale, 'fileBrowser.openDefault') + ': ' + entry.path);
+    }
+  }, [showToast, locale]);
 
   const handleBatchTrash = useCallback(async () => {
     const paths = resolveTargetPaths(null);
@@ -951,25 +951,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
   }, [loadEntries, showToast, locale]);
 
-  // Shell operations
+  // Shell operations (all through the fs.openWith chain; no legacy shell bypass)
   const handleRevealInFinder = useCallback((entry: FileEntry) => {
-    const api = window.nativesAPI?.shell;
-    if (api?.showItemInFolder) {
-      api.showItemInFolder(entry.path);
-    } else {
-      showToast(t(locale, 'fileBrowser.revealInFinder') + ': ' + entry.path);
-    }
-  }, [showToast, locale]);
+    void handleOpenWith(entry, 'reveal');
+  }, [handleOpenWith]);
 
   const handleOpenInEditor = useCallback((entry: FileEntry) => {
-    const api = window.nativesAPI?.shell;
-    if (api?.openPath) {
-      api.openPath(entry.path);
-    } else {
-      navigator.clipboard.writeText(entry.path);
-      showToast(t(locale, 'fileBrowser.copyPath'));
-    }
-  }, [showToast, locale]);
+    void handleOpenWith(entry, 'editor');
+  }, [handleOpenWith]);
 
   const handleOpenInTerminal = useCallback(async (dir: string) => {
     const api = window.nativesAPI;

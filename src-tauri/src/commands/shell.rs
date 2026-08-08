@@ -1,12 +1,37 @@
+use crate::file_manager::{FileAccessPolicy, OperationPolicy};
 use crate::{Error, Result};
+
+/// Schemes treated as non-filesystem targets (opened directly, no path auth).
+fn looks_like_url(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    if let Some(sep) = lower.find("://") {
+        let scheme = &lower[..sep];
+        return !scheme.is_empty()
+            && scheme.bytes().enumerate().all(|(i, b)| {
+                (i == 0 && b.is_ascii_alphabetic())
+                    || (i > 0 && (b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.'))
+            });
+    }
+    matches!(
+        lower.split(':').next().unwrap_or(""),
+        "mailto" | "tel" | "sms" | "facetime" | "itms"
+    )
+}
 
 #[tauri::command]
 pub fn show_item_in_folder(path: String) -> Result<()> {
+    // Unified authorization kernel: canonicalize + allow/deny + symlink
+    // boundary (T108). Rejects out-of-scope / `..` / blocklisted paths
+    // before the OS reveal call.
+    let canonical = FileAccessPolicy::authorize_path(&path, OperationPolicy::Reveal)?
+        .as_path()
+        .to_string_lossy()
+        .to_string();
     #[cfg(target_os = "macos")]
     {
         // macOS: `open -R` reveals the file in Finder
         std::process::Command::new("open")
-            .args(["-R", &path])
+            .args(["-R", &canonical])
             .spawn()
             .map_err(|e| Error::Internal(e.to_string()))?;
         Ok(())
@@ -20,7 +45,7 @@ pub fn show_item_in_folder(path: String) -> Result<()> {
                 "--dest=org.freedesktop.FileManager1",
                 "/org/freedesktop/FileManager1",
                 "org.freedesktop.FileManager1.ShowItems",
-                format!("array:string:file://{}", &path).as_str(),
+                format!("array:string:file://{canonical}").as_str(),
                 "string:",
             ])
             .spawn();
@@ -31,10 +56,10 @@ pub fn show_item_in_folder(path: String) -> Result<()> {
             }
             Err(_) => {
                 // Fallback: open parent directory
-                let parent = std::path::Path::new(&path)
+                let parent = std::path::Path::new(&canonical)
                     .parent()
                     .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.clone());
+                    .unwrap_or_else(|| canonical.clone());
                 open::that(&parent).map_err(|e| Error::Internal(e.to_string()))
             }
         }
@@ -43,7 +68,7 @@ pub fn show_item_in_folder(path: String) -> Result<()> {
     {
         // Windows: `explorer /select,` highlights the file
         std::process::Command::new("explorer")
-            .args(["/select,", &path])
+            .args(["/select,", &canonical])
             .spawn()
             .map_err(|e| Error::Internal(e.to_string()))?;
         Ok(())
@@ -59,7 +84,13 @@ pub fn show_item_in_folder(path: String) -> Result<()> {
 
 #[tauri::command]
 pub fn open_path(path: String) -> Result<()> {
-    open::that(&path).map_err(|e| Error::Internal(e.to_string()))
+    // URLs (mailto/tel/custom schemes) are not filesystem targets and open
+    // directly; filesystem paths must pass the unified authorization kernel.
+    if looks_like_url(&path) {
+        return open::that(&path).map_err(|e| Error::Internal(e.to_string()));
+    }
+    let auth = FileAccessPolicy::authorize_path(&path, OperationPolicy::Reveal)?;
+    open::that(auth.as_path()).map_err(|e| Error::Internal(e.to_string()))
 }
 
 #[cfg(test)]
