@@ -790,13 +790,24 @@ impl RunManager {
             run.revision
         };
         match self.commit_transition(run_id, revision, target, metadata) {
-            Ok(_) => self
-                .get_run(run_id)
-                .ok_or_else(|| "run disappeared after commit".into()),
+            Ok(_) => {
+                // STREAM-CONTRACT-V2 Terminal: clear the run's live ring/bus
+                // state once a durable terminal status is committed. This is
+                // idempotent — remove_run on a missing run is a no-op.
+                if target.is_terminal() {
+                    self.runtime.live.remove_run(run_id);
+                }
+                self.get_run(run_id)
+                    .ok_or_else(|| "run disappeared after commit".into())
+            }
             Err(CommitError::AlreadyTerminal { .. }) => {
+                if target.is_terminal() {
+                    self.runtime.live.remove_run(run_id);
+                }
                 self.get_run(run_id).ok_or_else(|| "run not found".into())
             }
             Err(CommitError::CasConflict { status, .. }) if status.is_terminal() => {
+                self.runtime.live.remove_run(run_id);
                 self.get_run(run_id).ok_or_else(|| "run not found".into())
             }
             Err(e) => Err(e.to_string()),
@@ -2081,12 +2092,12 @@ impl RunManager {
                 .await
                 .unwrap_or_else(|_| CancellationToken::new());
             let engine = Arc::new(
-                AgentEngine::new(self.runtime.events.clone())
+                AgentEngine::with_live(self.runtime.events.clone(), self.runtime.live.clone())
                     .with_cancel_token(cancel)
                     .with_hooks(hooks)
                     .with_progress_sink(Arc::new(
                         crate::production_tools::DaemonToolProgressSink::new(
-                            self.runtime.events.clone(),
+                            self.runtime.live.clone(),
                         ),
                     )),
             );
@@ -2254,8 +2265,10 @@ impl RunManager {
             .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
             .await
             .map_err(|error| format!("register run cancellation token: {error}"))?;
-        let engine =
-            Arc::new(AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel));
+        let engine = Arc::new(
+            AgentEngine::with_live(self.runtime.events.clone(), self.runtime.live.clone())
+                .with_cancel_token(cancel),
+        );
         self.runtime.register_engine(&run.id, engine.clone()).await;
         let _ = self.commit_status(
             &run.id,
@@ -4943,7 +4956,10 @@ mod tests {
             .await;
 
         // Register a live child AgentEngine on child.run_id (production path).
-        let child_engine = Arc::new(AgentEngine::new(rm.runtime.events.clone()));
+        let child_engine = Arc::new(AgentEngine::with_live(
+            rm.runtime.events.clone(),
+            rm.runtime.live.clone(),
+        ));
         rm.runtime
             .register_engine(&child.run_id, child_engine.clone())
             .await;

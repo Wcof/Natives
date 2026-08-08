@@ -5,12 +5,13 @@
 //!
 //! ## What is cached (safe, revisioned)
 //! - compiled effective prompt (static part) + its digest
-//! - project instruction fingerprint (digest of AGENTS.md/CLAUDE.md/rules)
+//! - project instruction fingerprint (full-SHA-256 digest of the instruction
+//!   source set that [`agent_core::assemble_context`] actually reads)
 //! - frozen tool schemas / gateway template snapshot
 //! - skill catalog metadata (names/descriptions, not skill bodies' secrets)
 //! - capability resolution snapshot reusable subset
 //!
-//! ## What is NEVER cached (A5 contract)
+//! ## What is NEVER cached (A5 contract — excluded by construction)
 //! - provider credentials / secrets
 //! - permission decisions (per-call, per-profile authority)
 //! - checkpoint / side-effect ledger / resume state
@@ -18,14 +19,31 @@
 //!
 //! ## Invalidation
 //! The key covers project identity, capability/harness revisions, and
-//! provider/model/runtime. A digest of the project instruction files is part
-//! of the key so editing AGENTS.md/CLAUDE.md invalidates the entry. Schema
-//! revision bumps (app upgrade) also invalidate.
+//! provider/model/runtime. The project instruction digest is a full SHA-256
+//! over every instruction source file (AGENTS.md/CLAUDE.md, ancestor-directory
+//! copies, `.agents/rules` / `.claude/rules` / `.natives/rules`, user-level
+//! `$HOME/.natives` / `.agents` / `.claude` files) **plus** skill entry names.
+//! Any content edit anywhere in a file (not just the first 64 bytes)
+//! invalidates the entry, as does adding/removing a rules file or a skill.
+//! Schema revision bumps (app upgrade) also invalidate.
+//!
+//! ## Cache policy
+//! Bounded LRU: at most [`MAX_ENTRIES`], evicting the least-recently-used key.
+//! Eviction is fully deterministic for a given access sequence (an explicit
+//! MRU-order `VecDeque`, never HashMap iteration order).
+//!
+//! ## NEEDS-INTEGRATION (Wave-2)
+//! The digest/discovery helpers live here in the daemon, but the real prompt
+//! assembly (`assemble_context`) lives in `crates/agent-core/src/context.rs`,
+//! and the run path that would consume this cache is `production.rs` (owned by
+//! S1). This module only provides the helper + tests. Wave-2 must (a) compute
+//! [`project_instruction_digest`] when building the cache key and (b) keep the
+//! mirrored discovery in sync with `assemble_context`'s file reads.
 
 use agent_core::ToolSchema;
 use harness_core::CompiledPromptPlan;
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Cache entry size guard — never let the cache grow without bound.
@@ -68,114 +86,272 @@ pub struct PreparedAgentSession {
     pub skill_catalog_metadata: Vec<(String, String)>,
 }
 
-/// Bounded in-memory cache keyed by [`PreparedAgentSessionKey`].
-#[derive(Default)]
+/// A file that contributes to the assembled project instruction prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionSource {
+    /// Stable, deterministic label used in the digest: relative to the project
+    /// root when possible, otherwise `home/<rel>` for user-level config,
+    /// otherwise the absolute path.
+    pub label: String,
+    /// Path of the source file.
+    pub path: PathBuf,
+}
+
+/// Bounded LRU cache keyed by [`PreparedAgentSessionKey`].
+///
+/// Eviction is deterministic (explicit MRU order). The payload never contains
+/// credentials / permission decisions / run id / transcript — those are
+/// assembled per run and excluded by construction.
 pub struct PreparedAgentSessionCache {
-    inner: Mutex<HashMap<PreparedAgentSessionKey, Arc<PreparedAgentSession>>>,
+    inner: Mutex<PreparedLru>,
+}
+
+/// Inner LRU state. `order` front = least-recently-used.
+struct PreparedLru {
+    entries: HashMap<PreparedAgentSessionKey, Arc<PreparedAgentSession>>,
+    order: VecDeque<PreparedAgentSessionKey>,
 }
 
 impl PreparedAgentSessionCache {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: Mutex::new(PreparedLru {
+                entries: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+        }
     }
 
-    /// Lookup without loading anything.
+    /// Lookup without loading anything. Touches the key so it becomes
+    /// most-recently-used.
     pub fn get(&self, key: &PreparedAgentSessionKey) -> Option<Arc<PreparedAgentSession>> {
-        self.inner
-            .lock()
-            .expect("prepared session cache lock")
-            .get(key)
-            .cloned()
+        let mut lru = self.inner.lock().expect("prepared session cache lock");
+        let value = lru.entries.get(key).cloned()?;
+        lru.order.retain(|k| k != key);
+        lru.order.push_back(key.clone());
+        Some(value)
     }
 
-    /// Insert, evicting the oldest entries beyond [`MAX_ENTRIES`].
+    /// Insert, evicting the least-recently-used key beyond [`MAX_ENTRIES`].
     pub fn insert(&self, key: PreparedAgentSessionKey, session: PreparedAgentSession) {
-        let mut map = self.inner.lock().expect("prepared session cache lock");
-        map.insert(key, Arc::new(session));
-        while map.len() > MAX_ENTRIES {
-            // HashMap iteration order is unspecified but bounded; dropping the
-            // first encountered entry is sufficient for a size cap.
-            if let Some(oldest) = map.keys().next().cloned() {
-                map.remove(&oldest);
-            } else {
-                break;
+        let mut lru = self.inner.lock().expect("prepared session cache lock");
+        if lru.entries.contains_key(&key) {
+            lru.order.retain(|k| *k != key);
+        }
+        lru.entries.insert(key.clone(), Arc::new(session));
+        lru.order.push_back(key);
+        while lru.entries.len() > MAX_ENTRIES {
+            match lru.order.pop_front() {
+                Some(oldest) => {
+                    lru.entries.remove(&oldest);
+                }
+                None => break,
             }
         }
     }
 
     /// Clear everything (app schema bump / explicit invalidation).
     pub fn clear(&self) {
-        self.inner
-            .lock()
-            .expect("prepared session cache lock")
-            .clear();
+        let mut lru = self.inner.lock().expect("prepared session cache lock");
+        lru.entries.clear();
+        lru.order.clear();
     }
 }
 
-/// Compute a stable digest over the project instruction files
-/// (AGENTS.md / CLAUDE.md / .atomcode.md / rules) so edits invalidate the key.
-/// Missing files contribute their absence deterministically.
+/// Project instruction directories from `project_root` up to (and including)
+/// the nearest `.git` ancestor — a mirror of
+/// `crates/agent-core/src/context.rs::project_instruction_dirs`.
+fn project_instruction_dirs(start: &Path) -> Vec<PathBuf> {
+    let root = start
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(start);
+    let mut dirs = Vec::new();
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        dirs.push(dir.to_path_buf());
+        if dir == root {
+            break;
+        }
+        current = dir.parent();
+    }
+    dirs.reverse();
+    dirs
+}
+
+/// Discover every instruction/rules file that [`agent_core::assemble_context`]
+/// reads when building the system prompt for `project_root`:
+///
+/// 1. `AGENTS.md` / `agents.md` / `CLAUDE.md` / `Claude.md` in each project
+///    directory from `project_root` up to the nearest `.git` ancestor
+///    (mirrors `agent_core::context::project_instruction_dirs`).
+/// 2. `*.md` rules under `.agents/rules`, `.claude/rules`, `.natives/rules`
+///    in each of those directories.
+/// 3. User-level `AGENTS.md` / `agents.md` / `CLAUDE.md` / `Claude.md` and
+///    `rules/*.md` under `$HOME/.natives`, `$HOME/.agents`, `$HOME/.claude`
+///    (the same HOME scan `assemble_context` performs).
+///
+/// Skill bodies are injected by the daemon SkillStore and are deliberately NOT
+/// read here; skill entry *names* (which `assemble_context` advertises) are
+/// folded into the digest by [`discover_skill_entry_names`].
+///
+/// The returned set is sorted by label and deduplicated by canonical path, so
+/// the digest is deterministic. **NEEDS-INTEGRATION:** keep this mirror in
+/// sync with `assemble_context`'s file reads (Wave-2 must consume this helper
+/// when building the cache key).
+pub fn discover_instruction_sources(project_root: &Path) -> Vec<InstructionSource> {
+    let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let mut sources: Vec<InstructionSource> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
+    let instruction_dirs = project_instruction_dirs(&root);
+    for dir in &instruction_dirs {
+        for name in ["AGENTS.md", "agents.md", "CLAUDE.md", "Claude.md"] {
+            push_instruction_source(&mut sources, &mut seen, &dir.join(name), &root);
+        }
+        for rules_dir in [".agents/rules", ".claude/rules", ".natives/rules"] {
+            push_rules_sources(&mut sources, &mut seen, &dir.join(rules_dir), &root);
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        for config_root in [
+            home.join(".natives"),
+            home.join(".agents"),
+            home.join(".claude"),
+        ] {
+            for name in ["AGENTS.md", "agents.md", "CLAUDE.md", "Claude.md"] {
+                push_instruction_source(&mut sources, &mut seen, &config_root.join(name), &root);
+            }
+            push_rules_sources(&mut sources, &mut seen, &config_root.join("rules"), &root);
+        }
+    }
+
+    sources.sort_by(|a, b| a.label.cmp(&b.label));
+    sources
+}
+
+fn push_instruction_source(
+    sources: &mut Vec<InstructionSource>,
+    seen: &mut HashSet<PathBuf>,
+    path: &Path,
+    project_root: &Path,
+) {
+    if !path.is_file() {
+        return;
+    }
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !seen.insert(canonical) {
+        return;
+    }
+    sources.push(InstructionSource {
+        label: source_label(path, project_root),
+        path: path.to_path_buf(),
+    });
+}
+
+fn push_rules_sources(
+    sources: &mut Vec<InstructionSource>,
+    seen: &mut HashSet<PathBuf>,
+    rules_dir: &Path,
+    project_root: &Path,
+) {
+    let mut rules: Vec<PathBuf> = std::fs::read_dir(rules_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        })
+        .collect();
+    rules.sort();
+    for path in rules {
+        push_instruction_source(sources, seen, &path, project_root);
+    }
+}
+
+fn source_label(path: &Path, project_root: &Path) -> String {
+    if let Ok(rel) = path.strip_prefix(project_root) {
+        return rel.to_string_lossy().to_string();
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        if let Ok(rel) = path.strip_prefix(&home) {
+            return format!("home/{}", rel.to_string_lossy());
+        }
+    }
+    path.to_string_lossy().to_string()
+}
+
+/// Skill entry *names* that [`agent_core::assemble_context`] advertises in the
+/// system prompt (bodies are injected by the SkillStore and stay out of this
+/// digest). Mirrors the skills scan in `assemble_context` across the project
+/// instruction dirs, but folds in ALL names (not capped at 20/dir) so any
+/// skill addition/removal invalidates the cache key.
+pub fn discover_skill_entry_names(project_root: &Path) -> Vec<String> {
+    let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let instruction_dirs = project_instruction_dirs(&root);
+    let mut names: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for dir in instruction_dirs.iter().rev() {
+        for skills_dir in [
+            ".natives/skills",
+            ".grok/skills",
+            ".agents/skills",
+            ".claude/skills",
+        ] {
+            let Ok(rd) = std::fs::read_dir(dir.join(skills_dir)) else {
+                continue;
+            };
+            let mut entries: Vec<String> = rd
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|name| seen.insert(name.clone()))
+                .collect();
+            entries.sort();
+            names.extend(entries);
+        }
+    }
+    names.sort();
+    names
+}
+
+/// Full-SHA-256 fingerprint of the project instruction source set.
+///
+/// Upgraded from the legacy cheap rolling hash: every discovered file is
+/// hashed over its FULL content (length-prefixed), so a same-length edit
+/// anywhere in a file — not just the first 64 bytes — invalidates the entry.
+/// Skill entry names are folded in (name-only). Missing files contribute
+/// nothing to the set (their absence is deterministic: creation changes the
+/// set), and unreadable files contribute a fixed marker so a permission flip
+/// invalidates.
 pub fn project_instruction_digest(project_root: &Path) -> String {
-    use std::collections::BTreeMap;
-    use std::io::Read;
-    let mut files: BTreeMap<String, String> = BTreeMap::new();
-    for name in [
-        "AGENTS.md",
-        "CLAUDE.md",
-        ".atomcode.md",
-        ".atomcode.user.md",
-    ] {
-        let path = project_root.join(name);
-        match std::fs::File::open(&path) {
-            Ok(mut f) => {
-                let mut content = String::new();
-                if f.read_to_string(&mut content).is_ok() {
-                    files.insert(name.to_string(), content);
-                }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for source in discover_instruction_sources(project_root) {
+        hasher.update(b"file\0");
+        hasher.update(source.label.as_bytes());
+        hasher.update(b"\0");
+        match std::fs::read(&source.path) {
+            Ok(bytes) => {
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(&bytes);
             }
-            Err(_) => {
-                files.insert(name.to_string(), "<missing>".to_string());
-            }
+            Err(_) => hasher.update(b"unreadable"),
         }
+        hasher.update(b"\0");
     }
-    // ALSO scan the docs/ tree for project rules files (digest only, never
-    // body secrets). Keep it cheap: a stable join of file names + sizes.
-    if let Ok(entries) = std::fs::read_dir(project_root.join("docs")) {
-        let mut rules: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                if name.ends_with(".md") {
-                    Some(format!(
-                        "{name}:{}",
-                        e.metadata().ok().map(|m| m.len()).unwrap_or(0)
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        rules.sort();
-        for rule in rules {
-            files.insert(format!("docs/{rule}"), String::new());
-        }
+    for name in discover_skill_entry_names(project_root) {
+        hasher.update(b"skill\0");
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
     }
-    // Deterministic digest: hash of the sorted name=content-length pairs
-    // plus a cheap content hash. This is a fingerprint, not a security bound.
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    use std::hash::{Hash, Hasher};
-    for (name, content) in &files {
-        name.hash(&mut hasher);
-        content.len().hash(&mut hasher);
-        // Cheap rolling hash over content so content edits (same length)
-        // still change the fingerprint in practice.
-        let mut roll: u64 = 0;
-        for (i, b) in content.bytes().enumerate().take(64) {
-            roll = roll.wrapping_add((b as u64).wrapping_mul((i as u64 + 1).wrapping_mul(31)));
-        }
-        roll.hash(&mut hasher);
-    }
-    format!("{:016x}", hasher.finish())
+    format!("{:x}", hasher.finalize())
 }
 
 #[cfg(test)]
@@ -225,6 +401,98 @@ mod tests {
     }
 
     #[test]
+    fn instruction_tail_same_length_edit_invalidates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        let a: Vec<u8> = vec![b'a'; 512];
+        let mut b = a.clone();
+        // Same length, but edit well past the old 64-byte rolling-hash window —
+        // the full-SHA-256 digest must still invalidate.
+        b[400] = b'z';
+        b[499] = b'Z';
+        std::fs::write(p.join("AGENTS.md"), &a).unwrap();
+        let d1 = project_instruction_digest(p);
+        std::fs::write(p.join("AGENTS.md"), &b).unwrap();
+        let d2 = project_instruction_digest(p);
+        assert_ne!(d1, d2, "same-length tail edit must invalidate the key");
+    }
+
+    #[test]
+    fn full_sha256_digest_detects_content_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("CLAUDE.md"), "identical length line #1").unwrap();
+        let d1 = project_instruction_digest(p);
+        std::fs::write(p.join("CLAUDE.md"), "identical length line #9").unwrap();
+        let d2 = project_instruction_digest(p);
+        assert_ne!(d1, d2, "same-length content change must change the digest");
+        // Deterministic: same bytes -> same digest across repeated calls.
+        let d3 = project_instruction_digest(p);
+        assert_eq!(d2, d3, "digest must be deterministic");
+        // And a 512-char digest proving it is a real SHA-256, not a u64 hash.
+        assert_eq!(d2.len(), 64, "expected a full 256-bit hex digest");
+    }
+
+    #[test]
+    fn rules_edit_invalidates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        let rules = p.join(".agents").join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        let rule = rules.join("review.md");
+        std::fs::write(&rule, "always run rustfmt").unwrap();
+        let d1 = project_instruction_digest(p);
+        std::fs::write(&rule, "always run clippy").unwrap();
+        let d2 = project_instruction_digest(p);
+        assert_ne!(d1, d2, "editing a rules/*.md file must invalidate the key");
+    }
+
+    #[test]
+    fn discovery_covers_assemble_context_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::create_dir_all(p.join(".git")).unwrap();
+        let nested = p.join("apps").join("web");
+        std::fs::create_dir_all(nested.join(".claude").join("rules")).unwrap();
+        std::fs::create_dir_all(nested.join(".natives").join("skills").join("review")).unwrap();
+        std::fs::write(p.join("AGENTS.md"), "repo instruction").unwrap();
+        std::fs::write(nested.join("CLAUDE.md"), "nested instruction").unwrap();
+        std::fs::write(nested.join(".claude").join("rules").join("fmt.md"), "fmt").unwrap();
+        std::fs::write(
+            nested
+                .join(".natives")
+                .join("skills")
+                .join("review")
+                .join("SKILL.md"),
+            "# Review",
+        )
+        .unwrap();
+
+        let ctx = agent_core::assemble_context(None, Some(nested.as_path()), None);
+        let sources = discover_instruction_sources(&nested);
+        let skill_names = discover_skill_entry_names(&nested);
+        // Every .md file read by the real assembly is discovered here.
+        for src in ctx.sources.iter().filter(|s| s.contains(".md")) {
+            let canonical = std::fs::canonicalize(src).unwrap_or_else(|_| PathBuf::from(src));
+            let discovered = sources.iter().any(|s| {
+                std::fs::canonicalize(&s.path).unwrap_or_else(|_| s.path.clone()) == canonical
+            });
+            assert!(
+                discovered,
+                "assemble_context read {src} but discovery missed it"
+            );
+        }
+        assert!(
+            skill_names.iter().any(|n| n == "review"),
+            "skill entry names must be discovered"
+        );
+        assert!(
+            ctx.system_prompt.contains("- review"),
+            "assemble_context should advertise the review skill"
+        );
+    }
+
+    #[test]
     fn cache_is_bounded() {
         let cache = PreparedAgentSessionCache::new();
         for i in 0..(MAX_ENTRIES + 8) {
@@ -232,7 +500,41 @@ mod tests {
             k.provider_id = format!("p{i}");
             cache.insert(k, session());
         }
-        let map = cache.inner.lock().unwrap();
-        assert!(map.len() <= MAX_ENTRIES, "cache must stay bounded");
+        let lru = cache.inner.lock().unwrap();
+        assert!(lru.entries.len() <= MAX_ENTRIES, "cache must stay bounded");
+        assert_eq!(
+            lru.entries.len(),
+            lru.order.len(),
+            "order must track entries"
+        );
+    }
+
+    #[test]
+    fn cache_evicts_least_recently_used_deterministically() {
+        let cache = PreparedAgentSessionCache::new();
+        let mut keys = Vec::new();
+        for i in 0..MAX_ENTRIES {
+            let mut k = key(&format!("/tmp/natives-a5-lru-{i}"));
+            k.provider_id = format!("p{i}");
+            cache.insert(k.clone(), session());
+            keys.push(k);
+        }
+        // Touch the first key so it is now most-recently-used; the next LRU
+        // victim is `keys[1]`.
+        assert!(cache.get(&keys[0]).is_some());
+        let mut overflow = key("/tmp/natives-a5-lru-overflow");
+        overflow.provider_id = "overflow".into();
+        cache.insert(overflow, session());
+
+        let lru = cache.inner.lock().unwrap();
+        assert_eq!(lru.entries.len(), MAX_ENTRIES);
+        assert!(
+            lru.entries.contains_key(&keys[0]),
+            "touched entry must survive eviction"
+        );
+        assert!(
+            !lru.entries.contains_key(&keys[1]),
+            "deterministic LRU eviction must drop the least-recently-used key"
+        );
     }
 }

@@ -120,6 +120,16 @@ pub struct DaemonClient {
     protocol_version: String,
     bootstrap_token: String,
     client_version: String,
+    /// `Some` once [`DaemonClient::begin_watch`] has consumed the ACK. While in
+    /// stream mode only [`DaemonClient::read_stream_frame`] may be used — the
+    /// connection is dedicated to the `run.watch` stream.
+    stream_mode: Option<StreamWatchState>,
+}
+
+/// Per-stream bookkeeping while the client is reading a `run.watch` stream.
+pub struct StreamWatchState {
+    pub run_id: String,
+    pub last_activity: std::time::Instant,
 }
 
 impl DaemonClient {
@@ -144,6 +154,7 @@ impl DaemonClient {
             protocol_version,
             bootstrap_token: bootstrap_token.to_string(),
             client_version: client_version.to_string(),
+            stream_mode: None,
         })
     }
 
@@ -234,6 +245,7 @@ impl DaemonClient {
         self.reader = reader;
         self.session_token = session_token;
         self.protocol_version = protocol_version;
+        self.stream_mode = None;
         Ok(())
     }
 
@@ -292,6 +304,11 @@ impl DaemonClient {
     }
 
     async fn call_once(&mut self, method: &str, params: Value) -> Result<Value, DaemonClientError> {
+        if self.stream_mode.is_some() {
+            return Err(DaemonClientError::Protocol(
+                "client is in run.watch stream mode; call() is not available".into(),
+            ));
+        }
         let request_id = Uuid::new_v4().to_string();
         let req = RpcRequest {
             protocol_version: self.protocol_version.clone(),
@@ -386,6 +403,144 @@ impl DaemonClient {
                 match serde_json::from_value::<assistant_protocol::v2::RunEventKind>(payload_value)
                 {
                     Ok(kind) => Some(Ok(RunEventV2::new(run_id, sequence, kind))),
+                    Err(e) => Some(Err(DaemonClientError::Json(e))),
+                }
+            }
+            Err(e) => Some(Err(DaemonClientError::Json(e))),
+        }
+    }
+
+    /// Open a persistent `run.watch` (RunWatchStreamV2) connection and consume
+    /// the ordinary RPC ACK (`STREAM-CONTRACT-V2`).
+    ///
+    /// After this call the client is in **stream mode**: only
+    /// [`DaemonClient::read_stream_frame`] may be used. The ACK is a normal
+    /// `RpcResponse`; every later line is a [`RunStreamFrameV2`]. The 30s
+    /// frame timeout is safe because the daemon sends heartbeats on idle.
+    pub async fn begin_watch(
+        &mut self,
+        run_id: &str,
+        after_durable_sequence: u64,
+        after_live_sequence: u64,
+    ) -> Result<(), DaemonClientError> {
+        if self.stream_mode.is_some() {
+            return Err(DaemonClientError::Protocol(
+                "begin_watch called on a client already in stream mode".into(),
+            ));
+        }
+        let request_id = Uuid::new_v4().to_string();
+        let req = RpcRequest {
+            protocol_version: self.protocol_version.clone(),
+            request_id: request_id.clone(),
+            client_id: self.client_id.clone(),
+            session_token: self.session_token.clone(),
+            method: "run.watch".to_string(),
+            params: serde_json::json!({
+                "run_id": run_id,
+                "after_durable_sequence": after_durable_sequence,
+                "after_live_sequence": after_live_sequence,
+            }),
+        };
+        let line = serde_json::to_string(&req)?;
+        if self.writer.write_all(line.as_bytes()).await.is_err()
+            || self.writer.write_all(b"\n").await.is_err()
+        {
+            return Err(DaemonClientError::Protocol("connection closed".into()));
+        }
+
+        // First response must be the ordinary RPC ACK.
+        let ack_frame =
+            match read_frame(&mut self.reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+                Ok(Some(frame)) => frame,
+                Ok(None) => return Err(DaemonClientError::Protocol("connection closed".into())),
+                Err(FrameError::Oversize) => {
+                    return Err(DaemonClientError::Protocol(format!(
+                        "run.watch ACK frame exceeds {MAX_FRAME_BYTES} bytes"
+                    )))
+                }
+                Err(FrameError::Timeout) => {
+                    return Err(DaemonClientError::Protocol(
+                        "run.watch ACK frame read timed out".into(),
+                    ))
+                }
+                Err(FrameError::Io) => {
+                    return Err(DaemonClientError::Io(std::io::Error::other(
+                        "run.watch ACK frame read failed",
+                    )))
+                }
+            };
+        let ack_line = String::from_utf8_lossy(&ack_frame);
+        let resp: RpcResponse =
+            serde_json::from_str(ack_line.trim()).map_err(|e| DaemonClientError::Json(e))?;
+        if !resp.success {
+            let msg = resp
+                .error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "run.watch failed".into());
+            return Err(DaemonClientError::Rpc(msg));
+        }
+        // Validate the ACK advertises stream version 2 (frozen contract).
+        let data = resp.data.unwrap_or(Value::Null);
+        let stream = data.get("stream").and_then(|v| v.as_str()).unwrap_or("");
+        let version = data
+            .get("streamVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if stream != crate::stream_protocol::STREAM_METHOD
+            || version != crate::stream_protocol::STREAM_VERSION
+        {
+            return Err(DaemonClientError::Protocol(format!(
+                "unexpected run.watch ACK: stream={stream:?} version={version}"
+            )));
+        }
+        self.stream_mode = Some(StreamWatchState {
+            run_id: run_id.to_string(),
+            last_activity: std::time::Instant::now(),
+        });
+        Ok(())
+    }
+
+    /// Read the next frame on a `run.watch` (RunWatchStreamV2) connection.
+    ///
+    /// Returns `None` on clean close, or the decoded [`RunStreamFrameV2`].
+    /// Heartbeats reset the idle clock so a healthy stream never trips the 30s
+    /// frame timeout — only a truly silent stream does.
+    pub async fn read_stream_frame(
+        &mut self,
+    ) -> Option<Result<crate::stream_protocol::RunStreamFrameV2, DaemonClientError>> {
+        let frame = match read_frame(&mut self.reader, MAX_FRAME_BYTES, FRAME_READ_TIMEOUT).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return None, // clean close (terminal / cancel / disconnect)
+            Err(FrameError::Oversize) => {
+                return Some(Err(DaemonClientError::Protocol(format!(
+                    "run.watch frame exceeds {MAX_FRAME_BYTES} bytes"
+                ))))
+            }
+            Err(FrameError::Timeout) => {
+                return Some(Err(DaemonClientError::Protocol(
+                    "run.watch frame read timed out (no heartbeat)".into(),
+                )))
+            }
+            Err(FrameError::Io) => {
+                return Some(Err(DaemonClientError::Io(std::io::Error::other(
+                    "run.watch frame read failed",
+                ))))
+            }
+        };
+        let line = String::from_utf8_lossy(&frame);
+        match serde_json::from_str::<serde_json::Value>(line.trim()) {
+            Ok(value) => {
+                if value
+                    .get("frame_type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "heartbeat")
+                {
+                    if let Some(st) = self.stream_mode.as_mut() {
+                        st.last_activity = std::time::Instant::now();
+                    }
+                }
+                match serde_json::from_value::<crate::stream_protocol::RunStreamFrameV2>(value) {
+                    Ok(frame) => Some(Ok(frame)),
                     Err(e) => Some(Err(DaemonClientError::Json(e))),
                 }
             }

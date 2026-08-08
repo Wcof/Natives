@@ -2,6 +2,15 @@
  * DaemonAssistantAdapter — production path via Tauri nativesAPI.assistantV2.
  * GUI still only talks to AssistantGateway; this file is the sole place that
  * may touch window.nativesAPI for assistant execution.
+ *
+ * Persistent live stream (RunWatchStreamV2, docs/contracts/STREAM-CONTRACT-V2.md)
+ * is the PRIMARY path: the host watch bridge (`run_watch_start`/`stop` + the
+ * `run-watch-frame` Tauri event) streams durable + live frames, and the adapter
+ * tracks dual cursors (lastDurableSequence / lastLiveSequence) that never share
+ * a sequence namespace. Live deltas are transient and never advance the durable
+ * projection watermark. The legacy `run.subscribe` long-poll loop remains only
+ * as a compat fallback when the persistent stream is unavailable (e.g. embedded
+ * mode or an old daemon).
  */
 import type {
   AssistantMethod,
@@ -21,6 +30,8 @@ import {
   createProjectionState,
 } from '@/lib/assistant-protocol';
 import type { AssistantGateway } from './gateway';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -40,10 +51,129 @@ function getAssistantV2Request(): RequestFn | null {
   return (method, params) => api.request(method, params);
 }
 
+// ─── RunWatchStreamV2 host watch bridge ────────────────────────────────────
+
+/** Tauri event emitted by the host watch bridge once per frame. */
+const WATCH_FRAME_EVENT = 'run-watch-frame';
+
+/** One RunWatchStreamV2 frame as delivered by the host bridge. */
+export interface WatchFrame {
+  frame_type: 'event' | 'heartbeat' | 'resync_required';
+  lane?: 'durable' | 'live';
+  run_id?: string;
+  durable_sequence?: number | null;
+  live_sequence?: number | null;
+  event_type?: string;
+  payload?: unknown;
+  timestamp?: string;
+  reason?: string;
+}
+
+/** `run-watch-frame` event payload. */
+export interface WatchFrameEvent {
+  run_id: string;
+  frame: WatchFrame;
+}
+
+export interface WatchStartResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Host watch bridge seam. The Renderer never talks to the UDS socket directly
+ * — only Tauri commands (`run_watch_start`/`run_watch_stop`) and the
+ * `run-watch-frame` event.
+ */
+export interface HostWatchBridge {
+  start(
+    runId: string,
+    afterDurableSequence: number,
+    afterLiveSequence: number,
+  ): Promise<WatchStartResult>;
+  stop(runId: string): Promise<void>;
+  listen(listener: (frame: WatchFrame) => void): () => void;
+}
+
+/** Build the default Tauri-hosted bridge (lazy; tests inject a fake instead). */
+function createTauriWatchBridge(): HostWatchBridge | null {
+  if (typeof window === 'undefined') return null;
+  return {
+    async start(runId, afterDurableSequence, afterLiveSequence) {
+      try {
+        const result = (await invoke('run_watch_start', {
+          run_id: runId,
+          after_durable_sequence: afterDurableSequence,
+          after_live_sequence: afterLiveSequence,
+        })) as { ok?: boolean; error?: string };
+        return { ok: Boolean(result.ok), error: result.error };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    async stop(runId) {
+      try {
+        await invoke('run_watch_stop', { run_id: runId });
+      } catch {
+        // best-effort unsubscribe
+      }
+    },
+    listen(listener) {
+      let unlisten: (() => void) | null = null;
+      void listen<WatchFrameEvent>(WATCH_FRAME_EVENT, (event) => {
+        listener(event.payload.frame);
+      }).then((fn) => {
+        unlisten = fn;
+      });
+      return () => {
+        unlisten?.();
+      };
+    },
+  };
+}
+
+/**
+ * Synthetic live-sequence step. Live deltas are mapped to
+ * `durableAnchor + fraction` so the single-sequence renderer reducer accepts
+ * them without advancing the effective durable watermark (floor on reconnect).
+ */
+const LIVE_SEQUENCE_STEP = 0.000001;
+const LIVE_SEQUENCE_MAX_FRACTION = 0.999999;
+
+/** Max consecutive persistent-stream failures before falling back / giving up. */
+const MAX_WATCH_RECONNECTS = 3;
+
+/** Thrown when the persistent stream cannot be (re)established. */
+export class WatchStreamUnavailableError extends Error {
+  readonly runId: string;
+  constructor(runId: string, reason: string) {
+    super(`run.watch persistent stream unavailable for ${runId}: ${reason}`);
+    this.name = 'WatchStreamUnavailableError';
+    this.runId = runId;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Flatten the internally-tagged RunEventKind payload (drop the `type` key). */
+function flattenPayload(raw: unknown): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return payload;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k === 'type') continue;
+    payload[k] = v;
+  }
+  return payload;
+}
+
 export interface DaemonAdapterOptions {
   /** Inject for tests. */
   requestFn?: RequestFn;
   pollIntervalMs?: number;
+  /** Inject the persistent-stream bridge for tests. */
+  watchBridge?: HostWatchBridge;
 }
 
 export class DaemonAssistantAdapter implements AssistantGateway {
@@ -55,16 +185,25 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     string,
     ReturnType<typeof createProjectionState>['recovery']
   >();
+  /** Per-run ephemeral live cursor, kept across reconnects. */
+  private liveCursorByRun = new Map<string, number>();
+  private watchBridge: HostWatchBridge | null;
 
   constructor(options: DaemonAdapterOptions = {}) {
     this.requestFn = options.requestFn ?? null;
     this.pollIntervalMs = options.pollIntervalMs ?? 400;
+    this.watchBridge = options.watchBridge ?? null;
   }
 
   private resolveRequest(): RequestFn {
     const fn = this.requestFn ?? getAssistantV2Request();
     if (!fn) throw new Error('assistantV2 not available');
     return fn;
+  }
+
+  private resolveWatchBridge(): HostWatchBridge | null {
+    if (this.watchBridge) return this.watchBridge;
+    return createTauriWatchBridge();
   }
 
   async connect(): Promise<void> {
@@ -101,13 +240,297 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     return (await this.resolveRequest()(method, params)) as T;
   }
 
+  /**
+   * Persistent live stream is the primary path; the legacy `run.subscribe`
+   * long-poll loop remains as a compat fallback only.
+   */
   async *subscribe(runId: string, afterSequence: number): AsyncIterable<RunEvent> {
     const controller = new AbortController();
     this.abortControllers.set(runId, controller);
+    try {
+      const bridge = this.resolveWatchBridge();
+      if (bridge) {
+        try {
+          yield* this.readPersistentStream(
+            runId,
+            bridge,
+            controller.signal,
+            Math.floor(afterSequence),
+            this.liveCursorByRun.get(runId) ?? 0,
+          );
+          return;
+        } catch (err) {
+          if (!(err instanceof WatchStreamUnavailableError)) throw err;
+          // persistent stream unavailable (embedded / old daemon) → legacy fallback
+        }
+      }
+      yield* this.subscribeLegacy(runId, afterSequence, controller.signal);
+    } finally {
+      if (this.abortControllers.get(runId) === controller) {
+        this.abortControllers.delete(runId);
+      }
+    }
+  }
+
+  /**
+   * Persistent stream reader: consumes RunWatchStreamV2 frames from the host
+   * bridge, maintains dual cursors (durable / live — never merged), reconnects
+   * by cursor on unexpected closure, and clean-closes on a terminal durable
+   * event. Live deltas are buffered and flushed just before the next durable
+   * fact; a durable MessageCompleted/ToolCallCompleted clears the transient
+   * live state for that unit.
+   */
+  private async *readPersistentStream(
+    runId: string,
+    bridge: HostWatchBridge,
+    signal: AbortSignal,
+    initialDurable: number,
+    initialLive: number,
+  ): AsyncIterable<RunEvent> {
+    let durableSeq = initialDurable;
+    let liveSeq = initialLive;
+    let liveStaleUpTo = 0;
+    let liveFraction = 0;
+    let projection = createProjectionState(runId, initialDurable);
+    let liveBuffer: RunEvent[] = [];
+    let consecutiveFailures = 0;
+    let firstStart = true;
+
+    while (!signal.aborted) {
+      const started = await bridge
+        .start(runId, durableSeq, liveSeq)
+        .catch(() => ({ ok: false as const, error: 'watch_start_failed' }));
+      if (!started.ok) {
+        // An immediate rejection (embedded mode / old daemon) is an availability
+        // failure → fall back to legacy right away. Mid-stream reconnect
+        // failures retry a bounded number of times.
+        if (firstStart || consecutiveFailures >= MAX_WATCH_RECONNECTS) {
+          throw new WatchStreamUnavailableError(runId, started.error ?? 'unknown');
+        }
+        consecutiveFailures += 1;
+        await sleep(150 * consecutiveFailures);
+        continue;
+      }
+      firstStart = false;
+
+      const source = this.createFrameSource(bridge, runId, signal);
+      let sawFrame = false;
+      try {
+        for (;;) {
+          const frame = await source.next();
+          if (frame === 'closed') break;
+          sawFrame = true;
+          const out = this.consumeWatchFrame(frame, runId, {
+            durableSeq,
+            liveSeq,
+            liveStaleUpTo,
+            liveFraction,
+            projection,
+            liveBuffer,
+          });
+          durableSeq = out.state.durableSeq;
+          liveSeq = out.state.liveSeq;
+          liveStaleUpTo = out.state.liveStaleUpTo;
+          liveFraction = out.state.liveFraction;
+          projection = out.state.projection;
+          liveBuffer = out.state.liveBuffer;
+
+          for (const ev of out.events) {
+            this.projectionRecovery.set(runId, projection.recovery);
+            yield ev;
+          }
+          if (out.resyncLive) {
+            // Live buffer lost → drop transient live state; continue durable-only.
+            liveBuffer = [];
+            liveSeq = 0;
+            liveFraction = 0;
+          }
+          if (out.terminal) {
+            await bridge.stop(runId).catch(() => {});
+            this.liveCursorByRun.set(runId, liveSeq);
+            return;
+          }
+          if (out.streamClosed) {
+            break; // reconnect by durable/live cursor
+          }
+        }
+      } finally {
+        source.dispose();
+        await bridge.stop(runId).catch(() => {});
+      }
+      if (signal.aborted) {
+        this.liveCursorByRun.set(runId, liveSeq);
+        return;
+      }
+      if (sawFrame) consecutiveFailures = 0;
+      await sleep(200);
+    }
+    this.liveCursorByRun.set(runId, liveSeq);
+  }
+
+  /**
+   * Wait for the next frame on the host event stream. `'closed'` means the
+   * signal was aborted (or the stream ended without a terminal durable event).
+   */
+  private createFrameSource(bridge: HostWatchBridge, runId: string, signal: AbortSignal) {
+    let queue: WatchFrame[] = [];
+    let waiter: (() => void) | null = null;
+    const wake = () => {
+      const w = waiter;
+      waiter = null;
+      w?.();
+    };
+    const onAbort = () => wake();
+    signal.addEventListener('abort', onAbort);
+    const unlisten = bridge.listen((frame) => {
+      if (frame.run_id != null && frame.run_id !== runId) return;
+      queue.push(frame);
+      wake();
+    });
+    return {
+      dispose() {
+        signal.removeEventListener('abort', onAbort);
+        unlisten();
+      },
+      async next(): Promise<WatchFrame | 'closed'> {
+        for (;;) {
+          if (signal.aborted) return 'closed';
+          if (queue.length > 0) return queue.shift()!;
+          await new Promise<void>((resolve) => {
+            waiter = resolve;
+          });
+        }
+      },
+    };
+  }
+
+  /**
+   * Translate one RunWatchStreamV2 frame into renderer events while
+   * maintaining the dual durable/live cursors.
+   */
+  private consumeWatchFrame(
+    frame: WatchFrame,
+    runId: string,
+    state: {
+      durableSeq: number;
+      liveSeq: number;
+      liveStaleUpTo: number;
+      liveFraction: number;
+      projection: ReturnType<typeof createProjectionState>;
+      liveBuffer: RunEvent[];
+    },
+  ): {
+    state: {
+      durableSeq: number;
+      liveSeq: number;
+      liveStaleUpTo: number;
+      liveFraction: number;
+      projection: ReturnType<typeof createProjectionState>;
+      liveBuffer: RunEvent[];
+    };
+    events: RunEvent[];
+    terminal: boolean;
+    resyncLive: boolean;
+    streamClosed: boolean;
+  } {
+    const next = { ...state, liveBuffer: [...state.liveBuffer] };
+    const events: RunEvent[] = [];
+    const out = { state: next, events, terminal: false, resyncLive: false, streamClosed: false };
+
+    if (frame.frame_type === 'heartbeat') {
+      if (typeof frame.durable_sequence === 'number') {
+        next.durableSeq = Math.max(next.durableSeq, frame.durable_sequence);
+      }
+      if (typeof frame.live_sequence === 'number') {
+        next.liveSeq = Math.max(next.liveSeq, frame.live_sequence);
+      }
+      return out;
+    }
+
+    if (frame.frame_type === 'resync_required') {
+      // A live-lane resync means some ephemeral deltas are unrecoverable; the
+      // durable lane is never resynced from the live bus. A durable-lane
+      // resync / stream_closed signals the Renderer to reconnect by cursor.
+      if (frame.lane === 'live' || frame.reason === 'live_buffer_gap') {
+        out.resyncLive = true;
+      } else {
+        out.streamClosed = true;
+      }
+      return out;
+    }
+
+    if (frame.frame_type !== 'event') return out;
+
+    const liveSequence =
+      typeof frame.live_sequence === 'number' ? frame.live_sequence : null;
+
+    if (frame.lane === 'live') {
+      if (liveSequence != null) {
+        next.liveSeq = Math.max(next.liveSeq, liveSequence);
+        // Deltas for an already-completed message/tool are stale — drop them.
+        if (liveSequence <= next.liveStaleUpTo) return out;
+      }
+      const synthetic =
+        next.durableSeq +
+        Math.min(LIVE_SEQUENCE_MAX_FRACTION, next.liveFraction + LIVE_SEQUENCE_STEP);
+      next.liveFraction = synthetic - next.durableSeq;
+      const event: RunEvent = {
+        runId,
+        sequence: synthetic,
+        timestamp: frame.timestamp ?? new Date().toISOString(),
+        type: frame.event_type ?? 'unknown',
+        payload: flattenPayload(frame.payload),
+      };
+      next.liveBuffer = [...next.liveBuffer, event];
+      return out;
+    }
+
+    // Durable event: flush buffered live deltas first so live facts for a unit
+    // arrive before their durable completion.
+    for (const liveEvent of next.liveBuffer) {
+      events.push(liveEvent);
+    }
+    next.liveBuffer = [];
+
+    const durableSequence =
+      typeof frame.durable_sequence === 'number' ? frame.durable_sequence : 0;
+    next.durableSeq = Math.max(next.durableSeq, durableSequence);
+    next.liveFraction = 0;
+
+    const event: RunEvent = {
+      runId,
+      sequence: durableSequence,
+      timestamp: frame.timestamp ?? new Date().toISOString(),
+      type: frame.event_type ?? 'unknown',
+      payload: flattenPayload(frame.payload),
+    };
+    events.push(event);
+    // Durable facts advance the durable projection watermark (live never does).
+    next.projection = applyProjectionEvent(next.projection, event);
+
+    const type = event.type;
+    if (isTerminalEventType(type)) {
+      out.terminal = true;
+    }
+    // MessageCompleted / ToolCallCompleted clear transient live state: any
+    // buffered or late live deltas for the completed unit are now obsolete.
+    if (type === 'message_completed' || type === 'tool_call_completed') {
+      next.liveBuffer = [];
+      next.liveStaleUpTo = Math.max(next.liveStaleUpTo, next.liveSeq);
+    }
+    return out;
+  }
+
+  /** Legacy long-poll `run.subscribe` loop — compat fallback only. */
+  private async *subscribeLegacy(
+    runId: string,
+    afterSequence: number,
+    signal: AbortSignal,
+  ): AsyncIterable<RunEvent> {
     let seq = afterSequence;
     let projection = createProjectionState(runId, afterSequence);
     try {
-      while (!controller.signal.aborted) {
+      while (!signal.aborted) {
         let events: RunEvent[] = [];
         let terminal = false;
         try {
@@ -188,7 +611,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
         // errors are handled by the catch above (fallback + backoff).
       }
     } finally {
-      this.abortControllers.delete(runId);
+      // controller removed by caller (subscribe)
     }
   }
 

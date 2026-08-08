@@ -142,7 +142,9 @@ impl LiveEventBus {
         state.ring_bytes += event_bytes;
         while state.ring.len() > RING_MAX_EVENTS || state.ring_bytes > RING_MAX_BYTES {
             if let Some(oldest) = state.ring.first() {
-                state.ring_bytes = state.ring_bytes.saturating_sub(Self::event_bytes(&oldest.kind));
+                state.ring_bytes = state
+                    .ring_bytes
+                    .saturating_sub(Self::event_bytes(&oldest.kind));
             }
             state.ring.remove(0);
         }
@@ -284,7 +286,12 @@ mod tests {
     async fn subscribe_after_detects_gap_when_cursor_fell_before_buffer() {
         let bus = LiveEventBus::new();
         for i in 0..(RING_MAX_EVENTS + 64) as u64 {
-            let _ = bus.append("run-1", RunEventKind::TextDelta { text: i.to_string() });
+            let _ = bus.append(
+                "run-1",
+                RunEventKind::TextDelta {
+                    text: i.to_string(),
+                },
+            );
         }
         // Cursor 1 is far before the ring start ⇒ live gap.
         let sub = bus.subscribe_after("run-1", 1);

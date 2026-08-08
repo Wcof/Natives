@@ -214,11 +214,17 @@ async fn stream_watch_pushes_new_events_until_terminal() {
         "run.watch must stream at least one durable event envelope"
     );
     assert!(saw_terminal, "run.watch must close after a terminal event");
-    // A2 note: fixture TextOnly emits text_delta on the LIVE lane in this
-    // branch's agent-core; the durable terminal facts are what run.watch
-    // replays/pushes. text_delta here is asserted only if the running daemon
-    // still mirrors it durably (depends on Wave-1 merge state).
-    let _ = saw_text;
+    // STREAM-CONTRACT-V2 (frozen): under the V2 run.watch stream the live lane
+    // carries text_delta emitted by the Engine via the shared LiveEventBus.
+    // The fixture provider (TextOnly) emits exactly one TextDelta before
+    // Completed, so a correct V2 daemon MUST deliver it on the live lane.
+    // Gate 0 red test: this assertion is the first-order check that the
+    // daemon's run.watch live lane genuinely reaches the client.
+    assert!(
+        saw_text,
+        "V2 run.watch live lane must deliver the fixture's text_delta \
+         (STREAM-CONTRACT-V2 live lane); saw durable events but no text_delta frame"
+    );
     drop(starter);
 
     let _ = std::fs::remove_file(&sock);
@@ -312,7 +318,7 @@ async fn stream_watch_after_sequence_skips_old_events() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(seq) = env.get("sequence").and_then(|v| v.as_u64()) {
+        if let Some(seq) = env.get("durable_sequence").and_then(|v| v.as_u64()) {
             max_seq = max_seq.max(seq);
         }
         if let Some(ty) = env.get("event_type").and_then(|v| v.as_str()) {
@@ -347,7 +353,7 @@ async fn stream_watch_after_sequence_skips_old_events() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(seq) = env.get("sequence").and_then(|v| v.as_u64()) {
+        if let Some(seq) = env.get("durable_sequence").and_then(|v| v.as_u64()) {
             if seq <= max_seq {
                 replay_below += 1;
             }

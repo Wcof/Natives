@@ -7,7 +7,7 @@ use agent_core::assemble_context;
 use agent_core::metrics::MetricsSink;
 use agent_core::{
     AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderContext,
-    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer,
+    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer, LiveEventBus,
     PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
     ToolSchema,
 };
@@ -63,6 +63,10 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
 /// rather than reaching into maps when possible.
 pub struct ProductionRuntime {
     pub events: EventSequencer,
+    /// Shared ephemeral live event bus (STREAM-CONTRACT-V2 live lane). One bus
+    /// is shared across every engine/progress sink in the daemon so a Renderer
+    /// can subscribe to a run's deltas through a single handle.
+    pub live: LiveEventBus,
     /// Checkpoint authority paired with this runtime's Run/Event store.
     pub(crate) checkpoints: Arc<crate::checkpoint::CheckpointManager>,
     pub permissions: Arc<PermissionManager>,
@@ -279,6 +283,7 @@ impl ProductionRuntime {
     ) -> Self {
         let rt = Self {
             events,
+            live: LiveEventBus::new(),
             checkpoints,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
@@ -312,6 +317,14 @@ impl ProductionRuntime {
 
     pub(crate) fn checkpoint_manager(&self) -> &crate::checkpoint::CheckpointManager {
         &self.checkpoints
+    }
+
+    /// Shared live (ephemeral) event bus for the daemon.
+    ///
+    /// Cheap clone shares one bounded broadcast/ring across all engines and
+    /// progress sinks. Subscribers attach per-run via `subscribe_after`.
+    pub fn live_events(&self) -> LiveEventBus {
+        self.live.clone()
     }
 
     /// Register a hard tool allowlist for a run that will be started via RunManager.
@@ -590,7 +603,7 @@ impl ProductionRuntime {
             .ensure_execution_token(&run_id, parent_run_id.as_deref())
             .await?;
         let engine = Arc::new(
-            AgentEngine::new(self.events.clone())
+            AgentEngine::with_live(self.events.clone(), self.live.clone())
                 .with_cancel_token(cancel.clone())
                 .with_hooks(hooks)
                 .with_session_harness(crate::prompt_queue_store::global_harness())
@@ -605,7 +618,7 @@ impl ProductionRuntime {
                         run_id.clone(),
                     ),
                 ))
-                .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.events.clone())))
+                .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.live.clone())))
                 .with_provider_context_window(model_window)
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
@@ -800,6 +813,11 @@ impl ProductionRuntime {
         // do not retain a stale engine handle if history/checkpoint persistence
         // below fails.
         self.engines.lock().await.remove(&run_id);
+        // Terminal cleanup (STREAM-CONTRACT-V2 Terminal): drop the run's live
+        // ring/broadcast state so its deltas stop being retained once the run
+        // is over. Renderer clears transient live state on the durable
+        // terminal event.
+        self.live.remove_run(&run_id);
         let run_events = self
             .events
             .replay_after_checked(&run_id, 0)

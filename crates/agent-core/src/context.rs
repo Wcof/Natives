@@ -289,6 +289,22 @@ impl ContextStats {
         self.last_compaction_revision = self.last_compaction_revision.wrapping_add(1);
     }
 
+    /// Reset the running estimates to the actual post-compaction transcript
+    /// size.
+    ///
+    /// Compaction rewrites the history, so the incremental counters must be
+    /// re-seeded from the true kept-transcript size instead of continuing to
+    /// accumulate stale bytes. The caller passes the size of the transcript
+    /// that actually survived compaction.
+    ///
+    /// Does NOT bump [`Self::last_compaction_revision`] — that revision is the
+    /// caller's signal that a rewrite happened, so callers still call
+    /// [`Self::note_compaction`] when they actually compacted.
+    pub fn reset(&mut self, new_transcript_chars: usize) {
+        self.estimated_chars = new_transcript_chars as u64;
+        self.estimated_tokens = ContextBudget::estimate_tokens(new_transcript_chars);
+    }
+
     /// True when the running estimate crossed the threshold and a full
     /// compaction analysis is warranted.
     pub fn needs_compaction(&self, compact_threshold_chars: usize) -> bool {
@@ -540,5 +556,30 @@ mod tests {
         assert_eq!(kept[0].0, "system");
         assert!(kept[0].1.starts_with(TRUNCATION_MARKER));
         assert_eq!(kept[0].1, summary.unwrap());
+    }
+
+    #[test]
+    fn context_stats_reset_after_compaction() {
+        let mut stats = ContextStats::new();
+        stats.append_chars(40_000);
+        stats.note_compaction();
+        assert!(stats.estimated_chars >= 40_000);
+        assert_eq!(stats.last_compaction_revision, 1);
+
+        // Compaction kept only the last dialogue turn; re-seed from the real
+        // surviving transcript size so the counters stop accumulating stale
+        // pre-compaction bytes.
+        stats.reset(400);
+        assert_eq!(stats.estimated_chars, 400);
+        assert_eq!(stats.estimated_tokens, ContextBudget::estimate_tokens(400));
+        assert!(!stats.needs_compaction(1_000));
+
+        // The reset does not itself bump the revision marker.
+        assert_eq!(stats.last_compaction_revision, 1);
+
+        // Budget continues to accrue from the reset base.
+        stats.append_chars(1_200);
+        assert_eq!(stats.estimated_chars, 1_600);
+        assert!(stats.needs_compaction(1_000));
     }
 }

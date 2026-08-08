@@ -1590,7 +1590,10 @@ impl AgentEngine {
                     Err(error) => return Err(error),
                 };
                 if follow_up_consumed {
-                    self.events.append(
+                    // Live-lane signal (STREAM-CONTRACT-V2): high-frequency
+                    // Progress is ephemeral — never write it to the durable
+                    // EventSequencer.
+                    self.live.append(
                         run_id,
                         RunEventKind::Progress {
                             message: "follow_up_consumed".into(),

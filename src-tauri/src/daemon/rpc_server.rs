@@ -1140,6 +1140,33 @@ async fn handle_run_start(
     let event_bus = event_bus.clone();
     let content_owned = content.clone();
     tokio::spawn(async move {
+        // S3 Execution Policy: resolve the Settings V2 policy for this Run
+        // (explicit override → application default → safe default native).
+        // No hardcoded max_steps / silent runtime default here.
+        let settings = crate::execution_engine_settings::load_execution_engine_settings();
+        let runtimes = settings
+            .as_ref()
+            .map(crate::execution_engine_settings::build_runtime_descriptors)
+            .unwrap_or_default();
+        let policy = settings.as_ref().ok().and_then(|s| {
+            crate::execution_engine_settings::resolve_execution_policy(
+                s,
+                &runtimes,
+                None, // this legacy RPC path has no explicit runtime override
+                None, // no conversation-level override yet
+                None, // no explicit maxSteps override
+            )
+            .ok()
+        });
+        let (max_steps, runtime_id) = match &policy {
+            Some(p) => (Some(p.max_steps), Some(p.runtime_id.clone())),
+            None => {
+                // Settings unavailable → degrade explicitly with defaults that
+                // are documented, never a silent fake success. The daemon still
+                // enforces its own honest runtime gate.
+                (Some(crate::execution_engine_settings::DEFAULT_MAX_STEPS), None)
+            }
+        };
         // G4: same Run Authority façade as assistant_service (embedded or UDS).
         let create =
             crate::daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
@@ -1151,10 +1178,13 @@ async fn handle_run_start(
                 permission_profile: Some("ask".into()),
                 content: Some(content_owned.clone()),
                 attachments: None,
-                max_steps: Some(50),
+                max_steps,
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some(run_id.clone()),
+                effort: None,
+                runtime_id: runtime_id.clone(),
+                capability_selection: None,
             })
             .await;
         if let Err(error) = create {
@@ -1184,9 +1214,13 @@ async fn handle_run_start(
                 attachments: None,
                 trigger_message_id: None,
                 permission_profile: Some("ask".into()),
-                max_steps: Some(50),
+                max_steps,
                 project_path: None,
                 idempotency_key: None,
+                effort: None,
+                runtime_id,
+                agent_profile_id: None,
+                capability_selection: None,
             })
             .await;
 

@@ -57,7 +57,9 @@ fn b7_conflict_v2_is_authority_legacy_not_reapplied() {
 
     // Load MUST return the persisted V2 — the legacy key is not re-migrated
     // over an existing authority, and max_steps stays 120, not 25.
-    let loaded = load_execution_engine_settings();
+    // P0-13: load is Result-化 — a corrupt/failed read must be an explicit
+    // error, never a silent fake-default success.
+    let loaded = load_execution_engine_settings().expect("load must not fail");
     assert_eq!(
         loaded.native.max_steps, 120,
         "conflicting legacy must not overwrite the persisted V2 authority"
@@ -74,7 +76,7 @@ fn b7_no_db_keys_yields_safe_defaults() {
     // max_steps 50, fail policy, codex disabled). localStorage runtimePref is a
     // frontend one-shot migration (A7) and never reaches Rust.
     let _dir = register_temp_pool();
-    let loaded = load_execution_engine_settings();
+    let loaded = load_execution_engine_settings().expect("load must not fail");
     assert_eq!(loaded.default_runtime, "native");
     assert_eq!(loaded.native.max_steps, 50);
     assert_eq!(loaded.external_unavailable_policy, "fail");
