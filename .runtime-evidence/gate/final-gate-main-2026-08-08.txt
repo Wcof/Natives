@@ -1,0 +1,13 @@
+# Final Gate on main — 2026-08-08 实跑（main HEAD 619ddde1，单 clone 状态）
+
+GATE1_fmt=0
+GATE2_cargo_check=0
+GATE3_protocol=0
+GATE4_typecheck=0
+GATE5_lint=0
+GATE6_test=0
+GATE7_perf=0
+GATE8_verify_native_engine=0
+GATE9_tauri_build=0
+
+结论: 9/9 通过（与 perf/integration 上的 25055cee/cd5fa1f3 一致）
