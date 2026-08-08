@@ -202,6 +202,12 @@ struct WireLine {
     stream_version: Option<u64>,
 }
 
+/// Parse one newline-delimited wire frame into a field-checked view.
+///
+/// Field-assignment style (instead of one struct literal) keeps each field
+/// extraction explicit next to its JSON source; the `WireLine` fields are all
+/// covered and asserted by the tests below.
+#[allow(clippy::field_reassign_with_default)] // test helper; explicit is clearer
 fn parse_wire_line(line: &str) -> WireLine {
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,

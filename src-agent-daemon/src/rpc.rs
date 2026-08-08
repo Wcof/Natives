@@ -1637,8 +1637,8 @@ pub async fn handle_rpc(
             // If the requested live cursor fell before the bounded ring start,
             // some ephemeral deltas are unrecoverable → ResyncRequired(live).
             // This is never a durable-fact gap.
-            if live_gap {
-                if write_stream_frame(
+            if live_gap
+                && write_stream_frame(
                     writer,
                     &crate::stream_protocol::RunStreamFrameV2::resync_required(
                         &run_id,
@@ -1648,9 +1648,8 @@ pub async fn handle_rpc(
                 )
                 .await
                 .is_err()
-                {
-                    return;
-                }
+            {
+                return;
             }
 
             // 5b) If the run already reached terminal, clean close — never hang

@@ -129,6 +129,8 @@ fn is_fail_closed_miss(code: Option<&str>, body: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn every_advertised_daemon_method_has_real_dispatch() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
@@ -160,6 +162,8 @@ async fn every_advertised_daemon_method_has_real_dispatch() {
 /// guarantee: anything advertised there but not intercepted by the host reaches the daemon
 /// and must be dispatchable. Only `HOST_INTERCEPTED` is exempt, with a stated reason.
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn host_advertised_methods_are_dispatchable_unless_host_intercepted() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
@@ -253,6 +257,8 @@ fn host_only_methods_are_actually_intercepted_by_the_tauri_host() {
 /// call returns the honest `unsupported` code. This is the other half of the invariant:
 /// the first test stops us over-advertising, this one stops the red lines from drifting in.
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn deliberately_unsupported_methods_report_unsupported() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
@@ -283,6 +289,8 @@ async fn deliberately_unsupported_methods_report_unsupported() {
 /// is advertised — and the frontend loses the capability with no test turning red.
 /// Naming them here makes removal a deliberate edit to this list.
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn mcp_protocol_surface_is_advertised_and_dispatchable() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
@@ -326,6 +334,8 @@ async fn mcp_protocol_surface_is_advertised_and_dispatchable() {
 /// `handle_rpc` and additionally refuses the handler's own unknown-method error,
 /// which the generic fail-closed check cannot see.
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn harness_surface_is_advertised_and_really_routed() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
@@ -359,10 +369,11 @@ async fn harness_surface_is_advertised_and_really_routed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn project_identity_surface_reaches_the_harness_control_plane() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
-
     for method in ["project.identity.register", "project.identity.list"] {
         match probe(method).await {
             Probe::Blocked => {}
@@ -382,10 +393,11 @@ async fn project_identity_surface_reaches_the_harness_control_plane() {
 /// exactly like the OAuth pair above — never `internal_error`, and never quietly
 /// advertised by a future edit.
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn server_driven_mcp_methods_are_not_advertised() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();
-
     for method in ["mcp.sampling.createMessage", "mcp.elicitation.create"] {
         assert!(
             !IMPLEMENTED_METHODS.contains(&method) && !HOST_IMPLEMENTED_METHODS.contains(&method),
@@ -407,6 +419,8 @@ async fn server_driven_mcp_methods_are_not_advertised() {
 
 /// Unknown names must also fail closed as `unsupported`, never `internal_error`.
 #[tokio::test(flavor = "multi_thread")]
+// The dispatch_lock serializes entire tests across awaits on purpose.
+#[allow(clippy::await_holding_lock)]
 async fn unknown_methods_fail_closed_as_unsupported() {
     let _lock = dispatch_lock().lock().unwrap_or_else(|e| e.into_inner());
     isolate_env();

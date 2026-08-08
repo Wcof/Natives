@@ -410,6 +410,7 @@ impl UdsAuthority {
     /// - first call connects + handshakes once;
     /// - subsequent calls reuse the same connection (no per-call handshake);
     /// - on transport failure the client is dropped and reconnected once.
+    ///
     /// RPC-level errors (e.g. `run.start` validation) are returned as-is
     /// without discarding the healthy connection.
     async fn call(&self, method: &str, params: Value) -> Result<Value, AuthorityError> {

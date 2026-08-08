@@ -252,7 +252,7 @@ impl ContextBudget {
 /// 1. Always keep the last complete user/assistant dialogue turn (at least 2 msgs).
 /// 2. Prefer keeping tool-call / tool-result adjacent pairs when dropping.
 /// 3. Prepend a system truncation notice for omitted messages.
-
+///
 /// Incremental context budget (A5): maintained by appending deltas instead of
 /// re-serializing the whole transcript every provider/tool round. Only when
 /// `used >= compact_threshold` does the caller run a full compaction analysis;

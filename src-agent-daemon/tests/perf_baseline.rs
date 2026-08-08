@@ -458,7 +458,7 @@ async fn perf_baseline() {
     let mut md = String::new();
     md.push_str("# A0 Baseline (pre-remediation)\n\n");
     md.push_str(&format!("- commit: {git_rev}\n"));
-    md.push_str(&format!("- build: cargo test (debug profile)\n\n"));
+    md.push_str("- build: cargo test (debug profile)\n\n");
     md.push_str("## B1 pure-text long answer\n\n");
     for (name, v) in [("500 chunks", &b1_500), ("2000 chunks", &b1_2000)] {
         md.push_str(&format!("### {name}\n"));

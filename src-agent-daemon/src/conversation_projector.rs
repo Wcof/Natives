@@ -317,16 +317,15 @@ pub fn project_run_incremental(
     if run_exists == 0 {
         // Legacy/symbolic run without an FK row: fall back to the full
         // compat projection (the compat reader keeps FK columns NULL).
-        let events =
-            match load_events_for_run(&conn, run_id).map_err(|e| ProjectionError::retryable(e))? {
-                LoadEvents::Events(events) => events,
-                LoadEvents::QuarantinedRun => {
-                    return Ok(RunProjection {
-                        quarantined: 1,
-                        ..RunProjection::default()
-                    })
-                }
-            };
+        let events = match load_events_for_run(&conn, run_id).map_err(ProjectionError::retryable)? {
+            LoadEvents::Events(events) => events,
+            LoadEvents::QuarantinedRun => {
+                return Ok(RunProjection {
+                    quarantined: 1,
+                    ..RunProjection::default()
+                })
+            }
+        };
         conversation_store::append_assistant_turn_from_events(conversation_id, run_id, &events)
             .map_err(|e| ProjectionError::retryable(e.to_string()))?;
         return Ok(RunProjection::default());
@@ -341,7 +340,7 @@ pub fn project_run_incremental(
         )
         .map_err(|e| sqlite_failure("project incremental watermark read", e))?;
     let events = match load_events_after(&conn, run_id, after.max(0) as u64)
-        .map_err(|e| ProjectionError::retryable(e))?
+        .map_err(ProjectionError::retryable)?
     {
         LoadEvents::Events(events) => events,
         LoadEvents::QuarantinedRun => {

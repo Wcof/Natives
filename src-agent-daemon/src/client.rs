@@ -471,7 +471,7 @@ impl DaemonClient {
             };
         let ack_line = String::from_utf8_lossy(&ack_frame);
         let resp: RpcResponse =
-            serde_json::from_str(ack_line.trim()).map_err(|e| DaemonClientError::Json(e))?;
+            serde_json::from_str(ack_line.trim()).map_err(DaemonClientError::Json)?;
         if !resp.success {
             let msg = resp
                 .error

@@ -24,9 +24,9 @@ use tokio::sync::Notify;
 /// Tauri event emitted once per RunWatchStreamV2 frame.
 pub const WATCH_FRAME_EVENT: &str = "run-watch-frame";
 
-/// Server-side heartbeat cadence (the daemon's `run.watch` sends one every 15s
-/// on idle so the 30s client frame timeout never fires).
-const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+/// The daemon's `run.watch` sends a heartbeat every 15s on idle so the 30s
+/// client frame timeout never fires; the bridge below only needs the idle
+/// window to detect a dead stream.
 /// If no frame (including heartbeat) arrives within this window the stream is
 /// considered dead and the watch task tears down (heartbeat timeout handling).
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);

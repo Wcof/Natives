@@ -112,6 +112,12 @@ struct PreparedLru {
     order: VecDeque<PreparedAgentSessionKey>,
 }
 
+impl Default for PreparedAgentSessionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreparedAgentSessionCache {
     pub fn new() -> Self {
         Self {
