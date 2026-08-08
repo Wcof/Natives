@@ -141,7 +141,14 @@ impl DataStore {
                 )
                 .unwrap_or(0);
 
-            // Apply migrations sequentially
+            // Apply migrations sequentially. P0-011: v10 (the explicit
+            // user-cancelled terminal state) was defined but missing from this
+            // list, so old v8/v9 DBs permanently skipped it. v10 is a table
+            // rebuild and runs OUTSIDE the list via `run_v10_rebuild_if_needed`
+            // (postcondition-driven, see below). v13 is likewise a rebuild that
+            // must run outside the transaction (P0-025): PRAGMA foreign_keys=OFF
+            // is a no-op inside a transaction, and the old in-tx rebuild
+            // silently cascade-deleted messages/runs.
             let migrations: Vec<(i64, &str)> = vec![
                 (1, MIGRATION_001),
                 (2, MIGRATION_002),
@@ -153,7 +160,6 @@ impl DataStore {
                 (8, MIGRATION_008),
                 (11, MIGRATION_011),
                 (12, MIGRATION_012),
-                (13, MIGRATION_013),
                 (14, MIGRATION_014),
             ];
 
@@ -178,6 +184,19 @@ impl DataStore {
                 .map_err(|e| crate::Error::Internal(format!("Migration commit failed: {e}")))?;
         } // conn MutexGuard dropped here before legacy migration
 
+        // P0-011: v10 rebuild (add `cancelled` terminal state) — only for old
+        // DBs whose `assistant_runs` CHECK still lacks `cancelled`. Fresh DBs
+        // (MIGRATION_001 already includes it) skip the rebuild.
+        self.run_v10_rebuild_if_needed()?;
+
+        // P0-025: v13 rebuild must run OUTSIDE any transaction with FK off
+        // (SQLite ignores PRAGMA foreign_keys inside transactions). The old
+        // in-tx rebuild silently cascade-deleted messages/runs on
+        // `DROP TABLE assistant_conversations` because the FK cascade was
+        // still active. Rebuild protocol: FK off → create-copy-swap → FK on →
+        // foreign_key_check.
+        self.run_v13_rebuild()?;
+
         // Step 2: Run legacy data migration in a fresh transaction
         self.migrate_legacy_provider_keys()?;
         self.migrate_legacy_assistant_messages()?;
@@ -194,6 +213,149 @@ impl DataStore {
         self.cleanup_orphaned_rows()?;
 
         Ok(())
+    }
+
+    /// P0-011: run the v10 rebuild (add explicit `cancelled` terminal state)
+    /// only when the database actually needs it.
+    ///
+    /// Fresh DBs get `cancelled` from MIGRATION_001's CHECK and must skip the
+    /// rebuild; old v8/v9 DBs whose `assistant_runs` CHECK still lacks
+    /// `cancelled` get the rebuild. Postcondition-driven so the migration can
+    /// never be "defined but skipped forever" nor re-run destructively.
+    fn run_v10_rebuild_if_needed(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        // Already recorded: nothing to do.
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _schema_version WHERE version = 10",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if applied > 0 {
+            return Ok(());
+        }
+
+        // Postcondition: does `assistant_runs` already include `cancelled` in
+        // its status CHECK? If yes, v10's postcondition is already satisfied —
+        // record it and skip (fresh DBs).
+        let already_has_cancelled: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master
+                 WHERE type='table' AND name='assistant_runs' AND sql LIKE '%cancelled%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if already_has_cancelled {
+            conn.execute(
+                "INSERT OR IGNORE INTO _schema_version (version) VALUES (10)",
+                [],
+            )
+            .map_err(|e| {
+                crate::Error::Internal(format!("Failed to record migration v10: {e}"))
+            })?;
+            return Ok(());
+        }
+
+        // Old DB: rebuild outside any transaction with FK off (same protocol as
+        // v13 — the rebuild DROPs the legacy table and must not cascade).
+        conn.execute_batch("PRAGMA foreign_keys=OFF;")
+            .map_err(|e| crate::Error::Internal(format!("v10 FK off failed: {e}")))?;
+        let rebuild = conn
+            .execute_batch(MIGRATION_010)
+            .map_err(|e| crate::Error::Internal(format!("Migration v10 failed: {e}")));
+        match rebuild {
+            Ok(()) => {
+                conn.execute_batch("PRAGMA foreign_keys=ON;")
+                    .map_err(|e| crate::Error::Internal(format!("v10 FK on failed: {e}")))?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO _schema_version (version) VALUES (10)",
+                    [],
+                )
+                .map_err(|e| {
+                    crate::Error::Internal(format!("Failed to record migration v10: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                conn.execute_batch("PRAGMA foreign_keys=ON;").ok();
+                Err(e)
+            }
+        }
+    }
+
+    /// P0-025: run the v13 conversation rebuild OUTSIDE any transaction.
+    ///
+    /// SQLite ignores `PRAGMA foreign_keys=OFF` inside a transaction. The old
+    /// code ran v13 inside `run_migrations`' transaction, so the FK cascade
+    /// stayed active and `DROP TABLE assistant_conversations` silently
+    /// cascade-deleted every `assistant_messages` / `assistant_runs` row that
+    /// referenced it. Correct protocol: FK off → create-copy-swap → FK on →
+    /// `foreign_key_check` → record v13.
+    fn run_v13_rebuild(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        // Skip if v13 already recorded.
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _schema_version WHERE version = 13",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if applied > 0 {
+            return Ok(());
+        }
+
+        // FK off must be set outside any transaction.
+        conn.execute_batch("PRAGMA foreign_keys=OFF;")
+            .map_err(|e| crate::Error::Internal(format!("v13 FK off failed: {e}")))?;
+
+        let rebuild = conn.execute_batch(MIGRATION_013).map_err(|e| {
+            crate::Error::Internal(format!("Migration v13 failed: {e}"))
+        });
+
+        match rebuild {
+            Ok(()) => {
+                conn.execute_batch("PRAGMA foreign_keys=ON;")
+                    .map_err(|e| crate::Error::Internal(format!("v13 FK on failed: {e}")))?;
+                // Fail closed on any FK violation the rebuild left behind.
+                let violations: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM pragma_foreign_key_check",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| {
+                        crate::Error::Internal(format!("v13 foreign_key_check failed: {e}"))
+                    })?;
+                if violations > 0 {
+                    return Err(crate::Error::Internal(format!(
+                        "Migration v13 left {violations} foreign key violations"
+                    )));
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO _schema_version (version) VALUES (13)",
+                    [],
+                )
+                .map_err(|e| {
+                    crate::Error::Internal(format!("Failed to record migration v13: {e}"))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                conn.execute_batch("PRAGMA foreign_keys=ON;").ok();
+                Err(e)
+            }
+        }
     }
 
     /// Migrate provider keys from old legacy tables (user_providers / provider_api_keys).
