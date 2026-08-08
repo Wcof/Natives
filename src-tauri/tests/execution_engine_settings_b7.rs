@@ -10,8 +10,8 @@
 
 use natives_lib::db;
 use natives_lib::execution_engine_settings::{
-    load_execution_engine_settings, save_execution_engine_settings,
-    ExecutionEngineSettingsV2, EXECUTOR_KEY,
+    load_execution_engine_settings, save_execution_engine_settings, ExecutionEngineSettingsV2,
+    EXECUTOR_KEY,
 };
 
 fn register_temp_pool() -> tempfile::TempDir {

@@ -5775,8 +5775,11 @@ mod readonly_fast_path_tests {
         let run_id = format!("a4-b2-{}", uuid::Uuid::new_v4());
         let tools = tools_for(&run_id, "full_access", &root);
         for i in 0..6 {
-            std::fs::write(root.join(format!("src-{i}.rs")), format!("// probe {i}\nfn f{i}() {{}}\n"))
-                .expect("write fixture");
+            std::fs::write(
+                root.join(format!("src-{i}.rs")),
+                format!("// probe {i}\nfn f{i}() {{}}\n"),
+            )
+            .expect("write fixture");
         }
 
         // list_dir
@@ -5799,7 +5802,11 @@ mod readonly_fast_path_tests {
                     &CancellationToken::new(),
                 )
                 .await;
-            assert!(!out.is_error, "read_file #{i} must succeed: {:?}", out.output);
+            assert!(
+                !out.is_error,
+                "read_file #{i} must succeed: {:?}",
+                out.output
+            );
             reads += 1;
         }
         for i in 0..3 {
@@ -5820,7 +5827,11 @@ mod readonly_fast_path_tests {
                     &CancellationToken::new(),
                 )
                 .await;
-            assert!(!out.is_error, "read_file #b{i} must succeed: {:?}", out.output);
+            assert!(
+                !out.is_error,
+                "read_file #b{i} must succeed: {:?}",
+                out.output
+            );
             reads += 1;
         }
         assert_eq!(reads, 9, "9 read_file calls executed");
