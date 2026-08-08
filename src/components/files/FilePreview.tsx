@@ -38,14 +38,10 @@ interface FilePreviewProps {
 }
 
 /**
- * Preview Capability V2 feature flag（rollback 语义）：
- * localStorage 'natives:preview-capability-v2' === '0' → 走 legacy 预览分支；
- * 默认开启。Editor 写路径（editMode）不受该 flag 影响。
+ * Preview Capability V2 是唯一只读预览 pipeline(T201):legacy rollback flag
+ * 已物理删除,不再有 localStorage 'natives:preview-capability-v2' 回退分支。
+ * Editor 写路径(editMode)独立于只读预览。
  */
-export function previewCapabilityV2Enabled(): boolean {
-  if (typeof localStorage === 'undefined') return true;
-  return localStorage.getItem('natives:preview-capability-v2') !== '0';
-}
 
 export { type PreviewSubMode };
 
@@ -126,7 +122,10 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
     () => new PreviewService(createBuiltinRegistry(), createDefaultContext()),
     [],
   );
-  const v2ReadonlyPreview = previewCapabilityV2Enabled() && subMode === 'preview' && !editMode;
+  // T201: V2 PreviewSurface is the ONLY readonly preview pipeline. The legacy
+  // rollback flag is deleted; `subMode === 'preview' && !editMode` always goes
+  // through PreviewSurface.
+  const v2ReadonlyPreview = subMode === 'preview' && !editMode;
 
   useEffect(() => {
     getHttpPort().then(setHttpPort).catch(() => {});
