@@ -1,1 +1,4 @@
+cmd: npm run typecheck (tsc --noEmit)
 > tsc --noEmit
+exit=0
+RESULT=PASS (0 type errors)
