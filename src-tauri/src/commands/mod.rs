@@ -1,7 +1,7 @@
 pub mod agent;
 pub mod app;
 pub mod archive;
-pub mod assistant;
+// pub mod assistant; — T302: legacy assistant_* CRUD commands retired (Daemon-canonical).
 pub mod bridge;
 pub mod capability_secret;
 pub mod clipboard;
