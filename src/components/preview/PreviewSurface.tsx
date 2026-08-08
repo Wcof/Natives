@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { t, useLocale } from '@/i18n';
 import type { PreviewModel, PreviewRequest, PreviewSource } from '@/lib/preview/contracts';
 import { PreviewRequestController } from '@/lib/preview/request-controller';
 import type { PreviewService } from '@/lib/preview/service';
@@ -30,6 +31,7 @@ export interface PreviewSurfaceProps {
 }
 
 export default function PreviewSurface({ source, surface, service, autoLoad = true, onStatusChange }: PreviewSurfaceProps) {
+  const locale = useLocale();
   // Surface-local controller：本 Surface 的 stale/cancel 权威
   const controllerRef = useRef<PreviewRequestController | null>(null);
   if (!controllerRef.current) controllerRef.current = new PreviewRequestController();
@@ -75,14 +77,13 @@ export default function PreviewSurface({ source, surface, service, autoLoad = tr
   }, [status, onStatusChange]);
 
   if (status === 'loading') {
-    return <div data-preview-status="loading" style={{ padding: 24, color: 'var(--text-secondary)' }}>加载中…</div>;
+    return <div data-preview-status="loading" style={{ padding: 24, color: 'var(--text-secondary)' }}>{t(locale, 'preview.loading')}</div>;
   }
 
   if (status === 'error') {
     return (
       <div data-preview-status="error" data-error-code={error?.code} style={{ padding: 24, color: 'var(--danger, #e5484d)' }}>
-        {error?.code ? `预览失败（${error.code}）：` : '预览失败：'}
-        {error?.message ?? '未知错误'}
+        {t(locale, 'preview.error', { code: error?.code ?? 'unknown', message: error?.message ?? 'unknown' })}
       </div>
     );
   }
@@ -90,7 +91,7 @@ export default function PreviewSurface({ source, surface, service, autoLoad = tr
   if (status === 'unsupported' || (model && model.kind === 'unsupported')) {
     return (
       <div data-preview-status="unsupported" style={{ padding: 24, color: 'var(--text-secondary)' }}>
-        {model && model.kind === 'unsupported' ? model.reason : '此类型暂不支持预览'}
+        {model && model.kind === 'unsupported' ? model.reason : t(locale, 'preview.unsupported')}
       </div>
     );
   }

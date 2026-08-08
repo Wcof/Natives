@@ -7,6 +7,7 @@
  * 新 kind 必须在此穷尽分支；H0=BLOCKED 时 html 模型暂由 unsupported 呈现。
  */
 
+import { t, useLocale } from '@/i18n';
 import type { PreviewModel } from '@/lib/preview/contracts';
 import MarkdownRenderer from './renderers/MarkdownRenderer';
 import JsonRenderer from './renderers/JsonRenderer';
@@ -17,6 +18,7 @@ import CsvRenderer from './renderers/CsvRenderer';
 import ArchiveRenderer from './renderers/ArchiveRenderer';
 
 export function PreviewRenderer({ model }: { model: PreviewModel }) {
+  const locale = useLocale();
   switch (model.kind) {
     case 'markdown':
       return <MarkdownRenderer model={model} />;
@@ -39,12 +41,12 @@ export function PreviewRenderer({ model }: { model: PreviewModel }) {
     case 'unsupported':
       return (
         <div data-preview-kind="unsupported" style={{ padding: 24, color: 'var(--text-secondary)' }}>
-          {model.kind === 'unsupported' ? model.reason : `预览类型 ${model.kind} 尚未启用`}
+          {model.kind === 'unsupported' ? model.reason : t(locale, 'preview.typeNotEnabled', { kind: model.kind })}
         </div>
       );
     default: {
       const _exhaustive: never = model;
-      return <div data-preview-kind="unsupported">未知预览类型</div>;
+      return <div data-preview-kind="unsupported">{t(locale, 'preview.unknownType')}</div>;
     }
   }
 }

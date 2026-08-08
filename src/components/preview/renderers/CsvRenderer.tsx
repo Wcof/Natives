@@ -6,16 +6,18 @@
  * 有界渲染：超出预算时显式 truncated 提示，不创建无界 DOM（R-P4）。
  */
 
+import { t, useLocale } from '@/i18n';
 import type { PreviewModel } from '@/lib/preview/contracts';
 
 export type CsvModel = Extract<PreviewModel, { kind: 'csv' }>;
 
 export default function CsvRenderer({ model }: { model: CsvModel }) {
+  const locale = useLocale();
   return (
     <div data-preview-kind="csv" style={{ overflow: 'auto', padding: 12 }}>
       {model.truncated && (
         <div style={{ padding: '4px 0 8px', color: 'var(--text-secondary)', fontSize: 12 }}>
-          CSV 数据较大，已截断展示前 {model.rows.length} 行
+          {t(locale, 'preview.csvTruncated', { count: model.rows.length })}
         </div>
       )}
       <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>

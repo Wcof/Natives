@@ -7,6 +7,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { t, useLocale, type Locale } from '@/i18n';
 import type { PreviewModel } from '@/lib/preview/contracts';
 
 export type JsonModel = Extract<PreviewModel, { kind: 'json' }>;
@@ -30,11 +31,12 @@ function renderLeaf(value: unknown): string {
   }
 }
 
-function JsonNode({ label, value, depth, maxDepth }: {
+function JsonNode({ label, value, depth, maxDepth, locale }: {
   label: string | null;
   value: unknown;
   depth: number;
   maxDepth: number;
+  locale: Locale;
 }) {
   const [open, setOpen] = useState(depth < maxDepth);
   const canExpand = isExpandable(value);
@@ -62,19 +64,20 @@ function JsonNode({ label, value, depth, maxDepth }: {
       {label !== null && <span className="json-key">{label}: </span>}
       <span className="json-type">{Array.isArray(value) ? `Array(${entries.length})` : 'Object'}</span>
       {open &&
-        visible.map(([k, v]) => <JsonNode key={k} label={k} value={v} depth={depth + 1} maxDepth={maxDepth} />)}
-      {open && overflow > 0 && <div className="json-truncated">… {overflow} more (bounded)</div>}
+        visible.map(([k, v]) => <JsonNode key={k} label={k} value={v} depth={depth + 1} maxDepth={maxDepth} locale={locale} />)}
+      {open && overflow > 0 && <div className="json-truncated">{t(locale, 'preview.jsonMore', { count: overflow })}</div>}
     </div>
   );
 }
 
 export default function JsonRenderer({ model }: { model: JsonModel }) {
+  const locale = useLocale();
   const root = useMemo(() => (model.nodeCount > MAX_VISIBLE ? model.value : model.value), [model]);
   void root;
   return (
     <div className="json-tree" data-preview-kind="json">
-      {model.truncated && <div className="json-warning">JSON 超出节点/深度预算，已折叠展示（nodeCount={model.nodeCount}）</div>}
-      <JsonNode label={null} value={model.value} depth={0} maxDepth={4} />
+      {model.truncated && <div className="json-warning">{t(locale, 'preview.jsonTruncated', { count: model.nodeCount })}</div>}
+      <JsonNode label={null} value={model.value} depth={0} maxDepth={4} locale={locale} />
     </div>
   );
 }

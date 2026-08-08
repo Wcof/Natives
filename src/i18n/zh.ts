@@ -1961,6 +1961,19 @@ export const zh = {
     hintPluginTimeout: '插件加载超时，请尝试重新加载。',
   },
 
+  // Preview Capability V2（统一只读预览管线）
+  preview: {
+    loading: '加载中…',
+    error: '预览失败（{code}）：{message}',
+    unsupported: '此类型暂不支持预览',
+    typeNotEnabled: '预览类型 {kind} 尚未启用',
+    unknownType: '未知预览类型',
+    jsonMore: '… 其余 {count} 项（有界）',
+    jsonTruncated: 'JSON 超出节点/深度预算，已折叠展示（nodeCount={count}）',
+    csvTruncated: 'CSV 数据较大，已截断展示前 {count} 行',
+    archiveTruncated: '压缩包条目较多，仅显示前 {count} 项',
+  },
+
   common: {
     ok: '确定',
     cancel: '取消',

@@ -6,16 +6,18 @@
  * 有界渲染：超预算时显式 truncated 提示（R-P4）。
  */
 
+import { t, useLocale } from '@/i18n';
 import type { PreviewModel } from '@/lib/preview/contracts';
 
 export type ArchiveModel = Extract<PreviewModel, { kind: 'archive' }>;
 
 export default function ArchiveRenderer({ model }: { model: ArchiveModel }) {
+  const locale = useLocale();
   return (
     <div data-preview-kind="archive" style={{ padding: 12, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
       {model.truncated && (
         <div style={{ padding: '4px 0 8px', color: 'var(--text-secondary)' }}>
-          压缩包条目较多，仅显示前 {model.entries.length} 项
+          {t(locale, 'preview.archiveTruncated', { count: model.entries.length })}
         </div>
       )}
       <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>

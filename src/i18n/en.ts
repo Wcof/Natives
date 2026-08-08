@@ -1981,6 +1981,19 @@ export const en = {
     goHome: 'Go Home',
   },
 
+  // Preview Capability V2 (unified read-only preview pipeline)
+  preview: {
+    loading: 'Loading…',
+    error: 'Preview failed ({code}): {message}',
+    unsupported: 'This file type is not previewable',
+    typeNotEnabled: 'Preview type {kind} is not enabled yet',
+    unknownType: 'Unknown preview type',
+    jsonMore: '… {count} more (bounded)',
+    jsonTruncated: 'JSON exceeds node/depth budget; collapsed (nodeCount={count})',
+    csvTruncated: 'CSV is large; showing first {count} rows',
+    archiveTruncated: 'Archive has many entries; showing first {count}',
+  },
+
   // Common
   common: {
     ok: 'OK',
