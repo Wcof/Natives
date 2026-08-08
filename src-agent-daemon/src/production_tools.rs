@@ -5764,4 +5764,91 @@ mod readonly_fast_path_tests {
             "readonly tool must not create side-effect ledger records"
         );
     }
+
+    /// B2 — Coding Read Loop (05 §4): list_dir + read_file×5 + grep×3 +
+    /// read_file×4. ReadOnly tools must leave ZERO side-effect ledger rows and
+    /// ZERO checkpoint snapshots, while each call still succeeds.
+    #[tokio::test]
+    async fn readonly_coding_loop_does_not_create_ledger_or_checkpoint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap();
+        let run_id = format!("a4-b2-{}", uuid::Uuid::new_v4());
+        let tools = tools_for(&run_id, "full_access", &root);
+        for i in 0..6 {
+            std::fs::write(root.join(format!("src-{i}.rs")), format!("// probe {i}\nfn f{i}() {{}}\n"))
+                .expect("write fixture");
+        }
+
+        // list_dir
+        let out = tools
+            .execute_tool(
+                "list_dir",
+                serde_json::json!({ "path": root.to_string_lossy() }),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(!out.is_error, "list_dir must succeed: {:?}", out.output);
+
+        // read_file × 5 + grep × 3 + read_file × 4 (B2 sequence)
+        let mut reads = 0usize;
+        for i in 0..5 {
+            let out = tools
+                .execute_tool(
+                    "read_file",
+                    serde_json::json!({ "path": root.join(format!("src-{i}.rs")).to_string_lossy() }),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert!(!out.is_error, "read_file #{i} must succeed: {:?}", out.output);
+            reads += 1;
+        }
+        for i in 0..3 {
+            let out = tools
+                .execute_tool(
+                    "grep",
+                    serde_json::json!({ "pattern": "fn f", "path": root.to_string_lossy() }),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert!(!out.is_error, "grep #{i} must succeed: {:?}", out.output);
+        }
+        for i in 0..4 {
+            let out = tools
+                .execute_tool(
+                    "read_file",
+                    serde_json::json!({ "path": root.join(format!("src-{i}.rs")).to_string_lossy() }),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert!(!out.is_error, "read_file #b{i} must succeed: {:?}", out.output);
+            reads += 1;
+        }
+        assert_eq!(reads, 9, "9 read_file calls executed");
+
+        // Zero ledger rows for the whole loop.
+        let watermark = crate::side_effect_ledger::ledger_watermark(&run_id)
+            .ok()
+            .flatten();
+        assert_eq!(
+            watermark.as_deref(),
+            Some("0"),
+            "B2 read loop must not create side-effect ledger records"
+        );
+
+        // Zero checkpoint snapshots for the run.
+        let checkpoint = self_checkpoint_snapshots(&run_id);
+        assert_eq!(
+            checkpoint, 0,
+            "B2 read loop must not create checkpoint snapshots"
+        );
+    }
+
+    /// Count checkpoint snapshots persisted for a run (public query).
+    fn self_checkpoint_snapshots(run_id: &str) -> usize {
+        use crate::checkpoint::global_checkpoint_manager;
+        match global_checkpoint_manager().checkpoint_for_run_public(run_id) {
+            Ok(preview) => preview.files.len(),
+            Err(_) => 0,
+        }
+    }
 }
