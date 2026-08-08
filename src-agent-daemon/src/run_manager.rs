@@ -421,7 +421,18 @@ impl RunManager {
                         .unwrap_or_else(std::env::temp_dir)
                 })
                 .join("artifacts");
-            DataStore::new(&db_path, &artifact_dir).ok().map(Arc::new)
+            // T103 (P0-026): a production assistant.db open/migration failure
+            // must fail closed — never silently degrade to memory-only. The
+            // in-memory fallback is only for tests / no configured store.
+            match DataStore::new(&db_path, &artifact_dir) {
+                Ok(store) => Some(Arc::new(store)),
+                Err(e) => {
+                    panic!(
+                        "RunManager fail-closed: assistant.db open/migration failed at {}: {e}",
+                        db_path.display()
+                    )
+                }
+            }
         }
     }
 
@@ -1070,14 +1081,24 @@ impl RunManager {
         self.persist_runs_snapshot()
     }
 
-    /// Load non-terminal runs from disk; mark interrupted activity for safe resume UX.
+    /// Hydrate the in-memory run map from SQLite (the single persistence
+    /// authority). `snapshot.json` is NOT a truth source (P0-027): durable runs
+    /// live in the `run` table; a missing/corrupt snapshot must never lose a
+    /// durable run or block daemon startup.
     pub fn restore_runs_snapshot(&self) -> Result<usize, String> {
+        if self.data_store.is_some() {
+            return self.hydrate_runs_from_store();
+        }
+        // Memory-only mode (tests / no configured store): a snapshot file is an
+        // optional, disposable cache. A missing or corrupt snapshot is NOT an
+        // error here — it simply means nothing to restore.
         let path = self.snapshot_path();
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Ok(0);
         };
-        let loaded: HashMap<String, RunV2> =
-            serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        let Ok(loaded) = serde_json::from_str::<HashMap<String, RunV2>>(&raw) else {
+            return Ok(0);
+        };
         let mut count = 0;
         let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
         for (id, mut run) in loaded {
@@ -1093,6 +1114,93 @@ impl RunManager {
                 }
             }
             runs.insert(id, run);
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Restore durable runs from SQLite — the canonical restart source.
+    /// Active/queued rows are surfaced as `interrupted` (safe resume, no
+    /// silent re-exec); the same semantics the old snapshot restore applied,
+    /// but reading from the authoritative `run` table instead of a JSON cache.
+    fn hydrate_runs_from_store(&self) -> Result<usize, String> {
+        let Some(store) = &self.data_store else {
+            return Ok(0);
+        };
+        let conn = store.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, conversation_id, status, parent_run_id, agent_profile_id,
+                        provider_id, key_id, model_id, permission_profile,
+                        trigger_message_id, started_at, finished_at, error_code,
+                        step_count, max_steps, project_path, retry_count,
+                        created_at, idempotency_key, COALESCE(revision, 0),
+                        retry_of_run_id, retry_of_turn_id, continued_from_run_id,
+                        branch_id, branch_parent_message_id, checkpoint_id, resume_of_run_id,
+                        capability_snapshot_json
+                 FROM run ORDER BY created_at",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(RunV2 {
+                    capability_snapshot: row
+                        .get::<_, Option<String>>(27)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    status: run_status_from_db(&row.get::<_, String>(2)?),
+                    parent_run_id: row.get(3)?,
+                    agent_profile_id: row.get(4)?,
+                    provider_id: row.get(5)?,
+                    key_id: row.get(6)?,
+                    model_id: row.get(7)?,
+                    permission_profile: row.get(8)?,
+                    trigger_message_id: row.get(9)?,
+                    started_at: parse_db_time(row.get::<_, Option<String>>(10)?),
+                    finished_at: parse_db_time(row.get::<_, Option<String>>(11)?),
+                    error_code: row.get(12)?,
+                    step_count: row.get::<_, i64>(13)? as u32,
+                    max_steps: row.get::<_, i64>(14)? as u32,
+                    project_path: row.get(15)?,
+                    retry_count: row.get::<_, i64>(16)? as u32,
+                    created_at: parse_db_time(row.get::<_, Option<String>>(17)?),
+                    last_event_sequence: 0,
+                    idempotency_key: row.get(18)?,
+                    effort: None,
+                    runtime_id: None,
+                    revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
+                    project_id: None,
+                    project_identity_version: None,
+                    retry_of_run_id: row.get(20)?,
+                    retry_of_turn_id: row.get(21)?,
+                    continued_from_run_id: row.get(22)?,
+                    branch_id: row.get(23)?,
+                    branch_parent_message_id: row.get(24)?,
+                    checkpoint_id: row.get(25)?,
+                    resume_of_run_id: row.get(26)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut count = 0;
+        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+        for row in rows {
+            let mut run = row.map_err(|e| e.to_string())?;
+            if run.status.is_active() || run.status == RunStatusV2::Queued {
+                // Safe recovery: surface as interrupted so UI can retry (no silent re-exec).
+                run.status = RunStatusV2::Interrupted;
+                run.error_code = Some("daemon_restarted".into());
+                run.finished_at = Some(chrono::Utc::now());
+            }
+            if let Some(pp) = run.project_path.clone() {
+                if let Ok(mut map) = self.project_paths.lock() {
+                    map.insert(run.id.clone(), std::path::PathBuf::from(pp));
+                }
+            }
+            runs.insert(run.id.clone(), run);
             count += 1;
         }
         Ok(count)
