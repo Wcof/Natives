@@ -1,8 +1,8 @@
 # Final Gates Evidence — Preview Capability V2 (T70/T80)
 
-> 分支: agent/resource-preview-v2/20260808-175539/deploy-convergence
-> HEAD: 37c125e3（deploy@91d997e 祖先链已确认，可 merge 回 deploy）
-> 全部命令经 rtk 执行，exit code 如实记录，日志副本见执行会话。
+> 分支: deploy（T80 convergence 完成）
+> HEAD: 6f28f9f7（本地 deploy 分支；deploy@91d997e 祖先链已确认）
+> 全部命令经 rtk 执行，exit code 如实记录；本文件为权威证据汇总（2026-08-08 复核）。
 
 ## 7 项 Gates
 
@@ -13,7 +13,7 @@
 | rtk npm run test | 0 | 859 / 859 pass |
 | rtk npm run perf:check | 0 | /files 239.6KB gzip ≤ 350KB |
 | rtk cargo fmt --check | 0 | clean |
-| rtk cargo test --workspace | 0 | 1869 passed, 16 ignored (47 suites, 124.41s) |
+| rtk cargo test --workspace | 0 | 1869 passed, 16 ignored (47 suites, 123.22s) |
 | rtk npm run protocol:check | 0 | TS aligned；Rust methods 156 |
 
 ## H0 HTML Strategy Gate
