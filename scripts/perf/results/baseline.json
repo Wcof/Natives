@@ -1,0 +1,222 @@
+{
+  "gitSha": "46c6f4051a9aba1337f88c8b92e75b2bacf4f340",
+  "machine": {
+    "hostname": "ldhdeMacBook-Pro.local",
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "25.5.0",
+    "cpu": "Apple M1 (8 cores)",
+    "totalmemGB": 8
+  },
+  "build": "node v22.23.2 / tsx (in-memory simulation, no real Tauri host)",
+  "dataset": "deterministic seeded fixtures (seed=20260808): dir entries 1000/5000/10000/50000, images 500, watch modify 1000/5000 in 1000ms window, depth 5",
+  "generatedAt": "2026-08-08T10:05:17.461Z",
+  "budgetMs": {
+    "clickSelect": 100,
+    "hotIpc": 50,
+    "windowRows": 200,
+    "clickDelayToRemove": 200
+  },
+  "ops": {
+    "list_dir_construct_1000": {
+      "op": "list_dir_construct_1000",
+      "samples": 8,
+      "p50": 0.42233300000000895,
+      "p95": 0.4779169999999908,
+      "min": 0.42141700000000526,
+      "max": 0.4779169999999908,
+      "mean": 0.4293645000000019,
+      "DOM": 0,
+      "RSS": 95895552,
+      "verdict": "pass (≤ 50ms hot IPC)"
+    },
+    "list_dir_construct_5000": {
+      "op": "list_dir_construct_5000",
+      "samples": 8,
+      "p50": 2.1403329999999983,
+      "p95": 2.255875000000003,
+      "min": 2.118542000000005,
+      "max": 2.255875000000003,
+      "mean": 2.163166624999999,
+      "DOM": 0,
+      "RSS": 99221504,
+      "verdict": "pass (≤ 50ms hot IPC)"
+    },
+    "list_dir_construct_10000": {
+      "op": "list_dir_construct_10000",
+      "samples": 5,
+      "p50": 4.464958999999993,
+      "p95": 4.544708,
+      "min": 4.3091249999999945,
+      "max": 4.544708,
+      "mean": 4.446916799999994,
+      "DOM": 0,
+      "RSS": 108511232,
+      "verdict": "pass (≤ 50ms hot IPC)"
+    },
+    "list_dir_construct_50000": {
+      "op": "list_dir_construct_50000",
+      "samples": 3,
+      "p50": 23.674042000000014,
+      "p95": 25.512749999999983,
+      "min": 22.44995799999998,
+      "max": 25.512749999999983,
+      "mean": 23.878916666666658,
+      "DOM": 0,
+      "RSS": 128794624,
+      "verdict": "pass (≤ 50ms hot IPC)"
+    },
+    "dom_construct_1000": {
+      "op": "dom_construct_1000",
+      "samples": 5,
+      "p50": 0.4976249999999993,
+      "p95": 0.6734160000000031,
+      "min": 0.36025000000000773,
+      "max": 0.6734160000000031,
+      "mean": 0.5106415999999967,
+      "DOM": {
+        "naiveNodes": 8001,
+        "windowedNodes": 1603,
+        "naiveRows": 1000,
+        "windowedRows": 200,
+        "nodesPerRow": 8,
+        "windowSize": 200,
+        "r4Windowed": true
+      },
+      "RSS": 128860160,
+      "verdict": "naive DOM (8001 nodes) > 200-row window (1603 nodes) → must window"
+    },
+    "dom_construct_5000": {
+      "op": "dom_construct_5000",
+      "samples": 5,
+      "p50": 0.45512500000000955,
+      "p95": 0.6128750000000025,
+      "min": 0.34754100000000676,
+      "max": 0.6128750000000025,
+      "mean": 0.47884980000000044,
+      "DOM": {
+        "naiveNodes": 40001,
+        "windowedNodes": 1603,
+        "naiveRows": 5000,
+        "windowedRows": 200,
+        "nodesPerRow": 8,
+        "windowSize": 200,
+        "r4Windowed": true
+      },
+      "RSS": 128630784,
+      "verdict": "naive DOM (40001 nodes) > 200-row window (1603 nodes) → must window"
+    },
+    "dom_construct_10000": {
+      "op": "dom_construct_10000",
+      "samples": 3,
+      "p50": 0.7556250000000091,
+      "p95": 1.1554999999999893,
+      "min": 0.6660829999999862,
+      "max": 1.1554999999999893,
+      "mean": 0.8590693333333282,
+      "DOM": {
+        "naiveNodes": 80001,
+        "windowedNodes": 1603,
+        "naiveRows": 10000,
+        "windowedRows": 200,
+        "nodesPerRow": 8,
+        "windowSize": 200,
+        "r4Windowed": true
+      },
+      "RSS": 128794624,
+      "verdict": "naive DOM (80001 nodes) > 200-row window (1603 nodes) → must window"
+    },
+    "dom_construct_50000": {
+      "op": "dom_construct_50000",
+      "samples": 3,
+      "p50": 19.113665999999995,
+      "p95": 31.343999999999994,
+      "min": 18.765333999999967,
+      "max": 31.343999999999994,
+      "mean": 23.074333333333318,
+      "DOM": {
+        "naiveNodes": 400001,
+        "windowedNodes": 1603,
+        "naiveRows": 50000,
+        "windowedRows": 200,
+        "nodesPerRow": 8,
+        "windowSize": 200,
+        "r4Windowed": true
+      },
+      "RSS": 195936256,
+      "verdict": "naive DOM (400001 nodes) > 200-row window (1603 nodes) → must window"
+    },
+    "click_select_delay_200ms": {
+      "op": "click_select_delay_200ms",
+      "samples": 12,
+      "p50": 201.916875,
+      "p95": 201.974834,
+      "min": 201.89175000000006,
+      "max": 201.974834,
+      "mean": 201.92737508333335,
+      "DOM": 0,
+      "RSS": 196313088,
+      "verdict": "fixed 200ms delay present — expected p95 > 100ms budget; remove the delay"
+    },
+    "click_select_no_delay": {
+      "op": "click_select_no_delay",
+      "samples": 20,
+      "p50": 0.0003329999999550637,
+      "p95": 0.001167000000009466,
+      "min": 0.00029099999994741665,
+      "max": 0.0048330000000760265,
+      "mean": 0.0006062999999983277,
+      "DOM": 0,
+      "RSS": 196313088,
+      "verdict": "delay removed — p95 should be ≤ 100ms"
+    },
+    "host_io_sync_20x1ms": {
+      "op": "host_io_sync_20x1ms",
+      "samples": 8,
+      "p50": 30.099874999999997,
+      "p95": 30.119750000000067,
+      "min": 29.370207999999934,
+      "max": 30.119750000000067,
+      "mean": 29.905739499999996,
+      "DOM": 0,
+      "RSS": 196313088,
+      "verdict": "20 sequential blocking reads — main thread stalls (R-P2)"
+    },
+    "host_io_async_20x1ms": {
+      "op": "host_io_async_20x1ms",
+      "samples": 8,
+      "p50": 1.3012499999999818,
+      "p95": 1.349333999999999,
+      "min": 1.3002500000000055,
+      "max": 1.349333999999999,
+      "mean": 1.3075938749999807,
+      "DOM": 0,
+      "RSS": 196313088,
+      "verdict": "20 concurrent async reads — wall-clock ≪ sync, no main-thread stall"
+    },
+    "watch_modify_apply_1000": {
+      "op": "watch_modify_apply_1000",
+      "samples": 8,
+      "p50": 0.07074999999997544,
+      "p95": 0.1762499999999818,
+      "min": 0.06925000000001091,
+      "max": 0.1762499999999818,
+      "mean": 0.08780725000001155,
+      "DOM": 0,
+      "RSS": 196313088,
+      "verdict": "1000 deep modify events in 1000ms window coalesced into state map"
+    },
+    "watch_modify_apply_5000": {
+      "op": "watch_modify_apply_5000",
+      "samples": 8,
+      "p50": 0.22562500000003638,
+      "p95": 1.5189169999999876,
+      "min": 0.22166600000002745,
+      "max": 1.5189169999999876,
+      "mean": 0.39283337499999504,
+      "DOM": 0,
+      "RSS": 198344704,
+      "verdict": "5000 deep modify events in 1000ms window coalesced into state map"
+    }
+  }
+}
