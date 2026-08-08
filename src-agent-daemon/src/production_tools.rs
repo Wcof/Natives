@@ -5862,4 +5862,10 @@ mod readonly_fast_path_tests {
             Err(_) => 0,
         }
     }
+
+    /// §5 exact-name regression: readonly tools do not checkpoint (A4/B2).
+    #[test]
+    fn readonly_tool_does_not_checkpoint() {
+        readonly_coding_loop_does_not_create_ledger_or_checkpoint();
+    }
 }

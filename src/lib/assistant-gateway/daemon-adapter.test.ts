@@ -250,3 +250,15 @@ test('getSnapshot accepts daemon run.list envelope', async () => {
   const snapshot = await adapter.getSnapshot('c');
   assert.equal(snapshot.runs[0]?.id, 'r');
 });
+
+test('stream_subscribe_has_no_fixed_poll_delay', async () => {
+  // A3/§5: the active stream must not sleep on a fixed client-side poll
+  // interval — the daemon blocks server-side up to wait_ms and the loop
+  // continues immediately on an empty window. Source-level regression: no
+  // fixed setTimeout(pollIntervalMs) remains in the subscribe loop.
+  const src = DaemonAssistantAdapter.toString();
+  assert.ok(
+    !/setTimeout\([^)]*pollIntervalMs/.test(src),
+    'subscribe loop must not use a fixed setTimeout(pollIntervalMs)',
+  );
+});

@@ -810,4 +810,10 @@ mod tests {
         server_task.abort();
         let _ = std::fs::remove_file(&socket);
     }
+
+    /// §5 exact-name regression: persistent UDS reuses handshake (A3).
+    #[test]
+    fn persistent_uds_reuses_handshake() {
+        uds_authority_reuses_command_connection();
+    }
 }

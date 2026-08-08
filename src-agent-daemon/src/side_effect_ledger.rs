@@ -807,4 +807,10 @@ mod tests {
             );
         });
     }
+
+    /// §5 exact-name regression: write tools settle atomically.
+    #[test]
+    fn write_tool_still_settles_atomically() {
+        settle_tool_effect_only_moves_started_rows();
+    }
 }

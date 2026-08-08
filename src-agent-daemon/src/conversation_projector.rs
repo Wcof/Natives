@@ -1833,4 +1833,10 @@ mod incremental_projection_tests {
             4
         );
     }
+
+    /// §5 exact-name regression: projector uses watermark prefix (A8).
+    #[test]
+    fn projector_uses_watermark_prefix() {
+        projector_incremental_uses_watermark_prefix();
+    }
 }

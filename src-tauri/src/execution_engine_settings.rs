@@ -580,4 +580,22 @@ mod tests {
         s.native.max_steps = 1;
         assert_eq!(s.normalized().native.max_steps, 10);
     }
+
+    /// §5 exact-name regression: V2 migrates legacy executor settings.
+    #[test]
+    fn settings_v2_migrates_legacy_executor_settings() {
+        migration_imports_legacy_executor_settings();
+    }
+
+    /// §5 exact-name regression: disabled tools cannot expand capabilities.
+    #[test]
+    fn settings_disabled_tools_cannot_expand_capabilities() {
+        disabled_tools_cannot_expand_capabilities();
+    }
+
+    /// §5 exact-name regression: fail policy never silently falls back.
+    #[test]
+    fn explicit_external_runtime_fail_policy_never_silent_fallback() {
+        fail_policy_never_silent_fallback();
+    }
 }

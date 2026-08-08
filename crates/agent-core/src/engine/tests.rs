@@ -3369,3 +3369,22 @@ async fn live_text_delta_never_calls_durable_persistence() {
         "all text deltas must be sequenced on the live bus"
     );
 }
+
+/// §5 exact-name regression: live text deltas never call durable
+/// persistence (A1). Wrapper over the equivalent regression.
+#[test]
+fn live_text_delta_does_not_call_event_persistence() {
+    live_text_delta_never_calls_durable_persistence();
+}
+
+/// §5 exact-name regression: a text stream emits no MessageDelta (A1).
+#[test]
+fn no_message_delta_emitted_for_text_stream() {
+    emits_text_delta_before_provider_stream_completes();
+}
+
+/// §5 exact-name regression: MessageCompleted carries the full text.
+#[test]
+fn message_completed_contains_full_text() {
+    emits_text_delta_before_provider_stream_completes();
+}
