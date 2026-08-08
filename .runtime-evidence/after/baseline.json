@@ -18,7 +18,7 @@
       "run_event_rows": 6,
       "run_event_rows_per_1000_chunks": 3.0,
       "sqlite_writes_approx": 6,
-      "submit_to_completed_ms": 3116.835292,
+      "submit_to_completed_ms": 3022.276375,
       "terminal_tail_ms": -1.0,
       "text_delta_count": 0
     },
@@ -40,14 +40,14 @@
       "run_event_rows": 6,
       "run_event_rows_per_1000_chunks": 12.0,
       "sqlite_writes_approx": 6,
-      "submit_to_completed_ms": 781.729,
+      "submit_to_completed_ms": 761.898584,
       "terminal_tail_ms": -1.0,
       "text_delta_count": 0
     }
   },
   "baseline": "A0 pre-remediation snapshot",
   "build": "cargo test (debug profile)",
-  "commit": "626b3806",
+  "commit": "b25b3019",
   "invariants_measured": {
     "active_stream_fixed_sleep": "present (baseline: run.subscribe long-poll wait)",
     "live_delta_sqlite_writes": ">0 (baseline: every TextDelta persisted via EventSequencer persist-first)",
@@ -57,20 +57,20 @@
   "uds": {
     "connect_plus_handshake_ms": {
       "count": 10,
-      "max_ms": 11.587458,
-      "p50_ms": 0.079334,
-      "p75_ms": 0.096666,
-      "p95_ms": 11.587458
+      "max_ms": 5.539834000000001,
+      "p50_ms": 0.094167,
+      "p75_ms": 0.104416,
+      "p95_ms": 5.539834000000001
     },
     "handshake_per_rpc": 1,
     "handshakes_per_run_estimate": 8,
     "note": "current UdsAuthority re-connects + handshakes per RPC (authority.rs connect-per-call)",
     "rpc_after_handshake_ms": {
       "count": 10,
-      "max_ms": 2.996375,
-      "p50_ms": 0.049416,
-      "p75_ms": 0.051875,
-      "p95_ms": 2.996375
+      "max_ms": 3.043166,
+      "p50_ms": 0.058084000000000004,
+      "p75_ms": 0.06245800000000001,
+      "p95_ms": 3.043166
     }
   }
 }
