@@ -1,0 +1,3 @@
+> node scripts/check-protocol-sync.mjs
+[protocol-sync] OK — TS types aligned with assistant-protocol core surface
+[protocol-sync] Rust methods catalogued: 156

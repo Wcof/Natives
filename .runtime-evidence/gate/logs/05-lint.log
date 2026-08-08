@@ -1,0 +1,4 @@
+> eslint src/ && node scripts/i18n-check.mjs && node scripts/check-hardcoded-colors.mjs
+✅ i18n keys in sync: 2550 zh = 2550 en
+✅ Hardcoded colors: no new violations (329 grandfathered in 40 files)
+   12 file(s) improved — run with --update-baseline to lock in the progress.
