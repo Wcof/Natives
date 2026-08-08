@@ -124,16 +124,14 @@ fn test_migration_rollback_on_failure() {
     let store = DataStore::new(&db_path, &art_dir).unwrap();
     drop(store);
 
-    // Verify the database has the daemon schema version table
+    // Verify the database has the daemon migration ledger table
     let verify_conn = rusqlite::Connection::open(&db_path).unwrap();
-    let version: i64 = verify_conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
-            [],
-            |row| row.get(0),
-        )
+    let applied: i64 = verify_conn
+        .query_row("SELECT COUNT(*) FROM _daemon_migrations", [], |row| {
+            row.get(0)
+        })
         .unwrap();
-    assert!(version > 0, "Migrations should have run");
+    assert!(applied > 0, "Migrations should have run");
 
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_dir_all(&art_dir);

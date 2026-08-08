@@ -281,172 +281,14 @@ impl DataStore {
     /// Daemon therefore tracks progress in `_daemon_schema_version`. On first
     /// open of a legacy Host DB we bootstrap that table from the presence of
     /// the canonical tables (not from Host's version numbers).
+    /// Run pending migrations via the versioned, reentrant runner
+    /// (`migrations::run_pending`): per-version ledger membership, checksum
+    /// drift fail-closed, postcondition-driven adoption for partial/crash
+    /// states, and a final `foreign_key_check` gate.
     fn run_migrations(&self) -> Result<(), String> {
         let _migrate = Self::migration_lock();
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {e}"))?;
-
-        // Keep Host's table for Host migrations; do not read it for Daemon.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS _schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-             CREATE TABLE IF NOT EXISTS _daemon_schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );",
-        )
-        .map_err(|e| format!("Failed to ensure schema version tables: {e}"))?;
-
-        // One-shot bootstrap for DBs that already ran Daemon migrations under
-        // the old shared `_schema_version` name (fresh Daemon-only DBs, or
-        // after a partial recovery). If the full canonical core exists, mark
-        // all Daemon versions as applied so we do not re-run CREATE IF NOT
-        // EXISTS for nothing; if not, leave version at 0 so migrations run.
-        let daemon_version: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        if daemon_version == 0 {
-            let has_canonical_core: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) = 4 FROM sqlite_master
-                     WHERE type='table'
-                       AND name IN ('conversation', 'message', 'run', 'run_event')",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap_or(false);
-            if has_canonical_core {
-                // Preserve applied state when Daemon previously wrote into the
-                // shared table, or when an earlier recovery already created
-                // the core tables. Only mark historical versions that created
-                // the original core (1..=10). Later migrations (11+) must still
-                // execute when upgrading an already-bootstrapped Host DB.
-                const BOOTSTRAP_MAX: i64 = 10;
-                for (version, _) in migrations::ALL {
-                    if *version > BOOTSTRAP_MAX {
-                        continue;
-                    }
-                    conn.execute(
-                        "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
-                        params![version],
-                    )
-                    .map_err(|e| {
-                        format!("Failed to bootstrap daemon schema version {version}: {e}")
-                    })?;
-                }
-            }
-        }
-
-        let current_version: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        for (version, sql) in migrations::ALL {
-            if *version <= current_version {
-                continue;
-            }
-            // Avoid SAVEPOINT: some migration SQL toggles PRAGMA foreign_keys /
-            // legacy_alter_table and interacts poorly with nested transactions.
-            if let Err(e) = conn.execute_batch(sql) {
-                let msg = e.to_string();
-                // Tolerate additive column re-runs / partial rebuilds.
-                if (*version == 7 || *version == 11 || *version == 12)
-                    && msg.contains("duplicate column")
-                {
-                    let _ = conn.execute(
-                        "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
-                        params![version],
-                    );
-                    continue;
-                }
-                return Err(format!("Migration {version} failed: {e}"));
-            }
-            conn.execute(
-                "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
-                params![version],
-            )
-            .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
-        }
-
-        Self::ensure_run_metadata_columns(&conn)?;
-        Ok(())
-    }
-
-    fn ensure_run_metadata_columns(conn: &Connection) -> Result<(), String> {
-        let alters = [
-            "ALTER TABLE run ADD COLUMN parent_run_id TEXT",
-            "ALTER TABLE run ADD COLUMN agent_profile_id TEXT",
-            "ALTER TABLE run ADD COLUMN key_id TEXT",
-            "ALTER TABLE run ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'ask'",
-            "ALTER TABLE run ADD COLUMN project_path TEXT",
-            "ALTER TABLE run ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE run ADD COLUMN idempotency_key TEXT",
-            "ALTER TABLE run ADD COLUMN retry_of_run_id TEXT",
-            "ALTER TABLE run ADD COLUMN retry_of_turn_id TEXT",
-            "ALTER TABLE run ADD COLUMN continued_from_run_id TEXT",
-            "ALTER TABLE run ADD COLUMN branch_id TEXT",
-            "ALTER TABLE run ADD COLUMN branch_parent_message_id TEXT",
-            "ALTER TABLE run ADD COLUMN checkpoint_id TEXT",
-            "ALTER TABLE run ADD COLUMN resume_of_run_id TEXT",
-        ];
-        for sql in alters {
-            if let Err(e) = conn.execute_batch(sql) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column") {
-                    // Table may not exist yet on empty brand-new DB before mig1 — ignore
-                    if msg.contains("no such table") {
-                        continue;
-                    }
-                    return Err(format!("ensure run column failed: {e}"));
-                }
-            }
-        }
-        let _ = conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);",
-        );
-        for sql in [
-            "ALTER TABLE conversation ADD COLUMN branch_id TEXT",
-            "ALTER TABLE conversation ADD COLUMN parent_conversation_id TEXT",
-            "ALTER TABLE conversation ADD COLUMN branch_parent_message_id TEXT",
-        ] {
-            if let Err(e) = conn.execute_batch(sql) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                    return Err(format!("ensure conversation lineage column failed: {e}"));
-                }
-            }
-        }
-        for sql in [
-            "ALTER TABLE side_effect_record ADD COLUMN resource TEXT",
-            "ALTER TABLE side_effect_record ADD COLUMN started_at TEXT",
-            "ALTER TABLE side_effect_record ADD COLUMN completed_at TEXT",
-        ] {
-            if let Err(e) = conn.execute_batch(sql) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                    return Err(format!("ensure side effect lineage column failed: {e}"));
-                }
-            }
-        }
-        if let Err(e) = conn.execute_batch(
-            "ALTER TABLE resume_plan ADD COLUMN decision TEXT NOT NULL DEFAULT 'RequiresUserConfirmation'",
-        ) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") && !msg.contains("no such table") {
-                return Err(format!("ensure resume decision column failed: {e}"));
-            }
-        }
-        Ok(())
+        migrations::run_pending(&conn)
     }
 
     /// Get a connection for direct queries.
@@ -519,14 +361,12 @@ mod tests {
     fn test_migrations_run_sequentially() {
         let store = setup_test_store();
         let conn = store.conn().unwrap();
-        let max_version: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
-                [],
-                |row| row.get(0),
-            )
+        let applied: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _daemon_migrations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
-        assert!(max_version > 0, "Migrations should have run");
+        assert!(applied > 0, "Migrations should have run");
     }
 
     /// Host-first DBs already have `_schema_version` at v14 for `assistant_*`
@@ -590,14 +430,14 @@ mod tests {
 
             let daemon_version: i64 = conn
                 .query_row(
-                    "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
+                    "SELECT COUNT(*) FROM _daemon_migrations WHERE id >= 10",
                     [],
                     |row| row.get(0),
                 )
                 .unwrap();
             assert!(
-                daemon_version >= 10,
-                "daemon migrations should record in _daemon_schema_version, got {daemon_version}"
+                daemon_version >= 1,
+                "daemon migrations should record in _daemon_migrations"
             );
 
             // Host row should be merged into canonical conversation.
@@ -646,7 +486,7 @@ mod tests {
         assert!(store.has_table("message"));
         assert!(store.has_table("run"));
         assert!(store.has_table("run_event"));
-        assert!(store.has_table("_daemon_schema_version"));
+        assert!(store.has_table("_daemon_migrations"));
         let conn = store.conn().unwrap();
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0))
