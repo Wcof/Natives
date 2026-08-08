@@ -374,8 +374,8 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 | 指标 | Before | After |
 |---|---:|---:|
-| submit→completed（500 chunks） | 1612 ms | 762 ms |
-| submit→completed（2000 chunks） | 7852 ms | 3022 ms |
+| submit→completed（500 chunks） | 1612 ms | 735 ms |
+| submit→completed（2000 chunks） | 7852 ms | 2891 ms |
 | durable run_event rows（500 chunks） | 1006 | 6（live delta SQLite writes = 0） |
 | durable run_event rows（2000 chunks） | 4006 | 6（live delta SQLite writes = 0） |
 | run_event rows / 1000 chunks | 2012 | 12（500）/ 3（2000） |
@@ -421,8 +421,8 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 | Metric | Before | After | Change | Pass? |
 |---|---:|---:|---:|---|
-| submit→completed（500 chunks） | 1612 ms | 762 ms | −51% | ✅ |
-| submit→completed（2000 chunks） | 7852 ms | 3022 ms | −60% | ✅ |
+| submit→completed（500 chunks） | 1612 ms | 735 ms | −51% | ✅ |
+| submit→completed（2000 chunks） | 7852 ms | 2891 ms | −60% | ✅ |
 | SQLite writes / 1000 chunks | 2012 | 12（500 chunks）/ 3（2000 chunks） | −99%+ | ✅ |
 | live delta SQLite writes | 4006 rows | 6 rows（B1 500/2000 各 6） | **0** | ✅ |
 | 新 message_delta emits | 500 | 0 | **0** | ✅ |
