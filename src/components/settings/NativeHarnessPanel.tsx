@@ -741,8 +741,17 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
 
   useEffect(() => {
     if (!detailMode || canvasMode !== 'audit' || !selectedRunId || !ACTIVE_RUN_STATUSES.has(selectedRunStatus)) return;
-    const interval = window.setInterval(() => void loadRuns(selectedRunId), 2_000);
-    return () => window.clearInterval(interval);
+    // T218 (P2-004): polling must be >= R-P5's 5s floor and visibility-gated.
+    // NOTE: `document` is a Blueprint state variable here, so use window.document.
+    const interval = window.setInterval(() => void loadRuns(selectedRunId), 5_000);
+    const onVisibility = () => {
+      if (window.document.hidden) window.clearInterval(interval);
+    };
+    window.document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [canvasMode, detailMode, loadRuns, selectedRunId, selectedRunStatus]);
 
   const updateOverlay = (hook: CatalogHook, patch: Partial<HookOverlay>) => {
