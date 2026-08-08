@@ -18,8 +18,19 @@ pub struct HtmlPreviewResult {
 }
 
 /// Prepare an HTML file for sandboxed preview.
+///
+/// Security (P0-008): the file MUST be authorized before reading — an
+/// arbitrary `html_path` must never reach `read_to_string`. We canonicalize
+/// and run the host allow/deny kernel (`validate_path`, the same kernel
+/// FileAccessPolicy delegates to) before touching the file. A caller that
+/// only has an authorized handle (Renderer side) is safe; a caller passing
+/// any readable UTF-8 path is rejected.
 pub fn prepare_html_preview(html_path: &str, server_port: u16) -> Result<HtmlPreviewResult> {
     let path = Path::new(html_path);
+    // Authorize first: reject out-of-scope / `..` / blocklisted paths before
+    // any filesystem read (mirrors FileAccessPolicy semantics).
+    crate::file_manager::validate_path(path)
+        .map_err(|e| format!("html preview authorization failed for {html_path}: {e}"))?;
     if !path.exists() {
         return Err(Error::NotFound(format!("HTML file not found: {html_path}")));
     }
