@@ -105,25 +105,13 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
       data-file-entry={entry.path}
       data-heat={heat.toFixed(2)}
       onClick={(ev) => {
-        // Delay single-click to distinguish from double-click
+        // 立即选择（不再因可能双击而固定延迟 200ms；p95≤100ms 目标）。
+        // 双击时第一次 click 的即时选择本来就是 Finder 的正常反馈。
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
         const mods = { shiftKey: ev.shiftKey, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey };
-        // Multi-select should not delay — respond immediately
-        if (mods.shiftKey || mods.metaKey || mods.ctrlKey) {
-          onSelect(entry, mods);
-          return;
-        }
-        if (entry.isDir) {
-          onSelect(entry, mods);
-          return;
-        }
-        clickTimerRef.current = setTimeout(() => {
-          onSelect(entry, mods);
-          clickTimerRef.current = null;
-        }, 200);
+        onSelect(entry, mods);
       }}
       onDoubleClick={() => {
-        // Cancel pending single-click
         if (clickTimerRef.current) {
           clearTimeout(clickTimerRef.current);
           clickTimerRef.current = null;

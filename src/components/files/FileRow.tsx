@@ -72,20 +72,10 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
       className={flash ? 'anim-liveZapRow' : ''}
       data-file-entry={entry.path}
       onClick={(ev) => {
+        // 立即选择（不再因可能双击而固定延迟 200ms；p95≤100ms 目标）。
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
         const mods = { shiftKey: ev.shiftKey, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey };
-        if (mods.shiftKey || mods.metaKey || mods.ctrlKey) {
-          onSelect(entry, mods);
-          return;
-        }
-        if (entry.isDir) {
-          onSelect(entry, mods);
-          return;
-        }
-        clickTimerRef.current = setTimeout(() => {
-          onSelect(entry, mods);
-          clickTimerRef.current = null;
-        }, 200);
+        onSelect(entry, mods);
       }}
       onDoubleClick={() => {
         if (clickTimerRef.current) {
