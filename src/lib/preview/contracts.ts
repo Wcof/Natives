@@ -9,6 +9,9 @@ import type { ArchiveEntry, FileKind, ReadFileResult, ArchiveListing } from '@/t
 /** 预览 Surface 标识：每个 Surface 持有自己的 PreviewRequestController */
 export type PreviewSurfaceId = 'files' | 'assistant' | 'artifact' | 'follow';
 
+/** 右侧面板预览子模式(T213:从 shell 域下沉到共享契约,消除 files↔shell 交叉依赖 R-E3) */
+export type PreviewSubMode = 'preview' | 'info' | 'git';
+
 /** 预览输入：文件或内存内容。第一版就支持 memory，避免 Assistant 另起一条渲染线 */
 export type PreviewSource =
   | {

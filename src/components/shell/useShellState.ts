@@ -3,7 +3,7 @@
 import { startTransition, useState, useEffect, useRef, useCallback } from 'react';
 import type { Locale } from '@/i18n';
 import type { RightPanelMode } from './RightPanel';
-import type { PreviewSubMode } from '@/components/files/FilePreview';
+import type { PreviewSubMode } from '@/lib/preview/contracts';
 import type { FileEntry } from '@/types/file';
 import { useFollowMode } from '@/lib/follow-mode';
 
