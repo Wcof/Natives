@@ -374,15 +374,15 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 | 指标 | Before | After |
 |---|---:|---:|
-| submit→completed（500 chunks） | 1612 ms | 758 ms |
-| submit→completed（2000 chunks） | 7852 ms | 3671 ms |
+| submit→completed（500 chunks） | 1612 ms | 782 ms |
+| submit→completed（2000 chunks） | 7852 ms | 3117 ms |
 | durable run_event rows（500 chunks） | 1006 | 6（live delta SQLite writes = 0） |
 | durable run_event rows（2000 chunks） | 4006 | 6（live delta SQLite writes = 0） |
 | run_event rows / 1000 chunks | 2012 | 12（500）/ 3（2000） |
 | payload bytes / 1000 chunks | 5.2 MB | 22.3 KB |
 | 新 MessageDelta emits | 500 | 0 |
 
-> 数字为 2026-08-08 对 `perf/integration` HEAD `f0c6ef11` 的最终重跑（同一 A0 harness）；原始证据已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `888a9a29`、`f0c6ef11`）。
+> 数字为 2026-08-08 对 `main` HEAD `387b62b9` 的最终重跑（同一 A0 harness，单 clone 状态）；原始证据已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `f0c6ef11`、`387b62b9`）。
 
 详细 delta 见 `.runtime-evidence/after/delta.md`。
 
@@ -421,8 +421,8 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 | Metric | Before | After | Change | Pass? |
 |---|---:|---:|---:|---|
-| submit→completed（500 chunks） | 1612 ms | 736 ms | −54% | ✅ |
-| submit→completed（2000 chunks） | 7852 ms | 2854 ms | −64% | ✅ |
+| submit→completed（500 chunks） | 1612 ms | 782 ms | −51% | ✅ |
+| submit→completed（2000 chunks） | 7852 ms | 3117 ms | −60% | ✅ |
 | SQLite writes / 1000 chunks | 2012 | 12（500 chunks）/ 3（2000 chunks） | −99%+ | ✅ |
 | live delta SQLite writes | 4006 rows | 6 rows（B1 500/2000 各 6） | **0** | ✅ |
 | 新 message_delta emits | 500 | 0 | **0** | ✅ |
