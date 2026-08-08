@@ -13,7 +13,7 @@ import { useEditorSave } from '@/lib/use-editor-save';
 import { fsApi, fsWatchApiOrNull, hasNativeFiles } from '@/lib/files-api';
 import { rewriteLocalImages, type LocalImageRewrite } from '@/lib/markdown-local-images';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { type PreviewSubMode } from '@/components/shell/RightPanel';
+import { type PreviewSubMode } from '@/lib/preview/contracts';
 import MonacoDiffView from './MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
 import CsvTable from './CsvTable';

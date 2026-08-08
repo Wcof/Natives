@@ -26,7 +26,7 @@ import { navigateToFiles } from '@/lib/file-events';
 import { onFollowChange } from '@/lib/follow-mode';
 import { fsApi, hasNativeFiles, thumbnailApi } from '@/lib/files-api';
 import type { FileEntry } from '@/types/file';
-import type { PreviewSubMode } from '@/components/files/FilePreview';
+import type { PreviewSubMode } from '@/lib/preview/contracts';
 
 // Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
