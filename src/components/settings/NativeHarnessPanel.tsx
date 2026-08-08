@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Eye, Loader, Pencil, Plus, RefreshCw, Rocket, Save, Search, Star, Trash2, Workflow } from 'lucide-react';
 import nativesAPI, { type ProjectSummary, type ProviderSummary } from '@/lib/tauri-adapter';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { classifyError } from '@/lib/error-classifier';
 import { t, type Locale } from '@/i18n';
 import {
@@ -203,6 +204,12 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   const [runProviderId, setRunProviderId] = useState('');
   const [runModelId, setRunModelId] = useState('');
   const [runProjectPath, setRunProjectPath] = useState('');
+  // T216 (P1-020): unified confirm dialog replaces native window.confirm.
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   const fail = useCallback((cause: unknown) => {
     setError(classifyError(cause, { locale }).userMessage);
@@ -333,7 +340,17 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   }, [profileProject, profiles, query]);
 
   const selectProfile = (id: string, mode: DetailMode, target: WorkspaceTarget = 'preview') => {
-    if (dirty && !window.confirm(t(locale, 'settings.engineEngineeringDiscardConfirm'))) return;
+    if (dirty) {
+      setConfirmState({
+        title: t(locale, 'settings.engineEngineeringDiscardTitle'),
+        message: t(locale, 'settings.engineEngineeringDiscardConfirm'),
+        onConfirm: () => {
+          setConfirmState(null);
+          selectProfile(id, mode, target);
+        },
+      });
+      return;
+    }
     setProfileId(id);
     profileIdRef.current = id;
     setDetailMode(mode);
@@ -345,7 +362,17 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   };
 
   const openCreateProfile = () => {
-    if (dirty && !window.confirm(t(locale, 'settings.engineEngineeringDiscardConfirm'))) return;
+    if (dirty) {
+      setConfirmState({
+        title: t(locale, 'settings.engineEngineeringDiscardTitle'),
+        message: t(locale, 'settings.engineEngineeringDiscardConfirm'),
+        onConfirm: () => {
+          setConfirmState(null);
+          openCreateProfile();
+        },
+      });
+      return;
+    }
     setDetailMode('create');
     setProfileId('');
     profileIdRef.current = '';
@@ -447,7 +474,17 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     } catch (cause) { fail(cause); } finally { setBusy(false); }
   };
   const archiveProfile = async (id: string) => {
-    if (!window.confirm(t(locale, 'settings.engineEngineeringDeleteConfirm'))) return;
+    if (!confirmState) {
+      setConfirmState({
+        title: t(locale, 'settings.engineEngineeringDeleteTitle'),
+        message: t(locale, 'settings.engineEngineeringDeleteConfirm'),
+        onConfirm: () => {
+          setConfirmState(null);
+          void archiveProfile(id);
+        },
+      });
+      return;
+    }
     setBusy(true); setError(null);
     try {
       await nativesAPI.assistantV2.request('harness.profile.archive', { profile_id: id });
@@ -976,6 +1013,17 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
 
   return (
     <section className="space-y-5" data-testid="native-harness-panel">
+      {/* T216 (P1-020): unified confirm dialog replaces native window.confirm */}
+      <ConfirmDialog
+        open={confirmState !== null}
+        title={confirmState?.title ?? ''}
+        message={confirmState?.message ?? ''}
+        confirmLabel={t(locale, 'common.confirm')}
+        cancelLabel={t(locale, 'common.cancel')}
+        danger
+        onConfirm={() => confirmState?.onConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
       {error ? <div role="alert" className="rounded-lg border border-[var(--danger)] p-4 text-sm text-[var(--danger)]"><AlertTriangle size={16} className="mr-2 inline" />{error}</div> : null}
       {notice ? <div role="status" className="rounded-lg border border-[var(--success)] p-4 text-sm text-[var(--success)]">{notice}</div> : null}
 
