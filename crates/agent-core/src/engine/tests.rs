@@ -109,7 +109,7 @@ async fn frozen_tool_plan_is_not_discovered_a_second_time() {
     }
 
     let tools = CountingTools(AtomicUsize::new(0));
-    AgentEngine::new(EventSequencer::new())
+    AgentEngine::new(EventSequencer::memory_only())
         .run_with_tool_schemas(
             EngineRunConfig {
                 run_id: "frozen-tools".into(),
@@ -152,7 +152,7 @@ async fn session_end_hook_fires_after_success() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut hooks = HookRegistry::new();
     hooks.register(HookEvent::SessionEnd, Box::new(RecordingHook(seen.clone())));
-    let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
     let provider = FakeProvider {
         rounds: Mutex::new(Vec::new()),
     };
@@ -322,7 +322,7 @@ async fn tool_name_does_not_select_batch_execution() {
         batch_calls: AtomicUsize::new(0),
         single_task_calls: AtomicUsize::new(0),
     };
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -463,7 +463,7 @@ async fn parallel_readonly_tools_emit_source_order_results_after_out_of_order_co
         current: Arc::new(AtomicUsize::new(0)),
         max_seen: Arc::new(AtomicUsize::new(0)),
     };
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-parallel-{}", uuid::Uuid::new_v4());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![vec![
@@ -590,7 +590,7 @@ async fn sequential_tool_serializes_the_batch() {
         current: Arc::new(AtomicUsize::new(0)),
         max_seen: Arc::new(AtomicUsize::new(0)),
     };
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![vec![
             EngineProviderEvent::ToolCallDelta {
@@ -637,7 +637,7 @@ async fn sequential_tool_serializes_the_batch() {
 
 #[tokio::test]
 async fn completes_simple_text_turn() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![vec![
             EngineProviderEvent::TextDelta("hello".into()),
@@ -697,7 +697,7 @@ async fn completes_simple_text_turn() {
 
 #[tokio::test]
 async fn length_stop_never_executes_collected_tool_call() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -795,7 +795,7 @@ async fn hook_deny_keeps_tool_call_and_emits_one_error_result() {
     }
     let mut hooks = HookRegistry::new();
     hooks.register(HookEvent::PreToolUse, Box::new(DenyHook));
-    let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -872,7 +872,7 @@ async fn provider_receives_configured_history_messages() {
         }
     }
 
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = CapturingProvider {
         seen: Mutex::new(Vec::new()),
     };
@@ -1072,7 +1072,7 @@ async fn recovery_blocked_when_completion_and_uncertain_both_fail() {
 
 #[tokio::test]
 async fn executes_tool_then_completes() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -1118,7 +1118,7 @@ async fn executes_tool_then_completes() {
 
 #[tokio::test]
 async fn tool_turn_then_text_turn_are_distinct_turns() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-distinct-turns-{}", uuid::Uuid::new_v4());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
@@ -1245,7 +1245,7 @@ async fn emits_text_delta_before_provider_stream_completes() {
         }
     }
 
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-stream-{}", uuid::Uuid::new_v4());
     let run_id_bg = run_id.clone();
     // A1: subscribe the live bus before the run (live deltas are ephemeral).
@@ -1329,7 +1329,7 @@ async fn provider_stream_receives_cancel_and_run_interrupts_promptly() {
         }
     }
 
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let cancel = engine.cancel_flag();
     let run_id = format!("r-provider-cancel-{}", uuid::Uuid::new_v4());
     let run_id_bg = run_id.clone();
@@ -1438,7 +1438,7 @@ async fn retries_retryable_provider_stream_open_errors() {
         }
     }
 
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-provider-retry-{}", uuid::Uuid::new_v4());
     let provider = FlakyProvider {
         attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -1514,7 +1514,7 @@ async fn retries_retryable_provider_stream_open_errors() {
 
 #[tokio::test]
 async fn retries_empty_provider_response_once() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-empty-retry-{}", uuid::Uuid::new_v4());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
@@ -1575,7 +1575,7 @@ async fn retries_empty_provider_response_once() {
 
 #[tokio::test]
 async fn retries_stream_error_before_first_delta() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-pre-delta-error-{}", uuid::Uuid::new_v4());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
@@ -1630,7 +1630,7 @@ async fn retries_stream_error_before_first_delta() {
 
 #[tokio::test]
 async fn discards_partial_generation_error_without_retrying() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-partial-error-{}", uuid::Uuid::new_v4());
     let provider = FakeProvider {
         rounds: Mutex::new(vec![vec![
@@ -1862,7 +1862,7 @@ fn assert_tool_pairs_intact(messages: &[EngineMessage]) {
 
 #[tokio::test]
 async fn compaction_requests_model_summary_and_injects_it_into_history() {
-    let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_context_budget(1_000, 512);
     let provider = CompactionProvider::new(
         SummaryBehavior::Answer,
         vec![
@@ -1950,7 +1950,7 @@ async fn compaction_requests_model_summary_and_injects_it_into_history() {
 
 #[tokio::test]
 async fn compaction_falls_back_to_mechanical_when_summary_fails() {
-    let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_context_budget(1_000, 512);
     let provider = CompactionProvider::new(
         SummaryBehavior::Fail,
         vec![
@@ -2015,7 +2015,7 @@ async fn compaction_falls_back_to_mechanical_when_summary_fails() {
 
 #[tokio::test]
 async fn compaction_summary_is_interrupted_by_cancel() {
-    let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_context_budget(1_000, 512);
     let cancel = engine.cancel_token();
     let provider = Arc::new(CompactionProvider::new(
         SummaryBehavior::Hang,
@@ -2068,7 +2068,7 @@ async fn compaction_summary_is_interrupted_by_cancel() {
 
 #[tokio::test]
 async fn repeated_summary_failures_stop_paying_for_summarization() {
-    let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_context_budget(1_000, 512);
     let provider = CompactionProvider::new(
         SummaryBehavior::Fail,
         vec![
@@ -2107,7 +2107,7 @@ async fn repeated_summary_failures_stop_paying_for_summarization() {
 
 #[tokio::test]
 async fn no_summary_round_trip_when_history_is_within_budget() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let provider = CompactionProvider::new(
         SummaryBehavior::Answer,
         vec![
@@ -2144,7 +2144,7 @@ async fn no_summary_round_trip_when_history_is_within_budget() {
 
 #[tokio::test]
 async fn model_compaction_can_be_disabled() {
-    let engine = AgentEngine::new(EventSequencer::new())
+    let engine = AgentEngine::new(EventSequencer::memory_only())
         .with_context_budget(1_000, 512)
         .with_model_compaction(false);
     let provider = CompactionProvider::new(
@@ -2287,7 +2287,7 @@ fn announced_backoffs(engine: &AgentEngine, run_id: &str) -> Vec<u64> {
 /// a millisecond, three times, ignoring the delay the provider asked for.
 #[tokio::test]
 async fn rate_limited_connect_error_waits_for_the_provider_hint() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-429-connect-{}", uuid::Uuid::new_v4());
     let provider = RateLimitedProvider {
         attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -2317,7 +2317,7 @@ async fn rate_limited_connect_error_waits_for_the_provider_hint() {
 
 #[tokio::test]
 async fn rate_limited_stream_event_waits_for_the_provider_hint() {
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let run_id = format!("r-429-stream-{}", uuid::Uuid::new_v4());
     let provider = RateLimitedProvider {
         attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -2344,7 +2344,7 @@ async fn rate_limited_stream_event_waits_for_the_provider_hint() {
 
 #[tokio::test]
 async fn backoff_is_cancellable() {
-    let engine = Arc::new(AgentEngine::new(EventSequencer::new()));
+    let engine = Arc::new(AgentEngine::new(EventSequencer::memory_only()));
     let run_id = format!("r-429-cancel-{}", uuid::Uuid::new_v4());
     let provider = RateLimitedProvider {
         attempts: std::sync::atomic::AtomicUsize::new(0),
@@ -2403,7 +2403,7 @@ async fn doom_loop_error_names_the_repeating_pattern() {
         }
     }
 
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     let error = engine
         .run(
             EngineRunConfig {
@@ -2731,7 +2731,7 @@ fn round_trip_preserves_message_order_and_roles() {
 #[tokio::test]
 async fn engine_hands_user_images_to_the_provider() {
     let provider = CaptureProvider::default();
-    let engine = AgentEngine::new(EventSequencer::new());
+    let engine = AgentEngine::new(EventSequencer::memory_only());
     engine
         .run(
             EngineRunConfig {
@@ -2820,10 +2820,11 @@ async fn follow_up_closes_previous_turn_before_next_provider_call() {
     }
 
     let run_id = format!("follow-up-turn-boundary-{}", uuid::Uuid::new_v4());
-    let engine =
-        AgentEngine::new(EventSequencer::new()).with_input_receiver(Arc::new(FollowUpReceiver {
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_input_receiver(Arc::new(
+        FollowUpReceiver {
             offered: AtomicBool::new(false),
-        }));
+        },
+    ));
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -2921,7 +2922,8 @@ async fn steering_injects_complete_user_messages_in_fifo_order() {
         offered: AtomicUsize::new(0),
         acked: Mutex::new(Vec::new()),
     });
-    let engine = AgentEngine::new(EventSequencer::new()).with_input_receiver(receiver.clone());
+    let engine =
+        AgentEngine::new(EventSequencer::memory_only()).with_input_receiver(receiver.clone());
     let mut messages: Vec<crate::AgentMessage> = Vec::new();
     // Two steering inputs offered on successive drains — drain them FIFO.
     engine
@@ -3006,7 +3008,7 @@ fn engine_public_api_types_are_accessible() {
     };
 
     // AgentEngine
-    let _engine = AgentEngine::new(EventSequencer::new());
+    let _engine = AgentEngine::new(EventSequencer::memory_only());
 
     // EngineError
     let _err = EngineError::Message("test".into());
@@ -3119,7 +3121,7 @@ fn engine_conversion_functions_are_accessible() {
 
 #[test]
 fn engine_agentengine_builder_chain_compiles() {
-    let engine = AgentEngine::new(EventSequencer::new())
+    let engine = AgentEngine::new(EventSequencer::memory_only())
         .with_model_compaction(false)
         .with_cancel_token(CancellationToken::new())
         .with_context_budget(50_000, 4_000)
@@ -3171,7 +3173,7 @@ async fn post_tool_use_deny_fails_run_loudly() {
     }
     let mut hooks = HookRegistry::new();
     hooks.register(HookEvent::PostToolUse, Box::new(DenyPostHook));
-    let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -3244,7 +3246,7 @@ async fn post_tool_use_observe_continues_run() {
     }
     let mut hooks = HookRegistry::new();
     hooks.register(HookEvent::PostToolUse, Box::new(ObservePostHook));
-    let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
