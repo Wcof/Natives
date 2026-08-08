@@ -373,7 +373,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
    * signal was aborted (or the stream ended without a terminal durable event).
    */
   private createFrameSource(bridge: HostWatchBridge, runId: string, signal: AbortSignal) {
-    let queue: WatchFrame[] = [];
+    const queue: WatchFrame[] = [];
     let waiter: (() => void) | null = null;
     const wake = () => {
       const w = waiter;
