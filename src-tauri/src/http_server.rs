@@ -20,12 +20,17 @@ const MAX_CONCURRENT_WORKERS: usize = 16;
 
 /// CSP for published Workshop modules — strict, no external connect-src, no eval.
 /// Modules run in iframe sandbox (allow-scripts allow-forms); this is a
-/// defense-in-depth layer against sandbox escape (R-S6).
-const WORKSHOP_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; frame-ancestors 'none'; form-action 'none'";
+/// defense-in-depth layer against sandbox escape (R-S6). `frame-ancestors` is
+/// deliberately NOT 'none' here: modules are displayed inside a sandboxed
+/// iframe, so blocking frame embedding would contradict the display model
+/// (P0-013). The sandbox attribute (no allow-same-origin) is the isolation
+/// boundary; CSP `frame-ancestors` is omitted for the module frame so the
+/// browser permits the intended iframe embedding.
+const WORKSHOP_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; form-action 'none'";
 
 /// CSP for draft previews — same as Workshop (drafts are unreviewed model
 /// output, must not have weaker CSP than a published module).
-const DRAFT_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; frame-ancestors 'none'; form-action 'none'";
+const DRAFT_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; form-action 'none'";
 
 /// CSP for local creative projects — allows loopback WS for Vite HMR, data:
 /// and blob: for hot-reload, and https: for external CDN resources (the
@@ -179,8 +184,21 @@ fn handle_request(
                 .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
 
             if path_only == "/natives-sdk.js" {
-                // Serve the bridge SDK — Workshop CSP applies
-                let script = include_str!("bridge_sdk.js");
+                // Serve the bridge SDK — Workshop CSP applies. Inject the real
+                // origin/port from the request's Host header so the SDK has no
+                // `__NATIVES_*__` placeholder (P0-009): the bridge target is
+                // this same local server the module was loaded from.
+                let host = get_header(&request, "Host")
+                    .unwrap_or_else(|| "localhost".to_string());
+                let origin = format!("http://{host}");
+                let port = host
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let script = include_str!("bridge_sdk.js")
+                    .replace("__NATIVES_ORIGIN__", &origin)
+                    .replace("__NATIVES_PORT__", &port);
                 let resp = Response::from_string(script)
                     .with_header(workshop_csp)
                     .with_header(
@@ -851,38 +869,73 @@ fn route_bridge(
             serde_json::json!({ "result": locale }).to_string()
         }
         ("lifecycle", "ready") => {
-            // Record module readiness in lifecycle tracker
-            if let Some(c) = conn.as_ref() {
-                let _ = c.execute(
-                    "INSERT INTO notifications (module_id, title, body, level, created_at)
-                     VALUES (?1, 'module.ready', 'Module ready', 'info', datetime('now'))",
-                    rusqlite::params![module_id],
-                );
+            // Record module readiness in lifecycle tracker. A DB open/write
+            // failure must surface as a structured error — never a fake
+            // ok:true (P1-040).
+            let Some(c) = conn.as_ref() else {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": "db unavailable: cannot open natives.db for lifecycle.ready"
+                })
+                .to_string();
+            };
+            match c.execute(
+                "INSERT INTO notifications (module_id, title, body, level, created_at)
+                 VALUES (?1, 'module.ready', 'Module ready', 'info', datetime('now'))",
+                rusqlite::params![module_id],
+            ) {
+                Ok(_) => r#"{"ok":true}"#.to_string(),
+                Err(e) => serde_json::json!({
+                    "ok": false,
+                    "error": format!("lifecycle.ready persistence failed: {e}")
+                })
+                .to_string(),
             }
-            r#"{"ok":true}"#.to_string()
         }
         ("lifecycle", "heartbeat") => {
-            // Update heartbeat timestamp — stored in module_data for each module
-            if let Some(c) = conn.as_ref() {
-                let ts = chrono::Utc::now().to_rfc3339();
-                let _ = c.execute(
-                    "INSERT INTO module_data (module_id, key, value) VALUES (?1, '_heartbeat', ?2)
-                     ON CONFLICT(module_id, key) DO UPDATE SET value = excluded.value",
-                    rusqlite::params![module_id, ts],
-                );
+            // Update heartbeat timestamp — stored in module_data for each module.
+            let Some(c) = conn.as_ref() else {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": "db unavailable: cannot open natives.db for lifecycle.heartbeat"
+                })
+                .to_string();
+            };
+            let ts = chrono::Utc::now().to_rfc3339();
+            match c.execute(
+                "INSERT INTO module_data (module_id, key, value) VALUES (?1, '_heartbeat', ?2)
+                 ON CONFLICT(module_id, key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![module_id, ts],
+            ) {
+                Ok(_) => r#"{"ok":true}"#.to_string(),
+                Err(e) => serde_json::json!({
+                    "ok": false,
+                    "error": format!("lifecycle.heartbeat persistence failed: {e}")
+                })
+                .to_string(),
             }
-            r#"{"ok":true}"#.to_string()
         }
         ("lifecycle", "error") => {
-            // Record error notification
-            if let Some(c) = conn.as_ref() {
-                let _ = c.execute(
-                    "INSERT INTO notifications (module_id, title, body, level, created_at)
-                     VALUES (?1, 'module.error', 'Bridge error', 'error', datetime('now'))",
-                    rusqlite::params![module_id],
-                );
+            // Record error notification.
+            let Some(c) = conn.as_ref() else {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": "db unavailable: cannot open natives.db for lifecycle.error"
+                })
+                .to_string();
+            };
+            match c.execute(
+                "INSERT INTO notifications (module_id, title, body, level, created_at)
+                 VALUES (?1, 'module.error', 'Bridge error', 'error', datetime('now'))",
+                rusqlite::params![module_id],
+            ) {
+                Ok(_) => r#"{"ok":true}"#.to_string(),
+                Err(e) => serde_json::json!({
+                    "ok": false,
+                    "error": format!("lifecycle.error persistence failed: {e}")
+                })
+                .to_string(),
             }
-            r#"{"ok":true}"#.to_string()
         }
         ("meta", "info") => {
             // Read real module version from DB, fallback to empty string (not a placeholder)
@@ -1319,10 +1372,12 @@ mod tests {
     fn csp_is_partitioned_per_domain() {
         // Verify that the partitioned CSP constants are distinct and have the
         // expected properties.
-        // Workshop CSP: no external connect-src, no eval
+        // Workshop CSP: no external connect-src, no eval. P0-013: modules are
+        // displayed inside a sandboxed iframe, so `frame-ancestors 'none'`
+        // would contradict the display model — it must NOT forbid framing.
         assert!(
-            WORKSHOP_CSP.contains("frame-ancestors 'none'"),
-            "workshop CSP must forbid framing: {WORKSHOP_CSP}"
+            !WORKSHOP_CSP.contains("frame-ancestors 'none'"),
+            "workshop CSP must allow the sandboxed iframe display model: {WORKSHOP_CSP}"
         );
         assert!(
             !WORKSHOP_CSP.contains("unsafe-eval"),
