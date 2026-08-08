@@ -382,7 +382,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | payload bytes / 1000 chunks | 5.2 MB | 22.3 KB |
 | 新 MessageDelta emits | 500 | 0 |
 
-> 数字为 2026-08-08 对 `main` HEAD `4d53b5b2` 的最终重跑（同一 A0 harness，单 clone 状态）；原始证据已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `79e6b0ba`、`4d53b5b2`）。
+> 数字为 2026-08-08 对 `main` HEAD `aba50b06` 的最终重跑（同一 A0 harness，单 clone 状态）；原始证据已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `79e6b0ba`、`aba50b06`）。
 
 详细 delta 见 `.runtime-evidence/after/delta.md`。
 
@@ -444,5 +444,5 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 - no embedded fallback：UDS 模式缺失 socket/bootstrap 即硬失败（`resolve_run_authority_mode` 生产默认 uds）。
 
 ### 证据文件
-- `.runtime-evidence/after/baseline.json` + `delta.md`（提交 `888a9a29`）
-- 回归测试：`readonly_coding_loop_does_not_create_ledger_or_checkpoint`（production_tools.rs）、`execution_engine_settings_b7.rs`（提交 `36bfc93d`）
+- `.runtime-evidence/after/baseline.json` + `delta.md`（最新提交 `aba50b06`，先期 `888a9a29`/`79e6b0ba`）
+- 回归测试：`readonly_coding_loop_does_not_create_ledger_or_checkpoint`（production_tools.rs）、`execution_engine_settings_b7.rs`（提交 `36bfc93d`）；§5 精确命名断言 13/13（提交 `ac898128`）
