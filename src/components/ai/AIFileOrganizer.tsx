@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Package, Edit2, Trash2, Archive, ClipboardList, FolderOpen, Ruler, RotateCcw } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { t as tr, useLocale } from '@/i18n';
@@ -118,6 +118,32 @@ export default function AIFileOrganizer() {
   const [lastRollback, setLastRollback] = useState<RollbackLog | null>(null);
   const briefContentRef = useRef<string>('');
 
+  // T211 (P1-026): on mount, scan ~/.natives/organize-log/ and restore any
+  // pending rollback from a previous session so an interrupted organize can
+  // still be undone after restart.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const fs = fsOrNull();
+        const list = await fs?.listDir('~/.natives/organize-log', { showHidden: false });
+        if (!Array.isArray(list) || list.length === 0) return;
+        // Latest log file wins (timestamp-suffixed filenames).
+        const latest = [...list].sort((a, b) => (b.name ?? '').localeCompare(a.name ?? ''))[0];
+        if (!latest?.path) return;
+        const raw = await fs?.readFile(latest.path) as { content?: string } | undefined;
+        if (!raw?.content || cancelled) return;
+        const parsed = JSON.parse(raw.content) as RollbackLog;
+        if (parsed && Array.isArray(parsed.moves) && parsed.moves.length > 0) {
+          setLastRollback(parsed);
+        }
+      } catch {
+        // Corrupt / unreadable log — ignore; undo simply isn't offered.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const handleAnalyze = useCallback(async () => {
     setAnalyzing(true);
     setProposals([]);
@@ -129,6 +155,17 @@ export default function AIFileOrganizer() {
       // Read brief file for organize preferences (Natives2)
       const brief = await readBriefFile();
       briefContentRef.current = brief;
+      // T211 (P1-026): preferences must influence the proposal decision.
+      // The brief supports `ignore: <category>` lines (e.g. `ignore: image`),
+      // which suppress proposals for that file category.
+      const ignoredCategories = new Set(
+        brief
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => /^ignore:/i.test(line))
+          .map((line) => line.replace(/^ignore:\s*/i, '').trim().toLowerCase())
+          .filter((c) => c.length > 0),
+      );
 
       const dir = currentDir || '~';
       const entries = await fsApi().listDir(dir, { sortBy: 'name', sortDir: 'asc', showHidden: false });
@@ -150,6 +187,7 @@ export default function AIFileOrganizer() {
 
         // Propose moving groups with 3+ files into type folders
         for (const [cat, files] of Object.entries(typeGroups)) {
+          if (ignoredCategories.has(cat)) continue; // T211: preference-suppressed
           if (files.length >= 3) {
             const folder = TYPE_FOLDERS[cat] || cat;
             for (const file of files) {
@@ -290,28 +328,55 @@ export default function AIFileOrganizer() {
     setApproved(new Set());
   }, []);
 
-  /** Undo the last organize operation using the rollback log (Natives2) */
+  /** Undo the last organize operation using the rollback log (Natives2).
+   *  T211 (P1-026): failures are reported individually and DO NOT clear
+   *  lastRollback — the remaining moves stay retryable. */
   const handleUndoLast = useCallback(async () => {
     if (!lastRollback) return;
     setExecuting(true);
     try {
       const fs = fsOrNull();
+      const remaining: RollbackEntry[] = [];
+      let succeeded = 0;
+      let failed = 0;
       for (const move of lastRollback.moves) {
-        if (move.action === 'move' && move.to) {
-          // Reverse the move
-          const targetDir = move.to.substring(0, move.to.lastIndexOf('/'));
-          await fs?.createEntry(targetDir, 'directory').catch(() => {});
-          await fs?.moveEntry(move.from, move.to).catch(() => {});
+        try {
+          if (move.action === 'move' && move.to) {
+            // Reverse the move
+            const targetDir = move.to.substring(0, move.to.lastIndexOf('/'));
+            await fs?.createEntry(targetDir, 'directory').catch(() => {});
+            await fs?.moveEntry(move.from, move.to);
+            succeeded += 1;
+          } else if (move.action === 'trash') {
+            // Trashed files can't be untrashed via API — keep as pending, do
+            // not silently claim success.
+            remaining.push(move);
+          } else {
+            remaining.push(move);
+          }
+        } catch {
+          failed += 1;
+          // T211: keep failed moves retryable.
+          remaining.push(move);
         }
-        // Note: trashed files can't be easily untrashed via API
       }
-      setLastRollback(null);
+      if (remaining.length > 0) {
+        // T211: never clear lastRollback while anything is still pending.
+        setLastRollback({ ...lastRollback, moves: remaining });
+      } else {
+        setLastRollback(null);
+      }
+      if (failed > 0) {
+        toast(t('aiWorkbench.organizer.undoPartialFailure', { failed, pending: remaining.length }), 'error');
+      } else if (succeeded > 0) {
+        toast(t('aiWorkbench.organizer.undoSuccess', { n: succeeded }), 'success');
+      }
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     } finally {
       setExecuting(false);
     }
-  }, [lastRollback, toast]);
+  }, [lastRollback, toast, t]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
