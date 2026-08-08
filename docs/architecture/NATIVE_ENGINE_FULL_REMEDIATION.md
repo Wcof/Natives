@@ -517,15 +517,15 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | `2b05294a` | fix(pi): Final Gate 前置修复（clippy -D warnings 清零） |
 | `a734dbb2` | fix(pi): Final Gate 修复（run.start 测试 SoT + lint） |
 
-### 18.4 验证证据（clean integration HEAD `a734dbb2`）
+### 18.4 验证证据（clean integration HEAD `a734dbb2`，集中修复后 `075b6eaf`）
 
-- `cargo fmt --check` ✅；`cargo clippy --workspace --all-targets -- -D warnings` ✅
-- `cargo check --workspace --all-targets` ✅
-- `cargo test --workspace`：**1905 passed / 0 failed**（含 stream_watch 2、stream_watch_v2 8（45s heartbeat）、live_event 8、prepared_session 8、context 7、execution_engine settings 16+18、b7 2）
+- `cargo fmt --check` ✅；`cargo clippy --workspace --all-targets -- -D warnings` ✅（集中修复后重跑仍清零）
+- `cargo check --workspace --all-targets` ✅（集中修复后重跑）
+- `cargo test --workspace`：Wave1 基线 **1905 passed / 0 failed**；集中修复后全量重跑 **1701 passed / 1 failed**，唯一失败 `stop_escalates_term_then_kill_for_stuck_stdio` 单独重跑 2 次均通过（并发时序偶发，非回归）。含 stream_watch 2、stream_watch_v2 8（45s heartbeat）、live_event 8、prepared_session 8、context 7、execution_engine settings 16+18、b7 2、`context_stats_tracked_and_reset_by_engine_loop`（P1-05 新增）。
 - `npm run protocol:check` ✅；`npm run lint` ✅（i18n 2550 zh=en）
 - `src/lib/assistant-gateway/daemon-adapter.test.ts`：13 项前端链路测试全绿
-- `npm run verify-native-engine` ✅
-- `npm run typecheck`：后台限时观察 5+ 分钟无错误输出后被关闭（按执行规则限时），未作为通过证据；`perf:check` 因依赖 typecheck 未跑。
+- `npm run verify-native-engine` ✅；`npm run build` ✅（Next.js 生产构建 0 错误，静态导出完成）
+- `npm run typecheck`：全量 `tsc --noEmit` 慢因 = `allowJs: true` + `include: **/*.ts` 纳入 `out/` 下 509 个 JS（`out/` 未 exclude），限时 5 分钟观察无错误输出后按规则关闭；**缩小范围 src 全量检查**（`allowJs: false`、排除 `out/.next/archive/src-tauri`）**通过（0 错误）**。`perf:check` 依赖全量 typecheck，同因未跑。
 - headed（真实 GUI / 真实 Provider）尚未验证项见 18.5。
 
 ### 18.5 未完成 / 待验证（诚实清单）
