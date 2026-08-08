@@ -354,6 +354,20 @@ pub fn project_instruction_digest(project_root: &Path) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Deterministic capability audit revision for the prepare cache key.
+///
+/// The resolved capability snapshot has no numeric revision field, so we fold
+/// its stable audit JSON (selection/profile/team/allowlist — no secrets) into
+/// a SHA-256 and take a u64 prefix. Any capability selection change bumps the
+/// revision and misses the cache.
+pub fn capability_audit_revision(audit: &serde_json::Value) -> u64 {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(audit.to_string().as_bytes());
+    let digest = hasher.finalize();
+    u64::from_le_bytes(digest[..8].try_into().expect("sha256 prefix"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

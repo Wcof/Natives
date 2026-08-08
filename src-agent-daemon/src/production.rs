@@ -67,6 +67,10 @@ pub struct ProductionRuntime {
     /// is shared across every engine/progress sink in the daemon so a Renderer
     /// can subscribe to a run's deltas through a single handle.
     pub live: LiveEventBus,
+    /// Warm prepare cache (P1-01): deterministic LRU over compiled static
+    /// prompts / frozen tool schemas. Never holds credentials, permission
+    /// decisions, run ids, or transcripts.
+    pub prepared: crate::prepared_session::PreparedAgentSessionCache,
     /// Checkpoint authority paired with this runtime's Run/Event store.
     pub(crate) checkpoints: Arc<crate::checkpoint::CheckpointManager>,
     pub permissions: Arc<PermissionManager>,
@@ -284,6 +288,7 @@ impl ProductionRuntime {
         let rt = Self {
             events,
             live: LiveEventBus::new(),
+            prepared: crate::prepared_session::PreparedAgentSessionCache::new(),
             checkpoints,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
@@ -818,10 +823,29 @@ impl ProductionRuntime {
         // is over. Renderer clears transient live state on the durable
         // terminal event.
         self.live.remove_run(&run_id);
+        // P1-07: replay from the run-start durable watermark, not from sequence
+        // 0. Events before the run's `CheckpointCreated{label:run_start}` (run
+        // creation / prepare bookkeeping) are never needed for the terminal
+        // projection or checkpoint metadata; replaying them on every run start
+        // was pure waste on the real production tail.
         let run_events = self
             .events
             .replay_after_checked(&run_id, 0)
             .map_err(|error| format!("run event replay failed: {error}"))?;
+        let run_start_watermark = run_events
+            .iter()
+            .find_map(|event| match &event.payload {
+                assistant_protocol::v2::RunEventKind::CheckpointCreated {
+                    label: Some(label),
+                    ..
+                } if label == "run_start" => Some(event.effective_run_sequence()),
+                _ => None,
+            })
+            .unwrap_or(0);
+        let run_events: Vec<_> = run_events
+            .into_iter()
+            .filter(|event| event.effective_run_sequence() >= run_start_watermark)
+            .collect();
         if let Some(turn_id) = run_events
             .iter()
             .rev()
