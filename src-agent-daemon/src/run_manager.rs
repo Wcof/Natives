@@ -2168,11 +2168,11 @@ impl RunManager {
                 Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
             };
             self.runtime.remove_engine(&run.id).await;
-            crate::conversation_projector::project_run_from_events(
-                &run.conversation_id,
-                &run.id,
-                &self.runtime.events.replay_after_checked(&run.id, 0)?,
-            )?;
+            // A8: watermark-driven incremental projection — replays only events
+            // after the run's projection watermark, never the full stream from
+            // sequence 0. Idempotency/quarantine/partial-turn semantics are
+            // unchanged (project_committed_turn).
+            crate::conversation_projector::project_run_incremental(&run.conversation_id, &run.id)?;
             return self.commit_outcome(&run.id, &outcome);
         }
 
@@ -2286,10 +2286,11 @@ impl RunManager {
             Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
         let outcome = if matches!(outcome, EngineOutcome::Completed { .. })
-            && crate::conversation_projector::project_run_from_events(
+            // A8: watermark-driven incremental projection — replays only events
+            // after the run's projection watermark (never from sequence 0).
+            && crate::conversation_projector::project_run_incremental(
                 &run.conversation_id,
                 &run.id,
-                &self.runtime.events.replay_after_checked(&run.id, 0)?,
             )
             .is_err()
         {

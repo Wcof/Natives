@@ -26,6 +26,10 @@ pub trait EventPersistence: Send + Sync {
 pub struct EventSequencer {
     inner: Arc<Mutex<Inner>>,
     persistence: Option<Arc<dyn EventPersistence>>,
+    /// Instance-level opt-out of disk persistence. Equivalent to
+    /// `NATIVES_EVENT_LOG_DISABLE=1` but scoped to this sequencer — immune to
+    /// ambient env mutation from parallel tests. Production never sets this.
+    memory_only: bool,
 }
 
 #[derive(Default)]
@@ -72,6 +76,21 @@ impl EventSequencer {
         Self {
             inner: Arc::new(Mutex::new(Inner::default())),
             persistence: Some(persistence),
+            memory_only: false,
+        }
+    }
+
+    /// Instance-scoped memory-only sequencer (no disk reads or writes).
+    ///
+    /// Equivalent to `NATIVES_EVENT_LOG_DISABLE=1` but immune to ambient env
+    /// mutation from parallel tests. Used by tests that must never touch the
+    /// shared event log directory; production keeps the default persist-first
+    /// behavior.
+    pub fn memory_only() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner::default())),
+            persistence: None,
+            memory_only: true,
         }
     }
 
@@ -109,6 +128,10 @@ impl EventSequencer {
             }
             return;
         }
+        if self.memory_only {
+            // Memory-only sequencer: never read the shared event log dir.
+            return;
+        }
         let Some(dir) = event_log_dir() else {
             return;
         };
@@ -143,6 +166,9 @@ impl EventSequencer {
     }
 
     fn persist_event(&self, run_id: &str, event: &RunEventV2) -> Result<(), String> {
+        if self.memory_only {
+            return Ok(());
+        }
         if let Some(persistence) = &self.persistence {
             return persistence.append(event);
         }

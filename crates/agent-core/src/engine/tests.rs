@@ -223,7 +223,10 @@ async fn typed_hook_inject_reaches_provider_turn_request() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let provider = RecordingTurnProvider(seen.clone());
     let run_id = format!("hook-inject-typed-{}", uuid::Uuid::new_v4());
-    AgentEngine::new(EventSequencer::new())
+    // memory_only: this test asserts hook Inject reaches the provider; the
+    // shared event log dir is never touched so parallel env mutation from
+    // other sequencer tests cannot fail hook telemetry persistence.
+    AgentEngine::new(EventSequencer::memory_only())
         .with_hooks(hooks)
         .run_with_typed_messages(
             EngineRunConfig {

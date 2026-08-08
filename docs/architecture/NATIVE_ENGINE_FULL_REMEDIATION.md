@@ -346,7 +346,8 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 ## 16. Pi-like 热路径整改（2026-08-08，A0–A8 真实完成状态）
 
-> 本轮整改基线 `4b8193cd`（deploy），已合并进 `main`（HEAD `aba50b06`，单 clone 状态）。
+> 本轮整改基线 `4b8193cd`（deploy），已合并进 `main`（单 clone 状态）。
+> **2026-08-08 最终集成复核**（HEAD `662f1cca` + 本地未提交收尾）：补齐 A8 run-end 增量投影生产接线（run_manager 两处改调 `project_run_incremental`）、修复 verify:native-engine 并行测试隔离（`EventSequencer::memory_only()`），9/9 Final Gate 与 B1/B2/B3/B5 在复核 HEAD 上重跑全绿（见 16.2/16.3）。
 > 只记录真实完成项与证据；**真网 Anthropic 与 GUI headed E2E 仍未验收**，不夸大为全量完成。
 
 ### 16.1 完成项（代码 + 测试证据）
@@ -361,14 +362,17 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | A4 ReadOnly Tool Fast Path | done | `SideEffect::ReadOnly` 工具跳过 checkpoint/ledger/conflict lease，直达 handler；写类工具严格路径不变；`readonly_tool_does_not_create_side_effect_record` 测试 |
 | A5 PreparedAgentSession | done | `prepared_session.rs` 缓存静态 prompt/tool schema/skill 元数据 + digest 失效 + 有界（32 项）；`ContextStats` 增量字符/token 预算；3 项单测 + context 套件 |
 | A7 Settings UI | done | 设置 > 执行引擎 = [运行设置][Harness 编排] 双 tab；`ExecutionEngineSettingsPanel` 完全由 backend snapshot 驱动；Harness tab 复用 `NativeHarnessPanel`；tauri-adapter V2 API；i18n zh/en 同步 |
-| A8 Incremental Projector | done | `project_run_incremental` 只重放 watermark 之后事件；幂等/quarantine/partial-turn 安全不变；`projector_incremental_uses_watermark_prefix` 测试 |
+| A8 Incremental Projector | done | `project_run_incremental` 只重放 watermark 之后事件；幂等/quarantine/partial-turn 安全不变；`projector_incremental_uses_watermark_prefix` 测试；**生产接线已补齐**（2026-08-08 复核）：`run_manager.rs` detached/常规两处 run-end 投影由 `project_run_from_events(replay_after_checked(0))` 改为 `project_run_incremental`，不再从 sequence 0 全量重放；`production.rs` run 收尾仍用本次 run 内存事件切片（非全量历史） |
 
 ### 16.2 Barrier / Final Gate 实测
 
 - Wave1 Barrier（合并 A0→A1→A2→A3→A6）：`cargo fmt --check` 0、`cargo check --workspace --all-targets` 0 errors、`protocol:check` OK、`typecheck` OK。
 - Wave2 合并 A4→A5→A7→A8 后 Final Gate 全部通过（9/9，2026-08-08 逐项实跑，main HEAD `aba50b06`）：
   `cargo fmt --check` / `cargo check --workspace --all-targets` / `protocol:check` / `verify:native-engine`（447 passed） / `typecheck` / `lint`（含 i18n 2550=2550、hardcoded colors 0 新增） / `test`（795 pass, 0 fail） / `perf:check`（bundle 预算内） / `tauri:build`（.app + .dmg 产出）。
+- **2026-08-08 最终集成复核重跑（HEAD `662f1cca` + 本地收尾改动，9/9 全绿）**：
+  `cargo fmt --check` 0 / `cargo check --workspace --all-targets` 0 / `protocol:check` OK（156 methods）/ `verify:native-engine` 0（agent-core 207 passed + daemon 452 passed，AUDIT PASS；此前并行 flaky 已通过 `EventSequencer::memory_only()` 测试隔离修复）/ `typecheck` 0 / `lint` 0（i18n 2550=2550）/ `test` 0（796 pass, 0 fail）/ `perf:check` 0（bundle 预算内）/ `tauri:build` 0（.app + .dmg 产出）。
 - 退出码与完整输出日志入库：`.runtime-evidence/gate/final-gate-2026-08-08.txt` + `.runtime-evidence/gate/logs/`（提交 `25055cee`、`cd5fa1f3`）。
+- **复核 Gate 证据文件**：`.runtime-evidence/gate/review-logs/`（`review-summary.txt` 9/9 全 0 + `01-fmt.log`…`09-tauri-build.log` 完整日志，2026-08-08 集成复核实跑）。
 
 ### 16.3 性能证据（A0 baseline → integration，同一 harness）
 
@@ -383,6 +387,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | 新 MessageDelta emits | 500 | 0 |
 
 > 数字为 2026-08-08 对 `main` HEAD `aba50b06` 的最终重跑（同一 A0 harness，单 clone 状态）；原始证据已入库：`.runtime-evidence/after/baseline.json` + `delta.md`（提交 `79e6b0ba`、`aba50b06`）。
+> **2026-08-08 集成复核重跑（HEAD `662f1cca` + 本地收尾改动，证据文件 `.runtime-evidence/after/review-benchmark.json` + `review-benchmark.md`）**：B1 500 chunks `submit_to_completed = 760 ms`（durable rows 6 / message_delta 0）、2000 chunks `3008 ms`（durable rows 6 / message_delta 0）——对比 Before 1612/7852 ms（−53%/−62%），性能结论不变。B2（`readonly_coding_loop_does_not_create_ledger_or_checkpoint`）、B3（`settle_tool_effect_only_moves_started_rows`）、B5（`stream_watch` 2 项 + `persistent_uds_reuses_handshake`）全部通过。
 
 详细 delta 见 `.runtime-evidence/after/delta.md`。
 

@@ -1,0 +1,9 @@
+GATE1_fmt=0
+GATE2_cargo_check=0
+GATE3_protocol=0
+GATE4_typecheck=0
+GATE8_verify=0
+GATE5_lint=0
+GATE6_test=0
+GATE7_perf_check=0
+GATE9_tauri_build=0
