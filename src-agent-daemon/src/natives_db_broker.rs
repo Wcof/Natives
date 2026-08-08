@@ -9,11 +9,10 @@
 //! - Never logs api_key material.
 //! - Opens DB read-only.
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use provider_adapters::capabilities::Credential;
-use rand::RngCore;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -55,16 +54,24 @@ pub struct LoopbackSettings {
 }
 
 impl NativesDbBroker {
-    /// Open existing natives.db (read-write is required for SQLite WAL open on some
-    /// systems; we never write key material — only SELECT).
+    /// Open existing natives.db READ-ONLY.
+    ///
+    /// T104 (P0-007): the Agent Daemon must never write the Host-authoritative
+    /// `natives.db`. Every connection opened by the daemon is read-only, so
+    /// credential/routing reads work but any UPDATE/INSERT fails closed — the
+    /// Host (via broker RPC/lease) is the only writer.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref().to_path_buf();
         if !path.exists() {
             return Err(format!("natives.db not found at {}", path.display()));
         }
-        let conn = Connection::open(&path).map_err(|e| format!("open natives.db failed: {e}"))?;
-        // The daemon only updates a refreshed OAuth lease. It never writes any
-        // plaintext credential material and serializes SQLite access via `conn`.
+        let conn = Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| format!("open natives.db (read-only) failed: {e}"))?;
+        // The daemon never writes key material — only SELECT. Read-only open
+        // enforces that at the SQLite layer.
         let _ = conn.execute_batch("PRAGMA busy_timeout=3000;");
         Ok(Self {
             path,
@@ -74,6 +81,22 @@ impl NativesDbBroker {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Fail-closed write guard: the daemon must NOT write natives.db (P0-007).
+    /// OAuth refresh persistence is the Host's job via broker lease; a call
+    /// that reaches the daemon with a write intent is a caller bug.
+    pub fn update_sub2api_credentials(
+        &self,
+        _account_id: &str,
+        _credentials: &Value,
+        _expires_at: Option<&str>,
+    ) -> Result<(), String> {
+        Err(
+            "natives.db write blocked: daemon holds a read-only lease (T104); \
+             OAuth credential persistence must go through the Host broker"
+                .into(),
+        )
     }
 
     /// Resolve one credential: exact key_id, or primary/active key for provider.
@@ -266,22 +289,18 @@ impl NativesDbBroker {
 
     /// Encrypt and atomically replace a refreshed OAuth credential document.
     /// The caller supplies only memory-resident JSON; it is never logged.
-    pub fn update_sub2api_credentials(
+    ///
+    /// T104 (P0-007): this write path is REMOVED — the daemon holds a
+    /// read-only lease on natives.db and must never persist credentials
+    /// itself. The fail-closed guard is defined above in `open()`'s impl.
+    #[allow(dead_code)]
+    fn update_sub2api_credentials_removed(
         &self,
-        account_id: &str,
-        credentials: &Value,
-        expires_at: Option<&str>,
+        _account_id: &str,
+        _credentials: &Value,
+        _expires_at: Option<&str>,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let (encrypted, dek) = envelope_encrypt(&credentials.to_string(), &conn)?;
-        let changed = conn.execute(
-            "UPDATE provider_accounts SET credentials_encrypted=?1, dek_encrypted=?2, expires_at=?3, status='active', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?4",
-            rusqlite::params![encrypted, dek, expires_at, account_id],
-        ).map_err(|e| format!("update OAuth account: {e}"))?;
-        if changed != 1 {
-            return Err("Sub2API account was removed before OAuth refresh completed".into());
-        }
-        Ok(())
+        Err("natives.db write blocked (T104)".into())
     }
 }
 
@@ -389,7 +408,10 @@ fn envelope_decrypt(
     String::from_utf8(plain).map_err(|e| format!("utf8: {e}"))
 }
 
+#[cfg(test)]
 fn envelope_encrypt(plaintext: &str, conn: &Connection) -> Result<(String, String), String> {
+    use aes_gcm::aead::OsRng;
+    use rand::RngCore;
     let kek = load_kek(conn)?;
     let mut dek = [0u8; 32];
     OsRng.fill_bytes(&mut dek);
@@ -494,8 +516,7 @@ fn read_capability_secret_at(path: &Path, id: &str) -> Result<String, String> {
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .or_else(|_| Connection::open(path))
-    .map_err(|e| format!("open natives.db failed: {e}"))?;
+    .map_err(|e| format!("open natives.db (read-only) failed: {e}"))?;
     let _ = conn.execute_batch("PRAGMA busy_timeout=3000;");
     let (ciphertext, nonce) = conn
         .query_row(
@@ -512,7 +533,12 @@ pub fn read_setting(key: &str) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open(&path).map_err(|e| format!("open natives.db failed: {e}"))?;
+    // T104: read-only lease on the Host-authoritative natives.db.
+    let conn = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("open natives.db (read-only) failed: {e}"))?;
     conn.query_row(
         "SELECT value FROM settings WHERE key = ?1 LIMIT 1",
         rusqlite::params![key],
@@ -525,24 +551,15 @@ pub fn read_setting(key: &str) -> Result<Option<String>, String> {
     })
 }
 
-pub fn write_setting(key: &str, value: &str) -> Result<(), String> {
-    let path = default_natives_db_path();
-    let conn = Connection::open(&path).map_err(|e| format!("open natives.db failed: {e}"))?;
-
-    // Ensure settings table exists (fallback for older schema versions)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
-        [],
+/// T104 (P0-007): daemon-side writes to the Host-authoritative natives.db are
+/// forbidden. Settings are written by the Host (which broadcasts changes);
+/// this function exists only to make that boundary explicit and fail closed.
+pub fn write_setting(_key: &str, _value: &str) -> Result<(), String> {
+    Err(
+        "natives.db write blocked: settings persistence belongs to the Host \
+         broker (T104); daemon must not write the Host-authoritative database"
+            .into(),
     )
-    .map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        rusqlite::params![key, value],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
 }
 
 #[cfg(test)]
