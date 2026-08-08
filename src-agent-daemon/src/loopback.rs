@@ -260,8 +260,12 @@ fn disabled_settings() -> LoopbackSettings {
 }
 
 fn route_models() -> Result<Vec<Value>, String> {
-    let conn = Connection::open(crate::natives_db_broker::default_natives_db_path())
-        .map_err(|e| e.to_string())?;
+    // T104: read-only lease on the Host-authoritative natives.db.
+    let conn = Connection::open_with_flags(
+        crate::natives_db_broker::default_natives_db_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare("SELECT DISTINCT model_id FROM provider_route_bindings WHERE enabled=1 ORDER BY model_id").map_err(|e| e.to_string())?;
     let models = stmt
         .query_map([], |row| {
@@ -274,8 +278,12 @@ fn route_models() -> Result<Vec<Value>, String> {
 }
 
 fn local_provider(model: &str) -> Result<crate::routing::RoutedProvider, String> {
-    let conn = Connection::open(crate::natives_db_broker::default_natives_db_path())
-        .map_err(|e| e.to_string())?;
+    // T104: read-only lease on the Host-authoritative natives.db.
+    let conn = Connection::open_with_flags(
+        crate::natives_db_broker::default_natives_db_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
     let mut statement = conn
         .prepare(
             "SELECT provider_id, credential_kind, credential_id, model_id

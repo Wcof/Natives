@@ -101,7 +101,10 @@ pub fn load_plan(
         model_id: primary_model,
     };
     let path = crate::natives_db_broker::default_natives_db_path();
-    let Ok(conn) = Connection::open(path) else {
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
         return RoutingPlan {
             enabled: false,
             targets: vec![primary],
@@ -573,7 +576,11 @@ async fn account_stream_history(
 }
 
 pub(crate) fn rectifier_enabled() -> bool {
-    let Ok(conn) = Connection::open(crate::natives_db_broker::default_natives_db_path()) else {
+    // T104: read-only lease on the Host-authoritative natives.db.
+    let Ok(conn) = Connection::open_with_flags(
+        crate::natives_db_broker::default_natives_db_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
         return false;
     };
     let raw = conn
