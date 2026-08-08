@@ -1,6 +1,7 @@
 use crate::db;
 use crate::Result;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
@@ -15,15 +16,32 @@ pub struct ProjectInfo {
 }
 
 /// List all registered projects with conversation counts.
+///
+/// P1-039: conversation_count comes from the Daemon canonical projection
+/// (`conversation.list`), NOT the retired Host `assistant_conversations`
+/// table. If the daemon is unreachable the count is 0 — never a stale Host
+/// table read.
 #[tauri::command]
-pub fn project_list() -> Result<Vec<ProjectInfo>> {
+pub async fn project_list() -> Result<Vec<ProjectInfo>> {
     let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+
+    // Canonical conversation counts by project path (from Daemon).
+    let mut daemon_counts: HashMap<String, i64> = HashMap::new();
+    if let Ok(value) =
+        crate::daemon_authority::request("conversation.list", serde_json::json!({})).await
+    {
+        if let Some(convs) = value.as_array() {
+            for c in convs {
+                if let Some(pid) = c.get("project_id").and_then(|v| v.as_str()) {
+                    *daemon_counts.entry(pid.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
 
     let mut stmt = conn
         .prepare(
-            "SELECT p.id, p.path, p.label,
-                (SELECT COUNT(*) FROM assistant_conversations c WHERE c.project_id = p.path AND c.archived_at IS NULL),
-                p.last_opened_at
+            "SELECT p.id, p.path, p.label, p.last_opened_at
              FROM assistant_projects p
              WHERE p.deleted_at IS NULL
              ORDER BY p.last_opened_at DESC, p.label COLLATE NOCASE",
@@ -32,16 +50,17 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
 
     let projects = stmt
         .query_map([], |row| {
+            let id: String = row.get(0)?;
             let path: String = row.get(1)?;
             let label: String = row.get(2)?;
-            let conv_count: i64 = row.get(3)?;
-            let last_opened_at: String = row.get(4)?;
+            let last_opened_at: String = row.get(3)?;
             let exists = Path::new(&path).exists();
+            let conversation_count = daemon_counts.get(&path).copied().unwrap_or(0);
             Ok(ProjectInfo {
-                id: row.get(0)?,
+                id,
                 path,
                 label,
-                conversation_count: conv_count,
+                conversation_count,
                 exists,
                 last_opened_at,
             })

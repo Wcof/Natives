@@ -1,4 +1,11 @@
-use rusqlite::params;
+//! Legacy assistant_* CRUD commands — RETIRED (T202, P1-004/P1-005).
+//!
+//! Host no longer reads/writes the legacy `assistant_sessions` /
+//! `assistant_messages` tables: conversations/messages/runs are canonical in
+//! the Agent Daemon (`assistant.db`). These commands fail closed so any stale
+//! caller surfaces an explicit error instead of touching retired tables. The
+//! `rpc_server.rs` orphan (dead code, 0 references) was physically deleted.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,207 +41,66 @@ pub struct AssistantMessage {
 
 #[tauri::command]
 pub fn assistant_list_sessions(
-    project_id: Option<String>,
+    _project_id: Option<String>,
 ) -> Result<Vec<AssistantSession>, String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    let query = match project_id {
-        Some(_) => "SELECT s.id, s.project_id, s.title, s.model_id, s.provider_id, s.created_at, s.updated_at, s.summary, s.token_used, s.status,
-                    (SELECT COUNT(*) FROM assistant_messages m WHERE m.session_id = s.id) as message_count
-             FROM assistant_sessions s
-             WHERE s.project_id = ?1
-             ORDER BY s.updated_at DESC",
-        None => "SELECT s.id, s.project_id, s.title, s.model_id, s.provider_id, s.created_at, s.updated_at, s.summary, s.token_used, s.status,
-                    (SELECT COUNT(*) FROM assistant_messages m WHERE m.session_id = s.id) as message_count
-             FROM assistant_sessions s
-             WHERE s.project_id IS NULL
-             ORDER BY s.updated_at DESC",
-    };
-
-    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
-
-    let session_rows = if let Some(ref pid) = project_id {
-        stmt.query_map(params![pid], row_to_session)
-    } else {
-        stmt.query_map([], row_to_session)
-    }
-    .map_err(|e| e.to_string())?;
-
-    Ok(session_rows.filter_map(|r| r.ok()).collect())
+    Err("assistant_list_sessions retired: sessions are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
-pub fn assistant_get_messages(session_id: String) -> Result<Vec<AssistantMessage>, String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, session_id, role, content, tool_calls, tool_result, status, token_count, created_at, sequence
-         FROM assistant_messages
-         WHERE session_id = ?1
-         ORDER BY sequence ASC"
-    ).map_err(|e| e.to_string())?;
-
-    let rows = stmt
-        .query_map(params![session_id], |row| {
-            Ok(AssistantMessage {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                tool_calls: row.get(4)?,
-                tool_result: row.get(5)?,
-                status: row.get(6)?,
-                token_count: row.get(7)?,
-                created_at: row.get(8)?,
-                sequence: row.get(9)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-
-    Ok(rows.filter_map(|r| r.ok()).collect())
+pub fn assistant_get_messages(_session_id: String) -> Result<Vec<AssistantMessage>, String> {
+    Err("assistant_get_messages retired: messages are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
 pub fn assistant_create_session(
-    project_id: Option<String>,
-    title: String,
-    model_id: String,
-    provider_id: String,
-    runtime_override: Option<String>,
+    _project_id: Option<String>,
+    _title: String,
+    _model_id: String,
+    _provider_id: String,
+    _runtime_override: Option<String>,
 ) -> Result<AssistantSession, String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    let id = uuid_v4();
-    let now = chrono_now();
-
-    conn.execute(
-        "INSERT INTO assistant_sessions (id, project_id, title, model_id, provider_id, runtime_override, created_at, updated_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active')",
-        params![id, project_id, title, model_id, provider_id, runtime_override, now, now],
-    ).map_err(|e| e.to_string())?;
-
-    Ok(AssistantSession {
-        id,
-        project_id,
-        title,
-        model_id,
-        provider_id,
-        created_at: now.clone(),
-        updated_at: now,
-        summary: String::new(),
-        token_used: 0,
-        status: "active".to_string(),
-        message_count: 0,
-    })
+    Err("assistant_create_session retired: sessions are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
-pub fn assistant_delete_session(session_id: String) -> Result<(), String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "DELETE FROM assistant_sessions WHERE id = ?1",
-        params![session_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
+pub fn assistant_delete_session(_session_id: String) -> Result<(), String> {
+    Err("assistant_delete_session retired: sessions are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
 pub fn assistant_save_message(
-    session_id: String,
-    role: String,
-    content: String,
-    tool_calls: Option<String>,
-    tool_result: Option<String>,
-    status: String,
-    token_count: i64,
+    _session_id: String,
+    _role: String,
+    _content: String,
+    _tool_calls: Option<String>,
+    _tool_result: Option<String>,
+    _status: String,
+    _token_count: i64,
 ) -> Result<AssistantMessage, String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    let id = uuid_v4();
-    let now = chrono_now();
-
-    // Get next sequence number for this session
-    let max_seq: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM assistant_messages WHERE session_id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(1);
-
-    conn.execute(
-        "INSERT INTO assistant_messages (id, session_id, role, content, tool_calls, tool_result, status, token_count, created_at, sequence)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![id, session_id, role, content, tool_calls, tool_result, status, token_count, now, max_seq],
-    ).map_err(|e| e.to_string())?;
-
-    // Update session's updated_at
-    conn.execute(
-        "UPDATE assistant_sessions SET updated_at = ?1 WHERE id = ?2",
-        params![now, session_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(AssistantMessage {
-        id,
-        session_id,
-        role,
-        content,
-        tool_calls,
-        tool_result,
-        status,
-        token_count,
-        created_at: now,
-        sequence: max_seq,
-    })
+    Err("assistant_save_message retired: messages are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
 pub fn assistant_update_message_status(
-    message_id: String,
-    status: String,
-    tool_result: Option<String>,
+    _message_id: String,
+    _status: String,
+    _tool_result: Option<String>,
 ) -> Result<(), String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "UPDATE assistant_messages SET status = ?1, tool_result = COALESCE(?2, tool_result) WHERE id = ?3",
-        params![status, tool_result, message_id],
-    ).map_err(|e| e.to_string())?;
-
-    Ok(())
+    Err("assistant_update_message_status retired: messages are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
-pub fn assistant_update_session_title(session_id: String, title: String) -> Result<(), String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-
-    let now = chrono_now();
-    conn.execute(
-        "UPDATE assistant_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
-        params![title, now, session_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
+pub fn assistant_update_session_title(_session_id: String, _title: String) -> Result<(), String> {
+    Err("assistant_update_session_title retired: sessions are Daemon-canonical (T202)".into())
 }
 
 #[tauri::command]
 pub fn assistant_update_session_model(
-    session_id: String,
-    model_id: String,
-    provider_id: String,
+    _session_id: String,
+    _model_id: String,
+    _provider_id: String,
 ) -> Result<(), String> {
-    let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-    let now = chrono_now();
-    conn.execute(
-        "UPDATE assistant_sessions SET model_id = ?1, provider_id = ?2, updated_at = ?3 WHERE id = ?4",
-        params![model_id, provider_id, now, session_id],
-    ).map_err(|e| e.to_string())?;
-    Ok(())
+    Err("assistant_update_session_model retired: sessions are Daemon-canonical (T202)".into())
 }
 
 pub fn uuid_v4() -> String {
@@ -257,22 +123,6 @@ pub fn uuid_v4() -> String {
 pub fn chrono_now() -> String {
     use chrono::Utc;
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
-}
-
-fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<AssistantSession> {
-    Ok(AssistantSession {
-        id: row.get(0)?,
-        project_id: row.get(1)?,
-        title: row.get(2)?,
-        model_id: row.get(3)?,
-        provider_id: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
-        summary: row.get(7)?,
-        token_used: row.get(8)?,
-        status: row.get(9)?,
-        message_count: row.get(10)?,
-    })
 }
 
 #[cfg(test)]
@@ -335,6 +185,20 @@ mod tests {
     fn test_chrono_now_format() {
         let now = chrono_now();
         assert!(now.len() >= 20);
-        assert!(now.ends_with('Z'));
+    }
+
+    #[test]
+    fn retired_commands_fail_closed() {
+        assert!(assistant_list_sessions(None).is_err());
+        assert!(assistant_get_messages("s".into()).is_err());
+        assert!(assistant_create_session(None, "t".into(), "m".into(), "p".into(), None).is_err());
+        assert!(assistant_delete_session("s".into()).is_err());
+        assert!(assistant_save_message(
+            "s".into(), "user".into(), "c".into(), None, None, "done".into(), 0
+        )
+        .is_err());
+        assert!(assistant_update_message_status("m".into(), "done".into(), None).is_err());
+        assert!(assistant_update_session_title("s".into(), "t".into()).is_err());
+        assert!(assistant_update_session_model("s".into(), "m".into(), "p".into()).is_err());
     }
 }
