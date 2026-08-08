@@ -7,7 +7,6 @@ import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile, shouldPreviewAsCode } from '@/lib/follow-mode';
 import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
-import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { parseUnifiedDiff } from '@/lib/diff-utils';
 import { useFileContent } from '@/lib/useFileContent';
 import { useEditorSave } from '@/lib/use-editor-save';
@@ -403,9 +402,15 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, editMode,
       : <FileMarkdownPreview path={entry.path} locale={locale} />;
   }
 
-  // HTML isolated preview
+  // HTML 文档预览：H0 gate BLOCKED（无真实 Tauri/WebKit headed evidence）。
+  // FilePreview 不再 raw useFileContent + srcDoc；统一走 Preview V2 管线，
+  // HTML provider 缺席时以显式 unsupported 呈现，禁止假绿。
   if (entry.name.endsWith('.html') || entry.name.endsWith('.htm')) {
-    return <HtmlFilePreview path={entry.path} locale={locale} />;
+    return (
+      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }} data-preview-kind="html-unsupported">
+        {t(locale, 'filePreview.noPreview').replace('{kind}', 'html')}
+      </div>
+    );
   }
 
   // Archive preview
@@ -514,27 +519,6 @@ function SaveConflictDialog({ open, fileName, locale, onOverwrite, onDismiss }: 
     />
   );
 }
-
-function HtmlFilePreview({ path, locale }: { path: string; locale: Locale }) {
-  const { content } = useFileContent(path);
-  if (content === null) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
-  }
-  return (
-    <iframe
-      srcDoc={content}
-      // File preview iframe: this is a LOCAL file viewer, NOT a plugin execution
-      // environment. `allow-popups` is deliberately excluded to prevent HTML files
-      // from opening new windows. `allow-same-origin` is excluded per security
-      // standard R-S2 (plugin iframes must never have it; file previews follow
-      // the same rule to keep the surface minimal).
-      sandbox={IFRAME_SANDBOX}
-      style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
-    />
-  );
-}
-
-// ── Code Preview (shiki highlight + Monaco editor) ──
 
 function CodePreview({ entry, locale, editMode, ext }: {
   entry: FileEntry;
