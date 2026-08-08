@@ -346,7 +346,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 ## 16. Pi-like 热路径整改（2026-08-08，A0–A8 真实完成状态）
 
-> 本轮整改基线 `4b8193cd`（deploy），已合并进 `main`（HEAD `4d53b5b2`，单 clone 状态）。
+> 本轮整改基线 `4b8193cd`（deploy），已合并进 `main`（HEAD `aba50b06`，单 clone 状态）。
 > 只记录真实完成项与证据；**真网 Anthropic 与 GUI headed E2E 仍未验收**，不夸大为全量完成。
 
 ### 16.1 完成项（代码 + 测试证据）
@@ -366,7 +366,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 ### 16.2 Barrier / Final Gate 实测
 
 - Wave1 Barrier（合并 A0→A1→A2→A3→A6）：`cargo fmt --check` 0、`cargo check --workspace --all-targets` 0 errors、`protocol:check` OK、`typecheck` OK。
-- Wave2 合并 A4→A5→A7→A8 后 Final Gate 全部通过（9/9，2026-08-08 逐项实跑，main HEAD `4d53b5b2`）：
+- Wave2 合并 A4→A5→A7→A8 后 Final Gate 全部通过（9/9，2026-08-08 逐项实跑，main HEAD `aba50b06`）：
   `cargo fmt --check` / `cargo check --workspace --all-targets` / `protocol:check` / `verify:native-engine`（447 passed） / `typecheck` / `lint`（含 i18n 2550=2550、hardcoded colors 0 新增） / `test`（795 pass, 0 fail） / `perf:check`（bundle 预算内） / `tauri:build`（.app + .dmg 产出）。
 - 退出码与完整输出日志入库：`.runtime-evidence/gate/final-gate-2026-08-08.txt` + `.runtime-evidence/gate/logs/`（提交 `25055cee`、`cd5fa1f3`）。
 
@@ -395,7 +395,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 ### 16.5 Rollback commit list
 
-单层可回滚（从 `main` HEAD `4d53b5b2` 依次 revert）：
+单层可回滚（从 `main` HEAD `aba50b06` 依次 revert）：
 
 1. `738dcb08` fix(gate): hardcoded colors → theme tokens（可安全 revert，仅 UI 样式）
 2. `d203d0c6` fix(gate): audit-old-symbols 期望持久 UDS command/event client 拆分（与 A3 同层）
