@@ -1,0 +1,4879 @@
+> find src \( -name '*.test.ts' -o -name '*.test.tsx' \) -print0 | xargs -0 tsx --import ./scripts/test-css-stub.cjs --test
+TAP version 13
+# Subtest: ProviderKeySummary
+    # Subtest: no plaintext
+    ok 1 - no plaintext
+      ---
+      duration_ms: 2.254416
+      type: 'test'
+    # Subtest: valid can be primary
+    ok 2 - valid can be primary
+      ---
+      duration_ms: 0.298875
+      type: 'test'
+    # Subtest: untested cannot be primary
+    ok 3 - untested cannot be primary
+      ---
+      duration_ms: 0.363375
+      type: 'test'
+    # Subtest: all statuses work
+    ok 4 - all statuses work
+      ---
+      duration_ms: 0.194167
+      type: 'test'
+    1..4
+ok 1 - ProviderKeySummary
+  ---
+  duration_ms: 4.101625
+  type: 'suite'
+# Subtest: ProviderSummary
+    # Subtest: multiple keys
+    ok 1 - multiple keys
+      ---
+      duration_ms: 0.588292
+      type: 'test'
+    # Subtest: defaultModel once
+    ok 2 - defaultModel once
+      ---
+      duration_ms: 0.112875
+      type: 'test'
+    # Subtest: keys masked
+    ok 3 - keys masked
+      ---
+      duration_ms: 0.150583
+      type: 'test'
+    1..3
+ok 2 - ProviderSummary
+  ---
+  duration_ms: 1.207833
+  type: 'suite'
+# Subtest: States
+    # Subtest: empty
+    ok 1 - empty
+      ---
+      duration_ms: 0.080875
+      type: 'test'
+    # Subtest: no keys
+    ok 2 - no keys
+      ---
+      duration_ms: 0.109625
+      type: 'test'
+    # Subtest: untested primary (migration)
+    ok 3 - untested primary (migration)
+      ---
+      duration_ms: 0.183791
+      type: 'test'
+    # Subtest: primary no delete
+    ok 4 - primary no delete
+      ---
+      duration_ms: 0.052666
+      type: 'test'
+    1..4
+ok 3 - States
+  ---
+  duration_ms: 0.527709
+  type: 'suite'
+# Subtest: Tests
+    # Subtest: transitions
+    ok 1 - transitions
+      ---
+      duration_ms: 0.098708
+      type: 'test'
+    # Subtest: no delete on fail
+    ok 2 - no delete on fail
+      ---
+      duration_ms: 0.039584
+      type: 'test'
+    1..2
+ok 4 - Tests
+  ---
+  duration_ms: 0.176084
+  type: 'suite'
+# Subtest: Sub-agent
+    # Subtest: primary-only works
+    ok 1 - primary-only works
+      ---
+      duration_ms: 0.070958
+      type: 'test'
+    # Subtest: 2 sub-keys ok
+    ok 2 - 2 sub-keys ok
+      ---
+      duration_ms: 0.053542
+      type: 'test'
+    1..2
+ok 5 - Sub-agent
+  ---
+  duration_ms: 0.203334
+  type: 'suite'
+# Subtest: Retention
+    # Subtest: reload persists
+    ok 1 - reload persists
+      ---
+      duration_ms: 0.087667
+      type: 'test'
+    # Subtest: masked stable
+    ok 2 - masked stable
+      ---
+      duration_ms: 0.098958
+      type: 'test'
+    # Subtest: no plaintext json
+    ok 3 - no plaintext json
+      ---
+      duration_ms: 0.039167
+      type: 'test'
+    1..3
+ok 6 - Retention
+  ---
+  duration_ms: 0.264792
+  type: 'suite'
+# Subtest: AssistantSidebarSection - create button uses createConversation with no mode argument
+ok 7 - AssistantSidebarSection - create button uses createConversation with no mode argument
+  ---
+  duration_ms: 0.901625
+  type: 'test'
+# Subtest: AssistantSidebarSection - search input filters conversations
+ok 8 - AssistantSidebarSection - search input filters conversations
+  ---
+  duration_ms: 0.0625
+  type: 'test'
+# Subtest: AssistantSidebarSection - no Chat/Agent mode selection popup
+ok 9 - AssistantSidebarSection - no Chat/Agent mode selection popup
+  ---
+  duration_ms: 0.04575
+  type: 'test'
+# Subtest: AssistantSidebarSection - unassigned section uses selectProject(null)
+ok 10 - AssistantSidebarSection - unassigned section uses selectProject(null)
+  ---
+  duration_ms: 0.037666
+  type: 'test'
+# Subtest: AssistantSidebarSection - project click does not create conversation
+ok 11 - AssistantSidebarSection - project click does not create conversation
+  ---
+  duration_ms: 0.110208
+  type: 'test'
+# Subtest: AssistantSidebarSection - search preserves parent project if it has matching conversations
+ok 12 - AssistantSidebarSection - search preserves parent project if it has matching conversations
+  ---
+  duration_ms: 0.136083
+  type: 'test'
+# Subtest: AssistantSidebarSection - collapsed state does not persist to SQLite
+ok 13 - AssistantSidebarSection - collapsed state does not persist to SQLite
+  ---
+  duration_ms: 0.053042
+  type: 'test'
+# Subtest: InteractionPromptShell exports shared composer column class
+ok 14 - InteractionPromptShell exports shared composer column class
+  ---
+  duration_ms: 1.147334
+  type: 'test'
+# Subtest: PermissionRequestCard is built on InteractionPromptShell
+ok 15 - PermissionRequestCard is built on InteractionPromptShell
+  ---
+  duration_ms: 0.337125
+  type: 'test'
+# Subtest: AskUserPromptCard reuses InteractionPromptShell
+ok 16 - AskUserPromptCard reuses InteractionPromptShell
+  ---
+  duration_ms: 0.163584
+  type: 'test'
+# Subtest: workbench replaces MessageInput while permission or ask_user is pending
+ok 17 - workbench replaces MessageInput while permission or ask_user is pending
+  ---
+  duration_ms: 1.011875
+  type: 'test'
+# Subtest: slash detection: / and /abc and newline-/abc open; mid-sentence / does not
+ok 18 - slash detection: / and /abc and newline-/abc open; mid-sentence / does not
+  ---
+  duration_ms: 0.5745
+  type: 'test'
+# Subtest: no fake hardcoded slash commands in UI or runtime list
+ok 19 - no fake hardcoded slash commands in UI or runtime list
+  ---
+  duration_ms: 0.395125
+  type: 'test'
+# Subtest: SlashCommandPopover is presentational — no document keydown listener
+ok 20 - SlashCommandPopover is presentational — no document keydown listener
+  ---
+  duration_ms: 0.106875
+  type: 'test'
+# Subtest: MessageInput owns slash keyboard on textarea onKeyDown
+ok 21 - MessageInput owns slash keyboard on textarea onKeyDown
+  ---
+  duration_ms: 0.355
+  type: 'test'
+# Subtest: slash empty-state copy is localized zh/en
+ok 22 - slash empty-state copy is localized zh/en
+  ---
+  duration_ms: 0.192917
+  type: 'test'
+# Subtest: closing menu or sending keeps free-form /text as ordinary message content
+ok 23 - closing menu or sending keeps free-form /text as ordinary message content
+  ---
+  duration_ms: 0.109666
+  type: 'test'
+# Subtest: up/down browse the active project question history without taking slash-menu keys
+ok 24 - up/down browse the active project question history without taking slash-menu keys
+  ---
+  duration_ms: 0.210666
+  type: 'test'
+# Subtest: IME composition confirmation never sends the draft
+ok 25 - IME composition confirmation never sends the draft
+  ---
+  duration_ms: 0.086167
+  type: 'test'
+# Subtest: approve scopes keep once / this_run / session / project semantics and display order
+ok 26 - approve scopes keep once / this_run / session / project semantics and display order
+  ---
+  duration_ms: 0.875
+  type: 'test'
+# Subtest: layout: built on InteractionPromptShell; full-width vertical actions
+ok 27 - layout: built on InteractionPromptShell; full-width vertical actions
+  ---
+  duration_ms: 0.095166
+  type: 'test'
+# Subtest: button order: once → this_run → session → project → reject (reject last)
+ok 28 - button order: once → this_run → session → project → reject (reject last)
+  ---
+  duration_ms: 0.081958
+  type: 'test'
+# Subtest: details collapsed by default; raw input behind toggle
+ok 29 - details collapsed by default; raw input behind toggle
+  ---
+  duration_ms: 0.123667
+  type: 'test'
+# Subtest: async handlers: await, lock while submitting, unlock + error on failure
+ok 30 - async handlers: await, lock while submitting, unlock + error on failure
+  ---
+  duration_ms: 0.093625
+  type: 'test'
+# Subtest: keyboard: Escape rejects via shell onEscape; focus-visible ring present
+ok 31 - keyboard: Escape rejects via shell onEscape; focus-visible ring present
+  ---
+  duration_ms: 0.047459
+  type: 'test'
+# Subtest: pending-only: non-pending status returns null
+ok 32 - pending-only: non-pending status returns null
+  ---
+  duration_ms: 0.106375
+  type: 'test'
+# Subtest: permissionCopy exposes all UI strings for locale
+ok 33 - permissionCopy exposes all UI strings for locale
+  ---
+  duration_ms: 0.186708
+  type: 'test'
+# Subtest: src/components/assistant/blocks/blocks.test.tsx
+ok 6 - src/components/assistant/blocks/blocks.test.tsx
+  ---
+  duration_ms: 352.300125
+  type: 'test'
+# Subtest: composer draft debounce (typing thrash)
+    # Subtest: MessageInput debounces draft persistence and flushes on send/unmount/switch
+    ok 1 - MessageInput debounces draft persistence and flushes on send/unmount/switch
+      ---
+      duration_ms: 0.464
+      type: 'test'
+    # Subtest: Workbench passes draftKey and accepts conversationId on onDraftChange
+    ok 2 - Workbench passes draftKey and accepts conversationId on onDraftChange
+      ---
+      duration_ms: 0.23925
+      type: 'test'
+    # Subtest: store provider debounces localStorage draft writes
+    ok 3 - store provider debounces localStorage draft writes
+      ---
+      duration_ms: 0.12025
+      type: 'test'
+    # Subtest: publishNavigation ignores tempSession.draft-only changes for consumers
+    ok 4 - publishNavigation ignores tempSession.draft-only changes for consumers
+      ---
+      duration_ms: 0.083583
+      type: 'test'
+    1..4
+ok 35 - composer draft debounce (typing thrash)
+  ---
+  duration_ms: 1.593042
+  type: 'suite'
+# Subtest: quiet soft-resub is never promoted to global reconnecting
+ok 36 - quiet soft-resub is never promoted to global reconnecting
+  ---
+  duration_ms: 0.621333
+  type: 'test'
+# Subtest: controller quiet iterator end is a no-op on connection; transport errors reconnect
+ok 37 - controller quiet iterator end is a no-op on connection; transport errors reconnect
+  ---
+  duration_ms: 0.167084
+  type: 'test'
+# Subtest: successful live event clears reconnecting and reconnectAttempts
+ok 38 - successful live event clears reconnecting and reconnectAttempts
+  ---
+  duration_ms: 0.107709
+  type: 'test'
+# Subtest: conversation menu exposes copy conversation ID via clipboard helper
+ok 39 - conversation menu exposes copy conversation ID via clipboard helper
+  ---
+  duration_ms: 0.278959
+  type: 'test'
+# Subtest: renders headings, nested lists, tables, task lists, and fenced code
+ok 40 - renders headings, nested lists, tables, task lists, and fenced code
+  ---
+  duration_ms: 15.355833
+  type: 'test'
+# Subtest: unclosed code fence does not throw
+ok 41 - unclosed code fence does not throw
+  ---
+  duration_ms: 0.91575
+  type: 'test'
+# Subtest: raw HTML script nodes are rewritten away
+ok 42 - raw HTML script nodes are rewritten away
+  ---
+  duration_ms: 0.171542
+  type: 'test'
+# Subtest: https links and page anchors preserved; javascript/data rejected
+ok 43 - https links and page anchors preserved; javascript/data rejected
+  ---
+  duration_ms: 2.13425
+  type: 'test'
+# Subtest: markdown host mounts with data-assistant-markdown marker
+ok 44 - markdown host mounts with data-assistant-markdown marker
+  ---
+  duration_ms: 0.353833
+  type: 'test'
+# Subtest: allows http(s), mailto, anchors, and relative paths
+ok 45 - allows http(s), mailto, anchors, and relative paths
+  ---
+  duration_ms: 0.653459
+  type: 'test'
+# Subtest: rejects javascript/data/file/vbscript and protocol-relative URLs
+ok 46 - rejects javascript/data/file/vbscript and protocol-relative URLs
+  ---
+  duration_ms: 0.128375
+  type: 'test'
+# Subtest: pluginsFilter strips rehype-raw from rehype list only
+ok 47 - pluginsFilter strips rehype-raw from rehype list only
+  ---
+  duration_ms: 0.450917
+  type: 'test'
+# Subtest: rewriteMarkdownNode neuters script and event/style attributes
+ok 48 - rewriteMarkdownNode neuters script and event/style attributes
+  ---
+  duration_ms: 0.198542
+  type: 'test'
+# Subtest: SAFE_MARKDOWN_ELEMENTS includes GFM structure and excludes script/style
+ok 49 - SAFE_MARKDOWN_ELEMENTS includes GFM structure and excludes script/style
+  ---
+  duration_ms: 0.082916
+  type: 'test'
+# Subtest: img src allows base64 raster data URLs only (G13)
+ok 50 - img src allows base64 raster data URLs only (G13)
+  ---
+  duration_ms: 0.157083
+  type: 'test'
+# Subtest: table gets scroll-container class without widening the allowlist (G8)
+ok 51 - table gets scroll-container class without widening the allowlist (G8)
+  ---
+  duration_ms: 0.168375
+  type: 'test'
+# Subtest: empty / whitespace sources are considered non-content by callers
+ok 52 - empty / whitespace sources are considered non-content by callers
+  ---
+  duration_ms: 0.046666
+  type: 'test'
+# Subtest: parsePlanApproval
+    # Subtest: reads the daemon envelope in full
+    ok 1 - reads the daemon envelope in full
+      ---
+      duration_ms: 1.109125
+      type: 'test'
+    # Subtest: refuses anything that is not a readable plan
+    ok 2 - refuses anything that is not a readable plan
+      ---
+      duration_ms: 0.130458
+      type: 'test'
+    # Subtest: only claims the card for exit_plan_mode
+    ok 3 - only claims the card for exit_plan_mode
+      ---
+      duration_ms: 0.178583
+      type: 'test'
+    # Subtest: cannot be talked down: the worse of declared and derived wins
+    ok 4 - cannot be talked down: the worse of declared and derived wins
+      ---
+      duration_ms: 0.173917
+      type: 'test'
+    # Subtest: never infers "low and reversible" for a step that writes or runs
+    ok 5 - never infers "low and reversible" for a step that writes or runs
+      ---
+      duration_ms: 0.160834
+      type: 'test'
+    # Subtest: assigns ids and disambiguates collisions instead of dropping steps
+    ok 6 - assigns ids and disambiguates collisions instead of dropping steps
+      ---
+      duration_ms: 0.080208
+      type: 'test'
+    # Subtest: skips unusable steps but keeps the readable ones
+    ok 7 - skips unusable steps but keeps the readable ones
+      ---
+      duration_ms: 0.124833
+      type: 'test'
+    # Subtest: caps steps so a runaway payload cannot flood the overlay
+    ok 8 - caps steps so a runaway payload cannot flood the overlay
+      ---
+      duration_ms: 0.162083
+      type: 'test'
+    1..8
+ok 53 - parsePlanApproval
+  ---
+  duration_ms: 2.783209
+  type: 'suite'
+# Subtest: PlanApprovalCard rendering
+    # Subtest: renders a checklist, not a JSON dump
+    ok 1 - renders a checklist, not a JSON dump
+      ---
+      duration_ms: 28.454916
+      type: 'test'
+    # Subtest: carries the plan heading, notes and step count
+    ok 2 - carries the plan heading, notes and step count
+      ---
+      duration_ms: 14.739291
+      type: 'test'
+    # Subtest: marks irreversible steps in the row, the badge and the banner
+    ok 3 - marks irreversible steps in the row, the badge and the banner
+      ---
+      duration_ms: 10.978666
+      type: 'test'
+    # Subtest: stays calm for a fully reversible, low-risk plan
+    ok 4 - stays calm for a fully reversible, low-risk plan
+      ---
+      duration_ms: 6.499875
+      type: 'test'
+    # Subtest: resolves every string through i18n in both locales
+    ok 5 - resolves every string through i18n in both locales
+      ---
+      duration_ms: 21.523875
+      type: 'test'
+    # Subtest: offers one approval and a rejection — not the permission scope ladder
+    ok 6 - offers one approval and a rejection — not the permission scope ladder
+      ---
+      duration_ms: 8.207208
+      type: 'test'
+    1..6
+ok 54 - PlanApprovalCard rendering
+  ---
+  duration_ms: 90.910125
+  type: 'suite'
+# Subtest: PlanApprovalCard contract
+    # Subtest: approves one-shot, matching the scope the daemon pins
+    ok 1 - approves one-shot, matching the scope the daemon pins
+      ---
+      duration_ms: 5.135333
+      type: 'test'
+    # Subtest: reuses the shared interaction shell and its submit-lock behaviour
+    ok 2 - reuses the shared interaction shell and its submit-lock behaviour
+      ---
+      duration_ms: 0.181
+      type: 'test'
+    # Subtest: bounds the step list height rather than pushing the actions off screen
+    ok 3 - bounds the step list height rather than pushing the actions off screen
+      ---
+      duration_ms: 0.078292
+      type: 'test'
+    1..3
+ok 55 - PlanApprovalCard contract
+  ---
+  duration_ms: 5.469375
+  type: 'suite'
+# Subtest: AssistantWorkbench wiring
+    # Subtest: gates the plan card on the RPC it answers with, and falls back to the generic card
+    ok 1 - gates the plan card on the RPC it answers with, and falls back to the generic card
+      ---
+      duration_ms: 0.115209
+      type: 'test'
+    # Subtest: lazy-loads the card but keeps the predicate eager (R-P7)
+    ok 2 - lazy-loads the card but keeps the predicate eager (R-P7)
+      ---
+      duration_ms: 0.103875
+      type: 'test'
+    # Subtest: never reaches the daemon except through the gateway
+    ok 3 - never reaches the daemon except through the gateway
+      ---
+      duration_ms: 0.048625
+      type: 'test'
+    1..3
+ok 56 - AssistantWorkbench wiring
+  ---
+  duration_ms: 0.316209
+  type: 'suite'
+# Subtest: run subscription lifecycle (one active sub per run)
+    # Subtest: starting a run aborts only the previous signal for that same run
+    ok 1 - starting a run aborts only the previous signal for that same run
+      ---
+      duration_ms: 0.45425
+      type: 'test'
+    # Subtest: a run with a live signal is not restarted
+    ok 2 - a run with a live signal is not restarted
+      ---
+      duration_ms: 0.366209
+      type: 'test'
+    # Subtest: a run whose signal was aborted is restarted
+    ok 3 - a run whose signal was aborted is restarted
+      ---
+      duration_ms: 0.098583
+      type: 'test'
+    # Subtest: runs that leave the wanted set are aborted and dropped
+    ok 4 - runs that leave the wanted set are aborted and dropped
+      ---
+      duration_ms: 0.087208
+      type: 'test'
+    # Subtest: clearing every subscription aborts all tracked signals
+    ok 5 - clearing every subscription aborts all tracked signals
+      ---
+      duration_ms: 0.1195
+      type: 'test'
+    # Subtest: soft-resub only continues when the same signal still owns the run slot
+    ok 6 - soft-resub only continues when the same signal still owns the run slot
+      ---
+      duration_ms: 0.090917
+      type: 'test'
+    # Subtest: an empty poll never reports a lost connection
+    ok 7 - an empty poll never reports a lost connection
+      ---
+      duration_ms: 0.163
+      type: 'test'
+    1..7
+ok 57 - run subscription lifecycle (one active sub per run)
+  ---
+  duration_ms: 1.909583
+  type: 'suite'
+# Subtest: timeline / activity empty-array identity
+    # Subtest: ConversationTimeline uses shared empty constants for runEvents + idle tools
+    ok 1 - ConversationTimeline uses shared empty constants for runEvents + idle tools
+      ---
+      duration_ms: 0.523333
+      type: 'test'
+    # Subtest: Workbench child-event path uses shared EMPTY_CHILD_EVENTS
+    ok 2 - Workbench child-event path uses shared EMPTY_CHILD_EVENTS
+      ---
+      duration_ms: 0.090958
+      type: 'test'
+    # Subtest: extractTodosFromEvents empty path is a shared constant
+    ok 3 - extractTodosFromEvents empty path is a shared constant
+      ---
+      duration_ms: 0.077167
+      type: 'test'
+    1..3
+ok 58 - timeline / activity empty-array identity
+  ---
+  duration_ms: 1.201417
+  type: 'suite'
+# Subtest: timelineWindowStart (pure)
+    # Subtest: renders everything when total fits the window
+    ok 1 - renders everything when total fits the window
+      ---
+      duration_ms: 0.908167
+      type: 'test'
+    # Subtest: caps mounted rows at the window size for large histories
+    ok 2 - caps mounted rows at the window size for large histories
+      ---
+      duration_ms: 0.250542
+      type: 'test'
+    # Subtest: revealing older rows grows the window without going negative
+    ok 3 - revealing older rows grows the window without going negative
+      ---
+      duration_ms: 0.20075
+      type: 'test'
+    1..3
+ok 59 - timelineWindowStart (pure)
+  ---
+  duration_ms: 2.89625
+  type: 'suite'
+# Subtest: classifyTimelineDelta (pure)
+    # Subtest: first observation keeps the default window
+    ok 1 - first observation keeps the default window
+      ---
+      duration_ms: 0.1925
+      type: 'test'
+    # Subtest: streaming append keeps the tail-anchored window
+    ok 2 - streaming append keeps the tail-anchored window
+      ---
+      duration_ms: 0.057625
+      type: 'test'
+    # Subtest: host prepend page grows the window so loaded rows stay visible
+    ok 3 - host prepend page grows the window so loaded rows stay visible
+      ---
+      duration_ms: 0.045792
+      type: 'test'
+    # Subtest: conversation switch / clear resets local reveals
+    ok 4 - conversation switch / clear resets local reveals
+      ---
+      duration_ms: 0.102084
+      type: 'test'
+    1..4
+ok 60 - classifyTimelineDelta (pure)
+  ---
+  duration_ms: 0.709125
+  type: 'suite'
+# Subtest: ConversationTimeline render window (component)
+    # Subtest: mounts at most 150 MessageRow for >200 messages
+    ok 1 - mounts at most 150 MessageRow for >200 messages
+      ---
+      duration_ms: 272.823875
+      type: 'test'
+    # Subtest: renders all rows and no reveal button when history fits the window
+    ok 2 - renders all rows and no reveal button when history fits the window
+      ---
+      duration_ms: 40.479083
+      type: 'test'
+    # Subtest: local reveal button takes precedence over host paging button
+    ok 3 - local reveal button takes precedence over host paging button
+      ---
+      duration_ms: 140.177875
+      type: 'test'
+    1..3
+ok 61 - ConversationTimeline render window (component)
+  ---
+  duration_ms: 454.772792
+  type: 'suite'
+# Subtest: assistant workspace shell fallbacks (workbench unmounted)
+    # Subtest: rename/archive have host direct branches instead of optional-chain no-ops
+    ok 1 - rename/archive have host direct branches instead of optional-chain no-ops
+      ---
+      duration_ms: 0.384916
+      type: 'test'
+    # Subtest: pin fallback writes the same db key/shape as the Workbench
+    ok 2 - pin fallback writes the same db key/shape as the Workbench
+      ---
+      duration_ms: 0.075708
+      type: 'test'
+    # Subtest: fallback failures surface via classifyError -> toast (no alert/confirm)
+    ok 3 - fallback failures surface via classifyError -> toast (no alert/confirm)
+      ---
+      duration_ms: 0.139667
+      type: 'test'
+    1..3
+ok 62 - assistant workspace shell fallbacks (workbench unmounted)
+  ---
+  duration_ms: 1.083709
+  type: 'suite'
+# Subtest: navigation refresh failure honesty (loadError)
+    # Subtest: snapshot carries loadError and empty state is distinguished from failure
+    ok 1 - snapshot carries loadError and empty state is distinguished from failure
+      ---
+      duration_ms: 0.188833
+      type: 'test'
+    # Subtest: publishNavigation structural bailout compares loadError
+    ok 2 - publishNavigation structural bailout compares loadError
+      ---
+      duration_ms: 0.046125
+      type: 'test'
+    1..2
+ok 63 - navigation refresh failure honesty (loadError)
+  ---
+  duration_ms: 0.305208
+  type: 'suite'
+# Subtest: assistant workspace context split (stream sidebar thrash)
+    # Subtest: exposes separate Navigation / Runtime / Actions / Api contexts and hooks
+    ok 1 - exposes separate Navigation / Runtime / Actions / Api contexts and hooks
+      ---
+      duration_ms: 0.624458
+      type: 'test'
+    # Subtest: sidebar conversation tree does not subscribe to combined workspace / runtime
+    ok 2 - sidebar conversation tree does not subscribe to combined workspace / runtime
+      ---
+      duration_ms: 0.095125
+      type: 'test'
+    # Subtest: shell Sidebar rail only needs actions, not runtime
+    ok 3 - shell Sidebar rail only needs actions, not runtime
+      ---
+      duration_ms: 0.071667
+      type: 'test'
+    # Subtest: navigation value useMemo does not depend on runtime
+    ok 4 - navigation value useMemo does not depend on runtime
+      ---
+      duration_ms: 0.16175
+      type: 'test'
+    # Subtest: workbench publishers come from stable Api, not runtime context
+    ok 5 - workbench publishers come from stable Api, not runtime context
+      ---
+      duration_ms: 0.321167
+      type: 'test'
+    1..5
+ok 64 - assistant workspace context split (stream sidebar thrash)
+  ---
+  duration_ms: 1.867916
+  type: 'suite'
+# Subtest: untouched stored rows are sent as null (keep sentinel)
+ok 65 - untouched stored rows are sent as null (keep sentinel)
+  ---
+  duration_ms: 0.751
+  type: 'test'
+# Subtest: touched row submits its value, untouched siblings stay null
+ok 66 - touched row submits its value, untouched siblings stay null
+  ---
+  duration_ms: 0.073833
+  type: 'test'
+# Subtest: removed rows are absent from the payload (deletion)
+ok 67 - removed rows are absent from the payload (deletion)
+  ---
+  duration_ms: 0.063041
+  type: 'test'
+# Subtest: create-mode rows (not stored) never produce null
+ok 68 - create-mode rows (not stored) never produce null
+  ---
+  duration_ms: 0.064375
+  type: 'test'
+# Subtest: blank keys are skipped and keys are trimmed
+ok 69 - blank keys are skipped and keys are trimmed
+  ---
+  duration_ms: 0.123458
+  type: 'test'
+# Subtest: groupCreativeApps
+    # Subtest: splits internal from imported sources
+    ok 1 - splits internal from imported sources
+      ---
+      duration_ms: 10.715917
+      type: 'test'
+    # Subtest: keeps the shared ordering inside each group
+    ok 2 - keeps the shared ordering inside each group
+      ---
+      duration_ms: 0.267292
+      type: 'test'
+    # Subtest: yields two empty groups for an empty catalog
+    ok 3 - yields two empty groups for an empty catalog
+      ---
+      duration_ms: 0.154459
+      type: 'test'
+    # Subtest: does not mutate the input array
+    ok 4 - does not mutate the input array
+      ---
+      duration_ms: 0.32675
+      type: 'test'
+    1..4
+ok 70 - groupCreativeApps
+  ---
+  duration_ms: 12.533916
+  type: 'suite'
+# Subtest: no draft and no revision resolve to their own empty states
+ok 71 - no draft and no revision resolve to their own empty states
+  ---
+  duration_ms: 0.598708
+  type: 'test'
+# Subtest: in-flight draft states outrank an unavailable port
+ok 72 - in-flight draft states outrank an unavailable port
+  ---
+  duration_ms: 0.187375
+  type: 'test'
+# Subtest: port failure and pending load are distinguished, ready needs both
+ok 73 - port failure and pending load are distinguished, ready needs both
+  ---
+  duration_ms: 0.065875
+  type: 'test'
+# Subtest: preview iframe never grants same-origin access (R-S2)
+ok 74 - preview iframe never grants same-origin access (R-S2)
+  ---
+  duration_ms: 0.148
+  type: 'test'
+# Subtest: frame identity comes from contentWindow, not the opaque origin
+ok 75 - frame identity comes from contentWindow, not the opaque origin
+  ---
+  duration_ms: 0.160166
+  type: 'test'
+# Subtest: revision rides in the URL so the frame cannot serve a cached revision
+ok 76 - revision rides in the URL so the frame cannot serve a cached revision
+  ---
+  duration_ms: 0.052542
+  type: 'test'
+# Subtest: CreativeDock structure (T10)
+    # Subtest: never nests an interactive control inside a button
+    ok 1 - never nests an interactive control inside a button
+      ---
+      duration_ms: 0.478833
+      type: 'test'
+    # Subtest: uses a real tablist/tab pattern with sibling action buttons
+    ok 2 - uses a real tablist/tab pattern with sibling action buttons
+      ---
+      duration_ms: 0.112334
+      type: 'test'
+    # Subtest: drives the real T07 Window API, not local fake state
+    ok 3 - drives the real T07 Window API, not local fake state
+      ---
+      duration_ms: 0.140417
+      type: 'test'
+    # Subtest: supports arrow-key and Home/End navigation on the tablist
+    ok 4 - supports arrow-key and Home/End navigation on the tablist
+      ---
+      duration_ms: 0.054667
+      type: 'test'
+    # Subtest: renders nothing when there are no tabs
+    ok 5 - renders nothing when there are no tabs
+      ---
+      duration_ms: 2.427041
+      type: 'test'
+    1..5
+ok 77 - CreativeDock structure (T10)
+  ---
+  duration_ms: 3.716292
+  type: 'suite'
+# Subtest: CreativeDock rendering (T10)
+    # Subtest: renders one tab per open window with aria-selected state
+    ok 1 - renders one tab per open window with aria-selected state
+      ---
+      duration_ms: 5.178
+      type: 'test'
+    # Subtest: hides the minimize control for minimized windows (restore on select)
+    ok 2 - hides the minimize control for minimized windows (restore on select)
+      ---
+      duration_ms: 1.065792
+      type: 'test'
+    # Subtest: renders a tab for a running app without windows (open action)
+    ok 3 - renders a tab for a running app without windows (open action)
+      ---
+      duration_ms: 0.411583
+      type: 'test'
+    1..3
+ok 78 - CreativeDock rendering (T10)
+  ---
+  duration_ms: 6.884042
+  type: 'suite'
+# Subtest: proposal wire field contract (T06)
+    # Subtest: the TS proposal type reads environmentKeys, never envKeys
+    ok 1 - the TS proposal type reads environmentKeys, never envKeys
+      ---
+      duration_ms: 0.526084
+      type: 'test'
+    # Subtest: the inbox keys cards by the stable proposalId
+    ok 2 - the inbox keys cards by the stable proposalId
+      ---
+      duration_ms: 0.075125
+      type: 'test'
+    1..2
+ok 79 - proposal wire field contract (T06)
+  ---
+  duration_ms: 1.172208
+  type: 'suite'
+# Subtest: ProposalApprovalCard rendering
+    # Subtest: renders the full executable, argv, cwd, env keys and project root
+    ok 1 - renders the full executable, argv, cwd, env keys and project root
+      ---
+      duration_ms: 8.890083
+      type: 'test'
+    # Subtest: renders a binary executable path and its argv
+    ok 2 - renders a binary executable path and its argv
+      ---
+      duration_ms: 13.321167
+      type: 'test'
+    # Subtest: resolves every string through i18n in both locales
+    ok 3 - resolves every string through i18n in both locales
+      ---
+      duration_ms: 15.921833
+      type: 'test'
+    1..3
+ok 80 - ProposalApprovalCard rendering
+  ---
+  duration_ms: 38.272042
+  type: 'suite'
+# Subtest: ProposalApprovalCard failure contract
+    # Subtest: the approve catch path shows the error and never toasts success
+    ok 1 - the approve catch path shows the error and never toasts success
+      ---
+      duration_ms: 0.308
+      type: 'test'
+    # Subtest: the inbox rethrows so the card stays visible with the error
+    ok 2 - the inbox rethrows so the card stays visible with the error
+      ---
+      duration_ms: 0.260584
+      type: 'test'
+    # Subtest: an already-decided result never dismisses the card silently
+    ok 3 - an already-decided result never dismisses the card silently
+      ---
+      duration_ms: 0.0605
+      type: 'test'
+    # Subtest: a duplicate event (already_decided) never resolves as a fresh success
+    ok 4 - a duplicate event (already_decided) never resolves as a fresh success
+      ---
+      duration_ms: 0.118166
+      type: 'test'
+    1..4
+ok 81 - ProposalApprovalCard failure contract
+  ---
+  duration_ms: 1.163333
+  type: 'suite'
+# Subtest: WorkshopPage convergence (T10)
+    # Subtest: WorkshopPage is no longer a giant multi-responsibility controller
+    ok 1 - WorkshopPage is no longer a giant multi-responsibility controller
+      ---
+      duration_ms: 0.559709
+      type: 'test'
+    # Subtest: wizards/surfaces live in dedicated single-responsibility modules
+    ok 2 - wizards/surfaces live in dedicated single-responsibility modules
+      ---
+      duration_ms: 0.215875
+      type: 'test'
+    # Subtest: removes the dead localStartAfterSave state (buttons already decide)
+    ok 3 - removes the dead localStartAfterSave state (buttons already decide)
+      ---
+      duration_ms: 0.061292
+      type: 'test'
+    # Subtest: removes the hardcoded English "confirm bind mounts" label
+    ok 4 - removes the hardcoded English "confirm bind mounts" label
+      ---
+      duration_ms: 0.175625
+      type: 'test'
+    # Subtest: user-visible labels in the shell come from i18n
+    ok 5 - user-visible labels in the shell come from i18n
+      ---
+      duration_ms: 0.090333
+      type: 'test'
+    1..5
+ok 82 - WorkshopPage convergence (T10)
+  ---
+  duration_ms: 1.985708
+  type: 'suite'
+# Subtest: file markdown is rendered as markup and keeps rewritten local images
+ok 83 - file markdown is rendered as markup and keeps rewritten local images
+  ---
+  duration_ms: 3.995375
+  type: 'test'
+# Subtest: file markdown allows local asset images but rejects active URLs
+ok 84 - file markdown allows local asset images but rejects active URLs
+  ---
+  duration_ms: 0.176209
+  type: 'test'
+# Subtest: nextSortForField
+    # Subtest: toggles direction when the same field is selected (name no-op fix)
+    ok 1 - toggles direction when the same field is selected (name no-op fix)
+      ---
+      duration_ms: 1.059625
+      type: 'test'
+    # Subtest: switches to name with ascending default
+    ok 2 - switches to name with ascending default
+      ---
+      duration_ms: 0.11625
+      type: 'test'
+    # Subtest: switches to mtime/size with descending default
+    ok 3 - switches to mtime/size with descending default
+      ---
+      duration_ms: 0.06925
+      type: 'test'
+    # Subtest: toggles mtime when re-selected
+    ok 4 - toggles mtime when re-selected
+      ---
+      duration_ms: 0.128583
+      type: 'test'
+    1..4
+ok 85 - nextSortForField
+  ---
+  duration_ms: 2.29175
+  type: 'suite'
+# Subtest: nextSortDir
+    # Subtest: sets explicit direction
+    ok 1 - sets explicit direction
+      ---
+      duration_ms: 0.154292
+      type: 'test'
+    # Subtest: toggles when value is omitted
+    ok 2 - toggles when value is omitted
+      ---
+      duration_ms: 0.042542
+      type: 'test'
+    # Subtest: toggles on unknown value
+    ok 3 - toggles on unknown value
+      ---
+      duration_ms: 0.087333
+      type: 'test'
+    1..3
+ok 86 - nextSortDir
+  ---
+  duration_ms: 0.554458
+  type: 'suite'
+# Subtest: EngineCapabilitiesPanel uses createDefaultGateway + capability-admin only
+ok 87 - EngineCapabilitiesPanel uses createDefaultGateway + capability-admin only
+  ---
+  duration_ms: 0.859084
+  type: 'test'
+# Subtest: EngineCapabilitiesPanel is a run evidence projection, not a scheduler inventory
+ok 88 - EngineCapabilitiesPanel is a run evidence projection, not a scheduler inventory
+  ---
+  duration_ms: 0.274917
+  type: 'test'
+# Subtest: Engine capability evidence types and bilingual copy cover the run projection
+ok 89 - Engine capability evidence types and bilingual copy cover the run projection
+  ---
+  duration_ms: 0.813959
+  type: 'test'
+# Subtest: Settings exposes one execution-engine entry containing capabilities and Harness
+ok 90 - Settings exposes one execution-engine entry containing capabilities and Harness
+  ---
+  duration_ms: 0.533083
+  type: 'test'
+# Subtest: Harness detail keeps run and editors inside the controlled canvas
+ok 91 - Harness detail keeps run and editors inside the controlled canvas
+  ---
+  duration_ms: 0.42125
+  type: 'test'
+# Subtest: Harness run start requires explicit project/provider/model instead of copying a global run
+ok 92 - Harness run start requires explicit project/provider/model instead of copying a global run
+  ---
+  duration_ms: 0.282875
+  type: 'test'
+# Subtest: Harness list opens create as a separate view and preview stays read-only
+ok 93 - Harness list opens create as a separate view and preview stays read-only
+  ---
+  duration_ms: 0.240792
+  type: 'test'
+# Subtest: Node inspector exposes per-node hooks, prompts, tools, and subagents
+ok 94 - Node inspector exposes per-node hooks, prompts, tools, and subagents
+  ---
+  duration_ms: 1.3125
+  type: 'test'
+# Subtest: execution canvas gives every canonical daemon stage a human-readable label
+ok 95 - execution canvas gives every canonical daemon stage a human-readable label
+  ---
+  duration_ms: 0.700042
+  type: 'test'
+# Subtest: layout preserves every returned stage, including an unknown twelfth node
+ok 96 - layout preserves every returned stage, including an unknown twelfth node
+  ---
+  duration_ms: 0.672292
+  type: 'test'
+# Subtest: canvas only renders authoritative edges whose endpoints exist
+ok 97 - canvas only renders authoritative edges whose endpoints exist
+  ---
+  duration_ms: 0.088209
+  type: 'test'
+# Subtest: run evidence marks edges adjacent to nodes with results
+ok 98 - run evidence marks edges adjacent to nodes with results
+  ---
+  duration_ms: 0.113625
+  type: 'test'
+# Subtest: every current stage exposes at least one proven configuration destination
+ok 99 - every current stage exposes at least one proven configuration destination
+  ---
+  duration_ms: 0.11525
+  type: 'test'
+# Subtest: audit calls Hook evidence what it is instead of verifying a whole stage
+ok 100 - audit calls Hook evidence what it is instead of verifying a whole stage
+  ---
+  duration_ms: 0.517584
+  type: 'test'
+# Subtest: audit distinguishes failed Hook evidence and a recorded prompt snapshot
+ok 101 - audit distinguishes failed Hook evidence and a recorded prompt snapshot
+  ---
+  duration_ms: 0.175583
+  type: 'test'
+# Subtest: summarizeOverviewUsage derives only available real metrics
+ok 102 - summarizeOverviewUsage derives only available real metrics
+  ---
+  duration_ms: 2.092958
+  type: 'test'
+# Subtest: summarizeOverviewUsage preserves unavailable token values
+ok 103 - summarizeOverviewUsage preserves unavailable token values
+  ---
+  duration_ms: 0.340208
+  type: 'test'
+# Subtest: buildOverviewTrend aggregates records for the same calendar day
+ok 104 - buildOverviewTrend aggregates records for the same calendar day
+  ---
+  duration_ms: 38.956958
+  type: 'test'
+# Subtest: Sub2API account selection toggles only the requested account
+ok 105 - Sub2API account selection toggles only the requested account
+  ---
+  duration_ms: 0.764334
+  type: 'test'
+# Subtest: Sub2API account selection removes deleted accounts
+ok 106 - Sub2API account selection removes deleted accounts
+  ---
+  duration_ms: 0.098
+  type: 'test'
+# Subtest: clampRightPanelWidth enforces min / max / viewport floor
+ok 107 - clampRightPanelWidth enforces min / max / viewport floor
+  ---
+  duration_ms: 0.4735
+  type: 'test'
+# Subtest: clampRightPanelWidth rounds to integer pixels
+ok 108 - clampRightPanelWidth rounds to integer pixels
+  ---
+  duration_ms: 0.059959
+  type: 'test'
+# Subtest: RightPanel implements left-edge drag resize
+ok 109 - RightPanel implements left-edge drag resize
+  ---
+  duration_ms: 0.115417
+  type: 'test'
+# Subtest: right-panel CSS supports elastic content + drag handle
+ok 110 - right-panel CSS supports elastic content + drag handle
+  ---
+  duration_ms: 0.20175
+  type: 'test'
+# Subtest: exported width constants stay coherent
+ok 111 - exported width constants stay coherent
+  ---
+  duration_ms: 0.079666
+  type: 'test'
+# Subtest: assistant tree is owned only by the shell sidebar
+ok 112 - assistant tree is owned only by the shell sidebar
+  ---
+  duration_ms: 1.638333
+  type: 'test'
+# Subtest: assistant workbench is a composition layer over Gateway + Store
+ok 113 - assistant workbench is a composition layer over Gateway + Store
+  ---
+  duration_ms: 0.90675
+  type: 'test'
+# Subtest: reselecting the active conversation refreshes snapshot without re-setActive
+ok 114 - reselecting the active conversation refreshes snapshot without re-setActive
+  ---
+  duration_ms: 0.330708
+  type: 'test'
+# Subtest: assistant sidebar does not default to a permanent loading spinner
+ok 115 - assistant sidebar does not default to a permanent loading spinner
+  ---
+  duration_ms: 0.547625
+  type: 'test'
+# Subtest: assistant and Quick Access use the same first-level heading style
+ok 116 - assistant and Quick Access use the same first-level heading style
+  ---
+  duration_ms: 0.4415
+  type: 'test'
+# Subtest: sidebar owns Favorites as a first-level rail above Assistant
+ok 117 - sidebar owns Favorites as a first-level rail above Assistant
+  ---
+  duration_ms: 0.361666
+  type: 'test'
+# Subtest: expanded sidebar owns collapse and header only restores it
+ok 118 - expanded sidebar owns collapse and header only restores it
+  ---
+  duration_ms: 0.306875
+  type: 'test'
+# Subtest: collapsed sidebar hides body and places expand control in titlebar
+ok 119 - collapsed sidebar hides body and places expand control in titlebar
+  ---
+  duration_ms: 0.238083
+  type: 'test'
+# Subtest: sidebar uses native traffic lights on macOS and fallback controls elsewhere
+ok 120 - sidebar uses native traffic lights on macOS and fallback controls elsewhere
+  ---
+  duration_ms: 0.981583
+  type: 'test'
+# Subtest: macOS window chrome keeps system traffic lights (decorations + Overlay)
+ok 121 - macOS window chrome keeps system traffic lights (decorations + Overlay)
+  ---
+  duration_ms: 2.575834
+  type: 'test'
+# Subtest: sidebar right-edge drag resizes width with clamp + double-click reset
+ok 122 - sidebar right-edge drag resizes width with clamp + double-click reset
+  ---
+  duration_ms: 0.157958
+  type: 'test'
+# Subtest: layout events debounce width persistence and flush on unload
+ok 123 - layout events debounce width persistence and flush on unload
+  ---
+  duration_ms: 0.052792
+  type: 'test'
+# Subtest: assistant heading exposes only tree toggle and add project actions
+ok 124 - assistant heading exposes only tree toggle and add project actions
+  ---
+  duration_ms: 0.076042
+  type: 'test'
+# Subtest: assistant projects only toggle their conversations and have no separate search
+ok 125 - assistant projects only toggle their conversations and have no separate search
+  ---
+  duration_ms: 0.121291
+  type: 'test'
+# Subtest: assistant project menu exposes pin, reveal, and remove actions
+ok 126 - assistant project menu exposes pin, reveal, and remove actions
+  ---
+  duration_ms: 0.05225
+  type: 'test'
+# Subtest: assistant conversation rows use a neutral selected state and comfortable height
+ok 127 - assistant conversation rows use a neutral selected state and comfortable height
+  ---
+  duration_ms: 0.072208
+  type: 'test'
+# Subtest: send path uses gateway sendOrQueue (queue while running, no streamChat)
+ok 128 - send path uses gateway sendOrQueue (queue while running, no streamChat)
+  ---
+  duration_ms: 0.141167
+  type: 'test'
+# Subtest: stop uses gateway cancelRun and does not invent terminal run status
+ok 129 - stop uses gateway cancelRun and does not invent terminal run status
+  ---
+  duration_ms: 0.115917
+  type: 'test'
+# Subtest: assistant composer does not change its border when the textarea focuses
+ok 130 - assistant composer does not change its border when the textarea focuses
+  ---
+  duration_ms: 0.040834
+  type: 'test'
+# Subtest: assistant sidebar deletion goes only through workspace actions (Gateway seam)
+ok 131 - assistant sidebar deletion goes only through workspace actions (Gateway seam)
+  ---
+  duration_ms: 0.111875
+  type: 'test'
+# Subtest: conversation menu panel lives under data-assistant-menu (outside-click must not kill item clicks)
+ok 132 - conversation menu panel lives under data-assistant-menu (outside-click must not kill item clicks)
+  ---
+  duration_ms: 4.742
+  type: 'test'
+# Subtest: assistant action menus portal to body above clipping layers
+ok 133 - assistant action menus portal to body above clipping layers
+  ---
+  duration_ms: 0.160333
+  type: 'test'
+# Subtest: slash commands use composer-local positioning; keyboard owned by MessageInput
+ok 134 - slash commands use composer-local positioning; keyboard owned by MessageInput
+  ---
+  duration_ms: 0.185042
+  type: 'test'
+# Subtest: locale persistence broadcasts the change consumed by the shell
+ok 135 - locale persistence broadcasts the change consumed by the shell
+  ---
+  duration_ms: 0.1215
+  type: 'test'
+# Subtest: Sidebar - assistant and Quick Access are sibling sections
+ok 136 - Sidebar - assistant and Quick Access are sibling sections
+  ---
+  duration_ms: 0.486875
+  type: 'test'
+# Subtest: Sidebar - projects and conversations appear only once in global sidebar
+ok 137 - Sidebar - projects and conversations appear only once in global sidebar
+  ---
+  duration_ms: 0.057541
+  type: 'test'
+# Subtest: Sidebar - no Chat/Agent new conversation entries
+ok 138 - Sidebar - no Chat/Agent new conversation entries
+  ---
+  duration_ms: 0.041834
+  type: 'test'
+# Subtest: Sidebar - create button calls createConversation() with no arguments
+ok 139 - Sidebar - create button calls createConversation() with no arguments
+  ---
+  duration_ms: 0.095042
+  type: 'test'
+# Subtest: Sidebar - has data-tauri-drag-region for window controls
+ok 140 - Sidebar - has data-tauri-drag-region for window controls
+  ---
+  duration_ms: 0.040708
+  type: 'test'
+# Subtest: Sidebar - search preserves parent project with matching conversations
+ok 141 - Sidebar - search preserves parent project with matching conversations
+  ---
+  duration_ms: 0.076
+  type: 'test'
+# Subtest: Sidebar - collapsed project state is frontend-only
+ok 142 - Sidebar - collapsed project state is frontend-only
+  ---
+  duration_ms: 0.098708
+  type: 'test'
+# Subtest: Sidebar - sidebar collapsed hides body and keeps expand control
+ok 143 - Sidebar - sidebar collapsed hides body and keeps expand control
+  ---
+  duration_ms: 0.036958
+  type: 'test'
+# Subtest: Sidebar - stacked notification and settings are fixed at bottom
+ok 144 - Sidebar - stacked notification and settings are fixed at bottom
+  ---
+  duration_ms: 0.257875
+  type: 'test'
+# Subtest: settings starts with personal overview and exposes one execution-engine entry
+ok 145 - settings starts with personal overview and exposes one execution-engine entry
+  ---
+  duration_ms: 0.800209
+  type: 'test'
+# Subtest: settings entry points normalize to the personal overview
+ok 146 - settings entry points normalize to the personal overview
+  ---
+  duration_ms: 0.086
+  type: 'test'
+# Subtest: valid settings targets are preserved and overview alias is redirected
+ok 147 - valid settings targets are preserved and overview alias is redirected
+  ---
+  duration_ms: 0.062708
+  type: 'test'
+# Subtest: invalid and removed settings targets fall back to personal overview
+ok 148 - invalid and removed settings targets fall back to personal overview
+  ---
+  duration_ms: 0.047708
+  type: 'test'
+# Subtest: ordinary navigation targets are not consumed
+ok 149 - ordinary navigation targets are not consumed
+  ---
+  duration_ms: 0.047917
+  type: 'test'
+# Subtest: dirChildrenOf
+    # Subtest: 只列文件夹、不列文件、排除隐藏
+    ok 1 - 只列文件夹、不列文件、排除隐藏
+      ---
+      duration_ms: 0.748125
+      type: 'test'
+    # Subtest: 空列表返回空数组
+    ok 2 - 空列表返回空数组
+      ---
+      duration_ms: 0.115083
+      type: 'test'
+    1..2
+ok 150 - dirChildrenOf
+  ---
+  duration_ms: 1.303916
+  type: 'suite'
+# Subtest: shouldFetchOnExpand
+    # Subtest: 从未加载过 → 需要请求
+    ok 1 - 从未加载过 → 需要请求
+      ---
+      duration_ms: 0.186583
+      type: 'test'
+    # Subtest: 正在加载 → 去重不重复请求（单次展开只发一次）
+    ok 2 - 正在加载 → 去重不重复请求（单次展开只发一次）
+      ---
+      duration_ms: 0.064875
+      type: 'test'
+    # Subtest: 30 秒内已加载 → 折叠再展开不重复请求
+    ok 3 - 30 秒内已加载 → 折叠再展开不重复请求
+      ---
+      duration_ms: 0.058333
+      type: 'test'
+    # Subtest: 超过 30 秒 → 重新拉取
+    ok 4 - 超过 30 秒 → 重新拉取
+      ---
+      duration_ms: 0.043125
+      type: 'test'
+    # Subtest: 上次出错 → 允许重试
+    ok 5 - 上次出错 → 允许重试
+      ---
+      duration_ms: 0.094541
+      type: 'test'
+    1..5
+ok 151 - shouldFetchOnExpand
+  ---
+  duration_ms: 0.767417
+  type: 'suite'
+# Subtest: markLoading / markLoaded / markError
+    # Subtest: markLoading 保留上次 children（stale-while-revalidate）
+    ok 1 - markLoading 保留上次 children（stale-while-revalidate）
+      ---
+      duration_ms: 0.118875
+      type: 'test'
+    # Subtest: 首次 markLoading 无历史 children
+    ok 2 - 首次 markLoading 无历史 children
+      ---
+      duration_ms: 0.107875
+      type: 'test'
+    # Subtest: markLoaded 覆盖为新结果并记录时间戳
+    ok 3 - markLoaded 覆盖为新结果并记录时间戳
+      ---
+      duration_ms: 0.240541
+      type: 'test'
+    # Subtest: markError 清空 children 并复位时间戳
+    ok 4 - markError 清空 children 并复位时间戳
+      ---
+      duration_ms: 0.055917
+      type: 'test'
+    # Subtest: 状态迁移不改动其它路径（不可变更新）
+    ok 5 - 状态迁移不改动其它路径（不可变更新）
+      ---
+      duration_ms: 0.044
+      type: 'test'
+    1..5
+ok 152 - markLoading / markLoaded / markError
+  ---
+  duration_ms: 0.736375
+  type: 'suite'
+# Subtest: toggleExpanded
+    # Subtest: 展开/折叠往返
+    ok 1 - 展开/折叠往返
+      ---
+      duration_ms: 0.067916
+      type: 'test'
+    # Subtest: 返回新 Set，不修改入参
+    ok 2 - 返回新 Set，不修改入参
+      ---
+      duration_ms: 0.041334
+      type: 'test'
+    1..2
+ok 153 - toggleExpanded
+  ---
+  duration_ms: 0.147
+  type: 'suite'
+# Subtest: arrowKindFor
+    # Subtest: 未加载 + 未展开 → collapsed（▸）
+    ok 1 - 未加载 + 未展开 → collapsed（▸）
+      ---
+      duration_ms: 0.071417
+      type: 'test'
+    # Subtest: 已加载有子目录 + 展开 → expanded（▾）
+    ok 2 - 已加载有子目录 + 展开 → expanded（▾）
+      ---
+      duration_ms: 0.040375
+      type: 'test'
+    # Subtest: 展开中且正在加载 → loading（spinner）
+    ok 3 - 展开中且正在加载 → loading（spinner）
+      ---
+      duration_ms: 0.03525
+      type: 'test'
+    # Subtest: 空目录（无子文件夹）→ 无箭头/禁用态
+    ok 4 - 空目录（无子文件夹）→ 无箭头/禁用态
+      ---
+      duration_ms: 0.034917
+      type: 'test'
+    # Subtest: listDir 报错 → 静默降级为无箭头
+    ok 5 - listDir 报错 → 静默降级为无箭头
+      ---
+      duration_ms: 0.030958
+      type: 'test'
+    # Subtest: 折叠但正在加载（后台刷新）→ 仍显示 collapsed
+    ok 6 - 折叠但正在加载（后台刷新）→ 仍显示 collapsed
+      ---
+      duration_ms: 0.0355
+      type: 'test'
+    1..6
+ok 154 - arrowKindFor
+  ---
+  duration_ms: 0.370834
+  type: 'suite'
+# Subtest: clampResizableRightPanelWidth respects min/max and viewport floor
+ok 155 - clampResizableRightPanelWidth respects min/max and viewport floor
+  ---
+  duration_ms: 0.508708
+  type: 'test'
+# Subtest: catalog reconciliation does not restart when a reload replaces the app array
+ok 156 - catalog reconciliation does not restart when a reload replaces the app array
+  ---
+  duration_ms: 0.521041
+  type: 'test'
+# Subtest: operation journal projection subscribes with cleanup (batch 2 CR-203)
+ok 157 - operation journal projection subscribes with cleanup (batch 2 CR-203)
+  ---
+  duration_ms: 0.145583
+  type: 'test'
+# Subtest: busy ids derive from Host operation facts, not only session calls
+ok 158 - busy ids derive from Host operation facts, not only session calls
+  ---
+  duration_ms: 0.065208
+  type: 'test'
+# Subtest: module catalog channel filter (R-T6)
+    # Subtest: accepts module channel
+    ok 1 - accepts module channel
+      ---
+      duration_ms: 0.404209
+      type: 'test'
+    # Subtest: ignores non-module channels
+    ok 2 - ignores non-module channels
+      ---
+      duration_ms: 0.062958
+      type: 'test'
+    1..2
+ok 159 - module catalog channel filter (R-T6)
+  ---
+  duration_ms: 0.964542
+  type: 'suite'
+# Subtest: active project is read from the database and legacy cache is migrated
+ok 160 - active project is read from the database and legacy cache is migrated
+  ---
+  duration_ms: 0.80475
+  type: 'test'
+# Subtest: database value wins over legacy browser cache
+ok 161 - database value wins over legacy browser cache
+  ---
+  duration_ms: 0.0885
+  type: 'test'
+# Subtest: clearing the active project deletes the database value
+ok 162 - clearing the active project deletes the database value
+  ---
+  duration_ms: 0.07425
+  type: 'test'
+# Subtest: a selected external-volume project remains active until project.list verifies it is gone
+ok 163 - a selected external-volume project remains active until project.list verifies it is gone
+  ---
+  duration_ms: 0.070209
+  type: 'test'
+# Subtest: writing empty string is treated same as null
+ok 164 - writing empty string is treated same as null
+  ---
+  duration_ms: 0.122
+  type: 'test'
+# Subtest: add provider dialog contract
+    # Subtest: uses accessible provider options
+    ok 1 - uses accessible provider options
+      ---
+      duration_ms: 0.538334
+      type: 'test'
+    # Subtest: keeps protocol selection in advanced options and only exposes testable protocols
+    ok 2 - keeps protocol selection in advanced options and only exposes testable protocols
+      ---
+      duration_ms: 0.168958
+      type: 'test'
+    # Subtest: labels the discover, test, and save sequence
+    ok 3 - labels the discover, test, and save sequence
+      ---
+      duration_ms: 0.120792
+      type: 'test'
+    # Subtest: localizes protocol labels and setup intro for both Anthropic and OpenAI
+    ok 4 - localizes protocol labels and setup intro for both Anthropic and OpenAI
+      ---
+      duration_ms: 0.163416
+      type: 'test'
+    1..4
+ok 165 - add provider dialog contract
+  ---
+  duration_ms: 1.477792
+  type: 'suite'
+# Subtest: provider preset protocol defaults
+    # Subtest: annotates every preset with a configurable protocol
+    ok 1 - annotates every preset with a configurable protocol
+      ---
+      duration_ms: 0.471208
+      type: 'test'
+    # Subtest: defaults custom providers to OpenAI and Claude-style presets to Anthropic
+    ok 2 - defaults custom providers to OpenAI and Claude-style presets to Anthropic
+      ---
+      duration_ms: 1.241709
+      type: 'test'
+    1..2
+ok 166 - provider preset protocol defaults
+  ---
+  duration_ms: 1.911834
+  type: 'suite'
+# Subtest: provider test failure UX
+    # Subtest: classifies the raw 429 diagnostic dump into a friendly Chinese rate-limit message
+    ok 1 - classifies the raw 429 diagnostic dump into a friendly Chinese rate-limit message
+      ---
+      duration_ms: 56.855417
+      type: 'test'
+    # Subtest: keeps non-rate-limit failures classified without dumping protocol metadata
+    ok 2 - keeps non-rate-limit failures classified without dumping protocol metadata
+      ---
+      duration_ms: 11.596208
+      type: 'test'
+    1..2
+ok 167 - provider test failure UX
+  ---
+  duration_ms: 69.105667
+  type: 'suite'
+# Subtest: task list auto-load uses stable query inputs and reserves external refresh for the user action
+ok 168 - task list auto-load uses stable query inputs and reserves external refresh for the user action
+  ---
+  duration_ms: 0.794
+  type: 'test'
+# Subtest: normalizeArtifactPath collapses separators and trailing slash
+ok 169 - normalizeArtifactPath collapses separators and trailing slash
+  ---
+  duration_ms: 0.192167
+  type: 'test'
+# Subtest: extractTodosFromEvents: latest todo_write wins
+ok 170 - extractTodosFromEvents: latest todo_write wins
+  ---
+  duration_ms: 0.25075
+  type: 'test'
+# Subtest: extractTodosFromEvents: empty when no todo_write
+ok 171 - extractTodosFromEvents: empty when no todo_write
+  ---
+  duration_ms: 0.337
+  type: 'test'
+# Subtest: summarizeTodoStatus: priority in_progress > completed > pending
+ok 172 - summarizeTodoStatus: priority in_progress > completed > pending
+  ---
+  duration_ms: 0.078459
+  type: 'test'
+# Subtest: aggregateArtifactFiles: created / modified buckets
+ok 173 - aggregateArtifactFiles: created / modified buckets
+  ---
+  duration_ms: 0.248167
+  type: 'test'
+# Subtest: aggregateArtifactFiles: created wins over later modified (no duplicate)
+ok 174 - aggregateArtifactFiles: created wins over later modified (no duplicate)
+  ---
+  duration_ms: 0.068667
+  type: 'test'
+# Subtest: aggregateArtifactFiles: duplicate events keep latest metadata
+ok 175 - aggregateArtifactFiles: duplicate events keep latest metadata
+  ---
+  duration_ms: 0.065542
+  type: 'test'
+# Subtest: aggregateArtifactFiles: child-run file events merge by path
+ok 176 - aggregateArtifactFiles: child-run file events merge by path
+  ---
+  duration_ms: 0.220875
+  type: 'test'
+# Subtest: aggregateArtifactFiles: path-bearing artifact defaults to created
+ok 177 - aggregateArtifactFiles: path-bearing artifact defaults to created
+  ---
+  duration_ms: 0.31175
+  type: 'test'
+# Subtest: mapSubagentUiStatus labels
+ok 178 - mapSubagentUiStatus labels
+  ---
+  duration_ms: 0.107375
+  type: 'test'
+# Subtest: allows text or attachment-only drafts
+ok 179 - allows text or attachment-only drafts
+  ---
+  duration_ms: 0.417541
+  type: 'test'
+# Subtest: rebuilds retry prompts with attachment references
+ok 180 - rebuilds retry prompts with attachment references
+  ---
+  duration_ms: 0.09425
+  type: 'test'
+# Subtest: normalizes permission profiles and file names
+ok 181 - normalizes permission profiles and file names
+  ---
+  duration_ms: 0.144458
+  type: 'test'
+# Subtest: connect pings daemon and marks connected
+ok 182 - connect pings daemon and marks connected
+  ---
+  duration_ms: 0.550833
+  type: 'test'
+# Subtest: connect fails closed when assistantV2 missing and no inject
+ok 183 - connect fails closed when assistantV2 missing and no inject
+  ---
+  duration_ms: 0.245792
+  type: 'test'
+# Subtest: subscribe uses run.subscribe then yields terminal completed
+ok 184 - subscribe uses run.subscribe then yields terminal completed
+  ---
+  duration_ms: 2.129417
+  type: 'test'
+# Subtest: subscribe falls back to run.getEvents when subscribe fails
+ok 185 - subscribe falls back to run.getEvents when subscribe fails
+  ---
+  duration_ms: 0.645958
+  type: 'test'
+# Subtest: subscribe recovers terminal when server marks terminal without new events
+ok 186 - subscribe recovers terminal when server marks terminal without new events
+  ---
+  duration_ms: 0.617958
+  type: 'test'
+# Subtest: subscribe rejects terminal status without an authoritative event
+ok 187 - subscribe rejects terminal status without an authoritative event
+  ---
+  duration_ms: 1.40175
+  type: 'test'
+# Subtest: request never invents streamChat path — only injected methods
+ok 188 - request never invents streamChat path — only injected methods
+  ---
+  duration_ms: 0.321083
+  type: 'test'
+# Subtest: getSnapshot accepts daemon run.list envelope
+ok 189 - getSnapshot accepts daemon run.list envelope
+  ---
+  duration_ms: 1.3405
+  type: 'test'
+# Subtest: stream_subscribe_has_no_fixed_poll_delay
+ok 190 - stream_subscribe_has_no_fixed_poll_delay
+  ---
+  duration_ms: 0.287458
+  type: 'test'
+# Subtest: fixture text stream drives reducer to completed without duplicate messages
+ok 191 - fixture text stream drives reducer to completed without duplicate messages
+  ---
+  duration_ms: 4.398083
+  type: 'test'
+# Subtest: fixture tool in-place update
+ok 192 - fixture tool in-place update
+  ---
+  duration_ms: 2.438417
+  type: 'test'
+# Subtest: fixture permission allow/deny path
+ok 193 - fixture permission allow/deny path
+  ---
+  duration_ms: 0.501542
+  type: 'test'
+# Subtest: fixture ask user interaction
+ok 194 - fixture ask user interaction
+  ---
+  duration_ms: 0.171875
+  type: 'test'
+# Subtest: fixture subagent + artifact
+ok 195 - fixture subagent + artifact
+  ---
+  duration_ms: 0.471083
+  type: 'test'
+# Subtest: fixture prompt queue enqueue edit reorder sendNow reassociate
+ok 196 - fixture prompt queue enqueue edit reorder sendNow reassociate
+  ---
+  duration_ms: 0.64725
+  type: 'test'
+# Subtest: fixture provider error on start
+ok 197 - fixture provider error on start
+  ---
+  duration_ms: 0.300458
+  type: 'test'
+# Subtest: fixture reasoning then text
+ok 198 - fixture reasoning then text
+  ---
+  duration_ms: 0.323708
+  type: 'test'
+# Subtest: reconnect: soft disconnect keeps content; replay continues
+ok 199 - reconnect: soft disconnect keeps content; replay continues
+  ---
+  duration_ms: 0.643542
+  type: 'test'
+# Subtest: sequence gap via skipSequences then replay
+ok 200 - sequence gap via skipSequences then replay
+  ---
+  duration_ms: 0.48275
+  type: 'test'
+# Subtest: formats reasoning elapsed time
+ok 201 - formats reasoning elapsed time
+  ---
+  duration_ms: 1.322583
+  type: 'test'
+# Subtest: timeline footer and thinking duration share the bounded 1Hz clock
+ok 202 - timeline footer and thinking duration share the bounded 1Hz clock
+  ---
+  duration_ms: 0.344292
+  type: 'test'
+# Subtest: extracts a stage title from reasoning headings and steps
+ok 203 - extracts a stage title from reasoning headings and steps
+  ---
+  duration_ms: 0.479958
+  type: 'test'
+# Subtest: reasoning toggle label is dynamic while live and summary when done
+ok 204 - reasoning toggle label is dynamic while live and summary when done
+  ---
+  duration_ms: 0.140916
+  type: 'test'
+# Subtest: extracts copyable text from message blocks
+ok 205 - extracts copyable text from message blocks
+  ---
+  duration_ms: 0.132667
+  type: 'test'
+# Subtest: suppresses desktop notification for the conversation currently open
+ok 206 - suppresses desktop notification for the conversation currently open
+  ---
+  duration_ms: 0.431042
+  type: 'test'
+# Subtest: notification titles are bilingual
+ok 207 - notification titles are bilingual
+  ---
+  duration_ms: 0.163834
+  type: 'test'
+# Subtest: locateAssistantTarget dispatches project→conversation→run path
+ok 208 - locateAssistantTarget dispatches project→conversation→run path
+  ---
+  duration_ms: 0.1205
+  type: 'test'
+# Subtest: groups conversations by their real project directory and keeps unassigned data explicit
+ok 209 - groups conversations by their real project directory and keeps unassigned data explicit
+  ---
+  duration_ms: 10.244084
+  type: 'test'
+# Subtest: registered projects appear even without conversations
+ok 210 - registered projects appear even without conversations
+  ---
+  duration_ms: 0.194542
+  type: 'test'
+# Subtest: registered projects with conversations merge correctly
+ok 211 - registered projects with conversations merge correctly
+  ---
+  duration_ms: 0.091167
+  type: 'test'
+# Subtest: hidden subagent child conversations stay out of the sidebar groups
+ok 212 - hidden subagent child conversations stay out of the sidebar groups
+  ---
+  duration_ms: 0.075125
+  type: 'test'
+# Subtest: sorts conversations inside a project by latest activity
+ok 213 - sorts conversations inside a project by latest activity
+  ---
+  duration_ms: 0.254916
+  type: 'test'
+# Subtest: conversations whose registered project directory is gone move to unassigned
+ok 214 - conversations whose registered project directory is gone move to unassigned
+  ---
+  duration_ms: 0.080084
+  type: 'test'
+# Subtest: engine unavailable still blocks creation
+ok 215 - engine unavailable still blocks creation
+  ---
+  duration_ms: 0.057167
+  type: 'test'
+# Subtest: no provider still blocks creation even without project check
+ok 216 - no provider still blocks creation even without project check
+  ---
+  duration_ms: 0.041792
+  type: 'test'
+# Subtest: no model still blocks creation even without project check
+ok 217 - no model still blocks creation even without project check
+  ---
+  duration_ms: 0.6695
+  type: 'test'
+# Subtest: keeps page, engine, and provider setup states distinct
+ok 218 - keeps page, engine, and provider setup states distinct
+  ---
+  duration_ms: 0.948666
+  type: 'test'
+# Subtest: unassigned group always sorted last
+ok 219 - unassigned group always sorted last
+  ---
+  duration_ms: 0.250167
+  type: 'test'
+# Subtest: projectId null and empty both treated as unassigned
+ok 220 - projectId null and empty both treated as unassigned
+  ---
+  duration_ms: 0.16525
+  type: 'test'
+# Subtest: registered project order follows backend list, not latest session
+ok 221 - registered project order follows backend list, not latest session
+  ---
+  duration_ms: 0.177042
+  type: 'test'
+# Subtest: pinned conversations float within their project only
+ok 222 - pinned conversations float within their project only
+  ---
+  duration_ms: 0.177959
+  type: 'test'
+# Subtest: orderGroupsWithPins keeps relative order within buckets
+ok 223 - orderGroupsWithPins keeps relative order within buckets
+  ---
+  duration_ms: 0.409
+  type: 'test'
+# Subtest: UI-called methods are in ALL_METHODS catalogue
+ok 224 - UI-called methods are in ALL_METHODS catalogue
+  ---
+  duration_ms: 1.483125
+  type: 'test'
+# Subtest: UI-called methods are implemented (daemon or host)
+ok 225 - UI-called methods are implemented (daemon or host)
+  ---
+  duration_ms: 0.335584
+  type: 'test'
+# Subtest: oauth browser methods are catalogued but advertised by neither surface (ADR-0016 decision 7)
+ok 226 - oauth browser methods are catalogued but advertised by neither surface (ADR-0016 decision 7)
+  ---
+  duration_ms: 0.224208
+  type: 'test'
+# Subtest: capability-gate HOST_METHODS_UI stays subset of HOST_IMPLEMENTED when present
+ok 227 - capability-gate HOST_METHODS_UI stays subset of HOST_IMPLEMENTED when present
+  ---
+  duration_ms: 0.120667
+  type: 'test'
+# Subtest: protocol run.rs advertises runtime_id and effort fields
+ok 228 - protocol run.rs advertises runtime_id and effort fields
+  ---
+  duration_ms: 0.344292
+  type: 'test'
+# Subtest: daemon capabilities keep codex unavailable in host_mediated helper source
+ok 229 - daemon capabilities keep codex unavailable in host_mediated helper source
+  ---
+  duration_ms: 0.636208
+  type: 'test'
+# Subtest: proposal.listPending is catalogued and daemon-implemented (T06)
+ok 230 - proposal.listPending is catalogued and daemon-implemented (T06)
+  ---
+  duration_ms: 0.24525
+  type: 'test'
+# Subtest: proposal envelope wire shape carries environmentKeys + stable proposalId (T06)
+ok 231 - proposal envelope wire shape carries environmentKeys + stable proposalId (T06)
+  ---
+  duration_ms: 0.485333
+  type: 'test'
+# Subtest: mapWireRunEvent: flattened Rust text_delta
+ok 232 - mapWireRunEvent: flattened Rust text_delta
+  ---
+  duration_ms: 2.38475
+  type: 'test'
+# Subtest: mapWireRunEvent: flattened Rust tool_call_requested/started/completed
+ok 233 - mapWireRunEvent: flattened Rust tool_call_requested/started/completed
+  ---
+  duration_ms: 0.655917
+  type: 'test'
+# Subtest: mapWireRunEvent: flattened Rust tool_call_delta
+ok 234 - mapWireRunEvent: flattened Rust tool_call_delta
+  ---
+  duration_ms: 0.101084
+  type: 'test'
+# Subtest: mapWireRunEvent: host-wrapped payload envelope
+ok 235 - mapWireRunEvent: host-wrapped payload envelope
+  ---
+  duration_ms: 0.072417
+  type: 'test'
+# Subtest: mapWireRunEvent + reducer: tool_call_delta merges into one card then completes
+ok 236 - mapWireRunEvent + reducer: tool_call_delta merges into one card then completes
+  ---
+  duration_ms: 2.926459
+  type: 'test'
+# Subtest: mapWireRunEvent + reducer: failed event surfaces error (no permanent thinking)
+ok 237 - mapWireRunEvent + reducer: failed event surfaces error (no permanent thinking)
+  ---
+  duration_ms: 0.206625
+  type: 'test'
+# Subtest: mapWireMessage: daemon run_reference bookkeeping block is filtered out
+ok 238 - mapWireMessage: daemon run_reference bookkeeping block is filtered out
+  ---
+  duration_ms: 0.824958
+  type: 'test'
+# Subtest: unwrapAssistantRpc returns the service payload
+ok 239 - unwrapAssistantRpc returns the service payload
+  ---
+  duration_ms: 0.746375
+  type: 'test'
+# Subtest: unwrapAssistantRpc throws the service error
+ok 240 - unwrapAssistantRpc throws the service error
+  ---
+  duration_ms: 0.208084
+  type: 'test'
+# Subtest: every display status has non-empty zh and en labels
+ok 241 - every display status has non-empty zh and en labels
+  ---
+  duration_ms: 0.762875
+  type: 'test'
+# Subtest: table has no extra keys beyond the known status list
+ok 242 - table has no extra keys beyond the known status list
+  ---
+  duration_ms: 1.139416
+  type: 'test'
+# Subtest: runStatusLabel resolves zh/en for every status
+ok 243 - runStatusLabel resolves zh/en for every status
+  ---
+  duration_ms: 0.292
+  type: 'test'
+# Subtest: runStatusLabel handles idle, unknown, and overrides
+ok 244 - runStatusLabel handles idle, unknown, and overrides
+  ---
+  duration_ms: 0.218083
+  type: 'test'
+# Subtest: detectSlashInput: bare / at start is active
+ok 245 - detectSlashInput: bare / at start is active
+  ---
+  duration_ms: 0.929792
+  type: 'test'
+# Subtest: detectSlashInput: /abc at start is active with query
+ok 246 - detectSlashInput: /abc at start is active with query
+  ---
+  duration_ms: 0.133917
+  type: 'test'
+# Subtest: detectSlashInput: /abc after a newline is active
+ok 247 - detectSlashInput: /abc after a newline is active
+  ---
+  duration_ms: 0.053041
+  type: 'test'
+# Subtest: detectSlashInput: mid-sentence / does not open menu
+ok 248 - detectSlashInput: mid-sentence / does not open menu
+  ---
+  duration_ms: 0.048291
+  type: 'test'
+# Subtest: detectSlashInput: space after query deactivates
+ok 249 - detectSlashInput: space after query deactivates
+  ---
+  duration_ms: 0.046
+  type: 'test'
+# Subtest: detectSlashInput: respects caret position
+ok 250 - detectSlashInput: respects caret position
+  ---
+  duration_ms: 0.049583
+  type: 'test'
+# Subtest: listSlashCommands is empty (no fake native commands)
+ok 251 - listSlashCommands is empty (no fake native commands)
+  ---
+  duration_ms: 0.357416
+  type: 'test'
+# Subtest: filterSlashCommands matches id/label/description
+ok 252 - filterSlashCommands matches id/label/description
+  ---
+  duration_ms: 0.090417
+  type: 'test'
+# Subtest: isSlashMenuKey covers Escape/arrows/Enter only
+ok 253 - isSlashMenuKey covers Escape/arrows/Enter only
+  ---
+  duration_ms: 0.224667
+  type: 'test'
+# Subtest: nextSlashIndex wraps around
+ok 254 - nextSlashIndex wraps around
+  ---
+  duration_ms: 0.314167
+  type: 'test'
+# Subtest: isTempConversationId recognizes only temp-* shells
+ok 255 - isTempConversationId recognizes only temp-* shells
+  ---
+  duration_ms: 0.506625
+  type: 'test'
+# Subtest: createTempConversationId always uses temp- prefix
+ok 256 - createTempConversationId always uses temp- prefix
+  ---
+  duration_ms: 0.101708
+  type: 'test'
+# Subtest: createTempConversationShell is local-only and allows empty provider
+ok 257 - createTempConversationShell is local-only and allows empty provider
+  ---
+  duration_ms: 0.085125
+  type: 'test'
+# Subtest: createTempSession includes empty draft (not long-term)
+ok 258 - createTempSession includes empty draft (not long-term)
+  ---
+  duration_ms: 0.377916
+  type: 'test'
+# Subtest: collectTempConversationIds keeps only temp shells
+ok 259 - collectTempConversationIds keeps only temp shells
+  ---
+  duration_ms: 0.063959
+  type: 'test'
+# Subtest: omitTempKeys strips temp drafts before long-term persist
+ok 260 - omitTempKeys strips temp drafts before long-term persist
+  ---
+  duration_ms: 0.076666
+  type: 'test'
+# Subtest: conversationsWithoutTemp excludes temp shells from sidebar groups
+ok 261 - conversationsWithoutTemp excludes temp shells from sidebar groups
+  ---
+  duration_ms: 0.13275
+  type: 'test'
+# Subtest: resolveRegisteredProjectPath prefers host-normalized path
+ok 262 - resolveRegisteredProjectPath prefers host-normalized path
+  ---
+  duration_ms: 0.058
+  type: 'test'
+# Subtest: re-picking a project keeps only the latest temp id
+ok 263 - re-picking a project keeps only the latest temp id
+  ---
+  duration_ms: 2.775625
+  type: 'test'
+# Subtest: select project → active session becomes temp-*, previous selection cleared
+ok 264 - select project → active session becomes temp-*, previous selection cleared
+  ---
+  duration_ms: 8.146084
+  type: 'test'
+# Subtest: before send: no conversation.create is issued (source contract + local-only shell)
+ok 265 - before send: no conversation.create is issued (source contract + local-only shell)
+  ---
+  duration_ms: 0.732042
+  type: 'test'
+# Subtest: temp session does not appear in sidebar project groups
+ok 266 - temp session does not appear in sidebar project groups
+  ---
+  duration_ms: 0.874166
+  type: 'test'
+# Subtest: first send creates once with normalized project path and replaces temp id
+ok 267 - first send creates once with normalized project path and replaces temp id
+  ---
+  duration_ms: 0.54975
+  type: 'test'
+# Subtest: create failure keeps temp page and user input
+ok 268 - create failure keeps temp page and user input
+  ---
+  duration_ms: 0.43775
+  type: 'test'
+# Subtest: consecutive project picks keep only the second temp session
+ok 269 - consecutive project picks keep only the second temp session
+  ---
+  duration_ms: 1.236417
+  type: 'test'
+# Subtest: switching to new project does not cancel prior conversation run
+ok 270 - switching to new project does not cancel prior conversation run
+  ---
+  duration_ms: 1.571583
+  type: 'test'
+# Subtest: temp drafts are never written to long-term draft persistence
+ok 271 - temp drafts are never written to long-term draft persistence
+  ---
+  duration_ms: 0.837125
+  type: 'test'
+# Subtest: workbench first-send path uses isTempConversationId and project.register path
+ok 272 - workbench first-send path uses isTempConversationId and project.register path
+  ---
+  duration_ms: 0.744458
+  type: 'test'
+# Subtest: workspace context stores tempSession on navigation and uses register path
+ok 273 - workspace context stores tempSession on navigation and uses register path
+  ---
+  duration_ms: 0.670833
+  type: 'test'
+# Subtest: sidebar filters temp ids and navigates assistant before project pick
+ok 274 - sidebar filters temp ids and navigates assistant before project pick
+  ---
+  duration_ms: 0.130083
+  type: 'test'
+# Subtest: filterTimelineBodyBlocks drops tools and live reasoning, keeps text/plan
+ok 275 - filterTimelineBodyBlocks drops tools and live reasoning, keeps text/plan
+  ---
+  duration_ms: 1.075375
+  type: 'test'
+# Subtest: extractLiveThinking only returns live reasoning blocks
+ok 276 - extractLiveThinking only returns live reasoning blocks
+  ---
+  duration_ms: 0.143667
+  type: 'test'
+# Subtest: deriveToolActivityFromEvents merges lifecycle and nests by parent id
+ok 277 - deriveToolActivityFromEvents merges lifecycle and nests by parent id
+  ---
+  duration_ms: 0.255791
+  type: 'test'
+# Subtest: selectActiveToolActivity keeps only pending/running
+ok 278 - selectActiveToolActivity keeps only pending/running
+  ---
+  duration_ms: 0.06775
+  type: 'test'
+# Subtest: tool detail keeps input, output, and the changed hunk until the answer completes
+ok 279 - tool detail keeps input, output, and the changed hunk until the answer completes
+  ---
+  duration_ms: 0.461709
+  type: 'test'
+# Subtest: body filter keeps compaction/system_notice/subagent blocks and text order
+ok 280 - body filter keeps compaction/system_notice/subagent blocks and text order
+  ---
+  duration_ms: 0.085417
+  type: 'test'
+# Subtest: summarizeConversationChanges reports the net file count and line totals
+ok 281 - summarizeConversationChanges reports the net file count and line totals
+  ---
+  duration_ms: 12.674166
+  type: 'test'
+# Subtest: unwrapArtifactListPayload accepts bare array and { artifacts } envelope
+ok 282 - unwrapArtifactListPayload accepts bare array and { artifacts } envelope
+  ---
+  duration_ms: 0.845583
+  type: 'test'
+# Subtest: mapWireArtifactList maps both envelopes
+ok 283 - mapWireArtifactList maps both envelopes
+  ---
+  duration_ms: 0.151792
+  type: 'test'
+# Subtest: selectSurfaceConversationId prefers child over root
+ok 284 - selectSurfaceConversationId prefers child over root
+  ---
+  duration_ms: 0.080458
+  type: 'test'
+# Subtest: selectArtifactsForRunTree merges parent + child run artifacts
+ok 285 - selectArtifactsForRunTree merges parent + child run artifacts
+  ---
+  duration_ms: 0.479792
+  type: 'test'
+# Subtest: i18n keys for A/B/C/subagent assignment exist in zh and en
+ok 286 - i18n keys for A/B/C/subagent assignment exist in zh and en
+  ---
+  duration_ms: 2.682541
+  type: 'test'
+# Subtest: workbench returns Promise from permission handlers and uses multi-run subSignals
+ok 287 - workbench returns Promise from permission handlers and uses multi-run subSignals
+  ---
+  duration_ms: 0.628584
+  type: 'test'
+# Subtest: reducer maps subagent_assignment interaction_requested
+ok 288 - reducer maps subagent_assignment interaction_requested
+  ---
+  duration_ms: 0.875125
+  type: 'test'
+# Subtest: listMcp maps servers/tools/namespaced from mcp.list
+ok 289 - listMcp maps servers/tools/namespaced from mcp.list
+  ---
+  duration_ms: 0.461458
+  type: 'test'
+# Subtest: listScheduler accepts array or jobs wrapper
+ok 290 - listScheduler accepts array or jobs wrapper
+  ---
+  duration_ms: 0.104167
+  type: 'test'
+# Subtest: listExtensions and listSkills via gateway only
+ok 291 - listExtensions and listSkills via gateway only
+  ---
+  duration_ms: 0.098875
+  type: 'test'
+# Subtest: searchMemory returns results array
+ok 292 - searchMemory returns results array
+  ---
+  duration_ms: 0.07425
+  type: 'test'
+# Subtest: loadCapabilityAdminDashboard fans out Phase6 RPC methods
+ok 293 - loadCapabilityAdminDashboard fans out Phase6 RPC methods
+  ---
+  duration_ms: 0.499542
+  type: 'test'
+# Subtest: dashboard degrades to null rateLimit when the daemon lacks the method
+ok 294 - dashboard degrades to null rateLimit when the daemon lacks the method
+  ---
+  duration_ms: 0.11125
+  type: 'test'
+# Subtest: capability admin never calls streamChat or window.nativesAPI
+ok 295 - capability admin never calls streamChat or window.nativesAPI
+  ---
+  duration_ms: 8.669208
+  type: 'test'
+# Subtest: hasMethod is false for null/empty capabilities
+ok 296 - hasMethod is false for null/empty capabilities
+  ---
+  duration_ms: 0.529541
+  type: 'test'
+# Subtest: hasMethod matches advertised methods only
+ok 297 - hasMethod matches advertised methods only
+  ---
+  duration_ms: 0.113834
+  type: 'test'
+# Subtest: canRewind requires both non-deprecated workspace restore methods
+ok 298 - canRewind requires both non-deprecated workspace restore methods
+  ---
+  duration_ms: 0.07075
+  type: 'test'
+# Subtest: canShowContextUsage requires conversation.getContextUsage
+ok 299 - canShowContextUsage requires conversation.getContextUsage
+  ---
+  duration_ms: 0.054583
+  type: 'test'
+# Subtest: canListTasks accepts task.list or run.listChildren
+ok 300 - canListTasks accepts task.list or run.listChildren
+  ---
+  duration_ms: 0.057083
+  type: 'test'
+# Subtest: canListTaskDepth requires task.list (not mere run.listChildren)
+ok 301 - canListTaskDepth requires task.list (not mere run.listChildren)
+  ---
+  duration_ms: 0.17525
+  type: 'test'
+# Subtest: canCancelTask requires task.cancel
+ok 302 - canCancelTask requires task.cancel
+  ---
+  duration_ms: 0.226084
+  type: 'test'
+# Subtest: canInterject requires promptQueue.interject
+ok 303 - canInterject requires promptQueue.interject
+  ---
+  duration_ms: 0.160083
+  type: 'test'
+# Subtest: canManageCapabilities requires capability.skill.list
+ok 304 - canManageCapabilities requires capability.skill.list
+  ---
+  duration_ms: 0.696208
+  type: 'test'
+# Subtest: canBrowseMcpHub requires capability.mcp.hub.search (may lag base family)
+ok 305 - canBrowseMcpHub requires capability.mcp.hub.search (may lag base family)
+  ---
+  duration_ms: 0.976334
+  type: 'test'
+# Subtest: canSelectRunCapabilities requires conversation.updateCapabilities
+ok 306 - canSelectRunCapabilities requires conversation.updateCapabilities
+  ---
+  duration_ms: 0.238666
+  type: 'test'
+# Subtest: needsEngineRecovery blocks fatal/incompatible and offline without caps
+ok 307 - needsEngineRecovery blocks fatal/incompatible and offline without caps
+  ---
+  duration_ms: 0.221125
+  type: 'test'
+# Subtest: buildDiagnosticsText includes connection fields
+ok 308 - buildDiagnosticsText includes connection fields
+  ---
+  duration_ms: 2.515542
+  type: 'test'
+# Subtest: HOST_METHODS_UI lists core host RPCs for contract checks
+ok 309 - HOST_METHODS_UI lists core host RPCs for contract checks
+  ---
+  duration_ms: 0.467541
+  type: 'test'
+# Subtest: resolveProjectPath prefers explicit then conversation then null without window
+ok 310 - resolveProjectPath prefers explicit then conversation then null without window
+  ---
+  duration_ms: 0.623
+  type: 'test'
+# [assistant] subscribe quiet end {
+#   runId: 'run-1',
+#   lastSequence: 2,
+#   reason: 'iterator_ended_without_terminal'
+# }
+# [assistant] subscribe quiet end {
+#   runId: 'run-1',
+#   lastSequence: 2,
+#   reason: 'iterator_ended_without_terminal'
+# }
+# [assistant] subscribe transport error {
+#   runId: 'run-1',
+#   lastSequence: 1,
+#   reason: 'transport_error',
+#   error: 'disconnected'
+# }
+# [assistant] subscribe quiet end {
+#   runId: 'run-1',
+#   lastSequence: 5,
+#   reason: 'iterator_ended_without_terminal'
+# }
+# [assistant] sequence gap recovery {
+#   runId: 'run-gap-1',
+#   lastSequence: 1,
+#   liveSequence: 3,
+#   reason: 'sequence_gap'
+# }
+# Subtest: sendOrQueue throws only when no project can be resolved
+ok 311 - sendOrQueue throws only when no project can be resolved
+  ---
+  duration_ms: 9.37625
+  type: 'test'
+# Subtest: sendOrQueue accepts explicit projectPath over conversation
+ok 312 - sendOrQueue accepts explicit projectPath over conversation
+  ---
+  duration_ms: 6.267041
+  type: 'test'
+# Subtest: sendOrQueue forwards conversation permission profile to daemon run.start
+ok 313 - sendOrQueue forwards conversation permission profile to daemon run.start
+  ---
+  duration_ms: 0.724167
+  type: 'test'
+# Subtest: respondPermission binds run_id and request_id; cancelRun issues run.cancel
+ok 314 - respondPermission binds run_id and request_id; cancelRun issues run.cancel
+  ---
+  duration_ms: 4.9615
+  type: 'test'
+# Subtest: duplicate sendOrQueue while busy enqueues prompt instead of second run
+ok 315 - duplicate sendOrQueue while busy enqueues prompt instead of second run
+  ---
+  duration_ms: 0.744292
+  type: 'test'
+# Subtest: respondPermission deny records approved=false bound to run_id
+ok 316 - respondPermission deny records approved=false bound to run_id
+  ---
+  duration_ms: 0.929833
+  type: 'test'
+# Subtest: respondPermission forwards this_run scope without remapping to run
+ok 317 - respondPermission forwards this_run scope without remapping to run
+  ---
+  duration_ms: 0.411875
+  type: 'test'
+# Subtest: retryRun after cancel returns new or same run id via run.retry
+ok 318 - retryRun after cancel returns new or same run id via run.retry
+  ---
+  duration_ms: 14.827292
+  type: 'test'
+# Subtest: project path missing and symlink-escape style path still require explicit path (no cwd invent)
+ok 319 - project path missing and symlink-escape style path still require explicit path (no cwd invent)
+  ---
+  duration_ms: 3.026375
+  type: 'test'
+# Subtest: run.getEvents replay after sequence gap returns later events only
+ok 320 - run.getEvents replay after sequence gap returns later events only
+  ---
+  duration_ms: 0.236542
+  type: 'test'
+# Subtest: subscribeRun quiet end without terminal does not set reconnecting
+ok 321 - subscribeRun quiet end without terminal does not set reconnecting
+  ---
+  duration_ms: 0.463041
+  type: 'test'
+# Subtest: subscribeRun transport error sets reconnecting; next event clears it
+ok 322 - subscribeRun transport error sets reconnecting; next event clears it
+  ---
+  duration_ms: 1.380083
+  type: 'test'
+# Subtest: subscribeRun sequence gap marks recoveringRuns only (global stays connected)
+ok 323 - subscribeRun sequence gap marks recoveringRuns only (global stays connected)
+  ---
+  duration_ms: 1.141959
+  type: 'test'
+# Subtest: reconnect replay settles assistant message and terminal exactly once
+ok 324 - reconnect replay settles assistant message and terminal exactly once
+  ---
+  duration_ms: 1.099
+  type: 'test'
+# Subtest: workbench delete optimistically drops from store and navigation groups
+ok 325 - workbench delete optimistically drops from store and navigation groups
+  ---
+  duration_ms: 0.661
+  type: 'test'
+# Subtest: shell fallback delete also optimistically updates navigation
+ok 326 - shell fallback delete also optimistically updates navigation
+  ---
+  duration_ms: 0.114333
+  type: 'test'
+# Subtest: host forwards conversation.delete to daemon authority
+ok 327 - host forwards conversation.delete to daemon authority
+  ---
+  duration_ms: 0.086709
+  type: 'test'
+# Subtest: daemon delete always hard-deletes even when cleanup is pending
+ok 328 - daemon delete always hard-deletes even when cleanup is pending
+  ---
+  duration_ms: 0.166583
+  type: 'test'
+# Subtest: daemon delete also clears conversation-scoped tool_calls and artifacts
+ok 329 - daemon delete also clears conversation-scoped tool_calls and artifacts
+  ---
+  duration_ms: 0.15
+  type: 'test'
+# Subtest: E2E: connect → list → open → send → stream complete (text)
+ok 330 - E2E: connect → list → open → send → stream complete (text)
+  ---
+  duration_ms: 26.864542
+  type: 'test'
+# Subtest: E2E: permission card path allow → continue
+ok 331 - E2E: permission card path allow → continue
+  ---
+  duration_ms: 3.229167
+  type: 'test'
+# Subtest: E2E: tool call lifecycle produces one completed tool block
+ok 332 - E2E: tool call lifecycle produces one completed tool block
+  ---
+  duration_ms: 1.402333
+  type: 'test'
+# Subtest: E2E: ask_user interaction event is pending (not treated as permission-only)
+ok 333 - E2E: ask_user interaction event is pending (not treated as permission-only)
+  ---
+  duration_ms: 0.272458
+  type: 'test'
+# Subtest: E2E: cancel mid-run marks terminal and clears active
+ok 334 - E2E: cancel mid-run marks terminal and clears active
+  ---
+  duration_ms: 3.668583
+  type: 'test'
+# Subtest: E2E: idle snapshot does not activate completed runs[0]
+ok 335 - E2E: idle snapshot does not activate completed runs[0]
+  ---
+  duration_ms: 15.113083
+  type: 'test'
+# [assistant] subscribe quiet end {
+#   runId: 'r1',
+#   lastSequence: 0,
+#   reason: 'iterator_ended_without_terminal'
+# }
+# Subtest: provider seeds projects+sessions before workbench: refreshNavigationFromHost + shell actions always on
+ok 336 - provider seeds projects+sessions before workbench: refreshNavigationFromHost + shell actions always on
+  ---
+  duration_ms: 0.699291
+  type: 'test'
+# Subtest: host conversation.* is never dual-routed to UDS daemon
+ok 337 - host conversation.* is never dual-routed to UDS daemon
+  ---
+  duration_ms: 0.110417
+  type: 'test'
+# Subtest: remove project confirm button is hard-coded zh/en, not raw i18n key
+ok 338 - remove project confirm button is hard-coded zh/en, not raw i18n key
+  ---
+  duration_ms: 0.07075
+  type: 'test'
+# Subtest: goal chrome only when conversation.mode === goal; ordinary send uses agent mode
+ok 339 - goal chrome only when conversation.mode === goal; ordinary send uses agent mode
+  ---
+  duration_ms: 0.1435
+  type: 'test'
+# Subtest: groupAssistantConversations seeds empty registered projects on first paint
+ok 340 - groupAssistantConversations seeds empty registered projects on first paint
+  ---
+  duration_ms: 0.699083
+  type: 'test'
+# Subtest: sendOrQueue failure clears optimistic user message and does not leave active run
+ok 341 - sendOrQueue failure clears optimistic user message and does not leave active run
+  ---
+  duration_ms: 3.64275
+  type: 'test'
+# Subtest: subscribeRun ending without terminal event stays quiet (no reconnect banner)
+ok 342 - subscribeRun ending without terminal event stays quiet (no reconnect banner)
+  ---
+  duration_ms: 0.851416
+  type: 'test'
+# Subtest: prompt queue empty for non-busy conversation (ordinary send does not invent queue chrome)
+ok 343 - prompt queue empty for non-busy conversation (ordinary send does not invent queue chrome)
+  ---
+  duration_ms: 0.097
+  type: 'test'
+# Subtest: applies events in order and reaches terminal only from completed event
+ok 344 - applies events in order and reaches terminal only from completed event
+  ---
+  duration_ms: 1.671541
+  type: 'test'
+# Subtest: ignores duplicate and out-of-order sequences (idempotent)
+ok 345 - ignores duplicate and out-of-order sequences (idempotent)
+  ---
+  duration_ms: 0.182458
+  type: 'test'
+# Subtest: sequence gap enters recovering and replay fills without duplicates
+ok 346 - sequence gap enters recovering and replay fills without duplicates
+  ---
+  duration_ms: 0.797542
+  type: 'test'
+# Subtest: retains a bounded event window for long streams
+ok 347 - retains a bounded event window for long streams
+  ---
+  duration_ms: 133.5555
+  type: 'test'
+# Subtest: tool call updates in place (no duplicate tool blocks)
+ok 348 - tool call updates in place (no duplicate tool blocks)
+  ---
+  duration_ms: 1.624042
+  type: 'test'
+# Subtest: tool_call_delta streams args into one card by id
+ok 349 - tool_call_delta streams args into one card by id
+  ---
+  duration_ms: 0.781333
+  type: 'test'
+# Subtest: permission queue binds to run and survives conversation switch
+ok 350 - permission queue binds to run and survives conversation switch
+  ---
+  duration_ms: 0.4115
+  type: 'test'
+# Subtest: child subagent run tracked under parent
+ok 351 - child subagent run tracked under parent
+  ---
+  duration_ms: 0.398292
+  type: 'test'
+# Subtest: prompt queue optimistic enqueue and reassociate server id
+ok 352 - prompt queue optimistic enqueue and reassociate server id
+  ---
+  duration_ms: 0.798792
+  type: 'test'
+# Subtest: disconnect soft keeps messages and drafts
+ok 353 - disconnect soft keeps messages and drafts
+  ---
+  duration_ms: 3.292458
+  type: 'test'
+# Subtest: generation attempt discard rolls back partial live text
+ok 354 - generation attempt discard rolls back partial live text
+  ---
+  duration_ms: 0.172542
+  type: 'test'
+# Subtest: generation attempt discard preserves reasoning context
+ok 355 - generation attempt discard preserves reasoning context
+  ---
+  duration_ms: 0.171166
+  type: 'test'
+# Subtest: draft isolation per conversation
+ok 356 - draft isolation per conversation
+  ---
+  duration_ms: 0.067167
+  type: 'test'
+# Subtest: reasoning then text freezes reasoning and tool+terminal
+ok 357 - reasoning then text freezes reasoning and tool+terminal
+  ---
+  duration_ms: 0.147
+  type: 'test'
+# Subtest: queued event does not regress preparing/running status
+ok 358 - queued event does not regress preparing/running status
+  ---
+  duration_ms: 0.059333
+  type: 'test'
+# Subtest: failed terminal from event only
+ok 359 - failed terminal from event only
+  ---
+  duration_ms: 0.066
+  type: 'test'
+# Subtest: snapshot apply rebuilds messages without wiping other conversations
+ok 360 - snapshot apply rebuilds messages without wiping other conversations
+  ---
+  duration_ms: 0.178958
+  type: 'test'
+# Subtest: interaction_responded removes pending interaction (engine wire name)
+ok 361 - interaction_responded removes pending interaction (engine wire name)
+  ---
+  duration_ms: 0.104541
+  type: 'test'
+# Subtest: interaction_resolved still removes pending interaction (legacy name)
+ok 362 - interaction_resolved still removes pending interaction (legacy name)
+  ---
+  duration_ms: 0.057208
+  type: 'test'
+# Subtest: terminal run event clears its pending interactions (no zombie cards)
+ok 363 - terminal run event clears its pending interactions (no zombie cards)
+  ---
+  duration_ms: 0.111542
+  type: 'test'
+# Subtest: context_compressed produces a structured compaction block that persists
+ok 364 - context_compressed produces a structured compaction block that persists
+  ---
+  duration_ms: 0.143583
+  type: 'test'
+# Subtest: generation_attempt_failed(retrying) surfaces a retry notice block
+ok 365 - generation_attempt_failed(retrying) surfaces a retry notice block
+  ---
+  duration_ms: 0.069333
+  type: 'test'
+# Subtest: generation_attempt_failed(final) does not add a notice (failed event owns it)
+ok 366 - generation_attempt_failed(final) does not add a notice (failed event owns it)
+  ---
+  duration_ms: 0.042667
+  type: 'test'
+# Subtest: text -> tool -> text keeps two text blocks in stream order (no gluing)
+ok 367 - text -> tool -> text keeps two text blocks in stream order (no gluing)
+  ---
+  duration_ms: 0.085542
+  type: 'test'
+# Subtest: checkpoint / subagent events produce visible notice blocks
+ok 368 - checkpoint / subagent events produce visible notice blocks
+  ---
+  duration_ms: 0.137542
+  type: 'test'
+# Subtest: eventsByRun LRU: old terminal run buffers evicted, active runs kept
+ok 369 - eventsByRun LRU: old terminal run buffers evicted, active runs kept
+  ---
+  duration_ms: 9.68025
+  type: 'test'
+# Subtest: selector identity (update-depth regression)
+    # Subtest: empty run-scoped selectors stay referentially stable
+    ok 1 - empty run-scoped selectors stay referentially stable
+      ---
+      duration_ms: 2.68025
+      type: 'test'
+    # Subtest: selectChildRuns empty results stay referentially stable
+    ok 2 - selectChildRuns empty results stay referentially stable
+      ---
+      duration_ms: 0.173834
+      type: 'test'
+    # Subtest: selectConversationMessages / promptQueue empty stay stable
+    ok 3 - selectConversationMessages / promptQueue empty stay stable
+      ---
+      duration_ms: 0.142458
+      type: 'test'
+    # Subtest: tree selectors with no root stay stable; empty root tree stays stable
+    ok 4 - tree selectors with no root stay stable; empty root tree stays stable
+      ---
+      duration_ms: 0.431833
+      type: 'test'
+    # Subtest: live bubble createdAt does not churn when run.startedAt is fixed
+    ok 5 - live bubble createdAt does not churn when run.startedAt is fixed
+      ---
+      duration_ms: 2.40025
+      type: 'test'
+    # Subtest: composer/set with identical text does not churn updatedAt / state identity
+    ok 6 - composer/set with identical text does not churn updatedAt / state identity
+      ---
+      duration_ms: 1.576375
+      type: 'test'
+    # Subtest: selectComposerDraft empty draft is referentially stable
+    ok 7 - selectComposerDraft empty draft is referentially stable
+      ---
+      duration_ms: 0.487208
+      type: 'test'
+    # Subtest: selectConversationMessages stays referentially stable across composer ticks
+    ok 8 - selectConversationMessages stays referentially stable across composer ticks
+      ---
+      duration_ms: 3.637583
+      type: 'test'
+    # Subtest: selectConversationMessages returns shared EMPTY when conversation has no rows
+    ok 9 - selectConversationMessages returns shared EMPTY when conversation has no rows
+      ---
+      duration_ms: 0.178291
+      type: 'test'
+    # Subtest: selectPendingInteractions is stable when interactions maps are unchanged
+    ok 10 - selectPendingInteractions is stable when interactions maps are unchanged
+      ---
+      duration_ms: 5.454417
+      type: 'test'
+    # Subtest: selectChildRuns stays stable when childSummaries map identity is unchanged
+    ok 11 - selectChildRuns stays stable when childSummaries map identity is unchanged
+      ---
+      duration_ms: 0.35525
+      type: 'test'
+    # Subtest: selectEventsForRunTree multi-child merge stays stable without event array changes
+    ok 12 - selectEventsForRunTree multi-child merge stays stable without event array changes
+      ---
+      duration_ms: 10.55975
+      type: 'test'
+    1..12
+ok 370 - selector identity (update-depth regression)
+  ---
+  duration_ms: 31.333583
+  type: 'suite'
+# Subtest: assistant workspace selectors
+    # Subtest: keeps empty effect dependencies referentially stable
+    ok 1 - keeps empty effect dependencies referentially stable
+      ---
+      duration_ms: 0.549875
+      type: 'test'
+    1..1
+ok 371 - assistant workspace selectors
+  ---
+  duration_ms: 1.009125
+  type: 'suite'
+# Subtest: subscription coordination
+    # Subtest: wanted set only includes active runs
+    ok 1 - wanted set only includes active runs
+      ---
+      duration_ms: 0.780625
+      type: 'test'
+    # Subtest: diff starts missing and cancels unwanted
+    ok 2 - diff starts missing and cancels unwanted
+      ---
+      duration_ms: 0.190459
+      type: 'test'
+    # Subtest: replaceRunSubscription aborts previous for same run (single sub)
+    ok 3 - replaceRunSubscription aborts previous for same run (single sub)
+      ---
+      duration_ms: 0.09475
+      type: 'test'
+    # Subtest: cancelUnwantedSubscriptions drops and aborts
+    ok 4 - cancelUnwantedSubscriptions drops and aborts
+      ---
+      duration_ms: 0.0855
+      type: 'test'
+    1..4
+ok 372 - subscription coordination
+  ---
+  duration_ms: 1.747125
+  type: 'suite'
+# Subtest: createDefaultGateway(preferFixture) returns FixtureAssistantAdapter surface
+ok 373 - createDefaultGateway(preferFixture) returns FixtureAssistantAdapter surface
+  ---
+  duration_ms: 0.585125
+  type: 'test'
+# Subtest: createDefaultGateway(false) fails closed without assistantV2
+ok 374 - createDefaultGateway(false) fails closed without assistantV2
+  ---
+  duration_ms: 0.298416
+  type: 'test'
+# Subtest: workbench source is composition-only (no v2call / streamChat / invent background status)
+ok 375 - workbench source is composition-only (no v2call / streamChat / invent background status)
+  ---
+  duration_ms: 0.413875
+  type: 'test'
+# Subtest: composer capability picker does not expose skills; skills are slash-only
+ok 376 - composer capability picker does not expose skills; skills are slash-only
+  ---
+  duration_ms: 0.094625
+  type: 'test'
+# Subtest: controller+gateway fixture path: connect → list → send → subscribe → timeline non-empty
+ok 377 - controller+gateway fixture path: connect → list → send → subscribe → timeline non-empty
+  ---
+  duration_ms: 24.744167
+  type: 'test'
+# Subtest: sendOrQueue uses conversation.projectId when no window db (fixture main path)
+ok 378 - sendOrQueue uses conversation.projectId when no window db (fixture main path)
+  ---
+  duration_ms: 4.583459
+  type: 'test'
+# Subtest: tool fixture produces single in-place tool block via shipped reducer
+ok 379 - tool fixture produces single in-place tool block via shipped reducer
+  ---
+  duration_ms: 2.783166
+  type: 'test'
+# Subtest: persistence helpers round-trip view and drafts (non-execution only)
+ok 380 - persistence helpers round-trip view and drafts (non-execution only)
+  ---
+  duration_ms: 1.337458
+  type: 'test'
+# Subtest: active run selector does not invent completion without terminal event
+ok 381 - active run selector does not invent completion without terminal event
+  ---
+  duration_ms: 0.313625
+  type: 'test'
+# Subtest: Clipboard
+    # Subtest: should export copyToClipboard function
+    ok 1 - should export copyToClipboard function
+      ---
+      duration_ms: 0.349459
+      type: 'test'
+    # Subtest: should export readFromClipboard function
+    ok 2 - should export readFromClipboard function
+      ---
+      duration_ms: 0.063125
+      type: 'test'
+    # Subtest: should return false when clipboard API unavailable
+    ok 3 - should return false when clipboard API unavailable
+      ---
+      duration_ms: 0.140042
+      type: 'test'
+    # Subtest: should return null when clipboard API unavailable
+    ok 4 - should return null when clipboard API unavailable
+      ---
+      duration_ms: 0.084833
+      type: 'test'
+    1..4
+ok 382 - Clipboard
+  ---
+  duration_ms: 1.152333
+  type: 'suite'
+# Subtest: creative-app catalog channel
+    # Subtest: accepts creative-app and module
+    ok 1 - accepts creative-app and module
+      ---
+      duration_ms: 0.486
+      type: 'test'
+    # Subtest: ignores other channels
+    ok 2 - ignores other channels
+      ---
+      duration_ms: 0.225667
+      type: 'test'
+    1..2
+ok 383 - creative-app catalog channel
+  ---
+  duration_ms: 5.133625
+  type: 'suite'
+# Subtest: creative-app actions
+    # Subtest: busy disables all actions
+    ok 1 - busy disables all actions
+      ---
+      duration_ms: 0.473666
+      type: 'test'
+    # Subtest: detects transient busy states
+    ok 2 - detects transient busy states
+      ---
+      duration_ms: 0.078875
+      type: 'test'
+    1..2
+ok 384 - creative-app actions
+  ---
+  duration_ms: 0.731166
+  type: 'suite'
+# Subtest: creative-app sort and badge
+    # Subtest: source badge
+    ok 1 - source badge
+      ---
+      duration_ms: 0.104709
+      type: 'test'
+    # Subtest: sort running first
+    ok 2 - sort running first
+      ---
+      duration_ms: 0.466
+      type: 'test'
+    # Subtest: delete defaults keep volumes and images
+    ok 3 - delete defaults keep volumes and images
+      ---
+      duration_ms: 1.128333
+      type: 'test'
+    1..3
+ok 385 - creative-app sort and badge
+  ---
+  duration_ms: 2.01
+  type: 'suite'
+# Subtest: creative-app lifecycle matrix helpers
+    # Subtest: auto-open only for local projects with flag
+    ok 1 - auto-open only for local projects with flag
+      ---
+      duration_ms: 0.158917
+      type: 'test'
+    # Subtest: open surface and delete options by source
+    ok 2 - open surface and delete options by source
+      ---
+      duration_ms: 0.134042
+      type: 'test'
+    1..2
+ok 386 - creative-app lifecycle matrix helpers
+  ---
+  duration_ms: 0.477625
+  type: 'suite'
+# Subtest: creative-app operation projection (batch 2 CR-203)
+    # Subtest: classifies active vs terminal phases
+    ok 1 - classifies active vs terminal phases
+      ---
+      duration_ms: 0.201833
+      type: 'test'
+    # Subtest: upsert merges operations immutably
+    ok 2 - upsert merges operations immutably
+      ---
+      duration_ms: 0.075708
+      type: 'test'
+    # Subtest: deriveBusyIds maps active operations to source ids
+    ok 3 - deriveBusyIds maps active operations to source ids
+      ---
+      duration_ms: 0.096208
+      type: 'test'
+    # Subtest: deriveBusyIds ignores operations with no application link
+    ok 4 - deriveBusyIds ignores operations with no application link
+      ---
+      duration_ms: 0.045292
+      type: 'test'
+    # Subtest: label keys point into creative.operation
+    ok 5 - label keys point into creative.operation
+      ---
+      duration_ms: 0.050333
+      type: 'test'
+    1..5
+ok 387 - creative-app operation projection (batch 2 CR-203)
+  ---
+  duration_ms: 0.538833
+  type: 'suite'
+# Subtest: creative-draft transitions
+    # Subtest: accepts every legal edge
+    ok 1 - accepts every legal edge
+      ---
+      duration_ms: 0.477125
+      type: 'test'
+    # Subtest: lint fail still lands on ready
+    ok 2 - lint fail still lands on ready
+      ---
+      duration_ms: 0.061292
+      type: 'test'
+    # Subtest: publish failure falls back to ready
+    ok 3 - publish failure falls back to ready
+      ---
+      duration_ms: 0.047625
+      type: 'test'
+    # Subtest: rejects every other pair including self-loops
+    ok 4 - rejects every other pair including self-loops
+      ---
+      duration_ms: 0.09675
+      type: 'test'
+    # Subtest: archived is terminal
+    ok 5 - archived is terminal
+      ---
+      duration_ms: 0.054709
+      type: 'test'
+    1..5
+ok 388 - creative-draft transitions
+  ---
+  duration_ms: 1.311208
+  type: 'suite'
+# Subtest: creative-draft actions
+    # Subtest: drafting can only generate
+    ok 1 - drafting can only generate
+      ---
+      duration_ms: 0.410625
+      type: 'test'
+    # Subtest: drafting with revisions unlocks undo/publish (engine never advances state)
+    ok 2 - drafting with revisions unlocks undo/publish (engine never advances state)
+      ---
+      duration_ms: 0.118208
+      type: 'test'
+    # Subtest: ready unlocks generate/publish, undo needs a second revision
+    ok 3 - ready unlocks generate/publish, undo needs a second revision
+      ---
+      duration_ms: 0.218
+      type: 'test'
+    # Subtest: in-flight states disable everything
+    ok 4 - in-flight states disable everything
+      ---
+      duration_ms: 0.118291
+      type: 'test'
+    # Subtest: published and archived stay read-only but deletable
+    ok 5 - published and archived stay read-only but deletable
+      ---
+      duration_ms: 0.2035
+      type: 'test'
+    # Subtest: non-busy states are never busy
+    ok 6 - non-busy states are never busy
+      ---
+      duration_ms: 0.050042
+      type: 'test'
+    1..6
+ok 389 - creative-draft actions
+  ---
+  duration_ms: 1.343833
+  type: 'suite'
+# Subtest: creative-draft revision pointer
+    # Subtest: moves within bounds
+    ok 1 - moves within bounds
+      ---
+      duration_ms: 0.084083
+      type: 'test'
+    # Subtest: clamps to rev-1 at the lower bound
+    ok 2 - clamps to rev-1 at the lower bound
+      ---
+      duration_ms: 0.0365
+      type: 'test'
+    # Subtest: clamps to max at the upper bound
+    ok 3 - clamps to max at the upper bound
+      ---
+      duration_ms: 0.0355
+      type: 'test'
+    # Subtest: degenerate max and non-finite input collapse to 1
+    ok 4 - degenerate max and non-finite input collapse to 1
+      ---
+      duration_ms: 0.038167
+      type: 'test'
+    # Subtest: labels the current revision
+    ok 5 - labels the current revision
+      ---
+      duration_ms: 0.108125
+      type: 'test'
+    1..5
+ok 390 - creative-draft revision pointer
+  ---
+  duration_ms: 0.377792
+  type: 'suite'
+# Subtest: creative-draft revision pruning
+    # Subtest: prunes only above the cap
+    ok 1 - prunes only above the cap
+      ---
+      duration_ms: 0.119708
+      type: 'test'
+    # Subtest: always keeps rev-1 and the newest revision
+    ok 2 - always keeps rev-1 and the newest revision
+      ---
+      duration_ms: 0.067667
+      type: 'test'
+    # Subtest: is order independent
+    ok 3 - is order independent
+      ---
+      duration_ms: 0.089667
+      type: 'test'
+    # Subtest: never drops rev-1 even with sparse revision numbers
+    ok 4 - never drops rev-1 even with sparse revision numbers
+      ---
+      duration_ms: 0.060125
+      type: 'test'
+    1..4
+ok 391 - creative-draft revision pruning
+  ---
+  duration_ms: 0.390625
+  type: 'suite'
+# Subtest: creative-grants
+    # Subtest: exposes the four capability kinds and three policies
+    ok 1 - exposes the four capability kinds and three policies
+      ---
+      duration_ms: 2.275916
+      type: 'test'
+    # Subtest: defaults everything to deny
+    ok 2 - defaults everything to deny
+      ---
+      duration_ms: 0.135666
+      type: 'test'
+    # Subtest: holds one_time and persistent grants
+    ok 3 - holds one_time and persistent grants
+      ---
+      duration_ms: 0.126833
+      type: 'test'
+    # Subtest: sorts grants by the canonical kind order
+    ok 4 - sorts grants by the canonical kind order
+      ---
+      duration_ms: 0.12375
+      type: 'test'
+    # Subtest: maps kind/policy/event to i18n keys
+    ok 5 - maps kind/policy/event to i18n keys
+      ---
+      duration_ms: 0.076958
+      type: 'test'
+    # Subtest: recognises valid kinds and policies only
+    ok 6 - recognises valid kinds and policies only
+      ---
+      duration_ms: 0.060959
+      type: 'test'
+    # Subtest: sorts history newest-first by timestamp
+    ok 7 - sorts history newest-first by timestamp
+      ---
+      duration_ms: 15.666375
+      type: 'test'
+    # Subtest: flags retryable capabilities and truncates targets
+    ok 8 - flags retryable capabilities and truncates targets
+      ---
+      duration_ms: 0.708083
+      type: 'test'
+    1..8
+ok 392 - creative-grants
+  ---
+  duration_ms: 20.331167
+  type: 'suite'
+# Subtest: desktop development startup
+    # Subtest: builds the Agent Daemon from every Tauri development entrypoint
+    ok 1 - builds the Agent Daemon from every Tauri development entrypoint
+      ---
+      duration_ms: 1.34925
+      type: 'test'
+    # Subtest: bundles the Agent Daemon for production desktop builds
+    ok 2 - bundles the Agent Daemon for production desktop builds
+      ---
+      duration_ms: 1.183833
+      type: 'test'
+    1..2
+ok 393 - desktop development startup
+  ---
+  duration_ms: 3.53825
+  type: 'suite'
+# Subtest: computeLineDiff
+    # Subtest: handles insert without shifting subsequent matches (not index-aligned)
+    ok 1 - handles insert without shifting subsequent matches (not index-aligned)
+      ---
+      duration_ms: 0.593834
+      type: 'test'
+    # Subtest: reports diffstat for pure replacement
+    ok 2 - reports diffstat for pure replacement
+      ---
+      duration_ms: 0.158292
+      type: 'test'
+    1..2
+ok 394 - computeLineDiff
+  ---
+  duration_ms: 1.352125
+  type: 'suite'
+# Subtest: DiffUtils
+    # Subtest: parseUnifiedDiff
+        # Subtest: should parse a simple unified diff
+        ok 1 - should parse a simple unified diff
+          ---
+          duration_ms: 0.208834
+          type: 'test'
+          ...
+        # Subtest: should handle diff with only additions
+        ok 2 - should handle diff with only additions
+          ---
+          duration_ms: 0.127125
+          type: 'test'
+          ...
+        # Subtest: should handle diff with only deletions
+        ok 3 - should handle diff with only deletions
+          ---
+          duration_ms: 0.055292
+          type: 'test'
+          ...
+        # Subtest: should return null for empty diff
+        ok 4 - should return null for empty diff
+          ---
+          duration_ms: 0.087041
+          type: 'test'
+          ...
+        1..4
+    ok 1 - parseUnifiedDiff
+      ---
+      duration_ms: 0.634417
+      type: 'suite'
+    # Subtest: formatSize
+        # Subtest: should format bytes
+        ok 1 - should format bytes
+          ---
+          duration_ms: 0.173083
+          type: 'test'
+          ...
+        # Subtest: should format KB
+        ok 2 - should format KB
+          ---
+          duration_ms: 0.057416
+          type: 'test'
+          ...
+        # Subtest: should format MB
+        ok 3 - should format MB
+          ---
+          duration_ms: 0.102958
+          type: 'test'
+          ...
+        # Subtest: should format GB
+        ok 4 - should format GB
+          ---
+          duration_ms: 0.160042
+          type: 'test'
+          ...
+        # Subtest: should handle zero
+        ok 5 - should handle zero
+          ---
+          duration_ms: 0.0535
+          type: 'test'
+          ...
+        # Subtest: should handle exactly 1 KB
+        ok 6 - should handle exactly 1 KB
+          ---
+          duration_ms: 2.683
+          type: 'test'
+          ...
+        1..6
+    ok 2 - formatSize
+      ---
+      duration_ms: 3.444833
+      type: 'suite'
+    1..2
+ok 395 - DiffUtils
+  ---
+  duration_ms: 4.40375
+  type: 'suite'
+# Subtest: ErrorClassifier
+    # Subtest: should classify plugin crash
+    ok 1 - should classify plugin crash
+      ---
+      duration_ms: 1.166833
+      type: 'test'
+    # Subtest: should classify timeout
+    ok 2 - should classify timeout
+      ---
+      duration_ms: 0.478208
+      type: 'test'
+    # Subtest: should classify permission denied
+    ok 3 - should classify permission denied
+      ---
+      duration_ms: 0.083083
+      type: 'test'
+    # Subtest: should classify module install failed
+    ok 4 - should classify module install failed
+      ---
+      duration_ms: 0.072167
+      type: 'test'
+    # Subtest: should classify terminal spawn failed
+    ok 5 - should classify terminal spawn failed
+      ---
+      duration_ms: 0.125667
+      type: 'test'
+    # Subtest: should classify database error
+    ok 6 - should classify database error
+      ---
+      duration_ms: 0.096209
+      type: 'test'
+    # Subtest: should classify network error
+    ok 7 - should classify network error
+      ---
+      duration_ms: 0.115209
+      type: 'test'
+    # Subtest: should classify unknown errors
+    ok 8 - should classify unknown errors
+      ---
+      duration_ms: 0.284875
+      type: 'test'
+    # Subtest: should include moduleId when provided
+    ok 9 - should include moduleId when provided
+      ---
+      duration_ms: 0.174917
+      type: 'test'
+    # Subtest: should handle non-Error objects
+    ok 10 - should handle non-Error objects
+      ---
+      duration_ms: 0.317959
+      type: 'test'
+    # Subtest: should parse structured { code, message } objects for project errors
+    ok 11 - should parse structured { code, message } objects for project errors
+      ---
+      duration_ms: 0.12225
+      type: 'test'
+    # Subtest: should parse PROJECT_PATH_REQUIRED from structured error
+    ok 12 - should parse PROJECT_PATH_REQUIRED from structured error
+      ---
+      duration_ms: 0.051625
+      type: 'test'
+    # Subtest: should parse PROJECT_NOT_DIRECTORY from structured error
+    ok 13 - should parse PROJECT_NOT_DIRECTORY from structured error
+      ---
+      duration_ms: 0.148375
+      type: 'test'
+    # Subtest: should parse PROJECT_REGISTER_FAILED from structured error
+    ok 14 - should parse PROJECT_REGISTER_FAILED from structured error
+      ---
+      duration_ms: 0.2185
+      type: 'test'
+    # Subtest: should handle DaemonError shape with technical_message
+    ok 15 - should handle DaemonError shape with technical_message
+      ---
+      duration_ms: 0.149167
+      type: 'test'
+    # Subtest: should classify auth rejected (401)
+    ok 16 - should classify auth rejected (401)
+      ---
+      duration_ms: 0.198416
+      type: 'test'
+    # Subtest: should classify rate limited (429)
+    ok 17 - should classify rate limited (429)
+      ---
+      duration_ms: 0.170458
+      type: 'test'
+    # Subtest: should classify IPC timeout
+    ok 18 - should classify IPC timeout
+      ---
+      duration_ms: 0.170875
+      type: 'test'
+    # Subtest: should classify file write failed
+    ok 19 - should classify file write failed
+      ---
+      duration_ms: 0.165083
+      type: 'test'
+    # Subtest: should classify config corrupted
+    ok 20 - should classify config corrupted
+      ---
+      duration_ms: 0.184333
+      type: 'test'
+    # Subtest: should use ErrorContext with stderr
+    ok 21 - should use ErrorContext with stderr
+      ---
+      duration_ms: 0.213584
+      type: 'test'
+    # Subtest: should provide recovery actions for retryable errors
+    ok 22 - should provide recovery actions for retryable errors
+      ---
+      duration_ms: 0.164959
+      type: 'test'
+    # Subtest: should provide recovery actions for terminal crash
+    ok 23 - should provide recovery actions for terminal crash
+      ---
+      duration_ms: 0.309792
+      type: 'test'
+    # Subtest: defaults user-facing copy to Chinese and supports English locale override
+    ok 24 - defaults user-facing copy to Chinese and supports English locale override
+      ---
+      duration_ms: 0.278916
+      type: 'test'
+    # Subtest: should include diagnostic ID in unknown error fallback
+    ok 25 - should include diagnostic ID in unknown error fallback
+      ---
+      duration_ms: 0.18725
+      type: 'test'
+    1..25
+ok 396 - ErrorClassifier
+  ---
+  duration_ms: 6.7315
+  type: 'suite'
+# Subtest: normalizeFavorite: legacy string path
+ok 397 - normalizeFavorite: legacy string path
+  ---
+  duration_ms: 0.666291
+  type: 'test'
+# Subtest: normalizeFavorite: legacy { path, addedAt }
+ok 398 - normalizeFavorite: legacy { path, addedAt }
+  ---
+  duration_ms: 0.14575
+  type: 'test'
+# Subtest: normalizeFavorite: new { kind, target, label }
+ok 399 - normalizeFavorite: new { kind, target, label }
+  ---
+  duration_ms: 0.065125
+  type: 'test'
+# Subtest: normalizeFavorite: rejects empty / garbage
+ok 400 - normalizeFavorite: rejects empty / garbage
+  ---
+  duration_ms: 0.066375
+  type: 'test'
+# Subtest: parseFavorites: migrates string[] and dedupes
+ok 401 - parseFavorites: migrates string[] and dedupes
+  ---
+  duration_ms: 1.0135
+  type: 'test'
+# Subtest: parseFavorites: sorts by addedAt desc
+ok 402 - parseFavorites: sorts by addedAt desc
+  ---
+  duration_ms: 0.088
+  type: 'test'
+# Subtest: parseFavorites: mixed legacy + new formats
+ok 403 - parseFavorites: mixed legacy + new formats
+  ---
+  duration_ms: 0.140625
+  type: 'test'
+# Subtest: toggleFileFavorite: add then remove
+ok 404 - toggleFileFavorite: add then remove
+  ---
+  duration_ms: 0.11825
+  type: 'test'
+# Subtest: toggleFileFavorite: newest first
+ok 405 - toggleFileFavorite: newest first
+  ---
+  duration_ms: 0.205833
+  type: 'test'
+# Subtest: removeFavorite by id and by kind+target
+ok 406 - removeFavorite by id and by kind+target
+  ---
+  duration_ms: 0.426833
+  type: 'test'
+# Subtest: favoritesNavTarget maps kinds
+ok 407 - favoritesNavTarget maps kinds
+  ---
+  duration_ms: 0.10725
+  type: 'test'
+# Subtest: favoriteFilePaths filters non-file kinds
+ok 408 - favoriteFilePaths filters non-file kinds
+  ---
+  duration_ms: 0.126833
+  type: 'test'
+# Subtest: parseFavorites caps at MAX
+ok 409 - parseFavorites caps at MAX
+  ---
+  duration_ms: 0.154292
+  type: 'test'
+# Subtest: a quick-access navigation wins over the async home fallback
+ok 410 - a quick-access navigation wins over the async home fallback
+  ---
+  duration_ms: 0.385042
+  type: 'test'
+# Subtest: FollowMode
+    # Subtest: state transitions (pure logic)
+        # Subtest: should cycle from off → terminal-follow → file-follow → off
+        ok 1 - should cycle from off → terminal-follow → file-follow → off
+          ---
+          duration_ms: 0.317459
+          type: 'test'
+          ...
+        # Subtest: should know which direction follows
+        ok 2 - should know which direction follows
+          ---
+          duration_ms: 0.062583
+          type: 'test'
+          ...
+        1..2
+    ok 1 - state transitions (pure logic)
+      ---
+      duration_ms: 0.7515
+      type: 'suite'
+    1..1
+ok 411 - FollowMode
+  ---
+  duration_ms: 0.92875
+  type: 'suite'
+# Subtest: file preview routing
+    # Subtest: renders HTML in view mode and opens its source in edit mode
+    ok 1 - renders HTML in view mode and opens its source in edit mode
+      ---
+      duration_ms: 0.152042
+      type: 'test'
+    # Subtest: keeps Markdown/CSV out of code preview and ordinary text in it
+    ok 2 - keeps Markdown/CSV out of code preview and ordinary text in it
+      ---
+      duration_ms: 0.054583
+      type: 'test'
+    1..2
+ok 412 - file preview routing
+  ---
+  duration_ms: 0.26975
+  type: 'suite'
+# Subtest: fmtCount
+    # Subtest: uses locale-aware compact units
+    ok 1 - uses locale-aware compact units
+      ---
+      duration_ms: 30.228125
+      type: 'test'
+    1..1
+ok 413 - fmtCount
+  ---
+  duration_ms: 32.268625
+  type: 'suite'
+# Subtest: Chinese usage labels
+    # Subtest: does not mix English token terms into the Chinese dashboard
+    ok 1 - does not mix English token terms into the Chinese dashboard
+      ---
+      duration_ms: 0.100917
+      type: 'test'
+    1..1
+ok 414 - Chinese usage labels
+  ---
+  duration_ms: 0.166291
+  type: 'suite'
+# Subtest: isNoisyChangePath
+    # Subtest: 放行普通文件变更
+    ok 1 - 放行普通文件变更
+      ---
+      duration_ms: 1.890166
+      type: 'test'
+    # Subtest: 拒绝相对根目录内以点开头的路径段
+    ok 2 - 拒绝相对根目录内以点开头的路径段
+      ---
+      duration_ms: 0.090166
+      type: 'test'
+    # Subtest: 根目录自身含点段时不误杀内部普通变更
+    ok 3 - 根目录自身含点段时不误杀内部普通变更
+      ---
+      duration_ms: 0.059125
+      type: 'test'
+    # Subtest: 拒绝构建/依赖目录段
+    ok 4 - 拒绝构建/依赖目录段
+      ---
+      duration_ms: 0.133334
+      type: 'test'
+    # Subtest: 拒绝临时/锁/数据库伴生文件后缀
+    ok 5 - 拒绝临时/锁/数据库伴生文件后缀
+      ---
+      duration_ms: 0.060959
+      type: 'test'
+    # Subtest: 拒绝中段 .tmp（fanbox：foo.swift.tmp.<pid>.<hex>）
+    ok 6 - 拒绝中段 .tmp（fanbox：foo.swift.tmp.<pid>.<hex>）
+      ---
+      duration_ms: 0.042167
+      type: 'test'
+    # Subtest: .tmp 规则不误杀含 tmp 子串的正常名
+    ok 7 - .tmp 规则不误杀含 tmp 子串的正常名
+      ---
+      duration_ms: 0.045458
+      type: 'test'
+    # Subtest: 根目录路径自身不算噪声
+    ok 8 - 根目录路径自身不算噪声
+      ---
+      duration_ms: 0.099291
+      type: 'test'
+    1..8
+ok 415 - isNoisyChangePath
+  ---
+  duration_ms: 3.253375
+  type: 'suite'
+# Subtest: topChildOf
+    # Subtest: 直接子文件返回自身
+    ok 1 - 直接子文件返回自身
+      ---
+      duration_ms: 0.148917
+      type: 'test'
+    # Subtest: 深层路径归并到顶层子目录
+    ok 2 - 深层路径归并到顶层子目录
+      ---
+      duration_ms: 0.163459
+      type: 'test'
+    # Subtest: 不在根目录下返回 null
+    ok 3 - 不在根目录下返回 null
+      ---
+      duration_ms: 0.046708
+      type: 'test'
+    # Subtest: 根目录带尾斜杠时行为一致
+    ok 4 - 根目录带尾斜杠时行为一致
+      ---
+      duration_ms: 0.036334
+      type: 'test'
+    1..4
+ok 416 - topChildOf
+  ---
+  duration_ms: 0.490209
+  type: 'suite'
+# Subtest: SelfOpenedTracker
+    # Subtest: 窗口期内视为自噪声，过期后放行并清理
+    ok 1 - 窗口期内视为自噪声，过期后放行并清理
+      ---
+      duration_ms: 0.095875
+      type: 'test'
+    # Subtest: 未登记路径不受影响
+    ok 2 - 未登记路径不受影响
+      ---
+      duration_ms: 0.035875
+      type: 'test'
+    # Subtest: 超出上限时淘汰最旧登记
+    ok 3 - 超出上限时淘汰最旧登记
+      ---
+      duration_ms: 0.04
+      type: 'test'
+    1..3
+ok 417 - SelfOpenedTracker
+  ---
+  duration_ms: 0.223917
+  type: 'suite'
+# Subtest: IframeManager
+    # Subtest: createIframe
+        # Subtest: should create an iframe and track it
+        ok 1 - should create an iframe and track it
+          ---
+          duration_ms: 1.157083
+          type: 'test'
+          ...
+        # Subtest: should set sandbox and src attributes
+        ok 2 - should set sandbox and src attributes
+          ---
+          duration_ms: 0.143125
+          type: 'test'
+          ...
+        # Subtest: should replace existing iframe when creating duplicate
+        ok 3 - should replace existing iframe when creating duplicate
+          ---
+          duration_ms: 0.272459
+          type: 'test'
+          ...
+        1..3
+    ok 1 - createIframe
+      ---
+      duration_ms: 2.069666
+      type: 'suite'
+    # Subtest: showIframe / hideIframe
+        # Subtest: should transition state on show and hide
+        ok 1 - should transition state on show and hide
+          ---
+          duration_ms: 0.319833
+          type: 'test'
+          ...
+        # Subtest: should return null for nonexistent module
+        ok 2 - should return null for nonexistent module
+          ---
+          duration_ms: 0.08775
+          type: 'test'
+          ...
+        1..2
+    ok 2 - showIframe / hideIframe
+      ---
+      duration_ms: 0.474542
+      type: 'suite'
+    # Subtest: destroyIframe
+        # Subtest: should remove the instance and clean up
+        ok 1 - should remove the instance and clean up
+          ---
+          duration_ms: 0.235625
+          type: 'test'
+          ...
+        # Subtest: should clear the onload handler to prevent leaks
+        ok 2 - should clear the onload handler to prevent leaks
+          ---
+          duration_ms: 0.198542
+          type: 'test'
+          ...
+        # Subtest: should not throw when destroying nonexistent iframe
+        ok 3 - should not throw when destroying nonexistent iframe
+          ---
+          duration_ms: 0.076708
+          type: 'test'
+          ...
+        1..3
+    ok 3 - destroyIframe
+      ---
+      duration_ms: 0.7015
+      type: 'suite'
+    # Subtest: destroyAll
+        # Subtest: should remove all instances
+        ok 1 - should remove all instances
+          ---
+          duration_ms: 0.252292
+          type: 'test'
+          ...
+        1..1
+    ok 4 - destroyAll
+      ---
+      duration_ms: 0.292417
+      type: 'suite'
+    # Subtest: LRU enforcement
+        # Subtest: should evict oldest background iframes when exceeding limit
+        ok 1 - should evict oldest background iframes when exceeding limit
+          ---
+          duration_ms: 0.19875
+          type: 'test'
+          ...
+        1..1
+    ok 5 - LRU enforcement
+      ---
+      duration_ms: 1.481959
+      type: 'suite'
+    # Subtest: getActiveCount / getBackgroundCount
+        # Subtest: should count correctly
+        ok 1 - should count correctly
+          ---
+          duration_ms: 0.77925
+          type: 'test'
+          ...
+        1..1
+    ok 6 - getActiveCount / getBackgroundCount
+      ---
+      duration_ms: 0.898041
+      type: 'suite'
+    # Subtest: singleton
+        # Subtest: should return the same instance from getIframeManager
+        ok 1 - should return the same instance from getIframeManager
+          ---
+          duration_ms: 36.328292
+          type: 'test'
+          ...
+        1..1
+    ok 7 - singleton
+      ---
+      duration_ms: 36.561709
+      type: 'suite'
+    1..7
+ok 418 - IframeManager
+  ---
+  duration_ms: 43.049667
+  type: 'suite'
+# Subtest: IframeSandbox
+    # Subtest: IframeSandboxManager
+        # Subtest: should register and provide a token
+        ok 1 - should register and provide a token
+          ---
+          duration_ms: 0.41725
+          type: 'test'
+          ...
+        # Subtest: should verify message source
+        ok 2 - should verify message source
+          ---
+          duration_ms: 0.071958
+          type: 'test'
+          ...
+        # Subtest: should update heartbeat
+        ok 3 - should update heartbeat
+          ---
+          duration_ms: 0.074541
+          type: 'test'
+          ...
+        # Subtest: should unregister and invalidate tokens
+        ok 4 - should unregister and invalidate tokens
+          ---
+          duration_ms: 0.063
+          type: 'test'
+          ...
+        # Subtest: should handle re-registration
+        ok 5 - should handle re-registration
+          ---
+          duration_ms: 0.056375
+          type: 'test'
+          ...
+        1..5
+    ok 1 - IframeSandboxManager
+      ---
+      duration_ms: 1.286167
+      type: 'suite'
+    # Subtest: BridgeSdkScript
+        # Subtest: should generate valid JS SDK script
+        ok 1 - should generate valid JS SDK script
+          ---
+          duration_ms: 0.201042
+          type: 'test'
+          ...
+        1..1
+    ok 2 - BridgeSdkScript
+      ---
+      duration_ms: 0.437042
+      type: 'suite'
+    1..2
+ok 419 - IframeSandbox
+  ---
+  duration_ms: 2.07825
+  type: 'suite'
+# Subtest: validateScheduleValue（契约第 1 节 schedule 语义）
+    # Subtest: once: ISO8601 有效，坏值报 errInvalidOnce
+    ok 1 - once: ISO8601 有效，坏值报 errInvalidOnce
+      ---
+      duration_ms: 0.911167
+      type: 'test'
+    # Subtest: interval: 整数秒且最小 60
+    ok 2 - interval: 整数秒且最小 60
+      ---
+      duration_ms: 0.287125
+      type: 'test'
+    # Subtest: cron: 5 字段，支持 * N */N A-B A,B,C
+    ok 3 - cron: 5 字段，支持 * N */N A-B A,B,C
+      ---
+      duration_ms: 0.447583
+      type: 'test'
+    # Subtest: cron: 值域校验（分 0-59/时 0-23/日 1-31/月 1-12/周 0-7）
+    ok 4 - cron: 值域校验（分 0-59/时 0-23/日 1-31/月 1-12/周 0-7）
+      ---
+      duration_ms: 0.55025
+      type: 'test'
+    # Subtest: cron: 步长与区间的病理值
+    ok 5 - cron: 步长与区间的病理值
+      ---
+      duration_ms: 0.231708
+      type: 'test'
+    1..5
+ok 420 - validateScheduleValue（契约第 1 节 schedule 语义）
+  ---
+  duration_ms: 3.475125
+  type: 'suite'
+# Subtest: nextCronRuns（本地时区触发预览）
+    # Subtest: */30 * * * *：从整点后一分钟起，下 3 次为 30/60/90 分边界
+    ok 1 - */30 * * * *：从整点后一分钟起，下 3 次为 30/60/90 分边界
+      ---
+      duration_ms: 1.734375
+      type: 'test'
+    # Subtest: 0 3 * * *：每天 03:00
+    ok 2 - 0 3 * * *：每天 03:00
+      ---
+      duration_ms: 0.332583
+      type: 'test'
+    # Subtest: 日/周同时受限时取「或」（vixie 语义）
+    ok 3 - 日/周同时受限时取「或」（vixie 语义）
+      ---
+      duration_ms: 0.334625
+      type: 'test'
+    # Subtest: 无效表达式返回空数组
+    ok 4 - 无效表达式返回空数组
+      ---
+      duration_ms: 0.1125
+      type: 'test'
+    1..4
+ok 421 - nextCronRuns（本地时区触发预览）
+  ---
+  duration_ms: 2.845375
+  type: 'suite'
+# Subtest: validateJobForm（必填校验）
+    # Subtest: 缺失必填字段逐项标记
+    ok 1 - 缺失必填字段逐项标记
+      ---
+      duration_ms: 0.149625
+      type: 'test'
+    # Subtest: project_path 必须为绝对路径
+    ok 2 - project_path 必须为绝对路径
+      ---
+      duration_ms: 0.096125
+      type: 'test'
+    1..2
+ok 422 - validateJobForm（必填校验）
+  ---
+  duration_ms: 0.300666
+  type: 'suite'
+# Subtest: hasAmbiguousLegacyCapabilities（旧能力绑定修复提示）
+    # Subtest: 只把非空且尚未类型化的 capability_refs 标为待修复
+    ok 1 - 只把非空且尚未类型化的 capability_refs 标为待修复
+      ---
+      duration_ms: 0.061875
+      type: 'test'
+    1..1
+ok 423 - hasAmbiguousLegacyCapabilities（旧能力绑定修复提示）
+  ---
+  duration_ms: 0.089542
+  type: 'suite'
+# Subtest: parseJobLastStatus（scheduled_tasks.last_status）
+    # Subtest: 契约样例逐一映射
+    ok 1 - 契约样例逐一映射
+      ---
+      duration_ms: 0.374833
+      type: 'test'
+    # Subtest: 未知状态如实透传（raw）
+    ok 2 - 未知状态如实透传（raw）
+      ---
+      duration_ms: 0.123625
+      type: 'test'
+    1..2
+ok 424 - parseJobLastStatus（scheduled_tasks.last_status）
+  ---
+  duration_ms: 0.643625
+  type: 'suite'
+# Subtest: runStatusTone（状态机全集，契约第 2 节）
+    # Subtest: 每个冻结状态都有确定的色调
+    ok 1 - 每个冻结状态都有确定的色调
+      ---
+      duration_ms: 0.274959
+      type: 'test'
+    1..1
+ok 425 - runStatusTone（状态机全集，契约第 2 节）
+  ---
+  duration_ms: 0.363833
+  type: 'suite'
+# Subtest: scheduleSummarySpec
+    # Subtest: 三种类型分别产出摘要参数
+    ok 1 - 三种类型分别产出摘要参数
+      ---
+      duration_ms: 0.301708
+      type: 'test'
+    1..1
+ok 426 - scheduleSummarySpec
+  ---
+  duration_ms: 0.501292
+  type: 'suite'
+# Subtest: once 值 datetime-local 互转
+    # Subtest: ISO → local → ISO 保持同一时刻（分钟精度）
+    ok 1 - ISO → local → ISO 保持同一时刻（分钟精度）
+      ---
+      duration_ms: 0.853208
+      type: 'test'
+    # Subtest: 无效输入返回空/null
+    ok 2 - 无效输入返回空/null
+      ---
+      duration_ms: 0.121416
+      type: 'test'
+    1..2
+ok 427 - once 值 datetime-local 互转
+  ---
+  duration_ms: 1.103791
+  type: 'suite'
+# Subtest: extractJobErrorCode（错误码子串提取，契约第 5 节）
+    # Subtest: 从 cmd() 包装后的消息中提取
+    ok 1 - 从 cmd() 包装后的消息中提取
+      ---
+      duration_ms: 0.467333
+      type: 'test'
+    1..1
+ok 428 - extractJobErrorCode（错误码子串提取，契约第 5 节）
+  ---
+  duration_ms: 2.4255
+  type: 'suite'
+# Subtest: local-creative helpers
+    # Subtest: title from path
+    ok 1 - title from path
+      ---
+      duration_ms: 0.417542
+      type: 'test'
+    # Subtest: package manager pick
+    ok 2 - package manager pick
+      ---
+      duration_ms: 0.0925
+      type: 'test'
+    # Subtest: scan gate
+    ok 3 - scan gate
+      ---
+      duration_ms: 0.062791
+      type: 'test'
+    # Subtest: build create request
+    ok 4 - build create request
+      ---
+      duration_ms: 0.152708
+      type: 'test'
+    # Subtest: plan summary and delete note
+    ok 5 - plan summary and delete note
+      ---
+      duration_ms: 0.140166
+      type: 'test'
+    1..5
+ok 429 - local-creative helpers
+  ---
+  duration_ms: 1.391917
+  type: 'suite'
+# Subtest: normalizePath
+    # Subtest: 折叠 ./ 与 ../
+    ok 1 - 折叠 ./ 与 ../
+      ---
+      duration_ms: 0.38225
+      type: 'test'
+    1..1
+ok 430 - normalizePath
+  ---
+  duration_ms: 0.872583
+  type: 'suite'
+# Subtest: resolveLocalRef
+    # Subtest: 相对路径基于 baseDir 解析
+    ok 1 - 相对路径基于 baseDir 解析
+      ---
+      duration_ms: 0.367334
+      type: 'test'
+    # Subtest: 本地绝对路径与 file:// 保留解析
+    ok 2 - 本地绝对路径与 file:// 保留解析
+      ---
+      duration_ms: 0.061958
+      type: 'test'
+    # Subtest: 外链/数据/资产 URL 不改写
+    ok 3 - 外链/数据/资产 URL 不改写
+      ---
+      duration_ms: 0.130458
+      type: 'test'
+    1..3
+ok 431 - resolveLocalRef
+  ---
+  duration_ms: 0.662209
+  type: 'suite'
+# Subtest: assetUrlToPath
+    # Subtest: 还原 convertFileSrc 两种形态
+    ok 1 - 还原 convertFileSrc 两种形态
+      ---
+      duration_ms: 0.247375
+      type: 'test'
+    1..1
+ok 432 - assetUrlToPath
+  ---
+  duration_ms: 0.2905
+  type: 'suite'
+# Subtest: rewriteLocalImages
+    # Subtest: 改写 md 图片语法并可精确还原原文
+    ok 1 - 改写 md 图片语法并可精确还原原文
+      ---
+      duration_ms: 0.442208
+      type: 'test'
+    # Subtest: 改写内联 <img> 并还原
+    ok 2 - 改写内联 <img> 并还原
+      ---
+      duration_ms: 0.134958
+      type: 'test'
+    # Subtest: 编辑期新增的资产 URL 落盘还原为真实路径
+    ok 3 - 编辑期新增的资产 URL 落盘还原为真实路径
+      ---
+      duration_ms: 0.05475
+      type: 'test'
+    1..3
+ok 433 - rewriteLocalImages
+  ---
+  duration_ms: 0.841291
+  type: 'suite'
+# Subtest: markdown-semantic
+    # Subtest: htmlSignature 折叠空白并提取结构
+    ok 1 - htmlSignature 折叠空白并提取结构
+      ---
+      duration_ms: 0.3505
+      type: 'test'
+    # Subtest: img src/alt 与 a href 参与签名
+    ok 2 - img src/alt 与 a href 参与签名
+      ---
+      duration_ms: 0.295625
+      type: 'test'
+    # Subtest: semanticEqual：等价写法通过，丢内容不通过
+    ok 3 - semanticEqual：等价写法通过，丢内容不通过
+      ---
+      duration_ms: 48.554834
+      type: 'test'
+    1..3
+ok 434 - markdown-semantic
+  ---
+  duration_ms: 50.566292
+  type: 'suite'
+# Subtest: PathDetector
+    # Subtest: should detect absolute paths like /Users/name/file.ts
+    ok 1 - should detect absolute paths like /Users/name/file.ts
+      ---
+      duration_ms: 0.709584
+      type: 'test'
+    # Subtest: should detect relative paths like ./src/file.ts
+    ok 2 - should detect relative paths like ./src/file.ts
+      ---
+      duration_ms: 0.166458
+      type: 'test'
+    # Subtest: should detect paths with line numbers like file.ts:42
+    ok 3 - should detect paths with line numbers like file.ts:42
+      ---
+      duration_ms: 0.072583
+      type: 'test'
+    # Subtest: should detect paths with ../ relative prefix
+    ok 4 - should detect paths with ../ relative prefix
+      ---
+      duration_ms: 0.059167
+      type: 'test'
+    # Subtest: should return empty array for text without paths
+    ok 5 - should return empty array for text without paths
+      ---
+      duration_ms: 0.068333
+      type: 'test'
+    # Subtest: should detect multiple paths in one line
+    ok 6 - should detect multiple paths in one line
+      ---
+      duration_ms: 0.053166
+      type: 'test'
+    # Subtest: should handle paths with hyphens and underscores
+    ok 7 - should handle paths with hyphens and underscores
+      ---
+      duration_ms: 0.143333
+      type: 'test'
+    1..7
+ok 435 - PathDetector
+  ---
+  duration_ms: 1.860083
+  type: 'suite'
+# Subtest: provider renderer/Tauri contract
+    # Subtest: wraps struct command arguments in input
+    ok 1 - wraps struct command arguments in input
+      ---
+      duration_ms: 1.28075
+      type: 'test'
+    # Subtest: only invokes registered provider commands
+    ok 2 - only invokes registered provider commands
+      ---
+      duration_ms: 0.933334
+      type: 'test'
+    # Subtest: persists the model selected in the add dialog
+    ok 3 - persists the model selected in the add dialog
+      ---
+      duration_ms: 0.550209
+      type: 'test'
+    # Subtest: persists the selected provider protocol separately from the preset
+    ok 4 - persists the selected provider protocol separately from the preset
+      ---
+      duration_ms: 0.458542
+      type: 'test'
+    # Subtest: keeps legacy Tauri RPC from rejecting implemented daemon methods
+    ok 5 - keeps legacy Tauri RPC from rejecting implemented daemon methods
+      ---
+      duration_ms: 0.147917
+      type: 'test'
+    1..5
+ok 436 - provider renderer/Tauri contract
+  ---
+  duration_ms: 6.272167
+  type: 'suite'
+# Subtest: classifyProviderReadiness
+    # Subtest: no_provider
+    ok 1 - no_provider
+      ---
+      duration_ms: 0.3375
+      type: 'test'
+    # Subtest: no_model
+    ok 2 - no_model
+      ---
+      duration_ms: 0.131666
+      type: 'test'
+    # Subtest: ready
+    ok 3 - ready
+      ---
+      duration_ms: 0.049209
+      type: 'test'
+    1..3
+ok 437 - classifyProviderReadiness
+  ---
+  duration_ms: 0.979917
+  type: 'suite'
+# Subtest: selectAssistantModel
+    # Subtest: null empty
+    ok 1 - null empty
+      ---
+      duration_ms: 0.077792
+      type: 'test'
+    # Subtest: first ready
+    ok 2 - first ready
+      ---
+      duration_ms: 0.064792
+      type: 'test'
+    1..2
+ok 438 - selectAssistantModel
+  ---
+  duration_ms: 0.265584
+  type: 'suite'
+# Subtest: connectionFingerprint
+    # Subtest: same
+    ok 1 - same
+      ---
+      duration_ms: 0.122666
+      type: 'test'
+    # Subtest: diff
+    ok 2 - diff
+      ---
+      duration_ms: 0.207208
+      type: 'test'
+    1..2
+ok 439 - connectionFingerprint
+  ---
+  duration_ms: 0.406708
+  type: 'suite'
+# Subtest: normalizeDiscoveredModels
+    # Subtest: filters
+    ok 1 - filters
+      ---
+      duration_ms: 0.073542
+      type: 'test'
+    1..1
+ok 440 - normalizeDiscoveredModels
+  ---
+  duration_ms: 0.117125
+  type: 'suite'
+# Subtest: selectDiscoveredModel
+    # Subtest: first
+    ok 1 - first
+      ---
+      duration_ms: 0.130208
+      type: 'test'
+    # Subtest: null empty
+    ok 2 - null empty
+      ---
+      duration_ms: 0.172458
+      type: 'test'
+    1..2
+ok 441 - selectDiscoveredModel
+  ---
+  duration_ms: 0.343334
+  type: 'suite'
+# Subtest: canTestDiscoveredModel
+    # Subtest: true
+    ok 1 - true
+      ---
+      duration_ms: 0.056917
+      type: 'test'
+    1..1
+ok 442 - canTestDiscoveredModel
+  ---
+  duration_ms: 0.083458
+  type: 'suite'
+# Subtest: unwrapProviderListPayload
+    # Subtest: accepts bare arrays from fixtures
+    ok 1 - accepts bare arrays from fixtures
+      ---
+      duration_ms: 0.061708
+      type: 'test'
+    # Subtest: accepts production { providers: [...] } envelopes
+    ok 2 - accepts production { providers: [...] } envelopes
+      ---
+      duration_ms: 0.040291
+      type: 'test'
+    # Subtest: returns empty for unexpected shapes
+    ok 3 - returns empty for unexpected shapes
+      ---
+      duration_ms: 0.317792
+      type: 'test'
+    1..3
+ok 443 - unwrapProviderListPayload
+  ---
+  duration_ms: 0.46
+  type: 'suite'
+# Subtest: mapWireProviders
+    # Subtest: maps envelope providers into picker options and readiness ready
+    ok 1 - maps envelope providers into picker options and readiness ready
+      ---
+      duration_ms: 0.116709
+      type: 'test'
+    # Subtest: treats missing active key as no_model readiness
+    ok 2 - treats missing active key as no_model readiness
+      ---
+      duration_ms: 0.101417
+      type: 'test'
+    # Subtest: dedupes providers with same id and collapses same name+baseUrl ghosts
+    ok 3 - dedupes providers with same id and collapses same name+baseUrl ghosts
+      ---
+      duration_ms: 0.126125
+      type: 'test'
+    1..3
+ok 444 - mapWireProviders
+  ---
+  duration_ms: 0.388166
+  type: 'suite'
+# Subtest: resolveModelSelection
+    # Subtest: keeps an explicit provider+model pair
+    ok 1 - keeps an explicit provider+model pair
+      ---
+      duration_ms: 0.136708
+      type: 'test'
+    # Subtest: falls back to provider default when model missing
+    ok 2 - falls back to provider default when model missing
+      ---
+      duration_ms: 0.040292
+      type: 'test'
+    # Subtest: blocks stale provider ids instead of remapping to another host
+    ok 3 - blocks stale provider ids instead of remapping to another host
+      ---
+      duration_ms: 0.035917
+      type: 'test'
+    # Subtest: defaults to first ready provider when preference empty
+    ok 4 - defaults to first ready provider when preference empty
+      ---
+      duration_ms: 0.059291
+      type: 'test'
+    1..4
+ok 445 - resolveModelSelection
+  ---
+  duration_ms: 0.319333
+  type: 'suite'
+# test error message
+# test warning
+# Failed with key sk-abc12345***
+# Auth failed: Bearer ***
+# xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# test
+# formatted test
+# Subtest: RuntimeLog
+    # Subtest: should install without errors
+    ok 1 - should install without errors
+      ---
+      duration_ms: 0.702916
+      type: 'test'
+    # Subtest: should capture console.error
+    ok 2 - should capture console.error
+      ---
+      duration_ms: 4.223125
+      type: 'test'
+    # Subtest: should capture console.warn
+    ok 3 - should capture console.warn
+      ---
+      duration_ms: 1.225541
+      type: 'test'
+    # Subtest: should scrub API keys
+    ok 4 - should scrub API keys
+      ---
+      duration_ms: 0.20225
+      type: 'test'
+    # Subtest: should scrub Bearer tokens
+    ok 5 - should scrub Bearer tokens
+      ---
+      duration_ms: 0.329583
+      type: 'test'
+    # Subtest: should cap entry length at 2000 chars
+    ok 6 - should cap entry length at 2000 chars
+      ---
+      duration_ms: 0.192917
+      type: 'test'
+    # Subtest: should clear logs
+    ok 7 - should clear logs
+      ---
+      duration_ms: 0.142667
+      type: 'test'
+    # Subtest: should format logs as text
+    ok 8 - should format logs as text
+      ---
+      duration_ms: 0.118583
+      type: 'test'
+    1..8
+ok 446 - RuntimeLog
+  ---
+  duration_ms: 8.149959
+  type: 'suite'
+# Subtest: SafeStream
+    # Subtest: should enqueue chunks normally
+    ok 1 - should enqueue chunks normally
+      ---
+      duration_ms: 1.670791
+      type: 'test'
+    # Subtest: should close normally
+    ok 2 - should close normally
+      ---
+      duration_ms: 0.116
+      type: 'test'
+    # Subtest: should silently swallow close errors on enqueue
+    ok 3 - should silently swallow close errors on enqueue
+      ---
+      duration_ms: 0.067
+      type: 'test'
+    # Subtest: should call onClosedWrite callback once
+    ok 4 - should call onClosedWrite callback once
+      ---
+      duration_ms: 0.065083
+      type: 'test'
+    # Subtest: should handle error without throwing
+    ok 5 - should handle error without throwing
+      ---
+      duration_ms: 0.062417
+      type: 'test'
+    # Subtest: should not enqueue after error
+    ok 6 - should not enqueue after error
+      ---
+      duration_ms: 0.058375
+      type: 'test'
+    # Subtest: should not close twice
+    ok 7 - should not close twice
+      ---
+      duration_ms: 0.101667
+      type: 'test'
+    # Subtest: should not error after close
+    ok 8 - should not error after close
+      ---
+      duration_ms: 0.105041
+      type: 'test'
+    1..8
+ok 447 - SafeStream
+  ---
+  duration_ms: 2.942917
+  type: 'suite'
+# Subtest: SearchEngine
+    # Subtest: findSubsequence
+        # Subtest: should find matching positions for "ts" in "main.ts"
+        ok 1 - should find matching positions for "ts" in "main.ts"
+          ---
+          duration_ms: 1.1705
+          type: 'test'
+          ...
+        # Subtest: should return null when no match
+        ok 2 - should return null when no match
+          ---
+          duration_ms: 0.141833
+          type: 'test'
+          ...
+        1..2
+    ok 1 - findSubsequence
+      ---
+      duration_ms: 1.875375
+      type: 'suite'
+    # Subtest: findStreaks
+        # Subtest: should identify a single streak of 2
+        ok 1 - should identify a single streak of 2
+          ---
+          duration_ms: 0.090791
+          type: 'test'
+          ...
+        # Subtest: should identify two separate streaks
+        ok 2 - should identify two separate streaks
+          ---
+          duration_ms: 0.045833
+          type: 'test'
+          ...
+        1..2
+    ok 2 - findStreaks
+      ---
+      duration_ms: 0.268
+      type: 'suite'
+    # Subtest: calculateScore
+        # Subtest: should return -1 for no match
+        ok 1 - should return -1 for no match
+          ---
+          duration_ms: 0.478459
+          type: 'test'
+          ...
+        # Subtest: should score exact match higher than subsequence
+        ok 2 - should score exact match higher than subsequence
+          ---
+          duration_ms: 0.253375
+          type: 'test'
+          ...
+        # Subtest: should prefer consecutive matches over scattered matches
+        ok 3 - should prefer consecutive matches over scattered matches
+          ---
+          duration_ms: 0.840958
+          type: 'test'
+          ...
+        # Subtest: should prefer matches at word boundaries
+        ok 4 - should prefer matches at word boundaries
+          ---
+          duration_ms: 0.170834
+          type: 'test'
+          ...
+        # Subtest: should prefer matches at start of filename
+        ok 5 - should prefer matches at start of filename
+          ---
+          duration_ms: 0.192125
+          type: 'test'
+          ...
+        # Subtest: should prefer shorter filenames
+        ok 6 - should prefer shorter filenames
+          ---
+          duration_ms: 0.195041
+          type: 'test'
+          ...
+        # Subtest: should add bonus for directories
+        ok 7 - should add bonus for directories
+          ---
+          duration_ms: 0.056208
+          type: 'test'
+          ...
+        # Subtest: should add bonus for recently modified files
+        ok 8 - should add bonus for recently modified files
+          ---
+          duration_ms: 0.051542
+          type: 'test'
+          ...
+        # Subtest: should handle empty query
+        ok 9 - should handle empty query
+          ---
+          duration_ms: 0.043042
+          type: 'test'
+          ...
+        # Subtest: should handle case insensitive matching
+        ok 10 - should handle case insensitive matching
+          ---
+          duration_ms: 0.043625
+          type: 'test'
+          ...
+        # Subtest: should score exact filename match highest
+        ok 11 - should score exact filename match highest
+          ---
+          duration_ms: 0.0365
+          type: 'test'
+          ...
+        1..11
+    ok 3 - calculateScore
+      ---
+      duration_ms: 2.879625
+      type: 'suite'
+    # Subtest: grepContent
+        # Subtest: should find matching lines for a simple query
+        ok 1 - should find matching lines for a simple query
+          ---
+          duration_ms: 63.957083
+          type: 'test'
+          ...
+        # Subtest: should search recursively
+        ok 2 - should search recursively
+          ---
+          duration_ms: 41.760375
+          type: 'test'
+          ...
+        # Subtest: should be case insensitive
+        ok 3 - should be case insensitive
+          ---
+          duration_ms: 32.920334
+          type: 'test'
+          ...
+        # Subtest: should skip binary files
+        ok 4 - should skip binary files
+          ---
+          duration_ms: 15.932125
+          type: 'test'
+          ...
+        # Subtest: should return empty array when no match
+        ok 5 - should return empty array when no match
+          ---
+          duration_ms: 21.188667
+          type: 'test'
+          ...
+        # Subtest: should filter by file extensions
+        ok 6 - should filter by file extensions
+          ---
+          duration_ms: 19.1795
+          type: 'test'
+          ...
+        1..6
+    ok 4 - grepContent
+      ---
+      duration_ms: 198.057625
+      type: 'suite'
+    # Subtest: searchFiles
+        # Subtest: should return results sorted by score descending
+        ok 1 - should return results sorted by score descending
+          ---
+          duration_ms: 1.189125
+          type: 'test'
+          ...
+        # Subtest: should find exact match first
+        ok 2 - should find exact match first
+          ---
+          duration_ms: 2.487959
+          type: 'test'
+          ...
+        # Subtest: should respect maxResults limit
+        ok 3 - should respect maxResults limit
+          ---
+          duration_ms: 1.2655
+          type: 'test'
+          ...
+        # Subtest: should include directories when includeDirs is true
+        ok 4 - should include directories when includeDirs is true
+          ---
+          duration_ms: 1.156834
+          type: 'test'
+          ...
+        1..4
+    ok 5 - searchFiles
+      ---
+      duration_ms: 9.049541
+      type: 'suite'
+    # Subtest: spotlightSearch
+        # Subtest: should return results from mdfind or grep fallback
+        ok 1 - should return results from mdfind or grep fallback
+          ---
+          duration_ms: 116.376417
+          type: 'test'
+          ...
+        # Subtest: should return empty array for no match
+        ok 2 - should return empty array for no match
+          ---
+          duration_ms: 72.647125
+          type: 'test'
+          ...
+        1..2
+    ok 6 - spotlightSearch
+      ---
+      duration_ms: 190.319958
+      type: 'suite'
+    1..6
+ok 448 - SearchEngine
+  ---
+  duration_ms: 403.5095
+  type: 'suite'
+# Subtest: ShikiUtils
+    # Subtest: extToLanguage
+        # Subtest: should map common extensions
+        ok 1 - should map common extensions
+          ---
+          duration_ms: 1.215083
+          type: 'test'
+          ...
+        # Subtest: should map web extensions
+        ok 2 - should map web extensions
+          ---
+          duration_ms: 0.220709
+          type: 'test'
+          ...
+        # Subtest: should return text for unknown extensions
+        ok 3 - should return text for unknown extensions
+          ---
+          duration_ms: 0.130917
+          type: 'test'
+          ...
+        1..3
+    ok 1 - extToLanguage
+      ---
+      duration_ms: 2.724667
+      type: 'suite'
+    # Subtest: detectLanguage
+        # Subtest: should detect language from filename
+        ok 1 - should detect language from filename
+          ---
+          duration_ms: 0.380541
+          type: 'test'
+          ...
+        # Subtest: should handle filenames without extension
+        ok 2 - should handle filenames without extension
+          ---
+          duration_ms: 0.11925
+          type: 'test'
+          ...
+        # Subtest: should handle filenames with multiple dots
+        ok 3 - should handle filenames with multiple dots
+          ---
+          duration_ms: 0.248
+          type: 'test'
+          ...
+        1..3
+    ok 2 - detectLanguage
+      ---
+      duration_ms: 1.096458
+      type: 'suite'
+    1..2
+ok 449 - ShikiUtils
+  ---
+  duration_ms: 4.907708
+  type: 'suite'
+# Subtest: should have exactly two themes (light / dark)
+ok 450 - should have exactly two themes (light / dark)
+  ---
+  duration_ms: 1.490834
+  type: 'test'
+# Subtest: should validate a valid theme
+ok 451 - should validate a valid theme
+  ---
+  duration_ms: 3.801042
+  type: 'test'
+# Subtest: should reject invalid hex color
+ok 452 - should reject invalid hex color
+  ---
+  duration_ms: 1.159667
+  type: 'test'
+# Subtest: light and dark use distinct grayscale brand colors
+ok 453 - light and dark use distinct grayscale brand colors
+  ---
+  duration_ms: 0.079792
+  type: 'test'
+# Subtest: dark theme uses dark surfaces
+ok 454 - dark theme uses dark surfaces
+  ---
+  duration_ms: 0.051083
+  type: 'test'
+# Subtest: light theme uses light surfaces
+ok 455 - light theme uses light surfaces
+  ---
+  duration_ms: 0.107875
+  type: 'test'
+# Subtest: normalizes legacy theme aliases to V1 theme ids
+ok 456 - normalizes legacy theme aliases to V1 theme ids
+  ---
+  duration_ms: 0.060167
+  type: 'test'
+# Subtest: chart-volume-0..8 are complete and in correct order
+ok 457 - chart-volume-0..8 are complete and in correct order
+  ---
+  duration_ms: 0.064834
+  type: 'test'
+# Subtest: getChartVolumeLevel covers zero and boundary values
+ok 458 - getChartVolumeLevel covers zero and boundary values
+  ---
+  duration_ms: 0.231458
+  type: 'test'
+# Subtest: filterUsageRecords
+    # Subtest: filters by source, model and project
+    ok 1 - filters by source, model and project
+      ---
+      duration_ms: 0.48725
+      type: 'test'
+    # Subtest: null cost is not zero
+    ok 2 - null cost is not zero
+      ---
+      duration_ms: 0.121666
+      type: 'test'
+    # Subtest: null token breakdown is not zero
+    ok 3 - null token breakdown is not zero
+      ---
+      duration_ms: 0.051542
+      type: 'test'
+    1..3
+ok 459 - filterUsageRecords
+  ---
+  duration_ms: 1.108917
+  type: 'suite'
+# Subtest: buildSourceDimensions
+    # Subtest: lists every adapted tool even when only one has usage rows
+    ok 1 - lists every adapted tool even when only one has usage rows
+      ---
+      duration_ms: 19.86875
+      type: 'test'
+    1..1
+ok 460 - buildSourceDimensions
+  ---
+  duration_ms: 20.01025
+  type: 'suite'
+# Subtest: aggregateUsageMetrics
+    # Subtest: cost coverage uses known token denominator
+    ok 1 - cost coverage uses known token denominator
+      ---
+      duration_ms: 0.521959
+      type: 'test'
+    # Subtest: empty records return empty metrics
+    ok 2 - empty records return empty metrics
+      ---
+      duration_ms: 0.6055
+      type: 'test'
+    1..2
+ok 461 - aggregateUsageMetrics
+  ---
+  duration_ms: 2.772583
+  type: 'suite'
+# Subtest: uniqueSessionCount
+    # Subtest: sessions are deduplicated by source and id
+    ok 1 - sessions are deduplicated by source and id
+      ---
+      duration_ms: 2.008833
+      type: 'test'
+    1..1
+ok 462 - uniqueSessionCount
+  ---
+  duration_ms: 2.229167
+  type: 'suite'
+# Subtest: buildDailyTrend
+    # Subtest: aggregates tokens by date
+    ok 1 - aggregates tokens by date
+      ---
+      duration_ms: 0.226583
+      type: 'test'
+    1..1
+ok 463 - buildDailyTrend
+  ---
+  duration_ms: 0.285792
+  type: 'suite'
+# Subtest: buildHourlyHeatmap
+    # Subtest: uses local hour fields from real-epoch hour starts
+    ok 1 - uses local hour fields from real-epoch hour starts
+      ---
+      duration_ms: 1.60225
+      type: 'test'
+    # Subtest: zero hourStartMs is excluded
+    ok 2 - zero hourStartMs is excluded
+      ---
+      duration_ms: 1.350541
+      type: 'test'
+    1..2
+ok 464 - buildHourlyHeatmap
+  ---
+  duration_ms: 4.179792
+  type: 'suite'
+# Subtest: buildProjectDistribution
+    # Subtest: aggregates tokens by project and merges long tail into others
+    ok 1 - aggregates tokens by project and merges long tail into others
+      ---
+      duration_ms: 1.985209
+      type: 'test'
+    1..1
+ok 465 - buildProjectDistribution
+  ---
+  duration_ms: 2.157708
+  type: 'suite'
+# Subtest: rtk is not added to usage
+    # Subtest: rtk field is separate from usage metrics
+    ok 1 - rtk field is separate from usage metrics
+      ---
+      duration_ms: 0.154875
+      type: 'test'
+    1..1
+ok 466 - rtk is not added to usage
+  ---
+  duration_ms: 0.193208
+  type: 'suite'
+# Subtest: project filter excludes unsupported sources
+    # Subtest: sources without project capability are excluded when project filter is active
+    ok 1 - sources without project capability are excluded when project filter is active
+      ---
+      duration_ms: 0.095167
+      type: 'test'
+    1..1
+ok 467 - project filter excludes unsupported sources
+  ---
+  duration_ms: 0.125375
+  type: 'suite'
+# Subtest: serializeUsageCsv
+    # Subtest: produces UTF-8 BOM header
+    ok 1 - produces UTF-8 BOM header
+      ---
+      duration_ms: 0.496708
+      type: 'test'
+    # Subtest: includes all records
+    ok 2 - includes all records
+      ---
+      duration_ms: 0.19225
+      type: 'test'
+    # Subtest: null values become empty cells
+    ok 3 - null values become empty cells
+      ---
+      duration_ms: 0.082625
+      type: 'test'
+    # Subtest: prevents CSV formula injection for = + - @
+    ok 4 - prevents CSV formula injection for = + - @
+      ---
+      duration_ms: 0.093416
+      type: 'test'
+    1..4
+ok 468 - serializeUsageCsv
+  ---
+  duration_ms: 1.426125
+  type: 'suite'
+# Subtest: serializeUsageBadgeSvg
+    # Subtest: returns valid SVG start tag
+    ok 1 - returns valid SVG start tag
+      ---
+      duration_ms: 12.181292
+      type: 'test'
+    # Subtest: handles missing cost gracefully
+    ok 2 - handles missing cost gracefully
+      ---
+      duration_ms: 0.134542
+      type: 'test'
+    # Subtest: handles no shareable metrics
+    ok 3 - handles no shareable metrics
+      ---
+      duration_ms: 0.112666
+      type: 'test'
+    1..3
+ok 469 - serializeUsageBadgeSvg
+  ---
+  duration_ms: 12.708334
+  type: 'suite'
+# Subtest: serializeUsageMarkdown
+    # Subtest: includes heading and period
+    ok 1 - includes heading and period
+      ---
+      duration_ms: 0.122375
+      type: 'test'
+    # Subtest: includes metrics when available
+    ok 2 - includes metrics when available
+      ---
+      duration_ms: 0.142292
+      type: 'test'
+    1..2
+ok 470 - serializeUsageMarkdown
+  ---
+  duration_ms: 0.489333
+  type: 'suite'
+# Subtest: hasShareableMetrics
+    # Subtest: returns false for null metrics
+    ok 1 - returns false for null metrics
+      ---
+      duration_ms: 0.12275
+      type: 'test'
+    # Subtest: returns true when tokens are available
+    ok 2 - returns true when tokens are available
+      ---
+      duration_ms: 0.046583
+      type: 'test'
+    # Subtest: returns false when nothing is available
+    ok 3 - returns false when nothing is available
+      ---
+      duration_ms: 0.039042
+      type: 'test'
+    1..3
+ok 471 - hasShareableMetrics
+  ---
+  duration_ms: 0.254625
+  type: 'suite'
+# Subtest: defaultExportFilename
+    # Subtest: generates correct format
+    ok 1 - generates correct format
+      ---
+      duration_ms: 0.644042
+      type: 'test'
+    1..1
+ok 472 - defaultExportFilename
+  ---
+  duration_ms: 0.734125
+  type: 'suite'
+# Subtest: useFileContent
+    # Subtest: should export useFileContent function
+    ok 1 - should export useFileContent function
+      ---
+      duration_ms: 0.401375
+      type: 'test'
+    # Subtest: should be a React hook (function name starts with use)
+    ok 2 - should be a React hook (function name starts with use)
+      ---
+      duration_ms: 0.081583
+      type: 'test'
+    1..2
+ok 473 - useFileContent
+  ---
+  duration_ms: 0.995459
+  type: 'suite'
+# Subtest: AgentTypes
+    # Subtest: should construct a valid AgentProject
+    ok 1 - should construct a valid AgentProject
+      ---
+      duration_ms: 0.763084
+      type: 'test'
+    # Subtest: should construct a valid AgentSession (real jsonl transcript shape)
+    ok 2 - should construct a valid AgentSession (real jsonl transcript shape)
+      ---
+      duration_ms: 0.114542
+      type: 'test'
+    # Subtest: should allow AgentSession without a title
+    ok 3 - should allow AgentSession without a title
+      ---
+      duration_ms: 0.053083
+      type: 'test'
+    # Subtest: should construct a valid SkillInfo
+    ok 4 - should construct a valid SkillInfo
+      ---
+      duration_ms: 0.063875
+      type: 'test'
+    # Subtest: should report health issues
+    ok 5 - should report health issues
+      ---
+      duration_ms: 0.051458
+      type: 'test'
+    # Subtest: should construct FileChangeEvent
+    ok 6 - should construct FileChangeEvent
+      ---
+      duration_ms: 0.050417
+      type: 'test'
+    # Subtest: should have 5 skill sources
+    ok 7 - should have 5 skill sources
+      ---
+      duration_ms: 0.150042
+      type: 'test'
+    # Subtest: should accept valid AgentStatus values
+    ok 8 - should accept valid AgentStatus values
+      ---
+      duration_ms: 0.126833
+      type: 'test'
+    1..8
+ok 474 - AgentTypes
+  ---
+  duration_ms: 2.335333
+  type: 'suite'
+# Subtest: FileTypes
+    # Subtest: FileEntry wire shape stays camelCase and complete
+    ok 1 - FileEntry wire shape stays camelCase and complete
+      ---
+      duration_ms: 0.363334
+      type: 'test'
+    # Subtest: StatResult allows missing-file shape
+    ok 2 - StatResult allows missing-file shape
+      ---
+      duration_ms: 0.064125
+      type: 'test'
+    # Subtest: frontend view models keep their normalized shapes
+    ok 3 - frontend view models keep their normalized shapes
+      ---
+      duration_ms: 0.091541
+      type: 'test'
+    1..3
+ok 475 - FileTypes
+  ---
+  duration_ms: 1.036083
+  type: 'suite'
+1..475
+# tests 796
+# suites 131
+# pass 796
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4393.001208

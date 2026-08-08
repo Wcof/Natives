@@ -1,0 +1,19 @@
+{
+  "commit": "87d35bc1",
+  "review_head": "87d35bc1",
+  "date": "2026-08-08",
+  "chunks_500": {
+    "submit_to_completed_ms": 720.7,
+    "run_event_rows": 6,
+    "message_delta_count": 0,
+    "sqlite_writes_approx": 6,
+    "live_delta_sqlite_writes": 0
+  },
+  "chunks_2000": {
+    "submit_to_completed_ms": 2887.2,
+    "run_event_rows": 6,
+    "message_delta_count": 0,
+    "sqlite_writes_approx": 6,
+    "live_delta_sqlite_writes": 0
+  }
+}
