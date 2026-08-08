@@ -27,6 +27,7 @@ import { fmtSize } from '@/lib/format';
 import { useFileDrop } from '@/lib/use-file-drop';
 import { useFsWatch } from '@/lib/use-fs-watch';
 import { isNoisyChangePath, topChildOf, SelfOpenedTracker } from '@/lib/fs-change-filter';
+import type { VirtualFileViewHandle } from '@/lib/preview/contracts';
 import { fsApi, archiveApi, hasNativeFiles } from '@/lib/files-api';
 import {
   FILE_EVENTS,
@@ -133,6 +134,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
+  /** T30 冻结接缝：虚拟视图 handle（scrollToIndex/getColumnCount），T31 持有并调用 */
+  const viewHandleRef = useRef<VirtualFileViewHandle | null>(null);
   const lastClickedIndexRef = useRef<number>(-1);
   /** 代次守卫：快速导航时丢弃过期的 loadEntries 响应，防止旧内容覆盖新目录 */
   const loadIdRef = useRef(0);
@@ -439,6 +442,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       // 点亮直接子项卡片；事件风暴（npm install 级）下按 150ms 合并 dispatch，
       // 避免逐条事件触发 setState 重渲染
       const child = topChildOf(currentPath, event.path);
+      // 直接子项事件（create/remove/rename/modify 直接成员）才触发整目录刷新；
+      // 深层后代修改只点亮顶层子项，不反复 whole reload（watch storm 预算 ≤2/settling）
+      const isDirectChildEvent = child !== null && child === event.path;
       if (child) {
         pendingFlashRef.current.add(child);
         if (!flashFlushTimerRef.current) {
@@ -450,12 +456,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           }, 150);
         }
       }
-      // 250ms 防抖整目录刷新（fanbox 同参）；loadEntries 自带代次守卫防过期写回
-      if (watchRefreshTimerRef.current) clearTimeout(watchRefreshTimerRef.current);
-      watchRefreshTimerRef.current = setTimeout(() => {
-        watchRefreshTimerRef.current = null;
-        void loadEntries();
-      }, 250);
+      // 仅直接子项变更走 250ms 防抖整目录刷新（fanbox 同参）；loadEntries 自带代次守卫
+      if (isDirectChildEvent) {
+        if (watchRefreshTimerRef.current) clearTimeout(watchRefreshTimerRef.current);
+        watchRefreshTimerRef.current = setTimeout(() => {
+          watchRefreshTimerRef.current = null;
+          void loadEntries();
+        }, 250);
+      }
     }, [currentPath, loadEntries]),
   );
 
@@ -1235,9 +1243,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     });
   }, [currentPath, entries, searchQuery]);
 
-  // Scroll keyboard selection into view
+  // Scroll keyboard selection into view（虚拟窗口跨窗口：走 T30 VirtualFileViewHandle 接缝）
   useEffect(() => {
     if (selectedIndex < 0 || selectedIndex >= filteredEntries.length) return;
+    const handle = viewHandleRef.current;
+    if (handle) {
+      handle.scrollToIndex(selectedIndex, { align: 'auto' });
+      return;
+    }
     const path = filteredEntries[selectedIndex]?.path;
     if (!path) return;
     const el = document.querySelector(`[data-file-entry="${CSS.escape(path)}"]`) as HTMLElement | null;
@@ -1397,6 +1410,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onMoveDrop={handleInternalMove}
             dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
             flashPaths={flashPaths}
+            scrollContainerRef={fileAreaRef}
+            onViewHandleReady={(h) => { viewHandleRef.current = h; }}
           />
         ) : (
           <FileList
@@ -1416,6 +1431,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onMoveDrop={handleInternalMove}
             dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
             flashPaths={flashPaths}
+            scrollContainerRef={fileAreaRef}
+            onViewHandleReady={(h) => { viewHandleRef.current = h; }}
           />
         )}
       </div>
