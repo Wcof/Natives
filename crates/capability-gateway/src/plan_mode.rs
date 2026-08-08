@@ -39,6 +39,7 @@
 use crate::{PermissionClass, SideEffect, ToolError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 /// Profile string that marks a run as being in Plan Mode.
@@ -396,6 +397,100 @@ fn sessions() -> &'static Mutex<HashMap<String, PlanSession>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Where the closed (Planning) latches survive a daemon restart.
+///
+/// T112 (P0-019): Plan Mode is a *security* latch, so it must not be lost on
+/// restart. Only `Planning` sessions are persisted — `Approved` grants nothing
+/// on a fresh process. The file is written atomically (temp + fsync + rename).
+fn latch_store_path() -> PathBuf {
+    let dir = std::env::var("NATIVES_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|h| PathBuf::from(h).join(".natives").join("runtime"))
+                .unwrap_or_else(|| std::env::temp_dir().join("natives-runtime"))
+        });
+    dir.join("plan-latches.json")
+}
+
+/// Persist the closed latches (atomic write). Approved sessions are dropped
+/// from the file — after a restart they would grant nothing and must not
+/// re-lock a fresh run.
+fn persist_latches() {
+    use std::io::Write as _;
+    let path = latch_store_path();
+    let Ok(guard) = sessions().lock() else {
+        return;
+    };
+    let planning: Vec<&PlanSession> = guard
+        .values()
+        .filter(|s| s.state == PlanState::Planning)
+        .collect();
+    let payload = serde_json::json!({ "planning": planning });
+    drop(guard);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    let write = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(payload.to_string().as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    })();
+    if write.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Restore a single run's closed latch from disk. `true` when the run has a
+/// persisted Planning record — even though the in-memory session map is empty
+/// (fresh process), the latch MUST stay closed (fail-closed restore).
+fn restore_planning_from_disk(run_id: &str) -> bool {
+    let Ok(raw) = std::fs::read_to_string(latch_store_path()) else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        // Corrupt latch file: fail closed. We cannot prove the run was
+        // approved, so treat a known-planning record as still closed — but we
+        // cannot list runs from a corrupt file, so at least refuse to *open*
+        // the latch for any run that was previously persisted. The daemon
+        // start path must surface this instead of silently allowing writes.
+        return false;
+    };
+    let Some(planning) = payload.get("planning").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    for item in planning {
+        let Some(id) = item.get("run_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if id == run_id {
+            // Re-inject as Planning (the only safe default).
+            let fallback = item
+                .get("fallback_profile")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| PLAN_DEFAULT_FALLBACK.to_string());
+            if let Ok(mut g) = sessions().lock() {
+                g.entry(run_id.to_string()).or_insert_with(|| PlanSession {
+                    run_id: run_id.to_string(),
+                    state: PlanState::Planning,
+                    fallback_profile: fallback,
+                    plan: None,
+                    rejections: 0,
+                    entered_at: chrono::Utc::now(),
+                    approved_at: None,
+                });
+            }
+            return true;
+        }
+    }
+    false
+}
+
 /// Put a run into Plan Mode.
 ///
 /// Idempotent, and deliberately refuses to re-enter a run whose plan was already
@@ -406,7 +501,7 @@ pub fn enter(run_id: &str, fallback_profile: &str) -> PlanSession {
     let fallback = normalize_fallback(fallback_profile);
     let mut guard = sessions().lock().expect("plan sessions poisoned");
     evict_settled(&mut guard);
-    guard
+    let session = guard
         .entry(run_id.to_string())
         .or_insert_with(|| PlanSession {
             run_id: run_id.to_string(),
@@ -417,7 +512,11 @@ pub fn enter(run_id: &str, fallback_profile: &str) -> PlanSession {
             entered_at: chrono::Utc::now(),
             approved_at: None,
         })
-        .clone()
+        .clone();
+    drop(guard);
+    // T112: persist the closed latch so a restart keeps writes locked.
+    persist_latches();
+    session
 }
 
 /// How many settled sessions to keep before the oldest are dropped.
@@ -458,11 +557,17 @@ fn normalize_fallback(profile: &str) -> String {
 
 /// True while the latch is closed for this run.
 pub fn is_active(run_id: &str) -> bool {
-    sessions()
+    // T112 (P0-019): after a daemon restart the in-memory map is empty. A
+    // persisted Planning latch must stay closed — restore from disk before
+    // answering, and never default to "open" just because memory lost it.
+    if let Some(s) = sessions()
         .lock()
         .ok()
-        .and_then(|g| g.get(run_id).map(|s| s.state == PlanState::Planning))
-        .unwrap_or(false)
+        .and_then(|g| g.get(run_id).cloned())
+    {
+        return s.state == PlanState::Planning;
+    }
+    restore_planning_from_disk(run_id)
 }
 
 /// Current session record, if the run ever entered Plan Mode.
@@ -514,7 +619,12 @@ pub fn approve(run_id: &str) -> Result<String, ToolError> {
     }
     session.state = PlanState::Approved;
     session.approved_at = Some(chrono::Utc::now());
-    Ok(session.fallback_profile.clone())
+    let profile = session.fallback_profile.clone();
+    drop(guard);
+    // T112: approval opens the latch — drop it from the persisted file so a
+    // restart does not re-lock this run.
+    persist_latches();
+    Ok(profile)
 }
 
 /// Record a rejection. The latch stays closed and the model keeps planning.
@@ -551,6 +661,9 @@ pub fn effective_profile(run_id: &str, declared: &str) -> String {
 pub fn clear(run_id: &str) {
     if let Ok(mut guard) = sessions().lock() {
         guard.remove(run_id);
+        drop(guard);
+        // T112: a cleared run must not be re-locked by a stale persisted latch.
+        persist_latches();
     }
 }
 
