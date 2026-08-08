@@ -7,7 +7,8 @@ const dialog = readFileSync(new URL('../components/settings/AddProviderDialog.ts
 const settings = readFileSync(new URL('../components/shell/SettingsPage.tsx', import.meta.url), 'utf8');
 const commands = readFileSync(new URL('../../src-tauri/src/commands/provider.rs', import.meta.url), 'utf8');
 const commandRegistry = readFileSync(new URL('../../src-tauri/src/lib.rs', import.meta.url), 'utf8');
-const legacyRpcServer = readFileSync(new URL('../../src-tauri/src/daemon/rpc_server.rs', import.meta.url), 'utf8');
+// T202/T302: legacy daemon/rpc_server.rs was physically deleted (orphan, 0 refs).
+// The provider command contract now lives solely in the Agent Daemon rpc.rs.
 const agentDaemonRpc = readFileSync(new URL('../../src-agent-daemon/src/rpc.rs', import.meta.url), 'utf8');
 
 describe('provider renderer/Tauri contract', () => {
@@ -35,10 +36,12 @@ describe('provider renderer/Tauri contract', () => {
     assert.match(commands, /api_protocol/);
   });
 
-  it('keeps legacy Tauri RPC from rejecting implemented daemon methods', () => {
-    assert.match(legacyRpcServer, /assistant_protocol::v2::is_implemented_method/);
-    assert.match(legacyRpcServer, /daemon_authority::request/);
-    assert.match(legacyRpcServer, /has_mcp_support: true/);
+  it('daemon rpc implements provider methods and stays clean', () => {
+    // T202/T302: the orphan host rpc_server.rs is gone; the Agent Daemon is the
+    // single RPC authority. Its response text must not regress into "missing
+    // content" placeholder shapes.
     assert.doesNotMatch(agentDaemonRpc, new RegExp(['Model response', 'missing content'].join(' ')));
+    assert.match(agentDaemonRpc, /is_implemented_method/);
+    assert.match(agentDaemonRpc, /conversation\.getContextUsage|mcp\.list/);
   });
 });

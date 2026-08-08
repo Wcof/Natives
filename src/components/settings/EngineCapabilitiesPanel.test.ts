@@ -146,7 +146,7 @@ test('Harness run start requires explicit project/provider/model instead of copy
   assert.match(panel, /project_path: runProjectPath/);
   assert.match(panel, /setWorkspaceTarget\('runs'\)/);
   assert.match(panel, /ACTIVE_RUN_STATUSES/);
-  assert.match(panel, /window\.setInterval\(\(\) => void loadRuns\(selectedRunId\), 2_000\)/);
+  assert.match(panel, /window\.setInterval\(\(\) => void loadRuns\(selectedRunId\), 5_000\)/);
   assert.doesNotMatch(panel, /const last = liveRuns\[0\]/);
 });
 
