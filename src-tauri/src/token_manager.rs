@@ -46,11 +46,10 @@ impl TokenManager {
     }
 
     fn generate_random_hex(bytes: usize) -> String {
-        use std::io::Read;
-        let mut rng = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
+        // P1-017: use rand::OsRng (OS CSPRNG) instead of /dev/urandom with
+        // platform-specific expect. Cross-platform and fail-closed.
         let mut buf = vec![0u8; bytes];
-        rng.read_exact(&mut buf)
-            .expect("failed to read from /dev/urandom");
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
         hex::encode(buf)
     }
 
