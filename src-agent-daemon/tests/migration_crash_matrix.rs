@@ -14,7 +14,7 @@
 
 use natives_agent_daemon::storage::DataStore;
 
-fn temp_dir(tag: &str) -> tempfile::TempDir {
+fn temp_dir(_tag: &str) -> tempfile::TempDir {
     tempfile::tempdir().expect("tempdir")
 }
 
@@ -160,8 +160,8 @@ fn matrix_wal_active() {
 }
 
 /// 5. Crash simulation: v13 ledger row removed → reopen re-attaches via
-/// postcondition (run.revision exists) and user rows are neither duplicated
-/// nor lost.
+///    postcondition (run.revision exists) and user rows are neither
+///    duplicated nor lost.
 #[test]
 fn matrix_crash_ledger_missing_reattaches() {
     let (dir, store) = fresh_store("t304-crash");
@@ -203,7 +203,7 @@ fn matrix_crash_ledger_missing_reattaches() {
 }
 
 /// 6. Partial legacy state: v37 column missing on run after a crash → reopen
-/// repairs the column set idempotently and preserves rows.
+///    repairs the column set idempotently and preserves rows.
 #[test]
 fn matrix_partial_legacy_columns_repair() {
     let (dir, store) = fresh_store("t304-partial");
