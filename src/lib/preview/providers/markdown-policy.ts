@@ -18,6 +18,18 @@ export function isAuthorizedAssetUrl(url: string): boolean {
 }
 
 /**
+ * P0-006: 只有落在授权根（baseDir）内的本地路径才能生成 asset URL。
+ * markdown 里 `![](/etc/passwd)` 这类越根绝对路径必须被拒——
+ * 不生成 asset:// URL（保留原文，随后被 urlTransform 的 markdown-safety 判定拦掉），
+ * 而不是把任意进程可读路径拼进资产链。
+ */
+export function isWithinAuthorizedBase(absPath: string, baseDir: string): boolean {
+  if (!baseDir) return false;
+  const base = baseDir.replace(/\/+$/, '');
+  return absPath === base || absPath.startsWith(base + '/');
+}
+
+/**
  * file markdown 的 urlTransform：已授权资产 URL 直接放行，其余走 markdown-safety 判定。
  * 签名与 markdown-safety.transformMarkdownUrl 对齐（react-markdown 兼容）。
  */
@@ -59,7 +71,13 @@ export function buildMarkdownRenderOptions(
   if (urlPolicy === 'authorized-file-assets') {
     return {
       rewrite: (source: string): string =>
-        rewriteLocalImages(source, baseDir ?? '', (abs) => `asset://localhost${encodeURI(abs)}`).text,
+        rewriteLocalImages(source, baseDir ?? '', (abs) =>
+          // P0-006: 仅授权根内路径生成 asset URL;越根/越界路径返回空,
+          // 保留原文,由 urlTransform 的 markdown-safety 判定拦掉。
+          isWithinAuthorizedBase(abs, baseDir ?? '')
+            ? `asset://localhost${encodeURI(abs)}`
+            : '',
+        ).text,
       urlTransform: transformAuthorizedFileUrl,
     };
   }
