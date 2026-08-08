@@ -753,14 +753,8 @@ pub fn run() {
             commands::jobs::job_set_enabled,
             commands::jobs::job_run_now,
             commands::jobs::job_runs_list,
-            commands::assistant::assistant_list_sessions,
-            commands::assistant::assistant_get_messages,
-            commands::assistant::assistant_create_session,
-            commands::assistant::assistant_delete_session,
-            commands::assistant::assistant_save_message,
-            commands::assistant::assistant_update_message_status,
-            commands::assistant::assistant_update_session_title,
-            commands::assistant::assistant_update_session_model,
+            // T202/T302: legacy assistant_* CRUD commands retired (fail-closed);
+            // conversations/messages are Daemon-canonical. No registration.
             commands::provider::provider_test,
             commands::provider::test_provider_raw,
             // Provider routing / Sub2API account pool (Host-owned configuration)
