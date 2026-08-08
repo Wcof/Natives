@@ -148,15 +148,61 @@ pub fn get_sequence(project_path: &str, version: &str) -> Result<serde_json::Val
     }))
 }
 
-/// Execute a release command
+/// Enumeration of release actions the wizard may execute. T206 (P1-033):
+/// `release_execute` must NOT accept an arbitrary shell string — only these
+/// fixed, argv-shaped actions are allowed, each built with a literal
+/// executable + args (no shell interpolation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseAction {
+    NpmInstall,
+    NpmBuild,
+    CargoBuildRelease,
+    GitCommitAndTag,
+    GitPush,
+}
+
+impl ReleaseAction {
+    /// Resolve an action id from the wire ("npm install", "npm run build", …)
+    /// to the enumerated action. Unknown / free-form ids are rejected.
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim() {
+            "npm install" => Some(Self::NpmInstall),
+            "npm run build" => Some(Self::NpmBuild),
+            "cargo build --release" => Some(Self::CargoBuildRelease),
+            "git commit && git tag" => Some(Self::GitCommitAndTag),
+            "git push" => Some(Self::GitPush),
+            _ => None,
+        }
+    }
+
+    /// Literal argv for the action. Never shells out to `sh -c`.
+    fn argv(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            Self::NpmInstall => ("npm", &["install"]),
+            Self::NpmBuild => ("npm", &["run", "build"]),
+            Self::CargoBuildRelease => ("cargo", &["build", "--release"]),
+            Self::GitCommitAndTag => ("git", &["commit", "-m", "release"]),
+            Self::GitPush => ("git", &["push", "--tags"]),
+        }
+    }
+}
+
+/// Execute an enumerated release action.
 pub fn execute_command(project_path: &str, command: &str) -> Result<serde_json::Value> {
-    let output = std::process::Command::new("sh")
-        .args(["-c", command])
+    let action = ReleaseAction::parse(command).ok_or_else(|| {
+        Error::Internal(format!(
+            "release_execute: unsupported action {command:?} — only enumerated release actions are allowed (T206)"
+        ))
+    })?;
+    let (program, args) = action.argv();
+    let output = std::process::Command::new(program)
+        .args(args)
         .current_dir(project_path)
         .output()
         .map_err(|e| Error::Internal(format!("command failed: {e}")))?;
 
     Ok(serde_json::json!({
+        "action": command,
         "exitCode": output.status.code(),
         "stdout": String::from_utf8_lossy(&output.stdout),
         "stderr": String::from_utf8_lossy(&output.stderr),
