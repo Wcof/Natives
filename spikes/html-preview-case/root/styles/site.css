@@ -1,0 +1,10 @@
+/* H0 fixture — root/styles/site.css */
+body { font-family: sans-serif; }
+
+.icon {
+  background-image: url('../img/中文 空格.png');
+}
+
+.local-bg {
+  background-image: url('nested/more.css'); /* url() relative sibling ref */
+}
