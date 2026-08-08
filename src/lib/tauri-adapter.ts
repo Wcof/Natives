@@ -1203,6 +1203,13 @@ export interface NativesAPI {
     get: () => Promise<{ enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }>;
     save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) => Promise<void>;
   };
+  /** 执行引擎设置 V2（唯一持久化权威 — A6 backend） */
+  executionEngine: {
+    getSnapshot: () => Promise<Record<string, unknown>>;
+    saveSettings: (settings: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    detectRuntimes: () => Promise<unknown[]>;
+    getDiagnostics: () => Promise<Record<string, unknown>>;
+  };
   /** Assistant in-process RPC (no daemon sidecar) */
   assistantV2: {
     request<T>(method: string, params?: unknown): Promise<T>;
@@ -2079,6 +2086,15 @@ const nativesAPI: NativesAPI = {
     get: () => cmd('executor_get_settings'),
     save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) =>
       cmd('executor_save_settings', { settings }),
+  },
+
+  // Execution Engine settings V2（唯一持久化权威 — A6 backend）
+  executionEngine: {
+    getSnapshot: () => cmd('execution_engine_get_snapshot'),
+    saveSettings: (settings: Record<string, unknown>) =>
+      cmd('execution_engine_save_settings', { settings }),
+    detectRuntimes: () => cmd('execution_engine_detect_runtimes'),
+    getDiagnostics: () => cmd('execution_engine_get_diagnostics'),
   },
 
   // Runtime abstraction（Slice B）

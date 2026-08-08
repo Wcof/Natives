@@ -642,6 +642,9 @@ async fn completes_simple_text_turn() {
         ]]),
     };
     let run_id = format!("simple-text-{}", uuid::Uuid::new_v4());
+    // A1: text deltas are live-only — subscribe before the run so the
+    // ephemeral broadcast retains them for the assertion below.
+    let mut live_rx = engine.live.subscribe(&run_id);
     let status = engine
         .run(
             EngineRunConfig {
@@ -663,11 +666,24 @@ async fn completes_simple_text_turn() {
         "{status:?}"
     );
     let events = engine.events.replay_after(&run_id, 0);
-    // `Started` is a RunManager lifecycle event, not an engine domain event;
-    // this assertion only ever passed by reading a stale on-disk r1.jsonl.
-    assert!(events
-        .iter()
-        .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })));
+    // TextDelta is a live event and must NOT be in the durable store.
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })),
+        "text delta must not be persisted (live lane only)"
+    );
+    // The live lane delivered the delta.
+    let mut live_text = String::new();
+    while let Ok(event) = live_rx.try_recv() {
+        if let RunEventKind::TextDelta { text } = event.kind {
+            live_text.push_str(&text);
+        }
+    }
+    assert!(
+        live_text.contains("hello"),
+        "text delta must be delivered on the live bus, got {live_text:?}"
+    );
     assert!(
         events
             .iter()
@@ -1227,9 +1243,11 @@ async fn emits_text_delta_before_provider_stream_completes() {
     }
 
     let engine = AgentEngine::new(EventSequencer::new());
-    let events = engine.events.clone();
     let run_id = format!("r-stream-{}", uuid::Uuid::new_v4());
     let run_id_bg = run_id.clone();
+    // A1: subscribe the live bus before the run (live deltas are ephemeral).
+    let live = engine.live.clone();
+    let mut live_rx = live.subscribe(&run_id);
     let handle = tokio::spawn(async move {
         engine
             .run(
@@ -1250,15 +1268,15 @@ async fn emits_text_delta_before_provider_stream_completes() {
 
     let mut saw_text_before_done = false;
     for _ in 0..100 {
-        let current = events.replay_after(&run_id, 0);
-        if current
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. }))
-            && !current
-                .iter()
-                .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
-        {
-            saw_text_before_done = true;
+        // The provider emits "early" then waits 2s before Completed; the live
+        // delta must be observable before the run terminates.
+        if let Ok(event) = live_rx.try_recv() {
+            if matches!(event.kind, RunEventKind::TextDelta { .. }) {
+                saw_text_before_done = true;
+                break;
+            }
+        }
+        if handle.is_finished() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1310,9 +1328,12 @@ async fn provider_stream_receives_cancel_and_run_interrupts_promptly() {
 
     let engine = AgentEngine::new(EventSequencer::new());
     let cancel = engine.cancel_flag();
-    let events = engine.events.clone();
     let run_id = format!("r-provider-cancel-{}", uuid::Uuid::new_v4());
     let run_id_bg = run_id.clone();
+    // A1: subscribe the live bus before the run (live deltas are ephemeral).
+    let live = engine.live.clone();
+    let mut live_rx = live.subscribe(&run_id);
+    let events_after = engine.events.clone();
     let provider_cancel_seen = Arc::new(AtomicBool::new(false));
     let provider_cancel_seen_bg = provider_cancel_seen.clone();
     let handle = tokio::spawn(async move {
@@ -1338,12 +1359,13 @@ async fn provider_stream_receives_cancel_and_run_interrupts_promptly() {
 
     let mut saw_text = false;
     for _ in 0..100 {
-        if events
-            .replay_after(&run_id, 0)
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. }))
-        {
-            saw_text = true;
+        if let Ok(event) = live_rx.try_recv() {
+            if matches!(event.kind, RunEventKind::TextDelta { .. }) {
+                saw_text = true;
+                break;
+            }
+        }
+        if handle.is_finished() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1370,7 +1392,7 @@ async fn provider_stream_receives_cancel_and_run_interrupts_promptly() {
         provider_cancel_seen.load(Ordering::SeqCst),
         "provider stream must observe engine cancel flag"
     );
-    let current = events.replay_after(&run_id, 0);
+    let current = events_after.replay_after(&run_id, 0);
     // Lifecycle terminal events are owned by RunManager; engine only returns outcome.
     assert!(!current
         .iter()
@@ -3240,6 +3262,8 @@ async fn post_tool_use_observe_continues_run() {
         ]),
     };
     let run_id = format!("post-obs-{}", uuid::Uuid::new_v4());
+    // A1: text deltas are live-only — subscribe before the run.
+    let mut live_rx = engine.live.subscribe(&run_id);
     engine
         .run(
             EngineRunConfig {
@@ -3256,17 +3280,92 @@ async fn post_tool_use_observe_continues_run() {
         )
         .await
         .unwrap();
-    let text: Vec<_> = engine
-        .events
-        .replay_after(&run_id, 0)
-        .into_iter()
-        .filter_map(|event| match event.payload {
-            RunEventKind::TextDelta { text } => Some(text),
-            _ => None,
-        })
-        .collect();
+    let mut text: Vec<String> = Vec::new();
+    while let Ok(event) = live_rx.try_recv() {
+        if let RunEventKind::TextDelta { text: t } = event.kind {
+            text.push(t);
+        }
+    }
     assert!(
         text.iter().any(|t| t.contains("after observe")),
         "the run must continue past an observing post hook"
+    );
+}
+
+#[tokio::test]
+async fn live_text_delta_never_calls_durable_persistence() {
+    // A1 regression: a 1000-delta text stream must not grow the durable
+    // persistence append count (live lane only). Lifecycle facts still persist.
+    struct CountingPersistence(Arc<AtomicUsize>);
+    impl EventPersistence for CountingPersistence {
+        fn append(&self, _: &assistant_protocol::v2::RunEventV2) -> Result<(), String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn replay_after(
+            &self,
+            _: &str,
+            _: u64,
+        ) -> Result<Vec<assistant_protocol::v2::RunEventV2>, String> {
+            Ok(Vec::new())
+        }
+        fn last_sequence(&self, _: &str) -> Result<u64, String> {
+            Ok(0)
+        }
+    }
+    struct ChunkProvider(usize);
+    #[async_trait::async_trait]
+    impl EngineProvider for ChunkProvider {
+        async fn stream(
+            &self,
+            _: &str,
+            _: Vec<EngineMessage>,
+            _: &[ToolSchema],
+            _: Option<&str>,
+            _: CancellationToken,
+        ) -> Result<EngineProviderEventStream, EngineError> {
+            let mut events = Vec::with_capacity(self.0 + 1);
+            for i in 0..self.0 {
+                events.push(EngineProviderEvent::TextDelta(format!("chunk-{i}")));
+            }
+            events.push(EngineProviderEvent::Completed);
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+    let count = Arc::new(AtomicUsize::new(0));
+    let engine = AgentEngine::new(EventSequencer::with_persistence(Arc::new(
+        CountingPersistence(count.clone()),
+    )));
+    let run_id = format!("live-delta-{}", uuid::Uuid::new_v4());
+    engine
+        .run(
+            EngineRunConfig {
+                run_id: run_id.clone(),
+                conversation_id: "conversation".into(),
+                model: "model".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "hello".into(),
+                max_steps: 1,
+            },
+            &ChunkProvider(1000),
+            &FakeTools,
+        )
+        .await
+        .unwrap();
+    let durable_calls = count.load(Ordering::SeqCst);
+    // Durable facts only (turn started/message started/generation
+    // attempt/message completed/turn completed…) — must be far below 1000 and
+    // independent of delta count; text deltas themselves are live-only.
+    assert!(
+        durable_calls < 10,
+        "durable persistence called {durable_calls} times for a 1000-delta stream"
+    );
+    // Live lane sequenced every delta (sequence counter does not depend on
+    // the broadcast window, so a 1000-delta stream is asserted exactly).
+    assert_eq!(
+        engine.live.last_sequence(&run_id),
+        1000,
+        "all text deltas must be sequenced on the live bus"
     );
 }

@@ -22,6 +22,7 @@ pub mod db;
 mod disk_usage;
 mod env_manager;
 mod error;
+pub mod execution_engine_settings;
 pub mod executor_catalog;
 pub mod file_manager;
 mod fs_watch;
@@ -808,6 +809,11 @@ pub fn run() {
             // Execution Engine settings（PRD 3.4）
             commands::executor_settings::executor_get_settings,
             commands::executor_settings::executor_save_settings,
+            // Execution Engine settings V2（唯一持久化权威）
+            commands::execution_engine::execution_engine_get_snapshot,
+            commands::execution_engine::execution_engine_save_settings,
+            commands::execution_engine::execution_engine_detect_runtimes,
+            commands::execution_engine::execution_engine_get_diagnostics,
             // Module rollback（US-6 一键回滚）
             commands::module::rollback_module,
             // Bridge / Security

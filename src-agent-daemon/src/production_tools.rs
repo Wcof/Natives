@@ -1152,6 +1152,48 @@ impl EngineToolRuntime for PermissionGatedTools {
             )
             .await;
 
+        // A4 — ReadOnly Fast Path.
+        //
+        // Classification source is the Gateway's SideEffect, never the legacy
+        // name-default `external`. Genuinely read-only tools (read_file /
+        // list_dir / grep / search / memory reads) skip checkpoint before/after,
+        // the side-effect ledger, and the conflict lease entirely — they have no
+        // durable side effect to record or resume. ToolCallStarted (above) and
+        // ToolCallCompleted (emitted by the engine loop after this returns)
+        // remain durable facts, so the read-only invocation is still
+        // observable/replayable. Mutating/process/network/MCP tools keep the
+        // full strict path below.
+        if matches!(side_effect, SideEffect::ReadOnly) {
+            let started = Instant::now();
+            let result = match self
+                .gateway
+                .execute(name, input.clone(), &tool_context)
+                .await
+            {
+                Ok(out) => {
+                    let mut output = out.result;
+                    attach_tool_output_artifact(
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        &mut output,
+                    );
+                    let is_error = output.get("error_code").and_then(Value::as_str).is_some()
+                        || output.get("error").is_some();
+                    ToolExecutionResult {
+                        output,
+                        is_error,
+                        duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
+                    }
+                }
+                Err(error) => ToolExecutionResult {
+                    output: serde_json::json!({ "error": error, "code": "readonly_tool_failed" }),
+                    is_error: true,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                },
+            };
+            return result;
+        }
+
         // Phase 3: Gateway path preflight MUST precede any checkpoint I/O (N01).
         // A rejected path returns before the ledger and the handler, so it
         // causes zero I/O. Checkpoint only ever receives Gateway-authorized
@@ -5654,5 +5696,170 @@ mod plan_mode_runtime_tests {
         assert_eq!(out.output["approved"], false);
         assert!(plan_mode::is_active(&id));
         plan_mode::clear(&id);
+    }
+}
+
+/// A4 — ReadOnly Fast Path regression tests.
+#[cfg(test)]
+mod readonly_fast_path_tests {
+    use super::*;
+    use crate::production::ProductionRuntime;
+    use tokio_util::sync::CancellationToken;
+
+    fn tools_for(run_id: &str, profile: &str, root: &std::path::Path) -> PermissionGatedTools {
+        let rt = ProductionRuntime::new();
+        let mut gateway = CapabilityGateway::new();
+        gateway.set_project_root(root.to_string_lossy().to_string());
+        let _ = gateway.register_builtins();
+        PermissionGatedTools {
+            gateway: Arc::new(gateway),
+            permissions: rt.permissions.clone(),
+            events: rt.events.clone(),
+            interactions: rt.interactions.clone(),
+            subagents: rt.subagents.clone(),
+            task_outputs: rt.task_outputs.clone(),
+            engines: rt.engines.clone(),
+            runtime: None,
+            provider_id: "test".into(),
+            key_id: None,
+            parent_run_id: run_id.to_string(),
+            conversation_id: format!("conv-{run_id}"),
+            model_id: "test-model".into(),
+            permission_profile: profile.to_string(),
+            tool_allowlist: None,
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
+        }
+    }
+
+    /// A4: a genuinely ReadOnly tool must take the fast path — no side-effect
+    /// ledger row, no checkpoint snapshot. ToolCallStarted/ToolCallCompleted
+    /// remain durable facts (engine loop), so the invocation is still
+    /// observable; only checkpoint/ledger/lease overhead is skipped.
+    #[tokio::test]
+    async fn readonly_tool_does_not_create_side_effect_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap();
+        let run_id = format!("a4-ro-{}", uuid::Uuid::new_v4());
+        let tools = tools_for(&run_id, "full_access", &root);
+        // read_file is classified ReadOnly by the Gateway capability registry.
+        let project_file = root.join("probe.txt");
+        std::fs::write(&project_file, "a4 probe").expect("write probe");
+        let out = tools
+            .execute_tool(
+                "read_file",
+                serde_json::json!({ "path": project_file.to_string_lossy() }),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(!out.is_error, "read_file must succeed: {:?}", out.output);
+        // The ledger must have NO record for this run (fast path skipped it).
+        let watermark = crate::side_effect_ledger::ledger_watermark(&run_id)
+            .ok()
+            .flatten();
+        assert_eq!(
+            watermark.as_deref(),
+            Some("0"),
+            "readonly tool must not create side-effect ledger records"
+        );
+    }
+
+    /// B2 — Coding Read Loop (05 §4): list_dir + read_file×5 + grep×3 +
+    /// read_file×4. ReadOnly tools must leave ZERO side-effect ledger rows and
+    /// ZERO checkpoint snapshots, while each call still succeeds.
+    #[tokio::test]
+    async fn readonly_coding_loop_does_not_create_ledger_or_checkpoint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap();
+        let run_id = format!("a4-b2-{}", uuid::Uuid::new_v4());
+        let tools = tools_for(&run_id, "full_access", &root);
+        for i in 0..6 {
+            std::fs::write(
+                root.join(format!("src-{i}.rs")),
+                format!("// probe {i}\nfn f{i}() {{}}\n"),
+            )
+            .expect("write fixture");
+        }
+
+        // list_dir
+        let out = tools
+            .execute_tool(
+                "list_dir",
+                serde_json::json!({ "path": root.to_string_lossy() }),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(!out.is_error, "list_dir must succeed: {:?}", out.output);
+
+        // read_file × 5 + grep × 3 + read_file × 4 (B2 sequence)
+        let mut reads = 0usize;
+        for i in 0..5 {
+            let out = tools
+                .execute_tool(
+                    "read_file",
+                    serde_json::json!({ "path": root.join(format!("src-{i}.rs")).to_string_lossy() }),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert!(
+                !out.is_error,
+                "read_file #{i} must succeed: {:?}",
+                out.output
+            );
+            reads += 1;
+        }
+        for i in 0..3 {
+            let out = tools
+                .execute_tool(
+                    "grep",
+                    serde_json::json!({ "pattern": "fn f", "path": root.to_string_lossy() }),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert!(!out.is_error, "grep #{i} must succeed: {:?}", out.output);
+        }
+        for i in 0..4 {
+            let out = tools
+                .execute_tool(
+                    "read_file",
+                    serde_json::json!({ "path": root.join(format!("src-{i}.rs")).to_string_lossy() }),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert!(
+                !out.is_error,
+                "read_file #b{i} must succeed: {:?}",
+                out.output
+            );
+            reads += 1;
+        }
+        assert_eq!(reads, 9, "9 read_file calls executed");
+
+        // Zero ledger rows for the whole loop.
+        let watermark = crate::side_effect_ledger::ledger_watermark(&run_id)
+            .ok()
+            .flatten();
+        assert_eq!(
+            watermark.as_deref(),
+            Some("0"),
+            "B2 read loop must not create side-effect ledger records"
+        );
+
+        // Zero checkpoint snapshots for the run.
+        let checkpoint = self_checkpoint_snapshots(&run_id);
+        assert_eq!(
+            checkpoint, 0,
+            "B2 read loop must not create checkpoint snapshots"
+        );
+    }
+
+    /// Count checkpoint snapshots persisted for a run (public query).
+    fn self_checkpoint_snapshots(run_id: &str) -> usize {
+        use crate::checkpoint::global_checkpoint_manager;
+        match global_checkpoint_manager().checkpoint_for_run_public(run_id) {
+            Ok(preview) => preview.files.len(),
+            Err(_) => 0,
+        }
     }
 }

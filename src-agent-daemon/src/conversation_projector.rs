@@ -289,6 +289,124 @@ enum LoadEvents {
     QuarantinedRun,
 }
 
+/// A8 — watermark-driven incremental projection.
+///
+/// Replays only the events AFTER the run's last projection watermark — never
+/// the full stream from sequence 0 — so already projected prefixes are not
+/// re-scanned on every run-end/startup pass. Per-turn idempotency, quarantine,
+/// and partial-turn safety are unchanged: `project_committed_turn` still
+/// materializes only TurnCompleted turns and leaves a crashed/partial turn
+/// un-materialized; `MessageCompleted.content` remains the committed-content
+/// authority.
+pub fn project_run_incremental(
+    conversation_id: &str,
+    run_id: &str,
+) -> Result<RunProjection, ProjectionError> {
+    let store = conversation_store::store()
+        .map_err(|e| ProjectionError::retryable(format!("projection store: {e}")))?;
+    let conn = store
+        .conn()
+        .map_err(|e| ProjectionError::retryable(format!("projection conn: {e}")))?;
+    let run_exists: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM run WHERE id = ?1)",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sqlite_failure("project incremental run existence", e))?;
+    if run_exists == 0 {
+        // Legacy/symbolic run without an FK row: fall back to the full
+        // compat projection (the compat reader keeps FK columns NULL).
+        let events =
+            match load_events_for_run(&conn, run_id).map_err(|e| ProjectionError::retryable(e))? {
+                LoadEvents::Events(events) => events,
+                LoadEvents::QuarantinedRun => {
+                    return Ok(RunProjection {
+                        quarantined: 1,
+                        ..RunProjection::default()
+                    })
+                }
+            };
+        conversation_store::append_assistant_turn_from_events(conversation_id, run_id, &events)
+            .map_err(|e| ProjectionError::retryable(e.to_string()))?;
+        return Ok(RunProjection::default());
+    }
+    // Read the durable projection watermark (0 when never projected).
+    let after: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(event_sequence), 0) FROM projection_watermark
+             WHERE projector = 'conversation' AND run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sqlite_failure("project incremental watermark read", e))?;
+    let events = match load_events_after(&conn, run_id, after.max(0) as u64)
+        .map_err(|e| ProjectionError::retryable(e))?
+    {
+        LoadEvents::Events(events) => events,
+        LoadEvents::QuarantinedRun => {
+            return Ok(RunProjection {
+                quarantined: 1,
+                ..RunProjection::default()
+            })
+        }
+    };
+    if events.is_empty() {
+        return Ok(RunProjection::default());
+    }
+    let mut report = RunProjection::default();
+    for group in group_turns(&events) {
+        match project_committed_turn(conversation_id, run_id, &group)? {
+            Some(ProjectionStatus::Projected) => report.projected += 1,
+            Some(ProjectionStatus::AlreadyProjected) => report.already_projected += 1,
+            Some(ProjectionStatus::Quarantined) => report.quarantined += 1,
+            Some(ProjectionStatus::RetryableFailure) | Some(ProjectionStatus::FatalFailure) => {
+                unreachable!("projection failures are returned as Err, never as a status")
+            }
+            None => {}
+        }
+    }
+    Ok(report)
+}
+
+/// Decode only the stored events with `sequence > after_sequence` for a run
+/// (the watermark prefix is skipped — A8 incremental replay).
+fn load_events_after(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    after_sequence: u64,
+) -> Result<LoadEvents, String> {
+    let payloads: Vec<String> = conn
+        .prepare(
+            "SELECT payload FROM run_event WHERE run_id = ?1 AND sequence > ?2 ORDER BY sequence",
+        )
+        .map_err(|e| e.to_string())?
+        .query_map(params![run_id, after_sequence as i64], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut events = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        match serde_json::from_str::<RunEventV2>(&payload) {
+            Ok(event) => events.push(event),
+            Err(error) => {
+                quarantine(
+                    run_id,
+                    None,
+                    None,
+                    "corrupt_stored_event",
+                    &error.to_string(),
+                )
+                .map_err(|e| {
+                    format!("corrupt stored event for run {run_id} could not be quarantined: {e}")
+                })?;
+                return Ok(LoadEvents::QuarantinedRun);
+            }
+        }
+    }
+    Ok(LoadEvents::Events(events))
+}
+
 /// Decode every stored event for a run. A corrupt payload quarantines the run
 /// explicitly (no silent skip) and is reported as [`LoadEvents::QuarantinedRun`]
 /// so recovery never mistakes it for a swallowed failure.
@@ -1521,6 +1639,198 @@ mod tests {
                 .len(),
             baseline.len() + 2,
             "second turn materialized after restart"
+        );
+    }
+}
+
+/// A8 — watermark-driven incremental projection tests (standalone module so it
+/// does not depend on the private `mod tests` helpers).
+#[cfg(test)]
+mod incremental_projection_tests {
+    use super::*;
+    use crate::conversation_store;
+
+    fn setup() -> ((String, String), tempfile::TempDir) {
+        let _guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("proj-incremental.db");
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        let conv = format!("proj-incr-conv-{}", uuid::Uuid::new_v4());
+        let run = format!("proj-incr-run-{}", uuid::Uuid::new_v4());
+        {
+            let store = conversation_store::store().unwrap();
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES (?1, 'chat', 'Projector Incremental', 'prov-1', 'model-1')",
+                params![conv],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES (?1, ?2, 'completed', 'prov-1', 'model-1')",
+                params![run, conv],
+            )
+            .unwrap();
+        }
+        ((conv, run), dir)
+    }
+
+    fn event(run_id: &str, sequence: u64, payload: RunEventKind) -> RunEventV2 {
+        RunEventV2 {
+            event_id: format!("evt-{run_id}-{sequence}"),
+            global_sequence: 0,
+            run_sequence: sequence,
+            run_id: run_id.into(),
+            sequence,
+            timestamp: chrono::Utc::now(),
+            payload,
+        }
+    }
+
+    fn typed_turn_events(run_id: &str, turn: &str, base: u64) -> Vec<RunEventV2> {
+        let mut events = Vec::new();
+        let mut push = |kind: RunEventKind, offset: u64| {
+            let seq = base + offset;
+            events.push(event(run_id, seq, kind));
+        };
+        push(
+            RunEventKind::TurnStarted {
+                turn_id: turn.into(),
+            },
+            0,
+        );
+        push(
+            RunEventKind::MessageStarted {
+                turn_id: turn.into(),
+                message_id: format!("msg-{turn}"),
+                role: "assistant".into(),
+            },
+            1,
+        );
+        push(
+            RunEventKind::TextDelta {
+                text: "hello".into(),
+            },
+            2,
+        );
+        push(
+            RunEventKind::ToolCallRequested {
+                id: format!("call-{turn}-1"),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "/tmp/a.txt"}),
+            },
+            3,
+        );
+        push(
+            RunEventKind::ToolCallCompleted {
+                id: format!("call-{turn}-1"),
+                name: "read_file".into(),
+                output: serde_json::json!({"content": "file body"}),
+                is_error: false,
+                duration_ms: 2,
+                result_message_id: Some(format!("rm-{turn}-1")),
+            },
+            4,
+        );
+        push(
+            RunEventKind::MessageCompleted {
+                turn_id: turn.into(),
+                message_id: format!("msg-{turn}"),
+                role: "assistant".into(),
+                content: Some(serde_json::json!({
+                    "message_id": format!("msg-{turn}"),
+                    "role": "assistant",
+                    "content": serde_json::to_value(vec![
+                        agent_core::ContentBlock::Text { text: "hello".into() },
+                    ]).unwrap(),
+                })),
+            },
+            5,
+        );
+        push(
+            RunEventKind::TurnCompleted {
+                turn_id: turn.into(),
+                stop_reason: "stop".into(),
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+            6,
+        );
+        events
+    }
+
+    fn persist_events(run_id: &str, events: &[RunEventV2]) {
+        let store = conversation_store::store().unwrap();
+        let conn = store.conn().unwrap();
+        for event in events {
+            conn.execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    run_id.to_string(),
+                    event.effective_run_sequence() as i64,
+                    event.payload.type_name().to_string(),
+                    serde_json::to_string(event).unwrap(),
+                    event.timestamp.to_rfc3339(),
+                    event.event_id.clone(),
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    /// A8: incremental projection replays only events AFTER the watermark and
+    /// skips the already-projected prefix; second pass is a no-op.
+    #[test]
+    fn projector_incremental_uses_watermark_prefix() {
+        let ((conv, run), _dir) = setup();
+        let t1 = typed_turn_events(&run, "t1", 0);
+        let t2 = typed_turn_events(&run, "t2", 7);
+        persist_events(&run, &t1);
+        persist_events(&run, &t2);
+
+        // Project turn 1 only (watermark now at sequence 7).
+        let first = project_run_from_events(&conv, &run, &t1).unwrap();
+        assert_eq!(first.projected, 1);
+
+        // Incremental pass picks up ONLY turn 2.
+        let incremental = project_run_incremental(&conv, &run).unwrap();
+        assert_eq!(incremental.projected, 1, "only the new turn projects");
+        assert_eq!(incremental.already_projected, 0);
+        let messages = conversation_store::load_agent_messages(&conv).unwrap();
+        assert_eq!(messages.len(), 4, "both turns' assistant + tool results");
+        // MessageCompleted.content remains the committed-content authority.
+        let assistant_texts: Vec<String> = messages
+            .iter()
+            .filter_map(|m| match m {
+                agent_core::AgentMessage::Assistant(a) => Some(
+                    a.content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            assistant_texts,
+            vec!["hello".to_string(), "hello".to_string()]
+        );
+        // Second incremental pass is a no-op.
+        let again = project_run_incremental(&conv, &run).unwrap();
+        assert_eq!(again.projected, 0);
+        assert_eq!(
+            conversation_store::load_agent_messages(&conv)
+                .unwrap()
+                .len(),
+            4
         );
     }
 }

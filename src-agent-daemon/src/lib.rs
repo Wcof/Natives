@@ -23,6 +23,7 @@ pub mod mcp_runtime;
 pub mod memory_store;
 pub mod metrics;
 pub mod natives_db_broker;
+pub mod prepared_session;
 pub mod production;
 pub mod production_credentials;
 pub mod production_hooks;

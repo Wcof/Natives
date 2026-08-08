@@ -252,6 +252,50 @@ impl ContextBudget {
 /// 1. Always keep the last complete user/assistant dialogue turn (at least 2 msgs).
 /// 2. Prefer keeping tool-call / tool-result adjacent pairs when dropping.
 /// 3. Prepend a system truncation notice for omitted messages.
+
+/// Incremental context budget (A5): maintained by appending deltas instead of
+/// re-serializing the whole transcript every provider/tool round. Only when
+/// `used >= compact_threshold` does the caller run a full compaction analysis;
+/// below the threshold the cheap counters are authoritative for the budget.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContextStats {
+    /// Running estimate of transcript characters (chars/4 token heuristic).
+    pub estimated_chars: u64,
+    /// Running estimate of tokens (chars/4, capped at u64 arithmetic bounds).
+    pub estimated_tokens: u64,
+    /// Bumped whenever a compaction pass actually rewrote the transcript; the
+    /// caller stores it and uses it to decide whether its cached snapshot of
+    /// the history is stale.
+    pub last_compaction_revision: u64,
+}
+
+impl ContextStats {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append one message/block worth of characters to the running estimate.
+    ///
+    /// O(1) — no transcript re-serialization. Callers pass the same char count
+    /// they would have stringified, but compute it incrementally (e.g.
+    /// `content.len()` per block).
+    pub fn append_chars(&mut self, added_chars: usize) {
+        self.estimated_chars = self.estimated_chars.saturating_add(added_chars as u64);
+        self.estimated_tokens = ContextBudget::estimate_tokens(self.estimated_chars as usize);
+    }
+
+    /// Mark that a compaction pass rewrote the transcript.
+    pub fn note_compaction(&mut self) {
+        self.last_compaction_revision = self.last_compaction_revision.wrapping_add(1);
+    }
+
+    /// True when the running estimate crossed the threshold and a full
+    /// compaction analysis is warranted.
+    pub fn needs_compaction(&self, compact_threshold_chars: usize) -> bool {
+        self.estimated_chars as usize >= compact_threshold_chars
+    }
+}
+
 pub fn compact_messages(
     messages: &[(String, String)],
     token_budget: u64,

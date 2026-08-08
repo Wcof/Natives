@@ -30,6 +30,7 @@ pub const ALL_METHODS: &[&str] = &[
     "run.continue",
     "run.resume",
     "run.subscribe",
+    "run.watch",
     "run.replay",
     "run.list",
     "run.getEvents",
@@ -199,6 +200,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "run.continue",
     "run.resume",
     "run.subscribe",
+    "run.watch",
     "run.replay",
     "run.list",
     "run.getEvents",
@@ -397,6 +399,7 @@ pub mod names {
     pub const RUN_CONTINUE: &str = "run.continue";
     pub const RUN_RESUME: &str = "run.resume";
     pub const RUN_SUBSCRIBE: &str = "run.subscribe";
+    pub const RUN_WATCH: &str = "run.watch";
     pub const RUN_REPLAY: &str = "run.replay";
     pub const RUN_LIST: &str = "run.list";
     pub const RUN_GET_EVENTS: &str = "run.getEvents";

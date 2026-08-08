@@ -4787,9 +4787,17 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Started)));
+        // A1 contract: TextDelta is live-only and must NOT be in the durable
+        // store; the committed content arrives via MessageCompleted.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })),
+            "text deltas are live-only after the A1 split"
+        );
         assert!(events
             .iter()
-            .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })));
+            .any(|e| matches!(e.payload, RunEventKind::MessageCompleted { .. })));
 
         // Dump evidence for verifier
         if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
