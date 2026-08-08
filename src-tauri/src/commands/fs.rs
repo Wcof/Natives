@@ -307,15 +307,11 @@ mod tests {
     fn test_fs_save_blob_rejects_empty_filename() {
         let tmp = std::env::temp_dir().join(format!("natives-test-fs-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
-<<<<<<< HEAD
-        let result = save_blob_impl(tmp.to_string_lossy().to_string().as_str(), "", "dGVzdA==");
-=======
         let result = save_blob_impl(
             tmp.to_string_lossy().to_string().as_str(),
             "",
             "dGVzdA==",
         );
->>>>>>> agent/resource-preview-v2/20260808-175539/t22-host-io
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(
             result.is_err(),
@@ -339,15 +335,11 @@ mod tests {
         // Use canonical path to avoid symlink issues
         let canonical_tmp = std::fs::canonicalize(&tmp).expect("failed to canonicalize");
         let dir_str = canonical_tmp.to_string_lossy().to_string();
-<<<<<<< HEAD
-        let result = save_blob_impl(dir_str.as_str(), "test.png", "dGVzdA==");
-=======
         let result = save_blob_impl(
             dir_str.as_str(),
             "test.png",
             "dGVzdA==",
         );
->>>>>>> agent/resource-preview-v2/20260808-175539/t22-host-io
         if result.is_err() {
             eprintln!("fs_save_blob failed: {:?}", result);
             eprintln!("dir: {}, name: test.png", dir_str);
