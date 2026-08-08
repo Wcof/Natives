@@ -21,6 +21,9 @@ import CsvTable from './CsvTable';
 import ArchivePreview from './ArchivePreview';
 import FileMarkdownPreview from './FileMarkdownPreview';
 import { getHttpPort } from '@/lib/natives-http-port';
+import PreviewSurface from '@/components/preview/PreviewSurface';
+import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
+import { PreviewService } from '@/lib/preview/service';
 
 // Lazy-loaded heavy components
 const MilkdownEditor = lazy(() => import('./MilkdownEditor'));
@@ -33,6 +36,16 @@ interface FilePreviewProps {
   onClose: () => void;
   editMode?: boolean;
   onEditModeChange?: (mode: boolean) => void;
+}
+
+/**
+ * Preview Capability V2 feature flag（rollback 语义）：
+ * localStorage 'natives:preview-capability-v2' === '0' → 走 legacy 预览分支；
+ * 默认开启。Editor 写路径（editMode）不受该 flag 影响。
+ */
+export function previewCapabilityV2Enabled(): boolean {
+  if (typeof localStorage === 'undefined') return true;
+  return localStorage.getItem('natives:preview-capability-v2') !== '0';
 }
 
 export { type PreviewSubMode };
@@ -109,6 +122,13 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
   const isArchive = isArchiveFile(entry.name);
   const isCode = shouldPreviewAsCode(entry.kind, entry.name, editMode);
 
+  // Preview V2 只读管线（surface-local controller 由 PreviewSurface 内部持有）
+  const previewService = useMemo(
+    () => new PreviewService(createBuiltinRegistry(), createDefaultContext()),
+    [],
+  );
+  const v2ReadonlyPreview = previewCapabilityV2Enabled() && subMode === 'preview' && !editMode;
+
   useEffect(() => {
     getHttpPort().then(setHttpPort).catch(() => {});
   }, []);
@@ -131,26 +151,41 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
         flexDirection: 'column',
       }}>
         {subMode === 'preview' && (
-          isCode
-            ? (
-              <CodePreview
-                entry={entry}
-                locale={locale}
-                editMode={editMode}
-                ext={ext}
-              />
-            )
-            : (
-              <PreviewContent
-                entry={entry}
-                locale={locale}
-                isMarkdown={isMarkdown}
-                isCsv={isCsv}
-                isArchive={isArchive}
-                editMode={editMode}
-                onImageClick={setLightboxSrc}
-              />
-            )
+          v2ReadonlyPreview ? (
+            <PreviewSurface
+              source={{
+                type: 'file',
+                path: entry.path,
+                name: entry.name,
+                kind: entry.kind,
+                size: entry.size,
+                mtime: entry.mtime,
+              }}
+              surface="files"
+              service={previewService}
+            />
+          ) : (
+            isCode
+              ? (
+                <CodePreview
+                  entry={entry}
+                  locale={locale}
+                  editMode={editMode}
+                  ext={ext}
+                />
+              )
+              : (
+                <PreviewContent
+                  entry={entry}
+                  locale={locale}
+                  isMarkdown={isMarkdown}
+                  isCsv={isCsv}
+                  isArchive={isArchive}
+                  editMode={editMode}
+                  onImageClick={setLightboxSrc}
+                />
+              )
+          )
         )}
         {subMode === 'git' && (
           <GitDiffView diff={gitDiff} loading={gitLoading} status={gitStatus} fileName={entry.name} locale={locale} />
