@@ -69,8 +69,7 @@ export default function PreviewSurface({ source, surface, service, autoLoad = tr
   useEffect(() => {
     if (autoLoad) void load();
     return () => controller.cancel(); // 卸载时只取消本 Surface 的请求
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey, surface, service, autoLoad]);
+  }, [sourceKey, surface, service, autoLoad, controller, load]);
 
   useEffect(() => {
     onStatusChange?.(status);
@@ -82,7 +81,7 @@ export default function PreviewSurface({ source, surface, service, autoLoad = tr
 
   if (status === 'error') {
     return (
-      <div data-preview-status="error" data-error-code={error?.code} style={{ padding: 24, color: 'var(--danger, #e5484d)' }}>
+      <div data-preview-status="error" data-error-code={error?.code} style={{ padding: 24, color: 'var(--danger)' }}>
         {t(locale, 'preview.error', { code: error?.code ?? 'unknown', message: error?.message ?? 'unknown' })}
       </div>
     );
