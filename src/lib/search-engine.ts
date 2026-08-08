@@ -1,6 +1,6 @@
 // legacy Electron module, search migrated to src-tauri/ commands
 import * as fs from 'fs';
-import * as path from 'path';
+import { basename as pathBasename, extname as pathExtname, join as pathJoin } from '@/lib/path-utils';
 import { execFile, execFileSync } from 'child_process';
 import { type ContentSearchResult, type SearchResult } from '../types/file';
 import { execFilePromise } from '@/lib/exec-file';
@@ -267,7 +267,7 @@ export async function grepContent(
 
     // 扩展名过滤
     if (allowedExts) {
-      const ext = path.extname(filePath).toLowerCase();
+      const ext = pathExtname(filePath).toLowerCase();
       if (!allowedExts.has(ext)) return;
     }
 
@@ -275,7 +275,7 @@ export async function grepContent(
       const stat = await fs.promises.stat(filePath);
       if (!stat.isFile() || stat.size > MAX_FILE_SIZE) return;
 
-      const ext = path.extname(filePath).toLowerCase();
+      const ext = pathExtname(filePath).toLowerCase();
       if (!TEXT_EXTENSIONS.has(ext) && ext !== '') return;
 
       const raw = await fs.promises.readFile(filePath);
@@ -294,7 +294,7 @@ export async function grepContent(
           ).trim();
           results.push({
             path: filePath,
-            name: path.basename(filePath),
+            name: pathBasename(filePath),
             line: i + 1,
             preview,
             matchStart: matchIdx,
@@ -316,7 +316,7 @@ export async function grepContent(
       for (const entry of entries) {
         if (results.length >= maxResults) return;
         if (Date.now() >= deadline) return; // 硬截止
-        const fullPath = path.join(dirPath, entry.name);
+        const fullPath = pathJoin(dirPath, entry.name);
         if (entry.isDirectory()) {
           if (entry.name.startsWith('.')) continue;
           // 跳过常见构建/依赖目录
@@ -368,7 +368,7 @@ export async function searchFiles(
       for (const entry of entries) {
         if (results.length >= maxResults * 2) break;
         if (Date.now() >= deadline) return; // 硬截止
-        const fullPath = path.join(dirPath, entry.name);
+        const fullPath = pathJoin(dirPath, entry.name);
 
         if (entry.isDirectory()) {
           // 跳过隐藏目录
@@ -462,7 +462,7 @@ export async function spotlightSearch(
       if (lines.length > 0) {
         return lines.slice(0, 50).map((filePath) => ({
           path: filePath,
-          name: path.basename(filePath),
+          name: pathBasename(filePath),
           line: 1,
           preview: query,
           matchStart: 0,
