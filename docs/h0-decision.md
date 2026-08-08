@@ -89,6 +89,7 @@ ls -la spikes/html-preview-case/root/encoded/
 本步已执行的实机结果：`readlink` → `../outside-secret.txt`；
 `cat root/link-out` → `TOP-SECRET-OUTSIDE`；两个媒体/图片文件为 0 字节。
 
+<<<<<<< HEAD
 ### 2.2 已执行证据（2026-08-08 复核，逐条实机输出）
 
 下列命令在 integration 树内真实执行，输出原样固化，作为 H0 fixture 真实性的可复核证据：
@@ -134,6 +135,8 @@ CSS/module/fetch）；但本机无真实 Tauri/WebKit headed evidence（`src-tau
 （T20/T21/T15），不阻塞 Markdown/JSON/Media/Browser/Host IO。
 
 
+=======
+>>>>>>> agent/resource-preview-v2/20260808-175539/t03-html-spike
 ## 3. 候选方案对比（H0 BLOCKED 下的倾向性分析，纯文档，不实现）
 
 | 维度 | A. srcDoc + parser rewrite（现状 `src-tauri/src/html_preview.rs`） | B. opaque scoped served-root |
