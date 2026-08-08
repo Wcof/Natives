@@ -24,6 +24,9 @@ export function Sub2ApiAccountPool({ locale, providers, api, onProviderCreated }
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [query, setQuery] = useState('');
+  // T216 (P1-020): unified create-pool name dialog replaces window.prompt.
+  const [showCreatePool, setShowCreatePool] = useState(false);
+  const [poolNameDraft, setPoolNameDraft] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -70,12 +73,12 @@ export function Sub2ApiAccountPool({ locale, providers, api, onProviderCreated }
   };
 
   const createPool = async () => {
-    const name = window.prompt(t(locale, 'settings.sub2apiPoolNamePrompt'))?.trim();
+    const name = poolNameDraft.trim();
     if (!name || !api?.createSub2ApiPool) return;
     setBusy(true); setError(null);
     try { await api.createSub2ApiPool({ name }); await onProviderCreated(); toast(t(locale, 'settings.sub2apiPoolCreated'), 'success'); }
     catch (cause) { setError(classifyError(cause, { locale }).userMessage); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setShowCreatePool(false); setPoolNameDraft(''); }
   };
   const filteredAccounts = accounts.filter((account) => `${account.name} ${account.email ?? ''} ${account.platform} ${account.status}`.toLowerCase().includes(query.trim().toLowerCase()));
   const loadFiles = async (files: FileList | File[]) => {
@@ -96,6 +99,19 @@ export function Sub2ApiAccountPool({ locale, providers, api, onProviderCreated }
     <div style={tableToolbarStyle}><strong style={{ color: 'var(--text)', fontSize: FONT_SIZE.sm }}>{t(locale, 'settings.sub2apiAccounts')} · {accounts.length}</strong><span style={searchStyle}><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t(locale, 'settings.sub2apiFilter')} style={searchInputStyle} /></span><button type="button" className="btn" disabled={selected.size === 0 || busy} onClick={() => setConfirmDelete(true)} style={{ color: 'var(--danger)' }}><Trash2 size={14} /> {t(locale, 'settings.sub2apiDeleteSelected', { count: selected.size })}</button></div>
     {loading ? <div style={stateStyle}>{t(locale, 'common.loading')}</div> : accounts.length === 0 ? <div style={stateStyle}>{t(locale, 'settings.sub2apiNoAccounts')}</div> : <div style={tableWrapStyle}><table style={tableStyle}><thead><tr><th style={cellStyle}><input aria-label={t(locale, 'settings.sub2apiSelectAll')} type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(filteredAccounts.map((account) => account.id)))} /></th><th style={cellStyle}>{t(locale, 'settings.sub2apiAccount')}</th><th style={cellStyle}>{t(locale, 'settings.sub2apiPlatform')}</th><th style={cellStyle}>{t(locale, 'settings.sub2apiStatus')}</th><th style={cellStyle}>{t(locale, 'settings.sub2apiCapacity')}</th></tr></thead><tbody>{filteredAccounts.map((account) => <tr key={account.id}><td style={cellStyle}><input aria-label={account.name} type="checkbox" checked={selected.has(account.id)} onChange={() => setSelected((current) => toggleAccountSelection(current, account.id))} /></td><td style={cellStyle}><strong>{account.name}</strong>{account.email && <span style={secondaryStyle}>{account.email}</span>}{account.expiresAt && <span style={secondaryStyle}>{t(locale, 'settings.sub2apiExpiresAt')}: {new Date(account.expiresAt).toLocaleString()}</span>}</td><td style={cellStyle}>{account.platform} · {account.accountType}</td><td style={cellStyle}><span style={statusStyle(account.status)}>{t(locale, `settings.sub2apiStatus${account.status[0]!.toUpperCase()}${account.status.slice(1)}`)}</span></td><td style={cellStyle}>{account.concurrency} · {account.priority}</td></tr>)}</tbody></table></div>}
     <ConfirmDialog open={confirmDelete} title={t(locale, 'settings.sub2apiDeleteTitle')} message={t(locale, 'settings.sub2apiDeleteMessage', { count: selected.size })} confirmLabel={t(locale, 'common.delete')} cancelLabel={t(locale, 'common.cancel')} danger onConfirm={() => void deleteAccounts()} onCancel={() => setConfirmDelete(false)} />
+    {/* T216 (P1-020): unified create-pool name dialog replaces window.prompt */}
+    {showCreatePool && (
+      <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '20vh', background: 'rgba(0,0,0,0.5)' }} onClick={(e) => { if (e.target === e.currentTarget) { setShowCreatePool(false); setPoolNameDraft(''); } }}>
+        <div style={{ width: 360, maxWidth: '90vw', background: 'var(--panel, #0e0f0c)', border: '1px solid var(--border)', borderRadius: BORDER_RADIUS.md, padding: SPACING.lg, display: 'grid', gap: SPACING.md }}>
+          <strong style={{ color: 'var(--text)', fontSize: FONT_SIZE.md }}>{t(locale, 'settings.sub2apiCreatePool')}</strong>
+          <input className="input" autoFocus value={poolNameDraft} onChange={(event) => setPoolNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void createPool(); if (event.key === 'Escape') { setShowCreatePool(false); setPoolNameDraft(''); } }} placeholder={t(locale, 'settings.sub2apiPoolNamePrompt')} style={{ ...inputStyle, width: '100%' }} />
+          <div style={{ display: 'flex', gap: SPACING.sm, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn" onClick={() => { setShowCreatePool(false); setPoolNameDraft(''); }}>{t(locale, 'common.cancel')}</button>
+            <button type="button" className="btn btn-primary" disabled={busy || !poolNameDraft.trim()} onClick={() => void createPool()}>{t(locale, 'settings.sub2apiCreatePool')}</button>
+          </div>
+        </div>
+      </div>
+    )}
   </section>;
 }
 
