@@ -1,0 +1,31 @@
+# 单 clone + 多 worktree 验证（原则 3）— 2026-08-08
+
+## git worktree list（git 官方视图）
+/Users/ldh/Downloads/project/AiNative/Natives     97ed6f0e [perf/integration]   <- 唯一仓库/主 worktree
+/Users/ldh/Downloads/project/AiNative/natives-a1  7c525542 [perf/a1-live-events]
+/Users/ldh/Downloads/project/AiNative/natives-a2  72befba6 [perf/a2-stream-server]
+/Users/ldh/Downloads/project/AiNative/natives-a3  204449ff [perf/a3-persistent-uds]
+/Users/ldh/Downloads/project/AiNative/natives-a4  7ac0e122 [perf/a4-readonly-fastpath]
+/Users/ldh/Downloads/project/AiNative/natives-a5  888ca5cb [perf/a5-warm-session]
+/Users/ldh/Downloads/project/AiNative/natives-a6  fa1be1bb [perf/a6-settings-v2]
+/Users/ldh/Downloads/project/AiNative/natives-a7  3b1f474e [perf/a7-settings-ui]
+/Users/ldh/Downloads/project/AiNative/natives-a8  5124882b [perf/a8-projector-tail]
+
+## 判定依据（worktree vs 独立 clone）
+- 独立 clone 的 .git 是「目录」，各自持有完整 objects/refs。
+- git worktree 的 .git 是「文件」，内容为 `gitdir: <主仓库>/.git/worktrees/<name>`，共享同一 object store。
+
+## 逐目录 .git 类型（全部为 worktree）
+natives-a1: gitdir: .../Natives/.git/w  -> worktree
+natives-a2: gitdir: .../Natives/.git/w  -> worktree
+natives-a3: gitdir: .../Natives/.git/w  -> worktree
+natives-a4: gitdir: .../Natives/.git/w  -> worktree
+natives-a5: gitdir: .../Natives/.git/w  -> worktree
+natives-a6: gitdir: .../Natives/.git/w  -> worktree
+natives-a7: gitdir: .../Natives/.git/w  -> worktree
+natives-a8: gitdir: .../Natives/.git/w  -> worktree
+
+## 结论
+natives-a1..a8 全部为同一仓库 /Users/ldh/Downloads/project/AiNative/Natives
+（基线 4b8193cd，集成分支 perf/integration）的 git worktree，
+共享 git objects；不存在 Subagent 各自 clone 的情况。原则 3 满足。
