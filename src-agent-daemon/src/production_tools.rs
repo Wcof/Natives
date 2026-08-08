@@ -5098,6 +5098,7 @@ mod tests {
         let make_run = |conversation_id: &str, parent: Option<&str>| {
             rm.create_run(assistant_protocol::v2::CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: conversation_id.to_string(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),

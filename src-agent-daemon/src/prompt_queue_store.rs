@@ -1422,6 +1422,7 @@ mod tests {
                 let active = rm
                     .create_run(assistant_protocol::v2::CreateRunRequest {
                         capability_selection: None,
+                        disabled_tools: None,
                         conversation_id: cid.clone(),
                         provider_id: "openai".into(),
                         model_id: "gpt-4o".into(),

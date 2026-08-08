@@ -659,6 +659,7 @@ mod tests {
         let run = auth
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-auth".into(),
                 provider_id: "echo".into(),
                 model_id: "echo".into(),

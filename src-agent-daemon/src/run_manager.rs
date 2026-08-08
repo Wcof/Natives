@@ -3146,6 +3146,7 @@ mod tests {
         let rm = RunManager::new();
         let req = CreateRunRequest {
             capability_selection: None,
+            disabled_tools: None,
             conversation_id: "c1".into(),
             provider_id: "openai".into(),
             model_id: "gpt-4o".into(),
@@ -3194,6 +3195,7 @@ mod tests {
             let run = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "sqlite-events-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -3260,6 +3262,7 @@ mod tests {
             let run = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "run-meta-conv".into(),
                     provider_id: "openai-compatible-provider".into(),
                     model_id: "deepseek-v4-flash".into(),
@@ -3337,6 +3340,7 @@ mod tests {
             let idempotency_key = format!("sqlite-idem-{}", Uuid::new_v4());
             let req = CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "sqlite-idem-conv".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -3420,6 +3424,7 @@ mod tests {
             let err = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "broken-events-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -3800,6 +3805,7 @@ mod tests {
         let original = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c1".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -3831,6 +3837,7 @@ mod tests {
         let original = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "active-retry".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -3889,6 +3896,7 @@ mod tests {
             let source = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "continue-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -4018,6 +4026,7 @@ mod tests {
             let source = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "continue-nosnap-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -4122,6 +4131,7 @@ mod tests {
         let source = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "resume-conv".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -4198,6 +4208,7 @@ mod tests {
             let source = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "noledger-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -4588,6 +4599,7 @@ mod tests {
         let created = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-detach".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -4710,6 +4722,7 @@ mod tests {
             let run = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "c-restore".into(),
                     provider_id: "openai".into(),
                     model_id: "m".into(),
@@ -4864,6 +4877,7 @@ mod tests {
             let created = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "c-idem-start".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -5072,6 +5086,7 @@ mod tests {
         let parent = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-tree".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -5248,6 +5263,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-cancel".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -5504,6 +5520,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-perm".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -6127,6 +6144,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-codex".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -6179,6 +6197,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-rt".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -6228,6 +6247,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-preserve".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -6261,6 +6281,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-retry-rt".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -6312,6 +6333,7 @@ mod tests {
         let run = rm
             .create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: "c-fail".into(),
                 provider_id: "missing-provider".into(),
                 model_id: "m".into(),
@@ -6394,6 +6416,7 @@ mod tests {
             let run = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: "host-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -6515,6 +6538,7 @@ mod tests {
             let run = rm
                 .create_run(CreateRunRequest {
                     capability_selection: None,
+                    disabled_tools: None,
                     conversation_id: format!("c-race-{i}"),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
