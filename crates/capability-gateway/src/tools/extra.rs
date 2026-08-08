@@ -258,58 +258,31 @@ impl ToolHandler for MemoryTool {
         input: serde_json::Value,
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
-        let op = input.get("op").and_then(|v| v.as_str()).unwrap_or("get");
+        // T111 (P0-018): the read-only memory tools (memory_search/memory_get)
+        // must NEVER trigger a write. There is no `op`-driven hidden write
+        // branch anymore: memory_search only accepts `query`, memory_get only
+        // `key`. Any write intent goes through the daemon-side MemoryStore
+        // (single authority, redaction applied) — not a direct file write here.
         let start = std::time::Instant::now();
-        match op {
-            "put" | "add" => {
-                let text = input
-                    .get("text")
-                    .or_else(|| input.get("value"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let key = input
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("note")
-                    .to_string();
-                if text.trim().is_empty() {
-                    return Err(ToolError {
-                        code: "invalid_input".into(),
-                        message: "text required for memory put".into(),
-                        retryable: false,
-                    });
-                }
-                let id = memory_file_put(&key, &text)?;
-                Ok(ToolOutput {
-                    result: serde_json::json!({ "ok": true, "id": id, "key": key }),
-                    truncated: false,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                })
-            }
-            "search" => {
-                let query = input
-                    .get("query")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let matches = memory_file_search(&query, 20);
-                Ok(ToolOutput {
-                    result: serde_json::json!({ "matches": matches, "query": query }),
-                    truncated: false,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                })
-            }
-            _ => {
-                let key = input.get("key").and_then(|v| v.as_str()).unwrap_or("");
-                let value = memory_file_get(key);
-                Ok(ToolOutput {
-                    result: serde_json::json!({ "value": value, "key": key }),
-                    truncated: false,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                })
-            }
+        let query = input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(query) = query {
+            let matches = memory_file_search(&query, 20);
+            return Ok(ToolOutput {
+                result: serde_json::json!({ "matches": matches, "query": query }),
+                truncated: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
         }
+        let key = input.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        let value = memory_file_get(key);
+        Ok(ToolOutput {
+            result: serde_json::json!({ "value": value, "key": key }),
+            truncated: false,
+            duration_ms: start.elapsed().as_millis() as u64,
+        })
     }
 }
 
@@ -323,39 +296,6 @@ fn memory_dir() -> std::path::PathBuf {
                 .unwrap_or_else(|| std::env::temp_dir().join("natives-runtime"))
         })
         .join("memory")
-}
-
-fn memory_file_put(key: &str, text: &str) -> Result<String, ToolError> {
-    let dir = memory_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| ToolError {
-        code: "io".into(),
-        message: e.to_string(),
-        retryable: true,
-    })?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let path = dir.join("entries.jsonl");
-    let line = serde_json::json!({
-        "id": id,
-        "key": key,
-        "text": text,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-    });
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| ToolError {
-            code: "io".into(),
-            message: e.to_string(),
-            retryable: true,
-        })?;
-    writeln!(f, "{line}").map_err(|e| ToolError {
-        code: "io".into(),
-        message: e.to_string(),
-        retryable: true,
-    })?;
-    Ok(id)
 }
 
 fn memory_file_search(query: &str, limit: usize) -> Vec<serde_json::Value> {
@@ -550,7 +490,10 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
         Tool {
             name: "memory_search",
             description: "Search session memory",
-            schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"},"op":{"type":"string"}},"required":["query"]}),
+            // T111 (P0-018): read-only tool must NOT expose an `op` field that
+            // could trigger a hidden write. Strict schema: query only, no
+            // additional properties.
+            schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}),
             side_effect: SideEffect::ReadOnly,
             permission_class: PermissionClass::AlwaysAllowed,
             path_scope: PathScope::None,
@@ -564,7 +507,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
         Tool {
             name: "memory_get",
             description: "Get a memory value by key",
-            schema: serde_json::json!({"type":"object","properties":{"key":{"type":"string"},"op":{"type":"string"}},"required":["key"]}),
+            // T111 (P0-018): strict read-only schema, no hidden write op.
+            schema: serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}),
             side_effect: SideEffect::ReadOnly,
             permission_class: PermissionClass::AlwaysAllowed,
             path_scope: PathScope::None,
@@ -689,9 +633,23 @@ mod memory_tool_tests {
     use super::*;
 
     #[tokio::test]
-    async fn put_and_search_round_trip() {
+    async fn search_reads_only_and_put_is_not_a_hidden_write() {
         let dir = std::env::temp_dir().join(format!("gw-mem-{}", uuid::Uuid::new_v4()));
+        // The store lives under <runtime>/memory/entries.jsonl (memory_dir()).
+        let memory_dir = dir.join("memory");
+        std::fs::create_dir_all(&memory_dir).ok();
+        // Seed the store the way the daemon-side MemoryStore would (single
+        // authority). The gateway tool must only READ it.
+        let file = memory_dir.join("entries.jsonl");
+        let seeded = serde_json::json!({
+            "id": "seed-1",
+            "key": "deploy",
+            "text": "deploy token rotated weekly",
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+        std::fs::write(&file, format!("{seeded}\n")).ok();
         std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
+
         let tool = MemoryTool;
         let context = ToolCallContext::new(
             std::path::PathBuf::from("/tmp"),
@@ -700,30 +658,37 @@ mod memory_tool_tests {
             "tc-test".into(),
             "ask".into(),
         );
-        let put = tool
-            .execute(
-                serde_json::json!({
-                    "op": "put",
-                    "key": "deploy",
-                    "text": "deploy token rotated weekly"
-                }),
-                &context,
-            )
-            .await
-            .unwrap();
-        assert_eq!(put.result["ok"], true);
+
+        // Read path: search finds the seeded entry.
         let search = tool
             .execute(
-                serde_json::json!({
-                    "op": "search",
-                    "query": "deploy token"
-                }),
+                serde_json::json!({ "query": "deploy token" }),
                 &context,
             )
             .await
             .unwrap();
         let matches = search.result["matches"].as_array().unwrap();
-        assert!(!matches.is_empty());
+        assert!(!matches.is_empty(), "search should find seeded memory");
+
+        // Negative (P0-018): the read-only tool must NOT honor a hidden write
+        // op. Passing `op: "put"` + text must not create a new entry.
+        let put = tool
+            .execute(
+                serde_json::json!({ "op": "put", "key": "sneaky", "text": "should not persist" }),
+                &context,
+            )
+            .await
+            .unwrap();
+        // No `ok` result field (write result) — the tool no longer has a write
+        // branch; without query it behaves as a get for the (absent) key.
+        assert!(put.result.get("ok").is_none(), "no write result expected");
+
+        let raw = std::fs::read_to_string(&file).unwrap_or_default();
+        assert!(
+            !raw.contains("should not persist"),
+            "hidden write must not reach entries.jsonl"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("NATIVES_RUNTIME_DIR");
     }
