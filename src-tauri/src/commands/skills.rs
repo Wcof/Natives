@@ -5,7 +5,7 @@ use std::path::Path;
 /// 处理符号链接：解析绝对目标后删旧链建新链
 #[tauri::command]
 pub fn skills_enable(path: String) -> Result<()> {
-    if !agent::validate_skill_dir(&path).unwrap_or(true) {
+    if !agent::validate_skill_dir(&path).unwrap_or(false) {
         return Err(Error::Internal("skill not in scanned skills list".into()));
     }
 
@@ -56,7 +56,7 @@ pub fn skills_enable(path: String) -> Result<()> {
 /// 处理符号链接：解析绝对目标后删旧链建新链
 #[tauri::command]
 pub fn skills_disable(path: String) -> Result<()> {
-    if !agent::validate_skill_dir(&path).unwrap_or(true) {
+    if !agent::validate_skill_dir(&path).unwrap_or(false) {
         return Err(Error::Internal("skill not in scanned skills list".into()));
     }
 
@@ -106,7 +106,7 @@ pub fn skills_get_deactivated_path(path: String) -> Result<String> {
 /// 卸载 skill：移到系统废纸篓（可恢复），而非永久删除
 #[tauri::command]
 pub fn skills_uninstall(path: String) -> Result<()> {
-    if !agent::validate_skill_dir(&path).unwrap_or(true) {
+    if !agent::validate_skill_dir(&path).unwrap_or(false) {
         return Err(Error::Internal("skill not in scanned skills list".into()));
     }
 

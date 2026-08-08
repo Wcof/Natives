@@ -926,8 +926,9 @@ pub fn validate_skill_dir(dir: &str) -> Result<bool> {
             item_dir == target
         }));
     }
-    // 没有缓存时放行（降级行为）
-    Ok(true)
+    // T113 (P0-020): cache 未建立/校验异常一律 fail-closed —— 返回 false,
+    // 拒绝 destructive action。绝不允许 "cache-missing => allow"。
+    Ok(false)
 }
 
 /// 清除 skills 缓存（toggle/trash 后调用）
