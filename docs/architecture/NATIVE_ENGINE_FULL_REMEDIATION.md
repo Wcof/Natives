@@ -474,7 +474,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | P0-08 | create+start 后 UI 才订阅，首批 live token 可能丢 | **production_done**（LiveBus bounded ring replay 1024 条 / 1MiB + subscribe_after + gap 标记） |
 | P0-09 | run_gateway 两处 max_steps=50 | **production_done**（删除硬编码，ResolvedExecutionPolicyV1 解析） |
 | P0-10 | RunManager runtime 缺失直接 native | **production_done**（runtime 优先级 + unavailable policy fail-closed） |
-| P0-11 | disabledTools 未进入真实工具面 | **integration_partial**（policy 解析 + 请求传递完成；daemon 侧最终减法需后续独立 PR 复核——见 18.5） |
+| P0-11 | disabledTools 未进入真实工具面 | **production_done**（schema+handler 均减法：Host create payload → rpc 注册 runtime → RunManager 工具面 `− disabledTools` 最终减法，只收紧不扩权） |
 | P0-12 | revision 仅 +1，不是 CAS | **production_done**（save 带 expected_revision 冲突检测；`settings_revision_conflict_is_detected`） |
 | P0-13 | Settings DB/JSON error 静默 defaults | **production_done**（load/save Result 化，corrupt 显式报错；`settings_corrupt_json_is_not_default_success`） |
 | P0-14 | migration write error 被吞 | **production_done**（Result 化 + 显式错误传播） |
@@ -482,7 +482,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | P1-02 | digest 只 hash 前64 bytes | **production_done**（full SHA-256；`full_sha256_digest_detects_content_change`） |
 | P1-03 | digest source 与 assemble_context 不一致 | **production_done**（统一 discover_instruction_sources + skill entry names） |
 | P1-04 | docs filename+size 漏同长度修改 | **production_done**（content-based；`instruction_tail_same_length_edit_invalidates`） |
-| P1-05 | ContextStats 未接 Engine loop | **integration_partial**（reset API + 测试完成；真实 engine 调用点未接入，见 18.5） |
+| P1-05 | ContextStats 未接 Engine loop | **production_done**（AgentEngine.context_stats 字段 + maybe_compact_values append_chars / compaction 后 note_compaction+reset；`context_stats_tracked_and_reset_by_engine_loop` 真实调用点测试绿） |
 | P1-06 | compaction 后 stats 无 reset | **production_done**（`context_stats_reset_after_compaction` 绿） |
 | P1-07 | real ProductionRuntime tail replay from seq0 | **production_done**（run_start watermark 起 replay，不再 seq0 全量） |
 | P1-08 | EventSequencer 仍能接受 live-only kind | **production_done**（durable lane guard；`durable_lane_rejects_live_only_events`） |
@@ -530,9 +530,9 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 ### 18.5 未完成 / 待验证（诚实清单）
 
-- P0-11 daemon 侧 disabledTools 最终减法、P1-05 ContextStats engine-loop 真实调用点：标注 `integration_partial`，需后续独立改动（不改断言、不静默）。
+- P0-11 disabledTools 减法、P1-05 ContextStats engine-loop：本轮集中修复已闭环为 `production_done`（见 18.1）。
 - P1-10 / P1-12：真实 headed 长回答与工具输出的 `provider delta→daemon→Tauri→renderer` p95 尚未在真实 GUI 验证；fixture 链路测试已证明可达性。
-- `npm run typecheck` / `perf:check`：本机 tsc --noEmit 单次超过 5 分钟限时被关闭，未形成通过证据（无错误输出但未跑完）。
+- `npm run typecheck` / `perf:check`：全量 `tsc --noEmit` 慢因已定位为 `allowJs: true` + `include: **/*.ts` 把 `out/` 下 509 个 JS 文件纳入检查（`out/` 未 exclude）。限时 5 分钟观察无错误输出后被关闭；缩小范围 src 全量检查（`allowJs: false`、排除 `out/.next/archive/src-tauri`）**通过（0 错误）**。`perf:check` 依赖全量 typecheck，同因未跑。
 - headed 验收（真实 Anthropic/OpenAI 长回答连续、cancel、maxSteps 新会话生效、Claude CLI unavailable 报错、fallback 说明、断流恢复）全部待真机环境执行。
 
 ### 18.6 回滚方案
@@ -540,3 +540,4 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 - 整体回退：`git revert` 自 `a734dbb2` 至 `72654617`（6 个提交）或 `git reset --hard 91d997e1`。
 - 分级：仅回滚 Wave2 可 revert `c3170992`（保留 Wave1 P0 流式闭环）；仅回滚 Settings 可 revert `e7a98298` 后手工保留 live/stream 部分（P0-09~P0-14 依赖该提交，需同步还原 run_gateway）。
 - 旧 `MessageDelta` / `executor:settings` / localStorage runtimePref 读路径均保留兼容，可安全 downgrade。
+- P0-11 集中修复（`run_disabled_tools` 存储 + 工具面减法）仅影响 run.create/start 工具面，可单独 revert 且不影响流式链路。

@@ -93,6 +93,11 @@ pub struct ProductionRuntime {
     /// Per-run tool allowlist registered before RunManager starts a child run.
     /// `Some(list)` = hard allowlist; entry removed once the run starts.
     pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    /// Per-run disabled tool deny list (P0-11, subtract-only). Registered by
+    /// the Host via `run.create` params (`disabled_tools`) and consumed once by
+    /// the RunManager tool-surface build as the final `− disabledTools` step.
+    /// Settings can only subtract, never expand capability.
+    pub run_disabled_tools: Arc<Mutex<HashMap<String, Vec<String>>>>,
     /// Per-run agent directive: a system prompt the *parent* agent authored for
     /// one specific child run, registered before RunManager starts it and
     /// consumed once by [`Self::start_run`].
@@ -300,6 +305,7 @@ impl ProductionRuntime {
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
+            run_disabled_tools: Arc::new(Mutex::new(HashMap::new())),
             run_agent_directives: Arc::new(Mutex::new(HashMap::new())),
             metrics_sink: crate::metrics::daemon_metrics_sink(),
         };
@@ -347,6 +353,20 @@ impl ProductionRuntime {
 
     pub async fn peek_run_tool_allowlist(&self, run_id: &str) -> Option<Vec<String>> {
         self.run_tool_allowlists.lock().await.get(run_id).cloned()
+    }
+
+    /// Register the subtract-only disabled tool list for a run (P0-11).
+    /// Consumed once by [`crate::run_manager::RunManager`] tool-surface build.
+    pub async fn set_run_disabled_tools(&self, run_id: &str, disabled: Vec<String>) {
+        self.run_disabled_tools
+            .lock()
+            .await
+            .insert(run_id.to_string(), disabled);
+    }
+
+    /// Take the disabled tool list for a run (consumed once at start).
+    pub async fn take_run_disabled_tools(&self, run_id: &str) -> Option<Vec<String>> {
+        self.run_disabled_tools.lock().await.remove(run_id)
     }
 
     /// Register the parent-authored system prompt for a child run that will be

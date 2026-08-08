@@ -1846,13 +1846,18 @@ impl RunManager {
             let selected_mcp_servers = capability_snapshot
                 .selection_active
                 .then(|| capability_snapshot.mcp_servers.iter().cloned().collect());
-            let schemas = crate::production_tools::model_visible_tool_schemas(
+            let mut schemas = crate::production_tools::model_visible_tool_schemas(
                 &gateway,
                 allowlist.as_deref(),
                 &capability_snapshot.mcp_tool_schemas,
                 selected_mcp_servers.as_ref(),
                 permission_profile.eq_ignore_ascii_case("plan"),
             );
+            // P0-11: Settings disabledTools 最终减法（subtract-only，只能收紧）。
+            // Host 在 run.create payload 注册；start 时消费一次。
+            if let Some(disabled) = self.runtime.take_run_disabled_tools(&run.id).await {
+                schemas.retain(|tool| !disabled.iter().any(|denied| denied == &tool.name));
+            }
             if let Err(error) = crate::production_tools::validate_tool_limit(schemas.len()) {
                 self.fail_run_if_active(&run.id, error.clone(), "tool_plan_too_large");
                 return Err(error);

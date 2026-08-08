@@ -1949,6 +1949,57 @@ async fn compaction_requests_model_summary_and_injects_it_into_history() {
 }
 
 #[tokio::test]
+async fn context_stats_tracked_and_reset_by_engine_loop() {
+    // P1-05: the engine loop must be a real caller of ContextStats — it
+    // appends transcript chars incrementally and, after a real compaction,
+    // bumps the revision and re-seeds the counters from the kept size.
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_context_budget(1_000, 512);
+    let provider = CompactionProvider::new(
+        SummaryBehavior::Answer,
+        vec![
+            tool_round(),
+            vec![
+                EngineProviderEvent::TextDelta("done".into()),
+                EngineProviderEvent::Completed,
+            ],
+        ],
+    );
+    let run_id = format!("r-stats-{}", uuid::Uuid::new_v4());
+    let status = engine
+        .run(
+            EngineRunConfig {
+                run_id: run_id.clone(),
+                conversation_id: "c-stats".into(),
+                model: "m".into(),
+                system_prompt: None,
+                messages: long_history(10),
+                user_content: "keep going".into(),
+                max_steps: 5,
+            },
+            &provider,
+            &BigOutputTools,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(status, crate::EngineOutcome::Completed { .. }),
+        "{status:?}"
+    );
+
+    let stats = engine.context_stats.lock().unwrap().clone();
+    assert!(
+        stats.last_compaction_revision >= 1,
+        "engine loop must note the real compaction (revision={})",
+        stats.last_compaction_revision
+    );
+    assert!(
+        stats.estimated_chars < 100_000,
+        "stats must reset to the kept transcript size, not accumulate stale bytes (chars={})",
+        stats.estimated_chars
+    );
+}
+
+#[tokio::test]
 async fn compaction_falls_back_to_mechanical_when_summary_fails() {
     let engine = AgentEngine::new(EventSequencer::memory_only()).with_context_budget(1_000, 512);
     let provider = CompactionProvider::new(

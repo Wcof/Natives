@@ -911,6 +911,20 @@ pub async fn handle_rpc(
             match serde_json::from_value::<CreateRunRequest>(request.params.clone()) {
                 Ok(req) => match run_manager().create_run(req) {
                     Ok(run) => {
+                        // P0-11: Host 的 subtract-only disabledTools 随 create
+                        // payload 到达，create 成功后按 run.id 注册；run.start
+                        // 时工具面构建做最终减法（Settings 只能减，不能扩权）。
+                        if let Some(disabled) = request
+                            .params
+                            .get("disabled_tools")
+                            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+                            .filter(|list| !list.is_empty())
+                        {
+                            run_manager()
+                                .runtime
+                                .set_run_disabled_tools(&run.id, disabled)
+                                .await;
+                        }
                         send_success(
                             writer,
                             &request.request_id,
