@@ -24,6 +24,57 @@ use std::time::Duration;
 
 /// Read a file from the filesystem (offset/limit, binary-safe metadata).
 pub struct ReadFileTool;
+
+/// Atomically write `content` to `path`: write a temp file in the same
+/// directory, fsync it, then rename over the target (P0-015). A crash before
+/// rename leaves the original intact; a concurrent writer cannot observe a
+/// half-written file. Returns the final path on success.
+pub async fn atomic_write_file(path: &str, content: &[u8]) -> Result<String, ToolError> {
+    use tokio::io::AsyncWriteExt as _;
+    let target = std::path::Path::new(path);
+    let dir = target
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "out".to_string());
+    let tmp_name = format!(".natives-tmp-{}-{}", file_name, std::process::id());
+    let tmp_path = dir.join(&tmp_name);
+
+    // Write + fsync the temp file.
+    {
+        let mut f = tokio::fs::File::create(&tmp_path).await.map_err(|e| ToolError {
+            code: "write_error".into(),
+            message: format!("atomic write create temp failed: {e}"),
+            retryable: true,
+        })?;
+        f.write_all(content).await.map_err(|e| ToolError {
+            code: "write_error".into(),
+            message: format!("atomic write temp failed: {e}"),
+            retryable: true,
+        })?;
+        f.sync_all().await.map_err(|e| ToolError {
+            code: "write_error".into(),
+            message: format!("atomic write fsync failed: {e}"),
+            retryable: true,
+        })?;
+    }
+
+    // Rename over the target (atomic on same filesystem).
+    tokio::fs::rename(&tmp_path, target).await.map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        ToolError {
+            code: "write_error".into(),
+            message: format!("atomic write rename failed: {e}"),
+            retryable: true,
+        }
+    })?;
+    Ok(path.to_string())
+}
+
+/// Async trait impl marker for `atomic_write_file` usage above.
 #[async_trait::async_trait]
 impl ToolHandler for ReadFileTool {
     async fn execute(
@@ -192,11 +243,13 @@ impl ToolHandler for WriteFileTool {
                 message: "Missing 'content'".into(),
                 retryable: false,
             })?;
-        tokio::fs::write(path, content)
+        // P0-015: atomic write (temp + fsync + rename) so a crash or a
+        // concurrent writer never leaves a half-written file.
+        atomic_write_file(path, content.as_bytes())
             .await
             .map_err(|e| ToolError {
                 code: "write_error".into(),
-                message: e.to_string(),
+                message: e.message,
                 retryable: true,
             })?;
         Ok(ToolOutput {
@@ -462,11 +515,12 @@ impl ToolHandler for EditFileTool {
             });
         }
         let updated = content.replacen(old, new, 1);
-        tokio::fs::write(path, &updated)
+        // P0-015: atomic write (temp + fsync + rename).
+        atomic_write_file(path, updated.as_bytes())
             .await
             .map_err(|e| ToolError {
                 code: "write_error".into(),
-                message: e.to_string(),
+                message: e.message,
                 retryable: true,
             })?;
         Ok(ToolOutput {

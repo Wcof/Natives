@@ -591,7 +591,10 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
                     "permission_profile":{"type":"string","enum":["readonly","ask","full_access"],"description":"Requested permission profile. Capped by yours and further tightened by the profile's permissionMode; it can only go down, never up."},
                     "agent":{"type":"string","description":"Expert team member id to run this task as. Only valid when an expert team is active; must be one of the roster ids from the team briefing."}
                 },
-                "required":["prompt"]
+                "anyOf":[
+                    {"required":["prompt"]},
+                    {"required":["task"]}
+                ]
             }),
             side_effect: SideEffect::Process,
             permission_class: PermissionClass::ProjectWrite,
