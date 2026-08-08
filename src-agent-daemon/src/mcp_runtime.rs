@@ -244,6 +244,13 @@ pub struct McpRuntime {
     starting: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Background SSE curl children (long-lived ingest).
     sse_children: Mutex<HashMap<String, Child>>,
+    /// Reader-thread alive flags per SSE server. `true` while the supervised
+    /// reader thread is still draining the curl stdout (real connection fact,
+    /// not an optimistic cache). Set `false` on EOF/error/cancel.
+    sse_readers: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Join handles for the SSE reader threads, so `stop()`/`remove_server()`
+    /// can bound-join them instead of leaking threads.
+    sse_reader_handles: Mutex<HashMap<String, std::thread::JoinHandle<()>>>,
     status: Mutex<HashMap<String, String>>,
     credentials: Mutex<McpCredentialStore>,
     /// Handshake result per server. Missing = never initialized.
@@ -280,6 +287,8 @@ impl McpRuntime {
             sessions: Mutex::new(HashMap::new()),
             starting: Mutex::new(HashMap::new()),
             sse_children: Mutex::new(HashMap::new()),
+            sse_readers: Mutex::new(HashMap::new()),
+            sse_reader_handles: Mutex::new(HashMap::new()),
             status: Mutex::new(HashMap::new()),
             credentials: Mutex::new(McpCredentialStore::new()),
             capabilities: Mutex::new(HashMap::new()),
@@ -371,6 +380,8 @@ impl McpRuntime {
         if let Ok(mut registry) = self.registry.lock() {
             registry.remove_server(server_id);
         }
+        // Stop any running listener so no thread/child outlives the server.
+        self.cancel_sse_listener(server_id);
         if let Ok(mut status) = self.status.lock() {
             status.remove(server_id);
         }
@@ -737,12 +748,8 @@ impl McpRuntime {
         if let Some(session) = session {
             stop_stdio_session(session);
         }
-        if let Ok(mut kids) = self.sse_children.lock() {
-            if let Some(mut child) = kids.remove(server_id) {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
+        // Kill the SSE child and bound-join its reader thread.
+        self.cancel_sse_listener(server_id);
         // Capabilities and the discovery caches were learned during a handshake
         // that is now over. Keeping them would let a dead server keep vouching
         // for a `resources/read` allowlist. Notifications are history and stay.
@@ -761,8 +768,12 @@ impl McpRuntime {
         Ok(())
     }
 
-    /// Start a bounded SSE listener (curl -N). Ingests `data:` tool frames into registry.
-    /// `NATIVES_MCP_SSE_MAX_SECS` caps duration (default 60) so tests/CI do not hang.
+    /// Start a supervised SSE listener (curl -N). A dedicated reader thread
+    /// keeps draining the stream until EOF/error, so `alive` reflects a real,
+    /// ongoing connection instead of a short-lived probe. Credentials are
+    /// passed via a 0600 temp header file — never in the child argv (P1-031).
+    /// `NATIVES_MCP_SSE_MAX_SECS` caps duration (default 60) so tests/CI do
+    /// not hang.
     pub fn start_sse_listener(&self, server_id: &str) -> Result<Value, String> {
         let config = self.server_config(server_id)?;
         if !matches!(config.transport, McpTransport::Sse | McpTransport::Http) {
@@ -773,47 +784,54 @@ impl McpRuntime {
             .clone()
             .ok_or_else(|| "sse server requires url".to_string())?;
         self.assert_url_allowed(&config, &url)?;
-        // Kill previous listener.
-        if let Ok(mut kids) = self.sse_children.lock() {
-            if let Some(mut child) = kids.remove(server_id) {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
+        // Kill previous listener + reader thread.
+        self.cancel_sse_listener(server_id);
+
         let max_secs = std::env::var("NATIVES_MCP_SSE_MAX_SECS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(60)
             .clamp(1, 600);
         let max_secs_arg = max_secs.to_string();
-        let mut args = vec![
-            "-fsS".into(),
-            "-N".into(),
-            "--max-time".into(),
-            max_secs_arg,
-            "-H".into(),
-            "Accept: text/event-stream".into(),
-        ];
+
+        // Credentials must not appear in the child argv. curl supports
+        // `-K -` (config from stdin): headers (Accept + Authorization +
+        // custom) are fed through the child's stdin, never as argv args.
+        let mut config_lines = String::from("header = \"Accept: text/event-stream\"\n");
         if let Some(auth) = self.resolve_auth_header(&config) {
-            args.push("-H".into());
-            args.push(format!("Authorization: {auth}"));
+            config_lines.push_str(&format!("header = \"Authorization: {auth}\"\n"));
         }
         if let Some(headers) = &config.headers {
             for (k, v) in headers {
                 if k.eq_ignore_ascii_case("authorization") {
                     continue;
                 }
-                args.push("-H".into());
-                args.push(format!("{k}: {v}"));
+                config_lines.push_str(&format!("header = \"{k}: {v}\"\n"));
             }
         }
+
+        let mut args = vec![
+            "-fsS".into(),
+            "-N".into(),
+            "--max-time".into(),
+            max_secs_arg,
+            "-K".into(),
+            "-".into(),
+        ];
         args.push(url.clone());
         let mut child = Command::new("curl")
             .args(&args)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("spawn sse listener failed: {e}"))?;
+        // Feed the header config through stdin, then close it so curl proceeds.
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(config_lines.as_bytes());
+            drop(stdin);
+        }
         let stdout = child
             .stdout
             .take()
@@ -841,10 +859,40 @@ impl McpRuntime {
         } else {
             self.ingest_tools_payload(server_id, &body).unwrap_or(0)
         };
-        // Note: we dropped the reader — child may get SIGPIPE; for production a
-        // dedicated thread would keep reading. Status reflects partial long-lived start.
+
+        // Supervised reader thread: keep draining until EOF (remote closed) or
+        // error, then flip the alive flag. `liveness()` derives from this flag
+        // plus `child.try_wait()` — never from an optimistic cache.
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_clone = Arc::clone(&alive);
+        let reader_thread = std::thread::spawn(move || {
+            let mut drain = BufReader::new(reader);
+            let mut buf = String::new();
+            let mut drain_line = String::new();
+            loop {
+                drain_line.clear();
+                match drain.read_line(&mut drain_line) {
+                    Ok(0) => break, // EOF — connection closed
+                    Ok(_) => {
+                        buf.push_str(&drain_line);
+                        if buf.len() > 256_000 {
+                            buf.clear();
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            alive_clone.store(false, Ordering::SeqCst);
+        });
+
         if let Ok(mut kids) = self.sse_children.lock() {
             kids.insert(server_id.to_string(), child);
+        }
+        if let Ok(mut readers) = self.sse_readers.lock() {
+            readers.insert(server_id.to_string(), Arc::clone(&alive));
+        }
+        if let Ok(mut handles) = self.sse_reader_handles.lock() {
+            handles.insert(server_id.to_string(), reader_thread);
         }
         if let Ok(mut st) = self.status.lock() {
             st.insert(
@@ -858,6 +906,25 @@ impl McpRuntime {
             "listening": true,
             "max_secs": max_secs,
         }))
+    }
+
+    /// Kill the SSE child and bound-join its reader thread; remove all
+    /// tracking for the server. Safe to call when no listener exists.
+    fn cancel_sse_listener(&self, server_id: &str) {
+        if let Ok(mut kids) = self.sse_children.lock() {
+            if let Some(mut child) = kids.remove(server_id) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        if let Ok(mut readers) = self.sse_readers.lock() {
+            readers.remove(server_id);
+        }
+        if let Ok(mut handles) = self.sse_reader_handles.lock() {
+            if let Some(handle) = handles.remove(server_id) {
+                let _ = handle.join();
+            }
+        }
     }
 
     /// Liveness: stdio sessions check try_wait; HTTP/SSE re-probe tools count.
@@ -898,7 +965,15 @@ impl McpRuntime {
                     .into_iter()
                     .filter(|t| t.server_id == server_id)
                     .count();
-                let sse_alive = self
+                // Real connection fact: the supervised reader thread is still
+                // draining the stream. `false` once EOF/error/cancel flipped it.
+                let reader_alive = self
+                    .sse_readers
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(server_id).map(|f| f.load(Ordering::SeqCst)))
+                    .unwrap_or(false);
+                let child_alive = self
                     .sse_children
                     .lock()
                     .ok()
@@ -914,9 +989,13 @@ impl McpRuntime {
                         }
                     })
                     .unwrap_or(false);
+                // Both must hold: a live child with a dead reader means the
+                // stream closed / was never supervised.
+                let sse_alive = reader_alive && child_alive;
                 Ok(json!({
                     "server_id": server_id,
-                    "alive": tools > 0 || sse_alive,
+                    "alive": sse_alive,
+                    "sse_listening": sse_alive,
                     "sse_listener_alive": sse_alive,
                     "transport": match config.transport {
                         McpTransport::Sse => "sse",
