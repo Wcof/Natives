@@ -1,4 +1,4 @@
-import * as path from 'path';
+import { resolve as pathResolve, isAbsolute as pathIsAbsolute, dirname as pathDirname, basename as pathBasename, extname as pathExtname, join as pathJoin } from '@/lib/path-utils';
 import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
 
 /* ── Types ── */
@@ -78,7 +78,7 @@ export function detectFilePaths(text: string, currentDir: string): PathMatch[] {
   // 1. Line references: file.ts:42 or file.ts:42:10 (highest priority)
   const linePattern = /([\w\-.]+\.\w+):(\d+)(?::(\d+))?/g;
   while ((match = linePattern.exec(text)) !== null) {
-    const resolved = path.resolve(currentDir, match[1]!);
+    const resolved = pathResolve(currentDir, match[1]!);
     matches.push({
       path: resolved,
       line: parseInt(match[2]!, 10),
@@ -105,7 +105,7 @@ export function detectFilePaths(text: string, currentDir: string): PathMatch[] {
   // 3. Relative paths: ./src/file.ts or ../file.ts
   const relPattern = /(\.\.?\/[\w\-.]+(?:\/[\w\-.]+)*\.\w+)/g;
   while ((match = relPattern.exec(text)) !== null) {
-    const resolved = path.resolve(currentDir, match[1]!);
+    const resolved = pathResolve(currentDir, match[1]!);
     if (!isOverlapping(matches, match.index, match.index + match[0].length)) {
       matches.push({ path: resolved, start: match.index, end: match.index + match[0].length });
     }
@@ -226,7 +226,7 @@ export async function locateCandidate(candidate: string, currentDir: string): Pr
 
 /** Strategy 1: Direct stat via Tauri IPC (prefers fs.stat, falls back to listDir) */
 async function statPath(candidate: string, currentDir: string): Promise<string | null> {
-  const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(currentDir, candidate);
+  const resolved = pathIsAbsolute(candidate) ? candidate : pathResolve(currentDir, candidate);
   try {
     const fs = getNativeFs();
     if (!fs) return null;
@@ -244,8 +244,8 @@ async function statPath(candidate: string, currentDir: string): Promise<string |
 
     const listDir = fs.listDir;
     if (!listDir) return null;
-    const parentDir = path.dirname(resolved);
-    const basename = path.basename(resolved);
+    const parentDir = pathDirname(resolved);
+    const basename = pathBasename(resolved);
     const entries = (await listDir(parentDir, { showHidden: true })) as Array<{ name: string; path: string }>;
     const found = entries.find(e => e.name === basename);
     return found?.path ?? null;
@@ -256,7 +256,7 @@ async function statPath(candidate: string, currentDir: string): Promise<string |
 
 /** Strategy 2: Extension fallback — try appending common extensions to bare filenames */
 async function tryExtensionFallback(candidate: string, currentDir: string): Promise<string | null> {
-  if (path.extname(candidate)) return null;
+  if (pathExtname(candidate)) return null;
 
   const commonExts = ['.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.json', '.md', '.html', '.css'];
   // Fire all in parallel, return first hit
@@ -266,7 +266,7 @@ async function tryExtensionFallback(candidate: string, currentDir: string): Prom
 
 /** Strategy 3: Scan scrollback buffer for a more complete version of the path */
 async function scanScrollbackForPath(candidate: string, currentDir: string): Promise<string | null> {
-  const basename = path.basename(candidate).toLowerCase();
+  const basename = pathBasename(candidate).toLowerCase();
   if (!basename || basename.length < 3) return null;
 
   // Search scrollback for lines containing the basename
@@ -277,7 +277,7 @@ async function scanScrollbackForPath(candidate: string, currentDir: string): Pro
     // Re-run detection on this line
     const paths = detectFilePaths(line, currentDir);
     for (const p of paths) {
-      if (path.basename(p.path).toLowerCase() === basename) {
+      if (pathBasename(p.path).toLowerCase() === basename) {
         const result = await statPath(p.path, currentDir);
         if (result) return result;
       }
@@ -288,7 +288,7 @@ async function scanScrollbackForPath(candidate: string, currentDir: string): Pro
 
 /** Strategy 4: Basename search — search cwd + common project roots for files matching basename */
 async function basenameSearch(candidate: string, currentDir: string): Promise<string | null> {
-  const basename = path.basename(candidate);
+  const basename = pathBasename(candidate);
   if (!basename || basename.length < 2) return null;
 
   try {
@@ -302,7 +302,7 @@ async function basenameSearch(candidate: string, currentDir: string): Promise<st
       const topEntries = await listDir(currentDir, { showHidden: false }) as Array<{ name: string; isDir: boolean }>;
       for (const e of topEntries) {
         if (e.isDir && !e.name.startsWith('.') && e.name !== 'node_modules') {
-          roots.push(path.join(currentDir, e.name));
+          roots.push(pathJoin(currentDir, e.name));
         }
       }
     } catch { /* ignore */ }
@@ -321,7 +321,7 @@ async function basenameSearch(candidate: string, currentDir: string): Promise<st
 
 /** Strategy 5: macOS Spotlight (mdfind) as last resort */
 async function spotlightSearch(candidate: string, currentDir: string): Promise<string | null> {
-  const basename = path.basename(candidate);
+  const basename = pathBasename(candidate);
   if (!basename || basename.length < 3) return null;
 
   try {
