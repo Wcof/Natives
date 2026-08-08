@@ -11,6 +11,7 @@ import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { fsApi, hasNativeFiles } from '@/lib/files-api';
 import { useTheme } from '@/context/ThemeContext';
 import { t, useLocale } from '@/i18n';
+import MarkdownRenderer from '@/components/preview/renderers/MarkdownRenderer';
 
 interface FollowRendererProps {
   filePath: string | null;
@@ -129,12 +130,21 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
     );
   }
 
-  // Markdown: rendered preview
+  // Markdown: rendered preview（复用 Preview V2 统一管线；本地文件 → authorized-file-assets policy）
   if (isMd && content) {
+    const lastSlash = filePath.lastIndexOf('/');
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
-          <LiveMarkdownPreview content={content} />
+          <MarkdownRenderer
+            model={{
+              kind: 'markdown',
+              source: content,
+              truncated: false,
+              baseDir: lastSlash > 0 ? filePath.slice(0, lastSlash) : undefined,
+              urlPolicy: 'authorized-file-assets',
+            }}
+          />
         </div>
         {narration && <NarrationBar text={narration} />}
       </div>
