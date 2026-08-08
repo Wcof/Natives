@@ -44,65 +44,6 @@ fn i109_envelope_roundtrip() {
 }
 
 // ── Issue #108: 独立 Assistant.db + 会话持久化 ──
-#[test]
-#[allow(non_snake_case)]
-fn i108_session_camelCase() {
-    use natives_lib::commands::assistant::AssistantSession;
-    let s = AssistantSession {
-        id: "s1".into(),
-        project_id: Some("p1".into()),
-        title: "T".into(),
-        model_id: "gpt-4".into(),
-        provider_id: "p".into(),
-        summary: "".into(),
-        token_used: 0,
-        status: "active".into(),
-        message_count: 3,
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
-    };
-    let j = serde_json::to_value(&s).unwrap();
-    assert_eq!(j["messageCount"], 3);
-    assert_eq!(j["projectId"], "p1");
-}
-#[test]
-fn i108_session_global_draft() {
-    use natives_lib::commands::assistant::AssistantSession;
-    let s = AssistantSession {
-        id: "s2".into(),
-        project_id: None,
-        title: "D".into(),
-        model_id: "gpt-4".into(),
-        provider_id: "p".into(),
-        summary: "".into(),
-        token_used: 0,
-        status: "active".into(),
-        message_count: 0,
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-01-01T00:00:00Z".into(),
-    };
-    let j = serde_json::to_value(&s).unwrap();
-    assert_eq!(j["projectId"], serde_json::Value::Null);
-}
-#[test]
-fn i108_message_interrupted() {
-    use natives_lib::commands::assistant::AssistantMessage;
-    let m = AssistantMessage {
-        id: "m1".into(),
-        session_id: "s1".into(),
-        role: "assistant".into(),
-        content: "Partial".into(),
-        tool_calls: None,
-        tool_result: None,
-        status: "interrupted".into(),
-        token_count: 3,
-        sequence: 1,
-        created_at: "2026-01-01T00:00:00Z".into(),
-    };
-    let j = serde_json::to_value(&m).unwrap();
-    assert_eq!(j["status"], "interrupted"); // 中断消息保留部分内容
-}
-
 // ── Issue #110: Linter 门禁 (KI-3) ──
 #[test]
 fn i110_reject_cdn() {

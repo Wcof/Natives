@@ -317,7 +317,7 @@ impl Bridge {
                 };
 
                 // Reply to the ORIGINAL sender; a send failure is explicit.
-                let send_ok = ilink::send_text(&account, &from, &reply, &conv.context_token);
+                let send_ok = ilink::send_text(&account, from, &reply, &conv.context_token);
                 match send_ok {
                     Ok(_) => {
                         conv.messages.push(Message {
