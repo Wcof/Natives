@@ -1182,16 +1182,7 @@ export interface NativesAPI {
     install: (name: string) => Promise<void>;
     uninstall: (name: string) => Promise<void>;
   };
-  assistant: {
-    listSessions: (params: { projectId: string | null }) => Promise<unknown>;
-    getMessages: (sessionId: string) => Promise<unknown>;
-    createSession: (params: { projectId: string | null; title: string; modelId: string; providerId: string }) => Promise<unknown>;
-    deleteSession: (sessionId: string) => Promise<void>;
-    saveMessage: (params: { sessionId: string; role: string; content: string; status: string; tokenCount: number; toolCalls?: string; toolResult?: string }) => Promise<unknown>;
-    updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) => Promise<void>;
-    updateSessionTitle: (params: { sessionId: string; title: string }) => Promise<void>;
-    updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) => Promise<void>;
-  };
+  // T202/T302: legacy assistant_* CRUD interface retired (Daemon-canonical now).
   daemonSupervisor: {
     status: () => Promise<unknown>;
     ensure: () => Promise<unknown>;
@@ -2053,25 +2044,10 @@ const nativesAPI: NativesAPI = {
     createSub2ApiPool: ({ name }) => cmd<string>('provider_accounts_create_pool', { input: { name } }),
   },
 
-  // Assistant
-  assistant: {
-    listSessions: (params: { projectId: string | null }) =>
-      cmd('assistant_list_sessions', params),
-    getMessages: (sessionId: string) =>
-      cmd('assistant_get_messages', { sessionId }),
-    createSession: (params: { projectId: string | null; title: string; modelId: string; providerId: string }) =>
-      cmd('assistant_create_session', params),
-    deleteSession: (sessionId: string) =>
-      cmd('assistant_delete_session', { sessionId }),
-    saveMessage: (params: { sessionId: string; role: string; content: string; status: string; tokenCount: number; toolCalls?: string; toolResult?: string }) =>
-      cmd('assistant_save_message', params),
-    updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) =>
-      cmd('assistant_update_message_status', params),
-    updateSessionTitle: (params: { sessionId: string; title: string }) =>
-      cmd('assistant_update_session_title', params),
-    updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) =>
-      cmd('assistant_update_session_model', params),
-  },
+  // Assistant — Daemon-canonical (T202/T302): legacy assistant_* CRUD commands
+  // retired from registration; conversations/messages live in the Agent Daemon.
+  // The frontend talks to the daemon via assistant-gateway/daemon-adapter, not
+  // through retired Host commands. No adapter surface is kept for them.
 
   // Sidecar supervisor (production UDS health; no silent embedded fallback)
   daemonSupervisor: {

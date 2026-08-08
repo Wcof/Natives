@@ -109,6 +109,7 @@ import { extractTodosFromEvents } from '@/lib/assistant-activity-view';
 import { summarizeConversationChanges } from '@/lib/assistant-timeline';
 import type { ProviderKeySummary } from '@/lib/tauri-adapter';
 import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
 import CommandPalette, { type AssistantCommand } from './CommandPalette';
@@ -229,6 +230,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [assignmentKeyOptions, setAssignmentKeyOptions] = useState<AssignmentKeyOption[]>([]);
   /** ADR-0016 composer capability picker visibility. */
   const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false);
+  /** T216/T302: unified confirm dialog for goal conversation deletion. */
+  const [confirmDeleteGoalId, setConfirmDeleteGoalId] = useState<string | null>(null);
 
   // Keep root selection aligned with store activeConversationId (which is always the root).
   const storeActiveId = state.activeConversationId;
@@ -2066,20 +2069,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               onPause={() => void handleStop()}
               onResume={() => void handleRetry()}
               onDelete={() => {
-                if (!activeId) return;
-                const ok = window.confirm(
-                  zh ? '确定删除此 Goal 会话？' : 'Delete this goal conversation?',
-                );
-                if (!ok) return;
-                void gateway
-                  .request('conversation.delete', { id: activeId })
-                  .then(() => {
-                    dispatch({ type: 'conversations/remove', id: activeId });
-                    if (stateRef.current.activeConversationId === activeId) {
-                      dispatch({ type: 'conversations/setActive', id: null });
-                    }
-                  })
-                  .catch((err) => toast(classifyError(err).userMessage, 'error'));
+                // T216/T302: unified confirm dialog replaces native window.confirm.
+                setConfirmDeleteGoalId(activeId ?? null);
               }}
             />
           ) : null}
@@ -2479,6 +2470,30 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           }
         }}
         onConfirm={handleAssignmentConfirm}
+      />
+      {/* T216/T302: unified confirm dialog for goal conversation deletion */}
+      <ConfirmDialog
+        open={confirmDeleteGoalId !== null}
+        title={t(locale, 'assistant.goalDelete')}
+        message={t(locale, 'assistant.goalDeleteConfirm')}
+        confirmLabel={t(locale, 'common.delete')}
+        cancelLabel={t(locale, 'common.cancel')}
+        danger
+        onConfirm={() => {
+          const id = confirmDeleteGoalId;
+          setConfirmDeleteGoalId(null);
+          if (!id) return;
+          void gateway
+            .request('conversation.delete', { id })
+            .then(() => {
+              dispatch({ type: 'conversations/remove', id });
+              if (stateRef.current.activeConversationId === id) {
+                dispatch({ type: 'conversations/setActive', id: null });
+              }
+            })
+            .catch((err) => toast(classifyError(err).userMessage, 'error'));
+        }}
+        onCancel={() => setConfirmDeleteGoalId(null)}
       />
     </div>
   );
