@@ -3217,6 +3217,7 @@ impl PermissionGatedTools {
                 // Child runs never inherit the parent conversation's selection;
                 // member skills come from the member profile at child resolve.
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id: child_conversation_id.clone(),
                 provider_id: child_provider.clone(),
                 model_id: child_model.clone(),
@@ -4610,6 +4611,7 @@ async fn requeue_child_run(
     let created =
         crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
             capability_selection: None,
+            disabled_tools: None,
             conversation_id: child_conversation_id.to_string(),
             provider_id: binding.provider_id.clone(),
             model_id: binding.model_id.clone(),

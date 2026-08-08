@@ -1553,6 +1553,7 @@ impl RunManager {
             // Seam A (ADR-0016): profile + selection flow through instead of
             // being dropped at the gateway boundary.
             capability_selection: req.capability_selection.clone(),
+            disabled_tools: None,
             conversation_id: conversation_id.clone(),
             provider_id: req.provider_id.clone().unwrap_or_default(),
             model_id: req.model_id.clone().unwrap_or_default(),
@@ -2396,6 +2397,7 @@ impl RunManager {
                 .ok_or_else(|| "conversation_id required".to_string())?;
             self.create_run(CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id,
                 provider_id: req.provider_id.clone().unwrap_or_default(),
                 model_id: req.model_id.clone().unwrap_or_default(),
@@ -2527,6 +2529,7 @@ impl RunManager {
             .map(|p| p.to_string_lossy().to_string());
         let mut new_run = self.create_run(CreateRunRequest {
             capability_selection: None,
+            disabled_tools: None,
             conversation_id: original.conversation_id,
             provider_id: original.provider_id,
             model_id: original.model_id,
@@ -2808,6 +2811,7 @@ impl RunManager {
         drop(conn);
         let mut new_run = self.create_run(CreateRunRequest {
             capability_selection: None,
+            disabled_tools: None,
             conversation_id: source.conversation_id.clone(),
             provider_id: source.provider_id.clone(),
             model_id: source.model_id.clone(),

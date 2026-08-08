@@ -244,6 +244,11 @@ pub struct CreateRunRequest {
     /// Capability library selection (ADR-0016). None = legacy behaviour.
     #[serde(default)]
     pub capability_selection: Option<CapabilitySelection>,
+    /// Subtract-only deny list: tool names the run may NOT call. Defined here
+    /// (single source) so the Host cannot inject a shadow field via serde_json
+    /// (P0-005). None/empty = no subtraction (advertised surface unchanged).
+    #[serde(default)]
+    pub disabled_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

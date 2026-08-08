@@ -164,6 +164,7 @@ fn build_run_requests(
         effort: job.effort.clone(),
         runtime_id: job.runtime_id.clone(),
         capability_selection: Some(capability_selection.clone()),
+        disabled_tools: None,
     };
     let start = StartRunRequest {
         run_id: None,
