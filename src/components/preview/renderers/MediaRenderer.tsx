@@ -23,6 +23,10 @@ export default function MediaRenderer({ model }: { model: MediaModel }) {
     case 'image':
     default:
       return (
+<<<<<<< HEAD
+=======
+        // eslint-disable-next-line @next/next/no-img-element
+>>>>>>> agent/resource-preview-v2/20260808-175539/t14-media-pdf
         <img src={model.src} alt={model.name} className="preview-media" data-preview-kind="image" style={{ maxWidth: '100%', objectFit: 'contain' }} />
       );
   }
