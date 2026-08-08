@@ -194,6 +194,21 @@ impl EventSequencer {
     pub fn append(&self, run_id: &str, mut payload: RunEventKind) -> RunEventV2 {
         // Never let secrets leak into the event bus.
         payload = sanitize_payload(payload);
+        // Durable-lane guard (S1 Live Core): TextDelta/ReasoningDelta/
+        // ToolCallDelta/ToolOutputDelta/Progress are live-only and must be
+        // routed through `LiveEventBus`, never the durable EventSequencer
+        // (STREAM-CONTRACT-V2 live lane). Reject them explicitly so a
+        // misrouted delta can't silently land on the durable SQLite log.
+        if is_live_only(&payload) {
+            return RunEventV2::new(
+                run_id,
+                0,
+                RunEventKind::Failed {
+                    error: redact_secrets(&format!("LIVE_EVENT_ON_DURABLE_LANE: {payload:?}")),
+                    code: "LIVE_EVENT_ON_DURABLE_LANE".into(),
+                },
+            );
+        }
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, run_id);
         if let Some(error) = inner.load_errors.get(run_id) {
@@ -243,9 +258,12 @@ impl EventSequencer {
         payload: RunEventKind,
     ) -> Result<RunEventV2, String> {
         let event = self.append(run_id, payload);
-        if matches!(&event.payload, RunEventKind::Failed { code, .. } if code == "PERSISTENCE_FAILED")
-        {
-            return Err("PERSISTENCE_FAILED".into());
+        if let RunEventKind::Failed { code, .. } = &event.payload {
+            match code.as_str() {
+                "PERSISTENCE_FAILED" => return Err("PERSISTENCE_FAILED".into()),
+                "LIVE_EVENT_ON_DURABLE_LANE" => return Err("LIVE_EVENT_ON_DURABLE_LANE".into()),
+                _ => {}
+            }
         }
         Ok(event)
     }
@@ -321,6 +339,23 @@ impl EventSequencer {
     }
 }
 
+/// Live-only kinds that must never be written to the durable lane.
+///
+/// STREAM-CONTRACT-V2 routes TextDelta / ReasoningDelta / ToolCallDelta /
+/// ToolOutputDelta / Progress on the ephemeral LiveEventBus; writing them here
+/// would balloon the durable SQLite event log with high-frequency deltas and
+/// split the live/durable seam.
+fn is_live_only(payload: &RunEventKind) -> bool {
+    matches!(
+        payload,
+        RunEventKind::TextDelta { .. }
+            | RunEventKind::ReasoningDelta { .. }
+            | RunEventKind::ToolCallDelta { .. }
+            | RunEventKind::ToolOutputDelta { .. }
+            | RunEventKind::Progress { .. }
+    )
+}
+
 fn sanitize_payload(payload: RunEventKind) -> RunEventKind {
     match payload {
         RunEventKind::Failed { error, code } => RunEventKind::Failed {
@@ -362,7 +397,14 @@ mod tests {
         let run_id = format!("r-seq-{}", uuid::Uuid::new_v4());
         let log = EventSequencer::new();
         let a = log.append(&run_id, RunEventKind::Started);
-        let b = log.append(&run_id, RunEventKind::TextDelta { text: "hi".into() });
+        let b = log.append(
+            &run_id,
+            RunEventKind::MessageStarted {
+                turn_id: "turn-1".into(),
+                message_id: "m-1".into(),
+                role: "assistant".into(),
+            },
+        );
         assert_eq!(a.sequence, 1);
         assert_eq!(b.sequence, 2);
         let replay = log.replay_after(&run_id, 1);
@@ -423,8 +465,10 @@ mod tests {
             log.append(&run_id, RunEventKind::Started);
             log.append(
                 &run_id,
-                RunEventKind::TextDelta {
-                    text: "hello".into(),
+                RunEventKind::MessageStarted {
+                    turn_id: "turn-1".into(),
+                    message_id: "m-1".into(),
+                    role: "assistant".into(),
                 },
             );
         }
@@ -436,6 +480,52 @@ mod tests {
         assert_eq!(replay[1].sequence, 2);
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("NATIVES_EVENT_LOG_DIR");
+    }
+
+    #[test]
+    fn durable_lane_rejects_live_only_kinds() {
+        let _guard = env_lock();
+        std::env::remove_var("NATIVES_EVENT_LOG_DIR");
+        std::env::set_var("NATIVES_EVENT_LOG_DISABLE", "1");
+        let log = EventSequencer::new();
+        let run_id = format!("r-liveguard-{}", uuid::Uuid::new_v4());
+        for live_kind in [
+            RunEventKind::TextDelta { text: "hi".into() },
+            RunEventKind::ReasoningDelta {
+                text: "think".into(),
+            },
+            RunEventKind::ToolCallDelta {
+                index: 0,
+                id: Some("t-1".into()),
+                name: Some("read_file".into()),
+                arguments_delta: "{}".into(),
+            },
+            RunEventKind::ToolOutputDelta {
+                tool_call_id: "t-1".into(),
+                tool_name: Some("run_terminal".into()),
+                stream: "stdout".into(),
+                text: "out".into(),
+                truncated: false,
+                turn_id: None,
+                message_id: None,
+                progress_sequence: None,
+            },
+            RunEventKind::Progress {
+                message: "p".into(),
+                percentage: None,
+            },
+        ] {
+            let event = log.append(&run_id, live_kind);
+            assert!(
+                matches!(&event.payload, RunEventKind::Failed { code, .. } if code == "LIVE_EVENT_ON_DURABLE_LANE"),
+                "live-only kind must be rejected on the durable lane"
+            );
+            assert_eq!(log.replay_after(&run_id, 0).len(), 0, "no durable replay");
+        }
+        // Durable kinds remain writable.
+        let ok = log.append(&run_id, RunEventKind::Started);
+        assert_eq!(ok.sequence, 1);
+        std::env::remove_var("NATIVES_EVENT_LOG_DISABLE");
     }
 
     #[test]

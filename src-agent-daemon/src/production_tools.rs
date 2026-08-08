@@ -7,9 +7,10 @@
 
 use agent_core::{
     default_subagent_tool_allowlist, AgentEngine, ChildFailureEffect, EngineToolRuntime,
-    EventSequencer, FailurePolicy, HookEvent, HookRegistry, HookRequest, NoopToolProgressSink,
-    PermissionAggregate, PermissionManager, PermissionProfile, SubAgentManager, SubAgentStatus,
-    ToolExecutionResult, ToolProgressSink, ToolProgressUpdate, ToolSchema,
+    EventSequencer, FailurePolicy, HookEvent, HookRegistry, HookRequest, LiveEventBus,
+    NoopToolProgressSink, PermissionAggregate, PermissionManager, PermissionProfile,
+    SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolProgressSink, ToolProgressUpdate,
+    ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::plan_mode::{self, PlanDecision};
@@ -194,8 +195,14 @@ pub struct PermissionGatedTools {
     pub selected_mcp_servers: Option<std::collections::HashSet<String>>,
 }
 
+/// Batched progress sink for tool output deltas.
+///
+/// ToolOutputDelta is a **live-lane** event (STREAM-CONTRACT-V2): it is emitted
+/// on the shared [`LiveEventBus`] and never written to the durable
+/// `EventSequencer`/SQLite event log. Batching (8KiB / 250ms) and
+/// late-drop-after-settle semantics are unchanged.
 pub struct DaemonToolProgressSink {
-    pub events: EventSequencer,
+    live: LiveEventBus,
     settled: Arc<Mutex<HashSet<String>>>,
     pending: Arc<Mutex<HashMap<String, (Instant, ToolProgressUpdate)>>>,
     scheduled_flushes: Arc<Mutex<HashSet<String>>>,
@@ -235,9 +242,9 @@ fn mcp_ledger_status(outcome_ok: bool, cancelled: bool) -> &'static str {
 }
 
 impl DaemonToolProgressSink {
-    pub fn new(events: EventSequencer) -> Self {
+    pub fn new(live: LiveEventBus) -> Self {
         Self {
-            events,
+            live,
             settled: Arc::new(Mutex::new(HashSet::new())),
             pending: Arc::new(Mutex::new(HashMap::new())),
             scheduled_flushes: Arc::new(Mutex::new(HashSet::new())),
@@ -249,7 +256,7 @@ impl DaemonToolProgressSink {
         let pending = self.pending.clone();
         let settled = self.settled.clone();
         let scheduled_flushes = self.scheduled_flushes.clone();
-        let events = self.events.clone();
+        let live = self.live.clone();
         let sequence = self.sequence.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -273,7 +280,7 @@ impl DaemonToolProgressSink {
             };
             if let Some(update) = update {
                 let progress_sequence = sequence.fetch_add(1, AtomicOrdering::Relaxed);
-                events.append(
+                live.append(
                     &update.run_id,
                     RunEventKind::ToolOutputDelta {
                         tool_call_id: update.tool_call_id,
@@ -339,7 +346,7 @@ impl ToolProgressSink for DaemonToolProgressSink {
         }
         if let Some(update) = emit {
             let progress_sequence = self.sequence.fetch_add(1, AtomicOrdering::Relaxed);
-            self.events.append(
+            self.live.append(
                 &update.run_id,
                 RunEventKind::ToolOutputDelta {
                     tool_call_id: update.tool_call_id,
@@ -1321,12 +1328,17 @@ impl EngineToolRuntime for PermissionGatedTools {
                 // the effect unresolved, so resume blocks instead of re-running
                 // it.
                 if name == "run_terminal" && live_forwarder.is_none() {
-                    emit_terminal_output_deltas(
-                        &self.events,
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        &output,
-                    );
+                    // Terminal output deltas are live-lane only; the shared
+                    // LiveBus lives on the runtime.
+                    if let Some(runtime) = self.runtime.as_deref() {
+                        let live = runtime.live_events();
+                        emit_terminal_output_deltas(
+                            &live,
+                            &self.parent_run_id,
+                            &stream_tool_call_id,
+                            &output,
+                        );
+                    }
                     // Background shell tasks: surface on Activity task list.
                     if output
                         .get("background")
@@ -1606,8 +1618,11 @@ fn attach_tool_output_artifact(run_id: &str, call_id: &str, output: &mut Value) 
 }
 
 /// Emit batched terminal stdout/stderr as ToolOutputDelta (≤8KB chunks, ≤1MB total).
+///
+/// ToolOutputDelta is live-lane only (STREAM-CONTRACT-V2): chunks go to the
+/// shared [`LiveEventBus`], never the durable EventSequencer.
 fn emit_terminal_output_deltas(
-    events: &EventSequencer,
+    live: &LiveEventBus,
     run_id: &str,
     tool_call_id: &str,
     result: &Value,
@@ -1629,7 +1644,7 @@ fn emit_terminal_output_deltas(
         let mut offset = 0usize;
         while offset < bytes.len() {
             if persisted >= MAX_PERSIST {
-                events.append(
+                live.append(
                     run_id,
                     RunEventKind::ToolOutputDelta {
                         tool_call_id: tool_call_id.to_string(),
@@ -1649,7 +1664,7 @@ fn emit_terminal_output_deltas(
             let end = offset + take;
             let chunk = String::from_utf8_lossy(&bytes[offset..end]).into_owned();
             persisted += chunk.len();
-            events.append(
+            live.append(
                 run_id,
                 RunEventKind::ToolOutputDelta {
                     tool_call_id: tool_call_id.to_string(),
@@ -4733,49 +4748,10 @@ mod tests {
     use super::*;
     use agent_core::SubAgentConfig;
 
-    #[derive(Default)]
-    struct CapturedEvents(std::sync::Mutex<Vec<assistant_protocol::v2::RunEventV2>>);
-
-    impl agent_core::EventPersistence for CapturedEvents {
-        fn append(&self, event: &assistant_protocol::v2::RunEventV2) -> Result<(), String> {
-            self.0.lock().unwrap().push(event.clone());
-            Ok(())
-        }
-
-        fn replay_after(
-            &self,
-            run_id: &str,
-            after_sequence: u64,
-        ) -> Result<Vec<assistant_protocol::v2::RunEventV2>, String> {
-            Ok(self
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|event| {
-                    event.run_id == run_id && event.effective_run_sequence() > after_sequence
-                })
-                .cloned()
-                .collect())
-        }
-
-        fn last_sequence(&self, run_id: &str) -> Result<u64, String> {
-            Ok(self
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|event| event.run_id == run_id)
-                .map(|event| event.effective_run_sequence())
-                .max()
-                .unwrap_or(0))
-        }
-    }
-
     #[tokio::test]
     async fn settled_tool_drops_late_progress() {
-        let captured = Arc::new(CapturedEvents::default());
-        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        let live = LiveEventBus::new();
+        let sink = DaemonToolProgressSink::new(live.clone());
         let update = ToolProgressUpdate {
             run_id: "progress-run".into(),
             tool_call_id: "progress-call".into(),
@@ -4791,18 +4767,20 @@ mod tests {
         sink.mark_tool_call_settled(&update.tool_call_id).await;
         sink.publish(update).await;
 
-        let events = captured.0.lock().unwrap();
-        assert_eq!(events.len(), 1);
+        // ToolOutputDelta is live-lane only: it lands on the LiveEventBus.
+        let sub = live.subscribe_after("progress-run", 0);
+        assert!(!sub.gap, "fresh bus must not report a gap");
+        assert_eq!(sub.buffered.len(), 1);
         assert!(matches!(
-            events[0].payload,
+            sub.buffered[0].kind,
             RunEventKind::ToolOutputDelta { .. }
         ));
     }
 
     #[tokio::test]
     async fn progress_flushes_after_batch_window_without_next_update() {
-        let captured = Arc::new(CapturedEvents::default());
-        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        let live = LiveEventBus::new();
+        let sink = DaemonToolProgressSink::new(live.clone());
         sink.publish(ToolProgressUpdate {
             run_id: "progress-timer-run".into(),
             tool_call_id: "progress-timer-call".into(),
@@ -4816,9 +4794,9 @@ mod tests {
         })
         .await;
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let events = captured.0.lock().unwrap();
-        assert!(events.iter().any(|event| matches!(
-            event.payload,
+        let sub = live.subscribe_after("progress-timer-run", 0);
+        assert!(sub.buffered.iter().any(|event| matches!(
+            event.kind,
             RunEventKind::ToolOutputDelta { ref text, .. } if text == "idle batch"
         )));
     }
@@ -5001,8 +4979,8 @@ mod tests {
     /// updates is rejected — zero events appended (terminal is authoritative).
     #[tokio::test]
     async fn progress_backpressure_rejects_updates_after_terminal() {
-        let captured = Arc::new(CapturedEvents::default());
-        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        let live = LiveEventBus::new();
+        let sink = DaemonToolProgressSink::new(live.clone());
         sink.mark_tool_call_settled("late-call").await;
         for i in 0..100 {
             sink.publish(ToolProgressUpdate {
@@ -5018,11 +4996,9 @@ mod tests {
             })
             .await;
         }
-        let events = captured.0.lock().unwrap();
-        assert!(
-            events
-                .iter()
-                .all(|e| !matches!(&e.payload, RunEventKind::ToolOutputDelta { .. })),
+        assert_eq!(
+            live.buffered_len("bp-run"),
+            0,
             "no progress event may be appended after the call settles"
         );
     }
@@ -5059,8 +5035,7 @@ mod tests {
     /// and scheduled flush tasks — after a cancel no progress work is left.
     #[tokio::test]
     async fn mcp_settle_drains_progress_tasks_to_zero() {
-        let captured = Arc::new(CapturedEvents::default());
-        let sink = DaemonToolProgressSink::new(EventSequencer::with_persistence(captured.clone()));
+        let sink = DaemonToolProgressSink::new(LiveEventBus::new());
         // A pending non-final update buffers into the sink and schedules a flush.
         sink.publish(ToolProgressUpdate {
             run_id: "drain-run".into(),

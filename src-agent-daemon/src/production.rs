@@ -7,7 +7,7 @@ use agent_core::assemble_context;
 use agent_core::metrics::MetricsSink;
 use agent_core::{
     AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderContext,
-    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer,
+    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EventSequencer, LiveEventBus,
     PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
     ToolSchema,
 };
@@ -63,6 +63,14 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
 /// rather than reaching into maps when possible.
 pub struct ProductionRuntime {
     pub events: EventSequencer,
+    /// Shared ephemeral live event bus (STREAM-CONTRACT-V2 live lane). One bus
+    /// is shared across every engine/progress sink in the daemon so a Renderer
+    /// can subscribe to a run's deltas through a single handle.
+    pub live: LiveEventBus,
+    /// Warm prepare cache (P1-01): deterministic LRU over compiled static
+    /// prompts / frozen tool schemas. Never holds credentials, permission
+    /// decisions, run ids, or transcripts.
+    pub prepared: crate::prepared_session::PreparedAgentSessionCache,
     /// Checkpoint authority paired with this runtime's Run/Event store.
     pub(crate) checkpoints: Arc<crate::checkpoint::CheckpointManager>,
     pub permissions: Arc<PermissionManager>,
@@ -85,6 +93,11 @@ pub struct ProductionRuntime {
     /// Per-run tool allowlist registered before RunManager starts a child run.
     /// `Some(list)` = hard allowlist; entry removed once the run starts.
     pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    /// Per-run disabled tool deny list (P0-11, subtract-only). Registered by
+    /// the Host via `run.create` params (`disabled_tools`) and consumed once by
+    /// the RunManager tool-surface build as the final `− disabledTools` step.
+    /// Settings can only subtract, never expand capability.
+    pub run_disabled_tools: Arc<Mutex<HashMap<String, Vec<String>>>>,
     /// Per-run agent directive: a system prompt the *parent* agent authored for
     /// one specific child run, registered before RunManager starts it and
     /// consumed once by [`Self::start_run`].
@@ -279,6 +292,8 @@ impl ProductionRuntime {
     ) -> Self {
         let rt = Self {
             events,
+            live: LiveEventBus::new(),
+            prepared: crate::prepared_session::PreparedAgentSessionCache::new(),
             checkpoints,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
@@ -290,6 +305,7 @@ impl ProductionRuntime {
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
+            run_disabled_tools: Arc::new(Mutex::new(HashMap::new())),
             run_agent_directives: Arc::new(Mutex::new(HashMap::new())),
             metrics_sink: crate::metrics::daemon_metrics_sink(),
         };
@@ -314,6 +330,14 @@ impl ProductionRuntime {
         &self.checkpoints
     }
 
+    /// Shared live (ephemeral) event bus for the daemon.
+    ///
+    /// Cheap clone shares one bounded broadcast/ring across all engines and
+    /// progress sinks. Subscribers attach per-run via `subscribe_after`.
+    pub fn live_events(&self) -> LiveEventBus {
+        self.live.clone()
+    }
+
     /// Register a hard tool allowlist for a run that will be started via RunManager.
     /// Consumed once by [`Self::start_run`] / fixture start path.
     pub async fn set_run_tool_allowlist(&self, run_id: &str, allowlist: Vec<String>) {
@@ -329,6 +353,20 @@ impl ProductionRuntime {
 
     pub async fn peek_run_tool_allowlist(&self, run_id: &str) -> Option<Vec<String>> {
         self.run_tool_allowlists.lock().await.get(run_id).cloned()
+    }
+
+    /// Register the subtract-only disabled tool list for a run (P0-11).
+    /// Consumed once by [`crate::run_manager::RunManager`] tool-surface build.
+    pub async fn set_run_disabled_tools(&self, run_id: &str, disabled: Vec<String>) {
+        self.run_disabled_tools
+            .lock()
+            .await
+            .insert(run_id.to_string(), disabled);
+    }
+
+    /// Take the disabled tool list for a run (consumed once at start).
+    pub async fn take_run_disabled_tools(&self, run_id: &str) -> Option<Vec<String>> {
+        self.run_disabled_tools.lock().await.remove(run_id)
     }
 
     /// Register the parent-authored system prompt for a child run that will be
@@ -590,7 +628,7 @@ impl ProductionRuntime {
             .ensure_execution_token(&run_id, parent_run_id.as_deref())
             .await?;
         let engine = Arc::new(
-            AgentEngine::new(self.events.clone())
+            AgentEngine::with_live(self.events.clone(), self.live.clone())
                 .with_cancel_token(cancel.clone())
                 .with_hooks(hooks)
                 .with_session_harness(crate::prompt_queue_store::global_harness())
@@ -605,7 +643,7 @@ impl ProductionRuntime {
                         run_id.clone(),
                     ),
                 ))
-                .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.events.clone())))
+                .with_progress_sink(Arc::new(DaemonToolProgressSink::new(self.live.clone())))
                 .with_provider_context_window(model_window)
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
@@ -800,10 +838,34 @@ impl ProductionRuntime {
         // do not retain a stale engine handle if history/checkpoint persistence
         // below fails.
         self.engines.lock().await.remove(&run_id);
+        // Terminal cleanup (STREAM-CONTRACT-V2 Terminal): drop the run's live
+        // ring/broadcast state so its deltas stop being retained once the run
+        // is over. Renderer clears transient live state on the durable
+        // terminal event.
+        self.live.remove_run(&run_id);
+        // P1-07: replay from the run-start durable watermark, not from sequence
+        // 0. Events before the run's `CheckpointCreated{label:run_start}` (run
+        // creation / prepare bookkeeping) are never needed for the terminal
+        // projection or checkpoint metadata; replaying them on every run start
+        // was pure waste on the real production tail.
         let run_events = self
             .events
             .replay_after_checked(&run_id, 0)
             .map_err(|error| format!("run event replay failed: {error}"))?;
+        let run_start_watermark = run_events
+            .iter()
+            .find_map(|event| match &event.payload {
+                assistant_protocol::v2::RunEventKind::CheckpointCreated {
+                    label: Some(label),
+                    ..
+                } if label == "run_start" => Some(event.effective_run_sequence()),
+                _ => None,
+            })
+            .unwrap_or(0);
+        let run_events: Vec<_> = run_events
+            .into_iter()
+            .filter(|event| event.effective_run_sequence() >= run_start_watermark)
+            .collect();
         if let Some(turn_id) = run_events
             .iter()
             .rev()

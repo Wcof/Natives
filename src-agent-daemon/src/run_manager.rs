@@ -790,13 +790,24 @@ impl RunManager {
             run.revision
         };
         match self.commit_transition(run_id, revision, target, metadata) {
-            Ok(_) => self
-                .get_run(run_id)
-                .ok_or_else(|| "run disappeared after commit".into()),
+            Ok(_) => {
+                // STREAM-CONTRACT-V2 Terminal: clear the run's live ring/bus
+                // state once a durable terminal status is committed. This is
+                // idempotent — remove_run on a missing run is a no-op.
+                if target.is_terminal() {
+                    self.runtime.live.remove_run(run_id);
+                }
+                self.get_run(run_id)
+                    .ok_or_else(|| "run disappeared after commit".into())
+            }
             Err(CommitError::AlreadyTerminal { .. }) => {
+                if target.is_terminal() {
+                    self.runtime.live.remove_run(run_id);
+                }
                 self.get_run(run_id).ok_or_else(|| "run not found".into())
             }
             Err(CommitError::CasConflict { status, .. }) if status.is_terminal() => {
+                self.runtime.live.remove_run(run_id);
                 self.get_run(run_id).ok_or_else(|| "run not found".into())
             }
             Err(e) => Err(e.to_string()),
@@ -1835,13 +1846,18 @@ impl RunManager {
             let selected_mcp_servers = capability_snapshot
                 .selection_active
                 .then(|| capability_snapshot.mcp_servers.iter().cloned().collect());
-            let schemas = crate::production_tools::model_visible_tool_schemas(
+            let mut schemas = crate::production_tools::model_visible_tool_schemas(
                 &gateway,
                 allowlist.as_deref(),
                 &capability_snapshot.mcp_tool_schemas,
                 selected_mcp_servers.as_ref(),
                 permission_profile.eq_ignore_ascii_case("plan"),
             );
+            // P0-11: Settings disabledTools 最终减法（subtract-only，只能收紧）。
+            // Host 在 run.create payload 注册；start 时消费一次。
+            if let Some(disabled) = self.runtime.take_run_disabled_tools(&run.id).await {
+                schemas.retain(|tool| !disabled.iter().any(|denied| denied == &tool.name));
+            }
             if let Err(error) = crate::production_tools::validate_tool_limit(schemas.len()) {
                 self.fail_run_if_active(&run.id, error.clone(), "tool_plan_too_large");
                 return Err(error);
@@ -1886,19 +1902,63 @@ impl RunManager {
                 .clone()
                 .unwrap_or_else(|| crate::skill_store::prompt_for_project(project_root));
             let child_directive = self.runtime.take_run_agent_directive(&run.id).await;
-            crate::production::compile_effective_prompt(
-                capability_snapshot
-                    .agent_profile_id
-                    .as_deref()
-                    .or(run.agent_profile_id.as_deref()),
-                capability_snapshot.profile.as_ref(),
-                child_directive.as_deref(),
-                Some(project_root),
-                (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
-                &harness_plan.prompt_blocks,
-                &harness_plan.builtin_prompt_replacements,
-                capability_snapshot.extra_system_prompt.as_deref(),
-            )
+            // P1-01: warm prepare — the static prompt layers are keyed by
+            // project identity + instruction digest + capability audit +
+            // provider/model/runtime. The cache is never used when a per-run
+            // child directive is present (those are run-specific and cannot be
+            // frozen). Credentials/permission/run-id are never part of the key
+            // or the payload.
+            let cache_key = if child_directive.is_none() {
+                Some(crate::prepared_session::PreparedAgentSessionKey {
+                    project_identity: project_root.to_string_lossy().to_string(),
+                    project_instruction_digest: crate::prepared_session::project_instruction_digest(
+                        project_root,
+                    ),
+                    capability_revision: crate::prepared_session::capability_audit_revision(
+                        &capability_snapshot.to_audit_json(),
+                    ),
+                    harness_revision: 0,
+                    provider_id: provider_id.clone(),
+                    model_id: model_id.clone(),
+                    runtime_id: runtime_id.clone(),
+                    app_schema_revision: 0,
+                })
+            } else {
+                None
+            };
+            let cached = cache_key
+                .as_ref()
+                .and_then(|key| self.runtime.prepared.get(key));
+            let effective_prompt = if let Some(session) = cached {
+                session.effective_prompt.clone()
+            } else {
+                let compiled = crate::production::compile_effective_prompt(
+                    capability_snapshot
+                        .agent_profile_id
+                        .as_deref()
+                        .or(run.agent_profile_id.as_deref()),
+                    capability_snapshot.profile.as_ref(),
+                    child_directive.as_deref(),
+                    Some(project_root),
+                    (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
+                    &harness_plan.prompt_blocks,
+                    &harness_plan.builtin_prompt_replacements,
+                    capability_snapshot.extra_system_prompt.as_deref(),
+                );
+                if let Some(key) = cache_key {
+                    self.runtime.prepared.insert(
+                        key,
+                        crate::prepared_session::PreparedAgentSession {
+                            effective_prompt: compiled.clone(),
+                            prompt_digest: compiled.effective_full_text.clone(),
+                            frozen_tool_schemas: frozen_tool_schemas.clone(),
+                            skill_catalog_metadata: Vec::new(),
+                        },
+                    );
+                }
+                compiled
+            };
+            effective_prompt
         } else {
             // Non-Native backends have their own prompt authority (for example
             // Claude CLI flags). Do not project a Native prompt they did not use.
@@ -2081,12 +2141,12 @@ impl RunManager {
                 .await
                 .unwrap_or_else(|_| CancellationToken::new());
             let engine = Arc::new(
-                AgentEngine::new(self.runtime.events.clone())
+                AgentEngine::with_live(self.runtime.events.clone(), self.runtime.live.clone())
                     .with_cancel_token(cancel)
                     .with_hooks(hooks)
                     .with_progress_sink(Arc::new(
                         crate::production_tools::DaemonToolProgressSink::new(
-                            self.runtime.events.clone(),
+                            self.runtime.live.clone(),
                         ),
                     )),
             );
@@ -2254,8 +2314,10 @@ impl RunManager {
             .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
             .await
             .map_err(|error| format!("register run cancellation token: {error}"))?;
-        let engine =
-            Arc::new(AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel));
+        let engine = Arc::new(
+            AgentEngine::with_live(self.runtime.events.clone(), self.runtime.live.clone())
+                .with_cancel_token(cancel),
+        );
         self.runtime.register_engine(&run.id, engine.clone()).await;
         let _ = self.commit_status(
             &run.id,
@@ -4943,7 +5005,10 @@ mod tests {
             .await;
 
         // Register a live child AgentEngine on child.run_id (production path).
-        let child_engine = Arc::new(AgentEngine::new(rm.runtime.events.clone()));
+        let child_engine = Arc::new(AgentEngine::with_live(
+            rm.runtime.events.clone(),
+            rm.runtime.live.clone(),
+        ));
         rm.runtime
             .register_engine(&child.run_id, child_engine.clone())
             .await;

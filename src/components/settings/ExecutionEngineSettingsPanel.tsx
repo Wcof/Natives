@@ -17,11 +17,17 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { t, type Locale } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
 import nativesAPI from '@/lib/tauri-adapter';
+import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
 
 const adapter = nativesAPI;
+
+/// Known Native tool surface (subtract-only candidates). Free-form entries
+/// are allowed too — this list is a convenience, not an authority.
+const KNOWN_TOOLS = ['read_file', 'list_dir', 'write_file', 'write_module', 'run_terminal', 'lint_module'];
 
 interface RuntimeDescriptor {
   id: string;
@@ -87,13 +93,19 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [maxStepsDraft, setMaxStepsDraft] = useState<number>(50);
+  const [disabledToolDraft, setDisabledToolDraft] = useState<string>('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      const snap = (await adapter.executionEngine.getSnapshot()) as unknown as ExecutionEngineSnapshot;
+      // Pass the legacy localStorage runtime pref so the backend performs the
+      // one-shot durable migration into Settings V2 defaultRuntime (no-op once
+      // the backend is authoritative — never repeated, never clobbers).
+      const snap = (await invoke<ExecutionEngineSnapshot>('execution_engine_get_snapshot', {
+        legacy_runtime_id: loadPreferredRuntimeId(),
+      })) as unknown as ExecutionEngineSnapshot;
       setSnapshot(snap);
       setMaxStepsDraft(snap?.settings?.native?.maxSteps ?? 50);
     } catch (err) {
@@ -145,6 +157,49 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
       }
     },
     [snapshot, locale, toast, refresh],
+  );
+
+  // 减法型 disabledTools：从当前快照的 disabledTools 出发，只允许用户“加”或
+  // “减”自己保存的禁用条目（减掉的条目回到 capability 表面，永远不会把
+  // capability 表面之外的工具加回来）。CAS revision 冲突由后端拒绝。
+  const saveDisabledTools = useCallback(
+    async (nextDisabled: string[]) => {
+      if (!snapshot) return;
+      setBusy(true);
+      try {
+        const normalized = Array.from(new Set(nextDisabled.map((s) => s.trim()).filter(Boolean))).sort();
+        const updated = {
+          ...snapshot.settings,
+          native: { ...snapshot.settings.native, disabledTools: normalized },
+        };
+        await adapter.executionEngine.saveSettings(updated);
+        toast(t(locale, 'executionEngine.saved'), 'success');
+        await refresh();
+      } catch (err) {
+        toast(String(err), 'error');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [snapshot, locale, toast, refresh],
+  );
+
+  const addDisabledTool = useCallback(() => {
+    if (!snapshot) return;
+    const tool = disabledToolDraft.trim();
+    if (!tool) return;
+    void saveDisabledTools([...snapshot.settings.native.disabledTools, tool]);
+    setDisabledToolDraft('');
+  }, [snapshot, disabledToolDraft, saveDisabledTools]);
+
+  const removeDisabledTool = useCallback(
+    (tool: string) => {
+      if (!snapshot) return;
+      void saveDisabledTools(
+        snapshot.settings.native.disabledTools.filter((existing) => existing !== tool),
+      );
+    },
+    [snapshot, saveDisabledTools],
   );
 
   if (error && !snapshot) {
@@ -231,7 +286,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
         </div>
       </Card>
 
-      {/* 卡片 2 — 当前解析结果（backend 决定，UI 不猜） */}
+      {/* 卡片 2 — 当前解析结果（backend 决定，UI 不猜）+ 实际协商的传输状态 */}
       <Card title={t(locale, 'executionEngine.resolvedTitle')}>
         <div>
           <strong>{t(locale, 'executionEngine.effectiveRuntime')}</strong>: {resolved.runtimeId}
@@ -244,6 +299,21 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           {resolved.fallbackUsed ? t(locale, 'common.yes') : t(locale, 'common.no')}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{resolved.reason}</div>
+        {/* Active negotiated transport — backend truth, never a fake config flag. */}
+        <div style={{ marginTop: 8, fontSize: 12, borderTop: '1px solid var(--border-soft)', paddingTop: 8 }}>
+          <div>
+            <strong>{locale.startsWith('zh') ? '实际协商传输' : 'Negotiated transport'}</strong>:{' '}
+            {String(snapshot.diagnosticsSummary.streamTransport ?? 'unknown')}
+          </div>
+          <div>
+            <strong>{locale.startsWith('zh') ? '运行权威' : 'Run authority'}</strong>:{' '}
+            {String(snapshot.diagnosticsSummary.authorityMode ?? 'unknown')}
+          </div>
+          <div>
+            <strong>{locale.startsWith('zh') ? 'Daemon 可达' : 'Daemon ready'}</strong>:{' '}
+            {snapshot.diagnosticsSummary.daemonReady ? t(locale, 'common.yes') : t(locale, 'common.no')}
+          </div>
+        </div>
       </Card>
 
       {/* 卡片 3 — Native Engine（普通 UI 只留 maxSteps + 减法覆盖） */}
@@ -289,13 +359,92 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
                 {t(locale, 'executionEngine.noDisabledTools')}
               </div>
             ) : (
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '6px 0' }}>
                 {snapshot.settings.native.disabledTools.map((tool) => (
-                  <li key={tool}>{tool}</li>
+                  <span
+                    key={tool}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '3px 8px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-soft)',
+                    }}
+                  >
+                    {tool}
+                    <button
+                      type="button"
+                      aria-label={`remove ${tool}`}
+                      onClick={() => removeDisabledTool(tool)}
+                      disabled={busy}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        color: 'var(--text-secondary)',
+                        fontSize: 13,
+                        lineHeight: 1,
+                        padding: 0,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
                 ))}
-              </ul>
+              </div>
             )}
-            <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+            {/* 减法编辑器：加入的是“禁用”，永远不能把 capability 表面之外的
+                工具加回来；saveSettings 的 revision CAS 拒绝跨窗口覆盖。 */}
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <input
+                type="text"
+                value={disabledToolDraft}
+                onChange={(e) => setDisabledToolDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addDisabledTool();
+                  }
+                }}
+                placeholder={locale.startsWith('zh') ? '工具名（减法禁用）' : 'tool name (subtract)'}
+                style={{ flex: 1, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => addDisabledTool()}
+                disabled={busy}
+                style={{ fontSize: 12 }}
+              >
+                {t(locale, 'common.save')}
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+              {KNOWN_TOOLS.filter(
+                (known) => !snapshot.settings.native.disabledTools.includes(known),
+              ).map((known) => (
+                <button
+                  key={known}
+                  type="button"
+                  onClick={() => void saveDisabledTools([...snapshot.settings.native.disabledTools, known])}
+                  disabled={busy}
+                  style={{
+                    fontSize: 11,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    border: '1px dashed var(--border)',
+                    background: 'transparent',
+                    cursor: busy ? 'default' : 'pointer',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  + {known}
+                </button>
+              ))}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', marginTop: 6 }}>
               {t(locale, 'executionEngine.disabledToolsHint')}
             </div>
           </div>

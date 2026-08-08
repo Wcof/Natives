@@ -9,6 +9,7 @@ use crate::compaction::{
     render_transcript_for_summary, repair_dangling_tool_calls, CompactResult,
     SUMMARY_SYSTEM_PROMPT,
 };
+use crate::context::ContextStats;
 use crate::doom_loop::DoomLoopDetector;
 use crate::event_seq::EventSequencer;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
@@ -19,7 +20,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 /// Soft budget for in-engine history characters before tool-output compaction.
@@ -592,6 +593,10 @@ pub struct AgentEngine {
     input_receiver: Option<Arc<dyn crate::EngineInputReceiver>>,
     safe_point_receiver: Option<Arc<dyn crate::EngineSafePointReceiver>>,
     provider_context_window: Option<u64>,
+    /// P1-05: running context budget stats maintained by the engine loop.
+    /// `append_chars` tracks transcript growth incrementally; a compaction pass
+    /// bumps the revision and resets the counters to the kept transcript size.
+    context_stats: Mutex<ContextStats>,
 }
 
 impl AgentEngine {
@@ -611,6 +616,7 @@ impl AgentEngine {
             input_receiver: None,
             safe_point_receiver: None,
             provider_context_window: None,
+            context_stats: Mutex::new(ContextStats::new()),
         }
     }
 
@@ -635,6 +641,7 @@ impl AgentEngine {
             input_receiver: None,
             safe_point_receiver: None,
             provider_context_window: None,
+            context_stats: Mutex::new(ContextStats::new()),
         }
     }
 
@@ -1590,7 +1597,10 @@ impl AgentEngine {
                     Err(error) => return Err(error),
                 };
                 if follow_up_consumed {
-                    self.events.append(
+                    // Live-lane signal (STREAM-CONTRACT-V2): high-frequency
+                    // Progress is ephemeral — never write it to the durable
+                    // EventSequencer.
+                    self.live.append(
                         run_id,
                         RunEventKind::Progress {
                             message: "follow_up_consumed".into(),
@@ -2256,6 +2266,13 @@ impl AgentEngine {
             .iter()
             .map(|message| message.to_string().len())
             .sum();
+        // P1-05: engine loop maintains the running context budget. The cheap
+        // counters stay authoritative below the threshold; a real compaction
+        // pass below resets them to the kept transcript size.
+        self.context_stats
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .append_chars(before_chars);
         if before_chars < history_limit {
             // Still repair dangling pairs cheaply.
             let (fixed, repaired) = repair_dangling_tool_calls(&messages);
@@ -2302,6 +2319,14 @@ impl AgentEngine {
             .iter()
             .map(|message| message.to_string().len())
             .sum();
+        // P1-05: a real compaction rewrote the transcript — bump the revision
+        // and re-seed the running counters from the kept size so stale bytes
+        // do not accumulate (P1-06 invariant).
+        {
+            let mut stats = self.context_stats.lock().unwrap_or_else(|e| e.into_inner());
+            stats.note_compaction();
+            stats.reset(after_chars);
+        }
 
         self.events.append(
             run_id,

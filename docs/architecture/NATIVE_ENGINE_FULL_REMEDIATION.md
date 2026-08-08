@@ -451,3 +451,93 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 ### 证据文件
 - `.runtime-evidence/after/baseline.json` + `delta.md`（最新提交 `aba50b06`，先期 `888a9a29`/`79e6b0ba`）
 - 回归测试：`readonly_coding_loop_does_not_create_ledger_or_checkpoint`（production_tools.rs）、`execution_engine_settings_b7.rs`（提交 `36bfc93d`）；§5 精确命名断言 13/13（提交 `ac898128`）
+
+---
+
+## 18. 2026-08-08 Pi-like Smoothness v2 整改（本轮增量）
+
+> 方案包：`natives-pi-smooth-remediation-pack`（00–14 / contracts / task-cards）
+> BASE_SHA：`91d997e1`；本分支：`perf/pi-integration`（HEAD `a734dbb2`）
+> 状态语义升级为四态：`component_done` / `integration_partial` / `production_done` / `headed_verified`
+
+### 18.1 状态总表（Issue Register 逐项）
+
+| ID | 问题 | 状态 |
+|---|---|---|
+| P0-01 | Production Engine 使用内部 LiveBus，Daemon 无共享 LiveBus | **production_done**（ProductionRuntime.live + AgentEngine::with_live 全构造点贯通） |
+| P0-02 | run.watch 只订阅 Durable EventSequencer | **production_done**（RunWatchStreamV2 durable+live mux） |
+| P0-03 | Server run.watch 无 ACK，Client 先等 RpcResponse | **production_done**（ACK → frame；client begin_watch/read_stream_frame） |
+| P0-04 | Renderer 主路径仍 run.subscribe | **production_done**（daemon-adapter persistent stream 主路径，legacy compat fallback） |
+| P0-05 | ToolOutputDelta 仍写 EventSequencer/SQLite | **production_done**（DaemonToolProgressSink 改 LiveBus；`tool_output_delta_does_not_persist` 绿） |
+| P0-06 | replay 后 subscribe 存在漏事件窗口 | **production_done**（先建 receiver 再 ACK/replay；subscribe-before-replay 测试绿） |
+| P0-07 | 30s frame timeout 杀合法静默 stream | **production_done**（15s heartbeat；`run_watch_heartbeat_survives_45s_idle` 绿） |
+| P0-08 | create+start 后 UI 才订阅，首批 live token 可能丢 | **production_done**（LiveBus bounded ring replay 1024 条 / 1MiB + subscribe_after + gap 标记） |
+| P0-09 | run_gateway 两处 max_steps=50 | **production_done**（删除硬编码，ResolvedExecutionPolicyV1 解析） |
+| P0-10 | RunManager runtime 缺失直接 native | **production_done**（runtime 优先级 + unavailable policy fail-closed） |
+| P0-11 | disabledTools 未进入真实工具面 | **production_done**（schema+handler 均减法：Host create payload → rpc 注册 runtime → RunManager 工具面 `− disabledTools` 最终减法，只收紧不扩权） |
+| P0-12 | revision 仅 +1，不是 CAS | **production_done**（save 带 expected_revision 冲突检测；`settings_revision_conflict_is_detected`） |
+| P0-13 | Settings DB/JSON error 静默 defaults | **production_done**（load/save Result 化，corrupt 显式报错；`settings_corrupt_json_is_not_default_success`） |
+| P0-14 | migration write error 被吞 | **production_done**（Result 化 + 显式错误传播） |
+| P1-01 | PreparedAgentSession 未接 production prepare | **production_done**（Runtime.prepared LRU + run_manager prepare 缓存接线，child_directive 存在时跳过） |
+| P1-02 | digest 只 hash 前64 bytes | **production_done**（full SHA-256；`full_sha256_digest_detects_content_change`） |
+| P1-03 | digest source 与 assemble_context 不一致 | **production_done**（统一 discover_instruction_sources + skill entry names） |
+| P1-04 | docs filename+size 漏同长度修改 | **production_done**（content-based；`instruction_tail_same_length_edit_invalidates`） |
+| P1-05 | ContextStats 未接 Engine loop | **production_done**（AgentEngine.context_stats 字段 + maybe_compact_values append_chars / compaction 后 note_compaction+reset；`context_stats_tracked_and_reset_by_engine_loop` 真实调用点测试绿） |
+| P1-06 | compaction 后 stats 无 reset | **production_done**（`context_stats_reset_after_compaction` 绿） |
+| P1-07 | real ProductionRuntime tail replay from seq0 | **production_done**（run_start watermark 起 replay，不再 seq0 全量） |
+| P1-08 | EventSequencer 仍能接受 live-only kind | **production_done**（durable lane guard；`durable_lane_rejects_live_only_events`） |
+| P1-09 | shared LiveBus 后 cleanup/memory bound | **production_done**（remove_run on terminal + ring 双上限） |
+| P1-10 | 5000 chunks broadcast lag 风险 | **integration_partial**（bounded ring + gap 已实现；真实 headed 长回答 benchmark 待验，见 18.5） |
+| P1-11 | stream test 不 assert text | **production_done**（stream_watch.rs 真断言 + stream_watch_v2.rs 8 项链路测试全绿） |
+| P1-12 | benchmark 只证明 Engine/SQLite | **integration_partial**（daemon-adapter.test.ts 13 项前端链路绿；真实 headed paint 延迟待验） |
+| P1-13 | create/start duplicated config 可 drift | **production_done**（Run 创建前固化 policy snapshot） |
+| P1-14 | localStorage runtime pref migration 未闭环 | **integration_partial**（shim 保留；frontend one-shot 迁移 UI 待复核） |
+| P1-15 | disabledTools UI 只展示不可编辑 | **integration_partial**（panel 提供编辑控件；UI 视觉复核待 headed） |
+| P2-01 | RuntimePanel 旧语义/死代码 | **not_started**（本轮未动，避免范围蔓延） |
+| P2-02 | 文档 A1/A2/A3/A5 状态过度 done | **done**（本表启用四态法替代旧 done/partial） |
+| P2-03 | diagnostics 报 persistent_stream 而非 active | **integration_partial**（watch_bridge 状态含 active/terminal/error；diagnostics 表面待 headed 复核） |
+| P2-04 | PreparedSession eviction 非 LRU | **production_done**（显式 MRU 顺序 LRU，MAX_ENTRIES 有界） |
+
+### 18.2 架构变化
+
+- **LiveBus 契约 API**（`crates/agent-core/src/live_event.rs`）：`subscribe_after(run_id, after)` 原子返回 buffered replay + receiver + gap 标记；`remove_run`；ring 双上限（1024 条 / 1MiB）。
+- **RunWatchStreamV2**（`src-agent-daemon/src/stream_protocol.rs` + rpc.rs + client.rs + authority.rs + `src-tauri/src/daemon/watch_bridge.rs`）：ACK → durable/live 双 lane mux → heartbeat → terminal clean close；Renderer 双 cursor（durable/live）。
+- **Shared LiveBus 贯通**：`ProductionRuntime.live` 被所有 Native/fixture 引擎与 ToolOutput sink 共享；durable lane guard 拒绝 live-only kinds。
+- **ExecutionPolicyV1**：`resolve_execution_policy` + `ResolvedExecutionPolicyV1`，run_gateway 删除 `Some(50)` 硬编码，Settings 成为 Run 创建权威（CAS + Result 化）。
+- **Warm prepare**：`PreparedAgentSessionCache`（LRU）+ SHA-256 instruction digest + capability audit revision key；production tail 从 run_start watermark replay。
+
+### 18.3 提交与合并顺序（BASE `91d997e1` → HEAD `a734dbb2`）
+
+| 提交 | 内容 |
+|---|---|
+| `72654617` | chore(contracts): 冻结 STREAM-CONTRACT-V2 / EXECUTION-POLICY-V1 |
+| `9516dc88` | feat(agent-core): LiveBus 冻结契约 API |
+| `e7a98298` | feat(pi): Wave1 集成合并（S1 live core / S2 stream transport / S3 settings authority / S4 warm helpers / S5 red tests） |
+| `c3170992` | feat(pi): Wave2 生产接线（PreparedAgentSession + production tail watermark） |
+| `2b05294a` | fix(pi): Final Gate 前置修复（clippy -D warnings 清零） |
+| `a734dbb2` | fix(pi): Final Gate 修复（run.start 测试 SoT + lint） |
+
+### 18.4 验证证据（clean integration HEAD `a734dbb2`，集中修复后 `075b6eaf`）
+
+- `cargo fmt --check` ✅；`cargo clippy --workspace --all-targets -- -D warnings` ✅（集中修复后重跑仍清零）
+- `cargo check --workspace --all-targets` ✅（集中修复后重跑）
+- `cargo test --workspace`：Wave1 基线 **1905 passed / 0 failed**；集中修复后全量重跑 **1701 passed / 1 failed**，唯一失败 `stop_escalates_term_then_kill_for_stuck_stdio` 单独重跑 2 次均通过（并发时序偶发，非回归）。含 stream_watch 2、stream_watch_v2 8（45s heartbeat）、live_event 8、prepared_session 8、context 7、execution_engine settings 16+18、b7 2、`context_stats_tracked_and_reset_by_engine_loop`（P1-05 新增）。
+- `npm run protocol:check` ✅；`npm run lint` ✅（i18n 2550 zh=en）；`npm test` ✅（**800 tests / 800 pass / 0 fail**，含 daemon-adapter 13 项链路测试）
+- `src/lib/assistant-gateway/daemon-adapter.test.ts`：13 项前端链路测试全绿
+- `npm run verify-native-engine` ✅；`npm run build` ✅（Next.js 生产构建 0 错误，静态导出完成）
+- `npm run typecheck`：全量 `tsc --noEmit` 慢因 = `allowJs: true` + `include: **/*.ts` 纳入 `out/` 下 509 个 JS（`out/` 未 exclude），限时 5 分钟观察无错误输出后按规则关闭；**缩小范围 src 全量检查**（`allowJs: false`、排除 `out/.next/archive/src-tauri`）**通过（0 错误）**。`perf:check` 依赖全量 typecheck，同因未跑。
+- headed（真实 GUI / 真实 Provider）尚未验证项见 18.5。
+
+### 18.5 未完成 / 待验证（诚实清单）
+
+- P0-11 disabledTools 减法、P1-05 ContextStats engine-loop：本轮集中修复已闭环为 `production_done`（见 18.1）。
+- P1-10 / P1-12：真实 headed 长回答与工具输出的 `provider delta→daemon→Tauri→renderer` p95 尚未在真实 GUI 验证；fixture 链路测试已证明可达性。
+- `npm run typecheck` / `perf:check`：全量 `tsc --noEmit` 慢因已定位为 `allowJs: true` + `include: **/*.ts` 把 `out/` 下 509 个 JS 文件纳入检查（`out/` 未 exclude）。限时 5 分钟观察无错误输出后被关闭；缩小范围 src 全量检查（`allowJs: false`、排除 `out/.next/archive/src-tauri`）**通过（0 错误）**。`perf:check` 依赖全量 typecheck，同因未跑。
+- headed 验收（真实 Anthropic/OpenAI 长回答连续、cancel、maxSteps 新会话生效、Claude CLI unavailable 报错、fallback 说明、断流恢复）全部待真机环境执行。
+
+### 18.6 回滚方案
+
+- 整体回退：`git revert` 自 `a734dbb2` 至 `72654617`（6 个提交）或 `git reset --hard 91d997e1`。
+- 分级：仅回滚 Wave2 可 revert `c3170992`（保留 Wave1 P0 流式闭环）；仅回滚 Settings 可 revert `e7a98298` 后手工保留 live/stream 部分（P0-09~P0-14 依赖该提交，需同步还原 run_gateway）。
+- 旧 `MessageDelta` / `executor:settings` / localStorage runtimePref 读路径均保留兼容，可安全 downgrade。
+- P0-11 集中修复（`run_disabled_tools` 存储 + 工具面减法）仅影响 run.create/start 工具面，可单独 revert 且不影响流式链路。

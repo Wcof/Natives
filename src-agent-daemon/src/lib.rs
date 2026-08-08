@@ -40,6 +40,7 @@ pub mod session_harness;
 pub mod side_effect_ledger;
 pub mod skill_store;
 pub mod storage;
+pub mod stream_protocol;
 pub mod subagent_store;
 pub mod task_store;
 

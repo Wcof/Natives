@@ -146,18 +146,23 @@ impl ExecutionEngineSettingsV2 {
 // ── Persistence + migration ───────────────────────────────────────────────
 
 /// Load V2 settings; on first read, migrate the legacy `executor:settings`.
-pub fn load_execution_engine_settings() -> ExecutionEngineSettingsV2 {
-    let defaults = ExecutionEngineSettingsV2::default();
-    let Ok(pool_conn) = db::get_main_conn() else {
-        return defaults;
-    };
+///
+/// P0-13: a DB read failure or corrupt JSON is a hard error (never a silent
+/// "default success"). The caller decides whether to surface it or degrade
+/// explicitly; the Settings authority never pretends defaults were stored.
+pub fn load_execution_engine_settings() -> Result<ExecutionEngineSettingsV2, String> {
+    let pool_conn = db::get_main_conn().map_err(|e| format!("open main DB: {e}"))?;
     let conn: &rusqlite::Connection = &pool_conn;
     match db::get_setting(conn, EXECUTION_ENGINE_KEY) {
-        Ok(Some(json)) => serde_json::from_str::<ExecutionEngineSettingsV2>(&json)
-            .map(|s| s.normalized())
-            .unwrap_or(defaults),
+        Ok(Some(json)) => {
+            let settings =
+                serde_json::from_str::<ExecutionEngineSettingsV2>(&json).map_err(|e| {
+                    format!("execution engine settings JSON corrupt (revision CAS unusable): {e}")
+                })?;
+            Ok(settings.normalized())
+        }
         Ok(None) => migrate_legacy_executor_settings(conn),
-        Err(_) => defaults,
+        Err(e) => Err(format!("read execution engine settings: {e}")),
     }
 }
 
@@ -169,9 +174,12 @@ pub fn load_execution_engine_settings() -> ExecutionEngineSettingsV2 {
 /// - Legacy `true` is HISTORICAL INFORMATION ONLY — it never re-enables a tool
 ///   the current capability system would deny (no privilege expansion).
 /// - Full legacy value is preserved in `compat` for rollback.
-pub fn migrate_legacy_executor_settings(conn: &rusqlite::Connection) -> ExecutionEngineSettingsV2 {
+pub fn migrate_legacy_executor_settings(
+    conn: &rusqlite::Connection,
+) -> Result<ExecutionEngineSettingsV2, String> {
     let mut v2 = ExecutionEngineSettingsV2::default();
-    let legacy = db::get_setting(conn, EXECUTOR_KEY).ok().flatten();
+    let legacy = db::get_setting(conn, EXECUTOR_KEY)
+        .map_err(|e| format!("read legacy executor settings: {e}"))?;
     if let Some(json) = legacy {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -183,28 +191,32 @@ pub fn migrate_legacy_executor_settings(conn: &rusqlite::Connection) -> Executio
             #[serde(default)]
             max_steps: Option<u32>,
         }
-        if let Ok(old) = serde_json::from_str::<Legacy>(&json) {
-            // Subtract only: `false` in legacy means the user disabled it.
-            for (name, enabled) in &old.enabled_tools {
-                if !enabled {
-                    v2.native.disabled_tools.push(name.clone());
-                }
+        // P0-13: corrupt legacy JSON is a hard error, not a silent default.
+        let old = serde_json::from_str::<Legacy>(&json).map_err(|e| {
+            format!("legacy executor settings JSON corrupt, refusing to default: {e}")
+        })?;
+        // Subtract only: `false` in legacy means the user disabled it.
+        for (name, enabled) in &old.enabled_tools {
+            if !enabled {
+                v2.native.disabled_tools.push(name.clone());
             }
-            if let Some(steps) = old.max_steps {
-                v2.native.max_steps = steps.clamp(MAX_STEPS_MIN, MAX_STEPS_MAX);
-            }
-            v2.compat = Some(CompatSettings {
-                legacy_max_self_heal: old.max_self_heal,
-                legacy_enabled_tools: Some(old.enabled_tools),
-            });
         }
+        if let Some(steps) = old.max_steps {
+            v2.native.max_steps = steps.clamp(MAX_STEPS_MIN, MAX_STEPS_MAX);
+        }
+        v2.compat = Some(CompatSettings {
+            legacy_max_self_heal: old.max_self_heal,
+            legacy_enabled_tools: Some(old.enabled_tools),
+        });
     }
     let v2 = v2.normalized();
-    // Persist immediately so the migration is exactly-once.
-    if let Ok(json) = serde_json::to_string(&v2) {
-        let _ = db::set_setting(conn, EXECUTION_ENGINE_KEY, &json);
-    }
-    v2
+    // P0-14: persist immediately so the migration is exactly-once; a failed
+    // write is a visible error, never a silent "migration succeeded" lie.
+    let json =
+        serde_json::to_string(&v2).map_err(|e| format!("serialize migrated settings: {e}"))?;
+    db::set_setting(conn, EXECUTION_ENGINE_KEY, &json)
+        .map_err(|e| format!("persist migrated execution engine settings: {e}"))?;
+    Ok(v2)
 }
 
 /// Pure policy application before persistence (testable without a DB pool):
@@ -218,15 +230,32 @@ pub fn prepare_for_save(mut settings: ExecutionEngineSettingsV2) -> ExecutionEng
     settings.normalized()
 }
 
-/// Persist V2 settings, bumping revision (conflict detection for multi-window).
+/// Persist V2 settings with **revision CAS** (conflict detection for
+/// multi-window). `settings.revision` is the caller's expected revision; if
+/// the durable current value's revision differs, the save is rejected so one
+/// window can never silently overwrite another's edit.
 pub fn save_execution_engine_settings(
     settings: ExecutionEngineSettingsV2,
 ) -> Result<ExecutionEngineSettingsV2, String> {
+    let expected_revision = settings.revision;
+    let pool_conn = db::get_main_conn().map_err(|e| e.to_string())?;
+    let conn: &rusqlite::Connection = &pool_conn;
+    // CAS read: corrupt existing value is a hard error, not a blind overwrite.
+    let current = match db::get_setting(conn, EXECUTION_ENGINE_KEY) {
+        Ok(Some(json)) => serde_json::from_str::<ExecutionEngineSettingsV2>(&json)
+            .map_err(|e| format!("existing settings JSON corrupt (cannot CAS): {e}"))?,
+        Ok(None) => ExecutionEngineSettingsV2::default(),
+        Err(e) => return Err(format!("read execution engine settings for CAS: {e}")),
+    };
+    if current.revision != expected_revision {
+        return Err(format!(
+            "settings revision conflict: expected {expected_revision}, found {} (another window changed the settings)",
+            current.revision
+        ));
+    }
     let settings = prepare_for_save(settings);
     let json = serde_json::to_string(&settings)
         .map_err(|e| format!("serialize execution engine settings: {e}"))?;
-    let pool_conn = db::get_main_conn().map_err(|e| e.to_string())?;
-    let conn: &rusqlite::Connection = &pool_conn;
     db::set_setting(conn, EXECUTION_ENGINE_KEY, &json).map_err(|e| e.to_string())?;
     Ok(settings)
 }
@@ -298,16 +327,18 @@ pub struct ExecutionEngineSnapshot {
 }
 
 /// Build the full snapshot consumed by Settings → 执行引擎 (A7 UI).
+///
+/// P0-13: settings read failure propagates (never a fake "default" snapshot).
 pub fn build_execution_engine_snapshot(
     authority_mode: &str,
     protocol_version: &str,
     stream_transport: &str,
     daemon_ready: bool,
-) -> ExecutionEngineSnapshot {
-    let settings = load_execution_engine_settings();
+) -> Result<ExecutionEngineSnapshot, String> {
+    let settings = load_execution_engine_settings()?;
     let runtimes = build_runtime_descriptors(&settings);
     let resolved_default = resolve_default_runtime(&settings, &runtimes);
-    ExecutionEngineSnapshot {
+    Ok(ExecutionEngineSnapshot {
         settings,
         runtimes,
         resolved_default,
@@ -318,7 +349,7 @@ pub fn build_execution_engine_snapshot(
             "streamTransport": stream_transport,
             "daemonReady": daemon_ready,
         }),
-    }
+    })
 }
 
 /// Native capabilities are the real daemon capability surface; external
@@ -456,10 +487,176 @@ pub fn resolve_default_runtime(
     }
 }
 
+// ── Execution Policy V1 (S3 Settings Authority → new top-level Run) ────────
+//
+// Contract: docs/contracts/EXECUTION-POLICY-V1.md. The policy is resolved ONCE
+// at Run creation, baked into the create/start request, and persisted as an
+// immutable snapshot so later Settings edits never touch an existing Run.
+
+/// Resolved execution policy for a single Run (EXECUTION-POLICY-V1 shape).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedExecutionPolicyV1 {
+    pub version: u32,
+    pub runtime_id: String,
+    /// explicit_run | conversation_override | application_default | safe_default
+    pub runtime_source: String,
+    /// Settings revision the policy was resolved from (0 = pristine default).
+    pub settings_revision: u32,
+    pub max_steps: u32,
+    /// Subtract-only deny list; never expands the capability surface.
+    pub disabled_tools: Vec<String>,
+    pub fallback_used: bool,
+    pub unavailable_policy: String,
+}
+
+impl ResolvedExecutionPolicyV1 {
+    pub fn snapshot_key(run_id: &str) -> String {
+        format!("execution:policy:snapshot:{run_id}")
+    }
+}
+
+/// Runtime availability used by policy resolution. Native is always ready;
+/// every external runtime is availability-checked from its descriptor
+/// (`ready` only). Unknown ids are unavailable.
+pub fn runtime_available(runtime_id: &str, runtimes: &[RuntimeDescriptor]) -> bool {
+    if runtime_id == RUNTIME_NATIVE {
+        return true;
+    }
+    runtimes
+        .iter()
+        .find(|r| r.id == runtime_id)
+        .map(|r| r.status == "ready")
+        .unwrap_or(false)
+}
+
+/// Resolve the execution policy for a new top-level Run.
+///
+/// Priority: **explicit run override → conversation override (if any) →
+/// application Settings V2 → safe default native**.
+///
+/// Unavailable semantics (EXECUTION-POLICY-V1 §Invariants):
+/// - explicit / conversation external runtime unavailable → hard error, never
+///   a silent fallback;
+/// - application default external runtime unavailable → falls back to native
+///   only when `externalUnavailablePolicy == "fallback_native"` (explicitly
+///   recorded as `fallbackUsed: true`, source `safe_default`); a `fail`
+///   policy errors instead.
+pub fn resolve_execution_policy(
+    settings: &ExecutionEngineSettingsV2,
+    runtimes: &[RuntimeDescriptor],
+    explicit_runtime_id: Option<&str>,
+    conversation_runtime_id: Option<&str>,
+    explicit_max_steps: Option<u32>,
+) -> Result<ResolvedExecutionPolicyV1, String> {
+    let (runtime_id, runtime_source) = match explicit_runtime_id {
+        Some(rt) if !rt.trim().is_empty() => (rt.trim().to_string(), "explicit_run"),
+        _ => match conversation_runtime_id {
+            Some(rt) if !rt.trim().is_empty() => (rt.trim().to_string(), "conversation_override"),
+            _ => (settings.default_runtime.clone(), "application_default"),
+        },
+    };
+
+    let available = runtime_available(&runtime_id, runtimes);
+    let unavailable_policy = settings.external_unavailable_policy.clone();
+    let (final_runtime, final_source, fallback_used) = if available {
+        (runtime_id, runtime_source, false)
+    } else if runtime_source == "application_default" && unavailable_policy == "fallback_native" {
+        // Only the application default may fall back — explicit/conversation
+        // selections never silently switch runtime.
+        (RUNTIME_NATIVE.to_string(), "safe_default", true)
+    } else {
+        return Err(format!(
+            "runtime '{runtime_id}' is unavailable (source {runtime_source}); unavailable policy '{unavailable_policy}' does not allow fallback — no silent switch to Native",
+        ));
+    };
+
+    // maxSteps: explicit run override > Settings native.maxSteps, always
+    // clamped into the daemon hard bounds (10..=200) per contract.
+    let max_steps = explicit_max_steps
+        .unwrap_or(settings.native.max_steps)
+        .clamp(MAX_STEPS_MIN, MAX_STEPS_MAX);
+
+    Ok(ResolvedExecutionPolicyV1 {
+        version: 1,
+        runtime_id: final_runtime,
+        runtime_source: final_source.to_string(),
+        settings_revision: settings.revision,
+        max_steps,
+        disabled_tools: settings.native.disabled_tools.clone(),
+        fallback_used,
+        unavailable_policy,
+    })
+}
+
+/// Persist the immutable policy snapshot for a created Run (固化). Later
+/// Settings edits never change an existing Run because the snapshot is read
+/// from here, not re-resolved.
+pub fn store_policy_snapshot(
+    run_id: &str,
+    policy: &ResolvedExecutionPolicyV1,
+) -> Result<(), String> {
+    let pool_conn = db::get_main_conn().map_err(|e| format!("open main DB: {e}"))?;
+    let conn: &rusqlite::Connection = &pool_conn;
+    let json =
+        serde_json::to_string(policy).map_err(|e| format!("serialize policy snapshot: {e}"))?;
+    db::set_setting(
+        conn,
+        &ResolvedExecutionPolicyV1::snapshot_key(run_id),
+        &json,
+    )
+    .map_err(|e| format!("persist policy snapshot for {run_id}: {e}"))
+}
+
+/// Read back a persisted policy snapshot (None when absent/corrupt is surfaced
+/// as an explicit degraded error, never silent defaults).
+pub fn load_policy_snapshot(run_id: &str) -> Result<Option<ResolvedExecutionPolicyV1>, String> {
+    let pool_conn = db::get_main_conn().map_err(|e| format!("open main DB: {e}"))?;
+    let conn: &rusqlite::Connection = &pool_conn;
+    match db::get_setting(conn, &ResolvedExecutionPolicyV1::snapshot_key(run_id)) {
+        Ok(Some(json)) => serde_json::from_str::<ResolvedExecutionPolicyV1>(&json)
+            .map(Some)
+            .map_err(|e| format!("policy snapshot for {run_id} corrupt: {e}")),
+        Ok(None) => Ok(None),
+        Err(e) => Err(format!("read policy snapshot for {run_id}: {e}")),
+    }
+}
+
+/// One-shot durable migration of the legacy localStorage runtime pref
+/// (`natives.assistant.runtimePref.v1`) into Settings V2 `defaultRuntime`.
+///
+/// Exactly-once & durable: only applies while the backend still holds the
+/// pristine default (revision 0, `defaultRuntime == "native"`). After the
+/// first successful CAS save the backend is authoritative, the localStorage
+/// key is removed by the caller, and any later invocation is a no-op — the
+/// migration can never run twice or clobber an explicit Settings V2 choice.
+pub fn migrate_legacy_runtime_pref(
+    legacy_runtime_id: Option<String>,
+) -> Result<ExecutionEngineSettingsV2, String> {
+    let mut settings = load_execution_engine_settings()?;
+    if settings.revision > 0 || settings.default_runtime != RUNTIME_NATIVE {
+        return Ok(settings); // backend already authoritative → nothing to migrate
+    }
+    let pref = legacy_runtime_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != RUNTIME_NATIVE)
+        .unwrap_or_default();
+    if pref.is_empty() {
+        return Ok(settings); // no legacy pref to adopt
+    }
+    if pref != RUNTIME_CLAUDE_CLI {
+        // codex_cli is fail-closed until the app-server is real; adopting it as
+        // defaultRuntime would only produce guaranteed run failures.
+        return Ok(settings);
+    }
+    settings.default_runtime = pref;
+    save_execution_engine_settings(settings)
+}
+
 /// Detect which external CLIs exist right now (snapshot refresh action).
-pub fn detect_runtimes() -> Vec<RuntimeDescriptor> {
-    let settings = load_execution_engine_settings();
-    build_runtime_descriptors(&settings)
+pub fn detect_runtimes() -> Result<Vec<RuntimeDescriptor>, String> {
+    let settings = load_execution_engine_settings()?;
+    Ok(build_runtime_descriptors(&settings))
 }
 
 /// Catalog aliases kept for source compatibility (A6 owns executor_catalog.rs).
@@ -501,7 +698,7 @@ mod tests {
         })
         .to_string();
         db::set_setting(&conn, EXECUTOR_KEY, &legacy).expect("set legacy");
-        let v2 = migrate_legacy_executor_settings(&conn);
+        let v2 = migrate_legacy_executor_settings(&conn).expect("migration must succeed");
         assert_eq!(v2.native.max_steps, 25);
         // Only `false` entries become disabled tools (subtractive).
         assert!(
@@ -597,5 +794,226 @@ mod tests {
     #[test]
     fn explicit_external_runtime_fail_policy_never_silent_fallback() {
         fail_policy_never_silent_fallback();
+    }
+
+    // ── S3 Execution Policy V1 tests ───────────────────────────────────────
+
+    /// A descriptor for a runtime that is NOT installed / not ready, so the
+    /// availability check is deterministic regardless of the host.
+    fn degraded_descriptor(id: &str) -> RuntimeDescriptor {
+        RuntimeDescriptor {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            status: "degraded".into(),
+            version: None,
+            authority: "external_bridge".into(),
+            reason_code: "not_ready".into(),
+            reason: "test".into(),
+            capabilities: HashMap::new(),
+            controllable: Vec::new(),
+        }
+    }
+
+    fn ready_descriptor(id: &str) -> RuntimeDescriptor {
+        let mut d = degraded_descriptor(id);
+        d.status = "ready".into();
+        d
+    }
+
+    #[test]
+    fn explicit_external_unavailable_never_falls_back() {
+        let mut settings = ExecutionEngineSettingsV2::default().normalized();
+        // Even with fallback_native configured, an EXPLICIT run override that
+        // is unavailable must hard-fail (never silently switch).
+        settings.external_unavailable_policy = "fallback_native".to_string();
+        let runtimes = [degraded_descriptor(RUNTIME_CLAUDE_CLI)];
+        let err = resolve_execution_policy(
+            &settings,
+            &runtimes,
+            Some(RUNTIME_CLAUDE_CLI), // explicit run override
+            None,
+            None,
+        )
+        .expect_err("explicit unavailable runtime must fail, never fall back");
+        assert!(
+            err.contains(RUNTIME_CLAUDE_CLI),
+            "error must name the runtime: {err}"
+        );
+        assert!(
+            err.contains("no silent switch"),
+            "error must state the no-fallback invariant: {err}"
+        );
+
+        // Same for a conversation override.
+        let err2 =
+            resolve_execution_policy(&settings, &runtimes, None, Some(RUNTIME_CLAUDE_CLI), None)
+                .expect_err("conversation override unavailable must fail");
+        assert!(err2.contains(RUNTIME_CLAUDE_CLI));
+    }
+
+    #[test]
+    fn application_default_fallback_native_is_explicit() {
+        let mut settings = ExecutionEngineSettingsV2::default().normalized();
+        settings.default_runtime = RUNTIME_CLAUDE_CLI.to_string();
+        settings.external_unavailable_policy = "fallback_native".to_string();
+        let runtimes = [degraded_descriptor(RUNTIME_CLAUDE_CLI)];
+
+        let resolved = resolve_execution_policy(&settings, &runtimes, None, None, None)
+            .expect("application default may fall back to native");
+        assert_eq!(resolved.runtime_id, RUNTIME_NATIVE);
+        assert!(
+            resolved.fallback_used,
+            "fallback must be recorded explicitly"
+        );
+        assert_eq!(resolved.runtime_source, "safe_default");
+
+        // fail policy → honest error, no silent switch.
+        settings.external_unavailable_policy = "fail".to_string();
+        let err = resolve_execution_policy(&settings, &runtimes, None, None, None)
+            .expect_err("fail policy must not fall back");
+        assert!(err.contains("fail"), "error mentions the policy: {err}");
+    }
+
+    #[test]
+    fn settings_disabled_tools_hidden_and_denied() {
+        let mut settings = ExecutionEngineSettingsV2::default().normalized();
+        settings.native.disabled_tools = vec!["run_terminal".to_string(), "write_file".to_string()];
+        // Schema gate: subtract-only, never expands capability.
+        assert!(!settings.effective_tool_allowed("run_terminal"));
+        assert!(settings.effective_tool_allowed("read_file"));
+        // Handler gate: the resolved policy carries the deny list and only it;
+        // there is no channel to re-enable a tool beyond the capability surface.
+        let runtimes = [ready_descriptor(RUNTIME_NATIVE)];
+        let policy = resolve_execution_policy(&settings, &runtimes, None, None, None).unwrap();
+        assert_eq!(
+            policy.disabled_tools,
+            vec!["run_terminal".to_string(), "write_file".to_string()]
+        );
+        assert!(policy.disabled_tools.contains(&"run_terminal".to_string()));
+        // Normalizing dedups and sorts, and never invents new entries.
+        settings
+            .native
+            .disabled_tools
+            .push("run_terminal".to_string());
+        let norm = settings.normalized();
+        assert_eq!(norm.native.disabled_tools.len(), 2);
+    }
+
+    /// Serialise the DB-pool tests: they replace the global main pool.
+    static DB_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn temp_main_pool() -> (tempfile::TempDir, db::DbPool) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = db::init_db_pool(&dir.path().join("natives-test.db")).expect("init pool");
+        db::register_main_pool(pool.clone());
+        (dir, pool)
+    }
+
+    #[test]
+    fn settings_revision_conflict_is_detected() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, _pool) = temp_main_pool();
+        let first = save_execution_engine_settings(ExecutionEngineSettingsV2::default())
+            .expect("first save succeeds (expected revision 0)");
+        assert_eq!(first.revision, 1, "prepare_for_save bumps revision");
+        // Re-save with a STALE revision → CAS conflict, not silent overwrite.
+        let err = save_execution_engine_settings(ExecutionEngineSettingsV2::default())
+            .expect_err("stale revision must be rejected");
+        assert!(
+            err.contains("revision conflict"),
+            "conflict error must be explicit: {err}"
+        );
+        // Correct (fresh) revision saves fine.
+        let mut next = first.clone();
+        next.native.max_steps = 120;
+        let ok = save_execution_engine_settings(next).expect("fresh revision saves");
+        assert_eq!(ok.revision, 2);
+    }
+
+    #[test]
+    fn settings_corrupt_json_is_not_default_success() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, pool) = temp_main_pool();
+        let conn = pool.get().expect("conn");
+        db::set_setting(&conn, EXECUTION_ENGINE_KEY, "{ not json !!").expect("seed corrupt");
+        let err = load_execution_engine_settings()
+            .expect_err("corrupt settings must be a hard error, never default success");
+        assert!(err.contains("corrupt"), "explicit corrupt error: {err}");
+        // Save on top of corrupt data must also refuse (CAS read fails).
+        let err2 = save_execution_engine_settings(ExecutionEngineSettingsV2::default())
+            .expect_err("CAS over corrupt data must fail");
+        assert!(err2.contains("corrupt"));
+    }
+
+    #[test]
+    fn legacy_runtime_pref_migrates_once() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, _pool) = temp_main_pool();
+        // No pref → no-op, pristine default.
+        let noop = migrate_legacy_runtime_pref(None).expect("no-op succeeds");
+        assert_eq!(noop.revision, 0);
+        assert_eq!(noop.default_runtime, RUNTIME_NATIVE);
+        // First migration adopts claude_cli and bumps revision (durable).
+        let migrated = migrate_legacy_runtime_pref(Some("claude_cli".into()))
+            .expect("first migration succeeds");
+        assert_eq!(migrated.default_runtime, RUNTIME_CLAUDE_CLI);
+        assert!(migrated.revision >= 1, "durable exactly-once marker");
+        // Re-invocation is a no-op: backend is authoritative, never re-migrates.
+        let again =
+            migrate_legacy_runtime_pref(Some("claude_cli".into())).expect("second call succeeds");
+        assert_eq!(
+            again.revision, migrated.revision,
+            "no revision bump on re-migrate"
+        );
+        assert_eq!(again.default_runtime, RUNTIME_CLAUDE_CLI);
+        // A different pref after migration must NOT clobber the V2 choice.
+        let keep = migrate_legacy_runtime_pref(Some("native".into())).expect("no clobber");
+        assert_eq!(keep.default_runtime, RUNTIME_CLAUDE_CLI);
+        assert_eq!(keep.revision, migrated.revision);
+    }
+
+    #[test]
+    fn existing_run_unchanged_after_settings_edit() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, _pool) = temp_main_pool();
+        // Run created under settings A.
+        let mut settings_a = ExecutionEngineSettingsV2::default().normalized();
+        settings_a.native.max_steps = 80;
+        settings_a.native.disabled_tools = vec!["run_terminal".to_string()];
+        let saved_a = save_execution_engine_settings(settings_a).expect("save A");
+        let runtimes = [ready_descriptor(RUNTIME_NATIVE)];
+        let policy = resolve_execution_policy(&saved_a, &runtimes, None, None, None).unwrap();
+        store_policy_snapshot("run-1", &policy).expect("snapshot persisted");
+
+        // Settings edited afterwards.
+        let mut settings_b = saved_a.clone();
+        settings_b.native.max_steps = 150;
+        settings_b.native.disabled_tools = Vec::new();
+        settings_b.default_runtime = RUNTIME_CLAUDE_CLI.to_string();
+        let _saved_b = save_execution_engine_settings(settings_b).expect("save B");
+
+        // The existing Run's frozen snapshot is unchanged.
+        let frozen = load_policy_snapshot("run-1")
+            .expect("snapshot readable")
+            .expect("snapshot present");
+        assert_eq!(frozen.max_steps, 80, "existing run maxSteps frozen");
+        assert_eq!(frozen.runtime_id, RUNTIME_NATIVE);
+        assert_eq!(frozen.disabled_tools, vec!["run_terminal".to_string()]);
+        assert_eq!(frozen.settings_revision, saved_a.revision);
+        // A NEW run would resolve the new settings instead.
+        let fresh = load_execution_engine_settings().expect("reload");
+        let fresh_policy = resolve_execution_policy(
+            &fresh,
+            &[ready_descriptor(RUNTIME_NATIVE)],
+            // Explicit native override → always available; the point here is
+            // that maxSteps + disabledTools now come from the EDITED settings.
+            Some(RUNTIME_NATIVE),
+            None,
+            None,
+        )
+        .expect("new run resolves");
+        assert_eq!(fresh_policy.max_steps, 150);
+        assert!(fresh_policy.disabled_tools.is_empty());
+        assert!(fresh_policy.settings_revision > saved_a.revision);
     }
 }

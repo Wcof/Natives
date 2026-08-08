@@ -145,6 +145,33 @@ async fn conversation_permission_and_attachments_round_trip() {
         tmp_db.to_string_lossy().as_ref(),
     );
     crate::daemon_authority::reset_authority_cache().await;
+    // S3 (EXECUTION-POLICY-V1): run.start resolves the execution policy from
+    // the main DB Settings authority (P0-13 fail-closed — no silent defaults),
+    // so the test must provide a real main DB pool.
+    let main_pool_dir =
+        std::env::temp_dir().join(format!("natives-asst-main-{}.db", uuid::Uuid::new_v4()));
+    let main_pool = crate::db::init_db_pool(&main_pool_dir).expect("init main pool");
+    // Seed the natives.db SoT provider surface the S3 policy resolver and the
+    // run.start preflight (`provider_model_pair_available`) read. Fresh
+    // natives.db lacks the migrated columns, so add them idempotently.
+    {
+        let conn = main_pool.get().expect("main conn");
+        conn.execute_batch(
+            "ALTER TABLE user_providers ADD COLUMN default_model TEXT;
+             ALTER TABLE provider_api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;
+             INSERT INTO user_providers
+                 (id, preset_name, api_protocol, name, website_url, base_url,
+                  default_model, created_at, updated_at)
+             VALUES ('provider', 'Provider', 'openai_chat_completions', 'Provider',
+                     '', '', 'model', datetime('now'), datetime('now'));
+             INSERT INTO provider_api_keys
+                 (id, provider_id, label, api_key_encrypted, dek_encrypted,
+                  is_active, created_at)
+             VALUES ('key', 'provider', '', 'enc', 'dek', 1, datetime('now'));",
+        )
+        .expect("seed natives.db SoT provider");
+    }
+    crate::db::register_main_pool(main_pool);
     let store = Arc::new(DataStore::new(":memory:").unwrap());
     let attachment_path = std::path::PathBuf::from(format!(
         "/tmp/natives-assistant-test-{}.txt",

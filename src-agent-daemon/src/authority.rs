@@ -410,6 +410,7 @@ impl UdsAuthority {
     /// - first call connects + handshakes once;
     /// - subsequent calls reuse the same connection (no per-call handshake);
     /// - on transport failure the client is dropped and reconnected once.
+    ///
     /// RPC-level errors (e.g. `run.start` validation) are returned as-is
     /// without discarding the healthy connection.
     async fn call(&self, method: &str, params: Value) -> Result<Value, AuthorityError> {
@@ -451,16 +452,19 @@ impl UdsAuthority {
         result.map_err(|e| AuthorityError::Message(e.to_string()))
     }
 
-    /// Open an independent event-stream connection (`run.watch`) for a run.
+    /// Open an independent persistent stream connection (`run.watch`,
+    /// RunWatchStreamV2) for a run.
     ///
-    /// The returned stream replays durable events > after_sequence and then
-    /// pushes new events until terminal / cancel / disconnect. This is a
+    /// The returned stream consumes the ACK and then yields
+    /// [`crate::stream_protocol::RunStreamFrameV2`] frames (durable/live/
+    /// heartbeat/resync) until terminal, cancel, or disconnect. This is a
     /// SEPARATE long-lived connection from the command client so a long
     /// streaming run never blocks command RPCs (A3 EventClient).
     pub async fn watch_events(
         &self,
         run_id: &str,
-        after_sequence: u64,
+        after_durable_sequence: u64,
+        after_live_sequence: u64,
     ) -> Result<WatchEventStream, AuthorityError> {
         let bootstrap = std::env::var("NATIVES_DAEMON_BOOTSTRAP")
             .ok()
@@ -475,13 +479,7 @@ impl UdsAuthority {
         self.connect_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         client
-            .call(
-                "run.watch",
-                serde_json::json!({
-                    "run_id": run_id,
-                    "after_sequence": after_sequence,
-                }),
-            )
+            .begin_watch(run_id, after_durable_sequence, after_live_sequence)
             .await
             .map_err(|e| AuthorityError::Message(e.to_string()))?;
         Ok(WatchEventStream { client })
@@ -490,17 +488,19 @@ impl UdsAuthority {
 
 /// Streaming handle for a `run.watch` connection (A3 EventClient).
 ///
-/// Yields `V2EventEnvelope`-shaped events; ends when the server closes the
-/// stream (terminal event / cancel / disconnect).
+/// Yields [`crate::stream_protocol::RunStreamFrameV2`] frames; ends when the
+/// server closes the stream (terminal event / cancel / disconnect).
 pub struct WatchEventStream {
     client: DaemonClient,
 }
 
 impl WatchEventStream {
-    /// Read the next event envelope line from the stream.
-    pub async fn next_event(&mut self) -> Option<Result<RunEventV2, AuthorityError>> {
+    /// Read the next frame line from the stream.
+    pub async fn next_frame(
+        &mut self,
+    ) -> Option<Result<crate::stream_protocol::RunStreamFrameV2, AuthorityError>> {
         self.client
-            .read_event()
+            .read_stream_frame()
             .await
             .map(|r| r.map_err(|e| AuthorityError::Message(e.to_string())))
     }
@@ -796,7 +796,7 @@ mod tests {
         // run does not exist, so `run.watch` fails at the RPC layer AFTER the
         // independent connection + handshake is established — which is exactly
         // what we assert: EventClient must not reuse the command connection.
-        let watch = auth.watch_events("no-such-run", 0).await;
+        let watch = auth.watch_events("no-such-run", 0, 0).await;
         assert_eq!(
             auth.handshake_count(),
             2,
