@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Natives — Personal All-in-One AI Workbench (Tauri Desktop Application)",
   "private": true,
+  "engines": {
+    "node": ">=20.11.0 <21"
+  },
+  "packageManager": "npm@10.5.0",
   "scripts": {
     "web:dev": "node scripts/ensure-port.mjs && NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
     "daemon:build": "cargo build -p natives-agent-daemon",

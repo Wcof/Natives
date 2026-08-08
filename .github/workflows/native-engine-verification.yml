@@ -31,6 +31,8 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
+      # T002 (P1-015): fail CI when package.json and package-lock.json drift.
+      - run: node scripts/check-lockfile-sync.mjs
       - name: Run verification
         run: |
           args=(--scratch "$RUNNER_TEMP/natives-native-engine-verification")
