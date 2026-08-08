@@ -566,6 +566,7 @@ impl HookHandler for NativeAgentHook {
         let created =
             match crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
                 capability_selection: None,
+                disabled_tools: None,
                 conversation_id,
                 provider_id: parent.provider_id,
                 model_id,

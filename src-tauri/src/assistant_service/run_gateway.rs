@@ -289,6 +289,13 @@ fn build_create_run_request(
         // runtimeId comes from the resolved policy (never a silent default).
         runtime_id: Some(policy.runtime_id.clone()),
         capability_selection: req.capability_selection.clone(),
+        // P0-005: disabled_tools rides in the typed protocol field (single
+        // source) — no serde_json shadow-field injection.
+        disabled_tools: if policy.disabled_tools.is_empty() {
+            None
+        } else {
+            Some(policy.disabled_tools.clone())
+        },
     }
 }
 
@@ -383,11 +390,9 @@ async fn create_and_start_run(
         idempotency_key.clone(),
     );
 
-    // Send create over the raw request path so `disabled_tools` (the S3
-    // subtract-only deny list) rides in the create payload. The protocol's
-    // CreateRunRequest does not yet carry the field (NEEDS-INTEGRATION: daemon
-    // final subtraction), but the payload already contains it for when it does.
-    let mut create_params = match serde_json::to_value(&create_req) {
+    // P0-005: disabled_tools is carried in the typed CreateRunRequest (single
+    // source in assistant-protocol) — no serde_json shadow-field injection.
+    let create_params = match serde_json::to_value(&create_req) {
         Ok(v) => v,
         Err(e) => {
             return error_response(
@@ -396,12 +401,6 @@ async fn create_and_start_run(
             )
         }
     };
-    if let Some(obj) = create_params.as_object_mut() {
-        obj.insert(
-            "disabled_tools".into(),
-            serde_json::to_value(&policy.disabled_tools).unwrap_or_default(),
-        );
-    }
     let daemon_run = match daemon_authority::request("run.create", create_params).await {
         Ok(value) => match serde_json::from_value::<assistant_protocol::v2::RunV2>(value) {
             Ok(run) => run,

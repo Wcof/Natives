@@ -2446,6 +2446,7 @@ pub async fn restart_subagent_with_binding(
         })?;
     let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
         capability_selection: None,
+        disabled_tools: None,
         conversation_id: sess.child_conversation_id.clone(),
         provider_id: binding.provider_id.clone(),
         model_id: binding.model_id.clone(),
