@@ -417,10 +417,23 @@ impl ToolHandler for NotificationTool {
         input: serde_json::Value,
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
+        // T208 (P1-035): delivered=true must only be returned after a real
+        // Host/OS delivery ACK. This gateway-side handler has no delivery
+        // sink, so claiming `delivered: true` would be a fake success. Fail
+        // closed: report the notification as NOT delivered (unsupported),
+        // keeping the message for observability. The real delivery path is the
+        // Agent Daemon production tools → Host notification RPC (handoff).
+        let message = input
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         Ok(ToolOutput {
             result: serde_json::json!({
-                "delivered": true,
-                "message": input.get("message").and_then(|v| v.as_str()).unwrap_or("")
+                "delivered": false,
+                "state": "unsupported",
+                "reason": "no delivery sink in capability-gateway; notification delivery requires Host/OS notification RPC (T208)",
+                "message": message,
             }),
             truncated: false,
             duration_ms: 0,
