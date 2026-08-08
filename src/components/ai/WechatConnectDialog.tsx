@@ -129,10 +129,16 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
     };
 
     poll();
-    const interval = window.setInterval(poll, 2500);
+    const interval = window.setInterval(poll, 5_000);
+    // T218 (P2-004): pause polling while the tab is hidden (visibility-gated).
+    const onVisibility = () => {
+      if (document.hidden) window.clearInterval(interval);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [api, env?.connected, locale, qrcode, refreshEnv, showError, toast]);
 
