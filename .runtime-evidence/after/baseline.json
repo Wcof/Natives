@@ -1,0 +1,76 @@
+{
+  "b1_text_stream": {
+    "chunks_2000": {
+      "chunks": 2000,
+      "delta_publish_delay_ms": {
+        "count": 0,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p75_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "durable_events": 6,
+      "live_events": 0,
+      "message_delta_count": 0,
+      "request_to_first_delta_ms": -1.0,
+      "run_event_bytes_per_1000_chunks": 20313.5,
+      "run_event_payload_bytes": 40627,
+      "run_event_rows": 6,
+      "run_event_rows_per_1000_chunks": 3.0,
+      "sqlite_writes_approx": 6,
+      "submit_to_completed_ms": 2854.137292,
+      "terminal_tail_ms": -1.0,
+      "text_delta_count": 0
+    },
+    "chunks_500": {
+      "chunks": 500,
+      "delta_publish_delay_ms": {
+        "count": 0,
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p75_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "durable_events": 6,
+      "live_events": 0,
+      "message_delta_count": 0,
+      "request_to_first_delta_ms": -1.0,
+      "run_event_bytes_per_1000_chunks": 22254.0,
+      "run_event_payload_bytes": 11127,
+      "run_event_rows": 6,
+      "run_event_rows_per_1000_chunks": 12.0,
+      "sqlite_writes_approx": 6,
+      "submit_to_completed_ms": 735.8266249999999,
+      "terminal_tail_ms": -1.0,
+      "text_delta_count": 0
+    }
+  },
+  "baseline": "A0 pre-remediation snapshot",
+  "build": "cargo test (debug profile)",
+  "commit": "29162e94",
+  "invariants_measured": {
+    "active_stream_fixed_sleep": "present (baseline: run.subscribe long-poll wait)",
+    "live_delta_sqlite_writes": ">0 (baseline: every TextDelta persisted via EventSequencer persist-first)",
+    "new_message_delta_emits": ">0 (baseline: engine_core.rs emits cumulative MessageDelta per TextDelta)",
+    "uds_handshake_per_rpc": "1 (baseline: UdsAuthority::call connects per RPC)"
+  },
+  "uds": {
+    "connect_plus_handshake_ms": {
+      "count": 10,
+      "max_ms": 4.4625,
+      "p50_ms": 0.079792,
+      "p75_ms": 0.08975,
+      "p95_ms": 4.4625
+    },
+    "handshake_per_rpc": 1,
+    "handshakes_per_run_estimate": 8,
+    "note": "current UdsAuthority re-connects + handshakes per RPC (authority.rs connect-per-call)",
+    "rpc_after_handshake_ms": {
+      "count": 10,
+      "max_ms": 2.766792,
+      "p50_ms": 0.05025,
+      "p75_ms": 0.053666,
+      "p95_ms": 2.766792
+    }
+  }
+}
