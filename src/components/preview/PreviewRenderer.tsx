@@ -13,6 +13,8 @@ import JsonRenderer from './renderers/JsonRenderer';
 import CodeRenderer from './renderers/CodeRenderer';
 import MediaRenderer from './renderers/MediaRenderer';
 import PdfRenderer from './renderers/PdfRenderer';
+import CsvRenderer from './renderers/CsvRenderer';
+import ArchiveRenderer from './renderers/ArchiveRenderer';
 
 export function PreviewRenderer({ model }: { model: PreviewModel }) {
   switch (model.kind) {
@@ -28,10 +30,12 @@ export function PreviewRenderer({ model }: { model: PreviewModel }) {
       return <MediaRenderer model={model} />;
     case 'pdf':
       return <PdfRenderer model={model} />;
+    case 'csv':
+      return <CsvRenderer model={model} />;
+    case 'archive':
+      return <ArchiveRenderer model={model} />;
     // HTML lane 未开放（H0 BLOCKED）；T20→T21→T15 完成后在此追加 HtmlRenderer
     case 'html':
-    case 'csv':
-    case 'archive':
     case 'unsupported':
       return (
         <div data-preview-kind="unsupported" style={{ padding: 24, color: 'var(--text-secondary)' }}>
