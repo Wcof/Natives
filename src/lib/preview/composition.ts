@@ -14,14 +14,18 @@ import { jsonProvider } from './providers/json';
 import { codeProvider } from './providers/code';
 import { mediaProvider } from './providers/media';
 import { pdfProvider } from './providers/pdf';
+import { csvProvider } from './providers/csv';
+import { archiveProvider } from './providers/archive';
 
-/** 内置 provider 列表（不含 HTML：H0 BLOCKED；CSV/Archive 由 T16/T17 合入后在此追加一次） */
+/** 内置 provider 列表（不含 HTML：H0 BLOCKED；T16/T17 已合入） */
 export const BUILTIN_PROVIDERS: PreviewProvider[] = [
   markdownProvider,
   jsonProvider,
   codeProvider,
   mediaProvider,
   pdfProvider,
+  csvProvider,
+  archiveProvider,
 ];
 
 export function createBuiltinRegistry(): PreviewRegistry {

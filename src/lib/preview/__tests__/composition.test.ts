@@ -17,11 +17,11 @@ function fakeContext(): PreviewContext {
   };
 }
 
-test('builtin registry contains exactly the C0 leaf providers (no HTML while H0 BLOCKED)', () => {
+test('builtin registry contains C0 leaf + T16/T17 providers (no HTML while H0 BLOCKED)', () => {
   const ids = BUILTIN_PROVIDERS.map((p) => p.id).sort();
-  assert.deepEqual(ids, ['code', 'json', 'markdown', 'media', 'pdf']);
+  assert.deepEqual(ids, ['archive', 'code', 'csv', 'json', 'markdown', 'media', 'pdf']);
   const reg = createBuiltinRegistry();
-  assert.equal(reg.size, 5);
+  assert.equal(reg.size, 7);
 });
 
 test('markdown file source routes through registry → service → typed model', async () => {
