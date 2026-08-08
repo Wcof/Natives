@@ -1,12 +1,12 @@
 # A0 Baseline (pre-remediation)
 
-- commit: 3f80bfa9
+- commit: 626b3806
 - build: cargo test (debug profile)
 
 ## B1 pure-text long answer
 
 ### 500 chunks
-- submit → completed: 757.90 ms
+- submit → completed: 781.73 ms
 - request → first delta: -1.00 ms
 - delta → live publish p50/p95: 0.00/0.00 ms
 - terminal tail (last delta → run returned): -1.00 ms
@@ -15,7 +15,7 @@
 - run_event rows / 1000 chunks: 12.0
 - run_event payload bytes / 1000 chunks: 22254.0
 ### 2000 chunks
-- submit → completed: 3670.78 ms
+- submit → completed: 3116.84 ms
 - request → first delta: -1.00 ms
 - delta → live publish p50/p95: 0.00/0.00 ms
 - terminal tail (last delta → run returned): -1.00 ms
@@ -26,6 +26,6 @@
 
 ## UDS handshake
 
-- connect+handshake p95: 0.59 ms (per RPC, current behavior)
+- connect+handshake p95: 11.59 ms (per RPC, current behavior)
 - handshakes per run (estimate): 8
 - note: current UdsAuthority re-connects + handshakes per RPC (authority.rs connect-per-call)
