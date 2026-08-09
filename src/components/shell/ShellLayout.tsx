@@ -561,7 +561,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             const fileName = filePath.split('/').pop() || filePath;
             // 字节级复制（copy_entry 自动建父目录 + 同名去重）；
             // 禁止 readFile+writeFileAtomic 文本中转——会损坏 PNG 二进制
-            await fsApi().copyEntry(filePath, `~/Desktop/素材/${fileName}`);
+            await fsApi().copyEntry(filePath, `~/Desktop/\u7d20\u6750/${fileName}`);
           } catch { /* ignore in browser mode */ }
         }}
         onAnnotate={async (filePath) => {

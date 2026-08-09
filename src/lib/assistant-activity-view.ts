@@ -3,6 +3,7 @@
  * Prefer optional props from Workbench; fall back to events when absent.
  */
 
+import { t } from '@/i18n';
 import type { Artifact, FileChange, RunEvent } from '@/lib/assistant-protocol';
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed';
@@ -40,8 +41,6 @@ export type SubagentUiStatusKey =
 
 export interface SubagentUiStatus {
   key: SubagentUiStatusKey;
-  zh: string;
-  en: string;
 }
 
 /** Normalize a full path for de-duplication (absolute/relative both OK). */
@@ -347,7 +346,7 @@ export function mapSubagentUiStatus(status: string | null | undefined): Subagent
     .toLowerCase();
 
   if (s === 'pending_assignment' || s === 'pending-assignment' || s === 'unassigned') {
-    return { key: 'pending_assignment', zh: '待分配', en: 'Pending assignment' };
+    return { key: 'pending_assignment' };
   }
   // completed and idle (compat) both surface as 已完成
   if (
@@ -357,7 +356,7 @@ export function mapSubagentUiStatus(status: string | null | undefined): Subagent
     s === 'success' ||
     s === 'idle'
   ) {
-    return { key: 'completed', zh: '已完成', en: 'Completed' };
+    return { key: 'completed' };
   }
   if (
     s === 'failed' ||
@@ -369,7 +368,7 @@ export function mapSubagentUiStatus(status: string | null | undefined): Subagent
     s === 'error' ||
     s === 'rejected'
   ) {
-    return { key: 'closed', zh: '关闭', en: 'Closed' };
+    return { key: 'closed' };
   }
   // open / queued / running / waiting_* / in_progress / active / preparing / …
   if (
@@ -387,15 +386,17 @@ export function mapSubagentUiStatus(status: string | null | undefined): Subagent
     s === 'reasoning' ||
     s === 'cancelling'
   ) {
-    return { key: 'in_progress', zh: '执行中', en: 'In progress' };
+    return { key: 'in_progress' };
   }
   // Unknown non-terminal → treat as in progress; unknown terminal-ish already handled.
-  return { key: 'in_progress', zh: '执行中', en: 'In progress' };
+  return { key: 'in_progress' };
 }
 
-export function todoStatusLabel(status: TodoStatus, zh: boolean): string {
-  // Labels kept for pure-helper fallbacks / tests; UI prefers i18n keys.
-  if (status === 'completed') return zh ? '已完成' : 'Completed';
-  if (status === 'in_progress') return zh ? '执行中' : 'In progress';
-  return zh ? '待执行' : 'Pending';
+export function todoStatusLabel(locale: string, status: TodoStatus): string {
+  const keys: Record<TodoStatus, string> = {
+    completed: 'assistant.activity.todo.completed',
+    in_progress: 'assistant.activity.todo.in_progress',
+    pending: 'assistant.activity.todo.pending',
+  };
+  return t(locale, keys[status]);
 }

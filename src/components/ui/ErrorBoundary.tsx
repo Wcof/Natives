@@ -2,15 +2,11 @@
 
 import React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { t } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
 // i18n messages for ErrorBoundary (class component can't use hooks)
-const MESSAGES = {
-  en: { title: 'Something went wrong', fallback: 'Operation could not be completed. Diagnostic ID: {id}. Please try again.', retry: 'Try Again' },
-  zh: { title: '出了点问题', fallback: '操作未完成，请重试。诊断编号：{id}。', retry: '重试' },
-};
-
-function getLocale(): 'en' | 'zh' {
+function getLocale(): string {
   try {
     const el = document.documentElement;
     const lang = el.getAttribute('lang') || el.dataset.locale || '';
@@ -56,7 +52,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
 
-      const msg = MESSAGES[getLocale()] || MESSAGES.en;
+      const locale = getLocale();
 
       return (
         <div style={{
@@ -65,9 +61,9 @@ export default class ErrorBoundary extends React.Component<Props, State> {
           color: 'var(--text)', background: 'var(--surface)',
         }}>
           <AlertTriangle size={32} style={{ color: 'var(--danger)' }} />
-<div style={{ fontSize: FONT_SIZE.xl, fontWeight: 600 }}>{msg.title}</div>
+<div style={{ fontSize: FONT_SIZE.xl, fontWeight: 600 }}>{t(locale, 'errorBoundary.title')}</div>
 <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 400 }}>
-            {this.state.error?.message || msg.fallback}
+            {this.state.error?.message || t(locale, 'errorBoundary.fallback')}
           </div>
           <button
             onClick={this.handleReset}
@@ -78,7 +74,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
               display: 'inline-flex', alignItems: 'center', gap: SPACING.xs,
             }}
           >
-            <RefreshCw size={12} /> {msg.retry}
+            <RefreshCw size={12} /> {t(locale, 'errorBoundary.retry')}
           </button>
         </div>
       );

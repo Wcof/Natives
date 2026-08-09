@@ -282,15 +282,15 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
         {/* Active negotiated transport — backend truth, never a fake config flag. */}
         <div style={{ marginTop: 8, fontSize: 12, borderTop: '1px solid var(--border-soft)', paddingTop: 8 }}>
           <div>
-            <strong>{locale.startsWith('zh') ? '实际协商传输' : 'Negotiated transport'}</strong>:{' '}
+            <strong>{t(locale, 'executionEnginePanel.negotiatedTransport')}</strong>:{' '}
             {String(snapshot.diagnosticsSummary.streamTransport ?? 'unknown')}
           </div>
           <div>
-            <strong>{locale.startsWith('zh') ? '运行权威' : 'Run authority'}</strong>:{' '}
+            <strong>{t(locale, 'executionEnginePanel.runAuthority')}</strong>:{' '}
             {String(snapshot.diagnosticsSummary.authorityMode ?? 'unknown')}
           </div>
           <div>
-            <strong>{locale.startsWith('zh') ? 'Daemon 可达' : 'Daemon ready'}</strong>:{' '}
+            <strong>{t(locale, 'executionEnginePanel.daemonReady')}</strong>:{' '}
             {snapshot.diagnosticsSummary.daemonReady ? t(locale, 'common.yes') : t(locale, 'common.no')}
           </div>
         </div>
@@ -388,7 +388,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
                     addDisabledTool();
                   }
                 }}
-                placeholder={locale.startsWith('zh') ? '工具名（减法禁用）' : 'tool name (subtract)'}
+                placeholder={t(locale, 'executionEnginePanel.disabledToolPlaceholder')}
                 style={{ flex: 1, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }}
               />
               <button

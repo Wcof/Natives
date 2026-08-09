@@ -1,5 +1,6 @@
 'use client';
 
+import { t } from '@/i18n';
 import { useEffect, useState } from 'react';
 import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
 
@@ -28,7 +29,6 @@ export default function FileMentionPopover({
   onSelect,
   onClose,
 }: FileMentionPopoverProps) {
-  const zh = locale.startsWith('zh');
   const [hits, setHits] = useState<ProjectFileHit[]>([]);
   const [index, setIndex] = useState(0);
 
@@ -107,15 +107,15 @@ export default function FileMentionPopover({
     <div
       className="absolute bottom-full left-0 z-50 mb-2 w-80 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-popup"
       role="listbox"
-      aria-label={zh ? '项目文件' : 'Project files'}
+      aria-label={t(locale, 'fileMention.ariaLabel')}
     >
       <div className="border-b border-[var(--border)] px-3 py-1.5 text-[11px] text-[var(--text-disabled)]">
-        {zh ? '用 @ 引用项目文件' : 'Mention project files with @'}
+        {t(locale, 'fileMention.hint')}
       </div>
       <ul className="max-h-56 overflow-y-auto py-1">
         {hits.length === 0 && (
           <li className="px-3 py-4 text-center text-xs text-[var(--text-disabled)]">
-            {zh ? '无匹配文件' : 'No files'}
+            {t(locale, 'fileMention.noMatch')}
           </li>
         )}
         {hits.map((hit, i) => (

@@ -6,9 +6,10 @@ const sidebar = readFileSync(new URL('./Sidebar.tsx', import.meta.url), 'utf8');
 const header = readFileSync(new URL('./Header.tsx', import.meta.url), 'utf8');
 const workbench = readFileSync(new URL('../assistant/AssistantWorkbench.tsx', import.meta.url), 'utf8');
 const assistantSidebar = readFileSync(new URL('../assistant/AssistantSidebarSection.tsx', import.meta.url), 'utf8');
-const messageInput = readFileSync(new URL('../assistant/MessageInput.tsx', import.meta.url), 'utf8');
+const messageInput = readFileSync(new URL('../ui/conversation/MessageInput.tsx', import.meta.url), 'utf8');
+const slashPopover = readFileSync(new URL('../ui/conversation/SlashCommandPopover.tsx', import.meta.url), 'utf8');
 const layoutEvents = readFileSync(new URL('./hooks/useLayoutEvents.ts', import.meta.url), 'utf8');
-const tauriAdapter = readFileSync(new URL('../../lib/tauri-adapter.ts', import.meta.url), 'utf8');
+const tauriAdapter = readFileSync(new URL('../../lib/tauri/host.ts', import.meta.url), 'utf8');
 // Send path moved into the composer hook; run control into the lifecycle hook.
 const composerHook = readFileSync(
   new URL('../../hooks/useAssistantWorkbenchComposer.ts', import.meta.url),
@@ -262,7 +263,6 @@ test('assistant action menus portal to body above clipping layers', () => {
 });
 
 test('slash commands use composer-local positioning; keyboard owned by MessageInput', () => {
-  const slashPopover = readFileSync(new URL('../assistant/SlashCommandPopover.tsx', import.meta.url), 'utf8');
   assert.equal(messageInput.includes('anchorRect'), false);
   assert.match(slashPopover, /bottom-full left-0/);
   // Popover must NOT own document keydown — MessageInput textarea does
@@ -272,6 +272,6 @@ test('slash commands use composer-local positioning; keyboard owned by MessageIn
 });
 
 test('locale persistence broadcasts the change consumed by the shell', () => {
-  assert.match(tauriAdapter, /setLocale:\s*async[\s\S]*?new CustomEvent\('locale-changed',\s*\{ detail: locale \}\)[\s\S]*?await cmd\('set_locale'/);
+  assert.match(tauriAdapter, /setLocale:[\s\S]*?new CustomEvent\('locale-changed',\s*\{ detail: locale \}\)[\s\S]*?await cmd\('set_locale'/);
   assert.match(layoutEvents, /addEventListener\('locale-changed'/);
 });

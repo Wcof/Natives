@@ -1,5 +1,6 @@
 'use client';
 
+import { t } from '@/i18n';
 import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { computeLineDiff } from '@/lib/diff-utils';
@@ -40,7 +41,6 @@ export default function DiffViewer({
   locale = 'en',
   defaultExpanded = false,
 }: DiffViewerProps) {
-  const zh = locale.startsWith('zh');
   const [expanded, setExpanded] = useState(mode === 'full' || defaultExpanded);
   const [useMonaco, setUseMonaco] = useState(mode === 'full');
   const result = useMemo(
@@ -69,11 +69,11 @@ export default function DiffViewer({
               setExpanded(true);
             }}
           >
-            {zh ? '完整查看' : 'Full view'}
+            {t(locale, 'diffViewer.fullView')}
           </button>
           {onOpenFile && (
             <button type="button" className="underline" onClick={onOpenFile}>
-              {zh ? '打开' : 'Open'}
+              {t(locale, 'diffViewer.open')}
             </button>
           )}
           {onRollback && (
@@ -83,12 +83,12 @@ export default function DiffViewer({
               className="text-amber-500 underline hover:text-amber-400"
               data-testid="diff-rollback"
             >
-              {zh ? '回滚' : 'Rollback'}
+              {t(locale, 'diffViewer.rollback')}
             </button>
           )}
           {mode === 'inline' && (
             <button type="button" className="underline" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? (zh ? '折叠' : 'Collapse') : (zh ? '展开' : 'Expand')}
+              {expanded ? t(locale, 'diffViewer.collapse') : t(locale, 'diffViewer.expand')}
             </button>
           )}
         </div>
@@ -107,7 +107,7 @@ export default function DiffViewer({
       {expanded && !useMonaco && (
         <div className="max-h-[300px] overflow-auto font-mono text-[0.6875rem]">
           {result.hunks.length === 0 ? (
-            <div className="p-3 text-[var(--text-disabled)]">{zh ? '无差异' : 'No changes'}</div>
+            <div className="p-3 text-[var(--text-disabled)]">{t(locale, 'diffViewer.noChanges')}</div>
           ) : (
             result.hunks.map((hunk, hi) => (
               <div key={hi} className="border-b border-[var(--border-subtle)] last:border-0">
@@ -144,7 +144,7 @@ export default function DiffViewer({
               className="text-[10px] underline text-[var(--primary)]"
               onClick={() => setUseMonaco(true)}
             >
-              {zh ? '在 Monaco 中打开' : 'Open in Monaco'}
+              {t(locale, 'diffViewer.openInMonaco')}
             </button>
           </div>
         </div>
@@ -156,7 +156,7 @@ export default function DiffViewer({
           className="w-full px-3 py-2 text-left text-[11px] text-[var(--text-disabled)] hover:bg-[var(--surface-hover)]"
           onClick={() => setExpanded(true)}
         >
-          {result.diffstat} · {zh ? '点击查看 hunk' : 'Click to view hunks'}
+          {result.diffstat} · {t(locale, 'diffViewer.clickForHunks')}
         </button>
       )}
     </div>

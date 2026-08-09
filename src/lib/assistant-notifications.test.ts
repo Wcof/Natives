@@ -14,8 +14,8 @@ test('suppresses desktop notification for the conversation currently open', () =
 });
 
 test('notification titles are bilingual', () => {
-  assert.match(notificationTitle('waiting_permission', true), /权限/);
-  assert.match(notificationTitle('run_failed', false), /failed/i);
+  assert.match(notificationTitle('zh', 'waiting_permission'), /权限/);
+  assert.match(notificationTitle('en', 'run_failed'), /failed/i);
 });
 
 test('locateAssistantTarget dispatches project→conversation→run path', () => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { t } from '@/i18n';
 
 interface ModelInfo {
   id: string;
@@ -65,7 +66,7 @@ export default function ModelSelectorDropdown({
   const selectedLabel =
     selectedModelInfo?.displayName && selectedModelInfo.displayName !== selectedModel
       ? selectedModelInfo.displayName
-      : selectedModel || models[0] || (locale.startsWith('zh') ? '未选择模型' : 'No model');
+      : selectedModel || models[0] || t(locale, 'modelSelector.noModel');
 
   // Position menu above the trigger so overflow:hidden parents cannot clip it.
   useLayoutEffect(() => {
@@ -124,9 +125,7 @@ export default function ModelSelectorDropdown({
 
   const label = selectedProvider
     ? `${selectedProvider.name} / ${selectedLabel}`
-    : locale.startsWith('zh')
-      ? '选择模型'
-      : 'Select model';
+    : t(locale, 'modelSelector.selectModel');
 
   const menu =
     isOpen && menuPos && typeof document !== 'undefined'
@@ -134,7 +133,7 @@ export default function ModelSelectorDropdown({
           <div
             ref={menuRef}
             role="listbox"
-            aria-label={locale.startsWith('zh') ? '选择模型' : 'Select model'}
+            aria-label={t(locale, 'modelSelector.selectModel')}
             className="fixed z-[200] max-h-72 min-w-[220px] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup"
             style={{
               top: menuPos.top,
@@ -145,7 +144,7 @@ export default function ModelSelectorDropdown({
           >
             {providers.length === 0 ? (
               <div className="px-2.5 py-3 text-center text-[0.6875rem] text-[var(--text-disabled)]">
-                {locale.startsWith('zh') ? '暂无可用供应商' : 'No providers available'}
+                {t(locale, 'modelSelector.noProviders')}
               </div>
             ) : (
               providers.map((provider) => {
@@ -157,7 +156,7 @@ export default function ModelSelectorDropdown({
                     </div>
                     {providerModels.length === 0 ? (
                       <div className="px-2.5 py-2 text-xs text-[var(--text-disabled)]">
-                        {locale.startsWith('zh') ? '未发现可用模型' : 'No discovered models'}
+                        {t(locale, 'modelSelector.noModels')}
                       </div>
                     ) : (
                       providerModels.map((modelInfo) => {

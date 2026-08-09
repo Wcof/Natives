@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Star, Play } from 'lucide-react';
 import { type FileEntry } from '@/types/file';
+import { t } from '@/i18n';
 import { EXT_BADGES, KIND_COLORS, getBadgeExt } from '@/lib/file-badges';
 import { getFileIcon, getIconColor, FbFolder, FbImage } from '@/lib/file-icons';
 import { useThumbnail } from '@/lib/use-thumbnail';
@@ -10,6 +11,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileCardProps {
   entry: FileEntry;
+  locale: string;
   onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   selected?: boolean;
@@ -35,7 +37,7 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }>
   git: { bg: 'transparent', text: 'var(--text-secondary)', border: 'var(--border)' },
 };
 
-export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths, flash = false }: FileCardProps) {
+export default function FileCard({ entry, locale, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths, flash = false }: FileCardProps) {
   const [dropTarget, setDropTarget] = useState(false);
   const [heat, setHeat] = useState(0);
   const [showRipple, setShowRipple] = useState(false);
@@ -245,7 +247,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
           e.stopPropagation();
           onFavoriteToggle?.(entry);
         }}
-        title={isFavorite ? '取消收藏' : '收藏'}
+        title={isFavorite ? t(locale, 'fileBrowser.unfavorite') : t(locale, 'fileBrowser.favorite')}
         style={{
           position: 'absolute', top: 6, right: 6,
           color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-disabled)',

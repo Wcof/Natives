@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import type { ContentBlock } from '@/types/assistant-content';
 
 export function formatElapsed(durationMs: number | null | undefined): string | null {
@@ -30,26 +31,29 @@ export function formatRunElapsed(
 ): string | null {
   const formatted = formatElapsed(durationMs);
   if (!formatted) return null;
-  const zh = locale.startsWith('zh');
   if (isFinished) {
-    return zh ? `已完成 ${formatted}` : `Completed ${formatted}`;
+    return t(locale, 'messageView.completedElapsed', { formatted });
   }
-  return zh ? `运行中 ${formatted}` : `Running ${formatted}`;
+  return t(locale, 'messageView.runningElapsed', { formatted });
 }
 
 /** Localized duration for reasoning headers, e.g. "3.2 秒" / "3.2s". Returns null if duration is under 0.1s. */
 export function formatReasoningDuration(milliseconds: number, locale = 'zh'): string | null {
   const seconds = Math.max(0, milliseconds) / 1000;
   if (seconds < 0.1) return null;
-  if (locale.startsWith('zh')) {
-    if (seconds < 60) return `${(Math.round(seconds * 10) / 10).toFixed(1)} 秒`;
-    return `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`;
-  }
-  return formatElapsed(milliseconds);
+  if (seconds < 60) return t(locale, 'messageView.reasoningSeconds', { v: (Math.round(seconds * 10) / 10).toFixed(1) });
+  return t(locale, 'messageView.reasoningMinutesSeconds', {
+    m: Math.floor(seconds / 60),
+    s: Math.floor(seconds % 60),
+  });
 }
 
-const LIVE_PHASES_ZH = ['正在思考', '分析问题', '梳理思路', '组织回答'] as const;
-const LIVE_PHASES_EN = ['Thinking', 'Analyzing', 'Planning', 'Organizing'] as const;
+const LIVE_PHASE_KEYS = [
+  'messageView.phaseThinking',
+  'messageView.phaseAnalyzing',
+  'messageView.phasePlanning',
+  'messageView.phaseOrganizing',
+] as const;
 
 function cleanStageLabel(value: string): string {
   const cleaned = value.replace(/\s+/g, ' ').trim();
@@ -97,10 +101,9 @@ export function extractReasoningStage(reasoning: string): string | null {
 }
 
 function livePhaseFallback(durationMs: number | undefined, locale: string): string {
-  const phases = locale.startsWith('zh') ? LIVE_PHASES_ZH : LIVE_PHASES_EN;
   const seconds = Math.max(0, durationMs ?? 0) / 1000;
-  const index = Math.min(phases.length - 1, Math.floor(seconds / 4));
-  return phases[index]!;
+  const index = Math.min(LIVE_PHASE_KEYS.length - 1, Math.floor(seconds / 4));
+  return t(locale, LIVE_PHASE_KEYS[index]!);
 }
 
 /**
@@ -116,7 +119,6 @@ export function reasoningToggleLabel(options: {
   locale?: string;
 }): string {
   const locale = options.locale ?? 'zh';
-  const zh = locale.startsWith('zh');
   const duration = options.durationMs != null && Number.isFinite(options.durationMs)
     ? formatReasoningDuration(options.durationMs, locale)
     : null;
@@ -128,12 +130,12 @@ export function reasoningToggleLabel(options: {
   }
 
   if (options.expanded) {
-    return zh ? '隐藏思考过程' : 'Hide thinking';
+    return t(locale, 'messageView.hideThinking');
   }
   if (duration) {
-    return zh ? `思考了 ${duration}` : `Thought for ${duration}`;
+    return t(locale, 'messageView.thoughtFor', { duration });
   }
-  return zh ? '查看思考过程' : 'View thinking';
+  return t(locale, 'messageView.viewThinking');
 }
 
 export function messagePlainText(blocks: ContentBlock[]): string {

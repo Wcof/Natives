@@ -21,7 +21,7 @@ function TextBlock({ block }: { block: ContentBlock }) {
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
   const live = Boolean(block.live);
-  const zh = (block.locale ?? 'zh').startsWith('zh');
+  const blockLocale = block.locale ?? 'zh';
   const [expanded, setExpanded] = React.useState(live);
   const userOverrideRef = React.useRef(false);
 
@@ -62,7 +62,7 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
         <span>{label}</span>
         {summaryFailed && (
           <span className="text-[10px] text-[var(--warning)] ml-1">
-            ({zh ? '总结生成失败' : 'Summary failed'})
+            (t(blockLocale, 'blocks.summaryFailed'))
           </span>
         )}
       </button>
@@ -379,14 +379,11 @@ function formatTokenCount(value: number | undefined): string {
 /** Context compression divider — collapsed bar with expandable summary. */
 function CompactionBlock({ block }: { block: ContentBlock }) {
   const appLocale = useLocale();
-  const zh = (block.locale ?? appLocale).startsWith('zh');
+  const blockLocale = block.locale ?? appLocale;
   const [expanded, setExpanded] = React.useState(false);
   const before = formatTokenCount(block.beforeTokens);
   const after = formatTokenCount(block.afterTokens);
-  // i18n-pending: inline zh/en until assistant block strings converge in src/i18n
-  const label = zh
-    ? `上下文已压缩 ${before} → ${after} tokens`
-    : `Context compressed ${before} → ${after} tokens`;
+  const label = t(blockLocale, 'blocks.compactedLabel', { before, after });
   const hasSummary = Boolean(block.summary && block.summary.trim());
 
   return (
@@ -410,7 +407,7 @@ function CompactionBlock({ block }: { block: ContentBlock }) {
       {expanded && hasSummary && (
         <div className="mt-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-hover)]/50 px-3 py-2 text-xs text-[var(--text-secondary)]">
           <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">
-            {zh ? '压缩摘要' : 'Compaction summary'}
+            {t(blockLocale, 'blocks.compactionSummary')}
           </div>
           <MarkdownText source={block.summary} />
         </div>
@@ -426,11 +423,10 @@ function CompactionBlock({ block }: { block: ContentBlock }) {
  */
 function SystemNoticeBlock({ block }: { block: ContentBlock }) {
   const appLocale = useLocale();
-  const zh = (block.locale ?? appLocale).startsWith('zh');
+  const blockLocale = block.locale ?? appLocale;
   const [showDetail, setShowDetail] = React.useState(false);
   const data = (block.noticeData ?? {}) as Record<string, unknown>;
 
-  // i18n-pending: inline zh/en until assistant block strings converge in src/i18n
   let tone: 'info' | 'warning' = 'info';
   let label: string;
   let detail: string | null = null;
@@ -442,20 +438,22 @@ function SystemNoticeBlock({ block }: { block: ContentBlock }) {
       const max = Number(data.maxAttempts ?? 0);
       const code = String(data.code ?? '');
       const nOfM = max > 0 ? `${attempt}/${max}` : `${attempt}`;
-      label = zh
-        ? `上游响应失败，第 ${nOfM} 次重试${code ? `（${code}）` : ''}`
-        : `Upstream attempt failed, retry ${nOfM}${code ? ` (${code})` : ''}`;
+      label = code
+        ? t(blockLocale, 'blocks.retryFailedWithCode', { n: nOfM, code })
+        : t(blockLocale, 'blocks.retryFailed', { n: nOfM });
       break;
     }
     case 'checkpoint_created': {
       const cpLabel = data.label != null ? String(data.label) : '';
-      label = zh ? '已创建还原点' : 'Restore point created';
+      label = t(blockLocale, 'blocks.restorePointCreated');
       detail = cpLabel || null;
       break;
     }
     case 'checkpoint_rewound': {
       const count = Number(data.count ?? (Array.isArray(data.paths) ? data.paths.length : 0));
-      label = zh ? `已回滚 ${count} 个文件` : `Rolled back ${count} file${count === 1 ? '' : 's'}`;
+      label = count === 1
+        ? t(blockLocale, 'blocks.rolledBackOne')
+        : t(blockLocale, 'blocks.rolledBackMany', { count });
       detail = Array.isArray(data.paths) && data.paths.length > 0
         ? data.paths.map(String).join('\n')
         : null;
@@ -463,7 +461,7 @@ function SystemNoticeBlock({ block }: { block: ContentBlock }) {
     }
     case 'subagent_created': {
       const task = String(data.task ?? '');
-      label = zh ? '派生子任务' : 'Subtask spawned';
+      label = t(blockLocale, 'blocks.subtaskSpawned');
       detail = task || null;
       break;
     }
@@ -495,7 +493,7 @@ function SystemNoticeBlock({ block }: { block: ContentBlock }) {
               aria-expanded={showDetail}
               className="shrink-0 text-[10px] text-[var(--text-disabled)] underline hover:text-[var(--text-secondary)]"
             >
-              {showDetail ? (zh ? '收起' : 'Hide') : (zh ? '详情' : 'Details')}
+              {showDetail ? t(blockLocale, 'blocks.hide') : t(blockLocale, 'blocks.details')}
             </button>
           )}
         </div>

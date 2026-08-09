@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2, Pause, Play, Trash2 } from 'lucide-react';
+import { t } from '@/i18n';
 import type { Run } from '@/lib/assistant-protocol';
 import { isActiveRunStatus, isTerminalRunStatus } from '@/lib/assistant-protocol';
-import { runStatusLabel, type RunStatusLabel } from '@/lib/assistant-run-status-labels';
+import { runStatusLabel, type DisplayRunStatus } from '@/lib/assistant-run-status-labels';
 
 export interface GoalStatusBarProps {
   goalTitle: string;
@@ -21,9 +22,9 @@ export interface GoalStatusBarProps {
 
 // Goal mode presents interruption as pause (paired with the Resume button),
 // so it overrides the canonical 已中断 / Interrupted wording.
-const GOAL_STATUS_OVERRIDES: Partial<Record<'interrupted' | 'cancelled', RunStatusLabel>> = {
-  interrupted: { zh: '已暂停', en: 'Paused' },
-  cancelled: { zh: '已暂停', en: 'Paused' },
+const GOAL_STATUS_OVERRIDES: Partial<Record<'interrupted' | 'cancelled', string>> = {
+  interrupted: 'runStatus.paused',
+  cancelled: 'runStatus.paused',
 };
 
 function formatElapsed(ms: number): string {
@@ -59,7 +60,6 @@ export default function GoalStatusBar({
   onResume,
   onDelete,
 }: GoalStatusBarProps) {
-  const zh = locale.startsWith('zh');
   const active = run ? isActiveRunStatus(run.status) : false;
   const terminal = run ? isTerminalRunStatus(run.status) : true;
   const paused =
@@ -75,12 +75,13 @@ export default function GoalStatusBar({
 
   const elapsed = run?.startedAt ? formatElapsed(elapsedMs(run.startedAt)) : '';
   const body = (instruction ?? '').trim() || goalTitle;
+  const status = run?.status as DisplayRunStatus | null | undefined;
 
   return (
     <div
       className="border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2.5"
       role="region"
-      aria-label={zh ? 'Goal 任务' : 'Goal task'}
+      aria-label={t(locale, 'assistant.goalTask')}
       data-goal-status-bar="1"
     >
       <div className="flex items-start gap-3">
@@ -102,11 +103,11 @@ export default function GoalStatusBar({
               Goal
             </span>
             <span className="font-medium text-[var(--text)]">
-              {runStatusLabel(run?.status, zh, GOAL_STATUS_OVERRIDES)}
+              {runStatusLabel(locale, status, GOAL_STATUS_OVERRIDES)}
               {run?.activity ? `：${run.activity}` : ''}
             </span>
             {elapsed && (
-              <span className="tabular-nums text-[var(--text-disabled)]" title={zh ? '耗时' : 'Elapsed'}>
+              <span className="tabular-nums text-[var(--text-disabled)]" title={t(locale, 'goalBar.elapsed')}>
                 {elapsed}
               </span>
             )}
@@ -127,10 +128,10 @@ export default function GoalStatusBar({
               type="button"
               onClick={onPause}
               className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-              title={zh ? '暂停' : 'Pause'}
+              title={t(locale, 'assistant.goalPause')}
             >
               <Pause size={12} />
-              {zh ? '暂停' : 'Pause'}
+              {t(locale, 'assistant.goalPause')}
             </button>
           )}
           {!active && canResume && onResume && (
@@ -138,10 +139,10 @@ export default function GoalStatusBar({
               type="button"
               onClick={onResume}
               className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-              title={zh ? '继续' : 'Resume'}
+              title={t(locale, 'assistant.goalResume')}
             >
               <Play size={12} />
-              {zh ? '继续' : 'Resume'}
+              {t(locale, 'assistant.goalResume')}
             </button>
           )}
           {onDelete && (
@@ -149,17 +150,17 @@ export default function GoalStatusBar({
               type="button"
               onClick={onDelete}
               className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-[var(--danger)] hover:bg-[var(--surface-hover)]"
-              title={zh ? '删除 Goal' : 'Delete goal'}
+              title={t(locale, 'assistant.goalDelete')}
             >
               <Trash2 size={12} />
-              {zh ? '删除' : 'Delete'}
+              {t(locale, 'common.delete')}
             </button>
           )}
         </div>
       </div>
       {paused && (
         <p className="mt-1 pl-5 text-[11px] text-[var(--text-disabled)]">
-          {zh ? '任务已暂停，可点「继续」恢复或「删除」结束。' : 'Paused — resume or delete this goal.'}
+          {t(locale, 'assistant.goalPausedHint')}
         </p>
       )}
     </div>

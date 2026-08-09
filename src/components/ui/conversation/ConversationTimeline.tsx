@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Check, Copy, FileDiff, RefreshCw, Undo2 } from 'lucide-react';
+import { t } from '@/i18n';
 import { formatRunElapsed, messagePlainText } from '@/lib/assistant-message-view';
 import type { RunEvent } from '@/lib/assistant-protocol';
 import {
@@ -142,20 +143,20 @@ function ChangeSummaryCard({
       <div role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setPinnedOpen(open => !open)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPinnedOpen(open => !open); } }} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[var(--surface-hover)]">
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--surface-hover)] text-[var(--text-secondary)]"><FileDiff size={20} /></div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-[var(--text)]">{zh ? `已编辑 ${summary.files.length} 个文件` : `Edited ${summary.files.length} files`}</div>
+          <div className="text-sm font-semibold text-[var(--text)]">{t(locale, 'timeline.editedFiles', { count: summary.files.length })}</div>
           <div className="mt-0.5 text-sm font-medium tabular-nums"><span className="text-emerald-500">+{summary.additions}</span><span className="ml-2 text-red-500">−{summary.deletions}</span></div>
         </div>
         {onRollbackChanges && !rolledBack && (
           confirming ? (
             <div className="flex shrink-0 items-center gap-1">
-              <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(false); }} disabled={rollingBack} className="rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{zh ? '取消' : 'Cancel'}</button>
-              <button type="button" onClick={(event) => { event.stopPropagation(); void restore(); }} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-red-500/10 disabled:opacity-50">{rollingBack ? (zh ? '撤销中…' : 'Undoing…') : (zh ? '确认撤销' : 'Confirm undo')}</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(false); }} disabled={rollingBack} className="rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{t(locale, 'common.cancel')}</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); void restore(); }} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-red-500/10 disabled:opacity-50">{rollingBack ? t(locale, 'timeline.undoing') : t(locale, 'timeline.confirmUndo')}</button>
             </div>
           ) : (
-            <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(true); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><Undo2 size={15} />{zh ? '撤销' : 'Undo'}</button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(true); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><Undo2 size={15} />{t(locale, 'timeline.undo')}</button>
           )
         )}
-        {rolledBack && <span className="shrink-0 text-xs text-[var(--text-disabled)]">{zh ? '已撤销' : 'Undone'}</span>}
+        {rolledBack && <span className="shrink-0 text-xs text-[var(--text-disabled)]">{t(locale, 'timeline.undone')}</span>}
       </div>
       {expanded && <div className="border-t border-[var(--border-subtle)] px-4 py-1">
         {summary.files.map((file) => (
@@ -303,7 +304,7 @@ const MessageRow = memo(function MessageRow({
           toolActivity.length === 0 && (
             <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
               <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--primary)]" />
-              {zh ? '正在思考' : 'Thinking'}
+              {t(locale, 'timeline.thinking')}
               {duration ? ` · ${duration}` : ''}
             </div>
           )}
@@ -326,7 +327,7 @@ const MessageRow = memo(function MessageRow({
         <button
           type="button"
           onClick={() => onCopy(message.id, messagePlainText(message.contentBlocks))}
-          title={zh ? '复制' : 'Copy'}
+          title={t(locale, 'common.copy')}
           className="ml-1 rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
         >
           {copiedId === message.id ? <Check size={12} /> : <Copy size={12} />}
@@ -335,7 +336,7 @@ const MessageRow = memo(function MessageRow({
           <button
             type="button"
             onClick={onRetry}
-            title={zh ? '重试' : 'Retry'}
+            title={t(locale, 'common.retry')}
             className="rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
           >
             <RefreshCw size={12} />
@@ -473,7 +474,7 @@ export default function ConversationTimeline({
   if (loading) {
     return (
       <div className="grid h-full place-items-center text-sm text-[var(--text-disabled)]">
-        {zh ? '加载中…' : 'Loading…'}
+        {t(locale, 'timeline.loading')}
       </div>
     );
   }
@@ -482,10 +483,10 @@ export default function ConversationTimeline({
       <div className="grid h-full place-items-center text-center">
         <div>
           <div className="text-sm text-[var(--text-secondary)]">
-            {zh ? '开始新的对话' : 'Start a new conversation'}
+            {t(locale, 'timeline.startNewConversation')}
           </div>
           <div className="mt-1 text-xs text-[var(--text-disabled)]">
-            {zh ? '在下方描述你想完成的任务' : 'Describe the task below'}
+            {t(locale, 'timeline.describeTask')}
           </div>
         </div>
       </div>
@@ -512,13 +513,14 @@ export default function ConversationTimeline({
             data-testid="timeline-show-earlier"
           >
             {/* i18n-pending: i18n files frozen this round; follow file-local zh/en pattern. */}
-            {zh
-              ? `显示更早 ${Math.min(TIMELINE_WINDOW_STEP, hiddenOlderCount)} 条（还有 ${hiddenOlderCount} 条未显示）`
-              : `Show ${Math.min(TIMELINE_WINDOW_STEP, hiddenOlderCount)} earlier (${hiddenOlderCount} hidden)`}
+            {t(locale, 'timeline.showEarlier', {
+              shown: Math.min(TIMELINE_WINDOW_STEP, hiddenOlderCount),
+              hidden: hiddenOlderCount,
+            })}
           </button>
         ) : hasMoreOlder && onLoadOlder ? (
           <button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]">
-            {loadingOlder ? (zh ? '加载中…' : 'Loading…') : (zh ? '加载更早消息' : 'Load older messages')}
+            {loadingOlder ? t(locale, 'timeline.loading') : t(locale, 'timeline.loadOlder')}
           </button>
         ) : null}
         {visibleMessages.map((message) => (

@@ -12,7 +12,7 @@ import type {
   TimelineThinkingActivity,
   TimelineToolActivity,
 } from '@/lib/assistant-timeline';
-import { genericThinkingTitle } from '@/lib/assistant-timeline';
+import { t } from '@/i18n';
 import { formatElapsed } from '@/lib/assistant-message-view';
 import DiffViewer from './DiffViewer';
 
@@ -33,21 +33,17 @@ export interface ThinkingActivityProps {
   nowMs?: number;
 }
 
-function statusLabel(status: TimelineToolActivity['status'], zh: boolean): string {
-  switch (status) {
-    case 'pending':
-      return zh ? '等待' : 'pending';
-    case 'running':
-      return zh ? '执行中' : 'running';
-    case 'completed':
-      return zh ? '完成' : 'done';
-    case 'failed':
-      return zh ? '失败' : 'failed';
-    case 'rejected':
-      return zh ? '拒绝' : 'rejected';
-    default:
-      return status;
-  }
+const TOOL_STATUS_KEYS: Record<TimelineToolActivity['status'], string> = {
+  pending: 'thinkingActivity.toolPending',
+  running: 'thinkingActivity.toolRunning',
+  completed: 'thinkingActivity.toolDone',
+  failed: 'thinkingActivity.toolFailed',
+  rejected: 'thinkingActivity.toolRejected',
+};
+
+function statusLabel(status: TimelineToolActivity['status'], locale: string): string {
+  const key = TOOL_STATUS_KEYS[status];
+  return key ? t(locale, key) : status;
 }
 
 function toolDetails(tool: TimelineToolActivity): { kind: 'terminal' | 'edit' | 'view' | 'other'; target: string } {
@@ -67,13 +63,17 @@ function toolDetails(tool: TimelineToolActivity): { kind: 'terminal' | 'edit' | 
   return { kind: 'other', target: tool.toolName };
 }
 
-function toolTitle(tool: TimelineToolActivity, zh: boolean): string {
+function toolTitle(tool: TimelineToolActivity, locale: string): string {
   const { kind, target } = toolDetails(tool);
   const running = tool.status === 'pending' || tool.status === 'running';
-  if (kind === 'terminal') return zh ? `${running ? '正在运行' : '运行'} ${target}` : `${running ? 'Running' : 'Ran'} ${target}`;
-  if (kind === 'edit') return zh ? `${running ? '正在编辑' : '编辑'} ${target}` : `${running ? 'Editing' : 'Edited'} ${target}`;
-  if (kind === 'view') return zh ? `${running ? '正在查看' : '查看'} ${target}` : `${running ? 'Viewing' : 'Viewed'} ${target}`;
-  return zh ? `${running ? '正在运行' : '执行'} ${target}` : `${running ? 'Running' : 'Ran'} ${target}`;
+  const keys: Record<'terminal' | 'edit' | 'view' | 'other', { running: string; done: string }> = {
+    terminal: { running: 'thinkingActivity.toolTerminalRunning', done: 'thinkingActivity.toolTerminalDone' },
+    edit: { running: 'thinkingActivity.toolEditRunning', done: 'thinkingActivity.toolEditDone' },
+    view: { running: 'thinkingActivity.toolViewRunning', done: 'thinkingActivity.toolViewDone' },
+    other: { running: 'thinkingActivity.toolOtherRunning', done: 'thinkingActivity.toolOtherDone' },
+  };
+  const pair = keys[kind];
+  return t(locale, running ? pair.running : pair.done, { target });
 }
 
 function toolValue(value: unknown): string | null {
@@ -94,7 +94,6 @@ export default function ThinkingActivity({
   thinkingFinishedAtMs = null,
   nowMs = 0,
 }: ThinkingActivityProps) {
-  const zh = locale.startsWith('zh');
   const live = Boolean(thinking?.live || tools.some(t => t.status === 'pending' || t.status === 'running'));
   const started =
     thinkingStartedAtMs != null && Number.isFinite(thinkingStartedAtMs)
@@ -164,11 +163,11 @@ export default function ThinkingActivity({
     setOpenTaxonomies((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const taxonomyLabels: Record<string, { zh: string; en: string; icon: typeof Eye }> = {
-    view: { zh: '查看指令', en: 'View Directives', icon: Eye },
-    edit: { zh: '编辑指令', en: 'Edit Directives', icon: FilePenLine },
-    terminal: { zh: '运行指令', en: 'Run Directives', icon: Terminal },
-    other: { zh: '其他指令', en: 'Other Directives', icon: Wrench },
+  const taxonomyKeys: Record<string, { labelKey: string; icon: typeof Eye }> = {
+    view: { labelKey: 'thinkingActivity.taxonomyView', icon: Eye },
+    edit: { labelKey: 'thinkingActivity.taxonomyEdit', icon: FilePenLine },
+    terminal: { labelKey: 'thinkingActivity.taxonomyTerminal', icon: Terminal },
+    other: { labelKey: 'thinkingActivity.taxonomyOther', icon: Wrench },
   };
 
   return (
@@ -192,8 +191,8 @@ export default function ThinkingActivity({
             aria-hidden
           />
         )}
-        <span>{zh ? (live ? '运行中' : '已完成') : (live ? 'Running' : 'Completed')}</span>
-        <span>{zh ? '已执行' : 'Executed'}</span>
+        <span>{live ? t(locale, 'thinkingActivity.running') : t(locale, 'thinkingActivity.completed')}</span>
+        <span>{t(locale, 'thinkingActivity.executed')}</span>
         {durationLabel ? (
           <span className="tabular-nums text-[var(--text-disabled)]">
             {durationLabel}
@@ -228,14 +227,14 @@ export default function ThinkingActivity({
                   ) : thinking.text ? (
                     <div className="line-clamp-2 text-[var(--text-secondary)]">{thinking.text}</div>
                   ) : (
-                    <div className="text-[var(--text-disabled)]">{zh ? '思考已完成' : 'Thinking complete'}</div>
+                    <div className="text-[var(--text-disabled)]">{t(locale, 'thinkingActivity.thinkingComplete')}</div>
                   )}
                   {thinking.summaryStatus === 'failed' && (
-                    <span className="text-[10px] text-[var(--warning)]">{zh ? '(总结生成失败)' : '(Summary generation failed)'}</span>
+                    <span className="text-[10px] text-[var(--warning)]">{t(locale, 'thinkingActivity.summaryFailed')}</span>
                   )}
                 </div>
               ) : (
-                <div className="text-[var(--text-disabled)]">{zh ? '…' : '…'}</div>
+                <div className="text-[var(--text-disabled)]">{'…'}</div>
               )}
             </div>
           )}
@@ -248,7 +247,7 @@ export default function ThinkingActivity({
                   {(['view', 'edit', 'terminal', 'other'] as const).map((kind) => {
                     const group = taxonomyGroups[kind];
                     if (group.length === 0) return null;
-                    const meta = taxonomyLabels[kind] ?? { zh: '其他指令', en: 'Other Directives', icon: Wrench };
+                    const meta = taxonomyKeys[kind] ?? { labelKey: 'thinkingActivity.taxonomyOther', icon: Wrench };
                     const Icon = meta.icon;
                     const isOpen = Boolean(openTaxonomies[kind]);
                     return (
@@ -259,7 +258,7 @@ export default function ThinkingActivity({
                           className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
                         >
                           <Icon size={13} />
-                          <span className="flex-1">{zh ? meta.zh : meta.en}</span>
+                          <span className="flex-1">{t(locale, meta.labelKey)}</span>
                           <span className="rounded-full bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] text-[var(--text-disabled)]">
                             {group.length}
                           </span>
@@ -271,7 +270,6 @@ export default function ThinkingActivity({
                               <RenderToolItem
                                 key={tool.toolCallId}
                                 tool={tool}
-                                zh={zh}
                                 locale={locale}
                                 expanded={Boolean(expandedTools[tool.toolCallId])}
                                 onToggle={() =>
@@ -294,7 +292,6 @@ export default function ThinkingActivity({
                     <RenderToolItem
                       key={tool.toolCallId}
                       tool={tool}
-                      zh={zh}
                       locale={locale}
                       expanded={Boolean(expandedTools[tool.toolCallId])}
                       onToggle={() =>
@@ -317,13 +314,11 @@ export default function ThinkingActivity({
 
 function RenderToolItem({
   tool,
-  zh,
   locale,
   expanded,
   onToggle,
 }: {
   tool: TimelineToolActivity;
-  zh: boolean;
   locale: string;
   expanded: boolean;
   onToggle: () => void;
@@ -351,9 +346,9 @@ function RenderToolItem({
           <Icon size={13} className="relative" />
         </span>
         <span className={`min-w-0 flex-1 truncate ${(tool.status === 'pending' || tool.status === 'running') ? 'animate-pulse text-[var(--text)]' : ''}`}>
-          {toolTitle(tool, zh)}
+          {toolTitle(tool, locale)}
         </span>
-        <span className="shrink-0 text-[var(--text-disabled)]">{statusLabel(tool.status, zh)}</span>
+        <span className="shrink-0 text-[var(--text-disabled)]">{statusLabel(tool.status, locale)}</span>
         <ChevronDown size={13} className={`shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded && (
@@ -370,13 +365,13 @@ function RenderToolItem({
           ))}
           {tool.input !== undefined && (
             <section>
-              <div className="mb-1 text-[10px] font-medium text-[var(--text-disabled)]">{zh ? '指令' : 'Input'}</div>
+              <div className="mb-1 text-[10px] font-medium text-[var(--text-disabled)]">{t(locale, 'thinkingActivity.inputLabel')}</div>
               <pre className="max-h-44 overflow-auto rounded bg-[var(--surface-hover)] p-2 whitespace-pre-wrap break-words text-[11px] text-[var(--text-secondary)]">{toolValue(tool.input)}</pre>
             </section>
           )}
           {output && (
             <section>
-              <div className="mb-1 text-[10px] font-medium text-[var(--text-disabled)]">{zh ? '输出' : 'Output'}</div>
+              <div className="mb-1 text-[10px] font-medium text-[var(--text-disabled)]">{t(locale, 'thinkingActivity.outputLabel')}</div>
               <pre className="max-h-44 overflow-auto rounded bg-[var(--surface-hover)] p-2 whitespace-pre-wrap break-words text-[11px] text-[var(--text-secondary)]">{output}</pre>
             </section>
           )}
