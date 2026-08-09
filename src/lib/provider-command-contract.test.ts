@@ -10,7 +10,11 @@ import { describe, it } from 'node:test';
 const adapter = readFileSync(new URL('./tauri/provider.ts', import.meta.url), 'utf8');
 const dialog = readFileSync(new URL('../components/settings/AddProviderDialog.tsx', import.meta.url), 'utf8');
 const settings = readFileSync(new URL('../components/shell/SettingsPage.tsx', import.meta.url), 'utf8');
-const commands = readFileSync(new URL('../../src-tauri/src/commands/provider.rs', import.meta.url), 'utf8');
+const providerDir = fileURLToPath(new URL('../../src-tauri/src/commands/provider/', import.meta.url));
+const commands = readdirSync(providerDir, { recursive: true })
+  .filter((f): f is string => typeof f === 'string' && f.endsWith('.rs'))
+  .map((f) => readFileSync(join(providerDir, f), 'utf8'))
+  .join('\n');
 const commandRegistry = readFileSync(new URL('../../src-tauri/src/lib.rs', import.meta.url), 'utf8');
 // T202/T302: legacy daemon/rpc_server.rs was physically deleted (orphan, 0 refs).
 // A2-03 split the Agent Daemon RPC authority into rpc/{dispatch,server,handlers}.

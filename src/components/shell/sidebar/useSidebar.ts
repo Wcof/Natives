@@ -3,7 +3,7 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, MouseEvent as ReactMouseEvent, DragEvent, SetStateAction } from 'react';
 import type { Locale } from '@/i18n';
-import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
+import { seedAllBuiltinTools } from '@/lib/builtin-tools';
 import {
   useFavorites,
   favoritesNavTarget,

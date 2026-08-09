@@ -240,7 +240,7 @@ function SettingsNav({ c }: { c: SidebarController }) {
 }
 
 function QuickAccessSection({ c }: { c: SidebarController }) {
-  const { locale, isCollapsed } = c;
+  const { locale } = c;
   return (
     <>
       {/* Quick Access List — fixed system shortcuts */}

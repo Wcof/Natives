@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { Activity, FileText, Loader, Puzzle, Wrench } from 'lucide-react';
+import { Activity, FileText, Loader, Wrench } from 'lucide-react';
 import type { Locale } from '@/i18n';
 import { t } from '@/i18n';
 import type { DaemonCapabilities } from '@/lib/assistant-protocol';

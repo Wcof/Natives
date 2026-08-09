@@ -2,7 +2,6 @@
 
 import type { Dispatch, SetStateAction } from 'react';
 import type { Locale } from '@/i18n';
-import type { DaemonCapabilities } from '@/lib/assistant-protocol';
 import { classifyError } from '@/lib/error-classifier';
 
 export const EXTENSION_DISCOVERY_STATUS = 'discovered_not_executable' as const;
