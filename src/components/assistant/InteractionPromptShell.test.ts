@@ -18,8 +18,8 @@ const askUser = readFileSync(
   resolve(process.cwd(), 'src/components/assistant/AskUserPromptCard.tsx'),
   'utf8',
 );
-const workbench = readFileSync(
-  resolve(process.cwd(), 'src/components/assistant/AssistantWorkbench.tsx'),
+const composer = readFileSync(
+  resolve(process.cwd(), 'src/components/assistant/workbench/WorkbenchComposer.tsx'),
   'utf8',
 );
 
@@ -44,18 +44,18 @@ test('AskUserPromptCard reuses InteractionPromptShell', () => {
   assert.match(askUser, /onAnswer/);
 });
 
-test('workbench replaces MessageInput while permission or ask_user is pending', () => {
-  assert.match(workbench, /composerBlockedByInteraction/);
-  assert.match(workbench, /data-composer-interaction-overlay/);
+test('composer replaces MessageInput while permission or ask_user is pending', () => {
+  assert.match(composer, /composerBlockedByInteraction/);
+  assert.match(composer, /data-composer-interaction-overlay/);
   // MessageInput must be behind the interaction gate, not rendered alongside.
   assert.match(
-    workbench,
+    composer,
     /composerBlockedByInteraction \? \([\s\S]*PermissionRequestCard[\s\S]*AskUserPromptCard[\s\S]*\) : \([\s\S]*<MessageInput/,
   );
   // Must not leave a free-floating permission card above an active MessageInput.
   assert.equal(
     /PermissionRequestCard[\s\S]{0,400}<MessageInput/.test(
-      workbench.replace(/composerBlockedByInteraction[\s\S]*?<\/MessageInput>/, ''),
+      composer.replace(/composerBlockedByInteraction[\s\S]*?<\/MessageInput>/, ''),
     ),
     false,
   );

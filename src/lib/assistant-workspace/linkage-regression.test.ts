@@ -32,6 +32,18 @@ const workbenchSrc = readFileSync(
   fileURLToPath(new URL('../../components/assistant/AssistantWorkbench.tsx', import.meta.url)),
   'utf8',
 );
+const composerSrc = readFileSync(
+  fileURLToPath(new URL('../../components/assistant/workbench/WorkbenchComposer.tsx', import.meta.url)),
+  'utf8',
+);
+const timelinePaneSrc = readFileSync(
+  fileURLToPath(new URL('../../components/assistant/workbench/WorkbenchTimelinePane.tsx', import.meta.url)),
+  'utf8',
+);
+const composerHookSrc = readFileSync(
+  fileURLToPath(new URL('../../hooks/useAssistantWorkbenchComposer.ts', import.meta.url)),
+  'utf8',
+);
 const sidebarSrc = readFileSync(
   fileURLToPath(new URL('../../components/assistant/AssistantSidebarSection.tsx', import.meta.url)),
   'utf8',
@@ -78,13 +90,14 @@ test('remove project confirm button is hard-coded zh/en, not raw i18n key', () =
 
 test('goal chrome only when conversation.mode === goal; ordinary send uses agent mode', () => {
   assert.match(workbenchSrc, /activeConversation\?\.mode === 'goal'/);
-  assert.match(workbenchSrc, /mode: 'agent'/);
+  // Ordinary sends create agent-mode conversations in the composer hook.
+  assert.match(composerHookSrc, /mode: 'agent'/);
   // Prompt queue hidden for goal mode (not used as goal chrome substitute).
-  assert.match(workbenchSrc, /items=\{isGoalMode \? \[\] : promptQueue\}/);
+  assert.match(composerSrc, /items=\{isGoalMode \? \[\] : promptQueue\}/);
   // Ordinary chat/agent: no RunStatusBar — progress is timeline + input stop only.
   assert.equal(workbenchSrc.includes("import RunStatusBar"), false);
   assert.equal(workbenchSrc.includes('<RunStatusBar'), false);
-  assert.match(workbenchSrc, /GoalStatusBar/);
+  assert.match(timelinePaneSrc, /GoalStatusBar/);
 });
 
 test('groupAssistantConversations seeds empty registered projects on first paint', () => {

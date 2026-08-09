@@ -16,16 +16,16 @@ const messageInputSrc = readFileSync(
   fileURLToPath(new URL('./MessageInput.tsx', import.meta.url)),
   'utf8',
 );
-const workbenchSrc = readFileSync(
-  fileURLToPath(new URL('../../assistant/AssistantWorkbench.tsx', import.meta.url)),
+const composerSrc = readFileSync(
+  fileURLToPath(new URL('./workbench/WorkbenchComposer.tsx', import.meta.url)),
   'utf8',
 );
 const storeContextSrc = readFileSync(
-  fileURLToPath(new URL('../../../lib/assistant-workspace/context.tsx', import.meta.url)),
+  fileURLToPath(new URL('../../lib/assistant-workspace/context.tsx', import.meta.url)),
   'utf8',
 );
 const workspaceContextSrc = readFileSync(
-  fileURLToPath(new URL('../../assistant/AssistantWorkspaceContext.tsx', import.meta.url)),
+  fileURLToPath(new URL('./AssistantWorkspaceContext.tsx', import.meta.url)),
   'utf8',
 );
 
@@ -43,9 +43,9 @@ describe('composer draft debounce (typing thrash)', () => {
     assert.match(messageInputSrc, /draftKey/);
   });
 
-  it('Workbench passes draftKey and accepts conversationId on onDraftChange', () => {
-    assert.match(workbenchSrc, /draftKey=\{activeId\}/);
-    assert.match(workbenchSrc, /onDraftChange=\{\(text,\s*conversationId\)\s*=>/);
+  it('Composer passes draftKey and accepts conversationId on onDraftChange', () => {
+    assert.match(composerSrc, /draftKey=\{activeId\}/);
+    assert.match(composerSrc, /onDraftChange=\{\(text,\s*conversationId\)\s*=>/);
   });
 
   it('store provider debounces localStorage draft writes', () => {

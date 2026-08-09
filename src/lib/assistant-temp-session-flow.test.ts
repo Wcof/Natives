@@ -31,6 +31,10 @@ const workbenchSrc = readFileSync(
   fileURLToPath(new URL('../components/assistant/AssistantWorkbench.tsx', import.meta.url)),
   'utf8',
 );
+const composerHookSrc = readFileSync(
+  fileURLToPath(new URL('../hooks/useAssistantWorkbenchComposer.ts', import.meta.url)),
+  'utf8',
+);
 const contextSrc = readFileSync(
   fileURLToPath(new URL('../components/assistant/AssistantWorkspaceContext.tsx', import.meta.url)),
   'utf8',
@@ -392,9 +396,9 @@ test('workbench first-send path uses isTempConversationId and project.register p
   assert.match(workbenchSrc, /resolveRegisteredProjectPath/);
   assert.match(workbenchSrc, /createTempSession/);
   assert.match(workbenchSrc, /conversationsWithoutTemp/);
-  // conversation.create only in handleSend (first send), not in addProjectFolder
-  assert.match(workbenchSrc, /'conversation\.create'/);
-  assert.match(workbenchSrc, /project_id:\s*activeProjectPath/);
+  // conversation.create lives in the composer hook (first send), not in the shell.
+  assert.match(composerHookSrc, /'conversation\.create'/);
+  assert.match(composerHookSrc, /project_id:\s*activeProjectPath/);
 });
 
 test('workspace context stores tempSession on navigation and uses register path', () => {

@@ -26,7 +26,10 @@ import {
 import PlanApprovalCard from './PlanApprovalCard';
 
 const cardSource = readFileSync(new URL('./PlanApprovalCard.tsx', import.meta.url), 'utf8');
-const workbenchSource = readFileSync(new URL('./AssistantWorkbench.tsx', import.meta.url), 'utf8');
+const composerSource = readFileSync(
+  new URL('./workbench/WorkbenchComposer.tsx', import.meta.url),
+  'utf8',
+);
 
 /** The envelope the daemon actually publishes (production_tools await_plan_approval). */
 function envelope(overrides: Record<string, unknown> = {}) {
@@ -291,20 +294,23 @@ describe('PlanApprovalCard contract', () => {
   });
 });
 
-describe('AssistantWorkbench wiring', () => {
+describe('WorkbenchComposer wiring', () => {
   it('gates the plan card on the RPC it answers with, and falls back to the generic card', () => {
-    assert.match(workbenchSource, /hasMethod\(state\.capabilities, 'permission\.respond'\)/);
-    assert.match(workbenchSource, /from '@\/lib\/assistant-workspace\/capability-gate'/);
-    const branch = workbenchSource.slice(workbenchSource.indexOf('pendingPlanApproval &&'));
+    assert.match(composerSource, /hasMethod\(state\.capabilities, 'permission\.respond'\)/);
+    assert.match(composerSource, /from '@\/lib\/assistant-workspace\/capability-gate'/);
+    const branch = composerSource.slice(composerSource.indexOf('pendingPlanApproval &&'));
     const planIdx = branch.indexOf('<PlanApprovalCard');
     const genericIdx = branch.indexOf('<PermissionRequestCard');
     assert.ok(planIdx > 0 && genericIdx > planIdx, 'generic card is the else branch');
   });
 
   it('lazy-loads the card but keeps the predicate eager (R-P7)', () => {
-    assert.match(workbenchSource, /lazy\(\(\) => import\('\.\/PlanApprovalCard'\)\)/);
-    assert.match(workbenchSource, /import \{ parsePlanApprovalRequest.*\} from '\.\/plan-approval'/);
-    assert.match(workbenchSource, /<Suspense/);
+    assert.match(composerSource, /lazy\(\(\) => import\('\.\.\/PlanApprovalCard'\)\)/);
+    assert.match(
+      composerSource,
+      /import \{ parsePlanApprovalRequest.*\} from '\.\.\/plan-approval'/,
+    );
+    assert.match(composerSource, /<Suspense/);
   });
 
   it('never reaches the daemon except through the gateway', () => {

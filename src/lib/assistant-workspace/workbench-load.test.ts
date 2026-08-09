@@ -32,6 +32,14 @@ const workbenchSrc = readFileSync(
   fileURLToPath(new URL('../../components/assistant/AssistantWorkbench.tsx', import.meta.url)),
   'utf8',
 );
+const composerSrc = readFileSync(
+  fileURLToPath(new URL('../../components/assistant/workbench/WorkbenchComposer.tsx', import.meta.url)),
+  'utf8',
+);
+const composerHookSrc = readFileSync(
+  fileURLToPath(new URL('../../hooks/useAssistantWorkbenchComposer.ts', import.meta.url)),
+  'utf8',
+);
 
 test('createDefaultGateway(preferFixture) returns FixtureAssistantAdapter surface', () => {
   const g = createDefaultGateway(true);
@@ -49,7 +57,8 @@ test('createDefaultGateway(false) fails closed without assistantV2', async () =>
 test('workbench source is composition-only (no v2call / streamChat / invent background status)', () => {
   assert.match(workbenchSrc, /AssistantStoreProvider/);
   assert.match(workbenchSrc, /data-gateway="1"/);
-  assert.match(workbenchSrc, /sendOrQueue/);
+  // Send path moved to the composer hook — still the shared controller, never a raw invoke.
+  assert.match(composerHookSrc, /sendOrQueue/);
   assert.match(workbenchSrc, /CommandPalette/);
   assert.equal(workbenchSrc.includes('function v2call'), false);
   assert.equal(/\bstreamChat\s*[:(]/.test(workbenchSrc), false);
@@ -61,7 +70,7 @@ test('workbench source is composition-only (no v2call / streamChat / invent back
 });
 
 test('composer capability picker does not expose skills; skills are slash-only', () => {
-  assert.match(workbenchSrc, /showSkills=\{false\}/);
+  assert.match(composerSrc, /showSkills=\{false\}/);
   assert.equal(workbenchSrc.includes('activeCapabilitySelection.skills?.length'), false);
 });
 
