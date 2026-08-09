@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PreviewContext, PreviewRequest } from '../contracts';
 import { PreviewProviderError } from '../errors';
-import { csvProvider, parseCsv, parseCsvLine, CSV_MAX_ROWS } from '../providers/csv';
+import {
+  csvProvider,
+  parseCsv,
+  parseCsvLine,
+  CSV_MAX_ROWS,
+  CSV_MAX_COLUMNS,
+  CSV_MAX_PARSE_BYTES,
+} from '../providers/csv';
 
 test('parseCsvLine handles quotes, commas and escaped quotes', () => {
   assert.deepEqual(parseCsvLine('a,"b,c",d'), ['a', 'b,c', 'd']);
@@ -86,4 +93,43 @@ test('empty csv is recoverable unsupported (allows code fallback)', async () => 
     () => csvProvider.prepare({ source: { type: 'file', path: '/a.csv', kind: 'text' }, mode: 'preview', surface: 'files' }, ctx),
     (e: unknown) => e instanceof PreviewProviderError && e.recoverable === true,
   );
+});
+
+// ── P2-02：CSV 字节/列预算（read/parse 阶段有界，不先解析完整文件再 slice）──
+
+test('parseCsv bounds columns beyond CSV_MAX_COLUMNS', () => {
+  const wide = Array.from({ length: CSV_MAX_COLUMNS + 50 }, (_, i) => `c${i}`).join(',') + '\n';
+  const parsed = parseCsv(wide);
+  assert.equal(parsed.truncated, true);
+  assert.ok(parsed.headers.length <= CSV_MAX_COLUMNS);
+});
+
+test('parseCsv stops parsing when input exceeds byte budget', () => {
+  // 单行巨大（无换行），超过字节预算：不解析完整输入，行/列仍受列预算保护
+  const hugeRow = Array.from({ length: Math.ceil(CSV_MAX_PARSE_BYTES / 2) }, (_, i) => `v${i}`).join(',');
+  const parsed = parseCsv('h1,h2\n' + hugeRow);
+  assert.equal(parsed.truncated, true);
+  assert.ok(parsed.rows.length <= 1);
+});
+
+test('parseCsv byte budget truncates without swallowing already-parsed rows', () => {
+  const bigBody = 'x,y\n' + ('1,2\n'.repeat(Math.ceil(CSV_MAX_PARSE_BYTES / 4) + 10));
+  const parsed = parseCsv(bigBody);
+  assert.equal(parsed.truncated, true);
+  assert.deepEqual(parsed.headers, ['x', 'y']);
+  assert.ok(parsed.rows.length > 0 && parsed.rows.length <= CSV_MAX_ROWS);
+});
+
+test('csv provider surfaces byte-budget truncation on oversized memory content', async () => {
+  const bigContent = 'h1,h2\n' + ('a,b\n'.repeat(Math.ceil(CSV_MAX_PARSE_BYTES / 4) + 10));
+  const ctx: PreviewContext = {
+    authorizeFile: async (path) => ({ path, name: 'a.csv', kind: 'text', size: 0, mtime: 1 }),
+    readText: async () => ({ content: '', truncated: false, size: 0, mtime: 1, kind: 'text', encoding: 'utf-8' }),
+    toAssetUrl: () => '',
+    prepareHtml: async () => ({ content: '', fsBase: '', serverPort: 0 }),
+    listArchive: async () => ({ entries: [], truncated: false, totalSize: 0 }),
+  };
+  const model = await csvProvider.prepare({ source: { type: 'memory', name: 'big.csv', content: bigContent }, mode: 'preview', surface: 'assistant' }, ctx);
+  assert.equal(model.kind, 'csv');
+  if (model.kind === 'csv') assert.equal(model.truncated, true);
 });

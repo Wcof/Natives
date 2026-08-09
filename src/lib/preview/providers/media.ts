@@ -2,8 +2,9 @@
 //
 // file source 必须先 ctx.authorizeFile(path) 再 ctx.toAssetUrl(AuthorizedPreviewFile)；
 // 禁止 raw path 直接 toAssetUrl/convertFileSrc（R14/D10）。authorize 抛出的
-// fatal（permission/security/io）原样透传，绝不降级。HEIC/TIFF 等受控转换仅当
-// 宿主提供 convert 钩子时接线，且转换只针对已授权文件。
+// fatal（permission/security/io）原样透传，绝不降级。HEIC/TIFF 等受控转换没有
+// 宿主 convert 钩子，不提供未接线的半成品 public type（整改原则：不保留
+// 未实现的声明面）。
 // PREV-004：Host kind（image/video/audio）优先，扩展名其次；未知扩展名
 // 不允许误判 image（旧实现 `kind in EXT_TO_KIND` 用错 key 空间导致 kind 分支失效，
 // 且未知扩展名回退到 'image'）。
@@ -11,7 +12,6 @@
 import type { FileKind } from '@/types/file';
 import { extOf } from '../classify';
 import type {
-  AuthorizedPreviewFile,
   PreviewContext,
   PreviewModel,
   PreviewProvider,
@@ -88,6 +88,3 @@ export const mediaProvider: PreviewProvider = {
     };
   },
 };
-
-/** 供测试/后续接入的受控转换钩子类型（HEIC/TIFF → 缓存 jpeg；仅已授权文件） */
-export type MediaConvertHook = (file: AuthorizedPreviewFile) => Promise<string | null>;
