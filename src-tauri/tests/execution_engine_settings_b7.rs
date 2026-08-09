@@ -11,7 +11,7 @@
 use natives_lib::db;
 use natives_lib::execution_engine_settings::{
     load_execution_engine_settings, save_execution_engine_settings, ExecutionEngineSettingsV2,
-    EXECUTOR_KEY,
+    ExternalUnavailablePolicy, RuntimeId, EXECUTOR_KEY,
 };
 
 /// 模块级锁:本文件的两个测试都向全局 MAIN_DB_POOL 注册自己的 temp pool,
@@ -87,8 +87,11 @@ fn b7_no_db_keys_yields_safe_defaults() {
     let _lock = TEST_POOL_LOCK.lock().unwrap();
     let _dir = register_temp_pool();
     let loaded = load_execution_engine_settings().expect("load must not fail");
-    assert_eq!(loaded.default_runtime, "native");
+    assert_eq!(loaded.default_runtime, RuntimeId::Native);
     assert_eq!(loaded.native.max_steps, 50);
-    assert_eq!(loaded.external_unavailable_policy, "fail");
+    assert_eq!(
+        loaded.external_unavailable_policy,
+        ExternalUnavailablePolicy::Fail
+    );
     assert!(!loaded.codex_cli.enabled, "codex stays blocked");
 }
