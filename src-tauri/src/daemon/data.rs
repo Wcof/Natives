@@ -1,4 +1,19 @@
-//! Data store — SQLite database access, migrations, and artifact storage.
+//! Host legacy data store — SQLite access and *one-way* legacy migration for
+//! the `assistant_*` tables that predate the Agent Daemon authority.
+//!
+//! Authority: the Agent Daemon owns `assistant.db` schema migrations and the
+//! canonical `conversation` / `message` / `run` / `run_event` / `prompt_queue`
+//! tables. This store keeps the historical `assistant_*` tables readable as a
+//! startup-only, one-way migration source (merged into the canonical tables by
+//! `src-agent-daemon/src/storage/host_authority_migration.rs`).
+//!
+//! DATA-001 remediation (R-D3 MUST): the historical v10/v13 CHECK-widening
+//! table rebuilds (`DROP TABLE` + rename) and the message-block FK repair
+//! rebuild were removed. SQLite cannot modify a CHECK constraint or a foreign
+//! key in place, and R-D3 forbids rebuilding a table to change them, so the
+//! wider enum is validated at the business layer. The remaining migrations are
+//! non-destructive (CREATE TABLE IF NOT EXISTS / guarded ALTER / dedup) and the
+//! legacy conversion never drops or overwrites preserved data.
 
 use crate::Result;
 use rusqlite::Connection;
@@ -141,14 +156,14 @@ impl DataStore {
                 )
                 .unwrap_or(0);
 
-            // Apply migrations sequentially. P0-011: v10 (the explicit
-            // user-cancelled terminal state) was defined but missing from this
-            // list, so old v8/v9 DBs permanently skipped it. v10 is a table
-            // rebuild and runs OUTSIDE the list via `run_v10_rebuild_if_needed`
-            // (postcondition-driven, see below). v13 is likewise a rebuild that
-            // must run outside the transaction (P0-025): PRAGMA foreign_keys=OFF
-            // is a no-op inside a transaction, and the old in-tx rebuild
-            // silently cascade-deleted messages/runs.
+            // Apply migrations sequentially. DATA-001 remediation: the
+            // historical v10/v13 table rebuilds (widening a CHECK enum via
+            // DROP TABLE + rename) are retired — R-D3 forbids rebuilds, SQLite
+            // cannot modify a CHECK in place, and the wider enum is now
+            // validated at the business layer. This list is therefore only the
+            // non-destructive CREATE TABLE IF NOT EXISTS / ALTER / dedup
+            // migrations; the legacy `assistant_*` tables stay readable as a
+            // one-way migration source and the Daemon owns the canonical schema.
             let migrations: Vec<(i64, &str)> = vec![
                 (1, MIGRATION_001),
                 (2, MIGRATION_002),
@@ -184,23 +199,11 @@ impl DataStore {
                 .map_err(|e| crate::Error::Internal(format!("Migration commit failed: {e}")))?;
         } // conn MutexGuard dropped here before legacy migration
 
-        // P0-011: v10 rebuild (add `cancelled` terminal state) — only for old
-        // DBs whose `assistant_runs` CHECK still lacks `cancelled`. Fresh DBs
-        // (MIGRATION_001 already includes it) skip the rebuild.
-        self.run_v10_rebuild_if_needed()?;
-
-        // P0-025: v13 rebuild must run OUTSIDE any transaction with FK off
-        // (SQLite ignores PRAGMA foreign_keys inside transactions). The old
-        // in-tx rebuild silently cascade-deleted messages/runs on
-        // `DROP TABLE assistant_conversations` because the FK cascade was
-        // still active. Rebuild protocol: FK off → create-copy-swap → FK on →
-        // foreign_key_check.
-        self.run_v13_rebuild()?;
-
-        // Step 2: Run legacy data migration in a fresh transaction
+        // Step 2: Run legacy data migration in a fresh transaction.
+        // One-way, startup-only: reads old structures, writes the new legacy
+        // assistant_* tables, idempotent, and never drops or rebuilds tables.
         self.migrate_legacy_provider_keys()?;
         self.migrate_legacy_assistant_messages()?;
-        self.repair_message_blocks_foreign_key()?;
         self.recover_stale_runs()?;
         {
             let conn = self.conn();
@@ -213,149 +216,6 @@ impl DataStore {
         self.cleanup_orphaned_rows()?;
 
         Ok(())
-    }
-
-    /// P0-011: run the v10 rebuild (add explicit `cancelled` terminal state)
-    /// only when the database actually needs it.
-    ///
-    /// Fresh DBs get `cancelled` from MIGRATION_001's CHECK and must skip the
-    /// rebuild; old v8/v9 DBs whose `assistant_runs` CHECK still lacks
-    /// `cancelled` get the rebuild. Postcondition-driven so the migration can
-    /// never be "defined but skipped forever" nor re-run destructively.
-    fn run_v10_rebuild_if_needed(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        // Already recorded: nothing to do.
-        let applied: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM _schema_version WHERE version = 10",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        if applied > 0 {
-            return Ok(());
-        }
-
-        // Postcondition: does `assistant_runs` already include `cancelled` in
-        // its status CHECK? If yes, v10's postcondition is already satisfied —
-        // record it and skip (fresh DBs).
-        let already_has_cancelled: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master
-                 WHERE type='table' AND name='assistant_runs' AND sql LIKE '%cancelled%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
-        if already_has_cancelled {
-            conn.execute(
-                "INSERT OR IGNORE INTO _schema_version (version) VALUES (10)",
-                [],
-            )
-            .map_err(|e| {
-                crate::Error::Internal(format!("Failed to record migration v10: {e}"))
-            })?;
-            return Ok(());
-        }
-
-        // Old DB: rebuild outside any transaction with FK off (same protocol as
-        // v13 — the rebuild DROPs the legacy table and must not cascade).
-        conn.execute_batch("PRAGMA foreign_keys=OFF;")
-            .map_err(|e| crate::Error::Internal(format!("v10 FK off failed: {e}")))?;
-        let rebuild = conn
-            .execute_batch(MIGRATION_010)
-            .map_err(|e| crate::Error::Internal(format!("Migration v10 failed: {e}")));
-        match rebuild {
-            Ok(()) => {
-                conn.execute_batch("PRAGMA foreign_keys=ON;")
-                    .map_err(|e| crate::Error::Internal(format!("v10 FK on failed: {e}")))?;
-                conn.execute(
-                    "INSERT OR IGNORE INTO _schema_version (version) VALUES (10)",
-                    [],
-                )
-                .map_err(|e| {
-                    crate::Error::Internal(format!("Failed to record migration v10: {e}"))
-                })?;
-                Ok(())
-            }
-            Err(e) => {
-                conn.execute_batch("PRAGMA foreign_keys=ON;").ok();
-                Err(e)
-            }
-        }
-    }
-
-    /// P0-025: run the v13 conversation rebuild OUTSIDE any transaction.
-    ///
-    /// SQLite ignores `PRAGMA foreign_keys=OFF` inside a transaction. The old
-    /// code ran v13 inside `run_migrations`' transaction, so the FK cascade
-    /// stayed active and `DROP TABLE assistant_conversations` silently
-    /// cascade-deleted every `assistant_messages` / `assistant_runs` row that
-    /// referenced it. Correct protocol: FK off → create-copy-swap → FK on →
-    /// `foreign_key_check` → record v13.
-    fn run_v13_rebuild(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        // Skip if v13 already recorded.
-        let applied: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM _schema_version WHERE version = 13",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        if applied > 0 {
-            return Ok(());
-        }
-
-        // FK off must be set outside any transaction.
-        conn.execute_batch("PRAGMA foreign_keys=OFF;")
-            .map_err(|e| crate::Error::Internal(format!("v13 FK off failed: {e}")))?;
-
-        let rebuild = conn.execute_batch(MIGRATION_013).map_err(|e| {
-            crate::Error::Internal(format!("Migration v13 failed: {e}"))
-        });
-
-        match rebuild {
-            Ok(()) => {
-                conn.execute_batch("PRAGMA foreign_keys=ON;")
-                    .map_err(|e| crate::Error::Internal(format!("v13 FK on failed: {e}")))?;
-                // Fail closed on any FK violation the rebuild left behind.
-                let violations: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM pragma_foreign_key_check",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| {
-                        crate::Error::Internal(format!("v13 foreign_key_check failed: {e}"))
-                    })?;
-                if violations > 0 {
-                    return Err(crate::Error::Internal(format!(
-                        "Migration v13 left {violations} foreign key violations"
-                    )));
-                }
-                conn.execute(
-                    "INSERT OR IGNORE INTO _schema_version (version) VALUES (13)",
-                    [],
-                )
-                .map_err(|e| {
-                    crate::Error::Internal(format!("Failed to record migration v13: {e}"))
-                })?;
-                Ok(())
-            }
-            Err(e) => {
-                conn.execute_batch("PRAGMA foreign_keys=ON;").ok();
-                Err(e)
-            }
-        }
     }
 
     /// Migrate provider keys from old legacy tables (user_providers / provider_api_keys).
@@ -674,29 +534,73 @@ impl DataStore {
             return Ok(());
         }
 
-        // Drop local legacy_assistant_messages if it exists, so we can copy fresh from natives_db
-        conn.execute_batch("DROP TABLE IF EXISTS legacy_assistant_messages;")
-            .ok();
-
-        // Create legacy_assistant_messages locally and load from natives_db
-        if attached {
-            conn.execute_batch(
-                "CREATE TABLE legacy_assistant_messages (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT,
-                    parent_message_id TEXT,
-                    role TEXT,
-                    content TEXT,
-                    status TEXT,
-                    created_at TEXT
-                );
-                INSERT INTO legacy_assistant_messages
-                SELECT id, session_id, parent_message_id, role, content, status, created_at
-                FROM natives_db.assistant_messages;",
+        // DATA-001 remediation (R-D3): this one-way legacy conversion no longer
+        // drops anything. The session-based rows are preserved under
+        // `legacy_assistant_messages` (created only when the name is free,
+        // never overwritten, backfilled only when empty), and the session →
+        // conversation rename only happens when the target name is free. A
+        // partial prior run that left an inconsistent state fails closed
+        // instead of dropping data to make room.
+        let legacy_exists: bool = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='legacy_assistant_messages'",
             )
-            .map_err(|e| {
-                crate::Error::Internal(format!("Failed to copy legacy assistant_messages: {e}"))
-            })?;
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+
+        if attached {
+            if legacy_exists {
+                // Preserved copy already present (idempotent re-entry): backfill
+                // only when it is empty so we never duplicate rows.
+                let copied: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM legacy_assistant_messages",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                if copied == 0 {
+                    conn.execute_batch(
+                        "INSERT INTO legacy_assistant_messages
+                         SELECT id, session_id, parent_message_id, role, content, status, created_at
+                         FROM natives_db.assistant_messages;",
+                    )
+                    .map_err(|e| {
+                        crate::Error::Internal(format!(
+                            "Failed to backfill legacy assistant_messages: {e}"
+                        ))
+                    })?;
+                }
+            } else {
+                conn.execute_batch(
+                    "CREATE TABLE legacy_assistant_messages (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT,
+                        parent_message_id TEXT,
+                        role TEXT,
+                        content TEXT,
+                        status TEXT,
+                        created_at TEXT
+                    );
+                    INSERT INTO legacy_assistant_messages
+                    SELECT id, session_id, parent_message_id, role, content, status, created_at
+                    FROM natives_db.assistant_messages;",
+                )
+                .map_err(|e| {
+                    crate::Error::Internal(format!("Failed to copy legacy assistant_messages: {e}"))
+                })?;
+            }
+        } else if legacy_exists {
+            // The local session-based table still occupies `assistant_messages`
+            // while a preserved copy already exists under
+            // `legacy_assistant_messages`. Producing the new-schema table here
+            // would require dropping one of them — refuse instead.
+            return Err(crate::Error::Internal(
+                "Legacy assistant_messages conversion is inconsistent: both \
+                 `assistant_messages` (session-based) and \
+                 `legacy_assistant_messages` exist; refusing to drop either"
+                    .into(),
+            ));
         } else {
             conn.execute_batch(
                 "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;",
@@ -704,7 +608,7 @@ impl DataStore {
             .map_err(|e| crate::Error::Internal(format!("Legacy messages rename failed: {e}")))?;
         }
 
-        // Recreate the new schema version of assistant_messages immediately
+        // Recreate the new schema version of assistant_messages.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS assistant_messages (
                 id TEXT PRIMARY KEY,
@@ -721,6 +625,29 @@ impl DataStore {
             CREATE INDEX IF NOT EXISTS idx_messages_conversation ON assistant_messages(conversation_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_parent ON assistant_messages(parent_message_id);"
         ).map_err(|e| crate::Error::Internal(format!("Failed to recreate assistant_messages: {e}")))?;
+
+        // If the local table is still session-based here (attached path where a
+        // pre-existing local session table occupies the name), the CREATE above
+        // was a no-op and any further write would target the wrong schema.
+        let still_session: bool = conn
+            .prepare("PRAGMA table_info(assistant_messages)")
+            .and_then(|mut stmt| {
+                let cols: Vec<String> = stmt
+                    .query_map([], |row| row.get::<_, String>(1))
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(cols.contains(&"session_id".to_string()))
+            })
+            .unwrap_or(false);
+        if still_session {
+            return Err(crate::Error::Internal(
+                "Legacy assistant_messages conversion cannot proceed: a local \
+                 session-based `assistant_messages` table occupies the name and \
+                 converting it would require dropping data (R-D3)"
+                    .into(),
+            ));
+        }
 
         // Migrate legacy assistant messages to new schema
         conn.execute_batch(
@@ -760,56 +687,6 @@ impl DataStore {
             let _ = conn.execute("DETACH DATABASE natives_db", []);
         }
 
-        Ok(())
-    }
-
-    /// Repair databases where SQLite rewrote message_blocks' FK to the
-    /// temporary legacy table while assistant_messages was being renamed.
-    fn repair_message_blocks_foreign_key(&self) -> Result<()> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-        let target: Option<String> = conn
-            .prepare("PRAGMA foreign_key_list(assistant_message_blocks)")
-            .and_then(|mut stmt| {
-                let mut rows = stmt.query([])?;
-                rows.next()?.map(|row| row.get(2)).transpose()
-            })
-            .map_err(|e| {
-                crate::Error::Internal(format!("Failed to inspect message block foreign key: {e}"))
-            })?;
-
-        if target.as_deref() == Some("assistant_messages") {
-            return Ok(());
-        }
-
-        let tx = conn
-            .transaction()
-            .map_err(|e| crate::Error::Internal(format!("Message block migration failed: {e}")))?;
-        tx.execute_batch(
-            "CREATE TABLE assistant_message_blocks_v9 (
-                id TEXT PRIMARY KEY,
-                message_id TEXT NOT NULL REFERENCES assistant_messages(id) ON DELETE CASCADE,
-                block_type TEXT NOT NULL,
-                block_index INTEGER NOT NULL DEFAULT 0,
-                content TEXT NOT NULL,
-                metadata TEXT
-            );
-            INSERT OR IGNORE INTO assistant_message_blocks_v9
-                (id, message_id, block_type, block_index, content, metadata)
-            SELECT b.id, b.message_id, b.block_type, b.block_index, b.content, b.metadata
-            FROM assistant_message_blocks b
-            JOIN assistant_messages m ON m.id = b.message_id;
-            DROP TABLE assistant_message_blocks;
-            ALTER TABLE assistant_message_blocks_v9 RENAME TO assistant_message_blocks;",
-        )
-        .map_err(|e| {
-            crate::Error::Internal(format!("Message block foreign key repair failed: {e}"))
-        })?;
-        tx.commit().map_err(|e| {
-            crate::Error::Internal(format!("Message block migration commit failed: {e}"))
-        })?;
         Ok(())
     }
 
@@ -1215,36 +1092,6 @@ CREATE TABLE IF NOT EXISTS assistant_projects (
 );
 ";
 
-/// v10: Add the explicit user-cancelled terminal state to existing databases.
-#[allow(dead_code)]
-const MIGRATION_010: &str = "
-ALTER TABLE assistant_runs RENAME TO assistant_runs_legacy;
-CREATE TABLE assistant_runs (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
-    parent_run_id TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    subagent_definition_id TEXT,
-    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','preparing','running','waiting_permission','cancelling','completed','failed','cancelled','interrupted')),
-    trigger_message_id TEXT,
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    runtime_id TEXT,
-    permission_profile TEXT,
-    max_steps INTEGER,
-    max_duration_secs INTEGER,
-    token_budget INTEGER,
-    started_at TEXT,
-    finished_at TEXT,
-    error_code TEXT,
-    step_count INTEGER DEFAULT 0,
-    total_input_tokens INTEGER DEFAULT 0,
-    total_output_tokens INTEGER DEFAULT 0
-);
-INSERT INTO assistant_runs SELECT * FROM assistant_runs_legacy;
-DROP TABLE assistant_runs_legacy;
-CREATE INDEX IF NOT EXISTS idx_runs_conversation ON assistant_runs(conversation_id);
-";
-
 /// v11: Host-owned prompt queue.
 const MIGRATION_011: &str = "
 CREATE TABLE IF NOT EXISTS assistant_prompt_queue (
@@ -1271,39 +1118,6 @@ WHERE rowid NOT IN (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_model_cache_provider_model
     ON assistant_model_cache(provider_id, model_id);
-";
-
-/// v13: Allow conversation mode = goal (long-running task chrome).
-/// SQLite cannot ALTER CHECK constraints; rebuild the table.
-const MIGRATION_013: &str = "
-PRAGMA foreign_keys=OFF;
-CREATE TABLE assistant_conversations_v13 (
-    id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat','agent','goal')),
-    project_id TEXT,
-    title TEXT NOT NULL DEFAULT '',
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    permission_profile_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    archived_at TEXT
-);
-INSERT INTO assistant_conversations_v13 (
-    id, mode, project_id, title, provider_id, model_id,
-    permission_profile_id, created_at, updated_at, archived_at
-)
-SELECT
-    id,
-    CASE WHEN mode IN ('chat','agent','goal') THEN mode ELSE 'agent' END,
-    project_id, title, provider_id, model_id,
-    permission_profile_id, created_at, updated_at, archived_at
-FROM assistant_conversations;
-DROP TABLE assistant_conversations;
-ALTER TABLE assistant_conversations_v13 RENAME TO assistant_conversations;
-CREATE INDEX IF NOT EXISTS idx_conversations_project ON assistant_conversations(project_id);
-CREATE INDEX IF NOT EXISTS idx_conversations_updated ON assistant_conversations(updated_at);
-PRAGMA foreign_keys=ON;
 ";
 
 /// v14: Soft-delete support for assistant_projects (logical delete, keep sessions).
@@ -1412,8 +1226,44 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// DATA-001 regression (Host side): no active migration constant may drop
+    /// or rename-rebuild a table. The historical v10/v13 rebuilds were removed;
+    /// what remains is CREATE TABLE IF NOT EXISTS / ALTER / dedup only.
     #[test]
-    fn test_repairs_legacy_message_block_foreign_key() {
+    fn no_active_migration_drops_tables() {
+        let active: Vec<(&str, &str)> = vec![
+            ("001", MIGRATION_001),
+            ("002", MIGRATION_002),
+            ("003", MIGRATION_003),
+            ("004", MIGRATION_004),
+            ("005", MIGRATION_005),
+            ("006", MIGRATION_006),
+            ("007", MIGRATION_007),
+            ("008", MIGRATION_008),
+            ("011", MIGRATION_011),
+            ("012", MIGRATION_012),
+            ("014", MIGRATION_014),
+        ];
+        for (name, sql) in active {
+            let upper = sql.to_ascii_uppercase();
+            assert!(
+                !upper.contains("DROP TABLE"),
+                "migration v{name} must not contain DROP TABLE (R-D3)"
+            );
+            assert!(
+                !upper.contains("RENAME TO"),
+                "migration v{name} must not rename-rebuild tables (R-D3)"
+            );
+        }
+    }
+
+    /// DATA-001 regression: the legacy message-block FK repair (a DROP-based
+    /// table rebuild) is retired. Running migrations against a database whose
+    /// `assistant_message_blocks` FK points at a legacy table must leave both
+    /// tables intact — the legacy tables are a read-only one-way migration
+    /// source and are never rebuilt.
+    #[test]
+    fn legacy_message_block_fk_is_left_intact_not_rebuilt() {
         let store = DataStore::new(":memory:").unwrap();
         {
             let conn = store.conn();
@@ -1434,29 +1284,27 @@ mod tests {
             ).unwrap();
         }
 
-        store.repair_message_blocks_foreign_key().unwrap();
-        let target: String = store
+        // Re-running migrations must not DROP/rebuild either table.
+        store.run_migrations().unwrap();
+        let tables: Vec<String> = store
             .conn()
-            .query_row(
-                "PRAGMA foreign_key_list(assistant_message_blocks)",
-                [],
-                |row| row.get(2),
-            )
-            .unwrap();
-        assert_eq!(target, "assistant_messages");
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(tables.contains(&"legacy_assistant_messages".to_string()));
+        assert!(tables.contains(&"assistant_messages".to_string()));
+        assert!(tables.contains(&"assistant_message_blocks".to_string()));
 
-        let conn = store.conn();
-        conn.execute(
-            "INSERT INTO assistant_conversations (id, title, provider_id, model_id, created_at, updated_at) VALUES ('c1', '', 'p1', 'm1', 'now', 'now')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO assistant_messages (id, conversation_id, role, created_at) VALUES ('m1', 'c1', 'user', 'now')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO assistant_message_blocks (id, message_id, block_type, content) VALUES ('b1', 'm1', 'text', 'hello')",
-            [],
-        ).unwrap();
+        // The legacy table stays readable (one-way migration source).
+        let count: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM assistant_messages", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
