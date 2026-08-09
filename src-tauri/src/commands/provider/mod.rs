@@ -207,14 +207,12 @@ fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
-
 fn is_anthropic_protocol(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
         "anthropic" | "claude" | "anthropic_messages" | "anthropic-native"
     )
 }
-
 
 fn normalize_api_protocol(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -229,7 +227,6 @@ fn normalize_api_protocol(value: &str) -> String {
     }
     .to_string()
 }
-
 
 fn required_api_protocol(value: Option<&str>) -> Result<String> {
     let raw = value
@@ -253,7 +250,6 @@ fn required_api_protocol(value: Option<&str>) -> Result<String> {
     }
 }
 
-
 fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
     let base = base_url.trim().trim_end_matches('/');
     if base.is_empty() {
@@ -270,7 +266,6 @@ fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
     }
 }
 
-
 fn provider_test_url(provider_type: &str, base_url: &str) -> Result<String> {
     match normalize_api_protocol(provider_type).as_str() {
         "anthropic_messages" => anthropic_url(base_url, "messages"),
@@ -281,7 +276,6 @@ fn provider_test_url(provider_type: &str, base_url: &str) -> Result<String> {
         ))),
     }
 }
-
 
 fn models_url(provider_type: &str, base_url: &str) -> Result<String> {
     match normalize_api_protocol(provider_type).as_str() {
@@ -294,7 +288,6 @@ fn models_url(provider_type: &str, base_url: &str) -> Result<String> {
         ))),
     }
 }
-
 
 fn non_empty_text(value: &serde_json::Value) -> bool {
     value.as_str().is_some_and(|text| !text.trim().is_empty())
@@ -348,7 +341,6 @@ fn provider_response_has_content(provider_type: &str, value: &serde_json::Value)
         }
     }
 }
-
 
 fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
     // Create lease table first
@@ -476,7 +468,6 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
     Ok(())
 }
 
-
 fn uuid_v4() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -494,7 +485,6 @@ fn uuid_v4() -> String {
         buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
     )
 }
-
 
 fn chrono_now() -> String {
     use chrono::Utc;

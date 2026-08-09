@@ -4,7 +4,6 @@
 //! scopes (or inside `spawn_blocking`) so `Connection` is never held across
 //! `.await` — Connection is !Send.
 
-
 use crate::creative_app::adapters::{self, LifecycleCtx, ResolvedSource};
 use crate::creative_app::browser::{self, BrowserStateHandle};
 use crate::creative_app::docker;
@@ -27,27 +26,25 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::AppState;
 
-mod lifecycle;
-mod github;
 mod browsing;
-mod windows;
+mod github;
+mod lifecycle;
+mod local_project;
 mod proposals;
 mod remote;
-mod local_project;
+mod windows;
 
-pub use lifecycle::*;
-pub use github::*;
 pub use browsing::*;
-pub use windows::*;
+pub use github::*;
+pub use lifecycle::*;
+pub use local_project::*;
 pub use proposals::*;
 pub use remote::*;
-pub use local_project::*;
-
+pub use windows::*;
 
 fn host_http_port(state: &AppState) -> u16 {
     *state.http_port.lock().unwrap_or_else(|e| e.into_inner())
 }
-
 
 fn modules_dir() -> std::path::PathBuf {
     dirs::home_dir()
@@ -56,11 +53,9 @@ fn modules_dir() -> std::path::PathBuf {
         .join("modules")
 }
 
-
 fn conn(pool: &DbPool) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
     pool.get().map_err(|e| Error::Internal(format!("db: {e}")))
 }
-
 
 fn lifecycle_ctx(
     app: tauri::AppHandle,
@@ -98,7 +93,6 @@ fn resolve_log_scope(
     let source = adapters::resolve(conn, id)?;
     Ok((source, None, id.to_string()))
 }
-
 
 fn format_local_log_lines(mem: &[crate::creative_app::local::logs::LogLine]) -> String {
     mem.iter()
@@ -140,7 +134,6 @@ fn redacted_for(kind: &str, id: &str) -> String {
     serde_json::json!({ "kind": kind, "appId": id }).to_string()
 }
 
-
 fn emit_operation(app: &tauri::AppHandle, conn: &rusqlite::Connection, op_id: i64) -> Result<()> {
     if let Some(operation) = op::get_operation(conn, op_id)? {
         emit_db_state_changed(
@@ -164,12 +157,10 @@ fn journal(
     emit_operation(app, conn, op_id)
 }
 
-
 fn settle_success(app: &tauri::AppHandle, conn: &rusqlite::Connection, op_id: i64) -> Result<()> {
     op::finish_success(conn, op_id)?;
     emit_operation(app, conn, op_id)
 }
-
 
 fn settle_failure(
     app: &tauri::AppHandle,
@@ -181,7 +172,6 @@ fn settle_failure(
     op::finish_failure(conn, op_id, Some(code), message)?;
     emit_operation(app, conn, op_id)
 }
-
 
 fn settle_cancelled(
     app: &tauri::AppHandle,

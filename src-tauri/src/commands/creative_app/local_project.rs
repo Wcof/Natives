@@ -82,7 +82,6 @@ pub fn creative_app_rescan_local(
     )
 }
 
-
 pub(crate) fn create_local_app(
     conn: &mut rusqlite::Connection,
     request: CreateLocalRequest,
@@ -221,7 +220,6 @@ pub(crate) fn create_local_app(
     );
     runtime_store::attach_identity(conn, summary)
 }
-
 
 pub(crate) fn update_local_app(
     conn: &mut rusqlite::Connection,
