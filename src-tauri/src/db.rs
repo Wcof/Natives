@@ -16,6 +16,7 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 mod db_migrations;
+mod migrations_steps;
 
 lazy_static! {
     /// 主 natives.db pool（全局持有，供 runtime 等无法 access AppState 的模块使用）
