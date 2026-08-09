@@ -363,6 +363,93 @@ pub fn project_run_incremental(
     Ok(report)
 }
 
+/// Explicit projector for usage aggregates (W2): the EventLog only appends and
+/// replays durable events; all read-model projection lives here. Called by the
+/// EventLog append path when a `UsageUpdated` event is persisted.
+pub fn project_usage_rollup(
+    conn: &rusqlite::Connection,
+    event: &RunEventV2,
+) -> Result<(), String> {
+    let RunEventKind::UsageUpdated {
+        input_tokens,
+        output_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
+        ..
+    } = &event.payload
+    else {
+        return Ok(());
+    };
+    let input = *input_tokens as i64;
+    let output = *output_tokens as i64;
+    // A provider that does not report cache usage contributes 0 to the
+    // rollup rather than poisoning it — the per-event `None` is still
+    // preserved verbatim in the serialized payload.
+    let cache_creation = cache_creation_tokens.unwrap_or(0) as i64;
+    let cache_read = cache_read_tokens.unwrap_or(0) as i64;
+    let _ = conn.execute(
+        "UPDATE run
+         SET total_input_tokens = COALESCE(total_input_tokens, 0) + ?1,
+             total_output_tokens = COALESCE(total_output_tokens, 0) + ?2
+         WHERE id = ?3",
+        params![input, output, event.run_id],
+    );
+    // Best-effort dual-write to message token columns when a trigger
+    // message exists (keeps conversation-level history useful).
+    let _ = conn.execute(
+        "UPDATE message
+         SET input_tokens = COALESCE(input_tokens, 0) + ?1,
+             output_tokens = COALESCE(output_tokens, 0) + ?2
+         WHERE id = (
+            SELECT trigger_message_id FROM run WHERE id = ?3 AND trigger_message_id IS NOT NULL
+         )",
+        params![input, output, event.run_id],
+    );
+
+    // Aggregate into usage_stats when the table exists.
+    // date uses UTC YYYY-MM-DD; dashboard localizes via range filters.
+    let model = conn
+        .query_row(
+            "SELECT model_id FROM run WHERE id = ?1",
+            params![event.run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| "unknown".into());
+    let date = event.timestamp.format("%Y-%m-%d").to_string();
+    // Ensure table exists (older DBs may not have been migrated by Host).
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS usage_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_path TEXT,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            UNIQUE(date, source, model)
+        );",
+    );
+    let _ = conn.execute(
+        "INSERT INTO usage_stats
+            (date, source, source_path, model, input_tokens, output_tokens,
+             cache_creation_tokens, cache_read_tokens, request_count, cost_usd)
+         VALUES (?1, 'natives', 'daemon:run_event', ?2, ?3, ?4, ?5, ?6, 1, 0.0)
+         ON CONFLICT(date, source, model) DO UPDATE SET
+            input_tokens = input_tokens + excluded.input_tokens,
+            output_tokens = output_tokens + excluded.output_tokens,
+            cache_creation_tokens =
+                cache_creation_tokens + excluded.cache_creation_tokens,
+            cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+            request_count = request_count + 1",
+        params![date, model, input, output, cache_creation, cache_read],
+    );
+    Ok(())
+}
+
 /// Decode only the stored events with `sequence > after_sequence` for a run
 /// (the watermark prefix is skipped — A8 incremental replay).
 fn load_events_after(
