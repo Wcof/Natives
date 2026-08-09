@@ -284,10 +284,20 @@ export const openWidgetWindow: NativesAPI['openWidgetWindow'] = () => {
 // capability (capabilities/menubar.json) and never inherits main's shell/fs/
 // dialog/credential/Workshop permissions.
 export const menubar: NativesAPI['menubar'] = {
-  toggle: () => cmd('menubar_toggle').catch(() => {}),
-  hide: () => cmd('menubar_hide').catch(() => {}),
-  openMain: () => cmd('menubar_open_main').catch(() => {}),
-  openPersonalOverview: () => cmd('menubar_open_personal_overview').catch(() => {}),
-  quit: () => cmd('menubar_quit').catch(() => {}),
+  toggle: async () => {
+    await cmd('menubar_toggle').catch(() => {});
+  },
+  hide: async () => {
+    await cmd('menubar_hide').catch(() => {});
+  },
+  openMain: async () => {
+    await cmd('menubar_open_main').catch(() => {});
+  },
+  openPersonalOverview: async () => {
+    await cmd('menubar_open_personal_overview').catch(() => {});
+  },
+  quit: async () => {
+    await cmd('menubar_quit').catch(() => {});
+  },
 };
 

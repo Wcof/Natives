@@ -51,7 +51,9 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
   const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
-      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      // Bounds are guaranteed by the loop (i<m, j<n) and the (m+1)×(n+1) table;
+      // noUncheckedIndexedAccess needs the explicit non-null assertions.
+      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
     }
   }
   const out: DiffLine[] = [];
@@ -59,23 +61,23 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
   let j = 0;
   while (i < m && j < n) {
     if (a[i] === b[j]) {
-      out.push({ kind: 'same', text: a[i] });
+      out.push({ kind: 'same', text: a[i]! });
       i++;
       j++;
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      out.push({ kind: 'removed', text: a[i] });
+    } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
+      out.push({ kind: 'removed', text: a[i]! });
       i++;
     } else {
-      out.push({ kind: 'added', text: b[j] });
+      out.push({ kind: 'added', text: b[j]! });
       j++;
     }
   }
   while (i < m) {
-    out.push({ kind: 'removed', text: a[i] });
+    out.push({ kind: 'removed', text: a[i]! });
     i++;
   }
   while (j < n) {
-    out.push({ kind: 'added', text: b[j] });
+    out.push({ kind: 'added', text: b[j]! });
     j++;
   }
   return out;
@@ -431,9 +433,9 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
                   style={{
                     background:
                       line.kind === 'added'
-                        ? 'rgba(34,197,94,0.12)'
+                        ? 'var(--success-soft)'
                         : line.kind === 'removed'
-                          ? 'rgba(239,68,68,0.12)'
+                          ? 'var(--danger-soft)'
                           : 'transparent',
                     color:
                       line.kind === 'added'

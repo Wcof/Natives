@@ -151,7 +151,12 @@ export default function MenubarOverview() {
   const trend = useMemo(() => (usage ? buildOverviewTrend(usage) : []), [usage]);
   const maxTrend = useMemo(() => Math.max(...trend.map((point) => point.totalTokens), 1), [trend]);
 
-  const isStale = metadata ? Date.now() - metadata.generatedAtMs > STALE_AFTER_MS : false;
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const isStale = metadata ? nowMs - metadata.generatedAtMs > STALE_AFTER_MS : false;
 
   const sourceStates = usage?.sources ?? [];
   const usableSources = sourceStates.filter((s) => s.state === 'ok' || s.state === 'partial').length;
