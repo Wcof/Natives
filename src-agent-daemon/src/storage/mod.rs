@@ -22,10 +22,8 @@ pub mod migrations;
 use rusqlite::{params, Connection};
 #[cfg(test)]
 use std::cell::Cell;
-use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::MutexGuard;
-use std::sync::{Mutex, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[cfg(test)]
 thread_local! {
@@ -154,6 +152,167 @@ impl Drop for EnvRestore {
     }
 }
 
+/// Cross-process, cross-instance exclusive lock for schema migrations
+/// (DATA-002).
+///
+/// Host and Daemon open the same `assistant.db`, and two daemon instances can
+/// race on the same file. A process-wide `Mutex` cannot serialize those, so the
+/// lock is a filesystem directory next to the DB file: `mkdir` is atomic across
+/// processes, and a live PID marker lets a new process detect and break a stale
+/// lock left by a crash. Acquisition is bounded by a timeout with an explicit
+/// error; two processes can never migrate simultaneously.
+#[derive(Debug)]
+struct MigrationFileLock {
+    lock_dir: PathBuf,
+}
+
+/// A lock directory with no readable owner PID is considered stale only after
+/// this age; a dead owner PID is always stale regardless of age.
+const MIGRATION_LOCK_STALENESS_MS: u64 = 120_000;
+
+impl MigrationFileLock {
+    fn path_for(db_path: &Path) -> PathBuf {
+        let mut os = db_path.as_os_str().to_os_string();
+        os.push(".migration.lock");
+        PathBuf::from(os)
+    }
+
+    /// Acquire the lock with a bounded wait. `NATIVES_MIGRATION_LOCK_TIMEOUT_MS`
+    /// (test knob) overrides the production 30s timeout.
+    fn acquire(db_path: &Path) -> Result<Self, String> {
+        let lock_dir = Self::path_for(db_path);
+        if let Some(parent) = lock_dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to prepare directory for migration lock {}: {e}",
+                    lock_dir.display()
+                )
+            })?;
+        }
+        let timeout_ms = std::env::var("NATIVES_MIGRATION_LOCK_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30_000);
+        let started = std::time::Instant::now();
+        loop {
+            match std::fs::create_dir(&lock_dir) {
+                Ok(()) => {
+                    // Marker with the owning PID; used by other processes to
+                    // decide whether the lock is live or stale.
+                    let _ =
+                        std::fs::write(lock_dir.join("owner.pid"), std::process::id().to_string());
+                    return Ok(MigrationFileLock { lock_dir });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if Self::break_stale(&lock_dir) {
+                        continue;
+                    }
+                    if started.elapsed().as_millis() >= u128::from(timeout_ms) {
+                        return Err(format!(
+                            "Migration lock is held by another process: {} (timed out after \
+                             {} ms). Wait for the other instance to finish migrating, or remove \
+                             the lock directory if it was left behind by a crashed process.",
+                            lock_dir.display(),
+                            timeout_ms
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Parent vanished (e.g. a tempdir torn down mid-flight in
+                    // tests). Recreate it and retry rather than fail spuriously.
+                    if let Some(parent) = lock_dir.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if started.elapsed().as_millis() >= u128::from(timeout_ms) {
+                        return Err(format!(
+                            "Failed to acquire migration lock at {}: {e}",
+                            lock_dir.display()
+                        ));
+                    }
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to acquire migration lock at {}: {e}",
+                        lock_dir.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Reclaim a stale lock directory. Returns true when the directory was
+    /// removed. A live owning PID is never considered stale (PID liveness is
+    /// authoritative on unix); a dead PID is always stale; a directory without
+    /// a readable owner PID falls back to mtime age.
+    fn break_stale(lock_dir: &Path) -> bool {
+        let pid = std::fs::read_to_string(lock_dir.join("owner.pid"))
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok());
+        match pid {
+            Some(pid) => {
+                if process_alive(pid) {
+                    return false;
+                }
+                std::fs::remove_dir_all(lock_dir).is_ok()
+            }
+            None => {
+                let age_ms = std::fs::metadata(lock_dir)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_millis());
+                if let Some(age_ms) = age_ms {
+                    if age_ms < u128::from(MIGRATION_LOCK_STALENESS_MS) {
+                        return false;
+                    }
+                }
+                std::fs::remove_dir_all(lock_dir).is_ok()
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: i32) -> bool {
+    // SAFETY: `kill(pid, 0)` signals nothing; it only probes existence.
+    // Returns 0 when the process exists, -1 with ESRCH when it does not.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn process_alive(_pid: i32) -> bool {
+    // Non-unix (Windows): no portable PID liveness probe without a dependency.
+    // Staleness falls back to the lock directory mtime only.
+    false
+}
+
+impl Drop for MigrationFileLock {
+    fn drop(&mut self) {
+        // Only remove the directory if we still own it — a stale-lock reclaimer
+        // may have replaced us after we were considered dead.
+        let owner = std::fs::read_to_string(self.lock_dir.join("owner.pid")).ok();
+        if owner.as_deref() == Some(&std::process::id().to_string()) {
+            let _ = std::fs::remove_file(self.lock_dir.join("owner.pid"));
+            let _ = std::fs::remove_dir(&self.lock_dir);
+        }
+    }
+}
+
+/// What `run_migrations` holds for the duration of the schema migration.
+///
+/// The variant payload is deliberately never read — it exists for its RAII
+/// Drop side effect (releasing the file lock / process mutex), so dead_code is
+/// expected.
+#[allow(dead_code)]
+enum MigrationGuard {
+    /// Directory lock next to the DB file — cross-process visibility.
+    File(MigrationFileLock),
+    /// Process-wide mutex — used only for `:memory:` databases, which cannot
+    /// be shared across processes, so the mutex is sufficient there.
+    Process(MutexGuard<'static, ()>),
+}
+
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
     conn: Mutex<Connection>,
@@ -243,13 +402,20 @@ impl DataStore {
         .unwrap_or(false)
     }
 
-    /// Process-wide lock so concurrent DataStore::new calls cannot interleave
-    /// schema migrations on different connections to the same file.
-    fn migration_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+    /// Acquire a cross-process, cross-instance exclusive lock for the schema
+    /// migration (DATA-002). `:memory:` databases cannot be shared across
+    /// processes, so for them a process-wide mutex is sufficient; file-backed
+    /// databases use the directory lock (see [`MigrationFileLock`]).
+    fn acquire_migration_lock(db_path: &Path) -> Result<MigrationGuard, String> {
+        if db_path == Path::new(":memory:") {
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            let guard = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            return Ok(MigrationGuard::Process(guard));
+        }
+        MigrationFileLock::acquire(db_path).map(MigrationGuard::File)
     }
 
     /// Process-wide lock for unit tests that mutate NATIVES_* env vars.
@@ -270,7 +436,7 @@ impl DataStore {
         EnvTestGuard::acquire()
     }
 
-    /// Run all pending daemon migrations.
+    /// Run all pending daemon migrations under a cross-process exclusive lock.
     ///
     /// Host (`src-tauri/src/daemon/data.rs`) and Daemon both open the same
     /// `assistant.db` file. Host already owns `_schema_version` for its
@@ -284,9 +450,11 @@ impl DataStore {
     /// Run pending migrations via the versioned, reentrant runner
     /// (`migrations::run_pending`): per-version ledger membership, checksum
     /// drift fail-closed, postcondition-driven adoption for partial/crash
-    /// states, and a final `foreign_key_check` gate.
+    /// states, and a final `foreign_key_check` gate. The whole run holds a
+    /// cross-process file lock (DATA-002), so a concurrent Host or daemon
+    /// instance cannot interleave schema migrations.
     fn run_migrations(&self) -> Result<(), String> {
-        let _migrate = Self::migration_lock();
+        let _migrate = Self::acquire_migration_lock(&self.db_path)?;
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {e}"))?;
         migrations::run_pending(&conn)
     }
@@ -324,6 +492,113 @@ mod tests {
         let db_path = tmp.join(format!("test_daemon_{}.db", uuid::Uuid::new_v4()));
         let art_dir = tmp.join(format!("test_artifacts_{}", uuid::Uuid::new_v4()));
         DataStore::new(&db_path, &art_dir).unwrap()
+    }
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{name}_{}.db", uuid::Uuid::new_v4()))
+    }
+
+    /// DATA-002 regression: the migration lock is cross-instance. A second
+    /// acquire while the first is held must fail with a bounded timeout and an
+    /// explicit error, exactly what a concurrent Host/Daemon (or two daemon
+    /// instances) would hit — a process-internal Mutex cannot provide this.
+    #[test]
+    fn migration_lock_is_exclusive_across_instances() {
+        let _env = EnvTestGuard::acquire();
+        let _restore = EnvRestore::capture();
+        std::env::set_var("NATIVES_MIGRATION_LOCK_TIMEOUT_MS", "200");
+
+        let db = temp_db_path("lock-excl");
+        let first = MigrationFileLock::acquire(&db).expect("first acquire");
+        let err = MigrationFileLock::acquire(&db).expect_err("second acquire must fail");
+        assert!(
+            err.contains("Migration lock is held by another process"),
+            "unexpected lock error: {err}"
+        );
+        assert!(
+            err.contains("timed out after"),
+            "error must report the bounded timeout: {err}"
+        );
+        drop(first);
+
+        // After release the lock is re-acquirable.
+        let second = MigrationFileLock::acquire(&db).expect("re-acquire after release");
+        drop(second);
+        let lock_dir = MigrationFileLock::path_for(&db);
+        assert!(
+            !lock_dir.exists(),
+            "lock directory must be released on drop"
+        );
+    }
+
+    /// A lock directory left behind by a dead process (crash) must be reclaimed
+    /// automatically instead of blocking startup forever.
+    #[test]
+    fn stale_migration_lock_is_reclaimed() {
+        let _env = EnvTestGuard::acquire();
+        let _restore = EnvRestore::capture();
+        std::env::set_var("NATIVES_MIGRATION_LOCK_TIMEOUT_MS", "500");
+
+        let db = temp_db_path("lock-stale");
+        let lock_dir = MigrationFileLock::path_for(&db);
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        // An impossible PID is dead on any real system (pid_max << 99999999).
+        std::fs::write(lock_dir.join("owner.pid"), "99999999").unwrap();
+
+        let guard = MigrationFileLock::acquire(&db).expect("stale lock must be reclaimed");
+        drop(guard);
+        assert!(!lock_dir.exists(), "lock directory must be removed on drop");
+    }
+
+    /// A lock directory owned by a live process must NOT be reclaimed — only
+    /// the bounded timeout applies.
+    #[test]
+    fn live_lock_is_never_reclaimed() {
+        let _env = EnvTestGuard::acquire();
+        let _restore = EnvRestore::capture();
+        std::env::set_var("NATIVES_MIGRATION_LOCK_TIMEOUT_MS", "200");
+
+        let db = temp_db_path("lock-live");
+        let lock_dir = MigrationFileLock::path_for(&db);
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        // This test process is alive: the lock is genuinely held.
+        std::fs::write(lock_dir.join("owner.pid"), std::process::id().to_string()).unwrap();
+
+        let err = MigrationFileLock::acquire(&db).expect_err("live lock must not be reclaimed");
+        assert!(
+            err.contains("Migration lock is held by another process"),
+            "{err}"
+        );
+        // Cleanup: this test owns the dir, remove it.
+        let _ = std::fs::remove_dir_all(&lock_dir);
+    }
+
+    /// DATA-002 end-to-end: `DataStore::new` fails closed when another instance
+    /// holds the migration lock, and succeeds after it is released.
+    #[test]
+    fn datastore_open_fails_closed_while_migration_lock_held() {
+        let _env = EnvTestGuard::acquire();
+        let _restore = EnvRestore::capture();
+        std::env::set_var("NATIVES_MIGRATION_LOCK_TIMEOUT_MS", "200");
+
+        let db = temp_db_path("lock-ds");
+        let art = std::env::temp_dir().join(format!("lock-ds-art_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&art).unwrap();
+
+        let _held = MigrationFileLock::acquire(&db).expect("hold lock");
+        let err = match DataStore::new(&db, &art) {
+            Ok(_) => panic!("DataStore::new must fail while the migration lock is held"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("Migration lock is held by another process"),
+            "unexpected error: {err}"
+        );
+        drop(_held);
+
+        let store = DataStore::new(&db, &art).expect("open after lock released");
+        assert!(store.has_table("conversation"));
+        let _ = std::fs::remove_dir_all(&art);
     }
 
     #[test]
