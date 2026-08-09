@@ -14,6 +14,11 @@
 
   // Phase 2: receive token grant from parent
   window.addEventListener('message', function(event) {
+    // R-S3: MessageEvent.source is the identity basis — a token grant is only
+    // acceptable from the actual parent window. event.origin is NOT usable as
+    // an identity check (sandboxed frame origins are opaque), so it is kept
+    // only as a cheap extra filter after the source check.
+    if (event.source !== window.parent) return;
     if (event.origin !== ORIGIN) return;
     var data = event.data;
     if (data && data.type === 'token-granted') {
