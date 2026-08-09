@@ -13,8 +13,10 @@ import {
 } from './assistant-activity-view';
 
 test('task list auto-load uses stable query inputs and reserves external refresh for the user action', () => {
+  // R4-04: controller logic lives in the activity-inspector hook; the shell
+  // only renders panels.
   const inspector = readFileSync(
-    resolve(process.cwd(), 'src/components/assistant/ActivityInspector.tsx'),
+    resolve(process.cwd(), 'src/components/assistant/activity-inspector/useActivityInspector.ts'),
     'utf8',
   );
 
