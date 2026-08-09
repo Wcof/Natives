@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 import type { ArchiveEntry, ReadFileResult } from '@/types/file';
-import { archiveApi, fsApi } from '@/lib/files-api';
+import { archiveApi, fsApi, htmlPreviewApi } from '@/lib/files-api';
 import type { AuthorizedPreviewFile, HtmlPreviewPrepared, PreviewContext } from './contracts';
 import { PreviewProviderError, fatalError } from './errors';
 
@@ -92,7 +92,8 @@ export interface PreviewHost {
 }
 
 /**
- * 生产默认 host：走 files-api 唯一入口；htmlPreview 属顶层 nativesAPI（T21 收敛到 files-api）。
+ * 生产默认 host：走 files-api 唯一入口（htmlPreview 经 files-api 的
+ * htmlPreviewApi() 域 facade 取用，不裸 window.nativesAPI，T21 收敛）。
  * 经全局 Window['nativesAPI'] 单一类型源取用，禁止再手写第二份内联定义（PREV-005）。
  */
 export function defaultPreviewHost(): PreviewHost {
@@ -102,11 +103,7 @@ export function defaultPreviewHost(): PreviewHost {
     listArchive: (path) => archiveApi().list(path),
     // 只有已授权文件会到达这里（PreviewContext.toAssetUrl 只在 authorize 后暴露）
     toAssetUrl: (path) => fsApi().convertFileSrc(path),
-    prepareHtml: (path) => {
-      const htmlPreview = typeof window !== 'undefined' ? window.nativesAPI?.htmlPreview : undefined;
-      if (!htmlPreview) throw fatalError('host_error', 'htmlPreview API not available');
-      return htmlPreview.prepare(path);
-    },
+    prepareHtml: (path) => htmlPreviewApi().prepare(path),
   };
 }
 

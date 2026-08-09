@@ -1,4 +1,5 @@
 use crate::creative_draft::paths as draft_paths;
+use crate::html_preview;
 use crate::token_manager::TokenManager;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,14 @@ const LOCAL_PROJECT_CSP: &str = "default-src 'self' data: blob: https:; script-s
 /// The bridge is a pure JSON API endpoint, not a rendered page, so CSP is
 /// defense-in-depth only.
 const BRIDGE_CSP: &str = "default-src 'none'; frame-ancestors 'none'; form-action 'none'";
+
+/// CSP for authorized HTML preview resources served via `/fs/{token}/{path}`.
+/// Same strictness as Workshop/Draft (unreviewed local HTML output must not have
+/// a weaker CSP than a published module): no external connect-src, no eval.
+/// The HTML document itself is displayed inside a sandboxed iframe, so
+/// `frame-ancestors` is deliberately omitted for the same reason as Workshop
+/// (P0-013) — the sandbox attribute is the isolation boundary.
+const PREVIEW_CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*; form-action 'none'";
 
 /// Maximum POST body size for bridge requests (64 MiB). Requests exceeding
 /// this limit receive a 413 response before any body is read (CR-402).
@@ -188,14 +197,9 @@ fn handle_request(
                 // origin/port from the request's Host header so the SDK has no
                 // `__NATIVES_*__` placeholder (P0-009): the bridge target is
                 // this same local server the module was loaded from.
-                let host = get_header(&request, "Host")
-                    .unwrap_or_else(|| "localhost".to_string());
+                let host = get_header(&request, "Host").unwrap_or_else(|| "localhost".to_string());
                 let origin = format!("http://{host}");
-                let port = host
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
+                let port = host.rsplit(':').next().unwrap_or("").to_string();
                 let script = include_str!("bridge_sdk.js")
                     .replace("__NATIVES_ORIGIN__", &origin)
                     .replace("__NATIVES_PORT__", &port);
@@ -221,6 +225,12 @@ fn handle_request(
                     local_csp,
                     matches!(method, Method::Head),
                 )?;
+            } else if path_only.starts_with("/fs/") {
+                // Authorized HTML preview resources — per-request session token
+                // binding + containment validation (PREV-001). Preview CSP.
+                let preview_csp = Header::from_bytes("Content-Security-Policy", PREVIEW_CSP)
+                    .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
+                serve_preview_file(request, preview_csp, matches!(method, Method::Head))?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
                 request.respond(resp)?;
@@ -456,6 +466,105 @@ fn serve_draft_file(
         let raw = std::fs::read_to_string(&resolved)?;
         let injected = inject_html_preview(&raw, draft_id);
         let resp = Response::from_string(injected)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
+        request.respond(resp)?;
+    } else {
+        let content = std::fs::read(&resolved)?;
+        let resp = Response::from_data(content)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", mime).unwrap());
+        request.respond(resp)?;
+    }
+    Ok(())
+}
+
+/// Serve authorized HTML preview resources.
+/// Route (PREV-001): `/fs/{token}/{relativePath}`
+///
+/// `token` is a preview session minted during `html_preview_prepare`, bound to
+/// the HTML document's parent directory. Every request is re-authorized:
+/// 1. the token must be an alive preview session;
+/// 2. the relative path must resolve strictly inside that session's base dir
+///    (`html_preview::resolve_within_base`, symlink-safe);
+/// 3. the resolved file must pass the host allow/deny kernel again
+///    (`file_manager::validate_path`) so a preview cannot reach blocklisted
+///    paths (e.g. `~/.ssh`) that happen to live inside the base dir.
+/// This is a revocable, per-resource authorization — not a raw-path proxy.
+fn serve_preview_file(
+    request: Request,
+    csp: Header,
+    head_only: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let url = request.url().to_string();
+    let path_part = url.split('?').next().unwrap_or(&url);
+    let path_part = path_part.strip_prefix("/fs/").unwrap_or(path_part);
+    // percent-decode relative path segments carefully
+    let path_part = percent_decode(path_part);
+    let mut seg = path_part.splitn(2, '/');
+    let token = seg.next().unwrap_or("");
+    let rel = seg.next().unwrap_or("");
+
+    // Shape / token sanity: unguessable hex token + an explicit relative path.
+    if token.is_empty()
+        || rel.is_empty()
+        || !token.chars().all(|c| c.is_ascii_hexdigit())
+        || token.contains("..")
+        || rel.contains('\0')
+    {
+        let resp = Response::from_string("Forbidden").with_status_code(403);
+        request.respond(resp)?;
+        return Ok(());
+    }
+
+    let base_dir = match html_preview::resolve_preview_session(token) {
+        Some(dir) => dir,
+        // Unknown/expired/revoked session: answer uniformly so probing cannot
+        // distinguish a dead session from a missing file.
+        None => {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    let resolved = match html_preview::resolve_within_base(&base_dir, &rel) {
+        Some(p) if p.is_file() => p,
+        _ => {
+            let resp = Response::from_string("Forbidden").with_status_code(403);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    // Defense-in-depth: the prepare step authorized the HTML document; here every
+    // served sibling must pass the same kernel so blocklisted paths are unreachable.
+    if crate::file_manager::validate_path(&resolved).is_err() {
+        let resp = Response::from_string("Forbidden").with_status_code(403);
+        request.respond(resp)?;
+        return Ok(());
+    }
+
+    let mime = guess_mime(&resolved);
+    if head_only {
+        let len = std::fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0);
+        let resp = Response::empty(200)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", mime).unwrap())
+            .with_header(
+                Header::from_bytes("Content-Length", len.to_string().into_bytes())
+                    .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap()),
+            );
+        request.respond(resp)?;
+        return Ok(());
+    }
+
+    if mime == "text/html" {
+        // Serve the (already rewritten) document raw so `previewUrl`-based
+        // rendering works; no Bridge injection — HTML previews never receive a
+        // Workshop Bridge token.
+        let raw = std::fs::read_to_string(&resolved)?;
+        let resp = Response::from_string(raw)
             .with_header(csp)
             .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
         request.respond(resp)?;
@@ -1309,6 +1418,142 @@ mod tests {
         );
     }
 
+    // ── PREV-001: authorized /fs/{token}/{path} preview resources ──
+
+    #[test]
+    fn preview_fs_route_serves_authorized_sibling_with_preview_csp() {
+        let f = fixture();
+        let file = f.data_dir.join("page.html");
+        std::fs::write(&file, "<html><body>preview</body></html>").unwrap();
+        let token = crate::html_preview::register_preview_session(f.data_dir.clone());
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        let response = http_get(port, &format!("/fs/{token}/page.html"));
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(
+            response.contains(&format!("Content-Security-Policy: {PREVIEW_CSP}")),
+            "preview resource must carry the preview CSP: {response}"
+        );
+        assert!(
+            response.contains("preview"),
+            "body should be the served file"
+        );
+    }
+
+    #[test]
+    fn preview_fs_route_rejects_unknown_or_revoked_session() {
+        let f = fixture();
+        let file = f.data_dir.join("x.png");
+        std::fs::write(&file, "png").unwrap();
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        // Unknown token: uniform 404, no probing signal.
+        let unknown = http_get(port, &format!("/fs/deadbeefdeadbeefdeadbeefdeadbeef/x.png"));
+        assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+
+        // Explicitly revoked session dies too.
+        let token = crate::html_preview::register_preview_session(f.data_dir.clone());
+        crate::html_preview::revoke_preview_session(&token);
+        let revoked = http_get(port, &format!("/fs/{token}/x.png"));
+        assert!(revoked.starts_with("HTTP/1.1 404"), "{revoked}");
+    }
+
+    #[test]
+    fn preview_fs_route_rejects_traversal_and_non_hex_token() {
+        let f = fixture();
+        let secret = f.data_dir.join("secret.txt");
+        std::fs::write(&secret, "top secret").unwrap();
+        let token = crate::html_preview::register_preview_session(f.data_dir.clone());
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        for bad in [
+            format!("/fs/{token}/../secret.txt"),
+            format!("/fs/{token}/../../etc/passwd"),
+            format!("/fs/{token}/sub/../../secret.txt"),
+            format!("/fs/{token}/%2e%2e/secret.txt"),
+            format!("/fs/not-hex-token/secret.txt"),
+        ] {
+            let response = http_get(port, &bad);
+            assert!(
+                response.starts_with("HTTP/1.1 403") || response.starts_with("HTTP/1.1 404"),
+                "expected 403/404 for {bad}: {response}"
+            );
+            assert!(
+                !response.contains("top secret"),
+                "secret leaked via {bad}: {response}"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_fs_route_rejects_escape_outside_base_and_blocklist() {
+        let f = fixture();
+        let token = crate::html_preview::register_preview_session(f.data_dir.clone());
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        // A file physically outside the base dir is unreachable even though the
+        // token is valid (containment is the boundary).
+        let outside = std::env::temp_dir().join(format!(
+            "natives-preview-outside-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("escape.png"), "png").unwrap();
+        let abs = outside.to_string_lossy().to_string();
+        let escaped = http_get(port, &format!("/fs/{token}/{abs}/escape.png"));
+        assert!(escaped.starts_with("HTTP/1.1 403"), "{escaped}");
+        let _ = std::fs::remove_dir_all(&outside);
+
+        // Blocklisted dotfiles inside the base dir are rejected by the kernel.
+        let ssh = f.data_dir.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(ssh.join("config"), "Host *").unwrap();
+        let blocked = http_get(port, &format!("/fs/{token}/.ssh/config"));
+        assert!(blocked.starts_with("HTTP/1.1 403"), "{blocked}");
+    }
+
+    #[test]
+    fn preview_fs_route_supports_head_requests() {
+        let f = fixture();
+        let file = f.data_dir.join("a.css");
+        std::fs::write(&file, "body{}").unwrap();
+        let token = crate::html_preview::register_preview_session(f.data_dir.clone());
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        use std::io::{Read, Write};
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect to test server");
+        write!(
+            stream,
+            "HEAD /fs/{token}/a.css HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+        .expect("write request");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        let response = String::from_utf8_lossy(&raw);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains("Content-Length"), "{response}");
+    }
+
     #[test]
     fn base_href_is_injected_before_head_close() {
         let html = "<html><head><title>x</title></head><body>a</body></html>";
@@ -1392,6 +1637,25 @@ mod tests {
         assert_eq!(
             WORKSHOP_CSP, DRAFT_CSP,
             "draft CSP must be identical to workshop CSP"
+        );
+
+        // Preview CSP: same strictness as Workshop (unreviewed local HTML must
+        // not get a weaker CSP), and distinct so domains stay partitioned.
+        assert_eq!(
+            PREVIEW_CSP, WORKSHOP_CSP,
+            "preview CSP must be as strict as workshop CSP"
+        );
+        assert!(
+            !PREVIEW_CSP.contains("frame-ancestors 'none'"),
+            "preview CSP must allow the sandboxed iframe display model: {PREVIEW_CSP}"
+        );
+        assert!(
+            !PREVIEW_CSP.contains("unsafe-eval"),
+            "preview CSP must not allow eval: {PREVIEW_CSP}"
+        );
+        assert!(
+            !PREVIEW_CSP.contains("connect-src https:"),
+            "preview CSP must not allow external connect: {PREVIEW_CSP}"
         );
 
         // Local Project CSP: allows loopback WS for Vite HMR
