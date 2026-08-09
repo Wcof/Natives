@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 mod agent;
@@ -314,6 +314,14 @@ pub fn run() {
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
             });
+
+            // RunWatchStreamV2 host watch bridge (persistent run.watch —
+            // NE-P0-01 §19.1): Renderer→Host→UDS→Daemon single stream. Host
+            // previously did not manage WatchBridgeState nor register the
+            // run_watch_start/stop/state commands; this is the only wiring.
+            app.manage(Arc::new(Mutex::new(
+                daemon::watch_bridge::WatchBridgeState::default(),
+            )));
 
             // Creative App: global mutation lock + child browser state (ADR-0013)
             // + local project runtime supervisor (process tree / logs)
@@ -832,6 +840,10 @@ pub fn run() {
             crate::sidecar_supervisor::daemon_supervisor_ensure,
             crate::sidecar_supervisor::daemon_supervisor_poll,
             crate::sidecar_supervisor::daemon_supervisor_shutdown,
+            // RunWatchStreamV2 host watch bridge (persistent run.watch — NE-P0-01 §19.1)
+            daemon::watch_bridge::run_watch_start,
+            daemon::watch_bridge::run_watch_stop,
+            daemon::watch_bridge::run_watch_state,
         ])
         .build(tauri::generate_context!())
         .expect("error while building natives")
