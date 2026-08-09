@@ -8,6 +8,7 @@ pub mod authority;
 pub mod capability;
 pub mod capability_resolution;
 pub mod checkpoint;
+pub mod child_run_orchestrator;
 pub mod cli_runtime_bridge;
 pub mod client;
 pub mod codex_runtime_bridge;

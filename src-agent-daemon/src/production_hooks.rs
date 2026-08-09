@@ -566,24 +566,23 @@ impl HookHandler for NativeAgentHook {
             Err(reason) => return HookOutcome::Failed { reason },
         };
         let created =
-            match crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
-                capability_selection: None,
-                disabled_tools: None,
-                conversation_id,
-                provider_id: parent.provider_id,
-                model_id,
-                key_id: Some(key_id),
-                agent_profile_id: None,
-                permission_profile: Some("readonly".into()),
-                content: Some(task),
-                attachments: None,
-                max_steps: Some(self.max_steps.clamp(1, 32)),
-                parent_run_id: Some(parent.id.clone()),
-                project_path: parent.project_path.clone(),
-                idempotency_key: None,
-                effort: parent.effort,
-                runtime_id: Some("native".into()),
-            }) {
+            match crate::child_run_orchestrator::create_child_run(
+                crate::child_run_orchestrator::ChildRunSpec {
+                    conversation_id,
+                    provider_id: parent.provider_id,
+                    model_id,
+                    key_id: Some(key_id),
+                    agent_profile_id: None,
+                    permission_profile: Some("readonly".into()),
+                    content: Some(task),
+                    max_steps: Some(self.max_steps.clamp(1, 32)),
+                    parent_run_id: Some(parent.id.clone()),
+                    project_path: parent.project_path.clone(),
+                    runtime_id: Some("native".into()),
+                },
+            )
+            .await
+            {
                 Ok(run) => run,
                 Err(reason) => {
                     let _ = crate::subagent_store::close_subagent_session(
@@ -594,14 +593,12 @@ impl HookHandler for NativeAgentHook {
                     return HookOutcome::Failed { reason };
                 }
             };
-        crate::global_run_manager()
-            .runtime
-            .set_run_tool_allowlist(&created.id, self.readonly_tools.clone())
-            .await;
-        crate::global_run_manager()
-            .runtime
-            .set_run_agent_directive(&created.id, self.prompt.clone())
-            .await;
+        crate::child_run_orchestrator::apply_child_surface(
+            &created.id,
+            self.readonly_tools.clone(),
+            Some(self.prompt.clone()),
+        )
+        .await;
         crate::global_run_manager().runtime.events.append(
             &parent.id,
             RunEventKind::SubagentCreated {
@@ -610,7 +607,7 @@ impl HookHandler for NativeAgentHook {
                 task: "Harness Agent Hook".into(),
             },
         );
-        if let Err(reason) = crate::run_manager::RunManager::start_detached_global(
+        if let Err(reason) = crate::child_run_orchestrator::start_child_run(
             assistant_protocol::v2::StartRunRequest {
                 run_id: Some(created.id.clone()),
                 conversation_id: Some(created.conversation_id.clone()),
@@ -629,7 +626,9 @@ impl HookHandler for NativeAgentHook {
                 agent_profile_id: None,
                 capability_selection: None,
             },
-        ) {
+        )
+        .await
+        {
             let _ =
                 crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&reason));
             return HookOutcome::Failed { reason };
