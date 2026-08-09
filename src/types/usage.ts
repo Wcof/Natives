@@ -260,3 +260,19 @@ export type DashboardState =
       data: UsageDashboardResponse;
       metadata: UsageCacheMetadata;
     };
+
+// ── Snapshot change event (frozen contract: `usage:snapshot-changed`) ──
+
+/** Cross-window event name emitted by the Host after a successful usage_sync. */
+export const USAGE_SNAPSHOT_CHANGED_EVENT = 'usage:snapshot-changed';
+
+export interface UsageSnapshotChangedPayload {
+  channel: string;
+  version: number;
+  sequence: number;
+  data: {
+    timeZone: string;
+    generatedAtMs: number;
+    schemaVersion: number;
+  };
+}

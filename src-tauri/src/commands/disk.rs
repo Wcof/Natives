@@ -1,6 +1,7 @@
 use crate::{disk_usage, Error, Result};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use sysinfo::{Disks, System};
 
@@ -38,21 +39,37 @@ pub fn disk_usage(dir_path: String) -> Result<Vec<JsonValue>> {
 
 #[tauri::command]
 pub fn disk_system_info() -> Result<DiskSystemInfo> {
+    // MB-P0-06: report the ROOT volume only. The previous implementation summed
+    // every mounted volume (external disks, Time Machine, …) into a fake
+    // "system disk" number. Honesty: if the root volume cannot be found or
+    // reports zero total space, return an explicit error — never fake 0.
     let disks = Disks::new_with_refreshed_list();
-    let mut total: u64 = 0;
-    let mut available: u64 = 0;
-
+    let mut root_disk = None;
     for disk in &disks {
-        total += disk.total_space();
-        available += disk.available_space();
+        if disk.mount_point() == Path::new("/") {
+            root_disk = Some(disk);
+            break;
+        }
     }
+    let Some(root) = root_disk else {
+        return Err(Error::Internal(
+            "root volume (/) not found; cannot report system storage".into(),
+        ));
+    };
 
-    let used = total.saturating_sub(available);
+    let total_bytes = root.total_space();
+    let available_bytes = root.available_space();
+    if total_bytes == 0 {
+        return Err(Error::Internal(
+            "root volume reported zero total space; refusing to fake storage".into(),
+        ));
+    }
+    let used_bytes = total_bytes.saturating_sub(available_bytes);
 
     Ok(DiskSystemInfo {
-        total_bytes: total,
-        used_bytes: used,
-        available_bytes: available,
+        total_bytes,
+        used_bytes,
+        available_bytes,
     })
 }
 

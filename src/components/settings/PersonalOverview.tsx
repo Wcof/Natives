@@ -27,7 +27,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import {
   buildOverviewTrend,
   summarizeOverviewUsage,
-} from './personal-overview-data';
+} from '@/lib/personal-overview-data';
 import styles from './PersonalOverview.module.css';
 
 type OverviewRange = '7d' | '30d';

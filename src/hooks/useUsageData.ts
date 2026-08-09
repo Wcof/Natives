@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { classifyError } from '@/lib/error-classifier';
+import { subscribeUsageSnapshotChanged } from '@/lib/tauri/usage';
 import type {
   DashboardState,
   UsageCacheMetadata,
@@ -9,6 +10,9 @@ import type {
   UsageDashboardResponse,
   UsageViewRequest,
 } from '@/types/usage';
+
+/** Re-exported for the Menubar popup / other surfaces (single implementation). */
+export { subscribeUsageSnapshotChanged, USAGE_SNAPSHOT_CHANGED_EVENT } from '@/lib/tauri/usage';
 
 /**
  * Shared usage data hook (ARCH-001 · F3-01).
@@ -107,6 +111,16 @@ export function useUsageData(
   useEffect(() => {
     setState({ kind: 'reading-cache' });
     void loadCached();
+  }, [loadCached]);
+
+  // Re-read the snapshot cache whenever the Host finishes a usage_sync
+  // (`usage:snapshot-changed`, R-T5). loadCached is read-only
+  // (usage_get_cached never scans), so this cannot loop back into usage_sync.
+  // The effect cleanup unsubscribes on unmount.
+  useEffect(() => {
+    return subscribeUsageSnapshotChanged(() => {
+      void loadCached();
+    });
   }, [loadCached]);
 
   return { state, errorMsg, isSyncing, lastSyncTime, clearError, loadCached, sync };
