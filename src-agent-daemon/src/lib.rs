@@ -16,6 +16,7 @@ pub mod conversation_projector;
 pub mod conversation_store;
 pub mod creative_ai;
 pub mod event_log;
+pub mod event_log_decode;
 pub mod extension_store;
 pub mod governor;
 pub mod interaction_store;
