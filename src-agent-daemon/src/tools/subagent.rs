@@ -312,12 +312,17 @@ impl PermissionGatedTools {
             .as_deref()
             .map(std::path::Path::new);
         let profile = match &requested_profile_id {
-            Some(id) => match agent_core::load_agent_profile(id, project_root_path) {
+            // 19.3-②: the SAME authoritative loader as DB Experts and file
+            // profiles — so a `subagent_type` naming a DB Expert works exactly
+            // like one naming a `.claude/agents/*.md` file (DB wins, file
+            // fallback, fail-closed on neither).
+            Some(id) => match crate::capability::experts::load_agent_profile(id, project_root_path)
+            {
                 Some(p) => Some(p),
                 None => {
                     return ToolExecutionResult {
                         output: serde_json::json!({
-                            "error": format!("agent profile `{id}` not found in the project or user profile directories"),
+                            "error": format!("agent profile `{id}` not found in the capability experts or project/user profile directories"),
                             "code": "agent_profile_not_found",
                         }),
                         is_error: true,
@@ -353,6 +358,14 @@ impl PermissionGatedTools {
             Some(sp) => Some(sp.to_string()),
             None => None,
         };
+
+        // NE-P0-08 / 19.3-①: a stable SHA-256 digest of the parent-authored
+        // persona. It is persisted next to the directive in the protected
+        // pending execution plan so restart/retry/continue restore the exact
+        // same text and digest — never a re-rolled or truncated persona.
+        let child_directive_digest = child_directive
+            .as_ref()
+            .map(|sp| crate::subagent_store::directive_sha256_hex(sp));
 
         // ── Permission and tool surface ──
         //
@@ -409,6 +422,49 @@ impl PermissionGatedTools {
         }
         let child_allowlist = child_allowlist;
 
+        // ── 19.3-④ team maxConcurrent contract ──
+        //
+        // When a leader delegates to a roster member under an active team, the
+        // parent run may not exceed the team's configured concurrent-child
+        // ceiling. The gate consults the durable reservation ledger BEFORE any
+        // child is spawned (persist-first), so a busy team rejects the extra
+        // delegation fail-closed instead of silently oversubscribing.
+        if member_profile.is_some() {
+            if let Some(team) = &self.team {
+                // Fail closed on ledger errors too — a team whose concurrency
+                // ledger cannot be read must not start unbounded delegations.
+                let active =
+                    match crate::subagent_store::parent_active_reservations(&self.parent_run_id) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            return ToolExecutionResult {
+                                output: serde_json::json!({
+                                    "error": format!("team concurrency gate failed: {e}"),
+                                    "code": "TEAM_CONCURRENCY_GATE_FAILED",
+                                }),
+                                is_error: true,
+                                duration_ms: 0,
+                            };
+                        }
+                    };
+                if active >= team.max_concurrent as usize {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": format!(
+                                "team '{}' max_concurrent reached ({}/{}): wait for a member to finish or raise the team limit",
+                                team.team_id, active, team.max_concurrent
+                            ),
+                            "code": "TEAM_MAX_CONCURRENT_REACHED",
+                            "max_concurrent": team.max_concurrent,
+                            "active": active,
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+            }
+        }
+
         // ── Step budget: request, else the profile's, else the daemon default ──
         let child_max_steps = input
             .get("max_steps")
@@ -427,11 +483,17 @@ impl PermissionGatedTools {
         // re-queues transient provider failures up to `max_retries`. Budgets
         // are capped by the daemon config so a parent can never buy a child
         // bigger than the machine-wide ceiling.
-        let failure_policy = input
-            .get("failure_policy")
-            .and_then(|v| v.as_str())
-            .map(FailurePolicy::parse)
-            .unwrap_or(self.subagents.config().failure_policy);
+        // 19.3-④ team failurePolicy contract: without an explicit per-call
+        // policy, a team delegation uses the team's configured failure policy
+        // (same vocabulary the daemon enforces per child). A member spawned
+        // without a team still falls back to the daemon default.
+        let failure_policy = match input.get("failure_policy").and_then(|v| v.as_str()) {
+            Some(raw) => FailurePolicy::parse(raw),
+            None => match (&self.team, member_profile.as_ref()) {
+                (Some(team), Some(_)) => FailurePolicy::parse(&team.failure_policy),
+                _ => self.subagents.config().failure_policy,
+            },
+        };
         let max_retries = input
             .get("max_retries")
             .and_then(|v| v.as_u64())
@@ -588,6 +650,10 @@ impl PermissionGatedTools {
                     "permission_profile": child_perm.clone(),
                     "tool_allowlist": child_allowlist.clone(),
                     "model_id": child_model.clone(),
+                    // 19.3-⑤: field-level visibility — hooks see the persona's
+                    // digest, never its text. The text lives only in the
+                    // protected pending execution plan.
+                    "system_prompt_digest": child_directive_digest.clone(),
                 }),
             })
             .await;
@@ -612,17 +678,27 @@ impl PermissionGatedTools {
         // no durable store and skips the reservation (slot lives in-memory).
         let depth = self.subagents.depth_for_child(&self.parent_run_id).await;
         if !fixture_mode {
-            let scope_snapshot = serde_json::json!({
-                "project_path": self.gateway.project_root.clone(),
-                "project_id": project_id_for_scope.clone(),
-                "project_identity_version": identity.as_ref().map(|i| i.identity_version as i64),
-                "permission_profile": child_perm.clone(),
-                "agent_profile_id": child_profile_id.clone(),
-                "max_steps": child_max_steps,
-                "tool_allowlist": child_allowlist.clone(),
-                "failure_policy": failure_policy.as_str(),
-                "max_tokens": child_max_tokens,
-            });
+            // NE-P0-08 / 19.3-①: the parent-authored directive is embedded in
+            // the reservation scope snapshot BEFORE the child run exists — the
+            // protected pending execution plan. A daemon crash between here and
+            // child start no longer loses the persona; retry/restart/continue
+            // read the exact same text + digest back.
+            let scope_snapshot = crate::subagent_store::with_pending_directive(
+                serde_json::json!({
+                    "project_path": self.gateway.project_root.clone(),
+                    "project_id": project_id_for_scope.clone(),
+                    "project_identity_version": identity.as_ref().map(|i| i.identity_version as i64),
+                    "permission_profile": child_perm.clone(),
+                    "agent_profile_id": child_profile_id.clone(),
+                    "max_steps": child_max_steps,
+                    "tool_allowlist": child_allowlist.clone(),
+                    "failure_policy": failure_policy.as_str(),
+                    "max_tokens": child_max_tokens,
+                }),
+                child_directive
+                    .as_deref()
+                    .zip(child_directive_digest.as_deref()),
+            );
             if let Err(error) = crate::subagent_store::reserve_subagent_slot(
                 &crate::subagent_store::SubagentReservation {
                     session_id: session_id.clone(),
@@ -891,6 +967,9 @@ impl PermissionGatedTools {
                 "tool_allowlist": child_allowlist,
                 "max_steps": child_max_steps,
                 "system_prompt_authored": child_directive.is_some(),
+                // 19.3-⑤: field-level visibility — the persona's digest, never
+                // its text, is echoed back to the parent conversation.
+                "system_prompt_digest": child_directive_digest,
             }),
             is_error: false,
             duration_ms: 0,
@@ -2042,6 +2121,19 @@ async fn requeue_child_run(
 ) -> Result<String, String> {
     let session = crate::subagent_store::get_subagent_session(session_id)?
         .ok_or_else(|| format!("subagent session not found: {session_id}"))?;
+    // NE-P0-08: the re-queued run restores the EXACT persona. The durable
+    // pending directive (same text + digest, verified) wins; the in-memory
+    // argument is only a fallback for legacy sessions created before
+    // directives were persisted. A digest mismatch is treated as corruption
+    // and fails closed on the durable copy rather than silently re-rolling.
+    let (directive_text, _directive_digest) = directive_for_requeue(
+        crate::subagent_store::pending_directive_for_session(session_id)
+            .ok()
+            .flatten(),
+        child_directive.as_deref(),
+    )
+    .map(|(text, digest)| (text, digest))
+    .unwrap_or_default();
     let project_path = session.project_path.clone();
     let prompt = if session.task.trim().is_empty() {
         format!("Retry (attempt {retry_number}) after: {reason}")
@@ -2071,10 +2163,10 @@ async fn requeue_child_run(
         .runtime
         .set_run_tool_allowlist(&created.id, child_allowlist.to_vec())
         .await;
-    if let Some(directive) = child_directive.as_deref().filter(|s| !s.is_empty()) {
+    if !directive_text.is_empty() {
         crate::global_run_manager()
             .runtime
-            .set_run_agent_directive(&created.id, directive.to_string())
+            .set_run_agent_directive(&created.id, directive_text)
             .await;
     }
     crate::run_manager::RunManager::start_detached_global(
@@ -2183,6 +2275,50 @@ fn use_fixture_flag(input: &Value) -> bool {
         || std::env::var("NATIVES_DAEMON_FIXTURE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
+}
+
+/// NE-P0-08: resolve the directive to apply on a re-queued run. The durable
+/// pending directive wins when its recorded digest matches a fresh hash of the
+/// text (crash-safe: same text + same digest). A digest mismatch is treated as
+/// corruption — the in-memory argument is used instead, never a silently
+/// re-rolled durable persona. Legacy sessions fall back to the in-memory arg.
+fn directive_for_requeue(
+    durable: Option<crate::subagent_store::PendingDirective>,
+    in_memory: Option<&str>,
+) -> Option<(String, String)> {
+    if let Some(pd) = durable {
+        if crate::subagent_store::directive_sha256_hex(&pd.text) == pd.digest {
+            return Some((pd.text, pd.digest));
+        }
+    }
+    in_memory.filter(|s| !s.trim().is_empty()).map(|s| {
+        (
+            s.to_string(),
+            crate::subagent_store::directive_sha256_hex(s),
+        )
+    })
+}
+
+/// 19.3-⑤ field-level visibility for the Parent Tool Input's `system_prompt`:
+/// exports/logs get a digest marker in place of the persona text, other fields
+/// pass through untouched. The digest lets an operator verify the same persona
+/// was restored without ever exposing the prompt body.
+pub fn redact_task_input_system_prompt(input: &Value) -> Value {
+    let mut out = input.clone();
+    let Some(obj) = out.as_object_mut() else {
+        return out;
+    };
+    for key in ["system_prompt", "agent_prompt"] {
+        if let Some(v) = obj.get_mut(key) {
+            if let Some(text) = v.as_str().filter(|s| !s.trim().is_empty()) {
+                *v = Value::String(format!(
+                    "[REDACTED system_prompt sha256:{}]",
+                    crate::subagent_store::directive_sha256_hex(text)
+                ));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2310,5 +2446,80 @@ mod tests {
             "FailFast must fail the parent run"
         );
         crate::run_manager::install_memory_global_for_test();
+    }
+
+    // ── NE-P0-08 / 19.3-①: retry restores the exact persona ──
+
+    #[test]
+    fn directive_for_requeue_prefers_verified_durable_copy() {
+        let text = "You are a terse Rust reviewer.";
+        let digest = crate::subagent_store::directive_sha256_hex(text);
+        let durable = Some(crate::subagent_store::PendingDirective {
+            text: text.to_string(),
+            digest: digest.clone(),
+            persisted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        let got =
+            directive_for_requeue(durable, Some("in-memory persona")).expect("durable copy wins");
+        assert_eq!(got.0, text, "retry uses the exact same text");
+        assert_eq!(got.1, digest, "retry uses the exact same digest");
+    }
+
+    #[test]
+    fn directive_for_requeue_falls_back_when_durable_missing_or_corrupt() {
+        // No durable copy: legacy session → in-memory arg wins.
+        let got =
+            directive_for_requeue(None, Some("  in-memory persona  ")).expect("in-memory fallback");
+        assert_eq!(got.0, "in-memory persona", "in-memory arg is trimmed");
+        // Digest mismatch (corruption signal): never silently re-roll the
+        // durable text — fall back to the in-memory arg instead.
+        let corrupt = Some(crate::subagent_store::PendingDirective {
+            text: "tampered persona".into(),
+            digest: crate::subagent_store::directive_sha256_hex("original"),
+            persisted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        let got = directive_for_requeue(corrupt, Some("in-memory persona"))
+            .expect("in-memory fallback on digest mismatch");
+        assert_eq!(got.0, "in-memory persona");
+        assert_eq!(
+            got.1,
+            crate::subagent_store::directive_sha256_hex("in-memory persona")
+        );
+        // Neither source → None.
+        assert!(directive_for_requeue(None, None).is_none());
+        assert!(directive_for_requeue(None, Some("   ")).is_none());
+    }
+
+    // ── 19.3-⑤: field-level redaction of the Parent Tool Input ──
+
+    #[test]
+    fn redact_task_input_hides_system_prompt_text_keeps_digest() {
+        let input = serde_json::json!({
+            "prompt": "do the thing",
+            "system_prompt": "secret persona body",
+            "agent_prompt": "also secret",
+            "max_steps": 5,
+        });
+        let redacted = redact_task_input_system_prompt(&input);
+        let serialized = redacted.to_string();
+        assert!(!serialized.contains("secret persona body"), "text redacted");
+        assert!(!serialized.contains("also secret"), "text redacted");
+        assert!(
+            serialized.contains("[REDACTED system_prompt sha256:"),
+            "digest marker"
+        );
+        assert_eq!(redacted["prompt"], "do the thing", "other fields untouched");
+        assert_eq!(redacted["max_steps"], 5, "other fields untouched");
+        // The digest marker contains the real digest for field-level verification.
+        let expected_digest = crate::subagent_store::directive_sha256_hex("secret persona body");
+        assert!(
+            serialized.contains(&expected_digest),
+            "digest stays visible for verification"
+        );
+        // Non-object input passes through untouched.
+        assert_eq!(
+            redact_task_input_system_prompt(&serde_json::json!("plain")),
+            "plain"
+        );
     }
 }

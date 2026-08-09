@@ -29,11 +29,12 @@ const inputStyle = {
   color: 'var(--text)',
 } as const;
 
-// Frozen daemon vocab (experts.rs::validate_team_settings).
-const STRATEGIES = ['parallel', 'sequential', 'coordinator'] as const;
+// 19.3-④: `strategy` and `taskTemplate` are retired from the runtime contract
+// and removed from the UI. Only the REAL contract fields remain configurable:
+// failurePolicy + maxConcurrent (enforced by the task tool at delegation).
 const FAILURE_POLICIES = ['isolate', 'fail_fast', 'require_all'] as const;
 
-type MemberDraft = Omit<CapabilityTeamMember, 'position'>;
+type MemberDraft = Omit<CapabilityTeamMember, 'position' | 'taskTemplate'>;
 
 /** Team = lead + ordered member allowlist + failure policy (ADR-0016 决策 3). */
 export default function ExpertTeamEditDialog({ locale, gateway, team, experts, onClose, onSaved }: ExpertTeamEditDialogProps) {
@@ -41,7 +42,6 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
   const isEdit = team !== null;
   const [name, setName] = useState(team?.name ?? '');
   const [description, setDescription] = useState(team?.description ?? '');
-  const [strategy, setStrategy] = useState(team?.strategy ?? 'parallel');
   const [failurePolicy, setFailurePolicy] = useState(team?.failurePolicy ?? 'isolate');
   const [maxConcurrent, setMaxConcurrent] = useState(team?.maxConcurrent ?? 2);
   const [coordinatorId, setCoordinatorId] = useState(team?.coordinatorExpertId ?? '');
@@ -49,7 +49,7 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
     (team?.members ?? [])
       .slice()
       .sort((a, b) => a.position - b.position)
-      .map(({ expertId, roleHint, taskTemplate }) => ({ expertId, roleHint, taskTemplate })),
+      .map(({ expertId, roleHint }) => ({ expertId, roleHint })),
   );
   const [enabled, setEnabled] = useState(team?.enabled ?? true);
   const [addSelect, setAddSelect] = useState('');
@@ -87,12 +87,11 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
     const payload: Partial<CapabilityExpertTeam> = {
       name: name.trim(),
       description: description.trim(),
-      strategy,
       failurePolicy,
       maxConcurrent,
       coordinatorExpertId: coordinatorId || null,
       enabled,
-      members: members.map((m, index) => ({ ...m, position: index })),
+      members: members.map((m, index) => ({ ...m, position: index, taskTemplate: null })),
     };
     try {
       if (isEdit && team) {
@@ -135,15 +134,7 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
           className="w-full rounded border px-3 py-2 text-sm"
           style={inputStyle}
         />
-        <div className="grid grid-cols-3 gap-2">
-          <label className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-            {t(locale, 'capabilities.experts.strategy')}
-            <select value={strategy} onChange={(e) => setStrategy(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
-              {STRATEGIES.map((s) => (
-                <option key={s} value={s}>{t(locale, `capabilities.experts.strategyOptions.${s}`)}</option>
-              ))}
-            </select>
-          </label>
+        <div className="grid grid-cols-2 gap-2">
           <label className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
             {t(locale, 'capabilities.experts.failurePolicy')}
             <select value={failurePolicy} onChange={(e) => setFailurePolicy(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
@@ -193,14 +184,6 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
                   className="w-28 rounded border px-2 py-1 text-xs"
                   style={inputStyle}
                 />
-                <input
-                  value={member.taskTemplate ?? ''}
-                  onChange={(e) => patchMember(index, { taskTemplate: e.target.value || null })}
-                  placeholder={t(locale, 'capabilities.experts.taskTemplate')}
-                  aria-label={t(locale, 'capabilities.experts.taskTemplate')}
-                  className="w-36 rounded border px-2 py-1 text-xs"
-                  style={inputStyle}
-                />
                 <button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label={t(locale, 'capabilities.experts.moveUp')} title={t(locale, 'capabilities.experts.moveUp')} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-30" style={{ color: 'var(--text-secondary)' }}>
                   <ArrowUp size={12} />
                 </button>
@@ -230,7 +213,7 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
               type="button"
               onClick={() => {
                 if (!addSelect) return;
-                setMembers([...members, { expertId: addSelect, roleHint: null, taskTemplate: null }]);
+                setMembers([...members, { expertId: addSelect, roleHint: null }]);
                 setAddSelect('');
               }}
               disabled={!addSelect}

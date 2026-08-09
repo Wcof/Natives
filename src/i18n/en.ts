@@ -2641,6 +2641,13 @@ export const en = {
       teamDeleteMessage: 'This cannot be undone. Member experts are kept.',
       teamDeleted: 'Team deleted',
       nameRequired: 'Name is required',
+      aiGenerate: 'AI generate prompt',
+      aiGenerateTitle: 'AI-generated prompt draft',
+      aiGenerateHint: 'Review the generated persona below. Green = additions, red = removals against the current prompt.',
+      aiGenerateConfirm: 'Use and save',
+      aiGenerateCancel: 'Discard',
+      aiGenerateFailed: 'The generation run did not complete',
+      aiGenerateProjectRequired: 'Open a project first so the assistant run has a workspace.',
     },
     picker: {
       open: 'Capabilities',

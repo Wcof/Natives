@@ -6,9 +6,10 @@
 //! (precedent: subagent_store).
 
 use super::store;
-use agent_core::profile::parse_agent_profile_markdown;
+use agent_core::profile::{parse_agent_profile_markdown, AgentProfile};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
+use std::path::Path;
 use uuid::Uuid;
 
 fn now_iso() -> String {
@@ -44,6 +45,96 @@ fn expert_row_to_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "createdAt": row.get::<_, String>("created_at")?,
         "updatedAt": row.get::<_, String>("updated_at")?,
     }))
+}
+
+/// DB-authoritative profile load with file fallback (ADR-0016 decision 3).
+///
+/// 19.3-②: this is the **single authoritative loader** both DB Experts and
+/// `.md` AgentProfile files go through. The DB (`capability_expert`) wins for
+/// enabled rows; a file profile from the project/user profile directories is
+/// the fallback (interchange format). Used by run-level capability resolution,
+/// run start, and the `task` tool's `subagent_type` — so a DB Expert is usable
+/// as a subagent persona exactly like a file profile.
+pub fn load_agent_profile(id: &str, project_root: Option<&Path>) -> Option<AgentProfile> {
+    if let Some(profile) = load_expert_profile_from_db(id) {
+        return Some(profile);
+    }
+    agent_core::load_agent_profile(id, project_root)
+}
+
+/// Load an enabled DB Expert as an `AgentProfile` (authoritative source).
+pub fn load_expert_profile_from_db(id: &str) -> Option<AgentProfile> {
+    let expert = get(&json!({ "id": id })).ok()?;
+    let expert = expert.get("expert")?;
+    if expert.get("enabled") != Some(&json!(true)) {
+        return None;
+    }
+    let as_vec = |v: &Value| -> Option<Vec<String>> {
+        let items: Vec<String> = v
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if items.is_empty() {
+            None
+        } else {
+            Some(items)
+        }
+    };
+    let params = expert.get("params").cloned().unwrap_or_else(|| json!({}));
+    let param_str = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_string);
+    let param_u64 = |key: &str| params.get(key).and_then(Value::as_u64);
+    Some(AgentProfile {
+        id: expert.get("id")?.as_str()?.to_string(),
+        name: expert
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        description: expert
+            .get("description")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        prompt_mode: param_str("promptMode"),
+        system_prompt: expert
+            .get("systemPrompt")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        tools: expert.get("tools").and_then(as_vec),
+        disallowed_tools: expert.get("disallowedTools").and_then(as_vec),
+        permission_mode: expert
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        skills: expert.get("skills").and_then(as_vec),
+        provider_id: expert
+            .get("providerId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        key_id: expert
+            .get("keyId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        model_id: expert
+            .get("modelId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        base_url_override: param_str("baseUrlOverride"),
+        context_mode: param_str("contextMode"),
+        isolation_mode: param_str("isolationMode"),
+        max_steps: param_u64("maxSteps").and_then(|v| u32::try_from(v).ok()),
+        max_duration: param_u64("maxDuration"),
+        token_budget: param_u64("tokenBudget"),
+        completion_requirement: param_str("completionRequirement"),
+        body: expert
+            .get("systemPrompt")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        source_path: None,
+    })
 }
 
 pub fn list(params_value: &Value) -> Result<Value, String> {
@@ -427,9 +518,12 @@ pub fn export_md(params_value: &Value) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, String> {
+    // 19.3-④: `strategy` is dead configuration (no runtime honours it) and is
+    // no longer part of the contract — it is not advertised in the API. The
+    // column stays in the DB untouched for historical rows.
     let team = conn
         .query_row(
-            "SELECT id, name, description, strategy, failure_policy, max_concurrent,
+            "SELECT id, name, description, failure_policy, max_concurrent,
                     coordinator_expert_id, enabled, created_at, updated_at
                FROM capability_expert_team WHERE id = ?1",
             params![id],
@@ -438,13 +532,12 @@ fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, 
                     "id": row.get::<_, String>(0)?,
                     "name": row.get::<_, String>(1)?,
                     "description": row.get::<_, String>(2)?,
-                    "strategy": row.get::<_, String>(3)?,
-                    "failurePolicy": row.get::<_, String>(4)?,
-                    "maxConcurrent": row.get::<_, i64>(5)?,
-                    "coordinatorExpertId": row.get::<_, Option<String>>(6)?,
-                    "enabled": row.get::<_, i64>(7)? != 0,
-                    "createdAt": row.get::<_, String>(8)?,
-                    "updatedAt": row.get::<_, String>(9)?,
+                    "failurePolicy": row.get::<_, String>(3)?,
+                    "maxConcurrent": row.get::<_, i64>(4)?,
+                    "coordinatorExpertId": row.get::<_, Option<String>>(5)?,
+                    "enabled": row.get::<_, i64>(6)? != 0,
+                    "createdAt": row.get::<_, String>(7)?,
+                    "updatedAt": row.get::<_, String>(8)?,
                 }))
             },
         )
@@ -465,7 +558,8 @@ fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, 
                 "expertId": row.get::<_, String>(0)?,
                 "position": row.get::<_, i64>(1)?,
                 "roleHint": row.get::<_, String>(2)?,
-                "taskTemplate": row.get::<_, String>(3)?,
+                // `task_template` is not honoured by the runtime contract
+                // (19.3-④): retained in the column for history, never advertised.
             }))
         })
         .map_err(|e| e.to_string())?
@@ -512,7 +606,9 @@ pub fn team_create(params_value: &Value) -> Result<Value, String> {
         .filter(|s| !s.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let (strategy, failure_policy, max_concurrent) = validate_team_settings(params_value)?;
+    // 19.3-④: strategy is fixed at the default — no runtime honours it and it
+    // is no longer a configurable contract field.
+    let (failure_policy, max_concurrent) = validate_team_settings(params_value)?;
     let coordinator = str_field(params_value, "coordinatorExpertId");
     let members = parse_members(params_value)?;
     if members.is_empty() {
@@ -538,12 +634,11 @@ pub fn team_create(params_value: &Value) -> Result<Value, String> {
         "INSERT INTO capability_expert_team
             (id, name, description, strategy, failure_policy, max_concurrent,
              coordinator_expert_id, enabled, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+         VALUES (?1, ?2, ?3, 'parallel', ?4, ?5, ?6, ?7, ?8, ?8)",
         params![
             id,
             name,
             str_field(params_value, "description").unwrap_or_default(),
-            strategy,
             failure_policy,
             max_concurrent,
             coordinator,
@@ -598,16 +693,15 @@ pub fn team_update(params_value: &Value) -> Result<Value, String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    if params_value.get("strategy").is_some()
-        || params_value.get("failurePolicy").is_some()
-        || params_value.get("maxConcurrent").is_some()
-    {
-        let (strategy, failure_policy, max_concurrent) =
+    // 19.3-④: `failurePolicy`/`maxConcurrent` are the real runtime contract
+    // fields; `strategy` is retired from the contract (kept at default).
+    if params_value.get("failurePolicy").is_some() || params_value.get("maxConcurrent").is_some() {
+        let (failure_policy, max_concurrent) =
             validate_team_settings_with_defaults(params_value, &tx, &id)?;
         tx.execute(
             "UPDATE capability_expert_team
-                SET strategy = ?2, failure_policy = ?3, max_concurrent = ?4 WHERE id = ?1",
-            params![id, strategy, failure_policy, max_concurrent],
+                SET failure_policy = ?2, max_concurrent = ?3 WHERE id = ?1",
+            params![id, failure_policy, max_concurrent],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -878,14 +972,10 @@ fn insert_members(
     Ok(())
 }
 
-fn validate_team_settings(params_value: &Value) -> Result<(String, String, i64), String> {
-    let strategy = params_value
-        .get("strategy")
-        .and_then(Value::as_str)
-        .unwrap_or("parallel");
-    if !matches!(strategy, "parallel" | "sequential" | "coordinator") {
-        return Err(format!("invalid strategy: {strategy}"));
-    }
+/// Validate the real runtime-contract team settings (19.3-④): `failurePolicy`
+/// (isolate/fail_fast/require_all) and `maxConcurrent` (1..=8). `strategy` is
+/// retired from the contract and always resolves to the fixed default.
+fn validate_team_settings(params_value: &Value) -> Result<(String, i64), String> {
     let failure_policy = params_value
         .get("failurePolicy")
         .or_else(|| params_value.get("failure_policy"))
@@ -902,33 +992,22 @@ fn validate_team_settings(params_value: &Value) -> Result<(String, String, i64),
     if !(1..=8).contains(&max_concurrent) {
         return Err("maxConcurrent must be in 1..=8".into());
     }
-    Ok((
-        strategy.to_string(),
-        failure_policy.to_string(),
-        max_concurrent,
-    ))
+    Ok((failure_policy.to_string(), max_concurrent))
 }
 
 fn validate_team_settings_with_defaults(
     params_value: &Value,
     conn: &rusqlite::Connection,
     id: &str,
-) -> Result<(String, String, i64), String> {
-    let (current_strategy, current_policy, current_max): (String, String, i64) = conn
+) -> Result<(String, i64), String> {
+    let (current_policy, current_max): (String, i64) = conn
         .query_row(
-            "SELECT strategy, failure_policy, max_concurrent FROM capability_expert_team WHERE id = ?1",
+            "SELECT failure_policy, max_concurrent FROM capability_expert_team WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| e.to_string())?;
     let mut merged = serde_json::Map::new();
-    merged.insert(
-        "strategy".into(),
-        params_value
-            .get("strategy")
-            .cloned()
-            .unwrap_or_else(|| json!(current_strategy)),
-    );
     merged.insert(
         "failurePolicy".into(),
         params_value
@@ -987,4 +1066,155 @@ fn required_str<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| format!("{key} required"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn with_temp_db<F: FnOnce()>(f: F) {
+        let _guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(format!("experts-{}.db", Uuid::new_v4()));
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let _warm = crate::storage::DataStore::new(&db, &art).expect("experts temp db migrate");
+        f();
+        crate::storage::set_test_db_override(None, None);
+    }
+
+    #[test]
+    fn db_expert_loads_through_authoritative_loader() {
+        with_temp_db(|| {
+            // 19.3-②: a DB Expert is loadable by the same authoritative loader
+            // the run path uses — so `subagent_type`/expert selection can name it.
+            insert_expert(
+                &json!({
+                    "id": "db-expert-1",
+                    "name": "DB Expert",
+                    "systemPrompt": "You are the DB expert.",
+                    "tools": ["read_file"],
+                    "skills": ["user:rust"],
+                    "enabled": true,
+                }),
+                "manual",
+            )
+            .unwrap();
+            let profile = load_agent_profile("db-expert-1", None).expect("loadable");
+            assert_eq!(profile.id, "db-expert-1");
+            assert_eq!(
+                profile.system_prompt.as_deref(),
+                Some("You are the DB expert.")
+            );
+            assert_eq!(profile.tools, Some(vec!["read_file".to_string()]));
+            // A missing id falls back to the file loader which also fails closed.
+            assert!(load_agent_profile("ghost-expert", None).is_none());
+        });
+    }
+
+    #[test]
+    fn disabled_db_expert_is_not_loadable() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({
+                    "id": "disabled-expert",
+                    "name": "Disabled",
+                    "systemPrompt": "You are disabled.",
+                    "enabled": false,
+                }),
+                "manual",
+            )
+            .unwrap();
+            assert!(
+                load_expert_profile_from_db("disabled-expert").is_none(),
+                "disabled experts must not be loadable as personas"
+            );
+        });
+    }
+
+    #[test]
+    fn team_contract_retires_strategy_and_keeps_failure_policy_and_max_concurrent() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead."}),
+                "manual",
+            )
+            .unwrap();
+            insert_expert(
+                &json!({"id": "member", "name": "Member", "systemPrompt": "Member."}),
+                "manual",
+            )
+            .unwrap();
+            // 19.3-④: strategy is no longer part of the contract; the API input
+            // ignores it. failurePolicy/maxConcurrent are the real fields.
+            let created = team_create(&json!({
+                "id": "team-1",
+                "name": "Growth",
+                "strategy": "sequential",
+                "failurePolicy": "require_all",
+                "maxConcurrent": 4,
+                "coordinatorExpertId": "lead",
+                "members": [
+                    {"expertId": "member", "roleHint": "builds"},
+                ],
+            }))
+            .unwrap();
+            let team = &created["team"];
+            assert_eq!(team["failurePolicy"], "require_all");
+            assert_eq!(team["maxConcurrent"], 4);
+            assert!(
+                team.get("strategy").is_none(),
+                "strategy is retired from the API contract"
+            );
+            assert!(
+                team["members"][0].get("taskTemplate").is_none(),
+                "taskTemplate is retired from the API contract"
+            );
+            assert_eq!(team["members"][0]["expertId"], "member");
+
+            // Round-trip through update keeps the real fields.
+            let updated = team_update(&json!({
+                "id": "team-1",
+                "failurePolicy": "fail_fast",
+                "maxConcurrent": 2,
+            }))
+            .unwrap();
+            assert_eq!(updated["team"]["failurePolicy"], "fail_fast");
+            assert_eq!(updated["team"]["maxConcurrent"], 2);
+        });
+    }
+
+    #[test]
+    fn team_contract_rejects_bad_failure_policy_and_max_concurrent() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({"id": "x", "name": "X", "systemPrompt": "X."}),
+                "manual",
+            )
+            .unwrap();
+            let bad_policy = team_create(&json!({
+                "id": "bad-team-1",
+                "name": "Bad",
+                "failurePolicy": "explode",
+                "maxConcurrent": 2,
+                "members": [{"expertId": "x"}],
+            }));
+            assert!(
+                bad_policy.is_err(),
+                "unknown failurePolicy must fail closed"
+            );
+            let bad_conc = team_create(&json!({
+                "id": "bad-team-2",
+                "name": "Bad",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 99,
+                "members": [{"expertId": "x"}],
+            }));
+            assert!(
+                bad_conc.is_err(),
+                "out-of-range maxConcurrent must fail closed"
+            );
+        });
+    }
 }

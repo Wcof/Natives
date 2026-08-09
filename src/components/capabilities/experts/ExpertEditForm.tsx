@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import type { AssistantGateway } from '@/lib/assistant-gateway';
 import {
@@ -33,6 +34,53 @@ const PERMISSION_MODES = ['', 'readonly', 'ask', 'full_access'] as const;
 
 const splitList = (text: string): string[] => text.split(',').map((s) => s.trim()).filter(Boolean);
 
+/** Ceiling on an AI-generated prompt draft (same as the task tool's persona limit). */
+const MAX_GENERATED_PROMPT_BYTES = 16_000;
+
+interface DiffLine {
+  kind: 'same' | 'removed' | 'added';
+  text: string;
+}
+
+/** Minimal LCS line diff for the preview/diff step (no external dependency). */
+function diffLines(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split('\n');
+  const b = newText.split('\n');
+  const m = a.length;
+  const n = b.length;
+  const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      out.push({ kind: 'same', text: a[i] });
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      out.push({ kind: 'removed', text: a[i] });
+      i++;
+    } else {
+      out.push({ kind: 'added', text: b[j] });
+      j++;
+    }
+  }
+  while (i < m) {
+    out.push({ kind: 'removed', text: a[i] });
+    i++;
+  }
+  while (j < n) {
+    out.push({ kind: 'added', text: b[j] });
+    j++;
+  }
+  return out;
+}
+
 /** Expert form incl. multi-select skill binding (data source: capability.skill.list). */
 export default function ExpertEditForm({ locale, gateway, expert, skills, onClose, onSaved }: ExpertEditFormProps) {
   const { toast } = useToast();
@@ -50,12 +98,15 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
   const [enabled, setEnabled] = useState(expert?.enabled ?? true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
 
   const toggleSkill = (id: string) => {
     setSelectedSkills((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
   };
 
-  const handleSave = async () => {
+  const handleSave = async (promptOverride?: string) => {
     if (!name.trim()) {
       setFormError(t(locale, 'capabilities.experts.nameRequired'));
       return;
@@ -65,7 +116,7 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
     const payload: Partial<CapabilityExpert> = {
       name: name.trim(),
       description: description.trim(),
-      systemPrompt,
+      systemPrompt: promptOverride ?? systemPrompt,
       tools: splitList(toolsText),
       disallowedTools: splitList(disallowedText),
       permissionMode: permissionMode || null,
@@ -89,6 +140,112 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // ── 19.3-③: "AI 生成 Expert Prompt" reuses the ORDINARY Assistant Run ──
+  // There is deliberately NO second Prompt Generator service: this starts a
+  // normal run.start on a throwaway conversation through the same Assistant
+  // gateway the chat uses, streams text_delta events, and hands the finished
+  // draft to the preview/diff → confirm → save flow below.
+  const handleAiGenerate = async () => {
+    if (generating) return;
+    if (!name.trim()) {
+      setGenerateError(t(locale, 'capabilities.experts.nameRequired'));
+      return;
+    }
+    setGenerating(true);
+    setGenerateError(null);
+    setDraft(null);
+    try {
+      const { readActiveProject } = await import('@/lib/active-project');
+      const api =
+        typeof window !== 'undefined'
+          ? (window as unknown as { nativesAPI?: { db?: { get?: (k: string) => Promise<unknown> } } })
+              .nativesAPI
+          : undefined;
+      const projectPath = await readActiveProject(api);
+      if (!projectPath) {
+        setGenerateError(t(locale, 'capabilities.experts.aiGenerateProjectRequired'));
+        return;
+      }
+      const genProvider = (providerId && providerId.trim()) || 'openai';
+      const genModel = (modelId && modelId.trim()) || 'gpt-4o';
+      const created = await gateway.request<{ id?: string }>('conversation.create', {
+        mode: 'agent',
+        title: t(locale, 'capabilities.experts.aiGenerateTitle'),
+        provider_id: genProvider,
+        model_id: genModel,
+        project_id: 'config-expert-generator',
+        permission_profile_id: 'readonly',
+      });
+      const conversationId = created?.id;
+      if (!conversationId) {
+        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+        return;
+      }
+      const generationPrompt = [
+        'You are an expert-prompt author. Write the SYSTEM PROMPT body for an AI Expert persona.',
+        `Expert name: ${name.trim()}`,
+        description.trim() ? `Expert description: ${description.trim()}` : '',
+        'Output only the system prompt text itself — no markdown fences, no commentary, no preamble.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const started = await gateway.request<Record<string, unknown>>('run.start', {
+        conversation_id: conversationId,
+        provider_id: genProvider,
+        model_id: genModel,
+        permission_profile: 'readonly',
+        content: generationPrompt,
+        project_path: projectPath,
+        runtime_id: 'native',
+      });
+      const wire = started && typeof started === 'object' ? started : {};
+      const runId = String(wire.daemon_run_id ?? wire.daemonRunId ?? wire.id ?? '');
+      if (!runId) {
+        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+        return;
+      }
+      let text = '';
+      let status: string | null = null;
+      for await (const event of gateway.subscribe(runId, 0)) {
+        if (event.type === 'text_delta') {
+          const piece = event.payload?.text;
+          if (typeof piece === 'string') text += piece;
+        } else if (
+          event.type === 'completed' ||
+          event.type === 'failed' ||
+          event.type === 'cancelled' ||
+          event.type === 'interrupted'
+        ) {
+          status = event.type;
+        }
+      }
+      if (status !== 'completed') {
+        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+        return;
+      }
+      const trimmed = text.trim();
+      if (!trimmed) {
+        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+        return;
+      }
+      setDraft(trimmed.slice(0, MAX_GENERATED_PROMPT_BYTES));
+    } catch (e) {
+      setGenerateError(classifyError(e).userMessage);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const confirmDraft = () => {
+    if (draft == null) return;
+    const next = draft;
+    setDraft(null);
+    // Confirm → save into the existing Capability Expert (same create/update
+    // path as the manual form — never a second Prompt Generator service).
+    void handleSave(next);
   };
 
   return (
@@ -124,6 +281,20 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
           className="h-28 w-full resize-none rounded border px-3 py-2 text-sm"
           style={inputStyle}
         />
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => void handleAiGenerate()}
+            disabled={generating}
+            className="flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs disabled:opacity-50"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
+            title={t(locale, 'capabilities.experts.aiGenerate')}
+          >
+            <Sparkles size={13} aria-hidden />
+            {t(locale, generating ? 'capabilities.common.loading' : 'capabilities.experts.aiGenerate')}
+          </button>
+          {generateError ? <p className="text-xs" style={{ color: 'var(--danger)' }}>{generateError}</p> : null}
+        </div>
         <input
           value={toolsText}
           onChange={(e) => setToolsText(e.target.value)}
@@ -237,6 +408,67 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
           </button>
         </div>
       </div>
+
+      {draft !== null && (
+        <Modal
+          isOpen
+          onClose={() => setDraft(null)}
+          title={t(locale, 'capabilities.experts.aiGenerateTitle')}
+          width={720}
+        >
+          <div className="space-y-3">
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {t(locale, 'capabilities.experts.aiGenerateHint')}
+            </p>
+            <div
+              className="max-h-72 overflow-y-auto rounded border font-mono text-xs"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface)' }}
+            >
+              {diffLines(systemPrompt, draft).map((line, index) => (
+                <div
+                  key={index}
+                  className="whitespace-pre-wrap px-2 py-0.5"
+                  style={{
+                    background:
+                      line.kind === 'added'
+                        ? 'rgba(34,197,94,0.12)'
+                        : line.kind === 'removed'
+                          ? 'rgba(239,68,68,0.12)'
+                          : 'transparent',
+                    color:
+                      line.kind === 'added'
+                        ? 'var(--success)'
+                        : line.kind === 'removed'
+                          ? 'var(--danger)'
+                          : 'var(--text)',
+                  }}
+                >
+                  {line.kind !== 'same' && (line.kind === 'added' ? '+ ' : '- ')}
+                  {line.text}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDraft(null)}
+                className="px-4 py-2 text-sm"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {t(locale, 'capabilities.experts.aiGenerateCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={confirmDraft}
+                disabled={submitting}
+                className="btn btn-primary rounded px-4 py-2 text-sm disabled:opacity-50"
+              >
+                {t(locale, 'capabilities.experts.aiGenerateConfirm')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </Modal>
   );
 }

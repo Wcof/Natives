@@ -2628,6 +2628,13 @@ export const zh = {
       teamDeleteMessage: '此操作不可撤销，不会删除成员专家。',
       teamDeleted: '专家团已删除',
       nameRequired: '名称必填',
+      aiGenerate: 'AI 生成提示词',
+      aiGenerateTitle: 'AI 生成的提示词草稿',
+      aiGenerateHint: '预览生成的 Persona。绿色为新增，红色为相对当前提示词的移除。',
+      aiGenerateConfirm: '采用并保存',
+      aiGenerateCancel: '放弃',
+      aiGenerateFailed: '生成运行未完成',
+      aiGenerateProjectRequired: '请先打开一个项目，以便助手运行获得工作区。',
     },
     picker: {
       open: '能力',

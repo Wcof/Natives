@@ -129,14 +129,16 @@ export interface CapabilityTeamMember {
   expertId: string;
   position: number;
   roleHint: string | null;
-  taskTemplate: string | null;
+  /** Retired from the runtime contract (19.3-④): never sent to the daemon. */
+  taskTemplate?: string | null;
 }
 
 export interface CapabilityExpertTeam {
   id: string;
   name: string;
   description: string;
-  strategy: string;
+  /** Retired from the runtime contract (19.3-④): never sent to the daemon. */
+  strategy?: string;
   failurePolicy: string;
   maxConcurrent: number;
   coordinatorExpertId: string | null;

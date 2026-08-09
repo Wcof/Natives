@@ -331,85 +331,12 @@ pub fn resolve(
 }
 
 /// DB-authoritative profile load with file fallback (ADR-0016 decision 3).
+///
+/// 19.3-②: single authoritative loader shared with the task tool and run
+/// start — DB Expert rows win, `.md` AgentProfile files are the interchange
+/// fallback. Kept as a thin alias so all resolution call sites agree.
 pub fn load_profile(id: &str, project_root: Option<&Path>) -> Option<AgentProfile> {
-    if let Some(profile) = load_expert_profile_from_db(id) {
-        return Some(profile);
-    }
-    agent_core::load_agent_profile(id, project_root)
-}
-
-fn load_expert_profile_from_db(id: &str) -> Option<AgentProfile> {
-    let expert = crate::capability::experts::get(&json!({ "id": id })).ok()?;
-    let expert = expert.get("expert")?;
-    if expert.get("enabled") != Some(&json!(true)) {
-        return None;
-    }
-    let as_vec = |v: &Value| -> Option<Vec<String>> {
-        let items: Vec<String> = v
-            .as_array()?
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
-        if items.is_empty() {
-            None
-        } else {
-            Some(items)
-        }
-    };
-    let params = expert.get("params").cloned().unwrap_or_else(|| json!({}));
-    let param_str = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_string);
-    let param_u64 = |key: &str| params.get(key).and_then(Value::as_u64);
-    Some(AgentProfile {
-        id: expert.get("id")?.as_str()?.to_string(),
-        name: expert
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        description: expert
-            .get("description")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
-        prompt_mode: param_str("promptMode"),
-        system_prompt: expert
-            .get("systemPrompt")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        tools: expert.get("tools").and_then(as_vec),
-        disallowed_tools: expert.get("disallowedTools").and_then(as_vec),
-        permission_mode: expert
-            .get("permissionMode")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        skills: expert.get("skills").and_then(as_vec),
-        provider_id: expert
-            .get("providerId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        key_id: expert
-            .get("keyId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        model_id: expert
-            .get("modelId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        base_url_override: param_str("baseUrlOverride"),
-        context_mode: param_str("contextMode"),
-        isolation_mode: param_str("isolationMode"),
-        max_steps: param_u64("maxSteps").and_then(|v| u32::try_from(v).ok()),
-        max_duration: param_u64("maxDuration"),
-        token_budget: param_u64("tokenBudget"),
-        completion_requirement: param_str("completionRequirement"),
-        body: expert
-            .get("systemPrompt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        source_path: None,
-    })
+    crate::capability::experts::load_agent_profile(id, project_root)
 }
 
 fn resolve_team(team_id: &str, _project_root: Option<&Path>) -> Result<ResolvedTeam, ResolveError> {
@@ -743,6 +670,36 @@ mod tests {
             // Clearing works.
             set_conversation_selection("conv-1", None).unwrap();
             assert!(get_conversation_selection("conv-1").is_none());
+        });
+    }
+
+    #[test]
+    fn team_resolution_carries_real_failure_policy_and_max_concurrent() {
+        with_temp_db(|| {
+            make_expert("lead");
+            make_expert("builder");
+            crate::capability::experts::team_create(&json!({
+                "id": "contract-team",
+                "name": "Contract",
+                "failurePolicy": "fail_fast",
+                "maxConcurrent": 5,
+                "coordinatorExpertId": "lead",
+                "members": [
+                    { "expertId": "builder" },
+                    { "expertId": "lead" }
+                ],
+            }))
+            .unwrap();
+            let selection = CapabilitySelection {
+                team_id: Some("contract-team".into()),
+                ..Default::default()
+            };
+            let snapshot = resolve(Some(&selection), "conv-x", None, None, "native").unwrap();
+            let team = snapshot.team.expect("team resolved");
+            // 19.3-④: these are the real runtime-contract fields the task tool
+            // enforces (failure policy default + max concurrent gate).
+            assert_eq!(team.failure_policy, "fail_fast");
+            assert_eq!(team.max_concurrent, 5);
         });
     }
 }
