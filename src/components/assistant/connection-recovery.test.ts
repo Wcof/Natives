@@ -29,7 +29,7 @@ test('quiet soft-resub is never promoted to global reconnecting', () => {
   assert.equal(runHook.includes("connection: 'reconnecting'"), false);
   assert.equal(runHook.includes('connection/set'), false);
   // And the Workbench must consume that loop rather than keep its own copy.
-  assert.match(workbench, /useAssistantRun\(\)/);
+  assert.match(workbench, /useAssistantRunSubscription/);
   assert.equal(workbench.includes('const startSubscription = useCallback'), false);
 });
 

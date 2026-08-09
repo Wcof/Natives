@@ -115,19 +115,33 @@ test('workbench returns Promise from permission handlers and uses multi-run subS
     fileURLToPath(new URL('../../components/assistant/AssistantWorkbench.tsx', import.meta.url)),
     'utf8',
   );
-  assert.match(workbench, /return handlePermission\(/);
+  const composer = readFileSync(
+    fileURLToPath(new URL('../../components/assistant/workbench/WorkbenchComposer.tsx', import.meta.url)),
+    'utf8',
+  );
+  const runHook = readFileSync(
+    fileURLToPath(new URL('./use-assistant-run.ts', import.meta.url)),
+    'utf8',
+  );
+  const subagentHook = readFileSync(
+    fileURLToPath(new URL('../../hooks/useAssistantSubagentState.ts', import.meta.url)),
+    'utf8',
+  );
+  // The composer returns the Promise from permission handlers so the card can
+  // await + recover on failure.
+  assert.match(composer, /return handlePermission\(/);
   // Multi-run subscription signals moved into useAssistantRun; the Workbench is
   // now one of two consumers rather than the owner.
-  assert.match(workbench, /useAssistantRun\(\)/);
-  assert.match(workbench, /retainSubscriptions/);
+  assert.match(runHook, /useAssistantRun\(\)/);
+  assert.match(runHook, /retainSubscriptions/);
   assert.match(workbench, /selectedRootConversationId/);
   assert.match(workbench, /selectedChildConversationId/);
-  assert.match(workbench, /subagent\.touch/);
-  assert.match(workbench, /conversation_id: rootConversationId/);
-  assert.match(workbench, /subagent\.switchRoute/);
+  assert.match(subagentHook, /subagent\.touch/);
+  assert.match(subagentHook, /conversation_id: rootConversationId/);
+  assert.match(subagentHook, /subagent\.switchRoute/);
   assert.match(workbench, /interaction\.respond/);
   assert.match(workbench, /SubagentAssignmentModal/);
-  assert.match(workbench, /restarted_run_id/);
+  assert.match(subagentHook, /restarted_run_id/);
   assert.match(workbench, /rootEvents/);
   assert.match(workbench, /selectedChildEvents/);
   assert.match(workbench, /mainTodos/);

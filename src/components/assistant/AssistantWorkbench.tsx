@@ -6,8 +6,7 @@
  * Components never call window.nativesAPI.assistantV2 / streamChat.
  */
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Locale } from '@/i18n';
 import { t } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
@@ -26,11 +25,6 @@ import {
 } from '@/lib/assistant-project-groups';
 import { readActiveProject, writeActiveProject } from '@/lib/active-project';
 import {
-  normalizePermissionProfile,
-  type AssistantDraft,
-  type AssistantPermissionProfile,
-} from '@/lib/assistant-composer';
-import {
   AssistantStoreProvider,
   useAssistantDispatch,
   useAssistantGateway,
@@ -39,7 +33,6 @@ import {
   selectArtifacts,
   selectArtifactsForRunTree,
   selectChildRuns,
-  selectComposerDraft,
   selectConversationMessages,
   selectEventsForRunTree,
   selectFileChanges,
@@ -49,82 +42,50 @@ import {
   selectPromptQueue,
   selectRunEvents,
   selectSurfaceConversationId,
-  type InspectorTab,
 } from '@/lib/assistant-workspace';
 import {
-  canInterject,
   canRewind,
-  canSelectRunCapabilities,
-  buildDiagnosticsText,
-  hasMethod,
   needsEngineRecovery,
 } from '@/lib/assistant-workspace/capability-gate';
-import { updateConversationCapabilities } from '@/lib/assistant-workspace/capability-admin';
 import {
-  cancelRun,
   connectWorkspace,
   loadConversations,
   openConversation,
-  respondPermission,
-  retryRun,
-  sendOrQueue,
-  subscribeRun,
 } from '@/lib/assistant-workspace/controller';
 import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
-import { useAssistantRun } from '@/lib/assistant-workspace/use-assistant-run';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
-import { isActiveRunStatus, mapWireConversation, mapWireMessage } from '@/lib/assistant-protocol';
+import { mapWireMessage } from '@/lib/assistant-protocol';
 import type {
-  CapabilitySelection,
   Conversation,
   RunEvent,
   SubagentAssignmentInteraction,
-  SubagentSession,
 } from '@/lib/assistant-protocol';
 import { messagePlainText } from '@/lib/assistant-message-view';
-import { copyToClipboard } from '@/lib/clipboard';
-import ConversationTimeline from './ConversationTimeline';
-import MessageInput from './MessageInput';
-// ADR-0016 capability picker — lazy so it stays out of the initial bundle (R-P7).
-const LazyCapabilityPickerPopover = lazy(() => import('./CapabilityPickerPopover'));
-import PermissionRequestCard from './PermissionRequestCard';
-import { parsePlanApprovalRequest, type PlanApproval } from './plan-approval';
-// R-P7: the plan checklist is a low-frequency surface. The predicate that
-// decides whether to show it is eager (plain module above); only the renderer
-// is split out.
-const PlanApprovalCard = lazy(() => import('./PlanApprovalCard'));
-import AskUserPromptCard from './AskUserPromptCard';
-import { COMPOSER_COLUMN_CLASS } from './InteractionPromptShell';
-import GoalStatusBar from './GoalStatusBar';
-import PromptQueuePanel from './PromptQueuePanel';
-import ActivityInspector from './ActivityInspector';
-import SubagentAssignmentModal, {
-  type AssignmentKeyOption,
-  type SubagentAssignmentConfirmPayload,
-} from './SubagentAssignmentModal';
+import { useAssistantRunSubscription } from '@/hooks/useAssistantRunSubscription';
+import { useAssistantSubagentState } from '@/hooks/useAssistantSubagentState';
+import { useAssistantRunLifecycle } from '@/hooks/useAssistantRunLifecycle';
+import { useAssistantWorkbenchKeyboard } from '@/hooks/useAssistantWorkbenchKeyboard';
+import SubagentAssignmentModal from './SubagentAssignmentModal';
 import type { ActivitySubagentView } from './ActivityInspector';
 import { extractTodosFromEvents } from '@/lib/assistant-activity-view';
 import { summarizeConversationChanges } from '@/lib/assistant-timeline';
-import type { ProviderKeySummary } from '@/lib/tauri-adapter';
-import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
-import CommandPalette, { type AssistantCommand } from './CommandPalette';
+import CommandPalette from './CommandPalette';
 import type { ProviderWithModels } from './ModelSelectorDropdown';
+import WorkbenchHeader from './workbench/WorkbenchHeader';
+import WorkbenchTimelinePane from './workbench/WorkbenchTimelinePane';
+import WorkbenchComposer from './workbench/WorkbenchComposer';
+import WorkbenchPanels from './workbench/WorkbenchPanels';
 import {
   useAssistantNavigation,
   useAssistantWorkspaceApi,
   type AssistantWorkspaceActions,
 } from './AssistantWorkspaceContext';
 import {
-  ASSISTANT_LOCATE_EVENT,
-  type AssistantLocateTarget,
-} from '@/lib/assistant-notifications';
-import {
   collectTempConversationIds,
   conversationsWithoutTemp,
-  createTempConversationShell,
   createTempSession,
   isTempConversationId,
   resolveRegisteredProjectPath,
@@ -139,60 +100,7 @@ interface AssistantWorkbenchProps {
   preferFixture?: boolean;
 }
 
-function mapSubagentSessions(raw: unknown): SubagentSession[] {
-  const sessionsRaw =
-    raw && typeof raw === 'object' && Array.isArray((raw as { sessions?: unknown }).sessions)
-      ? (raw as { sessions: unknown[] }).sessions
-      : Array.isArray(raw)
-        ? raw
-        : [];
-  return sessionsRaw
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((r) => ({
-      id: String(r.id ?? ''),
-      parentConversationId: String(
-        r.parent_conversation_id ?? r.parentConversationId ?? '',
-      ),
-      childConversationId: String(
-        r.child_conversation_id ?? r.childConversationId ?? '',
-      ),
-      parentRunId:
-        r.parent_run_id != null || r.parentRunId != null
-          ? String(r.parent_run_id ?? r.parentRunId)
-          : null,
-      taskCallId:
-        r.task_call_id != null || r.taskCallId != null
-          ? String(r.task_call_id ?? r.taskCallId)
-          : null,
-      name: String(r.name ?? r.task ?? r.id ?? ''),
-      task: String(r.task ?? ''),
-      status: String(r.status ?? 'open'),
-      providerId: String(r.provider_id ?? r.providerId ?? ''),
-      keyId: String(r.key_id ?? r.keyId ?? ''),
-      modelId: String(r.model_id ?? r.modelId ?? ''),
-      lastActivityAt:
-        r.last_activity_at != null || r.lastActivityAt != null
-          ? String(r.last_activity_at ?? r.lastActivityAt)
-          : undefined,
-      closedAt:
-        r.closed_at != null || r.closedAt != null
-          ? String(r.closed_at ?? r.closedAt)
-          : null,
-      error: r.error != null ? String(r.error) : null,
-      createdAt:
-        r.created_at != null || r.createdAt != null
-          ? String(r.created_at ?? r.createdAt)
-          : undefined,
-      updatedAt:
-        r.updated_at != null || r.updatedAt != null
-          ? String(r.updated_at ?? r.updatedAt)
-          : undefined,
-    }))
-    .filter((s) => s.id.length > 0);
-}
-
 function WorkbenchInner({ locale }: { locale: Locale }) {
-  const zh = locale.startsWith('zh');
   const { toast } = useToast();
   const state = useAssistantStore();
   const dispatch = useAssistantDispatch();
@@ -207,7 +115,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   /** Per-run soft-resubscribe abort + attempt counts (multi-run table). */
 
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
-  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
@@ -215,7 +122,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [pinnedConversationIds, setPinnedConversationIds] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState(!state.view.rightCollapsed);
   const [loadingConversations, setLoadingConversations] = useState(true);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   /** Project list / navigation always use root; timeline/input use surface. */
   const [selectedRootConversationId, setSelectedRootConversationId] = useState<string | null>(
     null,
@@ -223,11 +129,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [selectedChildConversationId, setSelectedChildConversationId] = useState<string | null>(
     null,
   );
-  const [subagentSessions, setSubagentSessions] = useState<SubagentSession[]>([]);
-  const [switchKeySessionId, setSwitchKeySessionId] = useState<string | null>(null);
-  const [assignmentKeyOptions, setAssignmentKeyOptions] = useState<AssignmentKeyOption[]>([]);
-  /** ADR-0016 composer capability picker visibility. */
-  const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false);
   /** T216/T302: unified confirm dialog for goal conversation deletion. */
   const [confirmDeleteGoalId, setConfirmDeleteGoalId] = useState<string | null>(null);
 
@@ -372,27 +273,56 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const contextUsage = rootConversationId
     ? state.contextUsageByConversation[rootConversationId] ?? null
     : null;
-  const permission = interactions.find((i) => i.kind === 'permission');
-  /**
-   * A submitted plan reaches the GUI on the permission channel (`tool_name =
-   * exit_plan_mode`), so it is the same pending interaction as any tool prompt —
-   * only the payload tells it apart. Parsed here so the render below is a plain
-   * branch.
-   *
-   * Deliberately not hand-memoised: `permission` comes out of `Array.find`, which
-   * the React Compiler will not accept as a stable dependency, and the parse is
-   * bounded by the 40-step plan cap and short-circuits on the tool name for every
-   * ordinary tool prompt. The compiler memoises it for us.
-   */
-  const pendingPlanApproval: PlanApproval | null =
-    permission && permission.kind === 'permission'
-      ? parsePlanApprovalRequest(permission.toolName, permission.input)
-      : null;
-  const askUser = interactions.find((i) => i.kind === 'ask_user');
   const planApproval = interactions.find((i) => i.kind === 'plan_approval');
   const subagentAssignment = interactions.find(
     (i): i is SubagentAssignmentInteraction => i.kind === 'subagent_assignment',
   );
+
+  // Stable bridge so subscription control (owned by useAssistantRunSubscription
+  // below) stays available to subagent actions without ordering the two hooks
+  // against each other.
+  const ensureRunSubscriptionRef = useRef<(runId: string | null | undefined) => void>(
+    () => undefined,
+  );
+  const ensureRunSubscription = useCallback((runId: string | null | undefined) => {
+    ensureRunSubscriptionRef.current(runId);
+  }, []);
+
+  // Subagent session / key-assignment ownership.
+  const subagent = useAssistantSubagentState({
+    rootConversationId,
+    subagentAssignment,
+    providers,
+    activeConversation,
+    rootConversation,
+    locale,
+    ensureRunSubscription,
+    setLoadingMessages,
+    setSelectedChildConversationId,
+  });
+  const { subagentSessions } = subagent;
+
+  // Run control lifecycle: stopping flag + stop/retry/permission/rollback/
+  // diagnostics/reconnect. Kept in one hook so the shell only passes run ids.
+  const {
+    stoppingRunId,
+    handleStop,
+    handleRetry,
+    handlePermission,
+    handleRollbackChanges,
+    handleCopyDiagnostics,
+    handleRetryConnection,
+  } = useAssistantRunLifecycle({
+    activeRunId,
+    rootRun,
+    activeRun,
+    ensureRunSubscription,
+    locale,
+  });
+
+  // Composer ownership (send path + ADR-0016 capability picker) lives inside
+  // WorkbenchComposer so the shell stays a pure orchestrator.
+
   const activitySubagents = useMemo<ActivitySubagentView[]>(() => {
     if (subagentSessions.length > 0) {
       return subagentSessions.map((s) => {
@@ -492,110 +422,15 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   // Run lifecycle (subscription loop, quiet resubscribe, cancel/retry/permission)
   // lives in useAssistantRun so the creator workbench runs the identical logic
   // instead of a second copy that would have to rediscover the same edge cases.
-  const {
-    startSubscription,
-    ensureRunSubscription,
-    retainSubscriptions,
-    abortAllSubscriptions,
-    stop: stopRun,
-    retry: retryRunViaHook,
-    respondPermission: respondPermissionViaHook,
-  } = useAssistantRun();
-
-  const refreshSubagentSessions = useCallback(
-    async (parentConversationId: string | null | undefined) => {
-      if (!parentConversationId || isTempConversationId(parentConversationId)) {
-        setSubagentSessions([]);
-        return;
-      }
-      try {
-        const raw = await gateway.request<unknown>('subagent.list', {
-          conversation_id: parentConversationId,
-          include_closed: true,
-        });
-        setSubagentSessions(mapSubagentSessions(raw));
-      } catch {
-        // Method may be unavailable on older daemons — fall back to child runs.
-      }
-    },
-    [gateway],
-  );
-
-  const loadAssignmentKeys = useCallback(async () => {
-    const preferredProviderId = activeConversation?.providerId ?? rootConversation?.providerId ?? '';
-    const preferredModelId = activeConversation?.modelId ?? rootConversation?.modelId ?? '';
-    try {
-      const list = await window.nativesAPI?.provider?.list?.();
-      if (!Array.isArray(list)) {
-        // Fall back to gateway provider list (has_active_key only; no status).
-        const opts: AssignmentKeyOption[] = [];
-        for (const p of providers) {
-          if (!p.keys?.length) continue;
-          for (const k of p.keys) {
-            opts.push({
-              providerId: p.id,
-              providerName: p.name,
-              keyId: k.id,
-              keyLabel: k.label || k.maskedKey || k.id,
-              modelId: p.id === preferredProviderId ? (preferredModelId || p.defaultModel || p.models?.[0]?.id || '') : (p.defaultModel || p.models?.[0]?.id || ''),
-              models: (p.models ?? []).map((m) => ({
-                id: m.id,
-                displayName: m.displayName,
-              })),
-              isActive: true,
-              status: 'valid',
-            });
-          }
-        }
-        opts.sort((left, right) => Number(right.providerId === preferredProviderId) - Number(left.providerId === preferredProviderId));
-        setAssignmentKeyOptions(opts);
-        return;
-      }
-      const opts: AssignmentKeyOption[] = [];
-      for (const p of list) {
-        const provider = p as {
-          id: string;
-          displayName?: string;
-          name?: string;
-          defaultModel?: string | null;
-          models?: Array<{ id: string; displayName?: string | null }>;
-          keys?: Array<
-            Partial<ProviderKeySummary> & {
-              id: string;
-              label?: string;
-              maskedKey?: string;
-              isActive?: boolean;
-              status?: ProviderKeySummary['status'] | string;
-            }
-          >;
-        };
-        const models = (provider.models ?? []).map((m) => ({
-          id: m.id,
-          displayName: m.displayName ?? undefined,
-        }));
-        for (const k of provider.keys ?? []) {
-          // Only active + validated keys for random/custom; keep others out of the pool.
-          const active = k.isActive !== false;
-          if (!active) continue;
-          if (k.status != null && k.status !== 'valid') continue;
-          opts.push({
-            providerId: provider.id,
-            providerName: provider.displayName || provider.name || provider.id,
-            keyId: k.id,
-            keyLabel: k.label || k.maskedKey || k.id,
-            modelId: provider.id === preferredProviderId ? (preferredModelId || provider.defaultModel || models[0]?.id || '') : (provider.defaultModel || models[0]?.id || ''),
-            models,
-            isActive: true,
-            status: (k.status as AssignmentKeyOption['status']) ?? 'valid',
-          });
-        }
-      }
-      opts.sort((left, right) => Number(right.providerId === preferredProviderId) - Number(left.providerId === preferredProviderId));
-      setAssignmentKeyOptions(opts);
-    } catch {
-      setAssignmentKeyOptions([]);
-    }
-  }, [providers, activeConversation?.providerId, activeConversation?.modelId, rootConversation?.providerId, rootConversation?.modelId]);
+  const runSubscription = useAssistantRunSubscription({
+    rootRun,
+    rootConversationId,
+    children,
+    subagentSessions,
+  });
+  // Point the stable bridge at the real subscription controller from this render.
+  ensureRunSubscriptionRef.current = runSubscription.ensureRunSubscription;
+  const abortAllSubscriptions = runSubscription.abortAllSubscriptions;
 
   // Boot: connect + list conversations + providers
   useEffect(() => {
@@ -661,42 +496,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     };
   }, [gateway, dispatch, toast]);
 
-  // Multi-run subscription: keep root + active child runs subscribed without cancelling others.
-  // Depend on status signatures (not array/object identity) so empty selectChildRuns
-  // / store map replacement on unrelated ticks cannot thrash soft-resubscribe.
-  const childrenSubKey = children
-    .map((ch) => `${ch.id}:${ch.status}`)
-    .sort()
-    .join('|');
-  const subagentSubKey = subagentSessions
-    .map((s) => {
-      const childRunId = state.activeRunByConversation[s.childConversationId] ?? '';
-      const status = childRunId ? state.runs[childRunId]?.status ?? '' : '';
-      return `${s.childConversationId}:${childRunId}:${status}`;
-    })
-    .sort()
-    .join('|');
-  useEffect(() => {
-    const wanted = new Set<string>();
-    if (rootRun && isActiveRunStatus(rootRun.status)) wanted.add(rootRun.id);
-    // children / sessions read from latest render via closure; deps are signature keys.
-    for (const ch of children) {
-      if (isActiveRunStatus(String(ch.status))) wanted.add(ch.id);
-    }
-    for (const s of subagentSessions) {
-      const childRunId = stateRef.current.activeRunByConversation[s.childConversationId];
-      if (childRunId) {
-        const run = stateRef.current.runs[childRunId];
-        if (run && isActiveRunStatus(run.status)) wanted.add(childRunId);
-      }
-    }
-    // Drop soft-resub loops for runs no longer in the wanted set (switch session /
-    // terminal child / parent left). Without this, every historical active run kept
-    // polling → multi-subscription thrash and wasted gateway traffic.
-    retainSubscriptions(wanted);
-
-  }, [rootRun?.id, rootRun?.status, childrenSubKey, subagentSubKey, ensureRunSubscription]);
-
   // Load subagent.list when root conversation is visible. Avoid re-listing on every
   // transient status flicker while the parent is already waiting_subagent / running —
   // use a coarse phase so assignment → first child does not hammer subagent.list.
@@ -705,37 +504,15 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       ? 'active'
       : rootRun?.status ?? 'idle';
   useEffect(() => {
-    void refreshSubagentSessions(rootConversationId);
-  }, [rootConversationId, refreshSubagentSessions, rootRunPhase]);
-
-  // Heartbeat: touch only the root conversation every 30s while assistant page is visible.
-  // Do NOT loop over every subagent — daemon scopes keepalive by parent conversation_id.
-  useEffect(() => {
-    if (!rootConversationId || isTempConversationId(rootConversationId)) return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void gateway
-        .request('subagent.touch', {
-          conversation_id: rootConversationId,
-        })
-        .catch(() => undefined);
-    };
-    tick();
-    const handle = window.setInterval(tick, 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(handle);
-    };
-  }, [rootConversationId, gateway]);
+    void subagent.refreshSubagentSessions(rootConversationId);
+  }, [rootConversationId, subagent.refreshSubagentSessions, rootRunPhase]);
 
   // Prefetch assignment keys when an assignment interaction appears.
   useEffect(() => {
-    if (subagentAssignment || switchKeySessionId) {
-      void loadAssignmentKeys();
+    if (subagentAssignment || subagent.switchKeySessionId) {
+      void subagent.loadAssignmentKeys();
     }
-  }, [subagentAssignment, switchKeySessionId, loadAssignmentKeys]);
+  }, [subagentAssignment, subagent.switchKeySessionId, subagent.loadAssignmentKeys]);
 
   // Publish navigation snapshot for shell sidebar
   useEffect(() => {
@@ -755,7 +532,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         pinned: pinnedConversationIds.has(c.id),
       })),
       registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label, exists: p.exists })),
-      zh ? '未关联项目' : 'Unassigned',
+      t(locale, 'assistant.unassignedProjects'),
     );
     // Merge with projects already seeded by AssistantWorkspaceProvider so a
     // late/empty workbench project.list cannot blank the sidebar on first paint.
@@ -776,7 +553,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               parentConversationId: c.parentConversationId ?? null,
             })),
             seedPaths,
-            zh ? '未关联项目' : 'Unassigned',
+            t(locale, 'assistant.unassignedProjects'),
           );
         }
       }
@@ -830,7 +607,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     loadingConversations,
     providerReadiness,
     publishNavigation,
-    zh,
   ]);
 
   // Publish runtime for shell
@@ -889,7 +665,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         try {
           await openConversation(gateway, dispatch, id);
           ensureRunSubscription(stateRef.current.activeRunByConversation[id]);
-          void refreshSubagentSessions(id);
+          void subagent.refreshSubagentSessions(id);
         } catch (err) {
           toast(classifyError(err).userMessage, 'error');
         } finally {
@@ -901,15 +677,32 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       try {
         await openConversation(gateway, dispatch, id);
         ensureRunSubscription(stateRef.current.activeRunByConversation[id]);
-        void refreshSubagentSessions(id);
+        void subagent.refreshSubagentSessions(id);
       } catch (err) {
         toast(classifyError(err).userMessage, 'error');
       } finally {
         setLoadingMessages(false);
       }
     },
-    [gateway, dispatch, toast, ensureRunSubscription, refreshSubagentSessions],
+    [gateway, dispatch, toast, ensureRunSubscription, subagent.refreshSubagentSessions],
   );
+
+  // Keyboard / command palette ownership (shortcuts + commands + palette flag).
+  const { paletteOpen, setPaletteOpen, commands } = useAssistantWorkbenchKeyboard({
+    activeId,
+    activeRunId,
+    activeRunStatus,
+    isStreaming,
+    providers,
+    activeProjectPath,
+    locale,
+    handleStop,
+    handleRetry,
+    ensureRunSubscription,
+    selectConversation,
+    publishNavigation,
+    setRightPanelOpen,
+  });
 
   // Sync external sidebar selection (persisted sessions only — temps hydrate below).
   useEffect(() => {
@@ -1032,360 +825,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       activeProjectPath: path,
     }));
   }, [navigation.pendingCreateProjectPath]);
-
-  const handleSend = useCallback(
-    async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
-      // Sends always target the surface conversation (child when selected).
-      let conversationId = activeId;
-      /** Set on temp→real promotion; store update lands after this tick. */
-      let promotedCapabilitySelection: CapabilitySelection | null = null;
-      const pick = resolveModelSelection(providers, {
-        providerId: activeConversation?.providerId,
-        modelId: activeConversation?.modelId,
-      });
-      // Stale/deleted provider: block send and require explicit re-select (no ghost remap).
-      if (
-        activeConversation?.providerId &&
-        !providers.some((p) => p.id === activeConversation.providerId)
-      ) {
-        toast(
-          zh
-            ? '当前会话的供应商已失效，请重新选择供应商和模型'
-            : 'This conversation’s provider is no longer available. Re-select provider and model.',
-          'error',
-        );
-        return false;
-      }
-      const providerId = pick?.providerId ?? '';
-      const modelId = pick?.modelId ?? '';
-      if (!providerId || !modelId || providerReadiness !== 'ready') {
-        toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
-        return false;
-      }
-
-      try {
-        if (!conversationId || isTempConversationId(conversationId)) {
-          const activeProject = registeredProjects.find((project) => project.path === activeProjectPath);
-          if (!activeProjectPath || activeProject?.exists === false) {
-            toast(
-              zh
-                ? '请先选择一个存在的项目文件夹'
-                : 'Select an existing project directory before starting a conversation',
-              'error',
-            );
-            return false;
-          }
-          const title = draft.content.trim().slice(0, 30) || t(locale, 'assistant.newConversation');
-          const createdRaw = await gateway.request<Record<string, unknown> | Conversation>(
-            'conversation.create',
-            {
-              mode: 'agent',
-              title,
-              provider_id: providerId,
-              model_id: modelId,
-              // Always use the normalized active project path (from project.register).
-              project_id: activeProjectPath,
-              permission_profile_id: activeConversation?.permissionProfileId ?? 'ask',
-            },
-          );
-          // Host returns snake_case; map so providerId/modelId actually land in store.
-          const created =
-            createdRaw && typeof createdRaw === 'object' && 'providerId' in createdRaw
-              ? (createdRaw as Conversation)
-              : mapWireConversation((createdRaw ?? {}) as Record<string, unknown>);
-          // Prefer the selection the user just confirmed if wire fields came back empty.
-          const conversation: Conversation = {
-            ...created,
-            providerId: created.providerId || providerId,
-            modelId: created.modelId || modelId,
-            projectId: created.projectId ?? activeProjectPath,
-            permissionProfileId:
-              created.permissionProfileId ??
-              activeConversation?.permissionProfileId ??
-              'ask',
-          };
-          const previousTempId =
-            activeId && isTempConversationId(activeId) ? activeId : null;
-          dispatch({ type: 'conversations/upsert', conversation });
-          dispatch({ type: 'conversations/setActive', id: conversation.id });
-          // Atomic temp → persisted: drop the local shell so the session appears once.
-          if (previousTempId && previousTempId !== conversation.id) {
-            const tempDraft = stateRef.current.composerByConversation[previousTempId];
-            if (tempDraft) {
-              dispatch({
-                type: 'composer/set',
-                conversationId: conversation.id,
-                draft: tempDraft,
-              });
-              dispatch({ type: 'composer/clear', conversationId: previousTempId });
-            }
-            // Carry the temp shell's capability selection to the real conversation
-            // and persist it now that a daemon-side row exists (ADR-0016).
-            const tempSelection =
-              stateRef.current.capabilitySelectionByConversation[previousTempId] ?? null;
-            promotedCapabilitySelection = tempSelection;
-            if (tempSelection) {
-              dispatch({
-                type: 'capabilitySelection/set',
-                conversationId: conversation.id,
-                selection: tempSelection,
-              });
-              dispatch({
-                type: 'capabilitySelection/set',
-                conversationId: previousTempId,
-                selection: null,
-              });
-              if (canSelectRunCapabilities(stateRef.current.capabilities)) {
-                void updateConversationCapabilities(gateway, conversation.id, tempSelection).catch(
-                  () => {
-                    /* run.start still carries the selection */
-                  },
-                );
-              }
-            }
-            dispatch({ type: 'conversations/remove', id: previousTempId });
-          }
-          // Clear root-level temp shell so sidebar/remount do not resurrect it.
-          setSelectedRootConversationId(conversation.id);
-          setSelectedChildConversationId(null);
-          publishNavigation((prev) => ({
-            ...prev,
-            tempSession: null,
-            selectedId: conversation.id,
-            activeProjectPath: activeProjectPath ?? prev.activeProjectPath,
-          }));
-          conversationId = conversation.id;
-        }
-
-        const result = await sendOrQueue(gateway, dispatch, stateRef.current, {
-          conversationId,
-          content: draft.content,
-          providerId,
-          modelId,
-          projectPath:
-            activeProjectPath ??
-            stateRef.current.conversations[conversationId]?.projectId ??
-            null,
-          attachments: draft.attachments.map((a) => ({
-            path: a.path,
-            name: a.name,
-            mimeType: a.mimeType,
-            size: a.size,
-          })),
-          forceImmediate,
-          // MIG-001: 不再从 localStorage 静默读 runtimePref — 运行默认值由
-          // Settings V2 defaultRuntime（或引擎自身决策）唯一权威。仅当用户
-          // 本次 Run 显式选择 runtime 时才通过 controller 传 explicit override。
-          // Promotion happened this tick — the store lookup would still miss it.
-          ...(promotedCapabilitySelection
-            ? { capabilitySelection: promotedCapabilitySelection }
-            : {}),
-        });
-
-        if (!result.queued && result.runId) {
-          ensureRunSubscription(result.runId);
-        }
-        return true;
-      } catch (err) {
-        // Create/send failure keeps the temp page and user input intact.
-        toast(classifyError(err).userMessage, 'error');
-        return false;
-      }
-    },
-    [
-      activeId,
-      activeConversation,
-      providers,
-      providerReadiness,
-      gateway,
-      dispatch,
-      toast,
-      zh,
-      locale,
-      activeProjectPath,
-      ensureRunSubscription,
-      publishNavigation,
-    ],
-  );
-
-  const handleStop = useCallback(async () => {
-    if (!activeRunId || stoppingRunId === activeRunId) return;
-    setStoppingRunId(activeRunId);
-    try {
-      await cancelRun(gateway, dispatch, activeRunId);
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    } finally {
-      setStoppingRunId((current) => current === activeRunId ? null : current);
-    }
-  }, [
-    // React Compiler cannot prove selector results immutable; callback dependencies are intentional.
-
-    activeRunId, gateway, dispatch, toast, stoppingRunId,
-  ]);
-
-  /**
-   * ADR-0016 conversation capability selection: store first (immediate echo),
-   * then persist to the daemon when the conversation is real and the method is
-   * advertised. Temp shells persist on promotion inside handleSend.
-   */
-  const handleCapabilitySelectionChange = useCallback(
-    async (selection: CapabilitySelection | null) => {
-      const id = activeId;
-      if (!id) return;
-      dispatch({ type: 'capabilitySelection/set', conversationId: id, selection });
-      if (isTempConversationId(id)) return;
-      if (!canSelectRunCapabilities(stateRef.current.capabilities)) return;
-      try {
-        await updateConversationCapabilities(gateway, id, selection);
-      } catch (err) {
-        toast(
-          `${t(locale, 'capabilities.picker.saveFailed')}: ${classifyError(err).userMessage}`,
-          'error',
-        );
-      }
-    },
-
-    [activeId, dispatch, gateway, toast, locale],
-  );
-
-  // Conversation switch closes the picker (selection is per conversation).
-  useEffect(() => {
-    setCapabilityPickerOpen(false);
-  }, [activeId]);
-
-  const handleRetry = useCallback(async () => {
-    if (!activeRunId) return;
-    try {
-      const newId = await retryRun(gateway, dispatch, activeRunId);
-      ensureRunSubscription(newId);
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    }
-  }, [
-
-    activeRunId, gateway, dispatch, toast, ensureRunSubscription,
-  ]);
-
-  const handlePermission = useCallback(
-    async (requestId: string, approved: boolean, scope?: string) => {
-      // Throw so PermissionRequestCard can unlock + show in-card error.
-      await respondPermission(
-        gateway,
-        dispatch,
-        requestId,
-        approved,
-        scope ?? 'once',
-        activeRunId,
-      );
-    },
-    [
-      gateway, dispatch,
-
-      activeRunId,
-    ],
-  );
-
-  const handleSelectSubagent = useCallback(
-    async (id: string) => {
-      const session = subagentSessions.find((s) => s.id === id);
-      const childId = session?.childConversationId;
-      if (!childId) {
-        // Legacy child-run id without session row — still mark selection for tasks panel.
-        setSelectedChildConversationId(null);
-        return;
-      }
-      setSelectedChildConversationId(childId);
-      setLoadingMessages(true);
-      try {
-        // Optional selective touch only when user focuses a specific subagent.
-        void gateway
-          .request('subagent.touch', { id: session.id })
-          .catch(() => undefined);
-        // Load hidden child conversation history without flipping sidebar root.
-        const snapshot = await gateway.getSnapshot(childId);
-        dispatch({ type: 'snapshot/apply', snapshot });
-        ensureRunSubscription(stateRef.current.activeRunByConversation[childId]);
-      } catch (err) {
-        toast(classifyError(err).userMessage, 'error');
-      } finally {
-        setLoadingMessages(false);
-      }
-    },
-    [subagentSessions, gateway, dispatch, toast, ensureRunSubscription],
-  );
-
-  const handleBackToMain = useCallback(() => {
-    setSelectedChildConversationId(null);
-  }, []);
-
-  const handleAssignmentConfirm = useCallback(
-    async (payload: SubagentAssignmentConfirmPayload) => {
-      const wireAssignments = payload.assignments.map((a) => ({
-        call_id: a.callId,
-        provider_id: a.providerId,
-        key_id: a.keyId,
-        model_id: a.modelId,
-      }));
-      const wirePool = payload.pool.map((b) => ({
-        provider_id: b.providerId,
-        key_id: b.keyId,
-        model_id: b.modelId,
-      }));
-      const wireBindings = payload.bindings.map((b) => ({
-        provider_id: b.providerId,
-        key_id: b.keyId,
-        model_id: b.modelId,
-      }));
-
-      if (payload.sessionId) {
-        const result = (await gateway.request('subagent.switchRoute', {
-          conversation_id: rootConversationId,
-          session_id: payload.sessionId,
-          mode: payload.mode,
-          bindings: wireBindings,
-          assignments: wireAssignments,
-          pool: wirePool,
-        })) as { restarted_run_id?: string; restartedRunId?: string } | null;
-        setSwitchKeySessionId(null);
-        const restarted =
-          result?.restarted_run_id ?? result?.restartedRunId ?? null;
-        if (restarted) {
-          ensureRunSubscription(restarted);
-        }
-        void refreshSubagentSessions(rootConversationId);
-        return;
-      }
-      if (!subagentAssignment) {
-        throw new Error(t(locale, 'assistant.subagentAssignment.errorFallback'));
-      }
-      await gateway.request('interaction.respond', {
-        id: subagentAssignment.id,
-        run_id: subagentAssignment.runId,
-        response: {
-          approved: true,
-          mode: payload.mode,
-          assignments: wireAssignments,
-          pool: wirePool,
-          // Legacy flat bindings still accepted by older daemons.
-          bindings: wireBindings,
-          conversation_id:
-            subagentAssignment.conversationId ?? rootConversationId ?? undefined,
-        },
-      });
-      dispatch({ type: 'interaction/remove', id: subagentAssignment.id });
-      void refreshSubagentSessions(rootConversationId);
-    },
-    [
-      gateway,
-      rootConversationId,
-      subagentAssignment,
-      dispatch,
-      refreshSubagentSessions,
-      locale,
-      ensureRunSubscription,
-    ],
-  );
 
   // Workspace actions for sidebar
   useEffect(() => {
@@ -1667,161 +1106,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     toast,
   ]);
 
-  // Keyboard shortcuts + notification deep-link
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key === '.') {
-        e.preventDefault();
-        void handleStop();
-      }
-      if (meta && e.shiftKey && e.key.toLowerCase() === 'p') {
-        e.preventDefault();
-        setPaletteOpen(true);
-      }
-      if (meta && e.shiftKey && e.key.toLowerCase() === 'i') {
-        e.preventDefault();
-        setRightPanelOpen(true);
-        dispatch({ type: 'view/patch', patch: { rightCollapsed: false, inspectorTab: 'run' } });
-      }
-      if (meta && e.shiftKey && e.key.toLowerCase() === 't') {
-        e.preventDefault();
-        setRightPanelOpen(true);
-        dispatch({ type: 'view/patch', patch: { rightCollapsed: false, inspectorTab: 'tasks' } });
-      }
-      if (e.key === 'Escape') {
-        // close popovers only — never cancel run
-        setPaletteOpen(false);
-      }
-    };
-    const onLocate = (ev: Event) => {
-      const detail = (ev as CustomEvent<AssistantLocateTarget>).detail;
-      if (!detail?.conversationId) return;
-      void selectConversation(detail.conversationId);
-      if (detail.interactionId) {
-        // focus interaction by leaving it in queue — card already binds run
-      }
-      setRightPanelOpen(true);
-    };
-    window.addEventListener('keydown', onKey);
-    window.addEventListener(ASSISTANT_LOCATE_EVENT, onLocate as EventListener);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener(ASSISTANT_LOCATE_EVENT, onLocate as EventListener);
-    };
-  }, [handleStop, dispatch, selectConversation]);
-
-  const commands: AssistantCommand[] = useMemo(() => {
-    const busy = isStreaming;
-    return [
-      {
-        id: 'new',
-        label: zh ? '新会话' : 'New conversation',
-        run: () => {
-          for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
-            dispatch({ type: 'conversations/remove', id: oldId });
-            dispatch({ type: 'composer/clear', conversationId: oldId });
-          }
-          const pick = selectAssistantModel(toProviderInfo(providers));
-          const session = createTempSession({
-            projectId: activeProjectPath,
-            title: t(locale, 'assistant.newConversation'),
-            providerId: pick?.providerId,
-            modelId: pick?.modelId,
-          });
-          dispatch({ type: 'conversations/upsert', conversation: session.conversation });
-          dispatch({ type: 'conversations/setActive', id: session.conversation.id });
-          publishNavigation((prev) => ({
-            ...prev,
-            selectedId: session.conversation.id,
-            tempSession: session,
-            pendingCreateProjectPath: undefined,
-          }));
-        },
-      },      {
-        id: 'stop',
-        label: zh ? '停止当前 Run' : 'Stop current run',
-        shortcut: '⌘.',
-        disabledReason: busy ? undefined : zh ? '当前无运行中的任务' : 'No active run',
-        run: () => void handleStop(),
-      },
-      {
-        id: 'retry',
-        label: zh ? '重试' : 'Retry',
-        disabledReason: activeRunStatus === 'failed' || activeRunStatus === 'interrupted'
-          ? undefined
-          : zh
-            ? '仅失败/中断可重试'
-            : 'Only failed/interrupted runs',
-        run: () => void handleRetry(),
-      },
-      {
-        id: 'inspector',
-        label: zh ? '打开 Inspector' : 'Open Inspector',
-        shortcut: '⌘⇧I',
-        run: () => {
-          setRightPanelOpen(true);
-          dispatch({ type: 'view/patch', patch: { rightCollapsed: false } });
-        },
-      },
-      {
-        id: 'tasks',
-        label: zh ? '任务面板' : 'Tasks panel',
-        shortcut: '⌘⇧T',
-        run: () => {
-          setRightPanelOpen(true);
-          dispatch({ type: 'view/patch', patch: { inspectorTab: 'tasks', rightCollapsed: false } });
-        },
-      },
-      {
-        id: 'background',
-        label: zh ? '转后台' : 'Background run',
-        disabledReason: busy ? undefined : zh ? '无活动 Run' : 'No active run',
-        run: () => {
-          // Background mode is represented by the live subscription/event stream;
-          // it is not a separate engine RPC.
-          if (activeRunId) {
-            ensureRunSubscription(activeRunId);
-          }
-        },
-      },
-      {
-        id: 'fork',
-        label: zh ? 'Fork 会话' : 'Fork conversation',
-        disabledReason: activeId && !isTempConversationId(activeId) ? undefined : zh ? '无会话' : 'No conversation',
-        run: () => {
-          if (!activeId || isTempConversationId(activeId)) return;
-          void gateway.request('conversation.fork', { conversation_id: activeId }).then((forked) => {
-            const c = forked as Conversation;
-            if (c?.id) {
-              dispatch({ type: 'conversations/upsert', conversation: c });
-              void selectConversation(c.id);
-            }
-          });
-        },
-      },
-    ];
-  }, [
-    zh,
-    isStreaming,
-    // Selector-derived primitives are immutable for this render.
-
-    activeRunId,
-
-    activeRunStatus,
-    handleStop,
-    handleRetry,
-    dispatch,
-    gateway,
-    activeId,
-    selectConversation,
-    providers,
-    locale,
-    activeProjectPath,
-    publishNavigation,
-    ensureRunSubscription,
-  ]);
-
   const timelineMessages = useMemo(
     () =>
       messages.map((m) => ({
@@ -1841,106 +1125,12 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     [messages, state.runs, state.liveByRun],
   );
 
-  const permissionProfile = normalizePermissionProfile(
-    activeConversation?.permissionProfileId ?? 'ask',
-  );
-
-  // Composer-blocking interactions: hide MessageInput so the user cannot type/stop/send.
-  const composerBlockedByInteraction = Boolean(
-    (permission && permission.kind === 'permission') ||
-      (askUser && askUser.kind === 'ask_user'),
-  );
-
   const showRight =
     rightPanelOpen &&
     (state.view.layoutBreakpoint === 'full' || state.view.layoutBreakpoint === 'drawer-right');
 
   const recoveryMode = needsEngineRecovery(state.connection, state.capabilities);
   const allowRewind = canRewind(state.capabilities);
-  // ADR-0016 composer capability picker (honest gate on conversation.updateCapabilities).
-  const capabilityPickerEnabled = canSelectRunCapabilities(state.capabilities);
-  const activeCapabilitySelection = activeId
-    ? state.capabilitySelectionByConversation[activeId] ?? null
-    : null;
-  const capabilityCount = activeCapabilitySelection
-    ? (activeCapabilitySelection.mcp_servers?.length ?? 0) +
-      (activeCapabilitySelection.expert_id ? 1 : 0) +
-      (activeCapabilitySelection.team_id ? 1 : 0)
-    : 0;
-
-  const handleRollbackChanges = useCallback(
-    async (changes: Array<{ path: string; runId?: string }>): Promise<boolean> => {
-      const byRun = new Map<string, string[]>();
-      for (const change of changes) {
-        const runId = change.runId ?? (rootRun ?? activeRun)?.id;
-        if (!runId || !change.path) continue;
-        const paths = byRun.get(runId) ?? [];
-        if (!paths.includes(change.path)) paths.push(change.path);
-        byRun.set(runId, paths);
-      }
-      if (byRun.size === 0) {
-        toast(zh ? '没有可撤销的文件变更' : 'No reversible file changes found', 'error');
-        return false;
-      }
-      try {
-        const previews = await Promise.all(
-          [...byRun.entries()].map(async ([runId, paths]) => {
-            const preview = await gateway.request<Record<string, unknown>>('workspace.restorePreview', {
-              run_id: runId,
-              paths,
-            });
-            const checkpointId = String(preview?.checkpoint_id ?? preview?.checkpointId ?? '');
-            const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
-            if (!checkpointId || conflicts.length > 0) {
-              throw new Error(zh ? '文件在执行后已被其他修改，无法安全撤销' : 'Files changed after this run; undo was refused safely');
-            }
-            return { runId, paths, checkpointId };
-          }),
-        );
-        for (const preview of previews) {
-          await gateway.request('workspace.restore', {
-            run_id: preview.runId,
-            checkpoint_id: preview.checkpointId,
-            paths: preview.paths,
-            conflict_policy: 'fail',
-          });
-        }
-        toast(zh ? '已撤销本次对话的文件修改' : 'Conversation file changes undone', 'success');
-        return true;
-      } catch (err) {
-        toast(classifyError(err).userMessage, 'error');
-        return false;
-      }
-    },
-    [rootRun, activeRun, gateway, toast, zh],
-  );
-
-  const handleCopyDiagnostics = useCallback(() => {
-    const text = buildDiagnosticsText({
-      connection: state.connection,
-      connectionError: state.connectionError,
-      protocolVersion: state.capabilities?.protocolVersion ?? null,
-      methodsCount: state.capabilities?.methods?.length ?? 0,
-      reconnectAttempts: state.reconnectAttempts,
-    });
-    void copyToClipboard(text).then((ok) => {
-      if (ok) toast(zh ? '诊断已复制' : 'Diagnostics copied', 'success');
-      else toast(zh ? '复制失败' : 'Copy failed', 'error');
-    });
-  }, [
-    state.connection,
-    state.connectionError,
-    state.capabilities,
-    state.reconnectAttempts,
-    toast,
-    zh,
-  ]);
-
-  const handleRetryConnection = useCallback(() => {
-    void connectWorkspace(gateway, dispatch).catch((err) => {
-      toast(classifyError(err).userMessage, 'error');
-    });
-  }, [gateway, dispatch, toast]);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col" data-assistant-workbench data-gateway="1">
@@ -1970,484 +1160,121 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       ) : (
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-end gap-1 border-b border-[var(--border)] px-3 py-1">
-            <button
-              type="button"
-              onClick={() => setPaletteOpen(true)}
-              className="rounded px-2 py-1 text-[11px] text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-              title={zh ? '命令面板 ⌘⇧P' : 'Command palette ⌘⇧P'}
-            >
-              {zh ? '命令' : 'Commands'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRightPanelOpen((v) => {
-                  const next = !v;
-                  dispatch({ type: 'view/patch', patch: { rightCollapsed: !next } });
-                  return next;
-                });
-              }}
-              className="rounded p-1.5 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-              title={zh ? '活动面板' : 'Activity panel'}
-              aria-label={zh ? '切换活动面板' : 'Toggle activity panel'}
-            >
-              {showRight ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-            </button>
-          </div>
-
-          <div className="min-h-0 flex-1">
-            <ConversationTimeline
-              messages={timelineMessages}
-              eventsByRun={state.eventsByRun}
-              changeEvents={events}
-              fileChanges={fileChanges}
-              onRollbackChanges={allowRewind ? handleRollbackChanges : undefined}
-              loading={loadingMessages}
-              locale={locale}
-              onRetry={() => void handleRetry()}
-              hasMoreOlder={Boolean(messagePageInfo?.hasMore)}
-              loadingOlder={loadingOlderMessages}
-              onLoadOlder={() => void loadOlderMessages()}
-            />
-          </div>
-
-          {/* Composer interactions (permission / ask_user) replace MessageInput below. */}
-
-          {planApproval && planApproval.kind === 'plan_approval' && (
-            <div className="mx-4 mb-2 max-h-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
-              <div className="font-medium">{planApproval.title}</div>
-              <pre className="mt-2 whitespace-pre-wrap text-xs text-[var(--text-secondary)]">
-                {planApproval.planMarkdown}
-              </pre>
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  className="rounded bg-[var(--primary)] px-3 py-1 text-white"
-                  onClick={() =>
-                    void gateway
-                      .request('interaction.respond', {
-                        id: planApproval.id,
-                        approved: true,
-                        run_id: planApproval.runId,
-                      })
-                      .then(() => dispatch({ type: 'interaction/remove', id: planApproval.id }))
-                  }
-                >
-                  {zh ? '批准计划' : 'Approve plan'}
-                </button>
-                <button
-                  type="button"
-                  className="rounded border border-[var(--border)] px-3 py-1"
-                  onClick={() =>
-                    void gateway
-                      .request('interaction.respond', {
-                        id: planApproval.id,
-                        approved: false,
-                        run_id: planApproval.runId,
-                      })
-                      .then(() => dispatch({ type: 'interaction/remove', id: planApproval.id }))
-                  }
-                >
-                  {zh ? '拒绝' : 'Reject'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {isGoalMode ? (
-            <GoalStatusBar
-              goalTitle={activeConversation?.title ?? (zh ? 'Goal 任务' : 'Goal')}
-              instruction={goalInstruction}
-              run={activeRun}
-              locale={locale}
-              tokenLabel={
-                contextUsage ? `${contextUsage.usedTokens} tokens` : undefined
-              }
-              canResume={goalCanResume}
-              onPause={() => void handleStop()}
-              onResume={() => void handleRetry()}
-              onDelete={() => {
-                // T216/T302: unified confirm dialog replaces native window.confirm.
-                setConfirmDeleteGoalId(activeId ?? null);
-              }}
-            />
-          ) : null}
-
-          {/* Prompt queue is for in-flight multi-send, not goal chrome. */}
-          <PromptQueuePanel
-            items={isGoalMode ? [] : promptQueue}
+          <WorkbenchHeader
             locale={locale}
-            onEdit={(id, content) =>
-              void gateway
-                .request('promptQueue.update', {
-                  id,
-                  conversation_id: activeId,
-                  content,
-                })
-                .then(() =>
-                  gateway
-                    .request('promptQueue.list', { conversation_id: activeId })
-                    .then((items) =>
-                      dispatch({
-                        type: 'promptQueue/set',
-                        conversationId: activeId!,
-                        items: items as typeof promptQueue,
-                      }),
-                    ),
-                )
-            }
-            onRemove={(id) =>
-              void gateway.request('promptQueue.remove', { id }).then(() =>
-                dispatch({
-                  type: 'promptQueue/set',
-                  conversationId: activeId!,
-                  items: promptQueue.filter((i) => i.id !== id),
-                }),
-              )
-            }
-            onSendNow={(id) => void gateway.request('promptQueue.sendNow', { id })}
-            onReorder={(ids) =>
-              void gateway.request('promptQueue.reorder', {
-                conversation_id: activeId,
-                ids,
-              })
-            }
+            onOpenPalette={() => setPaletteOpen(true)}
+            showRight={showRight}
+            onToggleRightPanel={() => {
+              setRightPanelOpen((v) => {
+                const next = !v;
+                dispatch({ type: 'view/patch', patch: { rightCollapsed: !next } });
+                return next;
+              });
+            }}
           />
 
-          {composerBlockedByInteraction ? (
-            <div className={`${COMPOSER_COLUMN_CLASS} pb-5 pt-2`} data-composer-interaction-overlay>
-              {permission && permission.kind === 'permission' ? (
-                // The plan checklist is a second rendering of the same pending
-                // permission, so it is gated on the RPC it would answer with.
-                // When `permission.respond` is not advertised the generic card
-                // still renders: the composer is already hidden behind this
-                // overlay, and showing nothing would wedge the run with no way
-                // for the user to answer at all.
-                pendingPlanApproval && hasMethod(state.capabilities, 'permission.respond') ? (
-                  <Suspense
-                    fallback={
-                      <div
-                        className="rounded-[var(--radius-lg,14px)] border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3 text-xs text-[var(--text-secondary)]"
-                        data-plan-approval-loading
-                      >
-                        {t(locale, 'assistant.permission.processing')}
-                      </div>
-                    }
-                  >
-                    <PlanApprovalCard
-                      requestId={permission.id}
-                      approval={pendingPlanApproval}
-                      locale={locale}
-                      // Must return the Promise so the card can await + recover on failure.
-                      onApprove={(id, scope) => handlePermission(id, true, scope)}
-                      onReject={(id) => handlePermission(id, false)}
-                    />
-                  </Suspense>
-                ) : (
-                  <PermissionRequestCard
-                    request={{
-                      id: permission.id,
-                      toolName: permission.toolName,
-                      reason: permission.reason,
-                      input: permission.input,
-                      status: 'pending',
-                      createdAt: permission.createdAt,
-                    }}
-                    locale={locale}
-                    onApprove={(id, scope) => {
-                      // Must return the Promise so the card can await + recover on failure.
-                      return handlePermission(id, true, scope);
-                    }}
-                    onReject={(id) => handlePermission(id, false)}
-                  />
-                )
-              ) : null}
-              {askUser && askUser.kind === 'ask_user' ? (
-                <AskUserPromptCard
-                  interaction={askUser}
-                  locale={locale}
-                  onAnswer={async (id, answer) => {
-                    await gateway.request('interaction.respond', {
-                      id,
-                      answer,
-                      run_id: askUser.runId,
-                    });
-                    dispatch({ type: 'interaction/remove', id });
-                  }}
-                  onCancel={async (id) => {
-                    await gateway.request('interaction.respond', {
-                      id,
-                      cancelled: true,
-                      run_id: askUser.runId,
-                    });
-                    dispatch({ type: 'interaction/remove', id });
-                  }}
-                />
-              ) : null}
-            </div>
-          ) : (
-          <MessageInput
+          <WorkbenchTimelinePane
             locale={locale}
-            onSend={(draft) => handleSend(draft, false)}
-            onForceSend={(draft) => handleSend(draft, true)}
-            onInterject={
-              canInterject(state.capabilities) && isStreaming && activeId && !isTempConversationId(activeId)
-                ? async (content) => {
-                    try {
-                      await gateway.request('promptQueue.interject', {
-                        conversation_id: activeId,
-                        content,
-                      });
-                      return true;
-                    } catch (err) {
-                      toast(classifyError(err).userMessage, 'error');
-                      return false;
-                    }
-                  }
-                : undefined
-            }
-            onStop={() => void handleStop()}
-            isStopping={stoppingRunId === activeRunId}
-            isStreaming={isStreaming}
-            allowQueueWhileStreaming
-            inputDisabledReason={
-              providerReadiness === 'no_provider'
-                ? 'no_provider'
-                : providerReadiness === 'no_model'
-                  ? 'no_model'
-                  : null
-            }
-            permissionProfile={permissionProfile}
-            onPermissionChange={async (profile: AssistantPermissionProfile) => {
-              // Always update local conversation state so the picker reflects the choice.
-              if (activeConversation) {
-                dispatch({
-                  type: 'conversations/upsert',
-                  conversation: { ...activeConversation, permissionProfileId: profile },
-                });
-              } else if (activeId) {
-                // Temp conversation shell without full object — create minimal patch via store.
-                const existing = stateRef.current.conversations[activeId];
-                if (existing) {
-                  dispatch({
-                    type: 'conversations/upsert',
-                    conversation: { ...existing, permissionProfileId: profile },
-                  });
-                }
-              }
-              // Persist only when the conversation is real on the host.
-              if (!activeId || isTempConversationId(activeId)) return;
-              try {
-                await gateway.request('conversation.update_permission', {
-                  id: activeId,
-                  permission_profile_id: profile,
-                });
-              } catch (err) {
-                toast(classifyError(err).userMessage, 'error');
-              }
-            }}
+            timelineMessages={timelineMessages}
+            events={events}
+            fileChanges={fileChanges}
+            allowRewind={allowRewind}
+            onRollbackChanges={handleRollbackChanges}
+            loadingMessages={loadingMessages}
+            onRetry={() => void handleRetry()}
+            hasMoreOlder={Boolean(messagePageInfo?.hasMore)}
+            loadingOlder={loadingOlderMessages}
+            onLoadOlder={() => void loadOlderMessages()}
+            planApproval={planApproval}
+            isGoalMode={isGoalMode}
+            goalTitle={activeConversation?.title ?? t(locale, 'assistant.goalTask')}
+            goalInstruction={goalInstruction}
+            activeRun={activeRun}
+            contextUsage={contextUsage}
+            goalCanResume={goalCanResume}
+            onPause={() => void handleStop()}
+            onResume={() => void handleRetry()}
+            onDeleteGoal={() => setConfirmDeleteGoalId(activeId ?? null)}
+          />
+
+          <WorkbenchComposer
+            locale={locale}
+            activeId={activeId}
+            activeConversation={activeConversation}
+            activeProjectPath={activeProjectPath}
             providers={providers}
-            selectedProviderId={modelSelection?.providerId ?? providers[0]?.id ?? ''}
-            selectedModel={modelSelection?.modelId}
-            onSelectModel={(providerId, modelId) => {
-              const now = new Date().toISOString();
-              // Always write selection into store — even without an active conversation —
-              // so the picker echoes immediately and temp shells stay editable.
-              if (activeConversation) {
-                dispatch({
-                  type: 'conversations/upsert',
-                  conversation: {
-                    ...activeConversation,
-                    providerId,
-                    modelId,
-                    updatedAt: now,
-                  },
-                });
-              } else if (activeId) {
-                const existing = stateRef.current.conversations[activeId];
-                if (existing) {
-                  dispatch({
-                    type: 'conversations/upsert',
-                    conversation: { ...existing, providerId, modelId, updatedAt: now },
-                  });
-                } else {
-                  const shell = createTempConversationShell({
-                    id: activeId,
-                    projectId: activeProjectPath,
-                    title: t(locale, 'assistant.newConversation'),
-                    providerId,
-                    modelId,
-                    now,
-                  });
-                  dispatch({ type: 'conversations/upsert', conversation: shell });
-                }
-              } else {
-                // No conversation yet: create a temp shell so selection has a home.
-                const session = createTempSession({
-                  projectId: activeProjectPath,
-                  title: t(locale, 'assistant.newConversation'),
-                  providerId,
-                  modelId,
-                  now,
-                });
-                dispatch({ type: 'conversations/upsert', conversation: session.conversation });
-                dispatch({ type: 'conversations/setActive', id: session.conversation.id });
-                publishNavigation((prev) => ({
-                  ...prev,
-                  selectedId: session.conversation.id,
-                  tempSession: session,
-                }));
-              }
-              if (activeId && !isTempConversationId(activeId)) {
-                void gateway
-                  .request('conversation.update_model', {
-                    id: activeId,
-                    provider_id: providerId,
-                    model_id: modelId,
-                  })
-                  .catch((err) => toast(classifyError(err).userMessage, 'error'));
-              }
-            }}
-            draftText={selectComposerDraft(state, activeId).text}
-            draftKey={activeId}
-            onDraftChange={(text, conversationId) => {
-              // Prefer the id captured at keystroke time so a switch mid-debounce
-              // still writes the previous conversation's draft.
-              const id = conversationId ?? activeId;
-              if (!id) return;
-              dispatch({ type: 'composer/set', conversationId: id, draft: { text } });
-              // Temp shell remount restore (settings round-trip). Debounced by
-              // MessageInput; publishNavigation bails without re-rendering the
-              // shell tree when only tempSession.draft.text changes.
-              if (isTempConversationId(id)) {
-                publishNavigation((prev) => {
-                  if (!prev.tempSession || prev.tempSession.conversation.id !== id) {
-                    return prev;
-                  }
-                  if (prev.tempSession.draft.text === text) return prev;
-                  return {
-                    ...prev,
-                    tempSession: {
-                      ...prev.tempSession,
-                      draft: {
-                        ...prev.tempSession.draft,
-                        text,
-                        updatedAt: new Date().toISOString(),
-                      },
-                    },
-                  };
-                });
-              }
-            }}
-            projectPath={activeProjectPath}
-            subagents={composerSubagents}
-            activeSubagent={activeComposerSubagent}
-            onSelectSubagent={(id) => void handleSelectSubagent(id)}
-            changeSummary={{
-              fileCount: conversationChangeSummary.files.length,
-              additions: conversationChangeSummary.additions,
-              deletions: conversationChangeSummary.deletions,
-            }}
-            onToggleCapabilities={
-              capabilityPickerEnabled && activeId
-                ? () => setCapabilityPickerOpen((open) => !open)
-                : undefined
-            }
-            capabilityCount={capabilityCount}
-            capabilityPickerSlot={
-              capabilityPickerOpen && capabilityPickerEnabled && activeId ? (
-                <Suspense fallback={null}>
-                  <LazyCapabilityPickerPopover
-                    locale={locale}
-                    gateway={gateway}
-                    selection={activeCapabilitySelection}
-                    onChange={(selection) => void handleCapabilitySelectionChange(selection)}
-                    onClose={() => setCapabilityPickerOpen(false)}
-                    showSkills={false}
-                  />
-                </Suspense>
-              ) : null
-            }
+            providerReadiness={providerReadiness}
+            registeredProjects={registeredProjects}
+            rootConversationId={rootConversationId}
+            modelSelection={modelSelection}
+            ensureRunSubscription={ensureRunSubscription}
+            publishNavigation={publishNavigation}
+            setSelectedRootConversationId={setSelectedRootConversationId}
+            setSelectedChildConversationId={setSelectedChildConversationId}
+            isGoalMode={isGoalMode}
+            isStreaming={isStreaming}
+            promptQueue={promptQueue}
+            stoppingRunId={stoppingRunId}
+            activeRunId={activeRunId}
+            handlePermission={handlePermission}
+            onStop={() => void handleStop()}
+            conversationChangeSummary={conversationChangeSummary}
+            composerSubagents={composerSubagents}
+            activeComposerSubagent={activeComposerSubagent}
+            onSelectSubagent={(id) => void subagent.handleSelectSubagent(id)}
           />
-          )}
         </div>
 
-        {showRight && (
-          <ResizableRightPanel
-            open={showRight}
-            width={state.view.rightWidth || 320}
-            onResize={(width) => dispatch({ type: 'view/patch', patch: { rightWidth: width } })}
-            onClose={() => {
-              setRightPanelOpen(false);
-              dispatch({ type: 'view/patch', patch: { rightCollapsed: true } });
-            }}
-            title={zh ? '活动' : 'Activity'}
-            ariaLabel={zh ? '助理右侧栏' : 'Assistant inspector'}
-            resizeLabel={zh ? '调整宽度' : 'Resize panel'}
-            resizeHint={zh ? '拖动调整宽度 · 双击重置' : 'Drag to resize · double-click to reset'}
-            closeLabel={zh ? '关闭' : 'Close'}
-            scrollBody={false}
-          >
-            <ActivityInspector
-              run={rootRun ?? activeRun}
-              events={rootEvents}
-              selectedChildEvents={selectedChildEvents}
-              mainTodos={mainTodos}
-              artifacts={artifacts}
-              children={children}
-              fileChanges={fileChanges}
-              contextUsage={contextUsage}
-              locale={locale}
-              providers={providers}
-              projectPath={activeProjectPath}
-              activeTab={state.view.inspectorTab}
-              onTabChange={(tab: InspectorTab) =>
-                dispatch({ type: 'view/patch', patch: { inspectorTab: tab } })
-              }
-              onRetry={() => void handleRetry()}
-              onOpenArtifact={(a) =>
-                void gateway.request('artifact.open', { id: a.id, path: a.path })
-              }
-              onRevealArtifact={(a) =>
-                void gateway.request('artifact.reveal', { id: a.id, path: a.path })
-              }
-              onOpenFile={(path) => void gateway.request('artifact.open', { path })}
-              capabilities={state.capabilities}
-              gateway={gateway}
-              conversationId={rootConversationId}
-              subagents={activitySubagents}
-              selectedSubagentId={
-                selectedChildConversationId
-                  ? activitySubagents.find(
-                      (s) => s.childConversationId === selectedChildConversationId,
-                    )?.id ?? null
-                  : null
-              }
-              fileEvents={fileEvents}
-              onSelectSubagent={(id) => void handleSelectSubagent(id)}
-              onBackToMain={handleBackToMain}
-              onSwitchSubagentKey={(id) => {
-                setSwitchKeySessionId(id);
-                void loadAssignmentKeys();
-              }}
-              onRefreshTasks={() => void refreshSubagentSessions(rootConversationId)}
-              showingChildSession={Boolean(selectedChildConversationId)}
-            />
-          </ResizableRightPanel>
-        )}
+        <WorkbenchPanels
+          locale={locale}
+          showRight={showRight}
+          rootRun={rootRun}
+          activeRun={activeRun}
+          rootEvents={rootEvents}
+          selectedChildEvents={selectedChildEvents}
+          mainTodos={mainTodos}
+          artifacts={artifacts}
+          children={children}
+          fileChanges={fileChanges}
+          contextUsage={contextUsage}
+          providers={providers}
+          activeProjectPath={activeProjectPath}
+          fileEvents={fileEvents}
+          rootConversationId={rootConversationId}
+          activitySubagents={activitySubagents}
+          selectedChildConversationId={selectedChildConversationId}
+          onRetry={() => void handleRetry()}
+          onOpenArtifact={(a) =>
+            void gateway.request('artifact.open', { id: a.id, path: a.path })
+          }
+          onRevealArtifact={(a) =>
+            void gateway.request('artifact.reveal', { id: a.id, path: a.path })
+          }
+          onOpenFile={(path) => void gateway.request('artifact.open', { path })}
+          onSelectSubagent={(id) => void subagent.handleSelectSubagent(id)}
+          onBackToMain={subagent.handleBackToMain}
+          onSwitchSubagentKey={(id) => {
+            subagent.setSwitchKeySessionId(id);
+            void subagent.loadAssignmentKeys();
+          }}
+          onRefreshTasks={() => void subagent.refreshSubagentSessions(rootConversationId)}
+          onClose={() => {
+            setRightPanelOpen(false);
+            dispatch({ type: 'view/patch', patch: { rightCollapsed: true } });
+          }}
+        />
       </div>
       )}
 
       <SubagentAssignmentModal
-        open={Boolean(subagentAssignment) || Boolean(switchKeySessionId)}
+        open={Boolean(subagentAssignment) || Boolean(subagent.switchKeySessionId)}
         locale={locale}
         interaction={subagentAssignment ?? null}
-        keys={assignmentKeyOptions}
-        switchSessionId={switchKeySessionId}
+        keys={subagent.assignmentKeyOptions}
+        switchSessionId={subagent.switchKeySessionId}
         onClose={() => {
-          if (switchKeySessionId) {
-            setSwitchKeySessionId(null);
+          if (subagent.switchKeySessionId) {
+            subagent.setSwitchKeySessionId(null);
             return;
           }
           if (subagentAssignment) {
@@ -2468,7 +1295,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               });
           }
         }}
-        onConfirm={handleAssignmentConfirm}
+        onConfirm={subagent.handleAssignmentConfirm}
       />
       {/* T216/T302: unified confirm dialog for goal conversation deletion */}
       <ConfirmDialog

@@ -9,6 +9,19 @@ const assistantSidebar = readFileSync(new URL('../assistant/AssistantSidebarSect
 const messageInput = readFileSync(new URL('../assistant/MessageInput.tsx', import.meta.url), 'utf8');
 const layoutEvents = readFileSync(new URL('./hooks/useLayoutEvents.ts', import.meta.url), 'utf8');
 const tauriAdapter = readFileSync(new URL('../../lib/tauri-adapter.ts', import.meta.url), 'utf8');
+// Send path moved into the composer hook; run control into the lifecycle hook.
+const composerHook = readFileSync(
+  new URL('../../hooks/useAssistantWorkbenchComposer.ts', import.meta.url),
+  'utf8',
+);
+const lifecycleHook = readFileSync(
+  new URL('../../hooks/useAssistantRunLifecycle.ts', import.meta.url),
+  'utf8',
+);
+const runSubscriptionHook = readFileSync(
+  new URL('../../hooks/useAssistantRunSubscription.ts', import.meta.url),
+  'utf8',
+);
 
 test('assistant tree is owned only by the shell sidebar', () => {
   assert.equal((sidebar.match(/<AssistantSidebarSection/g) ?? []).length, 1);
@@ -203,14 +216,14 @@ test('assistant conversation rows use a neutral selected state and comfortable h
 });
 
 test('send path uses gateway sendOrQueue (queue while running, no streamChat)', () => {
-  assert.match(workbench, /sendOrQueue/);
-  assert.match(workbench, /startSubscription/);
+  assert.match(composerHook, /sendOrQueue/);
+  assert.match(runSubscriptionHook, /startSubscription/);
   assert.equal(/\bstreamChat\s*[:(]/.test(workbench), false);
   assert.equal(workbench.includes('createAssistantStreamState'), false);
 });
 
 test('stop uses gateway cancelRun and does not invent terminal run status', () => {
-  assert.match(workbench, /cancelRun/);
+  assert.match(lifecycleHook, /cancelRun/);
   // Terminal status must come from daemon events, not optimistic interrupted
   assert.equal(/setStreamState[\s\S]*status: 'interrupted'/.test(workbench), false);
 });
