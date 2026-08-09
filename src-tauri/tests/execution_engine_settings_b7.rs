@@ -14,6 +14,10 @@ use natives_lib::execution_engine_settings::{
     EXECUTOR_KEY,
 };
 
+/// 模块级锁:本文件的两个测试都向全局 MAIN_DB_POOL 注册自己的 temp pool,
+/// 同一测试二进制内并行运行会互相覆盖(flaky)。串行化保证每次只注册一个 pool。
+static TEST_POOL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn register_temp_pool() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("natives-b7.db");
@@ -39,6 +43,7 @@ fn register_temp_pool() -> tempfile::TempDir {
 
 #[test]
 fn b7_conflict_v2_is_authority_legacy_not_reapplied() {
+    let _lock = TEST_POOL_LOCK.lock().unwrap();
     let _dir = register_temp_pool();
 
     // Fixture 3: persisted V2 (max_steps 120) + legacy key (max_steps 25) both
@@ -79,6 +84,7 @@ fn b7_no_db_keys_yields_safe_defaults() {
     // Fixture 1 (Rust side): neither key present → V2 defaults (native,
     // max_steps 50, fail policy, codex disabled). localStorage runtimePref is a
     // frontend one-shot migration (A7) and never reaches Rust.
+    let _lock = TEST_POOL_LOCK.lock().unwrap();
     let _dir = register_temp_pool();
     let loaded = load_execution_engine_settings().expect("load must not fail");
     assert_eq!(loaded.default_runtime, "native");
