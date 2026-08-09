@@ -8,7 +8,8 @@ const workbench = readFileSync(new URL('../assistant/AssistantWorkbench.tsx', im
 const assistantSidebar = readFileSync(new URL('../assistant/AssistantSidebarSection.tsx', import.meta.url), 'utf8');
 const messageInput = readFileSync(new URL('../assistant/MessageInput.tsx', import.meta.url), 'utf8');
 const layoutEvents = readFileSync(new URL('./hooks/useLayoutEvents.ts', import.meta.url), 'utf8');
-const tauriAdapter = readFileSync(new URL('../../lib/tauri-adapter.ts', import.meta.url), 'utf8');
+// ARCH-002: locale/theme impls live in the host facade, not the barrel.
+const tauriAdapter = readFileSync(new URL('../../lib/tauri/host.ts', import.meta.url), 'utf8');
 
 test('assistant tree is owned only by the shell sidebar', () => {
   assert.equal((sidebar.match(/<AssistantSidebarSection/g) ?? []).length, 1);
@@ -259,6 +260,8 @@ test('slash commands use composer-local positioning; keyboard owned by MessageIn
 });
 
 test('locale persistence broadcasts the change consumed by the shell', () => {
-  assert.match(tauriAdapter, /setLocale:\s*async[\s\S]*?new CustomEvent\('locale-changed',\s*\{ detail: locale \}\)[\s\S]*?await cmd\('set_locale'/);
+  // ARCH-002: setLocale is an exported facade const (host.ts) with a type
+  // annotation — the name is followed by `: NativesAPI['setLocale'] = async`.
+  assert.match(tauriAdapter, /setLocale:[\s\S]*?=\s*async[\s\S]*?new CustomEvent\('locale-changed',\s*\{ detail: locale \}\)[\s\S]*?await cmd\('set_locale'/);
   assert.match(layoutEvents, /addEventListener\('locale-changed'/);
 });

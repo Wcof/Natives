@@ -19,17 +19,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
-import nativesAPI, {
-  type ExecutionEngineSnapshot,
-  type RuntimeDescriptor,
-} from '@/lib/tauri-adapter';
+import { executionEngine } from '@/lib/tauri/execution-engine';
+import type { ExecutionEngineSnapshot, RuntimeDescriptor } from '@/lib/tauri/types';
 import { classifyError } from '@/lib/error-classifier';
 import {
   clearPreferredRuntimeId,
   loadPreferredRuntimeId,
 } from '@/lib/assistant-workspace/persistence';
-
-const adapter = nativesAPI;
 
 /// Known Native tool surface (subtract-only candidates). Free-form entries
 /// are allowed too — this list is a convenience, not an authority.
@@ -81,7 +77,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
       // 作为一次性迁移种子传给后端，后端做 one-way 迁移到 Settings V2 defaultRuntime
       // （revision CAS 保证只迁一次，绝不覆盖已权威的 V2）。迁移成功/无需迁移后
       // 立即清除旧 key — 此后 getter 不再读取旧值，新 Run 默认完全由 V2 决定。
-      const snap = await adapter.executionEngine.getSnapshot(loadPreferredRuntimeId());
+      const snap = await executionEngine.getSnapshot(loadPreferredRuntimeId());
       clearPreferredRuntimeId();
       setSnapshot(snap);
       setMaxStepsDraft(snap.settings.native.maxSteps ?? 50);
@@ -105,7 +101,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
         ...snapshot.settings,
         native: { ...snapshot.settings.native, maxSteps: Math.min(200, Math.max(10, maxStepsDraft)) },
       };
-      await adapter.executionEngine.saveSettings(updated);
+      await executionEngine.saveSettings(updated);
       toast(t(locale, 'executionEngine.saved'), 'success');
       await refresh();
     } catch (err) {
@@ -125,7 +121,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           defaultRuntime: runtimeId,
           ...(fallback ? { externalUnavailablePolicy: fallback } : {}),
         };
-        await adapter.executionEngine.saveSettings(updated);
+        await executionEngine.saveSettings(updated);
         toast(t(locale, 'executionEngine.saved'), 'success');
         await refresh();
       } catch (err) {
@@ -150,7 +146,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           ...snapshot.settings,
           native: { ...snapshot.settings.native, disabledTools: normalized },
         };
-        await adapter.executionEngine.saveSettings(updated);
+        await executionEngine.saveSettings(updated);
         toast(t(locale, 'executionEngine.saved'), 'success');
         await refresh();
       } catch (err) {
