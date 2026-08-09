@@ -593,9 +593,10 @@ pub struct AgentEngine {
     input_receiver: Option<Arc<dyn crate::EngineInputReceiver>>,
     safe_point_receiver: Option<Arc<dyn crate::EngineSafePointReceiver>>,
     provider_context_window: Option<u64>,
-    /// P1-05: running context budget stats maintained by the engine loop.
-    /// `append_chars` tracks transcript growth incrementally; a compaction pass
-    /// bumps the revision and resets the counters to the kept transcript size.
+    /// PERF-001: running context budget stats maintained by the engine loop.
+    /// `observe_transcript` appends only the per-round transcript growth; a
+    /// compaction pass bumps the revision and resets the counters to the kept
+    /// transcript size.
     context_stats: Mutex<ContextStats>,
 }
 
@@ -2262,17 +2263,18 @@ impl AgentEngine {
     ) -> Result<Vec<Value>, EngineError> {
         let history_limit = self.history_compact_chars.unwrap_or(HISTORY_COMPACT_CHARS);
         let tool_limit = self.tool_output_max_chars.unwrap_or(TOOL_OUTPUT_MAX_CHARS);
-        let before_chars: usize = messages
-            .iter()
-            .map(|message| message.to_string().len())
-            .sum();
-        // P1-05: engine loop maintains the running context budget. The cheap
-        // counters stay authoritative below the threshold; a real compaction
-        // pass below resets them to the kept transcript size.
+        // PERF-001: observe the transcript with a cheap structured char count
+        // (a bounded `Value` tree walk — no string allocation) and append ONLY
+        // this round's growth to the running budget. The pre-fix path
+        // re-serialized the whole transcript to a JSON string every
+        // provider/tool round AND re-accumulated that full size into the
+        // estimate, so an uncompacted multi-turn run drifted arbitrarily large
+        // while still paying O(n) serialization per round.
+        let before_chars = values_chars(&messages);
         self.context_stats
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .append_chars(before_chars);
+            .observe_transcript(before_chars);
         if before_chars < history_limit {
             // Still repair dangling pairs cheaply.
             let (fixed, repaired) = repair_dangling_tool_calls(&messages);
@@ -2314,14 +2316,12 @@ impl AgentEngine {
         } else {
             "mechanical"
         };
-        let after_chars: usize = result
-            .messages
-            .iter()
-            .map(|message| message.to_string().len())
-            .sum();
-        // P1-05: a real compaction rewrote the transcript — bump the revision
-        // and re-seed the running counters from the kept size so stale bytes
-        // do not accumulate (P1-06 invariant).
+        // Same cheap structured measure as the observe above, so the reset
+        // baseline and the next observation use one consistent char metric.
+        let after_chars = values_chars(&result.messages);
+        // P1-05/PERF-001: a real compaction rewrote the transcript — bump the
+        // revision and re-seed the running counters from the kept size so
+        // stale bytes do not accumulate (P1-06 invariant).
         {
             let mut stats = self.context_stats.lock().unwrap_or_else(|e| e.into_inner());
             stats.note_compaction();
@@ -2635,6 +2635,37 @@ fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
             Value::Object(obj)
         })
         .collect()
+}
+
+/// Cheap estimate of a transcript's serialized length WITHOUT allocating a
+/// string (PERF-001). Walks the `Value` tree summing string lengths and key
+/// lengths; structural overhead is folded in per node but no bytes are
+/// formatted or escaped. This is what the engine observes every
+/// provider/tool round instead of `messages.iter().map(|m|
+/// m.to_string().len()).sum()` — same order of growth, no per-round heap
+/// churn from JSON serialization.
+fn values_chars(messages: &[Value]) -> usize {
+    messages.iter().map(value_chars).sum()
+}
+
+fn value_chars(value: &Value) -> usize {
+    match value {
+        Value::Null => 4,
+        Value::Bool(boolean) => {
+            if *boolean {
+                4
+            } else {
+                5
+            }
+        }
+        Value::Number(number) => number.to_string().len(),
+        Value::String(text) => text.len(),
+        Value::Array(items) => items.iter().map(value_chars).sum(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| key.len() + value_chars(value))
+            .sum(),
+    }
 }
 
 fn agent_messages_to_values(messages: &[crate::AgentMessage]) -> Vec<Value> {

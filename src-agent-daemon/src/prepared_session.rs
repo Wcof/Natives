@@ -27,6 +27,20 @@
 //! invalidates the entry, as does adding/removing a rules file or a skill.
 //! Schema revision bumps (app upgrade) also invalidate.
 //!
+//! ## PERF-002 warm path (metadata fast path)
+//! [`PreparedAgentSessionCache::resolve`] is the two-tier lookup the run path
+//! uses:
+//! 1. **Fast tier** — [`project_instruction_metadata_fingerprint`]: a hash of
+//!    canonical path + mtime + size for each instruction source plus a
+//!    metadata-only skill-directory generation (entry name + length + mtime).
+//!    No instruction content is read and no skill body is scanned, so a warm
+//!    cache hit costs only `stat`/`read_dir` work.
+//! 2. **Slow tier** — only when the fast tier misses, [`project_instruction_digest`]
+//!    reads and SHA-256-hashes the full instruction content (and folds in skill
+//!    names). A content-identical metadata move (e.g. a `touch`) re-hits the
+//!    durable content-verified key, and [`PreparedAgentSessionCache::resolve`]
+//!    re-indexes it under the metadata key so the next lookup is fast again.
+//!
 //! ## Cache policy
 //! Bounded LRU: at most [`MAX_ENTRIES`], evicting the least-recently-used key.
 //! Eviction is fully deterministic for a given access sequence (an explicit
@@ -54,7 +68,10 @@ const MAX_ENTRIES: usize = 32;
 pub struct PreparedAgentSessionKey {
     /// Canonical project root (identity of the project's instructions).
     pub project_identity: String,
-    /// Digest of AGENTS.md/CLAUDE.md/rules files under the project.
+    /// Project instruction discriminator (PERF-002): either the metadata
+    /// fingerprint (fast tier) or the full content SHA-256 (slow tier). The
+    /// two-tier [`PreparedAgentSessionCache::resolve`] lookup indexes a rebuilt
+    /// session under BOTH values so a warm hit never needs the content hash.
     pub project_instruction_digest: String,
     /// ADR-0016 capability resolution revision (bumps when capability
     /// selection / profile / team changes).
@@ -112,6 +129,29 @@ struct PreparedLru {
     order: VecDeque<PreparedAgentSessionKey>,
 }
 
+/// Outcome of the PERF-002 two-tier [`PreparedAgentSessionCache::resolve`].
+#[derive(Debug)]
+pub enum PreparedResolve {
+    /// Warm metadata-tier hit — zero instruction content reads, zero skill
+    /// body scans.
+    Hit(Arc<PreparedAgentSession>),
+    /// Metadata moved but the full content digest re-hit a durable entry; the
+    /// entry has already been re-indexed under the metadata key so the next
+    /// identical lookup is metadata-only.
+    ContentUnchanged(Arc<PreparedAgentSession>),
+    /// No usable entry exists; the caller must rebuild. Carries the
+    /// already-computed full content digest so the caller does not re-hash.
+    Miss {
+        /// Metadata key to index the rebuilt session under.
+        fast_key: PreparedAgentSessionKey,
+        /// Full content SHA-256 (already computed during the slow-tier check).
+        full_digest: String,
+    },
+    /// No cache key is applicable (e.g. a per-run child directive is present);
+    /// the caller must rebuild without inserting anything.
+    NoCache,
+}
+
 impl Default for PreparedAgentSessionCache {
     fn default() -> Self {
         Self::new()
@@ -161,6 +201,62 @@ impl PreparedAgentSessionCache {
         let mut lru = self.inner.lock().expect("prepared session cache lock");
         lru.entries.clear();
         lru.order.clear();
+    }
+
+    /// PERF-002 two-tier warm lookup.
+    ///
+    /// 1. **Fast tier** — builds a key from
+    ///    [`project_instruction_metadata_fingerprint`] (canonical path + mtime
+    ///    + size + skill-directory generation). No instruction content is read
+    ///    and no skill body is scanned, so a warm hit costs only `stat` /
+    ///    `read_dir` work.
+    /// 2. **Slow tier** — only when the fast tier misses, the full content
+    ///    digest ([`project_instruction_digest`]) is computed and the durable
+    ///    content-verified key is consulted; a content-identical metadata move
+    ///    still re-hits and is re-indexed under the fast key.
+    ///
+    /// A [`PreparedResolve::Miss`] carries the already-computed `full_digest`
+    /// so the caller never re-hashes the instruction set.
+    pub fn resolve(
+        &self,
+        project_root: &Path,
+        project_identity: &str,
+        capability_revision: u64,
+        harness_revision: u64,
+        provider_id: &str,
+        model_id: &str,
+        runtime_id: &str,
+        app_schema_revision: u64,
+    ) -> PreparedResolve {
+        let fast_key = PreparedAgentSessionKey {
+            project_identity: project_identity.to_string(),
+            project_instruction_digest: project_instruction_metadata_fingerprint(project_root),
+            capability_revision,
+            harness_revision,
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            runtime_id: runtime_id.to_string(),
+            app_schema_revision,
+        };
+        if let Some(session) = self.get(&fast_key) {
+            return PreparedResolve::Hit(session);
+        }
+        let full_digest = project_instruction_digest(project_root);
+        let full_key = PreparedAgentSessionKey {
+            project_instruction_digest: full_digest.clone(),
+            ..fast_key.clone()
+        };
+        if let Some(session) = self.get(&full_key) {
+            // Content unchanged but metadata moved (e.g. a touch): keep the
+            // entry warm under the metadata key so the next lookup is
+            // metadata-only again.
+            self.insert(fast_key, (*session).clone());
+            return PreparedResolve::ContentUnchanged(session);
+        }
+        PreparedResolve::Miss {
+            fast_key,
+            full_digest,
+        }
     }
 }
 
@@ -327,6 +423,96 @@ pub fn discover_skill_entry_names(project_root: &Path) -> Vec<String> {
     names
 }
 
+/// Metadata-only fingerprint of the project instruction source set (PERF-002).
+///
+/// This is the **fast tier** of the prepared-session cache key. Unlike
+/// [`project_instruction_digest`] it NEVER reads instruction content: for each
+/// discovered source it hashes the canonical path label plus `mtime`/`size`
+/// from `metadata()`, and for each skill directory it folds in a generation
+/// built from entry names plus each entry's `len`/`mtime` — again metadata
+/// only. A content edit that bumps mtime/size, a rules-file add/remove, or a
+/// skill add/remove/rename therefore invalidates the fast tier, while a warm
+/// hit costs only `stat` / `read_dir` syscalls.
+///
+/// The full content digest is computed only when this fast tier misses; see
+/// [`PreparedAgentSessionCache::resolve`].
+pub fn project_instruction_metadata_fingerprint(project_root: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for source in discover_instruction_sources(project_root) {
+        hasher.update(b"file\0");
+        hasher.update(source.label.as_bytes());
+        hasher.update(b"\0");
+        match std::fs::metadata(&source.path) {
+            Ok(meta) => {
+                hasher.update(meta.len().to_le_bytes());
+                hasher.update(modified_nanos(&meta).to_le_bytes());
+            }
+            Err(_) => hasher.update(b"missing"),
+        }
+        hasher.update(b"\0");
+    }
+    for entry in skill_directory_generation(project_root) {
+        hasher.update(b"skill-dir\0");
+        hasher.update(entry.as_bytes());
+        hasher.update(b"\0");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn modified_nanos(meta: &std::fs::Metadata) -> u128 {
+    meta.modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Metadata-only generation of the effective skill-entry set (PERF-002).
+///
+/// Mirrors the traversal and name-dedup of [`discover_skill_entry_names`] but
+/// folds in each entry's `len`/`mtime` instead of reading any skill content, so
+/// a skill body edit (which can change the advertised description) invalidates
+/// the fast tier. Shadowed entries (duplicate name in an outer dir) contribute
+/// nothing — exactly the entries [`discover_skill_entry_names`] reports.
+fn skill_directory_generation(project_root: &Path) -> Vec<String> {
+    let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let instruction_dirs = project_instruction_dirs(&root);
+    let mut generation: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for dir in instruction_dirs.iter().rev() {
+        for skills_dir in [
+            ".natives/skills",
+            ".grok/skills",
+            ".agents/skills",
+            ".claude/skills",
+        ] {
+            let Ok(rd) = std::fs::read_dir(dir.join(skills_dir)) else {
+                continue;
+            };
+            let mut entries: Vec<String> = rd
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !seen.insert(name.clone()) {
+                        return None;
+                    }
+                    let marker = entry
+                        .metadata()
+                        .ok()
+                        .map(|meta| format!("{}\0{}", meta.len(), modified_nanos(&meta)))
+                        .unwrap_or_default();
+                    Some(format!("{name}\0{marker}"))
+                })
+                .collect();
+            entries.sort();
+            generation.extend(entries);
+        }
+    }
+    generation.sort();
+    generation
+}
+
 /// Full-SHA-256 fingerprint of the project instruction source set.
 ///
 /// Upgraded from the legacy cheap rolling hash: every discovered file is
@@ -380,8 +566,17 @@ mod tests {
 
     fn key(root: &str) -> PreparedAgentSessionKey {
         PreparedAgentSessionKey {
-            project_identity: root.to_string(),
             project_instruction_digest: project_instruction_digest(Path::new(root)),
+            ..key_base(root)
+        }
+    }
+
+    /// Key template without the instruction discriminator (the caller picks
+    /// the digest/fingerprint it wants).
+    fn key_base(root: &str) -> PreparedAgentSessionKey {
+        PreparedAgentSessionKey {
+            project_identity: root.to_string(),
+            project_instruction_digest: String::new(),
             capability_revision: 1,
             harness_revision: 1,
             provider_id: "openai".into(),
@@ -389,6 +584,14 @@ mod tests {
             runtime_id: "native".into(),
             app_schema_revision: 0,
         }
+    }
+
+    /// Pin a file's mtime so the metadata fingerprint sees an unchanged
+    /// mtime/size pair across content rewrites of equal length.
+    fn pin_mtime(path: &Path, mtime: std::time::SystemTime) {
+        let file = std::fs::File::open(path).expect("open for mtime pin");
+        let times = std::fs::FileTimes::new().set_modified(mtime);
+        file.set_times(times).expect("set pinned mtime");
     }
 
     fn session() -> PreparedAgentSession {
@@ -556,5 +759,174 @@ mod tests {
             !lru.entries.contains_key(&keys[1]),
             "deterministic LRU eviction must drop the least-recently-used key"
         );
+    }
+
+    #[test]
+    fn metadata_fingerprint_invalidates_on_content_edit() {
+        // PERF-002 fast tier: a size/mtime-moving edit must invalidate the
+        // metadata fingerprint without reading the file content.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("AGENTS.md"), "v1 rules").unwrap();
+        let fp1 = project_instruction_metadata_fingerprint(p);
+        std::fs::write(p.join("AGENTS.md"), "v1 rules with a longer body").unwrap();
+        let fp2 = project_instruction_metadata_fingerprint(p);
+        assert_ne!(
+            fp1, fp2,
+            "editing AGENTS.md must change the metadata fingerprint"
+        );
+    }
+
+    #[test]
+    fn metadata_fingerprint_invalidates_on_skill_add() {
+        // PERF-002 fast tier: adding a skill must invalidate via the
+        // metadata-only skill-directory generation (no skill body read).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        let fp1 = project_instruction_metadata_fingerprint(p);
+        let skills = p.join(".agents").join("skills").join("review");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join("SKILL.md"), "# Review\n\nsummary").unwrap();
+        let fp2 = project_instruction_metadata_fingerprint(p);
+        assert_ne!(
+            fp1, fp2,
+            "adding a skill must change the metadata fingerprint"
+        );
+    }
+
+    #[test]
+    fn metadata_fingerprint_reads_no_content() {
+        // PERF-002 fast tier must be metadata-only: two DIFFERENT contents
+        // pinned to the same length and mtime yield the SAME fingerprint,
+        // while the full content digest still catches the edit (slow tier).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        let a_path = p.join("AGENTS.md");
+        let a: Vec<u8> = vec![b'a'; 512];
+        let mut b = a.clone();
+        b[400] = b'z';
+        let fixed_mtime =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+
+        std::fs::write(&a_path, &a).unwrap();
+        pin_mtime(&a_path, fixed_mtime);
+        let fp_a = project_instruction_metadata_fingerprint(p);
+        let d_a = project_instruction_digest(p);
+
+        std::fs::write(&a_path, &b).unwrap();
+        pin_mtime(&a_path, fixed_mtime);
+        let fp_b = project_instruction_metadata_fingerprint(p);
+        let d_b = project_instruction_digest(p);
+
+        assert_eq!(
+            fp_a, fp_b,
+            "metadata fingerprint must not read file content"
+        );
+
+        assert_ne!(
+            d_a, d_b,
+            "full content digest must still detect the same-length edit"
+        );
+    }
+
+    #[test]
+    fn metadata_fingerprint_is_deterministic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("AGENTS.md"), "stable rules").unwrap();
+        let fp1 = project_instruction_metadata_fingerprint(p);
+        let fp2 = project_instruction_metadata_fingerprint(p);
+        assert_eq!(fp1, fp2, "fingerprint must be deterministic");
+        assert_eq!(fp1.len(), 64, "expected a full 256-bit hex digest");
+    }
+
+    #[test]
+    fn resolve_warm_hit_after_priming_uses_metadata_tier() {
+        // PERF-002 two-tier flow: a miss returns the fast key + full digest,
+        // the caller indexes under BOTH, and the next resolve is a metadata
+        // tier Hit (no content read, no skill scan).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("AGENTS.md"), "v1 rules").unwrap();
+        let cache = PreparedAgentSessionCache::new();
+        let session = session();
+        match cache.resolve(
+            p,
+            &p.to_string_lossy(),
+            1,
+            1,
+            "openai",
+            "gpt-4o",
+            "native",
+            0,
+        ) {
+            PreparedResolve::Miss {
+                fast_key,
+                full_digest,
+            } => {
+                let full_key = PreparedAgentSessionKey {
+                    project_instruction_digest: full_digest,
+                    ..fast_key.clone()
+                };
+                cache.insert(full_key, session.clone());
+                cache.insert(fast_key, session.clone());
+            }
+            other => panic!("expected Miss on a cold cache, got {other:?}"),
+        }
+        match cache.resolve(
+            p,
+            &p.to_string_lossy(),
+            1,
+            1,
+            "openai",
+            "gpt-4o",
+            "native",
+            0,
+        ) {
+            PreparedResolve::Hit(_) => {}
+            other => panic!("expected a warm metadata Hit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_reindexes_content_unchanged_hit_under_metadata_key() {
+        // PERF-002 slow tier: an entry primed only under the full content
+        // digest is re-indexed under the metadata key on the first resolve, so
+        // the next identical lookup is metadata-only.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("AGENTS.md"), "v1 rules").unwrap();
+        let cache = PreparedAgentSessionCache::new();
+        let full_key = PreparedAgentSessionKey {
+            project_instruction_digest: project_instruction_digest(p),
+            ..key_base(&p.to_string_lossy())
+        };
+        cache.insert(full_key, session());
+        match cache.resolve(
+            p,
+            &p.to_string_lossy(),
+            1,
+            1,
+            "openai",
+            "gpt-4o",
+            "native",
+            0,
+        ) {
+            PreparedResolve::ContentUnchanged(_) => {}
+            other => panic!("expected ContentUnchanged on the slow tier, got {other:?}"),
+        }
+        match cache.resolve(
+            p,
+            &p.to_string_lossy(),
+            1,
+            1,
+            "openai",
+            "gpt-4o",
+            "native",
+            0,
+        ) {
+            PreparedResolve::Hit(_) => {}
+            other => panic!("expected Hit after re-indexing, got {other:?}"),
+        }
     }
 }

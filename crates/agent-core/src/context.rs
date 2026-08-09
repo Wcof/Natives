@@ -257,9 +257,19 @@ impl ContextBudget {
 /// re-serializing the whole transcript every provider/tool round. Only when
 /// `used >= compact_threshold` does the caller run a full compaction analysis;
 /// below the threshold the cheap counters are authoritative for the budget.
+///
+/// PERF-001: the estimate must track the *real* transcript size. Callers feed
+/// [`Self::observe_transcript`] with a cheap structured char count (never a
+/// full transcript `to_string()`); the running estimate advances only by the
+/// growth since the last observation, and a compaction pass re-seeds it via
+/// [`Self::reset`] from the kept transcript size. Re-accumulating the whole
+/// transcript every round (the pre-fix behavior) made the budget drift
+/// arbitrarily large on uncompacted multi-turn runs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContextStats {
-    /// Running estimate of transcript characters (chars/4 token heuristic).
+    /// Running estimate of the current transcript characters (chars/4 token
+    /// heuristic). Maintained by appending only per-round growth; reset to the
+    /// kept size after compaction.
     pub estimated_chars: u64,
     /// Running estimate of tokens (chars/4, capped at u64 arithmetic bounds).
     pub estimated_tokens: u64,
@@ -284,6 +294,29 @@ impl ContextStats {
         self.estimated_tokens = ContextBudget::estimate_tokens(self.estimated_chars as usize);
     }
 
+    /// Observe the current transcript size and append only the growth since
+    /// the last observation (PERF-001).
+    ///
+    /// `current_chars` is a cheap structured char count supplied by the caller
+    /// — never a full transcript re-serialization. When the transcript only
+    /// grows, the appended delta equals exactly the characters added this
+    /// round, so the running estimate tracks the real transcript size instead
+    /// of re-accumulating the whole history every provider/tool round. Returns
+    /// the delta appended (0 when the transcript did not grow).
+    ///
+    /// After a compaction pass the caller calls [`Self::reset`] to re-seed the
+    /// estimate (and thus this observation baseline) from the kept transcript
+    /// size.
+    pub fn observe_transcript(&mut self, current_chars: usize) -> usize {
+        let previous = self.estimated_chars as usize;
+        let delta = current_chars.saturating_sub(previous);
+        if current_chars != previous {
+            self.estimated_chars = current_chars as u64;
+            self.estimated_tokens = ContextBudget::estimate_tokens(current_chars);
+        }
+        delta
+    }
+
     /// Mark that a compaction pass rewrote the transcript.
     pub fn note_compaction(&mut self) {
         self.last_compaction_revision = self.last_compaction_revision.wrapping_add(1);
@@ -295,7 +328,9 @@ impl ContextStats {
     /// Compaction rewrites the history, so the incremental counters must be
     /// re-seeded from the true kept-transcript size instead of continuing to
     /// accumulate stale bytes. The caller passes the size of the transcript
-    /// that actually survived compaction.
+    /// that actually survived compaction. This also re-seeds the baseline used
+    /// by [`Self::observe_transcript`], so the next observation appends only
+    /// the growth after compaction.
     ///
     /// Does NOT bump [`Self::last_compaction_revision`] — that revision is the
     /// caller's signal that a rewrite happened, so callers still call
@@ -581,5 +616,49 @@ mod tests {
         stats.append_chars(1_200);
         assert_eq!(stats.estimated_chars, 1_600);
         assert!(stats.needs_compaction(1_000));
+    }
+
+    #[test]
+    fn observe_transcript_appends_only_growth() {
+        // PERF-001: observing the transcript must append only the delta since
+        // the last observation — never the whole transcript again. The old
+        // engine loop re-accumulated the full transcript size every round, so
+        // an uncompacted multi-turn run drifted arbitrarily large.
+        let mut stats = ContextStats::new();
+        // First observation seeds the baseline once.
+        assert_eq!(stats.observe_transcript(1_000), 1_000);
+        assert_eq!(stats.estimated_chars, 1_000);
+        assert_eq!(
+            stats.estimated_tokens,
+            ContextBudget::estimate_tokens(1_000)
+        );
+        // Growth appends only the delta (200), not the full 1_200.
+        assert_eq!(stats.observe_transcript(1_200), 200);
+        assert_eq!(stats.estimated_chars, 1_200);
+        // A no-op observation appends nothing.
+        assert_eq!(stats.observe_transcript(1_200), 0);
+        assert_eq!(stats.estimated_chars, 1_200);
+        // The pre-fix behavior summed 1000+1200+1200 = 3400 here; the
+        // incremental estimate stays at the real transcript size.
+        assert_eq!(stats.estimated_chars, 1_200);
+    }
+
+    #[test]
+    fn observe_transcript_reseeds_from_compaction_reset() {
+        let mut stats = ContextStats::new();
+        stats.observe_transcript(4_000);
+        // Compaction keeps only the tail; re-seed from the real kept size.
+        stats.note_compaction();
+        stats.reset(600);
+        assert_eq!(stats.estimated_chars, 600);
+        assert_eq!(stats.last_compaction_revision, 1);
+        // Growth resumes from the reset baseline.
+        assert_eq!(stats.observe_transcript(900), 300);
+        assert_eq!(stats.estimated_chars, 900);
+        // A transcript that shrank without an explicit reset (never expected
+        // on the engine path) follows the size down instead of freezing the
+        // estimate at the stale high-water mark.
+        assert_eq!(stats.observe_transcript(400), 0);
+        assert_eq!(stats.estimated_chars, 400);
     }
 }
