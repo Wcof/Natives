@@ -53,6 +53,16 @@ import {
 } from '@/lib/assistant-activity-view';
 import { t } from '@/i18n';
 import ArtifactPreviewSurface from '@/components/preview/ArtifactPreviewSurface';
+// W4: shared inspector UI lives in the activity-inspector submodule; import the
+// panels instead of redefining them here (single owner for StatusIcon/TodoList/
+// SectionTitle/Row/Empty).
+import {
+  Empty,
+  Row,
+  SectionTitle,
+  StatusIcon,
+  TodoList,
+} from './activity-inspector/panels';
 
 export interface ActivitySubagentView {
   id: string;
@@ -116,16 +126,6 @@ const TABS: Array<{ id: InspectorTab; labelKey: string; icon: typeof Play; devOn
   { id: 'events', labelKey: 'activityInspector.tabEvents', icon: Radio, devOnly: true },
 ];
 
-function StatusIcon({ status }: { status: string }) {
-  if (status === 'completed') return <CheckCircle size={14} className="text-[var(--success)]" />;
-  if (status === 'failed' || status === 'closed') return <XCircle size={14} className="text-[var(--danger)]" />;
-  if (status === 'waiting_permission' || status === 'waiting_user' || status === 'pending_assignment')
-    return <AlertTriangle size={14} className="text-[var(--warning)]" />;
-  if (status === 'in_progress' || status === 'running' || status === 'queued')
-    return <Clock size={14} className="text-[var(--primary)]" />;
-  return <Clock size={14} className="text-[var(--text-disabled)]" />;
-}
-
 function mapWireBackgroundTask(raw: Record<string, unknown>): BackgroundTask {
   const id = String(raw.id ?? '');
   const kindRaw = String(raw.kind ?? 'other');
@@ -171,53 +171,6 @@ function snippet(text: string | null | undefined, max = 120): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   if (oneLine.length <= max) return oneLine;
   return `${oneLine.slice(0, max)}…`;
-}
-
-function TodoList({
-  todos,
-  locale,
-  emptyKey,
-}: {
-  todos: ActivityTodo[];
-  locale: string;
-  emptyKey: string;
-}) {
-  if (todos.length === 0) {
-    return <Empty locale={locale} messageKey={emptyKey} compact />;
-  }
-  return (
-    <ul className="space-y-1" data-testid="todo-list">
-      {todos.map((todo) => (
-        <li
-          key={todo.id}
-          className="flex items-start gap-2 rounded px-2 py-1 hover:bg-[var(--surface-hover)]"
-        >
-          <StatusIcon status={todo.status} />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[var(--text-secondary)]">{todo.content}</div>
-            <div className="text-[10px] text-[var(--text-disabled)]">
-              {todoStatusLabel(locale, todo.status)}
-            </div>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function SectionTitle({
-  title,
-  actions,
-}: {
-  title: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <div className="mb-1.5 flex items-center justify-between gap-2 font-medium text-[var(--text-secondary)]">
-      <span>{title}</span>
-      {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
-    </div>
-  );
 }
 
 export default function ActivityInspector({
@@ -1118,33 +1071,6 @@ export default function ActivityInspector({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-2">
-      <span className="text-[var(--text-disabled)]">{label}</span>
-      <span className="truncate text-right text-[var(--text-secondary)]">{value}</span>
-    </div>
-  );
-}
-
-function Empty({
-  locale,
-  messageKey,
-  compact = false,
-}: {
-  locale: string;
-  messageKey: string;
-  compact?: boolean;
-}) {
-  return (
-    <div
-      className={`${compact ? 'py-3' : 'py-8'} text-center text-[var(--text-disabled)]`}
-    >
-      {t(locale, messageKey)}
     </div>
   );
 }
