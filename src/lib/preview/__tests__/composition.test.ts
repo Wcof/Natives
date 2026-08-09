@@ -17,11 +17,21 @@ function fakeContext(): PreviewContext {
   };
 }
 
-test('builtin registry contains C0 leaf + T16/T17 providers (no HTML while H0 BLOCKED)', () => {
+test('builtin registry contains all C0 providers including html', () => {
   const ids = BUILTIN_PROVIDERS.map((p) => p.id).sort();
-  assert.deepEqual(ids, ['archive', 'code', 'csv', 'json', 'markdown', 'media', 'pdf']);
+  assert.deepEqual(ids, ['archive', 'code', 'csv', 'html', 'json', 'markdown', 'media', 'pdf']);
   const reg = createBuiltinRegistry();
-  assert.equal(reg.size, 7);
+  assert.equal(reg.size, 8);
+});
+
+test('html file source routes through registry → service → typed model', async () => {
+  const reg = createBuiltinRegistry();
+  const service = new PreviewService(reg, fakeContext());
+  const model = await service.prepare({ source: { type: 'file', path: '/a.html', kind: 'text' }, mode: 'preview', surface: 'files' });
+  assert.equal(model.kind, 'html');
+  if (model.kind === 'html') {
+    assert.equal(model.sandbox, 'allow-scripts allow-forms');
+  }
 });
 
 test('markdown file source routes through registry → service → typed model', async () => {

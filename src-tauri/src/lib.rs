@@ -817,8 +817,8 @@ pub fn run() {
             commands::watch_preview::fs_watch_stop,
             commands::watch_preview::fs_watch_stop_all,
             commands::watch_preview::fs_watch_list,
-            // HtmlPreview
-            commands::watch_preview::html_preview_prepare,
+            // HtmlPreview (async; blocking pool + size budget, PERF-003)
+            commands::fs::html_preview_prepare,
             // LidGuard
             commands::watch_preview::lid_guard_set,
             commands::watch_preview::lid_guard_status,

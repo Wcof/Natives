@@ -1,6 +1,7 @@
-use crate::{file_manager, Error, Result};
+use crate::{file_manager, html_preview, Error, Result};
 use serde_json::Value as JsonValue;
 use std::sync::OnceLock;
+use tauri::State;
 use tokio::sync::Semaphore;
 
 /// 共享有界 IO 信号量：所有文件域重命令共享 4 个并发槽位（R-P9/R15）。
@@ -266,6 +267,33 @@ pub async fn fs_recent_files(root: String) -> Result<Vec<file_manager::FileEntry
         .map_err(|e| Error::Internal(e.to_string()))?
 }
 
+// ── HtmlPreview prepare（PREV-001 / PERF-003）────────────────────────────
+// async command → bounded IO slot → spawn_blocking → html_preview core。
+// 同步读取被移出 command 线程（R-B6/R-P2），且 core 在读取前先过大小预算
+// （HTML_PREVIEW_MAX_BYTES），大文件直接拒绝、绝不读取完整文件。
+
+/// Prepare an HTML file for sandboxed preview.
+/// The blocking read runs on a blocking pool under the shared bounded IO
+/// semaphore; `html_preview::prepare_html_preview` enforces the size budget and
+/// binds a preview session whose token is embedded in every rewritten `/fs/` URL.
+#[tauri::command]
+pub async fn html_preview_prepare(
+    html_path: String,
+    state: State<'_, crate::AppState>,
+) -> Result<JsonValue> {
+    let _permit = acquire_io_slot().await?;
+    let port = *state
+        .http_port
+        .lock()
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let result = html_preview::prepare_html_preview(&html_path, port)?;
+        serde_json::to_value(result).map_err(|e| Error::Internal(e.to_string()))
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))?
+}
+
 // ── Security Regression Tests for fs_save_blob ──
 
 #[cfg(test)]
@@ -307,11 +335,7 @@ mod tests {
     fn test_fs_save_blob_rejects_empty_filename() {
         let tmp = std::env::temp_dir().join(format!("natives-test-fs-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
-        let result = save_blob_impl(
-            tmp.to_string_lossy().to_string().as_str(),
-            "",
-            "dGVzdA==",
-        );
+        let result = save_blob_impl(tmp.to_string_lossy().to_string().as_str(), "", "dGVzdA==");
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(
             result.is_err(),
@@ -335,11 +359,7 @@ mod tests {
         // Use canonical path to avoid symlink issues
         let canonical_tmp = std::fs::canonicalize(&tmp).expect("failed to canonicalize");
         let dir_str = canonical_tmp.to_string_lossy().to_string();
-        let result = save_blob_impl(
-            dir_str.as_str(),
-            "test.png",
-            "dGVzdA==",
-        );
+        let result = save_blob_impl(dir_str.as_str(), "test.png", "dGVzdA==");
         if result.is_err() {
             eprintln!("fs_save_blob failed: {:?}", result);
             eprintln!("dir: {}, name: test.png", dir_str);

@@ -66,3 +66,12 @@ export function diskApi(): NativesAPI['disk'] {
 export function thumbnailApi(): NativesAPI['thumbnail'] {
   return section('thumbnail');
 }
+
+/**
+ * HTML 预览 prepare：Host 授权 + 本地资源重写（/fs/{token}/）。走本文件域
+ * 唯一 nativesAPI 入口；业务组件/PreviewContext 不得裸 window.nativesAPI.htmlPreview。
+ * 不可用时抛 FilesApiUnavailableError（调用方降级/呈现）。
+ */
+export function htmlPreviewApi(): NativesAPI['htmlPreview'] {
+  return section('htmlPreview');
+}
