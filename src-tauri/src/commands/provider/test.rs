@@ -1,5 +1,3 @@
-
-
 use super::*;
 
 pub(crate) fn provider_test_body(provider_type: &str, model: &str) -> Result<serde_json::Value> {
@@ -41,7 +39,6 @@ pub(crate) fn provider_test_body(provider_type: &str, model: &str) -> Result<ser
     }
 }
 
-
 fn provider_test_error(
     protocol: &str,
     model: Option<&str>,
@@ -63,7 +60,6 @@ fn provider_test_error(
     )
 }
 
-
 fn provider_test_is_rate_limited(result: &ProviderTestResult) -> bool {
     result.error.as_deref().is_some_and(|err| {
         let lower = err.to_ascii_lowercase();
@@ -78,7 +74,6 @@ pub(crate) struct ProviderRateLimitRoute {
     provider_id: String,
     key_id: String,
 }
-
 
 async fn daemon_rate_limit_call(
     method: &str,
@@ -110,7 +105,6 @@ async fn daemon_rate_limit_call(
     Ok(())
 }
 
-
 async fn acquire_provider_test_slot(route: Option<&ProviderRateLimitRoute>) -> Result<()> {
     if let Some(route) = route {
         daemon_rate_limit_call("engine.rateLimit.acquire", route, None)
@@ -119,7 +113,6 @@ async fn acquire_provider_test_slot(route: Option<&ProviderRateLimitRoute>) -> R
     }
     Ok(())
 }
-
 
 async fn record_provider_test_rate_limit(
     route: Option<&ProviderRateLimitRoute>,
@@ -130,7 +123,6 @@ async fn record_provider_test_rate_limit(
         let _ = daemon_rate_limit_call("engine.rateLimit.cooldown", route, retry_after_ms).await;
     }
 }
-
 
 async fn execute_provider_test_with_retry(
     provider_type: &str,
@@ -548,7 +540,6 @@ pub async fn test_provider_raw(input: RawProviderTestInput) -> Result<ProviderTe
     )
     .await)
 }
-
 
 fn raw_provider_rate_limit_route(
     protocol: &str,

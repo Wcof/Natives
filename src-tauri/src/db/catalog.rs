@@ -1,5 +1,5 @@
 use crate::{Error, Result};
-use rusqlite::{Connection};
+use rusqlite::Connection;
 
 pub fn list_builtin_tools(conn: &Connection) -> Result<Vec<serde_json::Value>> {
     let mut stmt = conn

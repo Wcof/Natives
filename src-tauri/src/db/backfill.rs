@@ -13,7 +13,6 @@ pub(super) fn instance_status_for_state(state: &str) -> Option<&'static str> {
     })
 }
 
-
 pub(crate) fn parse_identity(json: Option<&str>) -> (Option<i32>, Option<u32>) {
     let Some(s) = json else {
         return (None, None);
@@ -28,7 +27,6 @@ pub(crate) fn parse_identity(json: Option<&str>) -> (Option<i32>, Option<u32>) {
     let pid = v.get("pid").and_then(|x| x.as_i64()).map(|x| x as u32);
     (pgid, pid)
 }
-
 
 pub(crate) fn backfill_creative_identity(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -738,6 +736,5 @@ pub(crate) fn upgrade_startup_plans_v1(conn: &Connection) -> Result<usize> {
 
     Ok(fixed)
 }
-
 
 // ──────────────────────────────────────────────

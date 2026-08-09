@@ -164,17 +164,17 @@ pub fn init_db_pool(path: &Path) -> Result<DbPool> {
     Ok(pool)
 }
 
-mod schema;
 mod backfill;
-mod kv;
-mod settings;
 mod catalog;
+mod kv;
+mod schema;
+mod settings;
 
-pub use schema::*;
 pub(crate) use backfill::*;
-pub use kv::*;
-pub use settings::*;
 pub use catalog::*;
+pub use kv::*;
+pub use schema::*;
+pub use settings::*;
 
 #[cfg(test)]
 #[path = "db_tests.rs"]
