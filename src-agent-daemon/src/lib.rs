@@ -34,6 +34,8 @@ pub mod proposal_fact;
 pub mod request_rectifier;
 pub mod routing;
 pub mod rpc;
+// ARCH-002: run_manager.rs facade re-exports from the `run` domain modules.
+mod run;
 pub mod run_manager;
 pub mod runtime;
 pub mod session_harness;
