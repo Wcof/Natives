@@ -6,59 +6,8 @@
 import React from 'react';
 import { reasoningToggleLabel } from '@/lib/assistant-message-view';
 import { t, useLocale } from '@/i18n';
+import type { ContentBlock } from '@/types/assistant-content';
 import MarkdownText from '../MarkdownText';
-
-// ─── Block Types ────────────────────────────────────────
-
-export type BlockType =
-  | 'text' | 'reasoning' | 'image' | 'file_reference'
-  | 'tool_call' | 'tool_result' | 'diff' | 'citation' | 'error'
-  | 'permission' | 'ask_user' | 'plan' | 'subagent' | 'artifact'
-  | 'compaction' | 'system_notice' | 'legacy';
-
-export interface ContentBlock {
-  type: BlockType | string;
-  text?: string;
-  reasoning?: string;
-  signature?: string;
-  imageUrl?: string;
-  mimeType?: string;
-  altText?: string;
-  filePath?: string;
-  fileSize?: number;
-  toolCallId?: string;
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  toolStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'rejected';
-  toolOutput?: unknown;
-  isError?: boolean;
-  durationMs?: number;
-  /** True while the parent assistant turn is still streaming this reasoning. */
-  live?: boolean;
-  locale?: string;
-  citationUri?: string;
-  citationTitle?: string;
-  errorCode?: string;
-  errorMessage?: string;
-  retryable?: boolean;
-  raw?: string;
-  originalType?: string;
-  diffstat?: string;
-  hunks?: Array<{ header: string; lines: string[] }>;
-  planMarkdown?: string;
-  permissionId?: string;
-  artifactId?: string;
-  subRunId?: string;
-  segmentId?: string;
-  summary?: string;
-  summaryStatus?: 'completed' | 'failed';
-  /** compaction: token counts around a context compression. */
-  beforeTokens?: number;
-  afterTokens?: number;
-  /** system_notice/subagent: structured notice payload (reducer stores data, renderer formats). */
-  noticeKind?: string;
-  noticeData?: Record<string, unknown>;
-}
 
 // ─── Block Renderers ────────────────────────────────────
 

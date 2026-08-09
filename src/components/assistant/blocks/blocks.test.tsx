@@ -5,7 +5,8 @@
 
 import { describe, it, assert } from '@/lib/test-utils';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { renderBlock, renderBlocks, type ContentBlock } from './index';
+import { renderBlock, renderBlocks } from './index';
+import type { ContentBlock } from '@/types/assistant-content';
 
 describe('ContentBlockRenderers', () => {
   it('should render text block', () => {

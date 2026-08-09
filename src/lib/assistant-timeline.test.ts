@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ContentBlock } from '@/components/assistant/blocks';
+import type { ContentBlock } from '@/types/assistant-content';
 import type { RunEvent } from '@/lib/assistant-protocol';
 import {
   deriveToolActivityFromEvents,
