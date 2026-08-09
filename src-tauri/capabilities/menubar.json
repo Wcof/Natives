@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "menubar",
+  "description": "Minimal capability for the macOS menubar popup (window label 'menubar', renderer route ?surface=menubar). Granting a separate capability means the popup never matches the 'main'-scoped default capability: it gets zero shell/fs/dialog/credential/Workshop permissions.",
+  "windows": ["menubar"],
+  "webview": ["menubar"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging"
+  ],
+  "note": "Permission isolation (contract §3 / MB-P0): the popup is a lightweight read-only overview surface. Its host-side commands (menubar_toggle/hide/quit/open_main/open_personal_overview, theme_ready_signal, usage.getCached) are validated by window label in Rust; this capability only adds the core window/event primitives the popup needs, and intentionally omits shell, fs, dialog, credential-broker and all Workshop/creative commands. Any webview not matching 'menubar' or 'main' receives no Tauri plugin capabilities at all."
+}

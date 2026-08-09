@@ -107,6 +107,34 @@ fn apply_macos_traffic_lights(app: &tauri::AppHandle) {
     }
 }
 
+/// Idempotent process teardown shared by every true-exit path
+/// (`RunEvent::ExitRequested`/`Exit` and the `menubar_quit` command).
+///
+/// MB-P0-01: window close only hides — it never reaches here. A `Once` guard
+/// guarantees PTY terminals, Ghostty sessions, local creative process trees and
+/// the Agent Daemon are reaped exactly once per process even if several exit
+/// paths fire back-to-back.
+pub(crate) fn shutdown_all_processes(app: &tauri::AppHandle) {
+    static CLEANUP: std::sync::Once = std::sync::Once::new();
+    CLEANUP.call_once(|| {
+        // 1. PTY terminals + Ghostty sessions.
+        if let Some(state) = app.try_state::<AppState>() {
+            state.ghostty_manager.kill_all();
+            state.terminal_manager.kill_all();
+        }
+        // 2. Local creative process trees (supervised dev servers).
+        if let Some(local_rt) = app.try_state::<creative_app::local::LocalRuntimeHandle>() {
+            let handle = app.clone();
+            let rt = local_rt.inner().clone();
+            tauri::async_runtime::block_on(async move {
+                creative_app::local::shutdown_all(rt.as_ref(), Some(&handle)).await;
+            });
+        }
+        // 3. Agent Daemon (UDS sidecar) — graceful, idempotent under concurrency.
+        let _ = sidecar_supervisor::global_supervisor().shutdown();
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -130,11 +158,13 @@ pub fn run() {
         )
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Focus the existing window when a second instance is launched
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+            // A second launch reuses the existing Host (contract §4): hide the
+            // menubar popup, then show/unminimize/focus the main window. Close
+            // is never a teardown path — cleanup only happens on true exit.
+            if let Some(popup) = app.get_webview_window(commands::menubar::MENUBAR_LABEL) {
+                let _ = popup.hide();
             }
+            let _ = commands::menubar::open_main_window(app);
         }))
         .setup(|app| {
             // Initialize SQLite database at ~/.natives/natives.db
@@ -431,6 +461,38 @@ pub fn run() {
                 )));
             }
 
+            // ── macOS menubar: single Tray (Tauri 2 core, no new plugin) ──
+            // icons/ has no dedicated `Template`-suffixed asset, so the existing
+            // icon.png is reused and marked as a template on macOS (black+alpha
+            // rendering in both light/dark menu bars). Left click toggles the
+            // lazily-created menubar popup (contract §3 / MB-P0-04).
+            {
+                let mut tray_builder =
+                    tauri::tray::TrayIconBuilder::with_id(commands::menubar::MENUBAR_TRAY_ID)
+                        .tooltip("Natives")
+                        .icon(
+                            tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))
+                                .map_err(|e| format!("failed to load tray icon: {e}"))?,
+                        );
+                #[cfg(target_os = "macos")]
+                {
+                    tray_builder = tray_builder.icon_as_template(true);
+                }
+                tray_builder
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let _ = commands::menubar::toggle_menubar(tray.app_handle());
+                        }
+                    })
+                    .build(app)
+                    .map_err(|e| format!("failed to build tray icon: {e}"))?;
+            }
+
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
             // It will be shown by theme_ready_signal command from frontend
             //
@@ -443,23 +505,27 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.try_state::<AppState>() {
-                    state.ghostty_manager.kill_all();
-                    state.terminal_manager.kill_all();
+            match event {
+                // MB-P0-01: window close is never a teardown path. Main red
+                // close and the menubar popup close only hide — Host, Daemon,
+                // Jobs, terminals and supervised processes keep running. Real
+                // cleanup happens exactly once on true exit: RunEvent
+                // ExitRequested/Exit or the `menubar_quit` command.
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let label = window.label();
+                    if label == "main" || label == commands::menubar::MENUBAR_LABEL {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
-                // Stop all local creative process trees on normal exit.
-                if let Some(local_rt) =
-                    window.try_state::<creative_app::local::LocalRuntimeHandle>()
-                {
-                    let handle = window.app_handle().clone();
-                    let rt = local_rt.inner().clone();
-                    tauri::async_runtime::block_on(async move {
-                        creative_app::local::shutdown_all(rt.as_ref(), Some(&handle)).await;
-                    });
+                // Popup blur (focus lost) → hide only, debounced so a tray click
+                // that causes the blur can still toggle the popup (contract §3).
+                tauri::WindowEvent::Focused(false) => {
+                    if window.label() == commands::menubar::MENUBAR_LABEL {
+                        commands::menubar::schedule_blur_hide(window.app_handle());
+                    }
                 }
-                // Graceful agent-daemon sidecar shutdown (wipe bootstrap file).
-                let _ = sidecar_supervisor::global_supervisor().shutdown();
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -736,6 +802,12 @@ pub fn run() {
             // Widget
             commands::widget::open_widget_window,
             commands::widget::theme_ready_signal,
+            // Menubar (macOS 常驻：Tray / Popup / quit)
+            commands::menubar::menubar_toggle,
+            commands::menubar::menubar_hide,
+            commands::menubar::menubar_quit,
+            commands::menubar::menubar_open_main,
+            commands::menubar::menubar_open_personal_overview,
             // WeChat ClawBot
             commands::wechat::wechat_env,
             commands::wechat::wechat_login,
@@ -847,11 +919,24 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building natives")
-        .run(|_app_handle, event| {
-            // Window CloseRequested is not the only exit path (menu quit, app exit, etc.).
+        .run(|app_handle, event| {
+            // Window CloseRequested is no longer an exit path (close → hide).
+            // True exit converges here and in `menubar_quit`:
+            //   Cmd+Q / App::exit / menu Quit → ExitRequested → Exit.
             match event {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                    let _ = crate::sidecar_supervisor::global_supervisor().shutdown();
+                    crate::shutdown_all_processes(app_handle);
+                }
+                // macOS Dock "Reopen": restore the main window when no window
+                // is visible (contract §4).
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    if !has_visible_windows {
+                        let _ = commands::menubar::open_main_window(app_handle);
+                    }
                 }
                 _ => {}
             }

@@ -12,7 +12,7 @@ use crate::usage::{
 };
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::AppState;
 
@@ -136,6 +136,7 @@ pub async fn usage_get_cached(
 /// Manually sync dashboard data. Runs all scanners, builds snapshot, persists to SQLite.
 #[tauri::command]
 pub async fn usage_sync(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: UsageSyncRequest,
 ) -> Result<UsageSyncResult> {
@@ -267,7 +268,21 @@ pub async fn usage_sync(
     // ── 5. Update memory cache ──
     state.usage_cache.set_snapshot(tz_str, snapshot.clone());
 
-    // ── 6. Build response for the current view ──
+    // ── 6. Broadcast snapshot change (R-T5) ──
+    // Cross-window event name is frozen: `usage:snapshot-changed`. Consumers
+    // (Settings Personal Overview, Menubar popup) re-read the cache via
+    // usage_get_cached — this event never triggers a scan.
+    let payload = crate::sequence_id::envelope(
+        "usage:snapshot-changed",
+        serde_json::json!({
+            "timeZone": tz_str,
+            "generatedAtMs": generated_at_ms,
+            "schemaVersion": snapshot.schema_version,
+        }),
+    );
+    let _ = app.emit("usage:snapshot-changed", payload);
+
+    // ── 7. Build response for the current view ──
     let response = snapshot::slice_response_with_custom(
         &snapshot,
         preset_to_str(&request.current_view.preset),

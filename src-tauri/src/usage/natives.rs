@@ -119,34 +119,25 @@ pub fn scan_natives_db(start_ms: i64, end_ms: i64) -> NativesScanResult {
     }
 }
 
-#[allow(clippy::type_complexity)] // pre-existing type shape
-fn candidate_db_openers() -> Vec<(
-    String,
-    Box<dyn Fn() -> Result<rusqlite::Connection, String>>,
-)> {
-    let mut out: Vec<(
-        String,
-        Box<dyn Fn() -> Result<rusqlite::Connection, String>>,
-    )> = Vec::new();
+/// Host-owned pooled SQLite connection. r2d2 pooled connections deref to
+/// `rusqlite::Connection`, so the scan helpers keep working unchanged.
+type HostPooledConn = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 
+#[allow(clippy::type_complexity)] // pre-existing type shape
+fn candidate_db_openers() -> Vec<(String, Box<dyn Fn() -> Result<HostPooledConn, String>>)> {
+    let mut out: Vec<(String, Box<dyn Fn() -> Result<HostPooledConn, String>>)> = Vec::new();
+
+    // MB-P0-06 authority: reads go through the Host-owned DB pools (Host
+    // projection). The scanner never opens the Daemon DB files directly.
     // Prefer main natives.db (Daemon protocol tables live here in current installs).
     out.push((
         "~/.natives/natives.db".into(),
-        Box::new(|| {
-            let conn = db::get_main_conn().map_err(|e| e.to_string())?;
-            // r2d2 pooled connection derefs to rusqlite::Connection; open a fresh
-            // file connection for scan isolation / no long pool hold.
-            let path = natives_db_path().ok_or_else(|| "no natives.db path".to_string())?;
-            rusqlite::Connection::open(path).map_err(|e| e.to_string())
-        }),
+        Box::new(|| db::get_main_conn().map_err(|e| e.to_string())),
     ));
 
     out.push((
         "~/.natives/assistant.db".into(),
-        Box::new(|| {
-            let path = assistant_db_path().ok_or_else(|| "no assistant.db path".to_string())?;
-            rusqlite::Connection::open(path).map_err(|e| e.to_string())
-        }),
+        Box::new(|| db::get_assistant_db_conn().map_err(|e| e.to_string())),
     ));
 
     out
@@ -195,11 +186,10 @@ fn scan_usage_stats_table(
     start_ms: i64,
     end_ms: i64,
 ) -> Result<(Vec<UsageDailyRecord>, Vec<UsageBreadcrumb>), String> {
-    let path = natives_db_path().ok_or_else(|| "natives.db path missing".to_string())?;
-    if !path.exists() {
-        return Ok((vec![], vec![]));
-    }
-    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+    // MB-P0-06: usage_stats is a Host-owned aggregate in the Host's own
+    // natives.db — read it through the Host main pool (Host projection), never
+    // by opening the DB file directly.
+    let conn = db::get_main_conn().map_err(|e| e.to_string())?;
     if !table_exists(&conn, "usage_stats") {
         return Ok((vec![], vec![]));
     }

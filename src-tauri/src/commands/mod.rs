@@ -20,6 +20,7 @@ pub mod library;
 pub mod locale;
 pub mod locate;
 pub mod mcp_oauth;
+pub mod menubar;
 pub mod module;
 pub mod notification;
 pub mod plugins;
