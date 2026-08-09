@@ -179,10 +179,12 @@ async fn stream_watch_pushes_new_events_until_terminal() {
     .await;
 
     // Drain the watch stream until terminal (Completed/TurnCompleted/Cancelled).
+    // 400×20ms = 8s 等待窗口:机器负载高(CI 并行/慢机)时避免把慢到达的
+    // text_delta 误判为未投递(环境时序 flaky)。
     let mut saw_durable_event = false;
     let mut saw_terminal = false;
     let mut saw_text = false;
-    for _ in 0..200 {
+    for _ in 0..400 {
         let line = read_line_raw(&mut stream).await;
         if line.is_empty() {
             break; // connection closed

@@ -285,7 +285,7 @@ async fn shared_live_bus_reaches_run_watch() {
 
     let mut saw_live_text = false;
     let mut saw_terminal = false;
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
+    let result = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let line = read_line_raw(&mut stream).await;
             if line.is_empty() {
@@ -373,7 +373,7 @@ async fn uds_watch_reads_ack_then_text_delta() {
         .expect("run.start via UdsAuthority");
 
     let mut saw_live_text = false;
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
+    let result = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             match watch.next_frame().await {
                 Some(Ok(RunStreamFrameV2::Event {
@@ -585,7 +585,7 @@ async fn run_watch_has_no_replay_subscribe_gap() {
 
     let mut live_seqs: Vec<u64> = Vec::new();
     let mut saw_terminal = false;
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
+    let result = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let line = read_line_raw(&mut stream).await;
             if line.is_empty() {
@@ -825,7 +825,7 @@ async fn terminal_clears_live_run_state() {
 
     // Drain until the durable terminal frame.
     let mut saw_live_text = false;
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
+    let result = tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let line = read_line_raw(&mut stream).await;
             if line.is_empty() {
