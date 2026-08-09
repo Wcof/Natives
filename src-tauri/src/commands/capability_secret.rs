@@ -194,7 +194,13 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    /// 模块级串行锁:provider_key_manager 的 KEK_CACHE 是 crate 全局 lazy_static,
+    /// 本模块的测试并行运行时可能读取到其他测试写出的陈旧 KEK,导致加解密 flaky。
+    static TEST_SERIAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn setup_test_db() -> Connection {
+        // 重置全局 KEK 缓存,确保本测试的 :memory: DB 生成并使用自己的 KEK。
+        provider_key_manager::reset_kek_cache_for_tests();
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -229,6 +235,11 @@ mod tests {
 
     #[test]
     fn capability_secret_encrypt_decrypt_roundtrip() {
+        let _lock = TEST_SERIAL_LOCK.lock().unwrap();
+        // KEK_CACHE is a crate-global lazy_static; parallel tests using other
+        // in-memory DBs may have left a stale KEK cached, which would make the
+        // roundtrip flaky. Reset it so encryption/decryption use this DB's KEK.
+        provider_key_manager::reset_kek_cache_for_tests();
         let conn = setup_test_db();
         let id = upsert_capability_secret(
             &conn,
@@ -255,6 +266,7 @@ mod tests {
 
     #[test]
     fn capability_secret_upsert_overwrites_same_identity() {
+        let _lock = TEST_SERIAL_LOCK.lock().unwrap();
         let conn = setup_test_db();
         let id1 =
             upsert_capability_secret(&conn, "mcp_env", "server-2", Some("API_KEY"), "v1").unwrap();
@@ -287,6 +299,7 @@ mod tests {
 
     #[test]
     fn capability_secret_rejects_invalid_input() {
+        let _lock = TEST_SERIAL_LOCK.lock().unwrap();
         let conn = setup_test_db();
         assert!(upsert_capability_secret(&conn, "bogus_kind", "s", None, "x").is_err());
         assert!(upsert_capability_secret(&conn, "mcp_bearer", "  ", None, "x").is_err());

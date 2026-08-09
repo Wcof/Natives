@@ -32,7 +32,7 @@ lazy_static! {
 }
 
 #[cfg(test)]
-fn reset_kek_cache_for_tests() {
+pub(crate) fn reset_kek_cache_for_tests() {
     let mut cache = KEK_CACHE.lock().unwrap();
     *cache = None;
 }
