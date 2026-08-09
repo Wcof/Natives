@@ -359,10 +359,24 @@ impl AgentEngine {
         point: crate::session_coordinator::SafePoint,
         messages: &mut Vec<crate::AgentMessage>,
     ) -> Result<(), EngineError> {
+        // Each SafePoint maps to the durable InputSafePoint the engine is
+        // actually at. The three tool-adjacent points share the durable
+        // bridge's single `AfterToolBatch` slot (the daemon's
+        // `DurableSafePointReceiver` has no finer tool-phase position), but
+        // their *engine* positions are distinct and real: `BeforeTool` fires
+        // before the batch executes, `AfterTool` after the batch and its
+        // transcript are committed, and `AfterPermissionResolved` lives on the
+        // daemon permission path (`tools/permission.rs`), never here. Keeping
+        // the match per-variant (rather than a shared `|` pattern) makes that
+        // mapping explicit instead of silently collapsing the points.
         let input_point = match point {
-            crate::session_coordinator::SafePoint::AfterTool
-            | crate::session_coordinator::SafePoint::BeforeTool
-            | crate::session_coordinator::SafePoint::AfterPermissionResolved => {
+            crate::session_coordinator::SafePoint::BeforeTool => {
+                crate::InputSafePoint::AfterToolBatch
+            }
+            crate::session_coordinator::SafePoint::AfterTool => {
+                crate::InputSafePoint::AfterToolBatch
+            }
+            crate::session_coordinator::SafePoint::AfterPermissionResolved => {
                 crate::InputSafePoint::AfterToolBatch
             }
             crate::session_coordinator::SafePoint::ProviderBatchBoundary => {
@@ -1301,6 +1315,19 @@ impl AgentEngine {
                     conflict_key: capability.and_then(|value| value.conflict_key.clone()),
                 });
             }
+
+            // Safe point: BeforeTool — immediately before the tool batch
+            // executes. Distinct from AfterTool (below), which fires after the
+            // batch and its transcript are committed. A queued interjection is
+            // injected into provider history before the tool calls appear. This
+            // is a real dispatch, and the topology truth test
+            // (harness_topology_truth.rs) fails if this call site disappears.
+            self.apply_safe_point(
+                &config.conversation_id,
+                crate::session_coordinator::SafePoint::BeforeTool,
+                &mut typed_messages,
+            )
+            .await?;
 
             let executed = self
                 .execute_prepared_tools(

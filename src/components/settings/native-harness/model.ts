@@ -7,6 +7,7 @@ import {
   traceEntriesForStage,
   type CanvasEdge,
   type CanvasNodeDetail,
+  type CanvasNodeRunResult,
   type CanvasRunSnapshot,
   type CanvasStage,
   type CanvasTraceEntry,
@@ -17,6 +18,29 @@ export const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToo
 export const ADAPTERS = ['command', 'http', 'mcp_tool', 'prompt', 'agent'] as const;
 export const ACTIVE_RUN_STATUSES = new Set(['created', 'queued', 'preparing', 'running', 'waiting_permission', 'waiting_subagent', 'cancelling']);
 export const BUILTIN_TOOL_NAMES = ['read_file', 'search_files', 'write_file', 'list_dir', 'grep', 'edit_file', 'run_terminal', 'apply_patch', 'memory_search', 'memory_get', 'task', 'task_output', 'kill_task', 'skill', 'web_search', 'enter_plan_mode', 'exit_plan_mode', 'write_draft_module', 'read_draft_module', 'rollback_draft_revision', 'lint_draft_module'];
+
+// Localized labels for durable hook-invocation trace entries. These keys are
+// only ever rendered from a real run_event HookInvocation — never from the Run
+// row. A stage with no hook points (provider) or no evidence gets no row at
+// all and therefore shows no_evidence.
+const HOOK_EVENT_ACTION_KEYS: Record<string, string> = {
+  SessionStart: 'settings.engineCanvasRunSessionStart',
+  SessionEnd: 'settings.engineCanvasRunTerminalResult',
+  UserPromptSubmit: 'settings.engineCanvasRunHookInvocation',
+  PreToolUse: 'settings.engineCanvasRunHookInvocation',
+  PostToolUse: 'settings.engineCanvasRunHookInvocation',
+  PostToolUseFailure: 'settings.engineCanvasRunHookInvocation',
+  PermissionRequest: 'settings.engineCanvasRunPermissionGate',
+  PermissionDenied: 'settings.engineCanvasRunPermissionGate',
+  Notification: 'settings.engineCanvasRunAuditSummary',
+  SubagentStart: 'settings.engineCanvasRunSubagentStrategy',
+  SubagentStop: 'settings.engineCanvasRunSubagentStrategy',
+  PreCompact: 'settings.engineCanvasRunCompactCheck',
+  PostCompact: 'settings.engineCanvasRunCompactCheck',
+  Stop: 'settings.engineCanvasRunStopDecision',
+  StopFailure: 'settings.engineCanvasRunStopDecision',
+  Error: 'settings.engineCanvasRunTerminalResult',
+};
 
 export type AdapterType = typeof ADAPTERS[number];
 export type DetailMode = 'preview' | 'edit' | 'create';
@@ -296,121 +320,64 @@ export function buildNodeDetails({
       ]
       : [];
     const stageTraces = traceEntriesForStage(stage, traceEntries);
-    const runResults = [
-      ...(stage.id === 'session' && selectedRun ? [{
-        id: `${selectedRun.id}:session`,
-        action: t(locale, 'settings.engineCanvasRunSessionStart'),
-        status: selectedRun.status,
-        timestamp: selectedRun.started_at ?? undefined,
-        output: t(locale, 'settings.engineCanvasRunSessionDetail', {
-          conversation: selectedRun.conversation_id,
-          permission: selectedRun.permission_profile,
-          runtime: selectedRun.runtime_id ?? 'native',
-        }),
-      }] : []),
-      ...(stage.id === 'provider' && selectedRun ? [{
-        id: `${selectedRun.id}:provider`,
-        action: t(locale, 'settings.engineCanvasRunProviderSelection'),
-        status: selectedRun.status,
-        timestamp: selectedRun.started_at ?? undefined,
-        output: t(locale, 'settings.engineCanvasRunProviderDetail', {
-          provider: selectedRun.provider_id,
-          model: selectedRun.model_id,
-        }),
-      }] : []),
-      ...(stage.id === 'permission' && selectedRun ? [{
-        id: `${selectedRun.id}:permission`,
-        action: t(locale, 'settings.engineCanvasRunPermissionGate'),
-        status: selectedRun.status,
-        timestamp: selectedRun.started_at ?? undefined,
-        output: t(locale, 'settings.engineCanvasRunPermissionDetail', {
-          permission: selectedRun.permission_profile,
-        }),
-      }] : []),
-      ...(stage.id === 'context' && runSnapshot?.snapshot?.prompt_plan ? [{
+    const completedTraces = stageTraces.filter((entry) => entry.type === 'hook_invocation_completed');
+    // NE-P0-06: `executed` is derived ONLY from durable evidence — the Harness
+    // Snapshot and the run_event HookInvocation trace. Nothing here is inferred
+    // from the Run row (selectedRun), so a stage with no hook points or no
+    // evidence gets no rows and therefore shows no_evidence instead of being
+    // presented as having executed.
+    const runResults: CanvasNodeRunResult[] = [];
+    // Durable Harness Snapshot evidence: the frozen prompt plan / tool plan.
+    if (stage.id === 'context' && runSnapshot?.snapshot?.prompt_plan) {
+      runResults.push({
         id: `${selectedRun?.id ?? 'run'}:prompt-plan`,
         action: t(locale, 'settings.engineCanvasRunPromptAssembly'),
-        status: selectedRun?.status,
+        status: 'completed',
         output: t(locale, 'settings.engineCanvasPromptSnapshotDetail', {
           count: runSnapshot.snapshot.prompt_plan.source_digests?.length ?? 0,
           tokens: runSnapshot.snapshot.prompt_plan.token_estimate ?? 0,
         }),
-      }] : []),
-      ...((stage.id === 'tool_gate' || stage.id === 'tool_execute') && runSnapshot?.snapshot?.tool_plan ? [{
+      });
+    }
+    if ((stage.id === 'tool_gate' || stage.id === 'tool_execute') && runSnapshot?.snapshot?.tool_plan) {
+      runResults.push({
         id: `${selectedRun?.id ?? 'run'}:tool-plan`,
         action: t(locale, 'settings.engineCanvasRunToolPlan'),
-        status: selectedRun?.status,
+        status: 'completed',
         output: t(locale, 'settings.engineCanvasToolSnapshotDetail', {
           count: runSnapshot.snapshot.tool_plan.tools?.length ?? 0,
         }),
-      }] : []),
-      ...(stage.id === 'subagent' && selectedRun ? [{
-        id: `${selectedRun.id}:subagent`,
-        action: t(locale, 'settings.engineCanvasRunSubagentStrategy'),
-        status: selectedRun.status,
-        timestamp: selectedRun.started_at ?? undefined,
-        output: t(locale, 'settings.engineCanvasRunSubagentDetail', {
-          mode: snapshot?.agentProfileId
-            ? t(locale, 'settings.engineCanvasSubagentKind.expert')
-            : snapshot?.teamId
-              ? t(locale, 'settings.engineCanvasSubagentKind.team')
-              : t(locale, 'settings.engineCanvasSubagentKind.dynamic'),
-          target: snapshot?.agentProfileId ?? snapshot?.teamId ?? 'task',
-          count: snapshot?.teamMembers?.length ?? 0,
-        }),
-      }] : []),
-      ...(stage.id === 'compact' && selectedRun ? [{
-        id: `${selectedRun.id}:compact`,
-        action: t(locale, 'settings.engineCanvasRunCompactCheck'),
-        status: selectedRun.status,
-        timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
-        output: t(locale, selectedRun.error_code ? 'settings.engineCanvasRunCompactErrorDetail' : 'settings.engineCanvasRunCompactDetail', {
-          status: selectedRun.status,
-          code: selectedRun.error_code ?? '',
-        }),
-      }] : []),
-      ...(stage.id === 'stop' && selectedRun ? [{
-        id: `${selectedRun.id}:stop`,
-        action: t(locale, 'settings.engineCanvasRunStopDecision'),
-        status: selectedRun.status,
-        timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
-        output: t(locale, selectedRun.error_code ? 'settings.engineCanvasRunStopErrorDetail' : 'settings.engineCanvasRunStopDetail', {
-          status: selectedRun.status,
-          code: selectedRun.error_code ?? '',
-        }),
-      }] : []),
-      ...(stage.id === 'cross_stage' && selectedRun ? [{
-        id: `${selectedRun.id}:cross-stage`,
-        action: t(locale, 'settings.engineCanvasRunAuditSummary'),
-        status: selectedRun.status,
-        timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
-        output: t(locale, 'settings.engineCanvasRunAuditDetail', {
-          count: traceEntries.length,
-          failed: traceEntries.filter((entry) => entry.status === 'failed' || Boolean(entry.error_category)).length,
-        }),
-      }] : []),
-      ...(stage.id === 'terminal' && selectedRun ? [{
-        id: `${selectedRun.id}:terminal`,
-        action: t(locale, 'settings.engineCanvasRunTerminalResult'),
-        status: selectedRun.status,
-        timestamp: selectedRun.finished_at ?? selectedRun.started_at ?? undefined,
-        output: t(locale, selectedRun.error_code ? 'settings.engineCanvasRunTerminalErrorDetail' : 'settings.engineCanvasRunTerminalDetail', {
-          provider: selectedRun.provider_id,
-          model: selectedRun.model_id,
-          code: selectedRun.error_code ?? '',
-        }),
-      }] : []),
-      ...stageTraces.map((entry) => ({
+      });
+    }
+    // Durable HookInvocation evidence (run_event hook_invocation_*): one row
+    // per trace entry actually dispatched for this stage.
+    for (const entry of stageTraces) {
+      const actionKey = HOOK_EVENT_ACTION_KEYS[entry.hook_event ?? ''];
+      runResults.push({
         id: `${entry.run_id}:${entry.sequence}`,
-        action: entry.hook_event ?? entry.type ?? t(locale, 'settings.engineCanvasRunHookInvocation'),
-        status: entry.status ?? entry.type,
+        action: actionKey ? t(locale, actionKey) : (entry.hook_event ?? t(locale, 'settings.engineCanvasRunHookInvocation')),
+        status: entry.type === 'hook_invocation_completed'
+          ? (entry.status ?? 'completed')
+          : (entry.type ?? 'running'),
         timestamp: entry.timestamp,
         duration_ms: entry.duration_ms,
         input: entry.input_summary ? `${entry.input_summary}${entry.input_truncated ? '…' : ''}` : undefined,
         output: entry.output_summary ? `${entry.output_summary}${entry.output_truncated ? '…' : ''}` : undefined,
         error: entry.error_category ?? undefined,
-      })),
-    ];
+      });
+    }
+    // Cross-stage audit summary: only when durable evidence exists anywhere.
+    if (stage.id === 'cross_stage' && completedTraces.length > 0) {
+      runResults.push({
+        id: `${selectedRun?.id ?? 'run'}:cross-stage`,
+        action: t(locale, 'settings.engineCanvasRunAuditSummary'),
+        status: 'completed',
+        output: t(locale, 'settings.engineCanvasRunAuditDetail', {
+          count: traceEntries.length,
+          failed: traceEntries.filter((entry) => entry.status === 'failed' || Boolean(entry.error_category)).length,
+        }),
+      });
+    }
     details[stage.id] = { hooks, prompts, tools, subagents, runResults };
   }
   return details;

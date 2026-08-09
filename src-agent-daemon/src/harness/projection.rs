@@ -9,6 +9,7 @@
 //! | Hook identity, provenance, matcher, timeout, policy, trust | `production_hooks::discover_production_hooks` |
 //! | enabled / locked / overrides | `harness_core::resolver`, applied to that discovery |
 //! | profile / version / binding | `assistant.db` rows |
+//! | trace entries | the durable `run_event` stream — see [`trace_entries`] |
 //!
 //! There is no fourth column for "computed to look good". A field the sources
 //! cannot fill is absent, not defaulted — an empty Hook list means the stage
@@ -17,6 +18,11 @@
 //! Adapter configuration is redacted on the way out
 //! (`harness_core::redaction`), so a Hook URL carrying a token in its query
 //! string never reaches the Renderer.
+//!
+//! The trace projection (`trace_entries`) derives ONLY from the durable
+//! `run_event` stream. There is deliberately no second durable authority:
+//! the legacy `harness_hook_trace` table is never written, so it is never a
+//! source here either.
 
 use harness_core::redaction::redact_kind;
 use harness_core::resolver::{Resolution, ResolvedHook};
@@ -170,6 +176,48 @@ pub fn topology(resolution: &Resolution) -> Value {
     })
 }
 
+/// Project the Hook-invocation trace from the single durable `run_event`
+/// authority.
+///
+/// The input is the raw `hook_invocation_started` / `hook_invocation_completed`
+/// payloads (`type`-tagged `RunEventKind` values, with `run_id` / `sequence` /
+/// `timestamp` injected by the repository). The projection filters to exactly
+/// those two event kinds and normalises the wire shape every consumer reads —
+/// it adds nothing that is not already in the event. There is no second
+/// durable authority: the legacy `harness_hook_trace` table is never written
+/// and therefore never a source here. A trace built this way cannot drift from
+/// the run_event stream, because it IS the run_event stream.
+pub fn trace_entries(run_events: &[Value]) -> Vec<Value> {
+    run_events
+        .iter()
+        .filter(|event| {
+            event
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "hook_invocation_started" | "hook_invocation_completed"
+                    )
+                })
+        })
+        .map(|event| {
+            let mut entry = event.clone();
+            if let Some(object) = entry.as_object_mut() {
+                // Every trace entry carries the id of the run_event row it was
+                // projected from, so a consumer can always name the source fact.
+                if object.get("source_authority").is_none() {
+                    object.insert(
+                        "source_authority".to_string(),
+                        Value::String("run_event".to_string()),
+                    );
+                }
+            }
+            entry
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +357,56 @@ mod tests {
         assert_eq!(counts["enabled"], 2);
         assert_eq!(counts["by_scope"]["project"], 1);
         assert_eq!(counts["by_scope"]["builtin"], 1);
+    }
+
+    #[test]
+    fn trace_projection_derives_only_from_run_events() {
+        let started = serde_json::json!({
+            "type": "hook_invocation_started",
+            "invocation_id": "inv-1",
+            "hook_id": "h-1",
+            "hook_event": "PreToolUse",
+            "source": "project",
+            "ordinal": 0,
+            "input_summary": "read_file a.txt",
+            "input_truncated": false,
+            "run_id": "run-1",
+            "sequence": 3,
+            "timestamp": "t1",
+        });
+        let completed = serde_json::json!({
+            "type": "hook_invocation_completed",
+            "invocation_id": "inv-1",
+            "hook_id": "h-1",
+            "hook_event": "PreToolUse",
+            "source": "project",
+            "ordinal": 0,
+            "status": "completed",
+            "effective_decision": "allow",
+            "error_category": null,
+            "duration_ms": 12,
+            "output_summary": "ok",
+            "output_truncated": false,
+            "run_id": "run-1",
+            "sequence": 4,
+            "timestamp": "t2",
+        });
+        // A non-hook run event must never leak into the trace.
+        let foreign = serde_json::json!({
+            "type": "tool_call_completed",
+            "id": "tc-1",
+            "run_id": "run-1",
+            "sequence": 5,
+        });
+        let entries = trace_entries(&[started, foreign, completed]);
+        assert_eq!(entries.len(), 2, "only hook-invocation events project");
+        assert_eq!(entries[0]["hook_event"], "PreToolUse");
+        assert_eq!(entries[0]["sequence"], 3);
+        assert_eq!(entries[1]["status"], "completed");
+        assert_eq!(entries[1]["sequence"], 4);
+        assert!(
+            entries.iter().all(|e| e["source_authority"] == "run_event"),
+            "every trace entry names its run_event source fact"
+        );
     }
 }

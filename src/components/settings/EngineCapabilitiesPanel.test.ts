@@ -278,24 +278,26 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(panel, /focusPromptId/);
   assert.match(panel, /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/);
   assert.match(panel, /traceEntriesForStage/);
+  // NE-P0-06: executed rows derive from durable evidence only. The localized
+  // labels are wired to HOOK_EVENT_ACTION_KEYS (rendered from a real run_event
+  // HookInvocation) or to the frozen Snapshot — never from the Run row.
+  assert.match(panel, /HOOK_EVENT_ACTION_KEYS/);
+  assert.match(panel, /hook_invocation_completed/);
+  assert.match(panel, /no_evidence/);
   assert.match(panel, /engineCanvasRunSessionStart/);
-  assert.match(panel, /engineCanvasRunSessionDetail/);
-  assert.match(panel, /engineCanvasRunProviderSelection/);
-  assert.match(panel, /engineCanvasRunProviderDetail/);
   assert.match(panel, /engineCanvasRunPermissionGate/);
-  assert.match(panel, /engineCanvasRunPermissionDetail/);
   assert.match(panel, /engineCanvasRunPromptAssembly/);
   assert.match(panel, /engineCanvasRunSubagentStrategy/);
-  assert.match(panel, /engineCanvasRunSubagentDetail/);
   assert.match(panel, /engineCanvasRunCompactCheck/);
-  assert.match(panel, /engineCanvasRunCompactErrorDetail/);
   assert.match(panel, /engineCanvasRunStopDecision/);
-  assert.match(panel, /engineCanvasRunStopErrorDetail/);
   assert.match(panel, /engineCanvasRunAuditSummary/);
   assert.match(panel, /engineCanvasRunAuditDetail/);
   assert.match(panel, /engineCanvasRunTerminalResult/);
-  assert.match(panel, /selectedRun\.finished_at \?\? selectedRun\.started_at/);
-  assert.match(panel, /engineCanvasRunTerminalErrorDetail/);
+  assert.match(panel, /engineCanvasRunHookInvocation/);
+  assert.match(panel, /engineCanvasRunToolPlan/);
+  assert.doesNotMatch(panel, /selectedRun\.status/);
+  assert.doesNotMatch(panel, /engineCanvasRunProviderSelection/);
+  assert.doesNotMatch(panel, /selectedRun\.finished_at/);
   assert.match(model, /runResults\?: CanvasNodeRunResult\[\]/);
   assert.match(model, /stage\.id === 'tool_gate' \|\| stage\.id === 'tool_execute'/);
   assert.match(panel, /engineCanvasDynamicSubagentPrompt/);
