@@ -4,10 +4,12 @@
  * T13 · JsonRenderer — 只消费 { kind: 'json' } PreviewModel。
  * 懒展开树：节点数 > 200 时默认折叠，展开有界（R-P4/R12）；超预算标记 truncated。
  * 不使用 Monaco（Monaco 属于 Editor 写路径）。
+ * 模型由 provider 保证：解析字节/节点/深度均有预算，value 永不超限进入 DOM。
  */
 
-import { useMemo, useState } from 'react';
-import { t, useLocale, type Locale } from '@/i18n';
+import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { t, useLocale } from '@/i18n';
 import type { PreviewModel } from '@/lib/preview/contracts';
 
 export type JsonModel = Extract<PreviewModel, { kind: 'json' }>;
@@ -36,7 +38,7 @@ function JsonNode({ label, value, depth, maxDepth, locale }: {
   value: unknown;
   depth: number;
   maxDepth: number;
-  locale: Locale;
+  locale: ReturnType<typeof useLocale>;
 }) {
   const [open, setOpen] = useState(depth < maxDepth);
   const canExpand = isExpandable(value);
@@ -58,8 +60,15 @@ function JsonNode({ label, value, depth, maxDepth, locale }: {
 
   return (
     <div className="json-node" style={{ paddingLeft: depth * 12 }}>
-      <button type="button" className="json-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
-        {open ? '▾' : '▸'}
+      <button
+        type="button"
+        className="json-toggle"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={open ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
+        style={{ display: 'inline-flex', alignItems: 'center', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit' }}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       </button>
       {label !== null && <span className="json-key">{label}: </span>}
       <span className="json-type">{Array.isArray(value) ? `Array(${entries.length})` : 'Object'}</span>
@@ -72,8 +81,6 @@ function JsonNode({ label, value, depth, maxDepth, locale }: {
 
 export default function JsonRenderer({ model }: { model: JsonModel }) {
   const locale = useLocale();
-  const root = useMemo(() => (model.nodeCount > MAX_VISIBLE ? model.value : model.value), [model]);
-  void root;
   return (
     <div className="json-tree" data-preview-kind="json">
       {model.truncated && <div className="json-warning">{t(locale, 'preview.jsonTruncated', { count: model.nodeCount })}</div>}

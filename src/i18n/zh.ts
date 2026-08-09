@@ -1969,8 +1969,11 @@ export const zh = {
     typeNotEnabled: '预览类型 {kind} 尚未启用',
     unknownType: '未知预览类型',
     jsonMore: '… 其余 {count} 项（有界）',
-    jsonTruncated: 'JSON 超出节点/深度预算，已折叠展示（nodeCount={count}）',
+    jsonTruncated: 'JSON 超出解析/节点/深度预算，已折叠展示（nodeCount={count}）',
+    codeTruncated: '… 代码较大，已截断显示前 {count} 行',
     csvTruncated: 'CSV 数据较大，已截断展示前 {count} 行',
+    csvMoreRows: '… 还有 {count} 行未显示（共 {total} 行）',
+    csvMoreColumns: '仅显示前 {count} 列',
     archiveTruncated: '压缩包条目较多，仅显示前 {count} 项',
   },
 

@@ -1989,8 +1989,11 @@ export const en = {
     typeNotEnabled: 'Preview type {kind} is not enabled yet',
     unknownType: 'Unknown preview type',
     jsonMore: '… {count} more (bounded)',
-    jsonTruncated: 'JSON exceeds node/depth budget; collapsed (nodeCount={count})',
+    jsonTruncated: 'JSON exceeds parse/node/depth budget; collapsed (nodeCount={count})',
+    codeTruncated: '… Code is large; showing first {count} lines',
     csvTruncated: 'CSV is large; showing first {count} rows',
+    csvMoreRows: '… {count} more rows not shown (total {total})',
+    csvMoreColumns: 'Showing first {count} columns',
     archiveTruncated: 'Archive has many entries; showing first {count}',
   },
 
