@@ -278,3 +278,16 @@ export const openWidgetWindow: NativesAPI['openWidgetWindow'] = () => {
     cmd('open_widget_window').catch(() => {});
 };
 
+// ── macOS menubar popup (frozen contract: commands/menubar.rs) ──
+// Window label `menubar`, route `?surface=menubar`. Every command is validated
+// against the invoking window label in Rust; the popup has its own minimal
+// capability (capabilities/menubar.json) and never inherits main's shell/fs/
+// dialog/credential/Workshop permissions.
+export const menubar: NativesAPI['menubar'] = {
+  toggle: () => cmd('menubar_toggle').catch(() => {}),
+  hide: () => cmd('menubar_hide').catch(() => {}),
+  openMain: () => cmd('menubar_open_main').catch(() => {}),
+  openPersonalOverview: () => cmd('menubar_open_personal_overview').catch(() => {}),
+  quit: () => cmd('menubar_quit').catch(() => {}),
+};
+

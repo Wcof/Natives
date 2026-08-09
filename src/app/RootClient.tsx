@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { useHydrated } from '@/hooks/useHydrated';
 import '@/lib/tauri-adapter';
 const LazyShellLayout = lazy(() => import('@/components/shell/ShellLayout'));
+const LazyMenubarSurface = lazy(() => import('@/components/menubar/MenubarSurface'));
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ToastProvider } from '@/components/ui/Toast';
 import { AssistantWorkspaceProvider } from '@/components/assistant/AssistantWorkspaceContext';
@@ -12,13 +13,25 @@ import { AssistantWorkspaceProvider } from '@/components/assistant/AssistantWork
    RootClient — Client Component
    Hydration, interactivity, providers.
    (Does NOT import global CSS — that lives in layout.tsx)
+
+   Surface routing happens HERE, at the earliest split (MB-P0-03):
+   - `?surface=menubar` → lightweight MenubarSurface. It deliberately does NOT
+     mount Shell, AssistantWorkspace, Workshop, update checks or main-window
+     global hooks — only the minimal theme context needed for the FOUC guard.
+   - everything else → full ShellLayout (unchanged).
    ═══════════════════════════════════════════════ */
 
 export default function RootClient({ children }: { children: ReactNode }) {
-  const isWidget = useHydrated() && typeof window !== 'undefined' && window.location.search.includes('mode=widget');
+  const hydrated = useHydrated();
+  const isMenubar =
+    hydrated && typeof window !== 'undefined' && window.location.search.includes('surface=menubar');
+  const isWidget =
+    hydrated && typeof window !== 'undefined' && window.location.search.includes('mode=widget');
 
   useEffect(() => {
-    if (isWidget) {
+    if (isMenubar) {
+      document.documentElement.classList.add('menubar-mode');
+    } else if (isWidget) {
       document.documentElement.classList.add('widget-mode');
     }
 
@@ -30,7 +43,19 @@ export default function RootClient({ children }: { children: ReactNode }) {
     };
     document.addEventListener('contextmenu', handleContextMenu);
     return () => document.removeEventListener('contextmenu', handleContextMenu);
-  }, []);
+  }, [isMenubar, isWidget]);
+
+  // Earliest split: the menubar popup is a self-contained lightweight surface.
+  // It must never load the Shell / Assistant / Workshop bundle or their hooks.
+  if (isMenubar) {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={null}>
+          <LazyMenubarSurface />
+        </Suspense>
+      </ThemeProvider>
+    );
+  }
 
   return (
     <ThemeProvider>

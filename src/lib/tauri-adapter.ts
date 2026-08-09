@@ -54,6 +54,7 @@ export {
   onDbStateChanged,
   openWidgetWindow,
   builtinTool,
+  menubar,
 } from './tauri/host';
 export { agent, skills, library, subagent, assistantV2, project } from './tauri/assistant';
 
@@ -100,6 +101,7 @@ import {
   onDbStateChanged,
   openWidgetWindow,
   builtinTool,
+  menubar,
 } from './tauri/host';
 import { agent, skills, library, subagent, assistantV2, project } from './tauri/assistant';
 
@@ -261,6 +263,9 @@ export const nativesAPI: NativesAPI = {
 
   // Project directory management
   project,
+
+  // macOS menubar popup
+  menubar,
 };
 
 // Expose to window (replaces contextBridge.exposeInMainWorld)

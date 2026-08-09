@@ -1152,6 +1152,16 @@ export interface NativesAPI {
     rename(id: string, label: string): Promise<void>;
     remove(id: string): Promise<void>;
   };
+  // macOS menubar popup (native_menubar_lifecycle: commands/menubar.rs).
+  // Frozen contract: window label `menubar`, route `?surface=menubar`; these
+  // commands validate the invoking window label in Rust.
+  menubar: {
+    toggle: () => Promise<void>;
+    hide: () => Promise<void>;
+    openMain: () => Promise<void>;
+    openPersonalOverview: () => Promise<void>;
+    quit: () => Promise<void>;
+  };
   /** Dialog (file/directory picker) */
   dialog: {
     pickDirectory(): Promise<string | null>;

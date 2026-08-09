@@ -8,7 +8,6 @@ import NotificationPanel from './NotificationPanel';
 import Header from './Header';
 import TerminalPanel from './Terminal';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
-import ControlHubWidget from './ControlHubWidget';
 import MainContent from './MainContent';
 import { applyTheme } from '@/lib/theme-engine';
 
@@ -307,29 +306,17 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }, [setRightPanelMode]);
 
   // Widget mode check — render only the ControlHub on transparent background
-  const isWidgetMode = typeof window !== 'undefined' && window.location.search.includes('mode=widget');
   const isSettingsMode = isSettingsView(activeView);
   const effectiveSidebarCollapsed = isSettingsMode ? false : state.sidebarCollapsed;
 
 
   // P1-5: 首次运行未设置用户名时进入引导页（此前被 demo 时期的注释旁路，导致
   // UsernameOnboarding 成为死代码、主页问候语无名可用）
-  if (!isWidgetMode && needsOnboarding) {
+  if (needsOnboarding) {
     return (
       <Suspense fallback={null}>
         <LazyUsernameOnboarding locale={locale} onComplete={() => setNeedsOnboarding(false)} />
       </Suspense>
-    );
-  }
-
-  // Widget mode — bypass chrome, render ControlHub directly
-  if (isWidgetMode) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-transparent">
-        <ErrorBoundary>
-          <ControlHubWidget />
-        </ErrorBoundary>
-      </div>
     );
   }
 
