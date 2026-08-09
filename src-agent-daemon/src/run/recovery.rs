@@ -1,7 +1,7 @@
 //! Startup interruption and snapshot restore.
 
-use super::manager::RunManager;
 use super::lifecycle::{parse_db_time, run_status_from_db};
+use super::manager::RunManager;
 use assistant_protocol::v2::{RunStatusV2, RunV2};
 use std::collections::HashMap;
 

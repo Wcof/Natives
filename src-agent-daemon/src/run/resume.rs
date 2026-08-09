@@ -1,7 +1,9 @@
 //! Checkpoint-based resume and side-effect resume gate.
 
 use super::manager::RunManager;
-use assistant_protocol::v2::{CreateRunRequest, ResumeDecision, RunV2, ResumeRunRequest, ResumeRunResponse};
+use assistant_protocol::v2::{
+    CreateRunRequest, ResumeDecision, ResumeRunRequest, ResumeRunResponse, RunV2,
+};
 use rusqlite::OptionalExtension;
 use uuid::Uuid;
 

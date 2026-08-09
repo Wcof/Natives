@@ -2,7 +2,7 @@
 
 use super::manager::RunManager;
 use super::resume::{load_resumable_checkpoint, unresolved_effects_for_checkpoint};
-use assistant_protocol::v2::{CreateRunRequest, RunV2, RetryRunRequest, ContinueRunRequest};
+use assistant_protocol::v2::{ContinueRunRequest, CreateRunRequest, RetryRunRequest, RunV2};
 use rusqlite::OptionalExtension;
 use uuid::Uuid;
 

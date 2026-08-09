@@ -1,8 +1,8 @@
 //! Cancel tree and cancellation.
 
 use super::manager::RunManager;
-use assistant_protocol::v2::{CancelRunRequest, RunStatusV2, RunV2};
 use agent_core::TransitionMetadata;
+use assistant_protocol::v2::{CancelRunRequest, RunStatusV2, RunV2};
 
 impl RunManager {
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {

@@ -1,11 +1,11 @@
 //! Status transitions and terminal arbitration (RunLifecycleAuthority impl).
 
+use super::manager::RunManager;
 use agent_core::CommitError;
+use agent_core::EngineOutcome;
 use agent_core::RunLifecycleAuthority;
 use agent_core::TransitionMetadata;
-use super::manager::RunManager;
 use assistant_protocol::v2::{RunEventKind, RunEventV2, RunStatusV2, RunV2};
-use agent_core::EngineOutcome;
 
 impl RunManager {
     /// Idempotent fail-close: mark run failed, persist, and emit a terminal `failed` event.
