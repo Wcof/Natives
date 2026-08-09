@@ -765,14 +765,24 @@ mod tests {
     #[test]
     fn config_from_env_defaults() {
         let _g = ENV_LOCK.lock().unwrap();
-        let prev = std::env::var("NATIVES_RUNTIME_DIR").ok();
+        let prev_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+        let prev_socket = std::env::var("NATIVES_DAEMON_SOCKET").ok();
+        // from_env() prefers NATIVES_DAEMON_SOCKET over runtime_dir — clear it
+        // so this test deterministically asserts the runtime-dir-derived path
+        // regardless of what other tests may have left in the environment.
         std::env::set_var("NATIVES_RUNTIME_DIR", "/tmp/natives-sup-test");
+        std::env::remove_var("NATIVES_DAEMON_SOCKET");
         let cfg = SupervisorConfig::from_env();
         assert!(cfg.socket_path.starts_with("/tmp/natives-sup-test"));
-        if let Some(v) = prev {
+        if let Some(v) = prev_runtime {
             std::env::set_var("NATIVES_RUNTIME_DIR", v);
         } else {
             std::env::remove_var("NATIVES_RUNTIME_DIR");
+        }
+        if let Some(v) = prev_socket {
+            std::env::set_var("NATIVES_DAEMON_SOCKET", v);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_SOCKET");
         }
     }
 
@@ -789,6 +799,8 @@ mod tests {
         );
         if let Some(value) = previous {
             std::env::set_var("NATIVES_DAEMON_BIN", value);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_BIN");
         }
     }
 

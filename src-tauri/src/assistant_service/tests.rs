@@ -51,6 +51,11 @@ fn provider_list_is_host_owned_not_daemon_owned() {
 
 #[tokio::test]
 async fn provider_list_returns_mirrored_user_provider_models() {
+    let _g = daemon_env_lock();
+    // Clear the global natives.db pool so handle_provider_list deterministically
+    // falls back to the :memory: DataStore mirror (avoids flaky from other tests
+    // registering a main pool that would make provider.list read natives.db).
+    crate::db::clear_main_pool_for_tests();
     let store = Arc::new(DataStore::new(":memory:").unwrap());
     store
         .conn()
