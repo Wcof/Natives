@@ -20,8 +20,10 @@ const sidebarSectionSrc = readFileSync(
   fileURLToPath(new URL('./AssistantSidebarSection.tsx', import.meta.url)),
   'utf8',
 );
+// R4-04: the shell sidebar's controller logic (including useAssistantActions)
+// moved into the useSidebar hook; the shell file only composes presentational parts.
 const shellSidebarSrc = readFileSync(
-  fileURLToPath(new URL('../shell/Sidebar.tsx', import.meta.url)),
+  fileURLToPath(new URL('../shell/sidebar/useSidebar.ts', import.meta.url)),
   'utf8',
 );
 

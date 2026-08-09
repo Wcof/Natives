@@ -3,11 +3,31 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// R4-04: NativeHarnessPanel was split into a thin shell + controller hook +
+// domain model + presentational editors. Static checks that assert the Harness
+// owns state/derived-data/editors run against the whole module family.
+const readHarnessFamily = () => [
+  'src/components/settings/NativeHarnessPanel.tsx',
+  'src/components/settings/native-harness/useNativeHarness.ts',
+  'src/components/settings/native-harness/model.ts',
+  'src/components/settings/native-harness/editors.tsx',
+]
+  .map((file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8'))
+  .join('\n');
+
+// R4-04: EngineCapabilitiesPanel was split into a thin shell + controller hook +
+// domain model + presentational cards. Static checks run against the family.
+const readEngineCapabilitiesFamily = () => [
+  'src/components/settings/EngineCapabilitiesPanel.tsx',
+  'src/components/settings/engine-capabilities/useEngineCapabilities.ts',
+  'src/components/settings/engine-capabilities/model.ts',
+  'src/components/settings/engine-capabilities/cards.tsx',
+]
+  .map((file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8'))
+  .join('\n');
+
 test('EngineCapabilitiesPanel uses createDefaultGateway + capability-admin only', () => {
-  const src = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/EngineCapabilitiesPanel.tsx'),
-    'utf8',
-  );
+  const src = readEngineCapabilitiesFamily();
   assert.match(src, /createDefaultGateway/);
   assert.match(src, /listCapabilitySkills/);
   assert.match(src, /listCapabilityMcpServers/);
@@ -23,10 +43,7 @@ test('EngineCapabilitiesPanel uses createDefaultGateway + capability-admin only'
 });
 
 test('EngineCapabilitiesPanel is a run evidence projection, not a scheduler inventory', () => {
-  const src = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/EngineCapabilitiesPanel.tsx'),
-    'utf8',
-  );
+  const src = readEngineCapabilitiesFamily();
   assert.match(src, /selectedRun/);
   assert.match(src, /runSnapshot/);
   assert.match(src, /getCapabilities/);
@@ -36,8 +53,8 @@ test('EngineCapabilitiesPanel is a run evidence projection, not a scheduler inve
   assert.match(src, /classifyError/);
   assert.match(src, /capability_snapshot/);
   assert.match(src, /effective_prompt_hash/);
-  assert.match(src, /prompt_plan\.layers/);
-  assert.match(src, /tool_plan\.canonical_hash/);
+  assert.match(src, /promptPlan\?\.layers/);
+  assert.match(src, /toolPlan\?\.canonical_hash/);
   assert.match(src, /expert\.systemPrompt/);
   assert.match(src, /settings\.engineCapabilities\.systemPrompt/);
   assert.match(src, /settings\.engineCapabilities\.teamDetail/);
@@ -55,7 +72,7 @@ test('Engine capability evidence types and bilingual copy cover the run projecti
     'utf8',
   );
   const workspace = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
+    path.join(process.cwd(), 'src/components/settings/native-harness/model.ts'),
     'utf8',
   );
   const en = fs.readFileSync(path.join(process.cwd(), 'src/i18n/en.ts'), 'utf8');
@@ -80,7 +97,7 @@ test('Settings exposes one execution-engine entry containing capabilities and Ha
     'utf8',
   );
   const sidebar = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/shell/Sidebar.tsx'),
+    path.join(process.cwd(), 'src/components/shell/sidebar/model.ts'),
     'utf8',
   );
   const workspace = fs.readFileSync(
@@ -103,10 +120,7 @@ test('Settings exposes one execution-engine entry containing capabilities and Ha
 });
 
 test('Harness detail keeps run and editors inside the controlled canvas', () => {
-  const panel = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
-    'utf8',
-  );
+  const panel = readHarnessFamily();
   const canvas = fs.readFileSync(
     path.join(process.cwd(), 'src/components/settings/NativeExecutionCanvas.tsx'),
     'utf8',
@@ -117,7 +131,7 @@ test('Harness detail keeps run and editors inside the controlled canvas', () => 
   );
 
   assert.match(panel, /const \[canvasMode, setCanvasMode\] = useState<CanvasMode>\('understand'\)/);
-  assert.match(panel, /mode=\{canvasMode\}/);
+  assert.match(panel, /mode=\{harness\.canvasMode\}/);
   assert.match(panel, /runPanel=\{runPanel\}/);
   assert.match(panel, /workspacePanel=\{workspacePanel\}/);
   assert.match(panel, /readOnly=\{readOnly\}/);
@@ -129,10 +143,7 @@ test('Harness detail keeps run and editors inside the controlled canvas', () => 
 });
 
 test('Harness run start requires explicit project/provider/model instead of copying a global run', () => {
-  const panel = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
-    'utf8',
-  );
+  const panel = readHarnessFamily();
 
   // ARCH-002: providers load via the domain facade `providerApi` (tauri/provider)
   // instead of the barrel's `nativesAPI.provider` — the run must resolve an
@@ -154,23 +165,17 @@ test('Harness run start requires explicit project/provider/model instead of copy
 });
 
 test('Harness list opens create as a separate view and preview stays read-only', () => {
-  const panel = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
-    'utf8',
-  );
+  const panel = readHarnessFamily();
 
   assert.match(panel, /type DetailMode = 'preview' \| 'edit' \| 'create'/);
-  assert.match(panel, /if \(detailMode === 'create'\)/);
-  assert.match(panel, /onClick=\{openCreateProfile\}/);
-  assert.match(panel, /const readOnly = detailMode === 'preview'/);
+  assert.match(panel, /if \(harness\.detailMode === 'create'\)/);
+  assert.match(panel, /onClick=\{harness\.openCreateProfile\}/);
+  assert.match(panel, /const readOnly = harness\.detailMode === 'preview'/);
   assert.match(panel, /<fieldset disabled=\{readOnly\}/);
 });
 
 test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () => {
-  const panel = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/NativeHarnessPanel.tsx'),
-    'utf8',
-  );
+  const panel = readHarnessFamily();
   const canvas = fs.readFileSync(
     path.join(process.cwd(), 'src/components/settings/NativeExecutionCanvas.tsx'),
     'utf8',
@@ -190,7 +195,7 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
 
   assert.match(model, /export type CanvasNodeDetail/);
   assert.match(panel, /const nodeDetails = useMemo<Record<string, CanvasNodeDetail>>/);
-  assert.match(panel, /nodeDetails=\{nodeDetails\}/);
+  assert.match(panel, /nodeDetails=\{harness\.nodeDetails\}/);
   assert.match(canvas, /nodeDetails=\{nodeDetails\}/);
   assert.match(canvas, /runPathStages/);
   assert.match(canvas, /engineCanvasRunPathSummary/);
@@ -205,9 +210,9 @@ test('Node inspector exposes per-node hooks, prompts, tools, and subagents', () 
   assert.match(graph, /engineCanvasNodeSubagentCount/);
   assert.match(graph, /run-arrow/);
   assert.match(canvas, /engineCanvasLegendRunPath/);
-  assert.match(panel, /onSetHookEnabled=\{setNodeHookEnabled\}/);
-  assert.match(panel, /onAuthorizeHook=\{authorizeNodeHook\}/);
-  assert.match(panel, /onRemovePrompt=\{removeNodePrompt\}/);
+  assert.match(panel, /onSetHookEnabled=\{harness\.setNodeHookEnabled\}/);
+  assert.match(panel, /onAuthorizeHook=\{harness\.authorizeNodeHook\}/);
+  assert.match(panel, /onRemovePrompt=\{harness\.removeNodePrompt\}/);
   assert.match(panel, /Harness Draft.*hook\.adapter\.type/);
   assert.match(panel, /authorized: hook\.adapter\.type === 'command' \? hook\.trust_confirmed : true/);
   assert.match(panel, /engineCanvasHookAuthorizationHarness/);

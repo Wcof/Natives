@@ -1,71 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import {
-  Play,
-  ListTree,
-  FileDiff,
-  Package,
-  Brain,
-  Radio,
-  CheckCircle,
-  XCircle,
-  Clock,
-  AlertTriangle,
-  Square,
-  ArrowLeft,
-  RefreshCw,
-  KeyRound,
-  GitBranch,
-  Search,
-  Upload,
-} from 'lucide-react';
-import type {
-  Artifact,
-  BackgroundTask,
-  ChildRunSummary,
-  ContextUsage,
-  DaemonCapabilities,
-  FileChange,
-  Run,
-  RunEvent,
-} from '@/lib/assistant-protocol';
-import type { AssistantGateway } from '@/lib/assistant-gateway';
-import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
-import type { InspectorTab } from '@/lib/assistant-workspace';
-import {
-  canCancelTask,
-  canListTaskDepth,
-  canListTasks,
-  canShowContextUsage,
-} from '@/lib/assistant-workspace/capability-gate';
-import {
-  aggregateArtifactFiles,
-  extractTodosFromEvents,
-  mapSubagentUiStatus,
-  summarizeTodoStatus,
-  todoStatusLabel,
-  type ActivityTodo,
-  type ArtifactFileItem,
-  type FileEventInput,
-  type TodoStatus,
-} from '@/lib/assistant-activity-view';
 import { t } from '@/i18n';
-import ArtifactPreviewSurface from '@/components/preview/ArtifactPreviewSurface';
+import {
+  useActivityInspector,
+  type ActivityInspectorProps,
+} from './activity-inspector/useActivityInspector';
+import {
+  ArtifactsPanel,
+  ChangesPanel,
+  ContextPanel,
+  EventsPanel,
+  RunPanel,
+  TasksPanel,
+} from './activity-inspector/panels';
 
-export interface ActivitySubagentView {
-  id: string;
-  name: string;
-  status: string;
-  providerId?: string;
-  keyLabel?: string;
-  childConversationId?: string;
-  task?: string;
-  todos?: Array<{ id: string; content: string; status: TodoStatus }>;
-  /** Failure message — never a raw key. */
-  error?: string;
-}
+export type { ActivitySubagentView } from './activity-inspector/model';
 
 interface ActivityInspectorProps {
   run: Run | null;
@@ -593,48 +542,48 @@ export default function ActivityInspector({
   return (
     <div className="flex h-full flex-col border-l border-[var(--border)] bg-[var(--surface)]">
       <div className="flex flex-wrap border-b border-[var(--border)]">
-        {tabs.map((tab) => (
+        {inspector.tabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
-            onClick={() => onTabChange(tab.id)}
+            onClick={() => inspector.onTabChange(tab.id)}
             aria-disabled={tab.disabled}
             title={
               tab.disabled
-                ? t(locale, 'activityInspector.engineCapabilityMissing')
+                ? t(inspector.locale, 'activityInspector.engineCapabilityMissing')
                 : undefined
             }
             className={`inline-flex items-center gap-1 px-2.5 py-2 text-[11px] font-medium transition-colors ${
               tab.disabled
                 ? 'cursor-not-allowed text-[var(--text-disabled)] opacity-50'
-                : effectiveTab === tab.id
+                : inspector.effectiveTab === tab.id
                   ? 'border-b-2 border-[var(--primary)] text-[var(--primary)]'
                   : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
             }`}
             data-testid={`inspector-tab-${tab.id}${tab.disabled ? '-disabled' : ''}`}
           >
             <tab.icon size={12} />
-            {t(locale, tab.labelKey)}
+            {t(inspector.locale, tab.labelKey)}
           </button>
         ))}
       </div>
 
-      <div className={`flex-1 ${effectiveTab === 'changes' || effectiveTab === 'artifacts' ? 'flex flex-col min-h-0 overflow-hidden' : 'overflow-y-auto'} p-3 text-xs`}>
-        {tasksCapabilityMissing && (
+      <div className={`flex-1 ${inspector.effectiveTab === 'changes' || inspector.effectiveTab === 'artifacts' ? 'flex flex-col min-h-0 overflow-hidden' : 'overflow-y-auto'} p-3 text-xs`}>
+        {inspector.tasksCapabilityMissing && (
           <div
             className="py-8 text-center text-[var(--text-disabled)]"
             data-testid="tasks-capability-not-ready"
           >
-            <div>{t(locale, 'activityInspector.tasksUnavailable')}</div>
+            <div>{t(inspector.locale, 'activityInspector.tasksUnavailable')}</div>
             <div className="mt-1 text-[10px]">
-              {t(locale, 'activityInspector.engineTasksMissing')}
+              {t(inspector.locale, 'activityInspector.engineTasksMissing')}
             </div>
           </div>
         )}
 
-        {!run && !tasksCapabilityMissing && (
+        {!inspector.run && !inspector.tasksCapabilityMissing && (
           <div className="grid h-full place-items-center text-[var(--text-disabled)]">
-            {t(locale, 'activityInspector.selectRunToInspect')}
+            {t(inspector.locale, 'activityInspector.selectRunToInspect')}
           </div>
         )}
 
@@ -1013,138 +962,31 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && effectiveTab === 'artifacts' && (
-          <div className="flex h-full flex-col gap-2" data-testid="artifacts-panel">
-            {artifactPreviewPath && (
-              <div className="flex h-1/2 min-h-0 flex-col rounded-lg border border-[var(--border)] overflow-hidden">
-                <div className="flex items-center justify-between border-b border-[var(--border)] px-2 py-1">
-                  <span className="truncate font-mono text-[10px] text-[var(--text-secondary)]">{artifactPreviewPath}</span>
-                  <button
-                    type="button"
-                    onClick={() => setArtifactPreviewPath(null)}
-                    className="text-[10px] text-[var(--text-disabled)] hover:text-[var(--text)]"
-                  >
-                    {t(locale, 'common.close')}
-                  </button>
-                </div>
-                <div className="min-h-0 flex-1 overflow-auto">
-                  <ArtifactPreviewSurface
-                    source={{ type: 'file', path: artifactPreviewPath }}
-                    autoLoad
-                  />
-                </div>
-              </div>
-            )}
-            {[
-              { key: 'used' as const, titleKey: 'activityInspector.bucketUsed', items: artifactBuckets.used },
-              { key: 'modified' as const, titleKey: 'activityInspector.bucketModified', items: artifactBuckets.modified },
-              { key: 'created' as const, titleKey: 'activityInspector.bucketCreated', items: artifactBuckets.created },
-            ].map((section) => (
-              <div key={section.key} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--border)] p-2">
-                <div className="mb-1 flex items-center justify-between font-medium text-[var(--text-secondary)]">
-                  <span>{t(locale, section.titleKey)}</span>
-                  <span className="text-[10px] text-[var(--text-disabled)]">{section.items.length}</span>
-                </div>
-                <div className="flex-1 overflow-y-auto space-y-0.5">
-                  {section.items.length === 0 ? (
-                    <div className="py-2 text-center text-[10px] text-[var(--text-disabled)]">
-                      {t(locale, 'activityInspector.noFiles')}
-                    </div>
-                  ) : (
-                    section.items.map((item) => (
-                      <button
-                        key={item.path}
-                        type="button"
-                        onClick={() => {
-                          setArtifactPreviewPath(item.path);
-                          openArtifactPath(item);
-                        }}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1 text-left font-mono hover:bg-[var(--surface-hover)]"
-                        data-testid={`artifact-file-${item.path}`}
-                      >
-                        <Package size={12} className="shrink-0 text-[var(--text-disabled)]" />
-                        <span className="min-w-0 flex-1 truncate">{item.path}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+        {inspector.run && inspector.effectiveTab === 'artifacts' && (
+          <ArtifactsPanel
+            locale={inspector.locale}
+            artifactBuckets={inspector.artifactBuckets}
+            artifactPreviewPath={inspector.artifactPreviewPath}
+            onClosePreview={inspector.onClosePreview}
+            onSelectFile={inspector.onSelectArtifactFile}
+          />
         )}
 
-        {run && effectiveTab === 'context' && (
-          <div className="space-y-2">
-            {!allowContextUsage ? (
-              <div
-                className="py-8 text-center text-[var(--text-disabled)]"
-                data-testid="context-capability-not-ready"
-              >
-                {t(locale, 'assistant.contextUsageNotReady')}
-              </div>
-            ) : contextUsage ? (
-              <>
-                <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-hover)]">
-                  <div
-                    className="h-full bg-[var(--primary)]"
-                    style={{
-                      width: `${Math.min(100, (contextUsage.usedTokens / Math.max(1, contextUsage.maxTokens)) * 100)}%`,
-                    }}
-                  />
-                </div>
-                <Row
-                  label={t(locale, 'activityInspector.usage')}
-                  value={`${contextUsage.usedTokens} / ${contextUsage.maxTokens}`}
-                />
-              </>
-            ) : (
-              <Empty locale={locale} messageKey="activityInspector.noContextUsage" />
-            )}
-          </div>
+        {inspector.run && inspector.effectiveTab === 'context' && (
+          <ContextPanel
+            locale={inspector.locale}
+            allowContextUsage={inspector.allowContextUsage}
+            contextUsage={inspector.contextUsage}
+          />
         )}
 
-        {run && effectiveTab === 'events' && (
-          <div className="space-y-0.5 font-mono">
-            {events.length === 0 ? (
-              <Empty locale={locale} messageKey="activityInspector.noEvents" />
-            ) : (
-              eventGroups.map((event) => (
-                <div key={`${event.type}-${event.first}`} className="flex gap-2 px-1 py-0.5 hover:bg-[var(--surface-hover)]">
-                  <span className="shrink-0 text-[var(--text-disabled)]">#{event.first}{event.last !== event.first ? `–${event.last}` : ''}</span>
-                  <span className="text-[var(--text-secondary)]">{event.type}{event.count > 1 ? ` ×${event.count}` : ''}</span>
-                </div>
-              ))
-            )}
-          </div>
+        {inspector.run && inspector.effectiveTab === 'events' && (
+          <EventsPanel
+            locale={inspector.locale}
+            eventGroups={inspector.eventGroups}
+          />
         )}
       </div>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-2">
-      <span className="text-[var(--text-disabled)]">{label}</span>
-      <span className="truncate text-right text-[var(--text-secondary)]">{value}</span>
-    </div>
-  );
-}
-
-function Empty({
-  locale,
-  messageKey,
-  compact = false,
-}: {
-  locale: string;
-  messageKey: string;
-  compact?: boolean;
-}) {
-  return (
-    <div
-      className={`${compact ? 'py-3' : 'py-8'} text-center text-[var(--text-disabled)]`}
-    >
-      {t(locale, messageKey)}
     </div>
   );
 }
