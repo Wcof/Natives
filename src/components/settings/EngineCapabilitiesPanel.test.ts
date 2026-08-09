@@ -15,11 +15,19 @@ const readHarnessFamily = () => [
   .map((file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8'))
   .join('\n');
 
+// R4-04: EngineCapabilitiesPanel was split into a thin shell + controller hook +
+// domain model + presentational cards. Static checks run against the family.
+const readEngineCapabilitiesFamily = () => [
+  'src/components/settings/EngineCapabilitiesPanel.tsx',
+  'src/components/settings/engine-capabilities/useEngineCapabilities.ts',
+  'src/components/settings/engine-capabilities/model.ts',
+  'src/components/settings/engine-capabilities/cards.tsx',
+]
+  .map((file) => fs.readFileSync(path.join(process.cwd(), file), 'utf8'))
+  .join('\n');
+
 test('EngineCapabilitiesPanel uses createDefaultGateway + capability-admin only', () => {
-  const src = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/EngineCapabilitiesPanel.tsx'),
-    'utf8',
-  );
+  const src = readEngineCapabilitiesFamily();
   assert.match(src, /createDefaultGateway/);
   assert.match(src, /listCapabilitySkills/);
   assert.match(src, /listCapabilityMcpServers/);
@@ -35,10 +43,7 @@ test('EngineCapabilitiesPanel uses createDefaultGateway + capability-admin only'
 });
 
 test('EngineCapabilitiesPanel is a run evidence projection, not a scheduler inventory', () => {
-  const src = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/settings/EngineCapabilitiesPanel.tsx'),
-    'utf8',
-  );
+  const src = readEngineCapabilitiesFamily();
   assert.match(src, /selectedRun/);
   assert.match(src, /runSnapshot/);
   assert.match(src, /getCapabilities/);
@@ -48,8 +53,8 @@ test('EngineCapabilitiesPanel is a run evidence projection, not a scheduler inve
   assert.match(src, /classifyError/);
   assert.match(src, /capability_snapshot/);
   assert.match(src, /effective_prompt_hash/);
-  assert.match(src, /prompt_plan\.layers/);
-  assert.match(src, /tool_plan\.canonical_hash/);
+  assert.match(src, /promptPlan\?\.layers/);
+  assert.match(src, /toolPlan\?\.canonical_hash/);
   assert.match(src, /expert\.systemPrompt/);
   assert.match(src, /settings\.engineCapabilities\.systemPrompt/);
   assert.match(src, /settings\.engineCapabilities\.teamDetail/);
