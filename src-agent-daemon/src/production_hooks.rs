@@ -18,18 +18,20 @@
 
 use agent_core::{
     AgentMessage, AllowAllHook, CommandHook, ContentBlock, EngineProvider, EngineProviderContext,
-    EngineProviderEvent, HookDecision, HookHandler, HookOutcome, HookRegistry, HookRequest,
-    HookResponse, HttpHook, MessageId, ProviderTurnRequest, UserMessage,
+    EngineProviderEvent, EventSequencer, HookDecision, HookHandler, HookOutcome, HookRegistry,
+    HookRequest, HookResponse, HttpHook, MessageId, ProviderTurnRequest, UserMessage,
 };
 use assistant_protocol::v2::RunEventKind;
 use futures_util::StreamExt;
 use harness_core::blueprint::{CommandWorkingDirPolicy, HookAdapterSpecV3, NativeHookSpecV3};
 use harness_core::hooks::{
-    HookDefinition, HookEvent, HookFailurePolicy, HookId, HookKind, HookScope, HookSource,
+    HookDefinition, HookErrorCategory, HookEvent, HookFailurePolicy, HookId, HookInvocationTrace,
+    HookKind, HookScope, HookSource,
 };
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Name of the built-in allow-all default, as it appears in Hook identities.
 const BUILTIN_ALLOW_ALL: &str = "allow-all";
@@ -742,6 +744,26 @@ fn collect_file_hooks(
     }
 }
 
+/// Read a Hook's `failure_policy` from its handler entry.
+///
+/// Both the snake_case (`failure_policy`) and camelCase (`failurePolicy`)
+/// spellings are accepted. Unknown or missing values default to `Fail`
+/// (`HookFailurePolicy::Fail`) — the same fail-closed default the runtime's
+/// `resolve_failure` applies, so discovery and dispatch can never disagree
+/// about what "unspecified" means.
+fn parse_failure_policy(handler: &Value) -> HookFailurePolicy {
+    let raw = handler
+        .get("failure_policy")
+        .and_then(Value::as_str)
+        .or_else(|| handler.get("failurePolicy").and_then(Value::as_str))
+        .unwrap_or("fail");
+    match raw {
+        "skip" => HookFailurePolicy::Skip,
+        "default" | "continue" | "allow" => HookFailurePolicy::Default,
+        _ => HookFailurePolicy::Fail,
+    }
+}
+
 fn push_handler_definition(
     event: HookEvent,
     matcher: Option<String>,
@@ -814,15 +836,300 @@ fn push_handler_definition(
         matcher,
         conditions: Vec::new(),
         timeout_ms,
-        failure_policy: HookFailurePolicy::Fail,
+        failure_policy: parse_failure_policy(handler),
         kind,
     });
+}
+
+// ── Run-level frozen Hook Dispatcher (NE-P0-05) ──────────────────────────────
+
+/// A Run's Hook plan, frozen at Run start and shared by every dispatch path.
+///
+/// One Run resolves and compiles its [`HookRegistry`] once; this value makes
+/// that registry available, read-only, to every dispatch site in the process —
+/// the engine loop, the permission gate, the notification hook, and the
+/// subagent lifecycle hooks. A `hooks.json` edit made while the Run is in
+/// flight never reaches this dispatcher, because discovery and resolution
+/// happened at Run start. Mid-Run Hook modifications therefore only affect the
+/// *next* Run, which resolves again and freezes a new plan.
+///
+/// Dispatch is a thin delegation to the underlying registry, which already
+/// owns the `HookInvocationStarted` / `HookInvocationCompleted` telemetry
+/// through the [`EventSequencer`] attached at freeze time. There is
+/// deliberately no second execution engine and no second trace authority here:
+/// the run event sequencer stays the single durable source for Hook traces.
+#[derive(Clone)]
+pub struct FrozenHookDispatcher {
+    run_id: String,
+    plan_hash: String,
+    registry: Arc<HookRegistry>,
+}
+
+impl FrozenHookDispatcher {
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    /// The frozen plan hash this dispatcher was bound to at Run start. In the
+    /// production seam this is the Run snapshot's canonical hash — the same
+    /// value the persisted snapshot, the compiled Provider prompt, and the
+    /// HookInvocation trace metadata all reference.
+    pub fn plan_hash(&self) -> &str {
+        &self.plan_hash
+    }
+
+    /// Every Hook in the frozen registry, canonical event order then dispatch
+    /// order. This is the catalog the control plane renders, so what a user
+    /// sees a Run "attached" is provably what it dispatches.
+    pub fn describe(&self) -> Vec<HookDefinition> {
+        self.registry.describe()
+    }
+
+    pub fn describe_event(&self, event: HookEvent) -> Vec<HookDefinition> {
+        self.registry.describe_event(event)
+    }
+
+    pub fn events_covered(&self) -> Vec<HookEvent> {
+        self.registry.events_covered()
+    }
+
+    pub fn fail_closed_security(&self) -> bool {
+        self.registry.fail_closed_security
+    }
+
+    /// Dispatch, resolving each Hook's failure through its
+    /// [`HookFailurePolicy`]. Security-sensitive events stay fail-closed
+    /// regardless of policy.
+    ///
+    /// HookInvocationStarted/Completed telemetry flows through the same
+    /// [`EventSequencer`] the registry was frozen with — a single event source.
+    pub async fn dispatch_outcomes(&self, request: HookRequest) -> Vec<HookOutcome> {
+        self.registry.dispatch_outcomes(request).await
+    }
+
+    pub async fn dispatch(&self, request: HookRequest) -> Vec<HookResponse> {
+        self.registry.dispatch(request).await
+    }
+
+    pub async fn observe(&self, request: HookRequest) -> Result<(), agent_core::ObserveResult> {
+        self.registry.observe(request).await
+    }
+
+    /// Fold Hook outcomes into a single permission verdict, fail-closed.
+    pub fn aggregate_permission(outcomes: &[HookOutcome]) -> agent_core::PermissionAggregate {
+        HookRegistry::aggregate_permission(outcomes)
+    }
+
+    /// Aggregate allow/deny for a subagent gate: any Deny wins.
+    pub fn aggregate_allow(responses: &[HookResponse]) -> Result<(), String> {
+        HookRegistry::aggregate_allow(responses)
+    }
+}
+
+/// Process-wide, Run-scoped frozen dispatchers, keyed by `run_id`.
+///
+/// Two writers converge on this table: the Run-start seam
+/// ([`freeze_run_hooks`]) and the lazy fallback ([`resolve_frozen_dispatcher`]).
+/// Insertion is idempotent — the first registration for a `run_id` wins and
+/// later calls are no-ops — which is exactly what makes a dispatcher frozen:
+/// a mid-Run `hooks.json` change can never replace it.
+fn frozen_dispatchers() -> &'static Mutex<HashMap<String, FrozenHookDispatcher>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, FrozenHookDispatcher>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Freeze a Run's compiled registry as its shared read-only dispatcher.
+///
+/// Idempotent per `run_id`: the first freeze wins, so a second call with a
+/// registry compiled from a mid-Run configuration change is ignored.
+///
+/// `events` is attached to the registry at freeze time so every dispatch from
+/// the tool paths emits HookInvocation telemetry through the same
+/// [`EventSequencer`] the engine uses.
+pub fn freeze_run_hooks(
+    run_id: &str,
+    plan_hash: &str,
+    registry: HookRegistry,
+    events: EventSequencer,
+) -> FrozenHookDispatcher {
+    let mut map = frozen_dispatchers()
+        .lock()
+        .expect("frozen hook dispatcher registry poisoned");
+    if let Some(existing) = map.get(run_id) {
+        return existing.clone();
+    }
+    let frozen = FrozenHookDispatcher {
+        run_id: run_id.to_string(),
+        plan_hash: plan_hash.to_string(),
+        registry: Arc::new(registry.with_events(events)),
+    };
+    map.insert(run_id.to_string(), frozen.clone());
+    frozen
+}
+
+/// The Run's frozen dispatcher, when the Run has been frozen.
+pub fn frozen_dispatcher_for_run(run_id: &str) -> Option<FrozenHookDispatcher> {
+    frozen_dispatchers()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(run_id).cloned())
+}
+
+/// Resolve the Run's frozen dispatcher, compiling once when it is not frozen.
+///
+/// This is the seam the permission and notification tool paths call. It is the
+/// single source of truth for the whole process: the first call for a `run_id`
+/// compiles the HookRegistry (discovery + resolution) exactly once and caches
+/// it; every later call — however many tool invocations, subagent spawns, or
+/// notifications — reuses that same frozen registry and never re-scans
+/// `hooks.json`.
+///
+/// The plan hash prefers the Run snapshot's canonical hash, so the Dispatcher,
+/// the Snapshot, the Provider Prompt and the HookInvocation trace all agree on
+/// the same plan. When no snapshot is persisted (hermetic tests, pre-seam
+/// runs) it falls back to a deterministic hash of the compiled definitions.
+pub fn resolve_frozen_dispatcher(
+    run_id: &str,
+    events: EventSequencer,
+    project: Option<&Path>,
+) -> FrozenHookDispatcher {
+    if let Some(existing) = frozen_dispatcher_for_run(run_id) {
+        return existing;
+    }
+    let definitions = discover_production_hooks(project);
+    let plan_hash =
+        snapshot_plan_hash_for_run(run_id).unwrap_or_else(|| definitions_plan_hash(&definitions));
+    let registry = compile_production_hooks(&definitions, project);
+    freeze_run_hooks(run_id, &plan_hash, registry, events)
+}
+
+/// Best-effort canonical plan hash from the Run's persisted Harness snapshot.
+///
+/// Same source as `harness.run.getSnapshot`: the snapshot's canonical hash.
+/// Any persistence or DB failure degrades to `None`; the caller then uses the
+/// deterministic definitions hash instead.
+///
+/// Test builds never touch the harness store: hermetic tests have no snapshot
+/// row and must not depend on ambient DB env vars or the store lock.
+#[cfg(not(test))]
+fn snapshot_plan_hash_for_run(run_id: &str) -> Option<String> {
+    crate::rpc::harness::repository::with_conn(|conn| {
+        Ok(
+            crate::rpc::harness::repository::get_run_snapshot(conn, run_id)?
+                .map(|snapshot| snapshot.canonical_hash()),
+        )
+    })
+    .ok()
+    .flatten()
+}
+
+#[cfg(test)]
+fn snapshot_plan_hash_for_run(_run_id: &str) -> Option<String> {
+    None
+}
+
+/// Deterministic plan hash for a definition set — the lazy fallback used when
+/// no Run snapshot is persisted.
+fn definitions_plan_hash(definitions: &[HookDefinition]) -> String {
+    harness_core::sha256_hex(&serde_json::to_string(definitions).unwrap_or_default())
+}
+
+/// Map a `HookInvocationStarted` run event into the [`HookInvocationTrace`]
+/// metadata model.
+///
+/// This is the daemon side of the contract the model specifies in
+/// `harness-core`: the single mapping between the durable event payload and
+/// the model, so a trace can be attributed to the frozen plan it ran under.
+pub fn trace_from_started_event(
+    event: &assistant_protocol::v2::RunEventV2,
+    plan_hash: &str,
+) -> Option<HookInvocationTrace> {
+    let assistant_protocol::v2::RunEventKind::HookInvocationStarted {
+        invocation_id,
+        hook_id,
+        hook_event,
+        source,
+        ordinal,
+        input_summary,
+        input_truncated,
+    } = &event.payload
+    else {
+        return None;
+    };
+    Some(HookInvocationTrace::started(
+        event.run_id.clone(),
+        plan_hash,
+        invocation_id.clone(),
+        hook_id.clone(),
+        hook_event.clone(),
+        source.clone(),
+        *ordinal,
+        input_summary.clone(),
+        *input_truncated,
+    ))
+}
+
+/// Map a `HookInvocationCompleted` run event into the [`HookInvocationTrace`]
+/// metadata model.
+pub fn trace_from_completed_event(
+    event: &assistant_protocol::v2::RunEventV2,
+    plan_hash: &str,
+) -> Option<HookInvocationTrace> {
+    let assistant_protocol::v2::RunEventKind::HookInvocationCompleted {
+        invocation_id,
+        hook_id,
+        hook_event,
+        source,
+        ordinal,
+        effective_decision,
+        error_category,
+        duration_ms,
+        output_summary,
+        output_truncated,
+        ..
+    } = &event.payload
+    else {
+        return None;
+    };
+    Some(
+        HookInvocationTrace::started(
+            event.run_id.clone(),
+            plan_hash,
+            invocation_id.clone(),
+            hook_id.clone(),
+            hook_event.clone(),
+            source.clone(),
+            *ordinal,
+            String::new(),
+            false,
+        )
+        .completed(
+            *duration_ms,
+            effective_decision.clone(),
+            error_category.as_deref().and_then(parse_error_category),
+            output_summary.clone(),
+            *output_truncated,
+        ),
+    )
+}
+
+/// Map the registry's error-category string onto the structured model enum.
+fn parse_error_category(category: &str) -> Option<HookErrorCategory> {
+    match category {
+        "handler_failure" => Some(HookErrorCategory::HandlerFailure),
+        "spawn_failure" => Some(HookErrorCategory::SpawnFailure),
+        "timeout" => Some(HookErrorCategory::Timeout),
+        "persistence_failure" => Some(HookErrorCategory::PersistenceFailure),
+        "policy_resolution" => Some(HookErrorCategory::PolicyResolution),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use agent_core::{HookDecision, HookRegistry, HookRequest, HookResponse};
+    use harness_core::hooks::HookInvocationStatus;
     // Only the assertions need a concrete `Duration`; production code goes
     // through `HookDefinition::timeout()`.
     use std::time::Duration;
@@ -1515,5 +1822,347 @@ mod tests {
             prompt_decision("maybe"),
             HookOutcome::Failed { .. }
         ));
+    }
+
+    // ── Run-level frozen Hook Dispatcher (NE-P0-05) ─────────────────────────
+
+    /// A Hook that always fails, so failure-policy resolution can be exercised
+    /// without spawning processes or opening sockets.
+    struct FixedFailHook;
+
+    #[async_trait::async_trait]
+    impl HookHandler for FixedFailHook {
+        async fn handle(&self, _request: HookRequest) -> HookResponse {
+            HookOutcome::Failed {
+                reason: "boom".into(),
+            }
+            .into_response()
+        }
+
+        async fn handle_outcome(&self, _request: HookRequest) -> HookOutcome {
+            HookOutcome::Failed {
+                reason: "boom".into(),
+            }
+        }
+    }
+
+    fn failing_registry(event: HookEvent, policy: HookFailurePolicy) -> HookRegistry {
+        let mut registry = HookRegistry::new();
+        registry.enable_security_fail_closed();
+        let source = HookSource::builtin("fixed-fail");
+        let definition = HookDefinition {
+            id: HookId::new(&source, event),
+            event,
+            source,
+            order: 0,
+            matcher: None,
+            conditions: Vec::new(),
+            timeout_ms: 0,
+            failure_policy: policy,
+            kind: HookKind::Builtin {
+                name: "fixed-fail".into(),
+            },
+        };
+        registry.register_defined(definition, Box::new(FixedFailHook));
+        registry
+    }
+
+    /// The freeze is idempotent per run: the first registration wins and a
+    /// later registration compiled from a mid-Run change is ignored.
+    #[test]
+    fn frozen_dispatcher_freezes_a_run_and_ignores_later_registrations() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &probe_group("Notification", PROBE_URL),
+        );
+        let events = EventSequencer::memory_only();
+
+        let first = freeze_run_hooks("run-freeze", "plan-v1", project.hooks(), events.clone());
+        assert_eq!(first.plan_hash(), "plan-v1");
+        assert_eq!(
+            frozen_dispatcher_for_run("run-freeze")
+                .expect("run frozen")
+                .plan_hash(),
+            "plan-v1"
+        );
+
+        let second = freeze_run_hooks("run-freeze", "plan-v2", project.hooks(), events);
+        assert_eq!(
+            second.plan_hash(),
+            "plan-v1",
+            "a second freeze for the same run must be a no-op"
+        );
+        assert_eq!(
+            frozen_dispatcher_for_run("run-freeze")
+                .expect("run frozen")
+                .plan_hash(),
+            "plan-v1"
+        );
+    }
+
+    /// Every dispatched Hook emits exactly one HookInvocationStarted and one
+    /// HookInvocationCompleted, through the same EventSequencer the registry
+    /// was frozen with — a single event source, and no dangling Started.
+    #[tokio::test]
+    async fn frozen_dispatcher_emits_started_and_completed_trace_through_event_sequencer() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &probe_group("Notification", PROBE_URL),
+        );
+        let events = EventSequencer::memory_only();
+        let frozen = freeze_run_hooks("run-trace", "plan-trace", project.hooks(), events.clone());
+
+        let responses = frozen
+            .dispatch(HookRequest {
+                event: HookEvent::Notification,
+                run_id: "run-trace".into(),
+                tool_name: None,
+                input: serde_json::json!({}),
+            })
+            .await;
+        // allow-all builtin + the loopback-rejected probe both dispatch.
+        assert_eq!(responses.len(), 2);
+
+        let replayed = events.replay_after("run-trace", 0);
+        let started: Vec<_> = replayed
+            .iter()
+            .filter(|e| matches!(&e.payload, RunEventKind::HookInvocationStarted { .. }))
+            .collect();
+        let completed: Vec<_> = replayed
+            .iter()
+            .filter(|e| matches!(&e.payload, RunEventKind::HookInvocationCompleted { .. }))
+            .collect();
+        assert_eq!(
+            started.len(),
+            2,
+            "every dispatched hook must emit HookInvocationStarted"
+        );
+        assert_eq!(
+            completed.len(),
+            2,
+            "every dispatched hook must emit HookInvocationCompleted"
+        );
+
+        for start in &started {
+            let start_trace = trace_from_started_event(start, "plan-trace").expect("started maps");
+            assert_eq!(start_trace.plan_hash, "plan-trace");
+            assert_eq!(start_trace.status, HookInvocationStatus::Started);
+            assert!(
+                completed
+                    .iter()
+                    .any(|c| trace_from_completed_event(c, "plan-trace")
+                        .is_some_and(|t| t.invocation_id == start_trace.invocation_id)),
+                "started invocation {} must have a completed twin",
+                start_trace.invocation_id
+            );
+        }
+    }
+
+    /// Resolving through the tool-path seam compiles exactly once per run and
+    /// is immune to mid-Run `hooks.json` edits — the edited file only reaches a
+    /// *new* Run.
+    #[tokio::test]
+    async fn resolve_frozen_dispatcher_compiles_once_and_is_immune_to_mid_run_edits() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &probe_group("Notification", PROBE_URL),
+        );
+        let run_id = format!("run-resolve-{}", uuid::Uuid::new_v4());
+        let events = EventSequencer::memory_only();
+
+        let first =
+            resolve_frozen_dispatcher(&run_id, events.clone(), Some(project.root.as_path()));
+        let plan_hash = first.plan_hash().to_string();
+        assert_eq!(
+            frozen_dispatcher_for_run(&run_id).unwrap().plan_hash(),
+            plan_hash
+        );
+
+        // Mid-Run edit: add a second probe hook to the same file.
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"hooks":{{"Notification":[{{"hooks":[
+                    {{"type":"http","url":"{PROBE_URL}"}},
+                    {{"type":"http","url":"{PROBE_URL}"}}
+                ]}}]}}}}"#
+            ),
+        );
+
+        let second = resolve_frozen_dispatcher(&run_id, events, Some(project.root.as_path()));
+        assert_eq!(
+            second.plan_hash(),
+            plan_hash,
+            "a mid-Run edit must not change the frozen plan hash"
+        );
+        let responses = second
+            .dispatch(HookRequest {
+                event: HookEvent::Notification,
+                run_id: run_id.clone(),
+                tool_name: None,
+                input: serde_json::json!({}),
+            })
+            .await;
+        assert_eq!(
+            responses.len(),
+            2,
+            "the frozen dispatcher still dispatches the pre-edit handler set"
+        );
+    }
+
+    /// `failurePolicy` / `failure_policy` is read from `hooks.json`; unknown
+    /// or missing values stay fail-closed `Fail`.
+    #[test]
+    fn failure_policy_field_is_parsed_from_hooks_json() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"hooks":{{"Notification":[{{"hooks":[
+                    {{"type":"http","url":"{PROBE_URL}","failurePolicy":"skip"}},
+                    {{"type":"http","url":"{PROBE_URL}","failure_policy":"default"}},
+                    {{"type":"http","url":"{PROBE_URL}"}},
+                    {{"type":"http","url":"{PROBE_URL}","failurePolicy":"bogus"}}
+                ]}}]}}}}"#
+            ),
+        );
+        let policies: Vec<_> = file_definitions(&project)
+            .iter()
+            .map(|d| d.failure_policy)
+            .collect();
+        assert_eq!(
+            policies,
+            vec![
+                HookFailurePolicy::Skip,
+                HookFailurePolicy::Default,
+                HookFailurePolicy::Fail,
+                HookFailurePolicy::Fail,
+            ]
+        );
+    }
+
+    /// The frozen dispatcher resolves a handler failure through the Hook's
+    /// failure policy: Skip drops it, Default allows it, and a security event
+    /// stays fail-closed no matter what the policy says.
+    #[tokio::test]
+    async fn frozen_dispatcher_applies_failure_policy_skip_default_and_security_override() {
+        let events = EventSequencer::memory_only();
+
+        let frozen = freeze_run_hooks(
+            "run-skip",
+            "plan-skip",
+            failing_registry(HookEvent::Notification, HookFailurePolicy::Skip),
+            events.clone(),
+        );
+        let responses = frozen
+            .dispatch(HookRequest {
+                event: HookEvent::Notification,
+                run_id: "run-skip".into(),
+                tool_name: None,
+                input: serde_json::json!({}),
+            })
+            .await;
+        assert!(
+            responses.is_empty(),
+            "Skip must drop the failed hook: {responses:?}"
+        );
+
+        let frozen = freeze_run_hooks(
+            "run-default",
+            "plan-default",
+            failing_registry(HookEvent::Notification, HookFailurePolicy::Default),
+            events.clone(),
+        );
+        let responses = frozen
+            .dispatch(HookRequest {
+                event: HookEvent::Notification,
+                run_id: "run-default".into(),
+                tool_name: None,
+                input: serde_json::json!({}),
+            })
+            .await;
+        assert_eq!(responses.len(), 1);
+        assert!(
+            matches!(responses[0].decision, HookDecision::Allow),
+            "Default must resolve a failure to Allow"
+        );
+
+        let frozen = freeze_run_hooks(
+            "run-sec",
+            "plan-sec",
+            failing_registry(HookEvent::PreToolUse, HookFailurePolicy::Default),
+            events.clone(),
+        );
+        let responses = frozen
+            .dispatch(HookRequest {
+                event: HookEvent::PreToolUse,
+                run_id: "run-sec".into(),
+                tool_name: Some("write_file".into()),
+                input: serde_json::json!({}),
+            })
+            .await;
+        assert!(
+            matches!(responses[0].decision, HookDecision::Deny { .. }),
+            "a security event must stay fail-closed even with Default policy"
+        );
+    }
+
+    /// The trace mapping round-trips the durable run-event payloads into the
+    /// metadata model, including the structured error category.
+    #[test]
+    fn trace_mapping_round_trips_run_event_payloads() {
+        let events = EventSequencer::memory_only();
+        let started = events.append(
+            "run-map",
+            RunEventKind::HookInvocationStarted {
+                invocation_id: "inv-1".into(),
+                hook_id: "builtin/allow-all#Notification".into(),
+                hook_event: "Notification".into(),
+                source: "allow-all".into(),
+                ordinal: 0,
+                input_summary: "{\"tool\":\"notification\"}".into(),
+                input_truncated: false,
+            },
+        );
+        let trace = trace_from_started_event(&started, "plan-hash").expect("started maps");
+        assert_eq!(trace.plan_hash, "plan-hash");
+        assert_eq!(trace.status, HookInvocationStatus::Started);
+        assert_eq!(trace.hook_event, "Notification");
+        assert_eq!(trace.hook_id, "builtin/allow-all#Notification");
+        assert!(!trace.input_truncated);
+
+        let completed = events.append(
+            "run-map",
+            RunEventKind::HookInvocationCompleted {
+                invocation_id: "inv-1".into(),
+                hook_id: "builtin/allow-all#Notification".into(),
+                hook_event: "Notification".into(),
+                source: "allow-all".into(),
+                ordinal: 0,
+                status: "completed".into(),
+                effective_decision: Some("Allow".into()),
+                error_category: Some("timeout".into()),
+                duration_ms: 7,
+                output_summary: "decision".into(),
+                output_truncated: false,
+            },
+        );
+        let trace = trace_from_completed_event(&completed, "plan-hash").expect("completed maps");
+        assert_eq!(trace.status, HookInvocationStatus::Completed);
+        assert_eq!(trace.duration_ms, 7);
+        assert_eq!(trace.effective_decision.as_deref(), Some("Allow"));
+        assert_eq!(
+            trace.error_category,
+            Some(HookErrorCategory::Timeout),
+            "the structured error category must survive the mapping"
+        );
+        assert_eq!(
+            parse_error_category("handler_failure"),
+            Some(HookErrorCategory::HandlerFailure)
+        );
+        assert_eq!(parse_error_category("unknown"), None);
     }
 }

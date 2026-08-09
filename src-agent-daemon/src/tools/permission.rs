@@ -91,9 +91,16 @@ impl PermissionGatedTools {
             .project_root
             .as_deref()
             .map(std::path::Path::new);
-        let permission_hooks =
-            crate::production_hooks::build_production_hooks_for_project(project_root)
-                .with_events(self.events.clone());
+        // NE-P0-05: the permission gate dispatches through the Run's frozen
+        // Hook Dispatcher — the same plan the engine was given at Run start —
+        // instead of re-scanning hooks.json on every tool call. A mid-Run edit
+        // only affects a new Run. Fail-closed aggregation is unchanged: a hook
+        // may tighten, never loosen, and a failure still denies.
+        let permission_hooks = crate::production_hooks::resolve_frozen_dispatcher(
+            &self.parent_run_id,
+            self.events.clone(),
+            project_root,
+        );
         let hook_outcomes = permission_hooks
             .dispatch_outcomes(HookRequest {
                 event: HookEvent::PermissionRequest,

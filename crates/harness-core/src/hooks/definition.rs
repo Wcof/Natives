@@ -260,6 +260,135 @@ pub enum HookFailurePolicy {
     Default,
 }
 
+/// The lifecycle phase of one Hook invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookInvocationStatus {
+    /// The dispatch emitted `HookInvocationStarted` before invoking the handler.
+    Started,
+    /// The dispatch emitted `HookInvocationCompleted` after the handler settled.
+    Completed,
+}
+
+/// Structured error category for a Hook invocation that did not complete
+/// normally. This is the single classification both the dispatcher and the
+/// durability layer use, so a failure reason never has to be reverse-parsed
+/// from free text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookErrorCategory {
+    /// The handler itself returned `HookOutcome::Failed`.
+    HandlerFailure,
+    /// The external process could not be spawned.
+    SpawnFailure,
+    /// The handler exceeded its configured timeout.
+    Timeout,
+    /// Telemetry could not be persisted before or after the handler ran.
+    PersistenceFailure,
+    /// The failure could not be resolved through the Hook's failure policy.
+    PolicyResolution,
+}
+
+/// One Hook invocation's lifecycle, as a single metadata model.
+///
+/// This is the shared contract behind the `HookInvocationStarted` and
+/// `HookInvocationCompleted` run events. It lives in the pure domain crate so
+/// the field set is a specification both the dispatcher and the durability
+/// layer must agree on and cannot silently drift apart:
+///
+/// - **run / Hook identity**: `run_id`, `hook_id`, `hook_event`, `source`,
+///   `ordinal` (position within the event's dispatch list);
+/// - **state / decision / duration**: `status`, `effective_decision`,
+///   `error_category`, `duration_ms`;
+/// - **redacted I/O summaries**: `input_summary` / `output_summary` are never
+///   the raw tool input or provider output — secrets are removed and the
+///   payload is capped;
+/// - **truncation metadata**: `input_truncated` / `output_truncated` tell a
+///   consumer the summary is an excerpt, not the whole payload;
+/// - **plan binding**: `plan_hash` ties the invocation to the frozen plan hash
+///   the Run committed to (the snapshot canonical hash), so a trace can be
+///   checked against the snapshot that advertised the dispatch.
+///
+/// The model itself is never a second durable authority: it is a pure
+/// description that the runtime maps into run events appended through the
+/// single run event source (`EventSequencer`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookInvocationTrace {
+    pub run_id: String,
+    /// Frozen plan hash the invocation belongs to (snapshot canonical hash).
+    pub plan_hash: String,
+    pub invocation_id: String,
+    pub hook_id: String,
+    pub hook_event: String,
+    pub source: String,
+    pub ordinal: u32,
+    pub status: HookInvocationStatus,
+    /// Serialized decision the Hook produced (`Allow`, `Deny { reason }`, …).
+    /// `None` when the invocation failed or was dropped by its failure policy.
+    pub effective_decision: Option<String>,
+    pub error_category: Option<HookErrorCategory>,
+    pub duration_ms: u64,
+    /// Redacted, capped input summary — never raw tool input.
+    pub input_summary: String,
+    pub input_truncated: bool,
+    /// Redacted, capped output summary — never raw provider output.
+    pub output_summary: String,
+    pub output_truncated: bool,
+}
+
+impl HookInvocationTrace {
+    /// Start-of-invocation metadata, before the handler runs.
+    pub fn started(
+        run_id: impl Into<String>,
+        plan_hash: impl Into<String>,
+        invocation_id: impl Into<String>,
+        hook_id: impl Into<String>,
+        hook_event: impl Into<String>,
+        source: impl Into<String>,
+        ordinal: u32,
+        input_summary: impl Into<String>,
+        input_truncated: bool,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            plan_hash: plan_hash.into(),
+            invocation_id: invocation_id.into(),
+            hook_id: hook_id.into(),
+            hook_event: hook_event.into(),
+            source: source.into(),
+            ordinal,
+            status: HookInvocationStatus::Started,
+            effective_decision: None,
+            error_category: None,
+            duration_ms: 0,
+            input_summary: input_summary.into(),
+            input_truncated,
+            output_summary: String::new(),
+            output_truncated: false,
+        }
+    }
+
+    /// Settle an invocation with its outcome metadata.
+    pub fn completed(
+        self,
+        duration_ms: u64,
+        effective_decision: Option<String>,
+        error_category: Option<HookErrorCategory>,
+        output_summary: impl Into<String>,
+        output_truncated: bool,
+    ) -> Self {
+        Self {
+            status: HookInvocationStatus::Completed,
+            duration_ms,
+            effective_decision,
+            error_category,
+            output_summary: output_summary.into(),
+            output_truncated,
+            ..self
+        }
+    }
+}
+
 /// How a condition compares a field against a pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -625,5 +754,74 @@ mod tests {
     #[test]
     fn failure_policy_defaults_to_fail() {
         assert_eq!(HookFailurePolicy::default(), HookFailurePolicy::Fail);
+    }
+
+    #[test]
+    fn hook_invocation_trace_started_then_completed_carries_full_metadata() {
+        let trace = HookInvocationTrace::started(
+            "run-1",
+            "snapshot-canonical-hash",
+            "inv-1",
+            "builtin/allow-all#PermissionRequest",
+            "PermissionRequest",
+            "allow-all",
+            0,
+            "{\"tool\":\"write_file\"}",
+            false,
+        );
+        assert_eq!(trace.status, HookInvocationStatus::Started);
+        assert_eq!(trace.plan_hash, "snapshot-canonical-hash");
+        assert_eq!(trace.duration_ms, 0);
+        assert_eq!(trace.error_category, None);
+        assert_eq!(trace.effective_decision, None);
+
+        let trace = trace.completed(
+            12,
+            Some("Deny { reason: \"no\" }".into()),
+            Some(HookErrorCategory::HandlerFailure),
+            "redacted-output",
+            true,
+        );
+        assert_eq!(trace.status, HookInvocationStatus::Completed);
+        assert_eq!(trace.duration_ms, 12);
+        assert_eq!(
+            trace.error_category,
+            Some(HookErrorCategory::HandlerFailure)
+        );
+        assert_eq!(
+            trace.effective_decision.as_deref(),
+            Some("Deny { reason: \"no\" }")
+        );
+        assert!(trace.output_truncated);
+        assert!(!trace.input_truncated);
+    }
+
+    #[test]
+    fn hook_invocation_trace_survives_a_json_round_trip() {
+        let trace = HookInvocationTrace::started(
+            "run-2",
+            "plan-hash",
+            "inv-2",
+            "project/.claude/hooks.json#PreToolUse[0]/0",
+            "PreToolUse",
+            ".claude/hooks.json",
+            1,
+            "summary",
+            true,
+        )
+        .completed(3, None, None, "out", false);
+        let text = serde_json::to_string(&trace).unwrap();
+        assert_eq!(
+            serde_json::from_str::<HookInvocationTrace>(&text).unwrap(),
+            trace
+        );
+        assert_eq!(
+            serde_json::from_str::<HookInvocationStatus>("\"started\"").unwrap(),
+            HookInvocationStatus::Started
+        );
+        assert_eq!(
+            serde_json::from_str::<HookErrorCategory>("\"timeout\"").unwrap(),
+            HookErrorCategory::Timeout
+        );
     }
 }

@@ -994,13 +994,18 @@ impl EngineToolRuntime for PermissionGatedTools {
                     }
                 }
                 if name == "notification" {
-                    let hooks = crate::production_hooks::build_production_hooks_for_project(
+                    // NE-P0-05: Notification dispatches through the Run's frozen
+                    // Hook Dispatcher (same plan hash as the engine's registry)
+                    // rather than re-scanning hooks.json per tool call. Mid-Run
+                    // edits only affect a new Run.
+                    let hooks = crate::production_hooks::resolve_frozen_dispatcher(
+                        &self.parent_run_id,
+                        self.events.clone(),
                         self.gateway
                             .project_root
                             .as_deref()
                             .map(std::path::Path::new),
-                    )
-                    .with_events(self.events.clone());
+                    );
                     let _ = hooks
                         .dispatch(HookRequest {
                             event: HookEvent::Notification,
