@@ -144,8 +144,9 @@ function collectUiBusiness() {
   const uiRoot = join(ROOT, 'src/components/ui');
   if (!existsSync(uiRoot)) return map;
   // UI atoms may only import: external packages, other ui files, design-tokens,
-  // i18n (framework), and pure type files. Anything else is a business dep.
-  const LIB_ALLOW = ['design-tokens', 'i18n', 'types/'];
+  // i18n (framework), pure type files, and generic UI infrastructure libs
+  // (focus trap / markdown safety / toast context — no business logic).
+  const LIB_ALLOW = ['design-tokens', 'i18n', 'types/', 'useFocusTrap', 'markdown-safety', 'toast-context'];
   for (const p of walk(uiRoot)) {
     if (!isHandwrittenTs(p)) continue;
     const src = readFileSync(p, 'utf8');
