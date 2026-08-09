@@ -11,6 +11,7 @@ pub mod path;
 pub mod plan;
 pub mod risk;
 pub mod runtime;
+pub mod runtime_utils;
 pub mod scan;
 pub mod store;
 
