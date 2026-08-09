@@ -729,6 +729,53 @@ export interface HarnessNotice {
   created_at?: string;
 }
 
+// ── Execution Engine V2 (E2-01) ───────────────────────────────────────────
+// Backend-derived truth: the snapshot is built by the Host from real runtime
+// discovery + the daemon capability handshake (SETTINGS-002). Capability map
+// keys/values mirror the daemon's advertised matrix; statuses are real probe
+// output (ready | degraded | blocked | disabled | not_installed).
+
+/** Runtime descriptor for the settings snapshot (Host-projected, real data). */
+export interface RuntimeDescriptor {
+  id: string;
+  displayName: string;
+  status: string;
+  version?: string | null;
+  authority: string;
+  reasonCode: string;
+  reason: string;
+  capabilities: Record<string, string>;
+  controllable: string[];
+}
+
+export interface ResolvedDefaultRuntime {
+  runtimeId: string;
+  source: string;
+  fallbackUsed: boolean;
+  reasonCode: string;
+  reason: string;
+}
+
+/** ExecutionEngineSettingsV2 wire shape (camelCase). */
+export interface ExecutionEngineSettings {
+  schemaVersion: number;
+  revision: number;
+  defaultRuntime: string;
+  externalUnavailablePolicy: string;
+  native: { maxSteps: number; disabledTools: string[] };
+  claudeCli: { enabled: boolean };
+  codexCli: { enabled: boolean };
+  diagnostics: { performanceTelemetry: boolean };
+}
+
+export interface ExecutionEngineSnapshot {
+  settings: ExecutionEngineSettings;
+  runtimes: RuntimeDescriptor[];
+  resolvedDefault: ResolvedDefaultRuntime;
+  defaultProvider?: unknown;
+  diagnosticsSummary: Record<string, unknown>;
+}
+
 export interface NativesAPI {
   themeReady: () => void;
   app: { version: () => Promise<string> };
@@ -1194,9 +1241,9 @@ export interface NativesAPI {
   /** 执行引擎设置 V2（唯一持久化权威 — A6 backend） */
   executionEngine: {
     /** legacyRuntimeId 仅用于一次性迁移（MIG-001），日常为 null。 */
-    getSnapshot: (legacyRuntimeId?: string | null) => Promise<Record<string, unknown>>;
-    saveSettings: (settings: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    detectRuntimes: () => Promise<unknown[]>;
+    getSnapshot: (legacyRuntimeId?: string | null) => Promise<ExecutionEngineSnapshot>;
+    saveSettings: (settings: ExecutionEngineSettings) => Promise<ExecutionEngineSettings>;
+    detectRuntimes: () => Promise<RuntimeDescriptor[]>;
     getDiagnostics: () => Promise<Record<string, unknown>>;
   };
   /** Assistant in-process RPC (no daemon sidecar) */
@@ -2063,7 +2110,7 @@ const nativesAPI: NativesAPI = {
     // 值让后端做 one-way 迁移；迁移完成后前端立即清除旧 key，此后恒为 null。
     getSnapshot: (legacyRuntimeId?: string | null) =>
       cmd('execution_engine_get_snapshot', { legacy_runtime_id: legacyRuntimeId ?? null }),
-    saveSettings: (settings: Record<string, unknown>) =>
+    saveSettings: (settings: ExecutionEngineSettings) =>
       cmd('execution_engine_save_settings', { settings }),
     detectRuntimes: () => cmd('execution_engine_detect_runtimes'),
     getDiagnostics: () => cmd('execution_engine_get_diagnostics'),

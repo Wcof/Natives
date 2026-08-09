@@ -656,12 +656,13 @@ mod tests {
     #[test]
     fn settings_default_runtime_reaches_created_run() {
         let mut settings = ExecutionEngineSettingsV2::default().normalized();
-        settings.default_runtime = crate::execution_engine_settings::RUNTIME_CLAUDE_CLI.to_string();
+        settings.default_runtime = crate::execution_engine_settings::RuntimeId::ClaudeCli;
         let runtimes = native_descriptors(&settings);
         // Application default resolves; claude is degraded → fail policy errors.
         // Use fallback_native to prove the source/fallback chain is honored and
         // the policy's resolved runtime (native) reaches the request.
-        settings.external_unavailable_policy = "fallback_native".to_string();
+        settings.external_unavailable_policy =
+            crate::execution_engine_settings::ExternalUnavailablePolicy::FallbackNative;
         let policy =
             resolve_execution_policy(&settings, &runtimes, None, None, None).expect("resolve");
         assert!(policy.fallback_used);
@@ -706,7 +707,8 @@ mod tests {
     #[test]
     fn explicit_external_unavailable_fails_before_create() {
         let mut settings = ExecutionEngineSettingsV2::default().normalized();
-        settings.external_unavailable_policy = "fallback_native".to_string();
+        settings.external_unavailable_policy =
+            crate::execution_engine_settings::ExternalUnavailablePolicy::FallbackNative;
         let runtimes = native_descriptors(&settings);
         let err = resolve_execution_policy(
             &settings,

@@ -19,7 +19,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
-import nativesAPI from '@/lib/tauri-adapter';
+import nativesAPI, {
+  type ExecutionEngineSnapshot,
+  type RuntimeDescriptor,
+} from '@/lib/tauri-adapter';
 import { classifyError } from '@/lib/error-classifier';
 import {
   clearPreferredRuntimeId,
@@ -32,40 +35,11 @@ const adapter = nativesAPI;
 /// are allowed too — this list is a convenience, not an authority.
 const KNOWN_TOOLS = ['read_file', 'list_dir', 'write_file', 'write_module', 'run_terminal', 'lint_module'];
 
-interface RuntimeDescriptor {
-  id: string;
-  displayName: string;
-  status: string;
-  version?: string | null;
-  authority: string;
-  reasonCode: string;
-  reason: string;
-  capabilities: Record<string, string>;
-  controllable: string[];
-}
-
-interface ResolvedDefaultRuntime {
-  runtimeId: string;
-  source: string;
-  fallbackUsed: boolean;
-  reasonCode: string;
-  reason: string;
-}
-
-interface ExecutionEngineSnapshot {
-  settings: {
-    schemaVersion: number;
-    revision: number;
-    defaultRuntime: string;
-    externalUnavailablePolicy: string;
-    native: { maxSteps: number; disabledTools: string[] };
-    claudeCli: { enabled: boolean };
-    codexCli: { enabled: boolean };
-    diagnostics: { performanceTelemetry: boolean };
-  };
-  runtimes: RuntimeDescriptor[];
-  resolvedDefault: ResolvedDefaultRuntime;
-  diagnosticsSummary: Record<string, unknown>;
+/** SETTINGS-001: only a currently-`ready` runtime is a valid default choice.
+ *  blocked / degraded / disabled / not_installed radios are disabled — the
+ *  Host save gate independently rejects them (double-layer validation). */
+export function isSelectable(runtime: RuntimeDescriptor): boolean {
+  return runtime.status === 'ready';
 }
 
 function statusLabel(locale: Locale, status: string): string {
@@ -107,9 +81,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
       // 作为一次性迁移种子传给后端，后端做 one-way 迁移到 Settings V2 defaultRuntime
       // （revision CAS 保证只迁一次，绝不覆盖已权威的 V2）。迁移成功/无需迁移后
       // 立即清除旧 key — 此后 getter 不再读取旧值，新 Run 默认完全由 V2 决定。
-      const snap = (await adapter.executionEngine.getSnapshot(
-        loadPreferredRuntimeId(),
-      )) as unknown as ExecutionEngineSnapshot;
+      const snap = await adapter.executionEngine.getSnapshot(loadPreferredRuntimeId());
       clearPreferredRuntimeId();
       setSnapshot(snap);
       setMaxStepsDraft(snap.settings.native.maxSteps ?? 50);
@@ -227,6 +199,11 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
 
   const defaultRt = snapshot.runtimes.find((r) => r.id === snapshot.settings.defaultRuntime);
   const resolved = snapshot.resolvedDefault;
+  // SETTINGS-002: capability rows come from the real daemon-advertised matrix
+  // projected into each descriptor — never a hardcoded feature list.
+  const capabilityKeys = Array.from(
+    new Set(snapshot.runtimes.flatMap((rt) => Object.keys(rt.capabilities))),
+  ).sort();
 
   return (
     <div>
@@ -262,7 +239,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
                   {t(locale, 'executionEngine.status')}: {statusLabel(locale, rt.status)}
                   {rt.version ? ` · ${rt.version}` : ''}
                 </div>
-                {rt.status === 'blocked' || rt.status === 'degraded' || rt.status === 'disabled' ? (
+                {!isSelectable(rt) ? (
                   <div style={{ fontSize: 12, color: 'var(--warning)', marginTop: 4 }}>
                     {rt.reason}
                   </div>
@@ -274,7 +251,8 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
                   name="defaultRuntime"
                   checked={snapshot.settings.defaultRuntime === rt.id}
                   onChange={() => void saveDefaultRuntime(rt.id)}
-                  disabled={busy}
+                  disabled={busy || !isSelectable(rt)}
+                  title={isSelectable(rt) ? undefined : rt.reason}
                 />
                 {rt.id === 'claude_cli' && snapshot.settings.defaultRuntime === rt.id ? (
                   <select
@@ -457,34 +435,33 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
         ) : null}
       </Card>
 
-      {/* 卡片 5 — 能力真相（backend descriptor） */}
+      {/* 卡片 5 — 能力真相（真实 daemon 探测投影，非 Host 静态表） */}
       <Card title={t(locale, 'executionEngine.capabilitiesTitle')}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
               <th style={{ padding: 6 }}>{t(locale, 'executionEngine.capability')}</th>
-              <th style={{ padding: 6 }}>Native</th>
-              <th style={{ padding: 6 }}>Claude CLI</th>
-              <th style={{ padding: 6 }}>Codex</th>
+              {snapshot.runtimes.map((rt) => (
+                <th key={rt.id} style={{ padding: 6 }}>
+                  {rt.displayName}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {['streaming', 'tools', 'mcp', 'hooks', 'subagent', 'checkpoint_resume', 'side_effect_ledger', 'provider_routing'].map(
-              (cap) => (
-                <tr key={cap} style={{ borderBottom: '1px solid var(--border-soft)' }}>
-                  <td style={{ padding: 6 }}>{cap}</td>
-                  {['native', 'claude_cli', 'codex_cli'].map((rid) => {
-                    const value =
-                      snapshot.runtimes.find((r) => r.id === rid)?.capabilities[cap] ?? 'unknown';
-                    return (
-                      <td key={rid} style={{ padding: 6 }}>
-                        {value}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ),
-            )}
+            {capabilityKeys.map((cap) => (
+              <tr key={cap} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                <td style={{ padding: 6 }}>{cap}</td>
+                {snapshot.runtimes.map((rt) => {
+                  const value = rt.capabilities[cap] ?? 'unknown';
+                  return (
+                    <td key={rt.id} style={{ padding: 6 }}>
+                      {value}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
           </tbody>
         </table>
       </Card>

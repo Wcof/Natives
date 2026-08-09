@@ -33,6 +33,106 @@ pub const RUNTIME_NATIVE: &str = "native";
 pub const RUNTIME_CLAUDE_CLI: &str = "claude_cli";
 pub const RUNTIME_CODEX_CLI: &str = "codex_cli";
 
+/// `externalUnavailablePolicy` wire values.
+pub const POLICY_FAIL: &str = "fail";
+pub const POLICY_FALLBACK_NATIVE: &str = "fallback_native";
+
+/// Restricted runtime id (SETTINGS-001). Serializes to the wire string; an
+/// unknown string from an external/legacy source deserializes into `Unknown`
+/// which is **never silently persisted** — the save path rejects it
+/// (`validate_enum_fields`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RuntimeId {
+    Native,
+    ClaudeCli,
+    CodexCli,
+    /// Unknown string seen on the wire (corrupt/legacy input). Kept so loading
+    /// a corrupt value is observable instead of a silent guess; never durable.
+    Unknown(String),
+}
+
+impl RuntimeId {
+    pub fn as_str(&self) -> &str {
+        match self {
+            RuntimeId::Native => RUNTIME_NATIVE,
+            RuntimeId::ClaudeCli => RUNTIME_CLAUDE_CLI,
+            RuntimeId::CodexCli => RUNTIME_CODEX_CLI,
+            RuntimeId::Unknown(raw) => raw.as_str(),
+        }
+    }
+
+    /// Known ids only; `Unknown` is never a valid persisted value.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, RuntimeId::Unknown(_))
+    }
+
+    pub fn from_known(value: &str) -> Option<Self> {
+        match value {
+            RUNTIME_NATIVE => Some(RuntimeId::Native),
+            RUNTIME_CLAUDE_CLI => Some(RuntimeId::ClaudeCli),
+            RUNTIME_CODEX_CLI => Some(RuntimeId::CodexCli),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for RuntimeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from_known(&raw).unwrap_or(RuntimeId::Unknown(raw)))
+    }
+}
+
+/// Restricted unavailable policy (SETTINGS-001). Same contract as `RuntimeId`:
+/// unknown strings decode to `Unknown` and are rejected before persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalUnavailablePolicy {
+    Fail,
+    FallbackNative,
+    Unknown(String),
+}
+
+impl ExternalUnavailablePolicy {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ExternalUnavailablePolicy::Fail => POLICY_FAIL,
+            ExternalUnavailablePolicy::FallbackNative => POLICY_FALLBACK_NATIVE,
+            ExternalUnavailablePolicy::Unknown(raw) => raw.as_str(),
+        }
+    }
+
+    pub fn is_known(&self) -> bool {
+        !matches!(self, ExternalUnavailablePolicy::Unknown(_))
+    }
+
+    pub fn from_known(value: &str) -> Option<Self> {
+        match value {
+            POLICY_FAIL => Some(ExternalUnavailablePolicy::Fail),
+            POLICY_FALLBACK_NATIVE => Some(ExternalUnavailablePolicy::FallbackNative),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for ExternalUnavailablePolicy {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ExternalUnavailablePolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from_known(&raw).unwrap_or(ExternalUnavailablePolicy::Unknown(raw)))
+    }
+}
+
 // ── V2 model (mirrors contracts/execution-engine-settings-v2.schema.json) ──
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -41,9 +141,9 @@ pub struct ExecutionEngineSettingsV2 {
     pub schema_version: u32,
     pub revision: u32,
     #[serde(default = "default_runtime")]
-    pub default_runtime: String,
+    pub default_runtime: RuntimeId,
     #[serde(default = "default_external_unavailable_policy")]
-    pub external_unavailable_policy: String,
+    pub external_unavailable_policy: ExternalUnavailablePolicy,
     pub native: NativeSettings,
     pub claude_cli: ExternalCliSettings,
     pub codex_cli: ExternalCliSettings,
@@ -86,11 +186,11 @@ pub struct CompatSettings {
     pub legacy_enabled_tools: Option<HashMap<String, bool>>,
 }
 
-fn default_runtime() -> String {
-    RUNTIME_NATIVE.to_string()
+fn default_runtime() -> RuntimeId {
+    RuntimeId::Native
 }
-fn default_external_unavailable_policy() -> String {
-    "fail".to_string()
+fn default_external_unavailable_policy() -> ExternalUnavailablePolicy {
+    ExternalUnavailablePolicy::Fail
 }
 fn default_max_steps() -> u32 {
     DEFAULT_MAX_STEPS
@@ -140,6 +240,25 @@ impl ExecutionEngineSettingsV2 {
     /// disabledTools — Settings can never expand permissions.
     pub fn effective_tool_allowed(&self, tool_name: &str) -> bool {
         !self.native.disabled_tools.iter().any(|d| d == tool_name)
+    }
+
+    /// Schema-level validation (SETTINGS-001): restricted enum fields must hold
+    /// a known value. An `Unknown` value decoded from a corrupt/legacy payload
+    /// is rejected here — it is never silently persisted.
+    pub fn validate_enum_fields(&self) -> Result<(), String> {
+        if !self.default_runtime.is_known() {
+            return Err(format!(
+                "defaultRuntime '{}' is not a known runtime id; refusing to save",
+                self.default_runtime.as_str()
+            ));
+        }
+        if !self.external_unavailable_policy.is_known() {
+            return Err(format!(
+                "externalUnavailablePolicy '{}' is not a known policy; refusing to save",
+                self.external_unavailable_policy.as_str()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -220,14 +339,18 @@ pub fn migrate_legacy_executor_settings(
 }
 
 /// Pure policy application before persistence (testable without a DB pool):
-/// schema pin, revision bump, codex fail-closed, bounds.
-pub fn prepare_for_save(mut settings: ExecutionEngineSettingsV2) -> ExecutionEngineSettingsV2 {
+/// schema pin, revision bump, codex fail-closed, bounds. Restricted enums are
+/// validated here so an unknown wire value is rejected instead of persisted.
+pub fn prepare_for_save(
+    mut settings: ExecutionEngineSettingsV2,
+) -> Result<ExecutionEngineSettingsV2, String> {
+    settings.validate_enum_fields()?;
     settings.schema_version = SCHEMA_VERSION;
     settings.revision = settings.revision.wrapping_add(1);
     // Codex stays fail-closed until the app-server is implemented: force the
     // flag off and never advertise it as enabled regardless of stored value.
     settings.codex_cli.enabled = false;
-    settings.normalized()
+    Ok(settings.normalized())
 }
 
 /// Persist V2 settings with **revision CAS** (conflict detection for
@@ -253,7 +376,7 @@ pub fn save_execution_engine_settings(
             current.revision
         ));
     }
-    let settings = prepare_for_save(settings);
+    let settings = prepare_for_save(settings)?;
     let json = serde_json::to_string(&settings)
         .map_err(|e| format!("serialize execution engine settings: {e}"))?;
     db::set_setting(conn, EXECUTION_ENGINE_KEY, &json).map_err(|e| e.to_string())?;
@@ -329,14 +452,18 @@ pub struct ExecutionEngineSnapshot {
 /// Build the full snapshot consumed by Settings → 执行引擎 (A7 UI).
 ///
 /// P0-13: settings read failure propagates (never a fake "default" snapshot).
-pub fn build_execution_engine_snapshot(
+/// SETTINGS-002: runtime capability/status comes from real discovery (local
+/// binary probes + the daemon capability handshake); the Host only composes
+/// what the daemon and the filesystem actually report — no static table.
+pub async fn build_execution_engine_snapshot(
     authority_mode: &str,
     protocol_version: &str,
     stream_transport: &str,
     daemon_ready: bool,
 ) -> Result<ExecutionEngineSnapshot, String> {
     let settings = load_execution_engine_settings()?;
-    let runtimes = build_runtime_descriptors(&settings);
+    let mut runtimes = build_runtime_descriptors(&settings);
+    project_daemon_capabilities(&mut runtimes, daemon_ready).await;
     let resolved_default = resolve_default_runtime(&settings, &runtimes);
     Ok(ExecutionEngineSnapshot {
         settings,
@@ -352,25 +479,21 @@ pub fn build_execution_engine_snapshot(
     })
 }
 
-/// Native capabilities are the real daemon capability surface; external
-/// runtimes never claim Natives' checkpoint/ledger/replay authority.
+/// Runtime descriptors from **real local discovery** (sync): binary probes,
+/// settings flags and fail-closed facts. No capability table is invented
+/// here — capabilities are projected separately from the daemon handshake
+/// (`project_daemon_capabilities`), so a descriptor never self-announces a
+/// static feature surface (SETTINGS-002).
+///
+/// Used where availability alone matters: policy resolution, the save gate,
+/// and as the base for the UI snapshot.
 pub fn build_runtime_descriptors(settings: &ExecutionEngineSettingsV2) -> Vec<RuntimeDescriptor> {
     let mut runtimes = Vec::new();
 
-    // Native — full Natives authority.
-    let mut native_caps = HashMap::new();
-    for (cap, supported) in [
-        ("streaming", "supported"),
-        ("tools", "supported"),
-        ("mcp", "supported"),
-        ("hooks", "supported"),
-        ("subagent", "supported"),
-        ("checkpoint_resume", "supported"),
-        ("side_effect_ledger", "supported"),
-        ("provider_routing", "supported"),
-    ] {
-        native_caps.insert(cap.to_string(), supported.to_string());
-    }
+    // Native — local fact: the built-in engine. Its readiness is confirmed by
+    // the daemon handshake in the snapshot path (degraded when unreachable);
+    // locally it is always selectable so policy resolution never rejects it
+    // merely because the sidecar is momentarily down.
     runtimes.push(RuntimeDescriptor {
         id: RUNTIME_NATIVE.to_string(),
         display_name: "Native".to_string(),
@@ -379,46 +502,36 @@ pub fn build_runtime_descriptors(settings: &ExecutionEngineSettingsV2) -> Vec<Ru
         authority: "native".to_string(),
         reason_code: "native_ready".to_string(),
         reason: "完整 Natives authority（checkpoint / ledger / replay / resume）".to_string(),
-        capabilities: native_caps,
+        capabilities: HashMap::new(),
         controllable: vec!["maxSteps".to_string(), "disabledTools".to_string()],
     });
 
-    // Claude CLI — external bridge; never claims Natives authority.
+    // Claude CLI — real binary probe (existence + --version, no side effects).
     let (claude_version, claude_status) = if settings.claude_cli.enabled {
         detect_external_cli("claude")
     } else {
         (None, "disabled".to_string())
     };
-    let mut claude_caps = HashMap::new();
-    claude_caps.insert("streaming".to_string(), "supported".to_string());
-    claude_caps.insert("tools".to_string(), "external_owned".to_string());
-    claude_caps.insert("mcp".to_string(), "external_owned".to_string());
-    claude_caps.insert("hooks".to_string(), "external_owned".to_string());
-    claude_caps.insert("checkpoint_resume".to_string(), "unsupported".to_string());
-    claude_caps.insert("side_effect_ledger".to_string(), "unsupported".to_string());
     runtimes.push(RuntimeDescriptor {
         id: RUNTIME_CLAUDE_CLI.to_string(),
         display_name: "Claude CLI".to_string(),
-        status: if claude_status == "ready" {
-            "ready"
-        } else if claude_status == "disabled" {
-            "disabled"
-        } else {
-            "degraded"
-        }
-        .to_string(),
+        status: claude_status.clone(),
         version: claude_version,
         authority: "external_bridge".to_string(),
         reason_code: format!("claude_cli_{claude_status}"),
-        reason: "配置与登录由 Claude CLI 自己管理；checkpoint/ledger 不属 CLI 能力".to_string(),
-        capabilities: claude_caps,
+        reason: match claude_status.as_str() {
+            "ready" => {
+                "配置与登录由 Claude CLI 自己管理；checkpoint/ledger 不属 CLI 能力".to_string()
+            }
+            "disabled" => "Claude CLI 已在设置中停用".to_string(),
+            "not_installed" => "未检测到 claude 二进制".to_string(),
+            _ => "claude 二进制存在但 --version 探测失败".to_string(),
+        },
+        capabilities: HashMap::new(),
         controllable: Vec::new(),
     });
 
     // Codex — fail-closed until the app-server is implemented.
-    let mut codex_caps = HashMap::new();
-    codex_caps.insert("streaming".to_string(), "unsupported".to_string());
-    codex_caps.insert("tools".to_string(), "unsupported".to_string());
     runtimes.push(RuntimeDescriptor {
         id: RUNTIME_CODEX_CLI.to_string(),
         display_name: "Codex".to_string(),
@@ -427,11 +540,133 @@ pub fn build_runtime_descriptors(settings: &ExecutionEngineSettingsV2) -> Vec<Ru
         authority: "external_bridge".to_string(),
         reason_code: "codex_app_server_not_implemented".to_string(),
         reason: "Codex app-server 未实现前 fail-closed，即使检测到二进制也不开放".to_string(),
-        capabilities: codex_caps,
+        capabilities: HashMap::new(),
         controllable: Vec::new(),
     });
 
     runtimes
+}
+
+/// Pure projection of the daemon's real capability handshake onto descriptors
+/// (testable without a live daemon). `daemon_flags` are the daemon-level
+/// capability flags and `matrix` the per-runtime feature matrix, both from
+/// `daemon.getCapabilities`. Native readiness is the daemon handshake truth;
+/// external runtimes keep their locally-detected status and gain only the
+/// matrix the daemon actually reports.
+fn apply_daemon_projection(
+    runtimes: &mut [RuntimeDescriptor],
+    daemon_ready: bool,
+    daemon_flags: &HashMap<String, String>,
+    matrix: &HashMap<String, assistant_protocol::v2::RuntimeFeatureMatrix>,
+) {
+    for rt in runtimes.iter_mut() {
+        if rt.id == RUNTIME_NATIVE {
+            rt.capabilities.clear();
+            if daemon_ready {
+                rt.status = "ready".to_string();
+                rt.reason_code = "native_ready".to_string();
+                rt.reason =
+                    "完整 Natives authority（checkpoint / ledger / replay / resume）".to_string();
+                for (flag, value) in daemon_flags {
+                    rt.capabilities.insert(flag.clone(), value.clone());
+                }
+            } else {
+                rt.status = "degraded".to_string();
+                rt.reason_code = "daemon_unreachable".to_string();
+                rt.reason = "Daemon 未就绪，Native 引擎当前不可用".to_string();
+            }
+            if let Some(row) = matrix.get(RUNTIME_NATIVE) {
+                for (cap, value) in matrix_entries(row) {
+                    rt.capabilities.insert(cap, value);
+                }
+            }
+        } else if let Some(row) = matrix.get(rt.id.as_str()) {
+            rt.capabilities.clear();
+            for (cap, value) in matrix_entries(row) {
+                rt.capabilities.insert(cap, value);
+            }
+        }
+    }
+}
+
+/// Fetch the daemon capability handshake and project it (SETTINGS-002). The
+/// Host never self-announces a static feature table; it composes whatever the
+/// daemon advertises. Best-effort: a failed handshake leaves external
+/// descriptors on their local status and marks native degraded — the honest
+/// state, not a fabricated one.
+async fn project_daemon_capabilities(runtimes: &mut [RuntimeDescriptor], daemon_ready: bool) {
+    use assistant_protocol::v2::RuntimeFeatureMatrix;
+    use std::collections::HashMap;
+
+    let handshake = crate::daemon_authority::request(
+        assistant_protocol::v2::methods::names::DAEMON_GET_CAPABILITIES,
+        serde_json::json!({}),
+    )
+    .await
+    .ok();
+
+    let (daemon_flags, matrix) = match handshake {
+        Some(value) => {
+            let flags = [
+                "tools",
+                "hooks",
+                "subagents",
+                "mcp",
+                "extensions",
+                "scheduler",
+                "event_replay",
+                "credential_broker",
+            ]
+            .iter()
+            .map(|flag| {
+                let supported = value
+                    .get(*flag)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                (
+                    flag.to_string(),
+                    if supported {
+                        "supported"
+                    } else {
+                        "unsupported"
+                    }
+                    .to_string(),
+                )
+            })
+            .collect::<HashMap<String, String>>();
+            let matrix = value
+                .get("runtime_capabilities")
+                .and_then(|v| {
+                    serde_json::from_value::<HashMap<String, RuntimeFeatureMatrix>>(v.clone()).ok()
+                })
+                .unwrap_or_default();
+            (flags, matrix)
+        }
+        None => (HashMap::new(), HashMap::new()),
+    };
+
+    apply_daemon_projection(runtimes, daemon_ready, &daemon_flags, &matrix);
+}
+
+/// Project one daemon feature-matrix row into the descriptor's string
+/// capability map (`supported` / `unsupported`).
+fn matrix_entries(row: &assistant_protocol::v2::RuntimeFeatureMatrix) -> HashMap<String, String> {
+    fn bool_str(v: bool) -> String {
+        if v {
+            "supported".to_string()
+        } else {
+            "unsupported".to_string()
+        }
+    }
+    let mut entries = HashMap::new();
+    entries.insert("expert".to_string(), bool_str(row.expert));
+    entries.insert("team".to_string(), bool_str(row.team));
+    entries.insert("skills".to_string(), bool_str(row.skills));
+    entries.insert("mcp".to_string(), bool_str(row.mcp));
+    if let Some(mechanism) = &row.mechanism {
+        entries.insert("mechanism".to_string(), mechanism.clone());
+    }
+    entries
 }
 
 /// Runtime resolution: explicit override > conversation override (caller
@@ -442,8 +677,7 @@ pub fn resolve_default_runtime(
     settings: &ExecutionEngineSettingsV2,
     runtimes: &[RuntimeDescriptor],
 ) -> ResolvedDefaultRuntime {
-    let preferred = settings.default_runtime.clone();
-    if preferred == RUNTIME_NATIVE {
+    if settings.default_runtime == RuntimeId::Native {
         return ResolvedDefaultRuntime {
             runtime_id: RUNTIME_NATIVE.to_string(),
             source: "application_default".to_string(),
@@ -453,6 +687,7 @@ pub fn resolve_default_runtime(
         };
     }
     // External runtime requested. Read its real status.
+    let preferred = settings.default_runtime.as_str();
     let status = runtimes
         .iter()
         .find(|r| r.id == preferred)
@@ -461,14 +696,14 @@ pub fn resolve_default_runtime(
     let ready = status == "ready";
     if ready {
         return ResolvedDefaultRuntime {
-            runtime_id: preferred.clone(),
+            runtime_id: preferred.to_string(),
             source: "application_default".to_string(),
             fallback_used: false,
             reason_code: format!("{preferred}_ready"),
             reason: "外部 Runtime 可用".to_string(),
         };
     }
-    if settings.external_unavailable_policy == "fallback_native" {
+    if settings.external_unavailable_policy == ExternalUnavailablePolicy::FallbackNative {
         return ResolvedDefaultRuntime {
             runtime_id: RUNTIME_NATIVE.to_string(),
             source: "safe_default".to_string(),
@@ -479,7 +714,7 @@ pub fn resolve_default_runtime(
     }
     // fail policy — honest failure, no silent switch.
     ResolvedDefaultRuntime {
-        runtime_id: preferred.clone(),
+        runtime_id: preferred.to_string(),
         source: "application_default".to_string(),
         fallback_used: false,
         reason_code: format!("{preferred}_unavailable_fail"),
@@ -530,6 +765,35 @@ pub fn runtime_available(runtime_id: &str, runtimes: &[RuntimeDescriptor]) -> bo
         .unwrap_or(false)
 }
 
+/// SETTINGS-001 Host gate: the application default must point at a runtime
+/// whose current status is `ready`. A blocked / degraded / disabled /
+/// not_installed runtime is not a valid savable default.
+///
+/// The gate only fires when the default **actually changes**, so an unavailable
+/// default inherited from a legacy migration does not lock out unrelated edits
+/// (e.g. adjusting maxSteps). The UI layer disables the matching radios; this
+/// is the backend gate that rejects a crafted save trying to persist an
+/// invalid default.
+pub fn validate_default_runtime_selectable(
+    incoming: &ExecutionEngineSettingsV2,
+    current: &ExecutionEngineSettingsV2,
+    runtimes: &[RuntimeDescriptor],
+) -> Result<(), String> {
+    if incoming.default_runtime == current.default_runtime {
+        return Ok(());
+    }
+    let id = incoming.default_runtime.as_str();
+    match runtimes.iter().find(|r| r.id == id).map(|r| r.status.as_str()) {
+        Some("ready") => Ok(()),
+        Some(other) => Err(format!(
+            "runtime '{id}' is currently {other}; an unavailable runtime cannot be saved as the default (pick a ready runtime)"
+        )),
+        None => Err(format!(
+            "runtime '{id}' is not a recognized runtime; refusing to save it as the default"
+        )),
+    }
+}
+
 /// Resolve the execution policy for a new top-level Run.
 ///
 /// Priority: **explicit run override → conversation override (if any) →
@@ -553,15 +817,20 @@ pub fn resolve_execution_policy(
         Some(rt) if !rt.trim().is_empty() => (rt.trim().to_string(), "explicit_run"),
         _ => match conversation_runtime_id {
             Some(rt) if !rt.trim().is_empty() => (rt.trim().to_string(), "conversation_override"),
-            _ => (settings.default_runtime.clone(), "application_default"),
+            _ => (
+                settings.default_runtime.as_str().to_string(),
+                "application_default",
+            ),
         },
     };
 
     let available = runtime_available(&runtime_id, runtimes);
-    let unavailable_policy = settings.external_unavailable_policy.clone();
+    let unavailable_policy = settings.external_unavailable_policy.as_str().to_string();
     let (final_runtime, final_source, fallback_used) = if available {
         (runtime_id, runtime_source, false)
-    } else if runtime_source == "application_default" && unavailable_policy == "fallback_native" {
+    } else if runtime_source == "application_default"
+        && settings.external_unavailable_policy == ExternalUnavailablePolicy::FallbackNative
+    {
         // Only the application default may fall back — explicit/conversation
         // selections never silently switch runtime.
         (RUNTIME_NATIVE.to_string(), "safe_default", true)
@@ -640,7 +909,7 @@ pub fn migrate_legacy_runtime_pref(
     legacy_runtime_id: Option<String>,
 ) -> Result<ExecutionEngineSettingsV2, String> {
     let mut settings = load_execution_engine_settings()?;
-    if settings.revision > 0 || settings.default_runtime != RUNTIME_NATIVE {
+    if settings.revision > 0 || settings.default_runtime != RuntimeId::Native {
         return Ok(settings); // backend already authoritative → nothing to migrate
     }
     let pref = legacy_runtime_id
@@ -650,16 +919,18 @@ pub fn migrate_legacy_runtime_pref(
     if pref.is_empty() || pref == RUNTIME_NATIVE {
         return Ok(settings); // no legacy pref to adopt
     }
-    match pref.as_str() {
-        RUNTIME_CLAUDE_CLI => {
-            settings.default_runtime = pref;
+    match RuntimeId::from_known(&pref) {
+        Some(RuntimeId::ClaudeCli) => {
+            settings.default_runtime = RuntimeId::ClaudeCli;
             save_execution_engine_settings(settings)
         }
         // codex_cli is fail-closed until the app-server is real; refusing to
         // adopt it as defaultRuntime is the honest result (no fallback to the
         // old value, no guarantee of run failures).
-        RUNTIME_CODEX_CLI => Ok(settings),
-        _ => Err(format!(
+        Some(RuntimeId::CodexCli) | Some(RuntimeId::Native) | Some(RuntimeId::Unknown(_)) => {
+            Ok(settings)
+        }
+        None => Err(format!(
             "legacy runtime pref '{pref}' is not a known runtime id; refusing to adopt it (no fallback to the old value)"
         )),
     }
@@ -694,8 +965,11 @@ mod tests {
     fn defaults_are_safe_and_bounded() {
         let s = ExecutionEngineSettingsV2::default().normalized();
         assert_eq!(s.schema_version, 2);
-        assert_eq!(s.default_runtime, RUNTIME_NATIVE);
-        assert_eq!(s.external_unavailable_policy, "fail");
+        assert_eq!(s.default_runtime, RuntimeId::Native);
+        assert_eq!(
+            s.external_unavailable_policy,
+            ExternalUnavailablePolicy::Fail
+        );
         assert_eq!(s.native.max_steps, 50);
         assert!(!s.codex_cli.enabled, "codex must default to disabled");
     }
@@ -736,7 +1010,7 @@ mod tests {
         assert!(!s.effective_tool_allowed("read_file"));
         assert!(s.effective_tool_allowed("write_file"));
         // Saving never enables codex (pure policy layer, no DB needed).
-        let saved = prepare_for_save(s);
+        let saved = prepare_for_save(s).expect("prepare_for_save succeeds");
         assert!(!saved.codex_cli.enabled, "codex stays blocked");
         assert!(saved.revision >= 1, "revision bumped");
     }
@@ -744,8 +1018,8 @@ mod tests {
     #[test]
     fn fail_policy_never_silent_fallback() {
         let mut s = ExecutionEngineSettingsV2::default().normalized();
-        s.default_runtime = RUNTIME_CLAUDE_CLI.to_string();
-        s.external_unavailable_policy = "fail".to_string();
+        s.default_runtime = RuntimeId::ClaudeCli;
+        s.external_unavailable_policy = ExternalUnavailablePolicy::Fail;
         // Claude not installed → status degraded.
         let rt = build_runtime_descriptors(&s);
         let claude = rt.iter().find(|r| r.id == RUNTIME_CLAUDE_CLI).unwrap();
@@ -761,7 +1035,7 @@ mod tests {
         let _ = claude;
 
         // Explicit fallback_native allows the switch.
-        s.external_unavailable_policy = "fallback_native".to_string();
+        s.external_unavailable_policy = ExternalUnavailablePolicy::FallbackNative;
         let resolved2 = resolve_default_runtime(&s, &rt);
         if claude.status != "ready" {
             assert!(resolved2.fallback_used);
@@ -777,7 +1051,7 @@ mod tests {
         let codex = rt.iter().find(|r| r.id == RUNTIME_CODEX_CLI).unwrap();
         assert_eq!(codex.status, "blocked");
         assert_eq!(codex.reason_code, "codex_app_server_not_implemented");
-        let saved = prepare_for_save(s);
+        let saved = prepare_for_save(s).expect("prepare_for_save succeeds");
         assert!(!saved.codex_cli.enabled, "codex force-closed on save");
     }
 
@@ -837,7 +1111,7 @@ mod tests {
         let mut settings = ExecutionEngineSettingsV2::default().normalized();
         // Even with fallback_native configured, an EXPLICIT run override that
         // is unavailable must hard-fail (never silently switch).
-        settings.external_unavailable_policy = "fallback_native".to_string();
+        settings.external_unavailable_policy = ExternalUnavailablePolicy::FallbackNative;
         let runtimes = [degraded_descriptor(RUNTIME_CLAUDE_CLI)];
         let err = resolve_execution_policy(
             &settings,
@@ -866,8 +1140,8 @@ mod tests {
     #[test]
     fn application_default_fallback_native_is_explicit() {
         let mut settings = ExecutionEngineSettingsV2::default().normalized();
-        settings.default_runtime = RUNTIME_CLAUDE_CLI.to_string();
-        settings.external_unavailable_policy = "fallback_native".to_string();
+        settings.default_runtime = RuntimeId::ClaudeCli;
+        settings.external_unavailable_policy = ExternalUnavailablePolicy::FallbackNative;
         let runtimes = [degraded_descriptor(RUNTIME_CLAUDE_CLI)];
 
         let resolved = resolve_execution_policy(&settings, &runtimes, None, None, None)
@@ -880,7 +1154,7 @@ mod tests {
         assert_eq!(resolved.runtime_source, "safe_default");
 
         // fail policy → honest error, no silent switch.
-        settings.external_unavailable_policy = "fail".to_string();
+        settings.external_unavailable_policy = ExternalUnavailablePolicy::Fail;
         let err = resolve_execution_policy(&settings, &runtimes, None, None, None)
             .expect_err("fail policy must not fall back");
         assert!(err.contains("fail"), "error mentions the policy: {err}");
@@ -964,11 +1238,11 @@ mod tests {
         // No pref → no-op, pristine default.
         let noop = migrate_legacy_runtime_pref(None).expect("no-op succeeds");
         assert_eq!(noop.revision, 0);
-        assert_eq!(noop.default_runtime, RUNTIME_NATIVE);
+        assert_eq!(noop.default_runtime, RuntimeId::Native);
         // First migration adopts claude_cli and bumps revision (durable).
         let migrated = migrate_legacy_runtime_pref(Some("claude_cli".into()))
             .expect("first migration succeeds");
-        assert_eq!(migrated.default_runtime, RUNTIME_CLAUDE_CLI);
+        assert_eq!(migrated.default_runtime, RuntimeId::ClaudeCli);
         assert!(migrated.revision >= 1, "durable exactly-once marker");
         // Re-invocation is a no-op: backend is authoritative, never re-migrates.
         let again =
@@ -977,10 +1251,10 @@ mod tests {
             again.revision, migrated.revision,
             "no revision bump on re-migrate"
         );
-        assert_eq!(again.default_runtime, RUNTIME_CLAUDE_CLI);
+        assert_eq!(again.default_runtime, RuntimeId::ClaudeCli);
         // A different pref after migration must NOT clobber the V2 choice.
         let keep = migrate_legacy_runtime_pref(Some("native".into())).expect("no clobber");
-        assert_eq!(keep.default_runtime, RUNTIME_CLAUDE_CLI);
+        assert_eq!(keep.default_runtime, RuntimeId::ClaudeCli);
         assert_eq!(keep.revision, migrated.revision);
     }
 
@@ -999,7 +1273,7 @@ mod tests {
         );
         let after = load_execution_engine_settings().expect("V2 readable");
         assert_eq!(after.revision, 0, "failed migration must not bump revision");
-        assert_eq!(after.default_runtime, RUNTIME_NATIVE);
+        assert_eq!(after.default_runtime, RuntimeId::Native);
     }
 
     /// MIG-001 negative: codex_cli is fail-closed — the migration refuses to
@@ -1011,7 +1285,7 @@ mod tests {
         let (_dir, _pool) = temp_main_pool();
         let result = migrate_legacy_runtime_pref(Some(RUNTIME_CODEX_CLI.into()))
             .expect("fail-closed refusal is a success no-op");
-        assert_eq!(result.default_runtime, RUNTIME_NATIVE);
+        assert_eq!(result.default_runtime, RuntimeId::Native);
         assert_eq!(result.revision, 0, "no durable adoption for codex");
     }
 
@@ -1032,7 +1306,7 @@ mod tests {
         let mut settings_b = saved_a.clone();
         settings_b.native.max_steps = 150;
         settings_b.native.disabled_tools = Vec::new();
-        settings_b.default_runtime = RUNTIME_CLAUDE_CLI.to_string();
+        settings_b.default_runtime = RuntimeId::ClaudeCli;
         let _saved_b = save_execution_engine_settings(settings_b).expect("save B");
 
         // The existing Run's frozen snapshot is unchanged.
@@ -1058,5 +1332,203 @@ mod tests {
         assert_eq!(fresh_policy.max_steps, 150);
         assert!(fresh_policy.disabled_tools.is_empty());
         assert!(fresh_policy.settings_revision > saved_a.revision);
+    }
+
+    // ── SETTINGS-001: restricted enums + blocked/degraded default gate ─────
+
+    #[test]
+    fn runtime_id_and_policy_roundtrip_through_serde() {
+        // Known values round-trip to the wire string.
+        assert_eq!(
+            serde_json::to_string(&RuntimeId::Native).unwrap(),
+            "\"native\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ExternalUnavailablePolicy::FallbackNative).unwrap(),
+            "\"fallback_native\""
+        );
+        // Unknown strings decode to Unknown (observable, never silently lost).
+        let parsed: RuntimeId = serde_json::from_str("\"garbage_runtime\"").unwrap();
+        assert_eq!(parsed, RuntimeId::Unknown("garbage_runtime".into()));
+        assert!(!parsed.is_known());
+        assert_eq!(parsed.as_str(), "garbage_runtime");
+        let policy: ExternalUnavailablePolicy = serde_json::from_str("\"garbage_policy\"").unwrap();
+        assert_eq!(
+            policy,
+            ExternalUnavailablePolicy::Unknown("garbage_policy".into())
+        );
+        assert!(!policy.is_known());
+    }
+
+    #[test]
+    fn unknown_enum_value_is_rejected_on_save() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, _pool) = temp_main_pool();
+        let seeded =
+            save_execution_engine_settings(ExecutionEngineSettingsV2::default()).expect("seed");
+        // Incoming carries an unknown defaultRuntime → rejected (never saved).
+        let mut bad = seeded.clone();
+        bad.default_runtime = RuntimeId::Unknown("garbage_runtime".into());
+        let err =
+            save_execution_engine_settings(bad).expect_err("unknown runtime must be rejected");
+        assert!(err.contains("not a known runtime id"), "{err}");
+        // Incoming carries an unknown unavailable policy → rejected.
+        let mut bad2 = seeded.clone();
+        bad2.external_unavailable_policy =
+            ExternalUnavailablePolicy::Unknown("garbage_policy".into());
+        let err2 =
+            save_execution_engine_settings(bad2).expect_err("unknown policy must be rejected");
+        assert!(err2.contains("not a known policy"), "{err2}");
+        // The durable value is untouched (revision still the seed's).
+        let after = load_execution_engine_settings().expect("readable");
+        assert_eq!(after.revision, seeded.revision, "no partial write");
+        assert_eq!(after.default_runtime, RuntimeId::Native);
+    }
+
+    #[test]
+    fn unavailable_default_runtime_is_rejected_by_host_gate() {
+        let settings = ExecutionEngineSettingsV2::default().normalized();
+        let runtimes = build_runtime_descriptors(&settings);
+
+        // codex_cli is blocked → never a valid savable default.
+        let mut codex_default = settings.clone();
+        codex_default.default_runtime = RuntimeId::CodexCli;
+        let err = validate_default_runtime_selectable(&codex_default, &settings, &runtimes)
+            .expect_err("blocked runtime must be rejected as a new default");
+        assert!(err.contains("blocked"), "names the status: {err}");
+
+        // An unchanged default passes even when its descriptor is degraded —
+        // the gate only fires when the default actually changes.
+        let mut degraded_rts = runtimes;
+        for r in degraded_rts.iter_mut() {
+            if r.id == RUNTIME_NATIVE {
+                r.status = "degraded".into();
+            }
+        }
+        assert!(
+            validate_default_runtime_selectable(&settings, &settings, &degraded_rts).is_ok(),
+            "unchanged default must not lock out unrelated edits"
+        );
+    }
+
+    // ── SETTINGS-002: descriptors come from real discovery + daemon matrix ──
+
+    #[test]
+    fn descriptors_reflect_real_detection_not_static_claims() {
+        let settings = ExecutionEngineSettingsV2::default().normalized();
+        let runtimes = build_runtime_descriptors(&settings);
+
+        // codex_cli stays blocked (fail-closed real fact).
+        let codex = runtimes.iter().find(|r| r.id == RUNTIME_CODEX_CLI).unwrap();
+        assert_eq!(codex.status, "blocked");
+        assert_eq!(codex.reason_code, "codex_app_server_not_implemented");
+
+        // claude_cli status is the real probe output — never a hardcoded claim.
+        let claude = runtimes
+            .iter()
+            .find(|r| r.id == RUNTIME_CLAUDE_CLI)
+            .unwrap();
+        assert!(
+            ["ready", "degraded", "not_installed", "disabled"].contains(&claude.status.as_str()),
+            "claude status must come from real detection, got: {}",
+            claude.status
+        );
+
+        // Native is locally ready; the sync descriptors carry NO capability
+        // table — capabilities are projected from the daemon handshake only.
+        let native = runtimes.iter().find(|r| r.id == RUNTIME_NATIVE).unwrap();
+        assert_eq!(native.status, "ready");
+        assert!(
+            native.capabilities.is_empty(),
+            "sync descriptors must not self-announce a static capability table"
+        );
+    }
+
+    #[test]
+    fn daemon_projection_applies_real_matrix() {
+        use assistant_protocol::v2::RuntimeFeatureMatrix;
+
+        let settings = ExecutionEngineSettingsV2::default().normalized();
+        let mut runtimes = build_runtime_descriptors(&settings);
+
+        let mut matrix = HashMap::new();
+        matrix.insert(
+            RUNTIME_NATIVE.to_string(),
+            RuntimeFeatureMatrix {
+                expert: true,
+                team: true,
+                skills: true,
+                mcp: true,
+                mechanism: Some("native_gateway".into()),
+                ..Default::default()
+            },
+        );
+        matrix.insert(
+            RUNTIME_CLAUDE_CLI.to_string(),
+            RuntimeFeatureMatrix {
+                expert: true,
+                team: true,
+                skills: true,
+                mcp: true,
+                mechanism: Some("cli_flags".into()),
+                execution_backend: Some("claude_cli_harness".into()),
+                note: Some("injected via CLI flags".into()),
+                ..Default::default()
+            },
+        );
+        matrix.insert(
+            RUNTIME_CODEX_CLI.to_string(),
+            RuntimeFeatureMatrix::default(),
+        );
+        let mut flags = HashMap::new();
+        flags.insert("tools".to_string(), "supported".to_string());
+        flags.insert("hooks".to_string(), "supported".to_string());
+
+        apply_daemon_projection(&mut runtimes, true, &flags, &matrix);
+
+        let native = runtimes.iter().find(|r| r.id == RUNTIME_NATIVE).unwrap();
+        assert_eq!(native.status, "ready");
+        assert_eq!(
+            native.capabilities.get("expert").map(String::as_str),
+            Some("supported")
+        );
+        assert_eq!(
+            native.capabilities.get("tools").map(String::as_str),
+            Some("supported")
+        );
+        assert_eq!(
+            native.capabilities.get("mechanism").map(String::as_str),
+            Some("native_gateway")
+        );
+
+        let claude = runtimes
+            .iter()
+            .find(|r| r.id == RUNTIME_CLAUDE_CLI)
+            .unwrap();
+        assert_eq!(
+            claude.capabilities.get("expert").map(String::as_str),
+            Some("supported")
+        );
+        // claude keeps its locally detected status; only the matrix is projected.
+        assert!(
+            claude.status == "ready"
+                || claude.status == "degraded"
+                || claude.status == "not_installed"
+                || claude.status == "disabled"
+        );
+
+        let codex = runtimes.iter().find(|r| r.id == RUNTIME_CODEX_CLI).unwrap();
+        assert_eq!(
+            codex.capabilities.get("expert").map(String::as_str),
+            Some("unsupported")
+        );
+        assert_eq!(codex.status, "blocked", "projection never un-blocks codex");
+
+        // Daemon unreachable → native is honestly degraded, no fabricated ready.
+        apply_daemon_projection(&mut runtimes, false, &HashMap::new(), &HashMap::new());
+        let native = runtimes.iter().find(|r| r.id == RUNTIME_NATIVE).unwrap();
+        assert_eq!(native.status, "degraded");
+        assert_eq!(native.reason_code, "daemon_unreachable");
+        assert!(native.capabilities.is_empty());
     }
 }
