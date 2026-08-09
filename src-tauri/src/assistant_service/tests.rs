@@ -76,12 +76,9 @@ async fn provider_list_reads_natives_db_settings_sot() {
     }
     crate::db::register_main_pool(main_pool);
 
-    // Give the assistant pool a temp path so the model-cache enrichment read
-    // never touches the real ~/.natives.
-    let assistant_dir =
-        std::env::temp_dir().join(format!("natives-prov-asst-{}.db", uuid::Uuid::new_v4()));
-    let assistant_pool = crate::db::init_db_pool(&assistant_dir).expect("init assistant pool");
-    crate::db::set_assistant_pool_for_tests(assistant_pool);
+    // W1: the provider mirror lives in the Host's own natives.db (created by
+    // init_db_pool → ensure_host_owned_tables), so the test only registers the
+    // main pool — the old assistant.db pool no longer exists.
 
     let response = dispatch_rpc("provider.list", &serde_json::json!({})).await;
     assert!(
@@ -101,9 +98,7 @@ async fn provider_list_reads_natives_db_settings_sot() {
     assert_eq!(providers[0]["models"][0]["id"], "deepseek-v4-flash");
 
     crate::db::clear_main_pool_for_tests();
-    crate::db::clear_assistant_pool_for_tests();
     let _ = std::fs::remove_file(&main_pool_dir);
-    let _ = std::fs::remove_file(&assistant_dir);
 }
 
 #[test]

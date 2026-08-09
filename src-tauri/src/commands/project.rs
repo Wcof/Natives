@@ -23,7 +23,7 @@ pub struct ProjectInfo {
 /// table read.
 #[tauri::command]
 pub async fn project_list() -> Result<Vec<ProjectInfo>> {
-    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let conn = db::get_main_conn().map_err(|e| e.to_string())?;
 
     // Canonical conversation counts by project path (from Daemon).
     let mut daemon_counts: HashMap<String, i64> = HashMap::new();
@@ -112,7 +112,7 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
         .unwrap_or_else(|| canonical_str.clone());
 
     let now = chrono::Utc::now().to_rfc3339();
-    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let conn = db::get_main_conn().map_err(|e| e.to_string())?;
 
     // Check if a soft-deleted project exists with the same path — restore it.
     let was_deleted: bool = conn
@@ -155,7 +155,7 @@ pub fn project_rename(id: String, label: String) -> Result<()> {
     if label.is_empty() {
         return Err("Project name cannot be empty".into());
     }
-    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let conn = db::get_main_conn().map_err(|e| e.to_string())?;
     let changed = conn
         .execute(
             "UPDATE assistant_projects SET label = ?1 WHERE (id = ?2 OR path = ?2) AND deleted_at IS NULL",
@@ -172,7 +172,7 @@ pub fn project_rename(id: String, label: String) -> Result<()> {
 /// Sessions keep their project_id so they reappear when the project is re-added.
 #[tauri::command]
 pub fn project_remove(id: String) -> Result<()> {
-    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let conn = db::get_main_conn().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE assistant_projects SET deleted_at = ?1 WHERE (id = ?2 OR path = ?2) AND deleted_at IS NULL",

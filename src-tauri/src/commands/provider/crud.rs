@@ -93,7 +93,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         .collect();
 
     let model_rows: std::collections::HashMap<String, Vec<DiscoveredModel>> = {
-        let assistant = crate::db::get_assistant_db_conn()?;
+        let assistant = crate::db::get_main_conn()?;
         let mut stmt = assistant.prepare(
             "SELECT provider_id, model_id, display_name FROM assistant_model_cache ORDER BY model_id ASC",
         ).map_err(|e| Error::Internal(e.to_string()))?;
@@ -367,7 +367,7 @@ pub fn provider_update_defaults(
         return Err(Error::InvalidInput("Provider not found".to_string()));
     }
     let now = chrono_now();
-    let assistant = crate::db::get_assistant_db_conn()?;
+    let assistant = crate::db::get_main_conn()?;
     let _ = assistant.execute(
         "UPDATE assistant_provider_configs SET default_model = ?1, updated_at = ?2 WHERE id = ?3",
         params![model, now, input.provider_id],
@@ -481,7 +481,7 @@ pub fn delete_provider(state: State<'_, AppState>, provider_id: String) -> Resul
 
     // Best-effort cleanup of the assistant mirror so the picker does not keep
     // a deleted provider around after Settings removes it.
-    if let Ok(assistant) = crate::db::get_assistant_db_conn() {
+    if let Ok(assistant) = crate::db::get_main_conn() {
         let _ = assistant.execute(
             "DELETE FROM assistant_model_cache WHERE provider_id = ?1",
             params![provider_id],
@@ -516,7 +516,7 @@ fn mirror_provider_to_assistant(
     now: &str,
     models: &[DiscoveredModel],
 ) -> Result<()> {
-    let assistant = crate::db::get_assistant_db_conn()?;
+    let assistant = crate::db::get_main_conn()?;
 
     // Defensive: Settings pool init historically only created session tables.
     // DataStore migrations own the full schema, but ensure picker tables exist

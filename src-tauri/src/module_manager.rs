@@ -708,7 +708,7 @@ pub fn rollback_module_html(modules_dir: &Path, module_id: &str, old_content: &s
     }
     atomic_write(&html_path, old_content)?;
     // 重新同步注册表（content_hash 已变，但 contract_id 不变 —— 非破坏性修改）
-    let pool_conn = crate::db::get_assistant_db_conn()?;
+    let pool_conn = crate::db::get_main_conn()?;
     let conn: &rusqlite::Connection = &pool_conn;
     sync_modules_to_db(conn, modules_dir)?;
     Ok(())

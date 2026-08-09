@@ -423,7 +423,7 @@ pub fn start() {
             loop {
                 interval.tick().await;
                 let joined = tokio::task::spawn_blocking(|| -> Result<TickReport> {
-                    let conn = crate::db::get_assistant_db_conn()?;
+                    let conn = crate::db::get_main_conn()?;
                     let _ = reconcile_nonterminal_runs(&conn, &DaemonRunLookup)?;
                     let dispatcher = super::global_dispatcher();
                     tick_once(&conn, dispatcher.as_ref(), Utc::now())

@@ -72,7 +72,7 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
 
     // Optional model cache from assistant.db (discovery results); never required.
     let model_rows: std::collections::HashMap<String, Vec<Value>> =
-        match crate::db::get_assistant_db_conn() {
+        match crate::db::get_main_conn() {
             Ok(assistant) => {
                 let mut stmt = match assistant.prepare(
                 "SELECT provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at
@@ -226,7 +226,7 @@ pub(crate) fn provider_model_pair_available(provider_id: &str, model_id: &str) -
     }
     // Model cache is optional discovery data mirrored into assistant.db by
     // `commands/provider.rs`.
-    if let Ok(assistant) = crate::db::get_assistant_db_conn() {
+    if let Ok(assistant) = crate::db::get_main_conn() {
         return assistant
             .query_row(
                 "SELECT EXISTS(

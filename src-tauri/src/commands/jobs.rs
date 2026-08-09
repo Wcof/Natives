@@ -248,7 +248,7 @@ where
     F: FnOnce(&rusqlite::Connection) -> Result<T> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
-        let conn = crate::db::get_assistant_db_conn()?;
+        let conn = crate::db::get_main_conn()?;
         work(&conn)
     })
     .await

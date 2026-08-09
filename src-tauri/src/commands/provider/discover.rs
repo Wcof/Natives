@@ -111,7 +111,7 @@ pub async fn provider_discover_models_saved(
         api_key,
     };
     let models = provider_discover_models(discover_input).await?;
-    let assistant = crate::db::get_assistant_db_conn()?;
+    let assistant = crate::db::get_main_conn()?;
     let tx = assistant
         .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;

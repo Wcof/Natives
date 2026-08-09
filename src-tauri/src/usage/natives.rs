@@ -129,15 +129,10 @@ fn candidate_db_openers() -> Vec<(String, Box<dyn Fn() -> Result<HostPooledConn,
 
     // MB-P0-06 authority: reads go through the Host-owned DB pools (Host
     // projection). The scanner never opens the Daemon DB files directly.
-    // Prefer main natives.db (Daemon protocol tables live here in current installs).
+    // W1: Host only reads its own natives.db — the assistant.db opener is gone.
     out.push((
         "~/.natives/natives.db".into(),
         Box::new(|| db::get_main_conn().map_err(|e| e.to_string())),
-    ));
-
-    out.push((
-        "~/.natives/assistant.db".into(),
-        Box::new(|| db::get_assistant_db_conn().map_err(|e| e.to_string())),
     ));
 
     out

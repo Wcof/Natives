@@ -1,8 +1,9 @@
-//! jobs/store.rs — Job 持久化（复用并扩展 assistant.db 的 scheduled_tasks / task_runs）
+//! jobs/store.rs — Job 持久化（Host-owned 表，位于 Host 自己的 natives.db）
 //!
 //! 契约第 1、2 节：表名不改，按既有机制（PRAGMA table_info 探测 + 条件
 //! ALTER TABLE ADD COLUMN）补齐缺失列，禁止 DROP/rebuild。
-//! 本文件是两张表 DDL 的单一来源：db.rs init_assistant_db 调用 ensure_schema。
+//! 本文件是两张表 DDL 的单一来源：db.rs ensure_host_owned_tables 调用
+//! ensure_schema（W1：表从 assistant.db 迁到 natives.db）。
 
 use crate::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -72,7 +73,7 @@ const RUN_COLUMNS: &str =
     "id, task_id, started_at, finished_at, status, result_summary, error, run_id, \
      conversation_id, \"trigger\", error_code, detail";
 
-/// 建表 + 条件补列（幂等）。db.rs init_assistant_db 与单测共同入口。
+/// 建表 + 条件补列（幂等）。db.rs ensure_host_owned_tables 与单测共同入口。
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "

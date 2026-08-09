@@ -269,15 +269,16 @@ pub fn run() {
                 .map_err(|e| format!("failed to create modules dir: {e}"))?;
 
             // Initialize assistant database (isolated from core natives.db)
-            db::init_assistant_db()
-                .map_err(|e| format!("failed to init assistant database: {e}"))?;
+            // W1: Host-owned tables (jobs + provider mirror) live in natives.db
+            // (see db::ensure_host_owned_tables inside init_db_pool); the Host
+            // no longer opens the Daemon's assistant.db.
 
             // Scheduler 双权威收敛：Host Job runner 启动前，一次性把旧 Daemon
             // scheduler/jobs.json 事务性导入 scheduled_tasks。源文件保留，成功后
             // 另存只读备份与完成 marker；冲突 fail-closed，禁止两份定义并跑。
             {
-                let mut assistant_conn = db::get_assistant_db_conn()
-                    .map_err(|e| format!("failed to open assistant database for jobs: {e}"))?;
+                let mut assistant_conn = db::get_main_conn()
+                    .map_err(|e| format!("failed to open main database for jobs: {e}"))?;
                 let legacy_jobs = runtime_dir.join("scheduler").join("jobs.json");
                 let report = jobs::migration::migrate_legacy_scheduler_jobs(
                     &mut assistant_conn,
@@ -295,7 +296,7 @@ pub fn run() {
             }
 
             // Job 任务模块：常驻 30s tick 循环（Once 幂等；列迁移已在
-            // init_assistant_db 内经 jobs::store::ensure_schema 补齐）
+            // natives.db 初始化内经 jobs::store::ensure_schema 补齐）
             jobs::runner::start();
 
             // Pre-warm env encryption key cache from SQLite settings.

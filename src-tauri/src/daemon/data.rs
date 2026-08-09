@@ -786,6 +786,26 @@ const MIGRATION_014: &str = "
 ALTER TABLE assistant_projects ADD COLUMN deleted_at TEXT;
 ";
 
+/// W1 (modular remediation): ensure the Host-owned provider mirror schema on
+/// any connection. The mirror tables are Host authority and live in the Host's
+/// own natives.db (via `db::ensure_host_owned_tables`); they are never created
+/// inside the Daemon's assistant.db.
+pub fn ensure_provider_mirror_schema(conn: &rusqlite::Connection) -> crate::Result<()> {
+    conn.execute_batch(MIGRATION_004_PROVIDERS)
+        .map_err(crate::Error::Database)?;
+    conn.execute_batch(MIGRATION_005)
+        .map_err(crate::Error::Database)?;
+    conn.execute_batch(MIGRATION_007)
+        .map_err(crate::Error::Database)?;
+    conn.execute_batch(MIGRATION_008)
+        .map_err(crate::Error::Database)?;
+    conn.execute_batch(MIGRATION_012)
+        .map_err(crate::Error::Database)?;
+    conn.execute_batch(MIGRATION_014)
+        .map_err(crate::Error::Database)?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "data_tests.rs"]
 mod data_tests;
