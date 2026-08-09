@@ -1,8 +1,8 @@
 //! Persistence mapping and run query access.
 
-use super::manager::RunManager;
 use super::lifecycle::{parse_db_time, run_status_from_db};
-use assistant_protocol::v2::{RunV2, ReplayRunRequest, RunEventV2};
+use super::manager::RunManager;
+use assistant_protocol::v2::{ReplayRunRequest, RunEventV2, RunV2};
 
 impl RunManager {
     pub(crate) fn persist_run_row(&self, run: &RunV2) -> Result<(), String> {
@@ -84,7 +84,10 @@ impl RunManager {
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
         Ok(())
     }
-    pub(crate) fn run_from_store_by_idempotency_key(&self, key: &str) -> Result<Option<RunV2>, String> {
+    pub(crate) fn run_from_store_by_idempotency_key(
+        &self,
+        key: &str,
+    ) -> Result<Option<RunV2>, String> {
         let Some(store) = &self.data_store else {
             return Ok(None);
         };

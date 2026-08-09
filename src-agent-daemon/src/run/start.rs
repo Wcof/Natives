@@ -1,11 +1,11 @@
 //! Run start, preparing, and execution seams.
 
 use super::manager::{global_run_manager, McpRunRefGuard, RunManager};
+use crate::production::{FixtureMode, FixtureProvider};
 use agent_core::{AgentEngine, EngineOutcome, EngineRunConfig, TransitionMetadata};
 use assistant_protocol::v2::{CreateRunRequest, RunStatusV2, RunV2, StartRunRequest};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use crate::production::{FixtureMode, FixtureProvider};
 
 impl RunManager {
     /// Production start: real provider path when credentials exist; fixture path only under test flag.
