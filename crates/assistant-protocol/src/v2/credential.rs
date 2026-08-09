@@ -236,6 +236,63 @@ pub struct LoopbackSettingsLeaseResponse {
     pub lease: Option<CredentialLeaseMeta>,
 }
 
+/// Routing-plan lease (Daemon → Host). Serves the Host-owned
+/// `provider_routing_settings` + `provider_route_bindings` so the daemon never
+/// opens natives.db (T104 / modular remediation W1). `run_id` binds the lease.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingPlanLeaseRequest {
+    pub run_id: String,
+}
+
+/// One route binding entry from the Host `provider_route_bindings` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingPlanTarget {
+    pub provider_id: String,
+    pub credential_kind: String,
+    #[serde(default)]
+    pub credential_id: Option<String>,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingPlanLeaseResponse {
+    pub enabled: bool,
+    #[serde(default)]
+    pub targets: Vec<RoutingPlanTarget>,
+    #[serde(default)]
+    pub lease: Option<CredentialLeaseMeta>,
+}
+
+/// Legacy Host `subagents` export lease (Daemon → Host). ADR-0016 retirement:
+/// the daemon imports the Host-owned `subagents` table once via the broker
+/// channel instead of opening natives.db. Read-only rows; memory-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSubagentsLeaseRequest {
+    pub run_id: String,
+}
+
+/// One legacy Host subagent row (no secrets — instructions/tools only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSubagentRow {
+    pub id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub instructions: Option<String>,
+    pub tools: Option<String>,
+    pub provider_id: Option<String>,
+    pub provider_key_id: Option<String>,
+    pub model_id: Option<String>,
+    pub enabled: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSubagentsLeaseResponse {
+    #[serde(default)]
+    pub rows: Vec<HostSubagentRow>,
+    #[serde(default)]
+    pub lease: Option<CredentialLeaseMeta>,
+}
+
 /// Capability-secret lease (Daemon → Host), e.g. MCP env / bearer / OAuth
 /// refresh material stored in the Host `capability_secrets` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]

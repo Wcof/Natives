@@ -233,7 +233,12 @@ function collectCrossDbDaemon() {
   for (const p of walk(daemonRoot)) {
     if (!p.endsWith('.rs')) continue;
     if (isTestFile(p)) continue;
-    const re = /natives\.db|default_natives_db_path|natives_db_broker|natives_db\b/;
+    // Only flag an actual DB-open into the Host-authoritative natives.db:
+    //   Connection::open / open_with_flags whose target is default_natives_db_path
+    //   or the `natives.db` literal. Broker lease clients (`NativesDbBroker::*`,
+    //   `open_default`) never open the file, fail-closed `write_setting` never
+    //   writes it, and `default_assistant_db_path` is the daemon's own store.
+    const re = /(Connection::open|open_with_flags)\([^)]*(default_natives_db_path|join\("natives\.db"\)|"natives\.db")/;
     for (const h of nonCommentLines(p, re)) {
       map.set(`${relToRoot(p)}:${h.line}`, h.text);
     }
@@ -248,7 +253,11 @@ function collectCrossDbHost() {
   for (const p of walk(hostRoot)) {
     if (!p.endsWith('.rs')) continue;
     if (isTestFile(p)) continue;
-    const re = /assistant\.db|get_assistant_db_conn|NATIVES_ASSISTANT_DB_PATH/;
+    // Host must never open the Daemon-authoritative assistant.db. `get_assistant_db_conn`
+    // is the pooled open; a direct `Connection::open` of the assistant.db literal is
+    // equally a violation. Setting the NATIVES_ASSISTANT_DB_PATH env var only hands the
+    // path to the daemon sidecar (which owns the file) and is not a Host open.
+    const re = /get_assistant_db_conn|init_assistant_db|(Connection::open)\([^)]*assistant\.db/;
     for (const h of nonCommentLines(p, re)) {
       map.set(`${relToRoot(p)}:${h.line}`, h.text);
     }

@@ -179,8 +179,10 @@ pub const ALL_METHODS: &[&str] = &[
     "credential.lease.status",
     "credential.pool.acquire",
     "credential.routing.settings",
+    "credential.routing.plan",
     "credential.secret.acquire",
     "credential.setting.get",
+    "host.subagents.export",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -552,8 +554,10 @@ pub mod names {
     pub const CREDENTIAL_LEASE_STATUS: &str = "credential.lease.status";
     pub const CREDENTIAL_POOL_ACQUIRE: &str = "credential.pool.acquire";
     pub const CREDENTIAL_ROUTING_SETTINGS: &str = "credential.routing.settings";
+    pub const CREDENTIAL_ROUTING_PLAN: &str = "credential.routing.plan";
     pub const CREDENTIAL_SECRET_ACQUIRE: &str = "credential.secret.acquire";
     pub const CREDENTIAL_SETTING_GET: &str = "credential.setting.get";
+    pub const HOST_SUBAGENTS_EXPORT: &str = "host.subagents.export";
 }
 
 /// Every advertised Harness method, in the order the design lists them.
@@ -606,8 +610,10 @@ pub const BROKER_LEASE_METHODS: &[&str] = &[
     names::CREDENTIAL_LEASE_STATUS,
     names::CREDENTIAL_POOL_ACQUIRE,
     names::CREDENTIAL_ROUTING_SETTINGS,
+    names::CREDENTIAL_ROUTING_PLAN,
     names::CREDENTIAL_SECRET_ACQUIRE,
     names::CREDENTIAL_SETTING_GET,
+    names::HOST_SUBAGENTS_EXPORT,
 ];
 
 /// Returns true if `method` is a known v2 RPC method.

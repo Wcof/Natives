@@ -35,17 +35,9 @@ pub(crate) async fn dispatch_daemon(
                 memory_usage_mb: 0,
                 health: DaemonHealth::Healthy,
             };
-            let mut value = serde_json::to_value(&status).unwrap_or_default();
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "natives_db_path".into(),
-                    serde_json::Value::String(
-                        crate::default_natives_db_path()
-                            .to_string_lossy()
-                            .to_string(),
-                    ),
-                );
-            }
+            let value = serde_json::to_value(&status).unwrap_or_default();
+            // W1: never expose a home/absolute natives.db path in status —
+            // the daemon holds only broker leases and must not leak the path.
             send_success(
                 writer,
                 &request.request_id,

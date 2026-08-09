@@ -179,10 +179,8 @@ async fn main() {
     println!(
         "Credential broker: {}",
         if broker_ok {
-            format!(
-                "natives.db ({})",
-                natives_agent_daemon::default_natives_db_path().display()
-            )
+            // W1: do not print the natives.db absolute path (home-path leak).
+            "UDS lease broker installed (host decrypts natives.db)".into()
         } else {
             "env-only (NATIVES_TEST_*)".into()
         }

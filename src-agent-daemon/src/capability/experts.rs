@@ -781,12 +781,10 @@ pub fn team_delete(params_value: &Value) -> Result<Value, String> {
 
 /// Import Host `subagents` rows once. Idempotent: skipped when any
 /// `source='host_migration'` expert exists. Safe to retry on failure.
+///
+/// W1: the daemon never opens natives.db — the Host-owned `subagents` table is
+/// exported over the authenticated broker lease channel (`host.subagents.export`).
 pub fn migrate_host_subagents() -> Result<u32, String> {
-    let natives_path = crate::default_natives_db_path();
-    migrate_host_subagents_from(&natives_path)
-}
-
-pub fn migrate_host_subagents_from(natives_db: &std::path::Path) -> Result<u32, String> {
     {
         let data = store()?;
         let conn = data.conn()?;
@@ -801,6 +799,69 @@ pub fn migrate_host_subagents_from(natives_db: &std::path::Path) -> Result<u32, 
             return Ok(0);
         }
     }
+    let resp = crate::natives_db_broker::NativesDbBroker::open_default()?
+        .host_subagents("daemon-boot")?;
+    import_host_subagent_rows(resp.rows)
+}
+
+/// Import one batch of legacy Host subagent rows into the capability library.
+/// Shared by the production broker lease path and the test fixture reader.
+fn import_host_subagent_rows(rows: Vec<crate::natives_db_broker::HostSubagentRow>) -> Result<u32, String> {
+    let mut migrated = 0u32;
+    for row in rows {
+        let id = row.id;
+        let name = row.name;
+        let role = row.role.unwrap_or_default();
+        let instructions = row.instructions.unwrap_or_default();
+        let tools_raw = row.tools.unwrap_or_default();
+        let provider_id = row.provider_id.unwrap_or_default();
+        let key_id = row.provider_key_id;
+        let model_id = row.model_id.unwrap_or_default();
+        let enabled = row.enabled;
+        let system_prompt = if !instructions.trim().is_empty() {
+            instructions
+        } else if !role.trim().is_empty() {
+            role.clone()
+        } else {
+            format!("You are {name}.")
+        };
+        let tools: Vec<String> = tools_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        // Host line allowed 'auto' key routing; capability experts store IDs only.
+        let key_id = key_id.filter(|k| !k.eq_ignore_ascii_case("auto"));
+        let result = insert_expert(
+            &json!({
+                "id": id,
+                "name": name,
+                "description": role,
+                "systemPrompt": system_prompt,
+                "tools": tools,
+                "providerId": if provider_id.is_empty() { Value::Null } else { json!(provider_id) },
+                "keyId": key_id,
+                "modelId": if model_id.is_empty() { Value::Null } else { json!(model_id) },
+                "enabled": enabled != 0,
+                "source": "host_migration",
+            }),
+            "host_migration",
+        );
+        match result {
+            Ok(_) => migrated += 1,
+            Err(e) if e.contains("already exists") => {}
+            Err(e) => return Err(format!("migrate host subagent failed: {e}")),
+        }
+    }
+    Ok(migrated)
+}
+
+/// Test-only fixture reader: reads a temp `subagents` table directly from a
+/// test-created natives.db file. Never used by production — the production
+/// path goes through the broker lease (`migrate_host_subagents`).
+#[cfg(test)]
+pub fn migrate_host_subagents_from(natives_db: &Path) -> Result<u32, String> {
     if !natives_db.exists() {
         return Ok(0);
     }
@@ -856,45 +917,23 @@ pub fn migrate_host_subagents_from(natives_db: &std::path::Path) -> Result<u32, 
     drop(stmt);
     drop(host);
 
-    let mut migrated = 0u32;
-    for (id, name, role, instructions, tools, provider_id, key_id, model_id, enabled) in rows {
-        let system_prompt = if !instructions.trim().is_empty() {
-            instructions
-        } else if !role.trim().is_empty() {
-            role.clone()
-        } else {
-            format!("You are {name}.")
-        };
-        let tools: Vec<String> = tools
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect();
-        // Host line allowed 'auto' key routing; capability experts store IDs only.
-        let key_id = key_id.filter(|k| !k.eq_ignore_ascii_case("auto"));
-        let result = insert_expert(
-            &json!({
-                "id": id,
-                "name": name,
-                "description": role,
-                "systemPrompt": system_prompt,
-                "tools": tools,
-                "providerId": provider_id,
-                "keyId": key_id,
-                "modelId": if model_id.is_empty() { Value::Null } else { json!(model_id) },
-                "enabled": enabled != 0,
-                "source": "host_migration",
-            }),
-            "host_migration",
-        );
-        match result {
-            Ok(_) => migrated += 1,
-            Err(e) if e.contains("already exists") => {}
-            Err(e) => return Err(format!("migrate host subagent failed: {e}")),
-        }
-    }
-    Ok(migrated)
+    import_host_subagent_rows(
+        rows.into_iter()
+            .map(|(id, name, role, instructions, tools, provider_id, key_id, model_id, enabled)| {
+                crate::natives_db_broker::HostSubagentRow {
+                    id,
+                    name,
+                    role: Some(role),
+                    instructions: Some(instructions),
+                    tools: Some(tools),
+                    provider_id,
+                    provider_key_id: key_id,
+                    model_id: Some(model_id),
+                    enabled,
+                }
+            })
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------

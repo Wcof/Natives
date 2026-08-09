@@ -729,8 +729,10 @@ export type AssistantMethod =
   | 'credential.lease.status'
   | 'credential.pool.acquire'
   | 'credential.routing.settings'
+  | 'credential.routing.plan'
   | 'credential.secret.acquire'
-  | 'credential.setting.get';
+  | 'credential.setting.get'
+  | 'host.subagents.export';
 
 /**
  * Capability library selection carried on run.start / conversation rows

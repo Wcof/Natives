@@ -248,7 +248,7 @@ fn authorized(header: Option<&String>, token: Option<&str>) -> bool {
 }
 
 fn read_settings() -> Result<LoopbackSettings, String> {
-    NativesDbBroker::open(crate::natives_db_broker::default_natives_db_path())?.loopback_settings()
+    NativesDbBroker::open_default()?.loopback_settings()
 }
 fn disabled_settings() -> LoopbackSettings {
     LoopbackSettings {
@@ -260,49 +260,36 @@ fn disabled_settings() -> LoopbackSettings {
 }
 
 fn route_models() -> Result<Vec<Value>, String> {
-    // T104: read-only lease on the Host-authoritative natives.db.
-    let conn = Connection::open_with_flags(
-        crate::natives_db_broker::default_natives_db_path(),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT DISTINCT model_id FROM provider_route_bindings WHERE enabled=1 ORDER BY model_id").map_err(|e| e.to_string())?;
-    let models = stmt
-        .query_map([], |row| {
-            Ok(json!({"id": row.get::<_, String>(0)?, "object": "model", "owned_by": "natives"}))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+    // T104 / W1: route bindings are Host-owned (natives.db); fetch them via the
+    // broker lease so the daemon never opens natives.db.
+    let plan = NativesDbBroker::open_default()?.routing_plan("loopback")?;
+    let mut models: Vec<Value> = plan
+        .targets
+        .into_iter()
+        .map(|t| t.model_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|id| json!({"id": id, "object": "model", "owned_by": "natives"}))
+        .collect();
+    models.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     Ok(models)
 }
 
 fn local_provider(model: &str) -> Result<crate::routing::RoutedProvider, String> {
-    // T104: read-only lease on the Host-authoritative natives.db.
-    let conn = Connection::open_with_flags(
-        crate::natives_db_broker::default_natives_db_path(),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| e.to_string())?;
-    let mut statement = conn
-        .prepare(
-            "SELECT provider_id, credential_kind, credential_id, model_id
-         FROM provider_route_bindings
-         WHERE enabled=1 AND model_id=?1 ORDER BY position, id",
-        )
-        .map_err(|error| error.to_string())?;
-    let targets = statement
-        .query_map([model], |row| {
-            Ok(crate::routing::RouteTarget {
-                provider_id: row.get(0)?,
-                credential_kind: row.get(1)?,
-                credential_id: row.get(2)?,
-                model_id: row.get(3)?,
-            })
+    // T104 / W1: route bindings are Host-owned (natives.db); fetch them via the
+    // broker lease so the daemon never opens natives.db.
+    let plan = NativesDbBroker::open_default()?.routing_plan("loopback")?;
+    let targets: Vec<crate::routing::RouteTarget> = plan
+        .targets
+        .into_iter()
+        .filter(|t| t.model_id == model)
+        .map(|t| crate::routing::RouteTarget {
+            provider_id: t.provider_id,
+            credential_kind: t.credential_kind,
+            credential_id: t.credential_id,
+            model_id: t.model_id,
         })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+        .collect();
     if targets.is_empty() {
         return Err("model is not bound to local routing".into());
     }

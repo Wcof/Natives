@@ -187,6 +187,36 @@ impl NativesDbBroker {
         })
     }
 
+    /// Acquire the Host-owned routing plan as a lease (Daemon → Host). Serves
+    /// `provider_routing_settings` + enabled `provider_route_bindings` so the
+    /// daemon never opens natives.db (T104 / modular remediation W1).
+    pub fn routing_plan(&self, run_id: &str) -> Result<RoutingPlanLeaseResponse, String> {
+        let req = RoutingPlanLeaseRequest {
+            run_id: run_id.to_string(),
+        };
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("routing plan request serialize failed: {e}")))?;
+        let data = self.lease_request(names::CREDENTIAL_ROUTING_PLAN, &payload)?;
+        let resp: RoutingPlanLeaseResponse = serde_json::from_value(data)
+            .map_err(|e| redact_err(&format!("routing plan response parse failed: {e}")))?;
+        Ok(resp)
+    }
+
+    /// Export legacy Host `subagents` rows once via the broker lease
+    /// (ADR-0016 / W1): the daemon imports Host-owned data without opening
+    /// natives.db. Memory-only; instructions/tools only, never secrets.
+    pub fn host_subagents(&self, run_id: &str) -> Result<HostSubagentsLeaseResponse, String> {
+        let req = HostSubagentsLeaseRequest {
+            run_id: run_id.to_string(),
+        };
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("subagents request serialize failed: {e}")))?;
+        let data = self.lease_request(names::HOST_SUBAGENTS_EXPORT, &payload)?;
+        let resp: HostSubagentsLeaseResponse = serde_json::from_value(data)
+            .map_err(|e| redact_err(&format!("subagents response parse failed: {e}")))?;
+        Ok(resp)
+    }
+
     /// Explicitly revoke a lease this daemon no longer needs (run finished or
     /// cancelled). Revocation is enforced by the Host; a revoked lease is
     /// rejected on any status/refresh probe.

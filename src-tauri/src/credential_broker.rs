@@ -544,6 +544,119 @@ pub fn broker_routing_settings(
     })
 }
 
+/// Acquire the Host-owned routing plan as a lease (Daemon → Host). Serves
+/// `provider_routing_settings` + enabled `provider_route_bindings` so the
+/// daemon never opens natives.db (T104 / modular remediation W1). Read-only;
+/// the lease binds to `run_id` like every other broker method.
+pub fn broker_routing_plan(
+    req: wire::RoutingPlanLeaseRequest,
+) -> std::result::Result<wire::RoutingPlanLeaseResponse, String> {
+    let _ = req.run_id;
+    let db = crate::db::get_main_conn()
+        .map_err(|e| redact_broker_error(&format!("DB connection failed: {e}")))?;
+    let enabled: bool = db
+        .query_row(
+            "SELECT enabled FROM provider_routing_settings WHERE id = 1",
+            [],
+            |row| row.get::<_, i64>(0).map(|v| v != 0),
+        )
+        .optional()
+        .map_err(|e| redact_broker_error(&format!("read routing settings: {e}")))?
+        .unwrap_or(false);
+    let mut targets = Vec::new();
+    if enabled {
+        let mut stmt = db
+            .prepare(
+                "SELECT provider_id, credential_kind, credential_id, model_id
+                 FROM provider_route_bindings WHERE enabled = 1
+                 ORDER BY position ASC, id ASC",
+            )
+            .map_err(|e| redact_broker_error(&format!("read route bindings: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| redact_broker_error(&format!("read route bindings: {e}")))?;
+        for row in rows.flatten() {
+            let (provider_id, credential_kind, credential_id, model_id) = row;
+            if provider_id.trim().is_empty() || model_id.trim().is_empty() {
+                continue;
+            }
+            targets.push(wire::RoutingPlanTarget {
+                provider_id,
+                credential_kind,
+                credential_id,
+                model_id,
+            });
+        }
+    }
+    let lease = lease_registry().issue(
+        "routing",
+        "plan",
+        "routing-plan",
+        None,
+        wire::CredentialLeaseMeta::default_ttl(),
+    );
+    Ok(wire::RoutingPlanLeaseResponse {
+        enabled,
+        targets,
+        lease: Some(lease),
+    })
+}
+
+/// Export legacy Host `subagents` rows as a lease (Daemon → Host). ADR-0016
+/// retirement: the daemon imports Host-owned data without opening natives.db.
+/// Read-only; instructions/tools only, never secrets.
+pub fn broker_host_subagents(
+    req: wire::HostSubagentsLeaseRequest,
+) -> std::result::Result<wire::HostSubagentsLeaseResponse, String> {
+    let _ = req.run_id;
+    let db = crate::db::get_main_conn()
+        .map_err(|e| redact_broker_error(&format!("DB connection failed: {e}")))?;
+    let rows = {
+        let mut stmt = db
+            .prepare(
+                "SELECT id, name, role, instructions, tools, provider_id, provider_key_id,
+                        model_id, enabled FROM subagents",
+            )
+            .map_err(|e| redact_broker_error(&format!("read subagents: {e}")))?;
+        let mapped = stmt
+            .query_map([], |row| {
+                Ok(wire::HostSubagentRow {
+                    id: row.get::<_, String>(0)?,
+                    name: row.get::<_, String>(1)?,
+                    role: row.get::<_, Option<String>>(2)?,
+                    instructions: row.get::<_, Option<String>>(3)?,
+                    tools: row.get::<_, Option<String>>(4)?,
+                    provider_id: row.get::<_, Option<String>>(5)?,
+                    provider_key_id: row.get::<_, Option<String>>(6)?,
+                    model_id: row.get::<_, Option<String>>(7)?,
+                    enabled: row.get::<_, i64>(8)?,
+                })
+            })
+            .map_err(|e| redact_broker_error(&format!("read subagents: {e}")))?;
+        mapped
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| redact_broker_error(&format!("read subagents: {e}")))?;
+    };
+    let lease = lease_registry().issue(
+        "subagents",
+        "host-export",
+        "host-subagents",
+        None,
+        wire::CredentialLeaseMeta::default_ttl(),
+    );
+    Ok(wire::HostSubagentsLeaseResponse {
+        rows,
+        lease: Some(lease),
+    })
+}
+
 /// Acquire one capability secret as a lease (Daemon → Host), e.g. MCP env /
 /// bearer / OAuth refresh material. Value is memory-only.
 pub fn broker_secret_acquire(
@@ -648,6 +761,18 @@ pub fn dispatch_broker_uds(payload_line: &str) -> std::result::Result<String, St
             let req: wire::LoopbackSettingsLeaseRequest = serde_json::from_value(envelope.payload)
                 .map_err(|e| redact_broker_error(&e.to_string()))?;
             broker_routing_settings(req)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
+        names::CREDENTIAL_ROUTING_PLAN => {
+            let req: wire::RoutingPlanLeaseRequest = serde_json::from_value(envelope.payload)
+                .map_err(|e| redact_broker_error(&e.to_string()))?;
+            broker_routing_plan(req)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
+        names::HOST_SUBAGENTS_EXPORT => {
+            let req: wire::HostSubagentsLeaseRequest = serde_json::from_value(envelope.payload)
+                .map_err(|e| redact_broker_error(&e.to_string()))?;
+            broker_host_subagents(req)
                 .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
         }
         names::CREDENTIAL_SECRET_ACQUIRE => {

@@ -87,8 +87,11 @@ fn circuit_write_lock() -> &'static Mutex<()> {
     CIRCUIT_WRITE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Load the route plan from natives.db. Missing tables/config intentionally fall
-/// back to the caller's direct target so an upgrade cannot break existing runs.
+/// Load the route plan via the Host broker lease (T104 / modular remediation
+/// W1). The daemon never opens natives.db — `provider_routing_settings` and
+/// `provider_route_bindings` are Host-owned and served over the authenticated
+/// broker socket. Missing/disabled config intentionally falls back to the
+/// caller's direct target so an upgrade cannot break existing runs.
 pub fn load_plan(
     primary_provider: String,
     primary_key: Option<String>,
@@ -100,26 +103,17 @@ pub fn load_plan(
         credential_id: primary_key,
         model_id: primary_model,
     };
-    let path = crate::natives_db_broker::default_natives_db_path();
-    let Ok(conn) = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
-        return RoutingPlan {
-            enabled: false,
-            targets: vec![primary],
-        };
+    let plan = match NativesDbBroker::open_default().and_then(|b| b.routing_plan("engine")) {
+        Ok(p) => p,
+        Err(_) => {
+            // Broker unreachable → fail closed to the primary target only.
+            return RoutingPlan {
+                enabled: false,
+                targets: vec![primary],
+            };
+        }
     };
-    let enabled: Option<i64> = conn
-        .query_row(
-            "SELECT enabled FROM provider_routing_settings WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten();
-    if enabled.unwrap_or(0) == 0 {
+    if !plan.enabled {
         return RoutingPlan {
             enabled: false,
             targets: vec![primary],
@@ -127,38 +121,24 @@ pub fn load_plan(
     }
 
     let mut targets = vec![primary];
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT provider_id, credential_kind, credential_id, model_id
-         FROM provider_route_bindings WHERE enabled = 1 ORDER BY position ASC, id ASC",
-    ) else {
-        return RoutingPlan {
-            enabled: true,
-            targets,
-        };
-    };
-    let rows = stmt.query_map([], |row| {
-        Ok(RouteTarget {
-            provider_id: row.get(0)?,
-            credential_kind: row.get(1)?,
-            credential_id: row.get(2)?,
-            model_id: row.get(3)?,
-        })
-    });
-    if let Ok(rows) = rows {
-        for target in rows.flatten() {
-            if target.provider_id.trim().is_empty() || target.model_id.trim().is_empty() {
-                continue;
-            }
-            if targets.iter().any(|existing| {
-                existing.provider_id == target.provider_id
-                    && existing.credential_kind == target.credential_kind
-                    && existing.credential_id == target.credential_id
-                    && existing.model_id == target.model_id
-            }) {
-                continue;
-            }
-            targets.push(target);
+    for target in plan.targets {
+        if target.provider_id.trim().is_empty() || target.model_id.trim().is_empty() {
+            continue;
         }
+        if targets.iter().any(|existing| {
+            existing.provider_id == target.provider_id
+                && existing.credential_kind == target.credential_kind
+                && existing.credential_id == target.credential_id
+                && existing.model_id == target.model_id
+        }) {
+            continue;
+        }
+        targets.push(RouteTarget {
+            provider_id: target.provider_id,
+            credential_kind: target.credential_kind,
+            credential_id: target.credential_id,
+            model_id: target.model_id,
+        });
     }
     RoutingPlan {
         enabled: true,
@@ -411,8 +391,7 @@ impl Sub2ApiPoolProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
-        let broker = NativesDbBroker::open(crate::natives_db_broker::default_natives_db_path())
-            .map_err(EngineError::Message)?;
+        let broker = NativesDbBroker::open_default().map_err(EngineError::Message)?;
         let accounts = broker
             .resolve_sub2api_pool(&self.provider_id)
             .map_err(EngineError::Message)?;
@@ -576,24 +555,16 @@ async fn account_stream_history(
 }
 
 pub(crate) fn rectifier_enabled() -> bool {
-    // T104: read-only lease on the Host-authoritative natives.db.
-    let Ok(conn) = Connection::open_with_flags(
-        crate::natives_db_broker::default_natives_db_path(),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
+    // T104 / W1: the rectifier config is Host-owned (natives.db). Read it via
+    // the broker lease — `loopback_settings` already returns the rectifier
+    // JSON — so the daemon never opens natives.db.
+    let Ok(settings) = NativesDbBroker::open_default().and_then(|b| b.loopback_settings()) else {
         return false;
     };
-    let raw = conn
-        .query_row(
-            "SELECT rectifier_json FROM provider_routing_settings WHERE id=1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .ok()
-        .flatten();
-    raw.and_then(|value| serde_json::from_str::<Value>(&value).ok())
-        .and_then(|value| value.get("enabled").and_then(Value::as_bool))
+    settings
+        .rectifier
+        .get("enabled")
+        .and_then(Value::as_bool)
         .unwrap_or(false)
 }
 
@@ -672,8 +643,7 @@ async fn refresh_codex_account(account: &mut Sub2ApiAccountCredential) -> Result
     if let Some(expiry) = &expires_at {
         credentials.insert("expires_at".into(), Value::String(expiry.clone()));
     }
-    let broker = NativesDbBroker::open(crate::natives_db_broker::default_natives_db_path())
-        .map_err(EngineError::Message)?;
+    let broker = NativesDbBroker::open_default().map_err(EngineError::Message)?;
     broker
         .update_sub2api_credentials(&account.id, &account.credentials, expires_at.as_deref())
         .map_err(EngineError::Message)?;
