@@ -1,3 +1,5 @@
+import { isExpectedMessageSource } from './message-source';
+
 // ── Sandbox Security Constant ──
 // MUST NOT include 'allow-same-origin' — that would let plugin iframes
 // access the host's cookies, localStorage, and DOM (R-S2 violation).
@@ -212,6 +214,18 @@ export class IframeManager {
     return Array.from(this.instances.keys());
   }
 
+  /**
+   * True when `source` matches a currently-managed module iframe's contentWindow.
+   * Used to gate host-side window messages that modules may legitimately send
+   * (e.g. shell:focus-base) without trusting event.origin (R-S3).
+   */
+  isManagedMessageSource(source: unknown): boolean {
+    for (const instance of this.instances.values()) {
+      if (instance.element?.contentWindow === source) return true;
+    }
+    return false;
+  }
+
   // ── Heartbeat & Crash Callbacks ──
 
   onHeartbeatTimeout(moduleId: string, cb: () => void): void {
@@ -393,8 +407,8 @@ export class IframeManager {
     this.messageListenerCleanups.get(moduleId)?.();
 
     const handler = async (event: MessageEvent) => {
-      // Verify the message came from our iframe (MessageEvent.source check)
-      if (event.source !== iframe.contentWindow) return;
+      // Verify the message came from our iframe (R-S3: MessageEvent.source check)
+      if (!isExpectedMessageSource(event, iframe.contentWindow)) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
 

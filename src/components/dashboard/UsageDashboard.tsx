@@ -1,9 +1,10 @@
 'use client';
 
-import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocale, t } from '@/i18n';
-import type { UsageDashboardResponse, UsageCacheReadResult, UsageCacheMetadata, UsageMetrics, UsageViewRequest, DashboardState } from '@/types/usage';
+import type { UsageMetrics, UsageViewRequest } from '@/types/usage';
 import { filterUsageRecords, aggregateUsageMetrics, uniqueSessionCount, buildSourceDimensions } from '@/lib/usage-dashboard';
+import { useUsageData } from '@/hooks/useUsageData';
 import { UsageToolbar } from './UsageToolbar';
 import { UsageMetricGrid } from './UsageMetricGrid';
 const UsageCharts = lazy(() => import('./UsageCharts').then((module) => ({ default: module.UsageCharts })));
@@ -20,7 +21,6 @@ interface UsageDashboardProps {
 export function UsageDashboard({ children }: UsageDashboardProps = {}) {
   const locale = useLocale();
   const { toast } = useToast();
-  const requestIdRef = useRef(0);
 
   const [preset, setPreset] = useState('30d');
   const [customStart, setCustomStart] = useState('');
@@ -28,10 +28,6 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
   const [sourceFilter, setSourceFilter] = useState<string[] | null>(null);
   const [modelFilter, setModelFilter] = useState<string[] | null>(null);
   const [projectFilter, setProjectFilter] = useState<string[] | null>(null);
-  const [state, setState] = useState<DashboardState>({ kind: 'reading-cache' });
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
   const [dismissedWarningKey, setDismissedWarningKey] = useState<string | null>(null);
   const [warningSeconds, setWarningSeconds] = useState(10);
 
@@ -56,76 +52,27 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
     }
   }, [toast]);
 
-  const buildViewRequest = useCallback((timeZone: string): UsageViewRequest => ({
-    preset: preset as UsageViewRequest['preset'],
-    timeZone,
-    projectPath: projectFilter?.[0] ?? null,
-    customStartMs: preset === 'custom' && customStart ? new Date(`${customStart}T00:00:00`).getTime() : undefined,
-    // The end date is inclusive in the UI, but backend ranges are exclusive.
-    customEndMs: preset === 'custom' && customEnd ? new Date(`${customEnd}T23:59:59.999`).getTime() + 1 : undefined,
-  }), [preset, customStart, customEnd, projectFilter]);
+  const buildViewRequest = useCallback((): UsageViewRequest => {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    return {
+      preset: preset as UsageViewRequest['preset'],
+      timeZone,
+      projectPath: projectFilter?.[0] ?? null,
+      customStartMs: preset === 'custom' && customStart ? new Date(`${customStart}T00:00:00`).getTime() : undefined,
+      // The end date is inclusive in the UI, but backend ranges are exclusive.
+      customEndMs: preset === 'custom' && customEnd ? new Date(`${customEnd}T23:59:59.999`).getTime() + 1 : undefined,
+    };
+  }, [preset, customStart, customEnd, projectFilter]);
 
-  // Sync data is user initiated. Cache reads never start a scan by themselves.
+  // Cache read + user-initiated sync live in the shared usage-data hook so
+  // Settings Personal Overview composes from the same state machine.
+  const { state, errorMsg, isSyncing, lastSyncTime, clearError, sync } = useUsageData(buildViewRequest);
+
   const handleSync = useCallback(async () => {
-    // 同步也参与请求竞态守卫：否则同步中切换预设后，旧预设的同步结果会
-    // 覆盖新预设视图；反向的 stale loadCached 也会覆盖新同步数据
-    const rid = ++requestIdRef.current;
-    setIsSyncing(true);
-    setErrorMsg(null);
-    try {
-      const api = window.nativesAPI;
-      if (!api?.usage?.sync) throw new Error('usage API not available');
-      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-      const result = (await api.usage.sync({
-        timeZone,
-        currentView: buildViewRequest(timeZone),
-      })) as { metadata: UsageCacheMetadata; response: UsageDashboardResponse };
-      if (rid !== requestIdRef.current) return;
-      setState({ kind: 'ready', data: result.response, metadata: result.metadata });
-      setLastSyncTime(result.metadata.generatedAtMs);
-      toast(t(locale, 'usage.syncedSuccess'), 'success');
-    } catch (err: any) {
-      if (rid !== requestIdRef.current) return;
-      const classified = classifyError(err);
-      setErrorMsg(classified.userMessage);
-      toast(classified.userMessage, 'error');
-      // Keep old data on failure
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [buildViewRequest, locale, toast]);
-
-  // Fetch cached data on mount / preset change
-  const loadCached = useCallback(async () => {
-    const rid = ++requestIdRef.current;
-    setErrorMsg(null);
-    try {
-      const api = window.nativesAPI;
-      if (!api?.usage?.getCached) throw new Error('usage API not available');
-      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-      const query = buildViewRequest(timeZone);
-      const result = (await api.usage.getCached(query)) as UsageCacheReadResult;
-      // Ignore stale responses
-      if (rid !== requestIdRef.current) return;
-      if (result.state === 'ready') {
-        setState({ kind: 'ready', data: result.response, metadata: result.metadata });
-        setLastSyncTime(result.metadata.generatedAtMs);
-      } else {
-        setState({ kind: 'missing-cache' });
-      }
-    } catch (err: any) {
-      if (rid !== requestIdRef.current) return;
-      const classified = classifyError(err);
-      setErrorMsg(classified.userMessage);
-      setState({ kind: 'missing-cache' });
-    }
-  }, [buildViewRequest]);
-
-  // Load cache on mount and preset change
-  useEffect(() => {
-    setState({ kind: 'reading-cache' });
-    loadCached();
-  }, [loadCached]);
+    const outcome = await sync();
+    if (outcome.ok) toast(t(locale, 'usage.syncedSuccess'), 'success');
+    else if (outcome.message) toast(outcome.message, 'error');
+  }, [sync, locale, toast]);
 
   // Filtered data
   const data = state.kind === 'ready' ? state.data : null;
@@ -279,7 +226,7 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
             {t(locale, 'usage.noCache')}
           </div>
           <button
-            onClick={handleSync}
+            onClick={() => void handleSync()}
             disabled={isSyncing}
             className={styles.primaryAction}
           >
@@ -318,7 +265,7 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
       >
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
           <button
-            onClick={handleSync}
+            onClick={() => void handleSync()}
             disabled={isSyncing}
             aria-busy={isSyncing}
             className={styles.secondaryAction}
@@ -337,7 +284,7 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
           <button
             type="button"
             className={styles.warningClose}
-            onClick={() => setErrorMsg(null)}
+            onClick={() => clearError()}
             aria-label={t(locale, 'common.close')}
             title={t(locale, 'common.close')}
           >

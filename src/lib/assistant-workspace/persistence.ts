@@ -112,7 +112,13 @@ export function savePersistedQuestionHistory(projectPath: string | null | undefi
 }
 
 
-/** Preferred execution runtime for new runs (native | claude_cli | …). UI-only pin. */
+/**
+ * Preferred execution runtime for new runs (native | claude_cli | …).
+ *
+ * MIG-001：此 key 不再是运行期权威 — 新 Run 启动不再读它，Settings V2
+ * defaultRuntime 是唯一默认来源。仅作为「一次性迁移种子」保留：设置页打开时
+ * 读一次传给后端做 one-way 迁移，成功后调用 `clearPreferredRuntimeId()` 立即删除。
+ */
 const RUNTIME_PREF_KEY = 'natives.assistant.runtimePref.v1';
 
 export function loadPreferredRuntimeId(): string | null {
@@ -125,14 +131,11 @@ export function loadPreferredRuntimeId(): string | null {
   }
 }
 
-export function savePreferredRuntimeId(runtimeId: string | null | undefined): void {
+/** MIG-001：迁移完成后删除旧 key。旧写入口 savePreferredRuntimeId 已移除。 */
+export function clearPreferredRuntimeId(): void {
   if (!canUseStorage()) return;
   try {
-    if (!runtimeId || !runtimeId.trim()) {
-      window.localStorage.removeItem(RUNTIME_PREF_KEY);
-      return;
-    }
-    window.localStorage.setItem(RUNTIME_PREF_KEY, runtimeId.trim());
+    window.localStorage.removeItem(RUNTIME_PREF_KEY);
   } catch {
     /* quota / private mode */
   }

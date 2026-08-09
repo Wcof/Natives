@@ -26,7 +26,7 @@ function withRun(state = createInitialWorkspaceState(), runId = 'r1', conversati
 test('mapWireRunEvent: flattened Rust text_delta', () => {
   const ev = mapWireRunEvent({
     run_id: 'r1',
-    sequence: 2,
+    run_sequence: 2,
     timestamp: '2026-07-22T00:00:00Z',
     type: 'text_delta',
     text: 'Hello ',
@@ -40,7 +40,7 @@ test('mapWireRunEvent: flattened Rust text_delta', () => {
 test('mapWireRunEvent: flattened Rust tool_call_requested/started/completed', () => {
   const requested = mapWireRunEvent({
     run_id: 'r1',
-    sequence: 1,
+    run_sequence: 1,
     timestamp: 't',
     type: 'tool_call_requested',
     id: 'tc1',
@@ -54,7 +54,7 @@ test('mapWireRunEvent: flattened Rust tool_call_requested/started/completed', ()
 
   const completed = mapWireRunEvent({
     run_id: 'r1',
-    sequence: 3,
+    run_sequence: 3,
     type: 'tool_call_completed',
     id: 'tc1',
     name: 'list_dir',
@@ -69,7 +69,7 @@ test('mapWireRunEvent: flattened Rust tool_call_requested/started/completed', ()
 test('mapWireRunEvent: flattened Rust tool_call_delta', () => {
   const delta = mapWireRunEvent({
     run_id: 'r1',
-    sequence: 2,
+    run_sequence: 2,
     type: 'tool_call_delta',
     index: 0,
     id: 'tc1',
@@ -85,7 +85,7 @@ test('mapWireRunEvent: flattened Rust tool_call_delta', () => {
 test('mapWireRunEvent: host-wrapped payload envelope', () => {
   const ev = mapWireRunEvent({
     runId: 'r1',
-    sequence: 4,
+    run_sequence: 4,
     type: 'failed',
     payload: {
       code: 'NO_CREDENTIALS',
@@ -102,7 +102,7 @@ test('mapWireRunEvent + reducer: tool_call_delta merges into one card then compl
   const events = [
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 1,
+      run_sequence: 1,
       type: 'tool_call_delta',
       index: 0,
       id: 'tc1',
@@ -111,7 +111,7 @@ test('mapWireRunEvent + reducer: tool_call_delta merges into one card then compl
     }),
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 2,
+      run_sequence: 2,
       type: 'tool_call_delta',
       index: 0,
       id: 'tc1',
@@ -119,7 +119,7 @@ test('mapWireRunEvent + reducer: tool_call_delta merges into one card then compl
     }),
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 3,
+      run_sequence: 3,
       type: 'tool_call_requested',
       id: 'tc1',
       name: 'list_dir',
@@ -127,14 +127,14 @@ test('mapWireRunEvent + reducer: tool_call_delta merges into one card then compl
     }),
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 4,
+      run_sequence: 4,
       type: 'tool_call_started',
       id: 'tc1',
       name: 'list_dir',
     }),
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 5,
+      run_sequence: 5,
       type: 'tool_call_completed',
       id: 'tc1',
       name: 'list_dir',
@@ -144,13 +144,13 @@ test('mapWireRunEvent + reducer: tool_call_delta merges into one card then compl
     }),
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 6,
+      run_sequence: 6,
       type: 'text_delta',
       text: 'done',
     }),
     mapWireRunEvent({
       run_id: 'r1',
-      sequence: 7,
+      run_sequence: 7,
       type: 'completed',
       reason: 'stop',
     }),
@@ -185,7 +185,7 @@ test('mapWireRunEvent + reducer: failed event surfaces error (no permanent think
     type: 'event/apply',
     event: mapWireRunEvent({
       run_id: 'r1',
-      sequence: 1,
+      run_sequence: 1,
       type: 'failed',
       code: 'NO_CREDENTIALS',
       error: 'No credentials for provider p',

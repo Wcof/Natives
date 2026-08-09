@@ -1,3 +1,8 @@
+use super::super::conversion::{
+    agent_messages_to_values, engine_messages_to_values, provider_backoff_ms,
+    tool_args_fingerprint, values_chars, values_to_engine_messages, MAX_PROVIDER_BACKOFF_MS,
+};
+use super::super::*;
 use super::*;
 use crate::EventPersistence;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1996,6 +2001,89 @@ async fn context_stats_tracked_and_reset_by_engine_loop() {
         stats.estimated_chars < 100_000,
         "stats must reset to the kept transcript size, not accumulate stale bytes (chars={})",
         stats.estimated_chars
+    );
+}
+
+#[tokio::test]
+async fn context_stats_estimate_tracks_transcript_not_cumulative_sum() {
+    // PERF-001: the engine loop must observe the transcript (append only the
+    // per-round growth), not re-accumulate the full history every round. After
+    // a tool round below the compaction threshold, the estimate must sit
+    // exactly at the cheap char count of the transcript the engine observed —
+    // a cumulative implementation would land far above it after repeated
+    // rounds.
+    let engine =
+        AgentEngine::new(EventSequencer::memory_only()).with_context_budget(10_000_000, 512);
+    let provider = CompactionProvider::new(
+        SummaryBehavior::Answer,
+        vec![
+            tool_round(),
+            vec![
+                EngineProviderEvent::TextDelta("done".into()),
+                EngineProviderEvent::Completed,
+            ],
+        ],
+    );
+    let status = engine
+        .run(
+            EngineRunConfig {
+                run_id: format!("r-observe-{}", uuid::Uuid::new_v4()),
+                conversation_id: "c-observe".into(),
+                model: "m".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "hello".into(),
+                max_steps: 2,
+            },
+            &provider,
+            &BigOutputTools,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(status, crate::EngineOutcome::Completed { .. }),
+        "{status:?}"
+    );
+
+    let stats = engine.context_stats.lock().unwrap().clone();
+    // Reconstruct the transcript the engine observed after the tool round
+    // (turn 1's assistant message + its tool result; the final text turn
+    // returns before a second observation). `values_chars` only sums string
+    // lengths, so random UUID message ids match by construction.
+    let mut final_messages = engine_messages_to_agent_messages(&[EngineMessage {
+        role: "user".into(),
+        content: "hello".into(),
+        tool_call_id: None,
+        tool_name: None,
+        tool_calls: None,
+        images: Vec::new(),
+    }]);
+    final_messages.push(crate::AgentMessage::Assistant(crate::AssistantMessage {
+        message_id: crate::MessageId::new(),
+        content: vec![crate::ContentBlock::ToolCall(crate::ToolCall {
+            tool_call_id: crate::ToolCallId::from("t1"),
+            name: "echo".into(),
+            arguments_json: r#"{"x":1}"#.into(),
+        })],
+        stop_reason: Some(crate::StopReason::ToolUse),
+    }));
+    final_messages.push(crate::AgentMessage::ToolResult(crate::ToolResultMessage {
+        message_id: crate::MessageId::new(),
+        tool_call_id: crate::ToolCallId::from("t1"),
+        tool_name: "echo".into(),
+        content: vec![crate::ToolResultBlock::Json {
+            value: serde_json::json!({ "body": "y".repeat(5_000) }),
+        }],
+        is_error: false,
+        code: None,
+    }));
+    let expected = values_chars(&agent_messages_to_values(&final_messages));
+    assert_eq!(
+        stats.estimated_chars as usize,
+        expected,
+        "estimate must equal the final transcript size, not a cumulative sum (chars={}, expected={})",
+        stats.estimated_chars,
+        expected
     );
 }
 

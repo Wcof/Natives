@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t, type Locale } from '@/i18n';
-import ConversationTimeline from '@/components/assistant/ConversationTimeline';
-import MessageInput from '@/components/assistant/MessageInput';
+import ConversationTimeline from '@/components/ui/conversation/ConversationTimeline';
+import MessageInput from '@/components/ui/conversation/MessageInput';
 import {
   useAssistantDispatch,
   useAssistantGateway,
@@ -21,7 +21,7 @@ import { readActiveProject } from '@/lib/active-project';
 import { mapWireProviders } from '@/lib/provider-model-selection';
 import type { Conversation } from '@/lib/assistant-protocol';
 import type { AssistantDraft } from '@/lib/assistant-composer';
-import type { ProviderWithModels } from '@/components/assistant/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
 import type { CreativeDraft } from '@/lib/tauri-adapter';
 
 /** Must match CREATIVE_DRAFT_AGENT_KIND in the daemon's production.rs. */
@@ -141,7 +141,7 @@ export default function CreationSession({
     if (conversationId) return conversationId;
     if (!provider || !modelId) throw new Error(t(locale, 'creative.session.noModel'));
     const projectId = await readActiveProject(window.nativesAPI);
-    if (!projectId) throw new Error(locale === 'zh' ? '请先选择项目文件夹' : 'Select a project directory first');
+    if (!projectId) throw new Error(t(locale, 'creativeSession.selectProjectFirst'));
 
     setCreating(true);
     try {
@@ -228,7 +228,7 @@ export default function CreationSession({
         onRetry={activeRunId ? () => void retry(activeRunId) : undefined}
       />
       {error && (
-        <p className="px-4 py-2 text-sm text-red-600 dark:text-red-400" role="alert">
+        <p className="px-4 py-2 text-sm text-[var(--danger)]" role="alert">
           {error}
         </p>
       )}

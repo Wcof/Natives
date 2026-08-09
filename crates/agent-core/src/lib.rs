@@ -14,6 +14,7 @@ pub mod doom_loop;
 pub mod engine;
 pub mod event_seq;
 pub mod facade;
+pub mod fs_util;
 pub mod hook_handlers;
 pub mod hooks;
 pub mod input;

@@ -540,8 +540,7 @@ async fn durable_lane_rejects_live_only_events() {
     );
     let ok = events.append(&run_id, RunEventKind::Started);
     assert_eq!(
-        ok.effective_run_sequence(),
-        1,
+        ok.run_sequence, 1,
         "durable sequence must not be consumed by rejected live-only events"
     );
 }

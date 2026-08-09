@@ -8,9 +8,9 @@
  * `run-watch-frame` Tauri event) streams durable + live frames, and the adapter
  * tracks dual cursors (lastDurableSequence / lastLiveSequence) that never share
  * a sequence namespace. Live deltas are transient and never advance the durable
- * projection watermark. The legacy `run.subscribe` long-poll loop remains only
- * as a compat fallback when the persistent stream is unavailable (e.g. embedded
- * mode or an old daemon).
+ * projection watermark. The persistent stream is the single streaming contract
+ * (STREAM-CONTRACT-V2); the legacy `run.subscribe` long-poll fallback is retired
+ * (MIG-004).
  */
 import type {
   AssistantMethod,
@@ -25,13 +25,11 @@ import {
   mapWireMessage,
   mapWireRun,
   mapWireRunEvent,
-  AuthoritativeEventMissing,
   applyProjectionEvent,
   createProjectionState,
 } from '@/lib/assistant-protocol';
 import type { AssistantGateway } from './gateway';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { cmd, subscribe } from '@/lib/tauri/core';
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -101,11 +99,11 @@ function createTauriWatchBridge(): HostWatchBridge | null {
   return {
     async start(runId, afterDurableSequence, afterLiveSequence) {
       try {
-        const result = (await invoke('run_watch_start', {
+        const result = await cmd<{ ok?: boolean; error?: string }>('run_watch_start', {
           run_id: runId,
           after_durable_sequence: afterDurableSequence,
           after_live_sequence: afterLiveSequence,
-        })) as { ok?: boolean; error?: string };
+        });
         return { ok: Boolean(result.ok), error: result.error };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -113,21 +111,15 @@ function createTauriWatchBridge(): HostWatchBridge | null {
     },
     async stop(runId) {
       try {
-        await invoke('run_watch_stop', { run_id: runId });
+        await cmd('run_watch_stop', { run_id: runId });
       } catch {
         // best-effort unsubscribe
       }
     },
     listen(listener) {
-      let unlisten: (() => void) | null = null;
-      void listen<WatchFrameEvent>(WATCH_FRAME_EVENT, (event) => {
-        listener(event.payload.frame);
-      }).then((fn) => {
-        unlisten = fn;
+      return subscribe<WatchFrameEvent>(WATCH_FRAME_EVENT, (payload) => {
+        listener(payload.frame);
       });
-      return () => {
-        unlisten?.();
-      };
     },
   };
 }
@@ -241,30 +233,25 @@ export class DaemonAssistantAdapter implements AssistantGateway {
   }
 
   /**
-   * Persistent live stream is the primary path; the legacy `run.subscribe`
-   * long-poll loop remains as a compat fallback only.
+   * Persistent live stream is the single streaming contract (STREAM-CONTRACT-V2).
+   * The legacy `run.subscribe` long-poll fallback is retired (MIG-004): when the
+   * persistent stream is unavailable the error propagates to the caller.
    */
   async *subscribe(runId: string, afterSequence: number): AsyncIterable<RunEvent> {
     const controller = new AbortController();
     this.abortControllers.set(runId, controller);
     try {
       const bridge = this.resolveWatchBridge();
-      if (bridge) {
-        try {
-          yield* this.readPersistentStream(
-            runId,
-            bridge,
-            controller.signal,
-            Math.floor(afterSequence),
-            this.liveCursorByRun.get(runId) ?? 0,
-          );
-          return;
-        } catch (err) {
-          if (!(err instanceof WatchStreamUnavailableError)) throw err;
-          // persistent stream unavailable (embedded / old daemon) → legacy fallback
-        }
+      if (!bridge) {
+        throw new WatchStreamUnavailableError(runId, 'no watch bridge available');
       }
-      yield* this.subscribeLegacy(runId, afterSequence, controller.signal);
+      yield* this.readPersistentStream(
+        runId,
+        bridge,
+        controller.signal,
+        Math.floor(afterSequence),
+        this.liveCursorByRun.get(runId) ?? 0,
+      );
     } finally {
       if (this.abortControllers.get(runId) === controller) {
         this.abortControllers.delete(runId);
@@ -519,170 +506,6 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       next.liveStaleUpTo = Math.max(next.liveStaleUpTo, next.liveSeq);
     }
     return out;
-  }
-
-  /** Legacy long-poll `run.subscribe` loop — compat fallback only. */
-  private async *subscribeLegacy(
-    runId: string,
-    afterSequence: number,
-    signal: AbortSignal,
-  ): AsyncIterable<RunEvent> {
-    let seq = afterSequence;
-    let projection = createProjectionState(runId, afterSequence);
-    try {
-      while (!signal.aborted) {
-        let events: RunEvent[] = [];
-        let terminal = false;
-        try {
-          const sub = (await this.resolveRequest()('run.subscribe', {
-            run_id: runId,
-            after_sequence: seq,
-            // A3: the daemon blocks server-side up to wait_ms for new events
-            // (persistent push on the long-poll connection). No client-side
-            // fixed poll sleep — an empty round just means the wait window
-            // elapsed; we loop immediately. wait_ms is bounded by the daemon
-            // (30s) and cancel rides a separate connection.
-            wait_ms: Math.max(this.pollIntervalMs * 10, 5_000),
-            mode: 'push',
-          })) as { events?: unknown[]; terminal?: boolean };
-          const raw = Array.isArray(sub?.events) ? sub.events : [];
-          events = raw.map((e) => mapWireRunEvent((e ?? {}) as Record<string, unknown>));
-          terminal = Boolean(sub?.terminal);
-        } catch {
-          // Fallback path: one-shot getEvents + run status (no push wait).
-          const raw = (await this.resolveRequest()('run.getEvents', {
-            run_id: runId,
-            after_sequence: seq,
-          })) as unknown;
-          const list = Array.isArray(raw)
-            ? raw
-            : Array.isArray((raw as { events?: unknown[] } | null)?.events)
-              ? (raw as { events: unknown[] }).events
-              : [];
-          events = list.map((e) => mapWireRunEvent((e ?? {}) as Record<string, unknown>));
-          terminal = await this.isRunTerminal(runId);
-        }
-
-        let sawTerminalEvent = false;
-        for (const event of events) {
-          if (event.sequence <= seq) continue;
-          seq = event.sequence;
-          projection = applyProjectionEvent(projection, event);
-          this.projectionRecovery.set(runId, projection.recovery);
-          yield event;
-          if (isTerminalEventType(event.type)) {
-            sawTerminalEvent = true;
-            return;
-          }
-        }
-
-        if (sawTerminalEvent) return;
-
-        // Server says the run is terminal but we have no new events after `seq`
-        // (client missed the terminal event, or after_sequence already past it).
-        // Replay from 0 once to recover the real terminal event; never exit the
-        // stream as "ended" while the UI still thinks the run is active — that
-        // used to flip ConnectionBanner into permanent "正在重连".
-        if (terminal) {
-          const recovered = await this.recoverTerminalEvent(runId, seq);
-          if (recovered) {
-            projection = applyProjectionEvent(projection, recovered);
-            this.projectionRecovery.set(runId, projection.recovery);
-            if (recovered.sequence <= seq) throw new AuthoritativeEventMissing(runId);
-            seq = recovered.sequence;
-            yield recovered;
-            return;
-          }
-          // A terminal DB status without its authoritative event is an
-          // incomplete projection, not permission to fabricate a sequence.
-          this.projectionRecovery.set(runId, {
-            kind: 'incomplete',
-            lastSequence: seq,
-            reason: 'authoritative_event_missing',
-          });
-          throw new AuthoritativeEventMissing(runId);
-        }
-
-        // Still active. Do not sleep on a fixed client-side interval — the
-        // daemon already blocked server-side for new events (wait_ms above),
-        // so an empty round is a real wait window, not a polling tick. Loop
-        // immediately. Long tool runs / slow providers are valid, and exiting
-        // only causes a fake reconnect loop in the workbench. True transport
-        // errors are handled by the catch above (fallback + backoff).
-      }
-    } finally {
-      // controller removed by caller (subscribe)
-    }
-  }
-
-  private async isRunTerminal(runId: string): Promise<boolean> {
-    try {
-      // Prefer a cheap events scan for a terminal kind already on disk.
-      const raw = (await this.resolveRequest()('run.getEvents', {
-        run_id: runId,
-        after_sequence: 0,
-      })) as unknown;
-      const list = Array.isArray(raw)
-        ? raw
-        : Array.isArray((raw as { events?: unknown[] } | null)?.events)
-          ? (raw as { events: unknown[] }).events
-          : [];
-      const events = list.map((e) => mapWireRunEvent((e ?? {}) as Record<string, unknown>));
-      if (events.some((e) => isTerminalEventType(e.type))) return true;
-
-      // Fall back to run.list status (run.get is not a public RPC).
-      const listed = (await this.resolveRequest()('run.list', {
-        run_id: runId,
-        limit: 50,
-      })) as unknown;
-      const runs = Array.isArray(listed)
-        ? listed
-        : Array.isArray((listed as { runs?: unknown[] } | null)?.runs)
-          ? (listed as { runs: unknown[] }).runs
-          : [];
-      const row = runs.find((r) => {
-        const rec = (r ?? {}) as Record<string, unknown>;
-        return String(rec.id ?? '') === runId;
-      }) as Record<string, unknown> | undefined;
-      if (!row) return false;
-      const status = String(row.status ?? '');
-      return (
-        status === 'completed' ||
-        status === 'failed' ||
-        status === 'cancelled' ||
-        status === 'interrupted'
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  /** Find the latest terminal event at-or-after `afterSequence` (replay from 0 if needed). */
-  private async recoverTerminalEvent(
-    runId: string,
-    afterSequence: number,
-  ): Promise<RunEvent | null> {
-    try {
-      const raw = (await this.resolveRequest()('run.getEvents', {
-        run_id: runId,
-        after_sequence: 0,
-      })) as unknown;
-      const list = Array.isArray(raw)
-        ? raw
-        : Array.isArray((raw as { events?: unknown[] } | null)?.events)
-          ? (raw as { events: unknown[] }).events
-          : [];
-      const events = list.map((e) => mapWireRunEvent((e ?? {}) as Record<string, unknown>));
-      const terminals = events.filter(
-        (e) => e.sequence > afterSequence && isTerminalEventType(e.type),
-      );
-      if (terminals.length > 0) return terminals[terminals.length - 1]!;
-      // If afterSequence already past the terminal, still surface the last terminal
-      // so the controller can apply it (reducer ignores seq <= last unless restamped).
-      return null;
-    } catch {
-      return null;
-    }
   }
 
   async getSnapshot(conversationId: string): Promise<ConversationSnapshot> {

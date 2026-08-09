@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { GripVertical, Pencil, Trash2, Zap, X } from 'lucide-react';
+import { t } from '@/i18n';
 import type { PromptQueueItem } from '@/lib/assistant-protocol';
 
 interface PromptQueuePanelProps {
@@ -23,7 +24,6 @@ export default function PromptQueuePanel({
   onReorder,
   onClear,
 }: PromptQueuePanelProps) {
-  const zh = locale.startsWith('zh');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [dragId, setDragId] = useState<string | null>(null);
@@ -33,10 +33,10 @@ export default function PromptQueuePanel({
   return (
     <div className="border-t border-[var(--border)] bg-[var(--surface-hover)]/40 px-3 py-2">
       <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium text-[var(--text-secondary)]">
-        <span>{zh ? `待发送队列 (${items.length})` : `Prompt queue (${items.length})`}</span>
+        <span>{t(locale, 'promptQueue.title', { count: items.length })}</span>
         {onClear && (
           <button type="button" onClick={onClear} className="hover:text-[var(--danger)]">
-            {zh ? '清空' : 'Clear'}
+            {t(locale, 'promptQueue.clear')}
           </button>
         )}
       </div>
@@ -73,16 +73,16 @@ export default function PromptQueuePanel({
                 <div className="flex gap-1">
                   <button
                     type="button"
-                    className="rounded bg-[var(--primary)] px-2 py-0.5 text-white"
+                    className="rounded bg-[var(--primary)] px-2 py-0.5 text-[var(--accent-ink)]"
                     onClick={() => {
                       onEdit(item.id, draft);
                       setEditingId(null);
                     }}
                   >
-                    {zh ? '保存' : 'Save'}
+                    {t(locale, 'common.save')}
                   </button>
                   <button type="button" onClick={() => setEditingId(null)}>
-                    {zh ? '取消' : 'Cancel'}
+                    {t(locale, 'common.cancel')}
                   </button>
                 </div>
               </div>
@@ -98,7 +98,7 @@ export default function PromptQueuePanel({
             <div className="flex shrink-0 gap-0.5">
               <button
                 type="button"
-                title={zh ? '立即发送' : 'Send now'}
+                title={t(locale, 'promptQueue.sendNow')}
                 className="rounded p-1 hover:bg-[var(--surface-hover)]"
                 onClick={() => onSendNow(item.id)}
               >
@@ -106,7 +106,7 @@ export default function PromptQueuePanel({
               </button>
               <button
                 type="button"
-                title={zh ? '编辑' : 'Edit'}
+                title={t(locale, 'common.edit')}
                 className="rounded p-1 hover:bg-[var(--surface-hover)]"
                 onClick={() => {
                   setEditingId(item.id);
@@ -117,7 +117,7 @@ export default function PromptQueuePanel({
               </button>
               <button
                 type="button"
-                title={zh ? '删除' : 'Remove'}
+                title={t(locale, 'promptQueue.remove')}
                 className="rounded p-1 hover:bg-[var(--surface-hover)]"
                 onClick={() => onRemove(item.id)}
               >

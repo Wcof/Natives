@@ -54,8 +54,6 @@ pub struct JobDetail {
     pub key_id: Option<String>,
     pub agent_profile_id: Option<String>,
     pub capability_selection: Option<CapabilitySelection>,
-    /// One-release compatibility view for legacy untyped arrays.
-    pub capability_refs: Option<Vec<String>>,
     pub permission_profile: String,
     pub max_steps: Option<i64>,
     pub effort: Option<String>,
@@ -104,22 +102,11 @@ fn invalid_capability_selection(detail: impl AsRef<str>) -> Error {
 
 fn encode_capability_binding(
     selection: Option<CapabilitySelection>,
-    legacy_refs: Option<Vec<String>>,
     default_empty: bool,
 ) -> Result<Option<String>> {
-    if selection.is_some() && legacy_refs.is_some() {
-        return Err(invalid_capability_selection(
-            "capability_selection and capability_refs cannot be submitted together",
-        ));
-    }
     if let Some(selection) = selection {
         selection.validate().map_err(invalid_capability_selection)?;
         return serde_json::to_string(&selection)
-            .map(Some)
-            .map_err(Error::Json);
-    }
-    if let Some(legacy_refs) = legacy_refs {
-        return serde_json::to_string(&legacy_refs)
             .map(Some)
             .map_err(Error::Json);
     }
@@ -136,33 +123,31 @@ fn encode_capability_binding(
     Ok(None)
 }
 
-fn decode_capability_binding(
-    raw: &str,
-) -> Result<(Option<CapabilitySelection>, Option<Vec<String>>)> {
+fn decode_capability_binding(raw: &str) -> Result<Option<CapabilitySelection>> {
     let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
         invalid_capability_selection(format!("stored capability JSON is invalid: {error}"))
     })?;
-    if value.is_array() {
-        let legacy_refs: Vec<String> = serde_json::from_value(value).map_err(|error| {
-            invalid_capability_selection(format!("legacy capability_refs is invalid: {error}"))
-        })?;
-        let selection = legacy_refs.is_empty().then(|| CapabilitySelection {
-            skills: Some(Vec::new()),
-            mcp_servers: Some(Vec::new()),
-            expert_id: None,
-            team_id: None,
-        });
-        return Ok((selection, Some(legacy_refs)));
-    }
     if value.is_object() {
         let selection: CapabilitySelection = serde_json::from_value(value).map_err(|error| {
             invalid_capability_selection(format!("stored capability_selection is invalid: {error}"))
         })?;
         selection.validate().map_err(invalid_capability_selection)?;
-        return Ok((Some(selection), None));
+        return Ok(Some(selection));
+    }
+    // `[]` is the pre-typed default stored in `scheduled_tasks.capability_refs`;
+    // read once as the typed empty selection so rows written before the typed
+    // format stay viewable. Any other array shape is the retired untyped format
+    // and is rejected.
+    if value.as_array().is_some_and(|a| a.is_empty()) {
+        return Ok(Some(CapabilitySelection {
+            skills: Some(Vec::new()),
+            mcp_servers: Some(Vec::new()),
+            expert_id: None,
+            team_id: None,
+        }));
     }
     Err(invalid_capability_selection(
-        "stored capability binding must be an object or legacy array",
+        "stored capability binding must be a typed capability_selection object",
     ))
 }
 
@@ -227,7 +212,7 @@ fn summary_from(job: &store::JobDefinition) -> JobSummary {
 
 fn detail_from(conn: &rusqlite::Connection, job: store::JobDefinition) -> Result<JobDetail> {
     let (recent_runs, _total) = store::list_runs(conn, Some(&job.id), RECENT_RUNS_LIMIT, 0)?;
-    let (capability_selection, capability_refs) = decode_capability_binding(&job.capability_refs)?;
+    let capability_selection = decode_capability_binding(&job.capability_refs)?;
     Ok(JobDetail {
         id: job.id,
         name: job.name,
@@ -239,7 +224,6 @@ fn detail_from(conn: &rusqlite::Connection, job: store::JobDefinition) -> Result
         key_id: job.key_id,
         agent_profile_id: job.agent_profile_id,
         capability_selection,
-        capability_refs,
         permission_profile: job.permission_profile,
         max_steps: job.max_steps,
         effort: job.effort,
@@ -309,7 +293,6 @@ pub async fn job_create(
     key_id: Option<String>,
     agent_profile_id: Option<String>,
     capability_selection: Option<CapabilitySelection>,
-    capability_refs: Option<Vec<String>>,
     permission_profile: Option<String>,
     max_steps: Option<i64>,
     effort: Option<String>,
@@ -331,9 +314,9 @@ pub async fn job_create(
             validate_expires_at(exp)?;
         }
         let capability_refs =
-            encode_capability_binding(capability_selection, capability_refs, true)?.ok_or_else(
-                || Error::Internal("new job capability binding was not encoded".to_string()),
-            )?;
+            encode_capability_binding(capability_selection, true)?.ok_or_else(|| {
+                Error::Internal("new job capability binding was not encoded".to_string())
+            })?;
         let mut normalized_description = None;
         apply_nullable_text_patch(&mut normalized_description, description);
         let mut normalized_key_id = None;
@@ -387,7 +370,6 @@ pub async fn job_update(
     key_id: Option<String>,
     agent_profile_id: Option<String>,
     capability_selection: Option<CapabilitySelection>,
-    capability_refs: Option<Vec<String>>,
     permission_profile: Option<String>,
     max_steps: Option<i64>,
     effort: Option<String>,
@@ -424,9 +406,7 @@ pub async fn job_update(
         if let Some(v) = agent_profile_id {
             job.agent_profile_id = Some(v);
         }
-        if let Some(binding) =
-            encode_capability_binding(capability_selection, capability_refs, false)?
-        {
+        if let Some(binding) = encode_capability_binding(capability_selection, false)? {
             job.capability_refs = binding;
         }
         if let Some(v) = permission_profile {
@@ -554,20 +534,6 @@ mod tests {
     }
 
     #[test]
-    fn capability_binding_rejects_new_and_legacy_fields_together() {
-        let error = encode_capability_binding(
-            Some(CapabilitySelection::default()),
-            Some(Vec::new()),
-            false,
-        )
-        .expect_err("mixed capability fields must fail");
-
-        assert!(error
-            .to_string()
-            .contains("JOB_INVALID_CAPABILITY_SELECTION"));
-    }
-
-    #[test]
     fn capability_binding_serializes_typed_selection_as_an_object() {
         let raw = encode_capability_binding(
             Some(CapabilitySelection {
@@ -576,7 +542,6 @@ mod tests {
                 expert_id: Some("expert-a".to_string()),
                 team_id: None,
             }),
-            None,
             false,
         )
         .expect("valid selection")
@@ -590,17 +555,8 @@ mod tests {
     }
 
     #[test]
-    fn capability_binding_preserves_legacy_arrays_for_compatibility() {
-        let raw = encode_capability_binding(None, Some(vec!["legacy-id".to_string()]), false)
-            .expect("legacy input remains accepted")
-            .expect("encoded legacy refs");
-
-        assert_eq!(raw, r#"["legacy-id"]"#);
-    }
-
-    #[test]
     fn capability_binding_defaults_new_jobs_to_an_explicit_empty_selection() {
-        let raw = encode_capability_binding(None, None, true)
+        let raw = encode_capability_binding(None, true)
             .expect("default selection")
             .expect("encoded default");
         let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
@@ -610,28 +566,35 @@ mod tests {
     }
 
     #[test]
-    fn capability_binding_reads_legacy_empty_array_as_explicit_empty_selection() {
-        let (selection, legacy_refs) =
-            decode_capability_binding("[]").expect("legacy empty binding");
-        let selection = selection.expect("explicit empty selection");
+    fn capability_binding_reads_retired_empty_array_as_empty_selection() {
+        let selection = decode_capability_binding("[]").expect("retired empty binding");
 
+        let selection = selection.expect("explicit empty selection");
         assert_eq!(selection.skills, Some(Vec::new()));
         assert_eq!(selection.mcp_servers, Some(Vec::new()));
-        assert_eq!(legacy_refs, Some(Vec::new()));
     }
 
     #[test]
-    fn capability_binding_reads_typed_object_without_inventing_legacy_refs() {
-        let (selection, legacy_refs) = decode_capability_binding(
+    fn capability_binding_rejects_non_empty_retired_arrays() {
+        let error = decode_capability_binding(r#"["skill-or-mcp"]"#)
+            .expect_err("untyped array must be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("JOB_INVALID_CAPABILITY_SELECTION"));
+    }
+
+    #[test]
+    fn capability_binding_reads_typed_object_only() {
+        let selection = decode_capability_binding(
             r#"{"skills":["skill-a"],"mcp_servers":[],"team_id":"team-a"}"#,
         )
-        .expect("typed binding");
-        let selection = selection.expect("typed selection");
+        .expect("typed binding")
+        .expect("typed selection");
 
         assert_eq!(selection.skills, Some(vec!["skill-a".to_string()]));
         assert_eq!(selection.mcp_servers, Some(Vec::new()));
         assert_eq!(selection.team_id.as_deref(), Some("team-a"));
-        assert_eq!(legacy_refs, None);
     }
 
     #[test]
@@ -678,6 +641,5 @@ mod tests {
                 .and_then(|selection| selection.skills),
             Some(vec!["skill-a".to_string()])
         );
-        assert_eq!(detail.capability_refs, None);
     }
 }

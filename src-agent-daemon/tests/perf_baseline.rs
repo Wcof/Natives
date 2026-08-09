@@ -443,7 +443,7 @@ async fn perf_baseline() {
         "invariants_measured": {
             "live_delta_sqlite_writes": ">0 (baseline: every TextDelta persisted via EventSequencer persist-first)",
             "new_message_delta_emits": ">0 (baseline: engine_core.rs emits cumulative MessageDelta per TextDelta)",
-            "active_stream_fixed_sleep": "present (baseline: run.subscribe long-poll wait)",
+            "active_stream_fixed_sleep": "absent (run.watch persistent stream replaces the retired run.subscribe long-poll wait)",
             "uds_handshake_per_rpc": "1 (baseline: UdsAuthority::call connects per RPC)",
         }
     });

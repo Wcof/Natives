@@ -5,6 +5,14 @@
 //! `assistant_run_events` / `assistant_prompt_queue`. Daemon owns unprefixed
 //! `conversation` / `message` / `run` / `run_event` / `prompt_queue`.
 //!
+//! This module is the **startup-only, one-way legacy migration reader** of the
+//! target architecture: it reads the old Host `assistant_*` tables and writes
+//! only the new canonical tables, it is idempotent, observable (records
+//! `_host_authority_migration`), and never does `DROP TABLE` / rename-rebuild
+//! (R-D3). It is invoked from `DataStore::new` after schema migrations; a
+//! concurrent invocation is safe because the merge runs in `BEGIN IMMEDIATE`
+//! and all copies are `INSERT OR IGNORE`.
+//!
 //! Rules (scheme):
 //! - Same Run ID: Daemon events win; Host messages win.
 //! - Transactional; records `_host_authority_migration`.

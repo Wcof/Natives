@@ -103,13 +103,19 @@ pub fn generate_config(theme_id: &str) -> String {
 pub fn write_config(theme_id: &str) -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| crate::Error::Internal("cannot find home directory".into()))?;
+    write_config_in(home, theme_id)
+}
+
+/// 在给定 home 下写主题配置（R-D5 原子写：temp sibling → fsync → rename）。
+/// 拆出 home 参数便于测试注入临时目录，避免依赖进程级 HOME 环境变量。
+fn write_config_in(home: PathBuf, theme_id: &str) -> Result<PathBuf> {
     let config_dir = home.join(".natives").join("ghostty");
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| crate::Error::Internal(format!("failed to create ghostty config dir: {e}")))?;
 
     let config_path = config_dir.join(format!("config-{theme_id}.conf"));
     let content = generate_config(theme_id);
-    std::fs::write(&config_path, &content)
+    agent_core::fs_util::atomic_write_bytes(&config_path, content.as_bytes())
         .map_err(|e| crate::Error::Internal(format!("failed to write ghostty config: {e}")))?;
 
     Ok(config_path)
@@ -184,5 +190,70 @@ mod tests {
         // In CI we'd set HOME to a temp dir.
         let config = generate_config("terminal-volt");
         assert!(!config.is_empty());
+    }
+
+    #[test]
+    fn test_write_config_in_writes_atomically_and_completely() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let path = write_config_in(home.clone(), "terminal-volt").unwrap();
+        assert_eq!(
+            path,
+            home.join(".natives")
+                .join("ghostty")
+                .join("config-terminal-volt.conf")
+        );
+        // Success path: the config file is complete and byte-exact.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            generate_config("terminal-volt")
+        );
+        // No temp residue in the ghostty config dir.
+        let ghostty_dir = home.join(".natives").join("ghostty");
+        let leftovers: Vec<_> = std::fs::read_dir(&ghostty_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+    }
+
+    #[test]
+    fn test_write_config_in_overwrites_previous_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let config_dir = home.join(".natives").join("ghostty");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        // A previous (even truncated) config exists; atomic write replaces it.
+        let config_path = config_dir.join("config-terminal-volt.conf");
+        std::fs::write(&config_path, b"truncated garbage").unwrap();
+
+        write_config_in(home.clone(), "terminal-volt").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            generate_config("terminal-volt")
+        );
+    }
+
+    #[test]
+    fn test_write_config_in_failure_leaves_no_partial_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        // `.natives` is a regular file → `create_dir_all` fails before any
+        // write, so no config may appear.
+        std::fs::write(home.join(".natives"), b"not a dir").unwrap();
+
+        let err = write_config_in(home.clone(), "terminal-volt");
+        assert!(err.is_err());
+        assert!(!home
+            .join(".natives")
+            .join("ghostty")
+            .join("config-terminal-volt.conf")
+            .exists());
     }
 }

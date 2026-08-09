@@ -36,6 +36,29 @@ pub struct RuntimeCapability {
     pub methods: Vec<String>,
 }
 
+/// Real per-runtime feature matrix advertised by the daemon
+/// (`daemon.getCapabilities` → `runtime_capabilities`). The Host projects this
+/// matrix into Settings runtime descriptors; it never invents capability
+/// claims itself (SETTINGS-002).
+///
+/// Wire shape mirrors `capability_resolution::runtime_capability_matrix()`
+/// (camelCase keys incl. `executionBackend`), so the daemon's raw JSON decodes
+/// directly into this type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeFeatureMatrix {
+    pub expert: bool,
+    pub team: bool,
+    pub skills: bool,
+    pub mcp: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DaemonCapabilities {
     pub protocol_version: String,

@@ -102,7 +102,7 @@ const LocalEditDialog = forwardRef<LocalEditDialogHandle, LocalEditDialogProps>(
                 {edit.envKeys.length ? edit.envKeys.join(', ') : '—'}
               </div>
               <pre className="p-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)] whitespace-pre-wrap">
-                {planSummaryLines(edit.plan, locale === 'en' ? 'en' : 'zh').join('\n')}
+                {planSummaryLines(edit.plan, locale).join('\n')}
               </pre>
             </>
           )}

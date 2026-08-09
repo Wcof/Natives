@@ -452,12 +452,10 @@ function buildResult(
 export function formatClassifiedError(err: ClassifiedError, locale = 'zh'): string {
   let msg = err.userMessage;
   if (err.actionHint) {
-    const what = locale.startsWith('zh') ? '建议' : 'What to do';
-    msg += `\n\n${what}: ${err.actionHint}`;
+    msg += `\n\n${t(locale, 'errors.suggestionLabel')}: ${err.actionHint}`;
   }
   if (err.details) {
-    const details = locale.startsWith('zh') ? '详情' : 'Details';
-    msg += `\n\n${details}: ${err.details}`;
+    msg += `\n\n${t(locale, 'errors.detailsLabel')}: ${err.details}`;
   }
   return msg;
 }

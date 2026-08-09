@@ -13,7 +13,7 @@ import { classifyError } from '@/lib/error-classifier';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 import { useToast } from '@/components/ui/Toast';
 import { Skeleton } from '@/components/ui/EmptyState';
-import { SKILL_CATEGORIES, type CapabilitySkill, type CapabilitySkillDetail } from '../shared/capability-types';
+import { SKILL_CATEGORIES, type CapabilitySkill, type CapabilitySkillDetail } from '@/types/capability';
 
 interface SkillDetailProps {
   locale: Locale;
@@ -118,7 +118,7 @@ export default function SkillDetail({ locale, gateway, skill, onClose, onChanged
 
   return (
     <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={t(locale, 'capabilities.skills.detail')}>
-      <div className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.4)' }} onClick={onClose} aria-hidden />
+      <div className="absolute inset-0" style={{ background: 'var(--overlay)' }} onClick={onClose} aria-hidden />
       <aside
         ref={dialogRef}
         tabIndex={-1}

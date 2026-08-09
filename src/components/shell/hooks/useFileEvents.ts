@@ -3,6 +3,7 @@ import type { RightPanelMode } from '../RightPanel';
 import { useEffect } from 'react';
 import type { FileEntry } from '@/types/file';
 import { FILE_EVENTS, onFileEvent } from '@/lib/file-events';
+import { getIframeManager } from '@/lib/iframe-manager';
 
 interface UseFileEventsOptions {
   followMode: string;
@@ -36,15 +37,18 @@ export function useFileEvents({
 
   // Shell:focus-base from iframes (Cmd+Shift+K)
   useEffect(() => {
+    const manager = getIframeManager();
     const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'shell:focus-base') {
-        const sidebar = document.querySelector<HTMLElement>('[data-sidebar]');
-        if (sidebar) {
-          const firstFocusable = sidebar.querySelector<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          firstFocusable?.focus();
-        }
+      if (event.data?.type !== 'shell:focus-base') return;
+      // R-S3: only honor focus requests from a currently-managed module iframe.
+      // A random window sending the same data shape must not move UI focus.
+      if (!manager.isManagedMessageSource(event.source)) return;
+      const sidebar = document.querySelector<HTMLElement>('[data-sidebar]');
+      if (sidebar) {
+        const firstFocusable = sidebar.querySelector<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        firstFocusable?.focus();
       }
     };
     window.addEventListener('message', handleMessage);

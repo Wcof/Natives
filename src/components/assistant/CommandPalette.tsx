@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { t } from '@/i18n';
 
 export interface AssistantCommand {
   id: string;
@@ -19,7 +20,6 @@ interface CommandPaletteProps {
 }
 
 export default function CommandPalette({ open, onClose, commands, locale }: CommandPaletteProps) {
-  const zh = locale.startsWith('zh');
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
 
@@ -74,10 +74,10 @@ export default function CommandPalette({ open, onClose, commands, locale }: Comm
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/40 pt-[12vh]"
+      className="fixed inset-0 z-[80] flex items-start justify-center bg-[var(--overlay)] pt-[12vh]"
       role="dialog"
       aria-modal="true"
-      aria-label={zh ? '助理命令面板' : 'Assistant command palette'}
+      aria-label={t(locale, 'assistantCommandPalette.title')}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -87,13 +87,13 @@ export default function CommandPalette({ open, onClose, commands, locale }: Comm
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={zh ? '搜索命令…' : 'Search commands…'}
+          placeholder={t(locale, 'assistantCommandPalette.searchPlaceholder')}
           className="w-full border-b border-[var(--border)] bg-transparent px-4 py-3 text-sm outline-none"
         />
         <ul className="max-h-80 overflow-y-auto py-1">
           {filtered.length === 0 && (
             <li className="px-4 py-6 text-center text-xs text-[var(--text-disabled)]">
-              {zh ? '无匹配命令' : 'No matching commands'}
+              {t(locale, 'assistantCommandPalette.noMatch')}
             </li>
           )}
           {filtered.map((cmd, i) => (

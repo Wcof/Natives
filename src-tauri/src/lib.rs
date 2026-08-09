@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
-use tokio::sync::Mutex as TokioMutex;
 
 mod agent;
 mod archive;
@@ -395,17 +394,19 @@ pub fn run() {
                 });
             }
 
-            // ── Initialize Assistant Store (in-process, no sidecar) ──
-            // The assistant database (~/.natives/assistant.db) is managed directly
-            // through the DataStore, which handles its own migrations and WAL setup.
+            // ── Assistant.db Host legacy migration (startup-only one-way) ──
+            // The agent daemon owns the canonical schema and the historical
+            // `assistant_*` conversation/run/message/event/queue tables. The Host
+            // only runs a one-way legacy migration service here (D2-01 /
+            // MIG-004 / DATA-002): it keeps old DB rows readable as a migration
+            // source and maintains the Host-owned provider mirror / project
+            // tables. No runtime DataStore state is registered — normal business
+            // paths read the Daemon or natives.db.
             let assistant_db_path = data_dir.join("assistant.db");
-            let assistant_data_store = std::sync::Arc::new(
-                daemon::data::DataStore::new(&assistant_db_path.to_string_lossy())
-                    .map_err(|e| format!("failed to init assistant store: {e}"))?,
-            );
-            app.manage(TokioMutex::new(assistant_service::AssistantStore::new(
-                assistant_data_store,
-            )));
+            daemon::data::LegacyMigrationService::open(&assistant_db_path.to_string_lossy())
+                .map_err(|e| format!("failed to open assistant legacy migration: {e}"))?
+                .run()
+                .map_err(|e| format!("failed to run assistant legacy migration: {e}"))?;
 
             // ── P1 Runtime 抽象层：仅注册独立 CLI runtime ──
             // Native Assistant 的生产执行入口是 Protocol v2 Agent Daemon；
@@ -722,7 +723,6 @@ pub fn run() {
             // Project （统一项目目录 API）
             commands::project::project_list,
             commands::project::project_register,
-            commands::project::project_open,
             commands::project::project_rename,
             commands::project::project_remove,
             // Widget
@@ -743,7 +743,8 @@ pub fn run() {
             // Runtime abstraction (Slice B)
             commands::runtime::runtime_list_available,
             commands::runtime::runtime_detect_cli,
-            commands::runtime::runtime_set_capability_enabled,
+            // runtime_set_capability_enabled 退役（MIG-002）：能力开关归
+            // Execution Engine Settings V2 唯一权威。不注册。
             // Jobs（任务模块，Job Module — 契约第 5 节）
             commands::jobs::job_list,
             commands::jobs::job_get,
@@ -800,10 +801,7 @@ pub fn run() {
             commands::capability_secret::capability_secret_list,
             // MCP OAuth 浏览器流 (ADR-0016 决策 7) — Host 侧 loopback + PKCE
             commands::mcp_oauth::mcp_oauth_start,
-            // Execution Engine settings（PRD 3.4）
-            commands::executor_settings::executor_get_settings,
-            commands::executor_settings::executor_save_settings,
-            // Execution Engine settings V2（唯一持久化权威）
+            // Execution Engine settings V2（唯一持久化权威；旧 executor_* 写入口已注销，MIG-002）
             commands::execution_engine::execution_engine_get_snapshot,
             commands::execution_engine::execution_engine_save_settings,
             commands::execution_engine::execution_engine_detect_runtimes,
@@ -819,8 +817,8 @@ pub fn run() {
             commands::watch_preview::fs_watch_stop,
             commands::watch_preview::fs_watch_stop_all,
             commands::watch_preview::fs_watch_list,
-            // HtmlPreview
-            commands::watch_preview::html_preview_prepare,
+            // HtmlPreview (async; blocking pool + size budget, PERF-003)
+            commands::fs::html_preview_prepare,
             // LidGuard
             commands::watch_preview::lid_guard_set,
             commands::watch_preview::lid_guard_status,

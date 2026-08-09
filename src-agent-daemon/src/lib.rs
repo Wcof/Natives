@@ -31,9 +31,12 @@ pub mod production_tools;
 pub mod project_identity;
 pub mod prompt_queue_store;
 pub mod proposal_fact;
+pub mod provider;
 pub mod request_rectifier;
 pub mod routing;
 pub mod rpc;
+// ARCH-002: run_manager.rs facade re-exports from the `run` domain modules.
+mod run;
 pub mod run_manager;
 pub mod runtime;
 pub mod session_harness;
@@ -43,6 +46,7 @@ pub mod storage;
 pub mod stream_protocol;
 pub mod subagent_store;
 pub mod task_store;
+pub mod tools;
 
 use governor::ProviderRequestGovernor;
 use std::sync::Arc;

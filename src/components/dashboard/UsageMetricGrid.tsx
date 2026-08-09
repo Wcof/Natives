@@ -121,8 +121,8 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
   const exact = (value: number | null | undefined) => value == null ? undefined : value.toLocaleString(locale.startsWith('zh') ? 'zh-CN' : 'en-US');
 
   // Duration card values
-  const durationStr = metrics?.estimatedActiveSeconds != null ? fmtDuration(metrics.estimatedActiveSeconds) : '—';
-  const spanStr = metrics?.sessionSpanMs != null ? fmtDuration(Math.round(metrics.sessionSpanMs / 1000)) : '—';
+  const durationStr = metrics?.estimatedActiveSeconds != null ? fmtDuration(metrics.estimatedActiveSeconds, locale) : '—';
+  const spanStr = metrics?.sessionSpanMs != null ? fmtDuration(Math.round(metrics.sessionSpanMs / 1000), locale) : '—';
 
   // Messages values
   const totalMsg = metrics ? metrics.totalUserMessages + metrics.totalAssistantMessages : null;

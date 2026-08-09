@@ -30,7 +30,6 @@ export default function AskUserPromptCard({
   onAnswer,
   onCancel,
 }: AskUserPromptCardProps) {
-  const zh = locale.startsWith('zh');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freeText, setFreeText] = useState('');
@@ -39,7 +38,7 @@ export default function AskUserPromptCard({
   const processing = t(locale, 'assistant.permission.processing');
   const errorFallback = t(locale, 'assistant.permission.errorFallback');
   const cancelLabel = t(locale, 'assistant.permission.reject');
-  const submitLabel = zh ? '提交' : 'Submit';
+  const submitLabel = t(locale, 'askUserCard.submit');
 
   const run = useCallback(
     async (action: () => void | Promise<void>) => {
@@ -110,14 +109,14 @@ export default function AskUserPromptCard({
               onChange={(e) => setFreeText(e.target.value)}
               disabled={submitting}
               rows={3}
-              placeholder={zh ? '输入你的回答…' : 'Type your answer…'}
+              placeholder={t(locale, 'askUserCard.inputPlaceholder')}
               className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:opacity-60"
             />
             <button
               type="button"
               disabled={submitting || !freeText.trim()}
               onClick={() => void run(() => onAnswer(interaction.id, freeText.trim()))}
-              className={`w-full rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
+              className={`w-full rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
             >
               {submitLabel}
             </button>
@@ -129,7 +128,7 @@ export default function AskUserPromptCard({
             type="button"
             disabled={submitting}
             onClick={() => void run(() => onCancel(interaction.id))}
-            className={`w-full rounded-lg border border-red-300/50 bg-transparent px-3 py-2 text-left text-xs font-medium text-red-600 dark:border-red-800/50 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-60 ${focusRing}`}
+            className={`w-full rounded-lg border border-[var(--danger)]/50 bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-60 ${focusRing}`}
           >
             {cancelLabel}
           </button>

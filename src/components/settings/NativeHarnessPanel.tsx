@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Eye, Loader, Pencil, Plus, RefreshCw, Rocket, Save, Search, Star, Trash2, Workflow } from 'lucide-react';
-import nativesAPI, { type ProjectSummary, type ProviderSummary } from '@/lib/tauri-adapter';
+import { assistantV2, project as projectApi } from '@/lib/tauri/assistant';
+import { provider as providerApi } from '@/lib/tauri/provider';
+import type { ProjectSummary, ProviderSummary } from '@/lib/tauri/types';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { classifyError } from '@/lib/error-classifier';
 import { t, type Locale } from '@/i18n';
@@ -229,10 +231,10 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       const identity = profileProject(profile);
       const scope = identity ? { project_id: identity.project_id, project_path: identity.canonical_path } : {};
       const [nextWorkspace, draft, prompt, versionList] = await Promise.all([
-        nativesAPI.assistantV2.request<Workspace>('harness.workspace.get', { profile_id: selected, ...scope }),
-        nativesAPI.assistantV2.request<{ revision: number; document: Blueprint; source_candidate?: DriftCandidate[] | null }>('harness.draft.get', { profile_id: selected }),
-        nativesAPI.assistantV2.request<PromptPreview>('harness.prompt.preview', scope),
-        nativesAPI.assistantV2.request<{ versions?: VersionSummary[] }>('harness.version.list', { profile_id: selected, limit: 20 }),
+        assistantV2.request<Workspace>('harness.workspace.get', { profile_id: selected, ...scope }),
+        assistantV2.request<{ revision: number; document: Blueprint; source_candidate?: DriftCandidate[] | null }>('harness.draft.get', { profile_id: selected }),
+        assistantV2.request<PromptPreview>('harness.prompt.preview', scope),
+        assistantV2.request<{ versions?: VersionSummary[] }>('harness.version.list', { profile_id: selected, limit: 20 }),
       ]);
       setWorkspace(nextWorkspace);
       setDocument(normalizeBlueprint(draft.document));
@@ -253,10 +255,10 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     setLoading(true); setError(null); setNotice(null);
     try {
       const [listed, identities, projectList, providerList] = await Promise.all([
-        nativesAPI.assistantV2.request<{ profiles?: Profile[] }>('harness.profile.list', {}),
-        nativesAPI.assistantV2.request<{ items?: ProjectIdentity[] }>('project.identity.list', {}),
-        nativesAPI.project.list(),
-        nativesAPI.provider.list(),
+        assistantV2.request<{ profiles?: Profile[] }>('harness.profile.list', {}),
+        assistantV2.request<{ items?: ProjectIdentity[] }>('project.identity.list', {}),
+        projectApi.list(),
+        providerApi.list(),
       ]);
       const nextProfiles = listed.profiles ?? [];
       const selected = requestedProfileId || profileIdRef.current || nextProfiles[0]?.id || '';
@@ -281,15 +283,15 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   const loadRuns = useCallback(async (runId?: string) => {
     setAuxLoading(true);
     try {
-      const result = await nativesAPI.assistantV2.request<{ runs?: Run[] }>('run.list', {});
+      const result = await assistantV2.request<{ runs?: Run[] }>('run.list', {});
       const runs = result.runs ?? [];
       const selected = runId || selectedRunId || runs[0]?.id || '';
       setLiveRuns(runs);
       setSelectedRunId(selected);
       if (selected) {
         const [trace, snapshot] = await Promise.all([
-          nativesAPI.assistantV2.request<{ entries?: TraceEntry[] }>('harness.trace.list', { run_id: selected, limit: 200 }),
-          nativesAPI.assistantV2.request<RunSnapshot>('harness.run.getSnapshot', { run_id: selected }),
+          assistantV2.request<{ entries?: TraceEntry[] }>('harness.trace.list', { run_id: selected, limit: 200 }),
+          assistantV2.request<RunSnapshot>('harness.run.getSnapshot', { run_id: selected }),
         ]);
         setTraceEntries(trace.entries ?? []);
         setRunSnapshot(snapshot);
@@ -307,7 +309,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     if (detailMode) void loadRuns();
   }, [detailMode, loadRuns]);
   useEffect(() => {
-    const unsubscribe = nativesAPI.assistantV2.subscribeHarness((event) => {
+    const unsubscribe = assistantV2.subscribeHarness((event) => {
       if (event.kind === 'trace_updated' && detailMode) {
         if (noticeRefreshRef.current != null) return;
         noticeRefreshRef.current = window.setTimeout(() => {
@@ -397,7 +399,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   };
   const persist = async () => {
     if (!document || !profileId) throw new Error('No Harness draft selected');
-    const saved = await nativesAPI.assistantV2.request<{ revision: number }>('harness.draft.save', { profile_id: profileId, revision, document });
+    const saved = await assistantV2.request<{ revision: number }>('harness.draft.save', { profile_id: profileId, revision, document });
     setRevision(saved.revision);
     setDirty(false);
     return saved.revision;
@@ -412,7 +414,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     setBusy(true); setError(null); setNotice(null);
     try {
       await persist();
-      const result = await nativesAPI.assistantV2.request<Review>('harness.draft.review', { profile_id: profileId });
+      const result = await assistantV2.request<Review>('harness.draft.review', { profile_id: profileId });
       setReview(result);
       setWorkspaceTarget('versions');
     } catch (cause) { fail(cause); } finally { setBusy(false); }
@@ -422,7 +424,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     setBusy(true); setError(null); setNotice(null);
     try {
       if (id === profileId && dirty) await persist();
-      await nativesAPI.assistantV2.request('harness.draft.publish', { profile_id: id, revision: id === profileId ? revision : undefined });
+      await assistantV2.request('harness.draft.publish', { profile_id: id, revision: id === profileId ? revision : undefined });
       await load(id);
       if (id === profileId) await loadDetail(id);
       setNotice(t(locale, 'settings.engineEngineeringPublished'));
@@ -436,10 +438,10 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
       if (newProfileKind === 'project_overlay') {
         const project = projects.find((item) => item.path === newProfileProjectPath);
         if (!project) throw new Error(t(locale, 'settings.engineEngineeringProjectRequired'));
-        const identity = await nativesAPI.assistantV2.request<{ project_id: string }>('project.identity.register', { path: project.path, name: project.label });
+        const identity = await assistantV2.request<{ project_id: string }>('project.identity.register', { path: project.path, name: project.label });
         projectId = identity.project_id;
       }
-      const result = await nativesAPI.assistantV2.request<{ profile: Profile }>('harness.profile.create', {
+      const result = await assistantV2.request<{ profile: Profile }>('harness.profile.create', {
         name: newProfileName.trim(), kind: newProfileKind, project_id: projectId,
       });
       setNewProfileName('');
@@ -452,7 +454,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
   const setDefaultProfile = async (id: string) => {
     setBusy(true); setError(null);
     try {
-      await nativesAPI.assistantV2.request('harness.binding.set', {
+      await assistantV2.request('harness.binding.set', {
         scope_type: 'global', scope_id: 'global', profile_id: id, mode: 'follow_published',
       });
       setNotice(t(locale, 'settings.engineEngineeringDefaultSet'));
@@ -464,8 +466,8 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     try {
       const project = projects.find((item) => item.path === bindProjectPath);
       if (!project) throw new Error(t(locale, 'settings.engineEngineeringProjectRequired'));
-      const identity = await nativesAPI.assistantV2.request<{ project_id: string }>('project.identity.register', { path: project.path, name: project.label });
-      await nativesAPI.assistantV2.request('harness.binding.set', {
+      const identity = await assistantV2.request<{ project_id: string }>('project.identity.register', { path: project.path, name: project.label });
+      await assistantV2.request('harness.binding.set', {
         scope_type: 'project', scope_id: identity.project_id, profile_id: bindProfileId, mode: 'follow_published',
       });
       setBindProfileId('');
@@ -487,7 +489,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     }
     setBusy(true); setError(null);
     try {
-      await nativesAPI.assistantV2.request('harness.profile.archive', { profile_id: id });
+      await assistantV2.request('harness.profile.archive', { profile_id: id });
       if (id === profileId) {
         setDetailMode(null);
         setProfileId('');
@@ -506,7 +508,7 @@ export function NativeHarnessPanel({ locale }: NativeHarnessPanelProps) {
     }
     setBusy(true); setError(null); setNotice(null);
     try {
-      const result = await nativesAPI.assistantV2.request<Run>('run.start', {
+      const result = await assistantV2.request<Run>('run.start', {
         conversation_id: crypto.randomUUID(),
         provider_id: runProviderId,
         model_id: runModelId,

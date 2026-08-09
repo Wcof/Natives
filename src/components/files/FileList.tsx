@@ -166,6 +166,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
               <div key={entry.path} style={{ position: 'absolute', top: index * VIRTUAL_ROW_HEIGHT, left: 0, right: 0 }}>
                 <FileRow
                   entry={entry}
+                  locale={locale}
                   onSelect={(ent, ev) => onSelect(ent, ev)}
                   onContextMenu={onContextMenu}
                   showDir={showDir}

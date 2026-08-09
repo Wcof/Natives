@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 /// Rules:
 /// - `event_id` is a stable UUID/ULID idempotency key (`UNIQUE`).
 /// - `global_sequence` is SQLite AUTOINCREMENT (`run_event.id`) — authority-wide.
-/// - `run_sequence` (wire: also accept legacy `sequence`) is per-run, starting at 1.
+/// - `run_sequence` is per-run, starting at 1. It is the only wire name
+///   (MIG-004: the legacy `sequence` alias is retired).
 /// - Events are persisted before being pushed to subscribers.
 /// - Payloads must never contain API keys, Authorization headers, or full raw
 ///   provider response bodies.
@@ -21,33 +22,12 @@ pub struct RunEventV2 {
     #[serde(default)]
     pub global_sequence: u64,
     pub run_id: String,
-    /// Per-run strictly increasing sequence (preferred wire name).
+    /// Per-run strictly increasing sequence.
     #[serde(default)]
     pub run_sequence: u64,
-    /// Deprecated wire alias of [`Self::run_sequence`]. Still serialized so
-    /// older clients can read `sequence`; new producers should set both equal.
-    #[serde(default)]
-    pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     #[serde(flatten)]
     pub payload: RunEventKind,
-}
-
-impl RunEventV2 {
-    /// Effective per-run sequence (prefers `run_sequence`, falls back to legacy `sequence`).
-    pub fn effective_run_sequence(&self) -> u64 {
-        if self.run_sequence > 0 {
-            self.run_sequence
-        } else {
-            self.sequence
-        }
-    }
-
-    /// Keep dual-cursor fields aligned after assignment.
-    pub fn set_run_sequence(&mut self, seq: u64) {
-        self.run_sequence = seq;
-        self.sequence = seq;
-    }
 }
 
 /// Discriminated event payload for Protocol v2.
@@ -436,7 +416,6 @@ impl RunEventV2 {
             global_sequence: 0,
             run_id: run_id.into(),
             run_sequence,
-            sequence: run_sequence,
             timestamp: Utc::now(),
             payload,
         }

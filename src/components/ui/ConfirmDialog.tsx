@@ -81,7 +81,7 @@ export default function ConfirmDialog({
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0, 0, 0, 0.4)',
+        background: 'var(--overlay)',
         animation: `fadeIn ${TRANSITION.normal}`,
       }}
       onClick={onCancel}

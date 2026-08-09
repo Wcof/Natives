@@ -4,9 +4,9 @@
 //! `agent_loop`) with one daemon-owned run authority. Types are JSON-serialised
 //! over authenticated UDS / Named Pipe.
 //!
-//! Formal envelopes live in [`envelope`]. Prefer them over legacy v1
-//! `RpcRequest` / `RpcResponse` shells. Servers may still accept v1-shaped JSON
-//! via [`envelope::parse_request_compat`].
+//! Formal envelopes live in [`envelope`]. The v2 typed envelopes are the only
+//! wire shape; legacy v1 `RpcRequest` / `RpcResponse` shell normalization is
+//! retired (MIG-004).
 
 pub mod capabilities;
 pub mod creative;

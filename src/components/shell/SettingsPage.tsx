@@ -625,7 +625,7 @@ export default function SettingsPage({
         <div className="settings-preference-card">
           <div className="settings-preference-copy">
             <span className="settings-preference-icon"><Globe size={18} /></span>
-            <div><h3>{t(locale, 'settings.language')}</h3><p>{locale === 'zh' ? '选择应用界面使用的语言。' : 'Choose the language used by the interface.'}</p></div>
+            <div><h3>{t(locale, 'settings.language')}</h3><p>{t(locale, 'settingsPage.languageDesc')}</p></div>
           </div>
           <select
             className="settings-select"
@@ -634,8 +634,8 @@ export default function SettingsPage({
               void handleLocaleChange(event.target.value)
             }
           >
-            <option value="zh">简体中文</option>
-            <option value="en">English</option>
+            <option value="zh">{t(locale, 'settingsPage.langChinese')}</option>
+            <option value="en">{t(locale, 'settingsPage.langEnglish')}</option>
           </select>
         </div>
       </>
@@ -652,7 +652,7 @@ export default function SettingsPage({
         <div className="settings-section-card">
           <div className="settings-section-heading settings-section-heading-with-icon">
             <span className="settings-preference-icon"><Palette size={18} /></span>
-            <div><h4>{t(locale, 'settings.theme')}</h4><p>{locale === 'zh' ? '主题会立即应用，并自动保存。' : 'Theme changes apply immediately and save automatically.'}</p></div>
+            <div><h4>{t(locale, 'settings.theme')}</h4><p>{t(locale, 'settingsPage.themeDesc')}</p></div>
           </div>
           <div className="settings-theme-grid">
             {THEMES.map(th => {
@@ -745,18 +745,16 @@ export default function SettingsPage({
             <div className="settings-plugin-copy">
               <strong>ccusage</strong>
               <span>
-                {locale === 'zh'
-                  ? '可选增强：成本校验与额外 agent。默认关闭；个人主页主数据来自本机日志扫描。'
-                  : 'Optional enricher for cost checks/extra agents. Off by default; dashboard uses native log scans.'}
+                {t(locale, 'settingsPage.ccusageDesc')}
               </span>
               <small>
                 {ccusageVersion
                   ? `v${ccusageVersion}`
-                  : (locale === 'zh' ? '未安装' : 'Not installed')}
+                  : t(locale, 'settingsPage.notInstalled')}
                 {' · '}
                 {ccusageEnabled
-                  ? (locale === 'zh' ? '已启用' : 'Enabled')
-                  : (locale === 'zh' ? '已关闭（默认）' : 'Disabled (default)')}
+                  ? t(locale, 'settingsPage.enabled')
+                  : t(locale, 'settingsPage.disabledDefault')}
               </small>
             </div>
             <button
@@ -765,7 +763,7 @@ export default function SettingsPage({
               className={`settings-status-button${ccusageEnabled ? ' enabled' : ''}`}
             >
               {ccusageBusy
-                ? (locale === 'zh' ? '处理中…' : 'Working…')
+                ? t(locale, 'settingsPage.working')
                 : ccusageEnabled
                   ? t(locale, 'common.disable')
                   : t(locale, 'common.enable')}
@@ -793,7 +791,7 @@ export default function SettingsPage({
                   <span className="settings-preference-icon"><Package size={17} /></span>
                   <div className="settings-plugin-copy">
                     <strong>{p.name}</strong>
-                    <span>{p.description || (locale === 'zh' ? '暂无插件说明' : 'No description')}</span>
+                    <span>{p.description || t(locale, 'settingsPage.pluginNoDescription')}</span>
                     {p.version && <small>v{p.version}</small>}
                   </div>
                   <button onClick={() => handleTogglePlugin(p.id, p.enabled)}

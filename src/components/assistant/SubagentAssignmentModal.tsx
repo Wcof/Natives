@@ -118,7 +118,6 @@ export default function SubagentAssignmentModal({
   onClose,
   onConfirm,
 }: SubagentAssignmentModalProps) {
-  const zh = locale.startsWith('zh');
   const [page, setPage] = useState<'confirm' | 'custom'>('confirm');
   const [countdown, setCountdown] = useState(10);
   const [mode, setMode] = useState<SubagentAssignmentMode>('default');
@@ -333,7 +332,7 @@ export default function SubagentAssignmentModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] p-4"
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -358,7 +357,7 @@ export default function SubagentAssignmentModal({
             <div className="space-y-3">
               <div>
                 <div className="mb-1.5 text-[11px] font-medium text-[var(--text-disabled)]">
-                  {zh ? '即将在 10 秒后自动批量创建并执行以下子智能体：' : 'Subagents to be created in 10s:'}
+                  {t(locale, 'subagentModal.autoCreateIntro')}
                 </div>
                 <ul
                   className="max-h-36 space-y-1 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2"
@@ -378,9 +377,7 @@ export default function SubagentAssignmentModal({
               </div>
 
               <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)]/60 p-2.5 text-xs text-[var(--text-secondary)]">
-                {zh
-                  ? '默认继承主会话供应商、默认密钥与模型。'
-                  : 'Defaults to main session provider, default key, and model.'}
+                {t(locale, 'subagentModal.defaultInheritHint')}
               </div>
             </div>
           ) : (
@@ -507,7 +504,7 @@ export default function SubagentAssignmentModal({
           {error ? (
             <div
               role="alert"
-              className="rounded border border-red-400/30 bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950/20"
+              className="rounded border border-[var(--danger)]/30 bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]"
             >
               {error}
             </div>
@@ -525,7 +522,7 @@ export default function SubagentAssignmentModal({
                 setMode('custom');
               }}
             >
-              {zh ? '单独设置' : 'Separate Settings'}
+              {t(locale, 'subagentModal.separateSettings')}
             </button>
           ) : (
             <button
@@ -538,7 +535,7 @@ export default function SubagentAssignmentModal({
                 setCountdown(10);
               }}
             >
-              {zh ? '返回倒计时' : 'Back to Countdown'}
+              {t(locale, 'subagentModal.backToCountdown')}
             </button>
           )}
 
@@ -553,14 +550,14 @@ export default function SubagentAssignmentModal({
             </button>
             <button
               type="button"
-              className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white disabled:opacity-50"
+              className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--accent-ink)] disabled:opacity-50"
               disabled={confirmDisabled}
               onClick={() => void handleConfirm()}
               data-testid="subagent-assignment-confirm"
             >
               {submitting
                 ? t(locale, 'assistant.subagentAssignment.processing')
-                : (zh ? `确认并创建 (${countdown}s)` : `Confirm & Create (${countdown}s)`)}
+                : t(locale, 'subagentModal.confirmAndCreate', { countdown })}
             </button>
           </div>
         </div>

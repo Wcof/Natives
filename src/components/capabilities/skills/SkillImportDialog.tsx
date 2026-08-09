@@ -7,7 +7,7 @@ import { importCapabilitySkill } from '@/lib/assistant-workspace/capability-admi
 import { classifyError } from '@/lib/error-classifier';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import { SKILL_CATEGORIES } from '../shared/capability-types';
+import { SKILL_CATEGORIES } from '@/types/capability';
 
 interface SkillImportDialogProps {
   locale: Locale;

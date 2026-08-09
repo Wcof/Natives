@@ -90,7 +90,10 @@ impl ArtifactStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        // R-D5 atomic write: temp sibling → write_all → fsync → rename. The
+        // in-memory index below is only touched after this succeeds, so the
+        // index never advertises an artifact that is not durably on disk.
+        agent_core::fs_util::atomic_write_bytes(&path, bytes).map_err(|e| e.to_string())?;
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         let sha256 = hex::encode(hasher.finalize());
@@ -215,5 +218,83 @@ mod tests {
         assert!(store.put("run1", "../escape.txt", b"x", None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("NATIVES_RUNTIME_DIR");
+    }
+
+    #[test]
+    fn put_uses_atomic_write_chain_and_updates_index_after_durable_write() {
+        let dir = std::env::temp_dir().join(format!("art-atomic-{}", uuid::Uuid::new_v4()));
+        let store = ArtifactStore {
+            root: dir.join("artifacts"),
+            index: Mutex::new(Vec::new()),
+        };
+        let bytes = b"atomic artifact bytes";
+        let meta = store.put("run1", "out.bin", bytes, None).unwrap();
+        let path = std::path::PathBuf::from(&meta.path);
+        // Success path: file on disk is complete and byte-exact.
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(meta.size, bytes.len() as u64);
+        // In-memory index reflects the durably-renamed artifact.
+        let list = store.list(Some("run1"));
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, meta.id);
+        // No temp residue left in the run directory.
+        let run_dir = store.root.join("run1");
+        let leftovers: Vec<_> = std::fs::read_dir(&run_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn put_failure_before_rename_leaves_no_partial_file_and_no_index_entry() {
+        let dir = std::env::temp_dir().join(format!("art-fail-{}", uuid::Uuid::new_v4()));
+        let store = ArtifactStore {
+            root: dir.join("artifacts"),
+            index: Mutex::new(Vec::new()),
+        };
+        // A NUL byte in the artifact name makes temp-file creation fail
+        // deterministically (std rejects NUL in paths) — a failure strictly
+        // before rename, so nothing may touch the target.
+        let err = store.put("run1", "bad\0name", b"hello", None).unwrap_err();
+        assert!(!err.is_empty());
+        let run_dir = store.root.join("run1");
+        assert!(run_dir.exists());
+        assert!(std::fs::read_dir(&run_dir).unwrap().next().is_none());
+        assert!(store.list(Some("run1")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn put_rename_failure_removes_temp_and_keeps_index_empty() {
+        let dir = std::env::temp_dir().join(format!("art-rename-{}", uuid::Uuid::new_v4()));
+        let store = ArtifactStore {
+            root: dir.join("artifacts"),
+            index: Mutex::new(Vec::new()),
+        };
+        // Target exists as a non-empty directory → rename over it fails; the
+        // temp file must be cleaned up and the pre-existing target untouched.
+        let run_dir = store.root.join("run1");
+        std::fs::create_dir_all(run_dir.join("out.txt")).unwrap();
+        std::fs::write(run_dir.join("out.txt").join("marker"), b"x").unwrap();
+        assert!(store.put("run1", "out.txt", b"hello", None).is_err());
+        assert_eq!(
+            std::fs::read(run_dir.join("out.txt").join("marker")).unwrap(),
+            b"x"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&run_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+        // Index is only updated after a durable rename — a failed write must
+        // not advertise the artifact.
+        assert!(store.list(Some("run1")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

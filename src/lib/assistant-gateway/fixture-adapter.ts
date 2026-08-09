@@ -378,7 +378,6 @@ export class FixtureAssistantAdapter implements AssistantGateway {
           }));
         return clone(children) as T;
       }
-      case 'run.rewind':
       case 'workspace.restore': {
         return { ok: true, rewound: true } as T;
       }

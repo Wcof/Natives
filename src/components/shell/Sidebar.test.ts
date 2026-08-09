@@ -6,9 +6,23 @@ const sidebar = readFileSync(new URL('./Sidebar.tsx', import.meta.url), 'utf8');
 const header = readFileSync(new URL('./Header.tsx', import.meta.url), 'utf8');
 const workbench = readFileSync(new URL('../assistant/AssistantWorkbench.tsx', import.meta.url), 'utf8');
 const assistantSidebar = readFileSync(new URL('../assistant/AssistantSidebarSection.tsx', import.meta.url), 'utf8');
-const messageInput = readFileSync(new URL('../assistant/MessageInput.tsx', import.meta.url), 'utf8');
+const messageInput = readFileSync(new URL('../ui/conversation/MessageInput.tsx', import.meta.url), 'utf8');
+const slashPopover = readFileSync(new URL('../ui/conversation/SlashCommandPopover.tsx', import.meta.url), 'utf8');
 const layoutEvents = readFileSync(new URL('./hooks/useLayoutEvents.ts', import.meta.url), 'utf8');
-const tauriAdapter = readFileSync(new URL('../../lib/tauri-adapter.ts', import.meta.url), 'utf8');
+const tauriAdapter = readFileSync(new URL('../../lib/tauri/host.ts', import.meta.url), 'utf8');
+// Send path moved into the composer hook; run control into the lifecycle hook.
+const composerHook = readFileSync(
+  new URL('../../hooks/useAssistantWorkbenchComposer.ts', import.meta.url),
+  'utf8',
+);
+const lifecycleHook = readFileSync(
+  new URL('../../hooks/useAssistantRunLifecycle.ts', import.meta.url),
+  'utf8',
+);
+const runSubscriptionHook = readFileSync(
+  new URL('../../hooks/useAssistantRunSubscription.ts', import.meta.url),
+  'utf8',
+);
 
 test('assistant tree is owned only by the shell sidebar', () => {
   assert.equal((sidebar.match(/<AssistantSidebarSection/g) ?? []).length, 1);
@@ -203,14 +217,14 @@ test('assistant conversation rows use a neutral selected state and comfortable h
 });
 
 test('send path uses gateway sendOrQueue (queue while running, no streamChat)', () => {
-  assert.match(workbench, /sendOrQueue/);
-  assert.match(workbench, /startSubscription/);
+  assert.match(composerHook, /sendOrQueue/);
+  assert.match(runSubscriptionHook, /startSubscription/);
   assert.equal(/\bstreamChat\s*[:(]/.test(workbench), false);
   assert.equal(workbench.includes('createAssistantStreamState'), false);
 });
 
 test('stop uses gateway cancelRun and does not invent terminal run status', () => {
-  assert.match(workbench, /cancelRun/);
+  assert.match(lifecycleHook, /cancelRun/);
   // Terminal status must come from daemon events, not optimistic interrupted
   assert.equal(/setStreamState[\s\S]*status: 'interrupted'/.test(workbench), false);
 });
@@ -249,7 +263,6 @@ test('assistant action menus portal to body above clipping layers', () => {
 });
 
 test('slash commands use composer-local positioning; keyboard owned by MessageInput', () => {
-  const slashPopover = readFileSync(new URL('../assistant/SlashCommandPopover.tsx', import.meta.url), 'utf8');
   assert.equal(messageInput.includes('anchorRect'), false);
   assert.match(slashPopover, /bottom-full left-0/);
   // Popover must NOT own document keydown — MessageInput textarea does
@@ -259,6 +272,6 @@ test('slash commands use composer-local positioning; keyboard owned by MessageIn
 });
 
 test('locale persistence broadcasts the change consumed by the shell', () => {
-  assert.match(tauriAdapter, /setLocale:\s*async[\s\S]*?new CustomEvent\('locale-changed',\s*\{ detail: locale \}\)[\s\S]*?await cmd\('set_locale'/);
+  assert.match(tauriAdapter, /setLocale:[\s\S]*?new CustomEvent\('locale-changed',\s*\{ detail: locale \}\)[\s\S]*?await cmd\('set_locale'/);
   assert.match(layoutEvents, /addEventListener\('locale-changed'/);
 });

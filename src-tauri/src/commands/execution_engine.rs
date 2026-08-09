@@ -11,8 +11,9 @@
 //! (A7) that only deletes the old key after a successful durable save.
 
 use crate::execution_engine_settings::{
-    build_execution_engine_snapshot, detect_runtimes, load_execution_engine_settings,
-    migrate_legacy_runtime_pref, save_execution_engine_settings, ExecutionEngineSettingsV2,
+    build_execution_engine_snapshot, build_runtime_descriptors, detect_runtimes,
+    load_execution_engine_settings, migrate_legacy_runtime_pref, save_execution_engine_settings,
+    validate_default_runtime_selectable, ExecutionEngineSettingsV2,
 };
 use crate::{Error, Result};
 
@@ -50,6 +51,7 @@ pub async fn execution_engine_get_snapshot(
     }
     let (mode, protocol, transport, daemon_ready) = authority_diagnostics().await;
     let snapshot = build_execution_engine_snapshot(&mode, &protocol, &transport, daemon_ready)
+        .await
         .map_err(Error::Internal)?;
     serde_json::to_value(&snapshot).map_err(Error::Json)
 }
@@ -57,10 +59,23 @@ pub async fn execution_engine_get_snapshot(
 /// Persist V2 settings with **revision CAS**: `settings.revision` is the
 /// caller's expected revision; a stale revision is rejected with a conflict
 /// error (codex force-closed; subtractive only).
+///
+/// SETTINGS-001 Host double-layer: the application default must point at a
+/// currently-`ready` runtime. The UI disables the blocked/degraded radios; this
+/// backend gate rejects a crafted save that tries to persist an invalid default
+/// (only when the default actually changes, so an unavailable default inherited
+/// from a legacy migration does not lock out unrelated edits).
 #[tauri::command]
 pub fn execution_engine_save_settings(
     settings: ExecutionEngineSettingsV2,
 ) -> Result<ExecutionEngineSettingsV2> {
+    let current = load_execution_engine_settings().map_err(Error::Internal)?;
+    // Descriptors are built from the incoming settings so enabling an external
+    // runtime and defaulting to it in the same save is judged against the
+    // would-be state, not the old one.
+    let runtimes = build_runtime_descriptors(&settings);
+    validate_default_runtime_selectable(&settings, &current, &runtimes)
+        .map_err(Error::InvalidInput)?;
     save_execution_engine_settings(settings).map_err(Error::Internal)
 }
 

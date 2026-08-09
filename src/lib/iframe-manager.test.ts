@@ -189,6 +189,38 @@ describe('IframeManager', () => {
     });
   });
 
+  describe('isManagedMessageSource', () => {
+    it('accepts the contentWindow of a managed module iframe', () => {
+      mgr.createIframe('mod1', 'http://example.com');
+      const inst = mgr.getInstance('mod1');
+      assert.ok(inst?.element);
+      const iframeWin = {};
+      (inst.element as any).contentWindow = iframeWin;
+      assert.equal(mgr.isManagedMessageSource(iframeWin), true);
+    });
+
+    it('rejects a window that is not a managed module iframe', () => {
+      mgr.createIframe('mod1', 'http://example.com');
+      assert.equal(mgr.isManagedMessageSource({}), false);
+      assert.equal(mgr.isManagedMessageSource(null), false);
+    });
+
+    it('rejects contentWindows of destroyed iframes', () => {
+      mgr.createIframe('mod1', 'http://example.com');
+      const inst = mgr.getInstance('mod1');
+      assert.ok(inst?.element);
+      const iframeWin = {};
+      (inst.element as any).contentWindow = iframeWin;
+      assert.equal(mgr.isManagedMessageSource(iframeWin), true);
+      mgr.destroyIframe('mod1');
+      assert.equal(mgr.isManagedMessageSource(iframeWin), false);
+    });
+
+    it('returns false when no iframes are managed', () => {
+      assert.equal(mgr.isManagedMessageSource({}), false);
+    });
+  });
+
   describe('singleton', () => {
     it('should return the same instance from getIframeManager', async () => {
       const { getIframeManager } = await import('./iframe-manager');

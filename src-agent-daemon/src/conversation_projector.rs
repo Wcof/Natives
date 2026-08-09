@@ -11,8 +11,9 @@
 //!   `projection_quarantine` — never silently skipped, never silently
 //!   overwritten — and the remaining turns still project.
 //! - FK decisions are made by actual row existence, not by run-/turn- name
-//!   prefixes. Runs without an FK row (legacy/symbolic ids) route through the
-//!   compat reader in `conversation_store`, which keeps FK columns NULL.
+//!   prefixes. The projector requires an existing run row; a run without one
+//!   fails closed with an explicit error (legacy/symbolic-run projection is
+//!   retired — the pre-typed engine that produced such data is gone).
 
 use agent_core::{AssistantMessage, ContentBlock, MessageId, ToolResultBlock, ToolResultMessage};
 use assistant_protocol::v2::{RunEventKind, RunEventV2};
@@ -191,10 +192,12 @@ pub fn project_run_from_events(
         )
         .map_err(|e| sqlite_failure("project run existence", e))?;
     if run_exists == 0 {
-        // Legacy/symbolic run without an FK row: the compat reader keeps the
-        // projection working without name-prefix FK heuristics.
-        conversation_store::append_assistant_turn_from_events(conversation_id, run_id, events)?;
-        return Ok(RunProjection::default());
+        // Retired: the pre-typed engine wrote events without a run FK row and
+        // they were routed to the compat reader in `conversation_store`. That
+        // path is gone (MIG-004); a missing run row is now an explicit failure.
+        return Err(ProjectionError::fatal(format!(
+            "projection requires an existing run row (legacy/symbolic-run projection is retired): {run_id}"
+        )));
     }
     let mut report = RunProjection::default();
     for group in group_turns(events) {
@@ -315,20 +318,12 @@ pub fn project_run_incremental(
         )
         .map_err(|e| sqlite_failure("project incremental run existence", e))?;
     if run_exists == 0 {
-        // Legacy/symbolic run without an FK row: fall back to the full
-        // compat projection (the compat reader keeps FK columns NULL).
-        let events = match load_events_for_run(&conn, run_id).map_err(ProjectionError::retryable)? {
-            LoadEvents::Events(events) => events,
-            LoadEvents::QuarantinedRun => {
-                return Ok(RunProjection {
-                    quarantined: 1,
-                    ..RunProjection::default()
-                })
-            }
-        };
-        conversation_store::append_assistant_turn_from_events(conversation_id, run_id, &events)
-            .map_err(|e| ProjectionError::retryable(e.to_string()))?;
-        return Ok(RunProjection::default());
+        // Retired: the pre-typed engine wrote events without a run FK row and
+        // they were routed to the compat reader in `conversation_store`. That
+        // path is gone (MIG-004); a missing run row is now an explicit failure.
+        return Err(ProjectionError::fatal(format!(
+            "projection requires an existing run row (legacy/symbolic-run projection is retired): {run_id}"
+        )));
     }
     // Read the durable projection watermark (0 when never projected).
     let after: i64 = conn
@@ -439,10 +434,9 @@ fn load_events_for_run(conn: &rusqlite::Connection, run_id: &str) -> Result<Load
     Ok(LoadEvents::Events(events))
 }
 
-/// Split events into turn groups using the same boundaries as the legacy
-/// reader: a new TurnStarted closes the previous group, TurnCompleted closes
-/// its own group, and any leftover events form a final (possibly delta-only)
-/// group.
+/// Split events into turn groups: a new TurnStarted closes the previous group,
+/// TurnCompleted closes its own group, and any leftover events form a final
+/// (possibly partial) group.
 fn group_turns(events: &[RunEventV2]) -> Vec<Vec<RunEventV2>> {
     let mut groups: Vec<Vec<RunEventV2>> = Vec::new();
     let mut current: Vec<RunEventV2> = Vec::new();
@@ -488,6 +482,11 @@ fn project_committed_turn(
         RunEventKind::TurnStarted { turn_id } => Some(turn_id.clone()),
         _ => None,
     });
+    // Retired: a turn group without TurnStarted is a pre-typed delta-only
+    // batch (the engine always emits typed turns now). It is not materialized.
+    let Some(typed_turn_id) = turn_id else {
+        return Ok(None);
+    };
     let assistant_message_id = events.iter().find_map(|event| match &event.payload {
         RunEventKind::MessageStarted {
             message_id, role, ..
@@ -547,7 +546,7 @@ fn project_committed_turn(
                     Err(detail) => {
                         quarantine(
                             run_id,
-                            turn_id.as_deref(),
+                            Some(&typed_turn_id),
                             assistant_message_id.as_deref(),
                             "corrupt_message_completed",
                             &detail,
@@ -566,7 +565,6 @@ fn project_committed_turn(
             _ => {}
         }
     }
-    let has_committed_content = committed_content.is_some();
     let content = committed_content.unwrap_or_else(|| {
         let mut content = Vec::new();
         if !thinking.trim().is_empty() {
@@ -588,17 +586,16 @@ fn project_committed_turn(
     if content.is_empty() && tool_results.is_empty() {
         return Ok(None);
     }
-    let typed_turn_id = turn_id.unwrap_or_else(|| format!("legacy-turn:{run_id}"));
     let assistant_id = assistant_message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let last_sequence = events
         .iter()
-        .map(|event| event.effective_run_sequence())
+        .map(|event| event.run_sequence)
         .max()
         .unwrap_or(0);
     let turn_sequence = events
         .iter()
         .find_map(|event| match &event.payload {
-            RunEventKind::TurnStarted { .. } => Some(event.effective_run_sequence()),
+            RunEventKind::TurnStarted { .. } => Some(event.run_sequence),
             _ => None,
         })
         .unwrap_or(0);
@@ -627,8 +624,7 @@ fn project_committed_turn(
             )
             .map_err(|e| sqlite_failure("project turn insert", e))?;
 
-        // Assistant message + blocks (mirrors the legacy append path so the
-        // stored rows are byte-identical: content blocks + run_reference).
+        // Assistant message + blocks: content blocks + run_reference.
         let assistant = AssistantMessage {
             message_id: MessageId::from(assistant_id.clone()),
             content: content.clone(),
@@ -636,9 +632,6 @@ fn project_committed_turn(
         };
         let mut assistant_blocks = content_blocks_to_json(&assistant.content);
         assistant_blocks.push(serde_json::json!({ "type": "run_reference", "run_id": run_id }));
-        let legacy_marker = typed_turn_id
-            .starts_with("legacy-turn:")
-            .then_some("legacy_turn_unknown");
         upsert_message_blocks(
             &tx,
             conversation_id,
@@ -648,7 +641,6 @@ fn project_committed_turn(
             "assistant",
             &assistant_blocks,
             stop_reason.as_deref(),
-            legacy_marker,
         )?;
 
         // Tool result messages (one per ToolCallCompleted, by stable result id).
@@ -675,42 +667,38 @@ fn project_committed_turn(
                 "assistant",
                 &blocks,
                 None,
-                legacy_marker,
             )?;
             projected_ids.push(result_id);
         }
 
         // Watermark — the event prefix + a digest of the projected message ids.
         // New turns advance the counter; re-projections only ever advance the
-        // sequence, so recovery stays idempotent.
+        // sequence, so recovery stays idempotent. (The `compat_hits` column is
+        // legacy observability and stays 0 — the compat path is retired.)
         let mut hasher = Sha256::new();
         for id in &projected_ids {
             hasher.update(id.as_bytes());
             hasher.update(b"\0");
         }
         let digest = hex::encode(hasher.finalize());
-        // Delta-only (non-typed) turns project through the compat branch inside
-        // the projector; each one records a hit so legacy usage stays observable.
-        let compat_contribution = if has_committed_content { 0 } else { 1 };
         if turn_affected > 0 {
             tx.execute(
                 "INSERT INTO projection_watermark
-                    (projector, run_id, event_sequence, turn_count, digest, compat_hits, created_at, updated_at)
-                 VALUES ('conversation', ?1, ?2, 1, ?3, ?4, datetime('now'), datetime('now'))
+                    (projector, run_id, event_sequence, turn_count, digest, created_at, updated_at)
+                 VALUES ('conversation', ?1, ?2, 1, ?3, datetime('now'), datetime('now'))
                  ON CONFLICT(projector, run_id) DO UPDATE SET
                     event_sequence = excluded.event_sequence,
                     turn_count = turn_count + 1,
                     digest = excluded.digest,
-                    compat_hits = compat_hits + excluded.compat_hits,
                     updated_at = datetime('now')",
-                params![run_id, last_sequence as i64, digest, compat_contribution],
+                params![run_id, last_sequence as i64, digest],
             )
             .map_err(|e| sqlite_failure("project watermark upsert", e))?;
         } else {
             tx.execute(
                 "INSERT INTO projection_watermark
-                    (projector, run_id, event_sequence, turn_count, digest, compat_hits, created_at, updated_at)
-                 VALUES ('conversation', ?1, ?2, 1, ?3, 0, datetime('now'), datetime('now'))
+                    (projector, run_id, event_sequence, turn_count, digest, created_at, updated_at)
+                 VALUES ('conversation', ?1, ?2, 1, ?3, datetime('now'), datetime('now'))
                  ON CONFLICT(projector, run_id) DO UPDATE SET
                     event_sequence = MAX(event_sequence, excluded.event_sequence),
                     updated_at = datetime('now')",
@@ -781,7 +769,6 @@ fn upsert_message_blocks(
     role: &str,
     blocks: &[Value],
     stop_reason: Option<&str>,
-    legacy_marker: Option<&str>,
 ) -> Result<(), ProjectionFailure> {
     let existing: Vec<(i64, String)> = tx
         .prepare(
@@ -813,14 +800,13 @@ fn upsert_message_blocks(
     tx.execute(
         "INSERT INTO message
             (id, conversation_id, role, status, turn_id, run_id, legacy_marker, truncated, stop_reason, created_at)
-         VALUES (?1, ?2, ?3, 'complete', ?4, ?5, ?6, 0, ?7, ?8)",
+         VALUES (?1, ?2, ?3, 'complete', ?4, ?5, NULL, 0, ?6, ?7)",
         params![
             message_id,
             conversation_id,
             role,
             turn_id,
             run_id,
-            legacy_marker,
             stop_reason,
             now
         ],
@@ -992,7 +978,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: sequence,
             run_id: run_id.into(),
-            sequence,
             timestamp: chrono::Utc::now(),
             payload,
         }
@@ -1248,15 +1233,15 @@ mod tests {
         assert!(stored.contains("tampered"));
     }
 
-    /// TASK-005 acceptance #4: FK decisions are by actual run existence, not
-    /// name prefixes. A symbolic run with no FK row routes to the compat
-    /// reader instead of failing the whole projection.
+    /// MIG-004: projecting a run without an FK row (the retired legacy/symbolic
+    /// path that used to route to the compat reader) now fails closed with an
+    /// explicit error instead of materializing delta-only turns.
     #[test]
-    fn missing_run_routes_to_compat_not_name_heuristics() {
+    fn missing_run_is_rejected_not_routed_to_compat() {
         let ((conv, _), _dir) = setup();
         let run = "run-1".to_string();
-        // Legacy delta-only events (no typed turn) are what a symbolic run
-        // carries; the compat reader materializes them with NULL FK columns.
+        // Pre-typed delta-only events (no typed turn, no run row) are what a
+        // legacy/symbolic run carried.
         let events = vec![event(
             &run,
             1,
@@ -1264,31 +1249,21 @@ mod tests {
                 text: "hello".into(),
             },
         )];
-        let report = project_run_from_events(&conv, &run, &events).unwrap();
-        assert_eq!(
-            report.projected, 0,
-            "compat path returns legacy count semantics"
+        let error = project_run_from_events(&conv, &run, &events)
+            .expect_err("a run without an FK row must be rejected, not routed to compat");
+        assert!(
+            error.message.contains("requires an existing run row"),
+            "error must name the retired run-row requirement: {error:?}"
+        );
+        assert!(
+            !error.retryable,
+            "a missing run row is a data anomaly, not a retryable failure"
         );
         let messages = conversation_store::load_agent_messages(&conv).unwrap();
-        assert_eq!(
-            messages.len(),
-            1,
-            "compat projection materializes the delta text"
+        assert!(
+            messages.is_empty(),
+            "rejected projection must not materialize messages"
         );
-        match &messages[0] {
-            agent_core::AgentMessage::Assistant(assistant) => {
-                let text = assistant
-                    .content
-                    .iter()
-                    .find_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .unwrap_or("");
-                assert_eq!(text, "hello");
-            }
-            other => panic!("expected assistant message, got {other:?}"),
-        }
     }
 
     /// TASK-005 (B03): startup recovery backfills committed turns whose events
@@ -1309,7 +1284,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1359,7 +1334,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1464,7 +1439,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(&event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1561,7 +1536,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1579,7 +1554,6 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, mut e)| {
-                e.sequence += 7;
                 e.run_sequence += 7;
                 e.global_sequence += 7;
                 e.event_id = format!("evt-{run}-{}", 8 + i as u64);
@@ -1684,7 +1658,6 @@ mod incremental_projection_tests {
             global_sequence: 0,
             run_sequence: sequence,
             run_id: run_id.into(),
-            sequence,
             timestamp: chrono::Utc::now(),
             payload,
         }
@@ -1771,7 +1744,7 @@ mod incremental_projection_tests {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     run_id.to_string(),
-                    event.effective_run_sequence() as i64,
+                    event.run_sequence as i64,
                     event.payload.type_name().to_string(),
                     serde_json::to_string(event).unwrap(),
                     event.timestamp.to_rfc3339(),

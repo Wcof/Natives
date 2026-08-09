@@ -182,7 +182,10 @@ fn apply_migration_037(conn: &Connection) -> Result<(), String> {
         ("side_effect_record", "resource TEXT"),
         ("side_effect_record", "started_at TEXT"),
         ("side_effect_record", "completed_at TEXT"),
-        ("resume_plan", "decision TEXT NOT NULL DEFAULT 'RequiresUserConfirmation'"),
+        (
+            "resume_plan",
+            "decision TEXT NOT NULL DEFAULT 'RequiresUserConfirmation'",
+        ),
     ];
     for (table, ddl) in alters {
         let already = conn
@@ -205,8 +208,40 @@ fn apply_migration_037(conn: &Connection) -> Result<(), String> {
             }
         }
     }
-    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);")
-        .map_err(|e| format!("Migration 37 index failed: {e}"))
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);",
+    )
+    .map_err(|e| format!("Migration 37 index failed: {e}"))
+}
+
+/// Legacy checksums accepted for migrations whose canonical text was rewritten
+/// during the DATA-001 remediation (R-D3: eliminate DROP TABLE / rename-rebuild
+/// from active migrations).
+///
+/// A database that applied the *historical* text records its historical
+/// checksum. Rewriting the canonical text would otherwise trip the drift check
+/// and fail closed forever on every real database. Instead, the historical
+/// checksum is accepted once as an already-applied marker and the ledger row is
+/// re-stamped with the new canonical checksum, so drift checks stay meaningful
+/// from that point on (one-way, idempotent, observable).
+///
+/// Versions and their historical checksums were captured before the rewrite
+/// (FNV-1a 64-bit, same function as `checksum_hex`):
+///
+/// | version | reason for rewrite                                   | legacy checksum            |
+/// |---------|------------------------------------------------------|----------------------------|
+/// | 4       | removed dead `mcp_server_config` CREATE (was DROP'd by 021) | `27678788fa1a0015` |
+/// | 10      | widened `subagent_session.status` CHECK to the business vocabulary | `c09a522ebe1b08b6` |
+/// | 11      | removed `subagent_session` create-copy-drop-rename rebuild | `60837927902eced6` |
+/// | 21      | removed `DROP TABLE IF EXISTS mcp_server_config`     | `4a3bce47882233f6`         |
+fn legacy_checksum_for(version: i64) -> Option<&'static str> {
+    match version {
+        4 => Some("27678788fa1a0015"),
+        10 => Some("c09a522ebe1b08b6"),
+        11 => Some("60837927902eced6"),
+        21 => Some("4a3bce47882233f6"),
+        _ => None,
+    }
 }
 
 /// Run pending migrations one-by-one with an idempotent, reentrant protocol.
@@ -220,9 +255,10 @@ fn apply_migration_037(conn: &Connection) -> Result<(), String> {
 /// - ALTER-heavy migrations tolerate partial DDL: `apply` runs the canonical
 ///   SQL; duplicate-column / no-such-table are treated as already-applied and
 ///   verified, not fatal (crash reentry, P0-024).
-/// - `v11` (table rebuild) is executed with `PRAGMA foreign_keys=OFF` outside
-///   the transaction, then create-copy-validate-swap inside it, then FK back
-///   on + `foreign_key_check` (P1-034).
+/// - Active migrations never use `DROP TABLE` rebuilds (R-D3). The last table
+///   rebuild (v11) was replaced by an incremental ALTER during the DATA-001
+///   remediation; see `legacy_checksum_for` for how already-applied databases
+///   are re-stamped.
 /// - Migration failure fails closed: the process startup errors instead of
 ///   entering a healthy-but-half-migrated state.
 pub fn run_pending(conn: &Connection) -> Result<(), String> {
@@ -256,9 +292,18 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
         Ok(())
     };
+    let restamp = |version: i64, canonical: &str| -> Result<(), String> {
+        conn.execute(
+            "UPDATE _daemon_migrations SET checksum = ?2 WHERE id = ?1",
+            rusqlite::params![version, checksum_hex(canonical)],
+        )
+        .map_err(|e| format!("Failed to re-stamp migration {version} checksum: {e}"))?;
+        Ok(())
+    };
 
     for (version, canonical) in ALL {
-        // Already applied: verify checksum drift (fail closed).
+        // Already applied: verify checksum drift (fail closed), accepting the
+        // one-time legacy re-stamp from the DATA-001 remediation.
         if is_recorded(*version)? {
             let stored: String = conn
                 .query_row(
@@ -269,6 +314,12 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
                 .map_err(|e| format!("Failed to read migration checksum: {e}"))?;
             let current = checksum_hex(canonical);
             if stored != current {
+                if let Some(legacy) = legacy_checksum_for(*version) {
+                    if stored == legacy {
+                        restamp(*version, canonical)?;
+                        continue;
+                    }
+                }
                 return Err(format!(
                     "Migration {version} checksum drift (stored {stored}, current {current}) — \
                      editing an applied migration fails closed; add a new migration instead"
@@ -282,30 +333,10 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
             record(*version, canonical)?;
             continue;
         }
-        let is_rebuild = *version == 11;
-        if is_rebuild {
-            conn.execute_batch("PRAGMA foreign_keys=OFF;")
-                .map_err(|e| format!("Migration {version} FK off failed: {e}"))?;
-        }
-        // Run the canonical SQL. Rebuilds get a transaction; others rely on
-        // idempotent SQL + tolerant postcondition re-entry. v37 uses a
-        // per-statement idempotent apply (see `apply_migration_037`).
-        let apply_result: Result<(), String> = if is_rebuild {
-            conn.execute_batch("BEGIN IMMEDIATE;")
-                .map_err(|e| format!("Migration {version} begin failed: {e}"))?;
-            let r = conn
-                .execute_batch(canonical)
-                .map_err(|e| format!("Migration {version} failed: {e}"));
-            match r {
-                Ok(()) => conn
-                    .execute_batch("COMMIT;")
-                    .map_err(|e| format!("Migration {version} commit failed: {e}")),
-                Err(e) => {
-                    let _ = conn.execute_batch("ROLLBACK;");
-                    Err(e)
-                }
-            }
-        } else if *version == 37 {
+        // Run the canonical SQL. Migrations rely on idempotent SQL + tolerant
+        // postcondition re-entry; v37 uses a per-statement idempotent apply
+        // (see `apply_migration_037`).
+        let apply_result: Result<(), String> = if *version == 37 {
             apply_migration_037(conn)
         } else {
             conn.execute_batch(canonical)
@@ -329,19 +360,13 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
                 }
             }
         }
-        if is_rebuild {
-            conn.execute_batch("PRAGMA foreign_keys=ON;")
-                .map_err(|e| format!("Migration {version} FK on failed: {e}"))?;
-        }
     }
 
-    // Fail closed on any FK violations left by rebuilds.
+    // Fail closed on any FK violations left by migrations.
     let fk_violations: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_foreign_key_check",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
         .map_err(|e| format!("foreign_key_check failed: {e}"))?;
     if fk_violations > 0 {
         return Err(format!(
@@ -561,17 +586,11 @@ CREATE TABLE IF NOT EXISTS extension_permission (
     UNIQUE(extension_id, permission)
 );
 
-CREATE TABLE IF NOT EXISTS mcp_server_config (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    transport TEXT NOT NULL DEFAULT 'stdio' CHECK(transport IN ('stdio', 'http_sse')),
-    command TEXT,
-    args TEXT NOT NULL DEFAULT '[]',
-    env_vars TEXT NOT NULL DEFAULT '[]',
-    url TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- mcp_server_config used to be created here and dropped by migration 021.
+-- During the DATA-001 remediation both were removed: the table never shipped a
+-- reader or writer, and R-D3 forbids destructive table rebuilds in active
+-- migrations. Fresh databases simply never create the dead table; databases
+-- that applied the old migrations already had it dropped by 021.
 
 CREATE TABLE IF NOT EXISTS hook_registration (
     id TEXT PRIMARY KEY,
@@ -701,6 +720,11 @@ CREATE TABLE IF NOT EXISTS _host_authority_migration (
 
 /// Migration 010: hidden subagent conversations + route policy + session registry.
 /// Stores only provider/key/model *IDs* — never plaintext credentials.
+///
+/// `subagent_session.status` carries the full business vocabulary here so the
+/// historical migration 011 table rebuild (which widened the CHECK via
+/// create-copy-drop-rename) is not needed — R-D3 forbids that rebuild, and
+/// future enum additions are validated at the business layer.
 const MIGRATION_010: &str = "
 ALTER TABLE conversation ADD COLUMN parent_conversation_id TEXT
     REFERENCES conversation(id) ON DELETE CASCADE;
@@ -727,7 +751,8 @@ CREATE TABLE IF NOT EXISTS subagent_session (
     name TEXT NOT NULL DEFAULT '',
     task TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open' CHECK(status IN (
-        'open', 'running', 'idle', 'closed', 'failed', 'cancelled'
+        'pending_assignment', 'open', 'queued', 'running', 'waiting',
+        'completed', 'idle', 'failed', 'cancelled', 'interrupted', 'closed'
     )),
     provider_id TEXT NOT NULL,
     key_id TEXT NOT NULL,
@@ -749,56 +774,17 @@ CREATE INDEX IF NOT EXISTS idx_subagent_session_activity
 
 /// Migration 011: subagent status vocabulary + parent heartbeat.
 ///
-/// - Allow `completed` (success terminal; `idle` kept for legacy rows).
-/// - Expand intermediate statuses used by assignment / resume.
-/// - Track parent conversation heartbeat independently of child activity.
+/// Rewritten during the DATA-001 remediation. The original implementation
+/// rebuilt `subagent_session` (create-copy-drop-rename) purely to widen its
+/// status CHECK, and R-D3 forbids DROP TABLE rebuilds. SQLite cannot modify a
+/// CHECK constraint in place without a rebuild, so the wider status vocabulary
+/// is now enforced at the business layer (`subagent_store`) and fresh databases
+/// receive the full vocabulary directly from MIGRATION_010's CREATE TABLE. The
+/// only schema delta that actually needs SQL here is the parent heartbeat
+/// column; the `ADD COLUMN` is idempotent and the runner tolerates re-entry.
 const MIGRATION_011: &str = "
-PRAGMA foreign_keys=OFF;
-PRAGMA legacy_alter_table=ON;
-
-CREATE TABLE subagent_session_new (
-    id TEXT PRIMARY KEY,
-    parent_conversation_id TEXT NOT NULL
-        REFERENCES conversation(id) ON DELETE CASCADE,
-    child_conversation_id TEXT NOT NULL
-        REFERENCES conversation(id) ON DELETE CASCADE,
-    parent_run_id TEXT,
-    task_call_id TEXT,
-    name TEXT NOT NULL DEFAULT '',
-    task TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN (
-        'pending_assignment', 'open', 'queued', 'running', 'waiting',
-        'completed', 'idle', 'failed', 'cancelled', 'interrupted', 'closed'
-    )),
-    provider_id TEXT NOT NULL,
-    key_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    attempted_bindings_json TEXT NOT NULL DEFAULT '[]',
-    last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
-    closed_at TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-INSERT INTO subagent_session_new
-    SELECT id, parent_conversation_id, child_conversation_id, parent_run_id, task_call_id,
-           name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
-           last_activity_at, closed_at, error, created_at, updated_at
-    FROM subagent_session;
-DROP TABLE subagent_session;
-ALTER TABLE subagent_session_new RENAME TO subagent_session;
-CREATE INDEX IF NOT EXISTS idx_subagent_session_parent
-    ON subagent_session(parent_conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_subagent_session_parent_run
-    ON subagent_session(parent_run_id);
-CREATE INDEX IF NOT EXISTS idx_subagent_session_activity
-    ON subagent_session(status, last_activity_at);
-
 ALTER TABLE subagent_route_policy
     ADD COLUMN last_parent_heartbeat_at TEXT;
-
-PRAGMA legacy_alter_table=OFF;
-PRAGMA foreign_keys=ON;
 ";
 
 /// Migration 012: SessionCoordinator durable state.
@@ -998,9 +984,13 @@ CREATE TABLE IF NOT EXISTS provider_route_health (
 /// and header validation rejects plaintext Authorization values at the RPC
 /// boundary.
 ///
-/// Also drops `mcp_server_config` (created by migration 004, zero readers or
-/// writers ever shipped; its transport CHECK list no longer matches the
-/// runtime). `hook_registration` belongs to the Harness track and stays.
+/// Also, the historical `DROP TABLE IF EXISTS mcp_server_config` was removed
+/// during the DATA-001 remediation (R-D3 forbids DROP TABLE in active
+/// migrations). `mcp_server_config` was created by migration 004 with zero
+/// readers or writers ever shipped, and that CREATE was removed from 004 as
+/// well — fresh databases never create the dead table, so no DROP is needed
+/// anywhere. Databases that applied the old migrations already had it dropped
+/// by the historical 021.
 ///
 /// Merge hazard, recorded because the runner cannot detect it: 021 and 022 were
 /// written on two parallel branches, and the Harness branch (022) ran first on
@@ -1113,8 +1103,6 @@ CREATE TABLE IF NOT EXISTS capability_mcp_hub_cache (
 
 ALTER TABLE conversation ADD COLUMN capability_selection_json TEXT;
 ALTER TABLE run ADD COLUMN capability_snapshot_json TEXT;
-
-DROP TABLE IF EXISTS mcp_server_config;
 ";
 
 /// Migration 022: Harness control plane (design 第 10 节).
@@ -1585,7 +1573,8 @@ ALTER TABLE resume_plan ADD COLUMN decision TEXT NOT NULL DEFAULT 'RequiresUserC
 
 #[cfg(test)]
 mod tests {
-    use super::ALL;
+    use super::{checksum_hex, legacy_checksum_for, run_pending, ALL};
+    use rusqlite::Connection;
 
     /// `run_migrations` skips every entry with `version <= MAX(applied)`, and it
     /// computes that maximum once. A duplicate or out-of-order version therefore
@@ -1627,5 +1616,129 @@ mod tests {
                 .any(|(v, sql)| *v == 22 && sql.contains("harness_profile")),
             "022 is no longer the harness control plane migration"
         );
+    }
+
+    /// DATA-001 regression: no active migration may contain a `DROP TABLE`
+    /// (or the create-copy-drop-rename rebuild pattern), per R-D3 MUST.
+    #[test]
+    fn no_active_migration_drops_tables() {
+        for (version, sql) in ALL {
+            let upper = sql.to_ascii_uppercase();
+            assert!(
+                !upper.contains("DROP TABLE"),
+                "migration {version} must not contain DROP TABLE (R-D3)"
+            );
+            assert!(
+                !upper.contains("RENAME TO"),
+                "migration {version} must not rename-rebuild tables (R-D3)"
+            );
+        }
+    }
+
+    /// DATA-001 remediation: a database that applied the *historical* migration
+    /// texts records their historical checksums. Rewriting the canonical text
+    /// must not fail closed forever on those databases — the legacy checksum is
+    /// accepted once and the ledger row re-stamped to the new checksum.
+    #[test]
+    fn legacy_checksum_restamp_allows_rewritten_migrations() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // Apply everything with the new canonical texts first, then simulate a
+        // pre-remediation database by overwriting the four rewritten versions'
+        // ledger rows with their historical checksums.
+        run_pending(&conn).unwrap();
+        for (version, legacy) in [
+            (4, "27678788fa1a0015"),
+            (10, "c09a522ebe1b08b6"),
+            (11, "60837927902eced6"),
+            (21, "4a3bce47882233f6"),
+        ] {
+            conn.execute(
+                "UPDATE _daemon_migrations SET checksum = ?2 WHERE id = ?1",
+                rusqlite::params![version, legacy],
+            )
+            .unwrap();
+        }
+
+        // Re-running must not fail closed on drift; it re-stamps the ledger.
+        run_pending(&conn).unwrap();
+        for (version, sql) in ALL {
+            if legacy_checksum_for(*version).is_some() {
+                let stored: String = conn
+                    .query_row(
+                        "SELECT checksum FROM _daemon_migrations WHERE id=?1",
+                        rusqlite::params![*version],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    stored,
+                    checksum_hex(sql),
+                    "version {version} must be re-stamped with the new canonical checksum"
+                );
+            }
+        }
+        // And a third run is still clean (idempotent, no drift).
+        run_pending(&conn).unwrap();
+    }
+
+    /// Unknown checksum drift still fails closed: only the documented legacy
+    /// checksums are accepted, never an arbitrary edit of an applied migration.
+    #[test]
+    fn unknown_checksum_drift_still_fails_closed() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_pending(&conn).unwrap();
+        conn.execute(
+            "UPDATE _daemon_migrations SET checksum = 'deadbeefdeadbeef' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        let err = run_pending(&conn).unwrap_err();
+        assert!(
+            err.contains("checksum drift"),
+            "expected fail-closed drift error, got: {err}"
+        );
+    }
+
+    /// DATA-001: the rewritten v10/v11 incremental path is idempotent — the
+    /// widened status CHECK comes from CREATE TABLE (v10) and the only v11
+    /// schema delta is a tolerant `ALTER TABLE ... ADD COLUMN`.
+    #[test]
+    fn rewritten_v11_is_incremental_and_reentrant() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_pending(&conn).unwrap();
+
+        // v11 postcondition: subagent_route_policy.last_parent_heartbeat_at.
+        let has_heartbeat: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('subagent_route_policy')
+                 WHERE name = 'last_parent_heartbeat_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_heartbeat, "v11 must add the parent heartbeat column");
+
+        // Fresh DBs get the full business status vocabulary from v10's CREATE
+        // TABLE — inserting a status that the old v10 CHECK rejected works.
+        conn.execute(
+            "INSERT INTO conversation (id, mode, provider_id, model_id)
+             VALUES ('c1', 'agent', 'openai', 'gpt-4o'), ('c2', 'agent', 'openai', 'gpt-4o')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO subagent_session (
+                id, parent_conversation_id, child_conversation_id,
+                status, provider_id, key_id, model_id, task
+             ) VALUES ('s1', 'c1', 'c2', 'completed', 'openai', 'k1', 'gpt-4o', 't')",
+            [],
+        )
+        .unwrap_or_else(|e| panic!("wide status CHECK must accept 'completed': {e}"));
+
+        // Re-entry (simulated crash between v10 and v11) stays clean.
+        run_pending(&conn).unwrap();
     }
 }

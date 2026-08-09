@@ -90,7 +90,7 @@ impl RunStreamFrameV2 {
         Self::Event {
             lane: RunStreamLane::Durable,
             run_id: run_id.to_string(),
-            durable_sequence: Some(event.effective_run_sequence()),
+            durable_sequence: Some(event.run_sequence),
             live_sequence: None,
             event_type: event.payload.type_name().to_string(),
             payload: serde_json::to_value(&event.payload).unwrap_or_default(),

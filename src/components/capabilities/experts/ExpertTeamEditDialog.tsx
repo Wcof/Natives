@@ -11,7 +11,7 @@ import {
 import { classifyError } from '@/lib/error-classifier';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import type { CapabilityExpert, CapabilityExpertTeam, CapabilityTeamMember } from '../shared/capability-types';
+import type { CapabilityExpert, CapabilityExpertTeam, CapabilityTeamMember } from '@/types/capability';
 
 interface ExpertTeamEditDialogProps {
   locale: Locale;

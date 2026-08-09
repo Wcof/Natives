@@ -63,7 +63,7 @@ export default function DeleteDialog({
       <div className="flex flex-col gap-3 py-1">
         <p className="text-xs text-[var(--text-secondary)]">
           {target.source === 'local_project'
-            ? deleteLocalConfirmNote(locale === 'en' ? 'en' : 'zh')
+            ? deleteLocalConfirmNote(locale)
             : t(locale, 'workshop.deleteDesc')}
         </p>
         <div className="p-3 bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg font-semibold text-sm text-[var(--text)]">

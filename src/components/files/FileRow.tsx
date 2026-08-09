@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { type FileEntry } from '@/types/file';
 import { Star, Play } from 'lucide-react';
+import { t } from '@/i18n';
 import { fmtSize, fmtTime } from '@/lib/format';
 import { EXT_BADGES, getBadgeExt } from '@/lib/file-badges';
 import { getFileIcon, getIconColor, FbFolder, FbImage } from '@/lib/file-icons';
@@ -10,6 +11,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileRowProps {
   entry: FileEntry;
+  locale: string;
   onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   showDir?: boolean;
@@ -23,7 +25,7 @@ interface FileRowProps {
   flash?: boolean;
 }
 
-export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths, flash = false }: FileRowProps) {
+export default function FileRow({ entry, locale, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths, flash = false }: FileRowProps) {
   const [dropTarget, setDropTarget] = useState(false);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -123,7 +125,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         fontSize: FONT_SIZE.lg,
         color: 'var(--text)',
         borderBottom: '1px solid var(--border)',
-        background: dropTarget ? 'var(--accent-soft, rgba(205,242,75,0.12))' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        background: dropTarget ? 'var(--accent-soft)' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
         outline: dropTarget || selected ? '1px solid var(--primary)' : 'none',
         outlineOffset: -1,
         transition: 'background 0.12s, opacity 0.12s',
@@ -140,10 +142,10 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
           <span style={{
             position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
             width: 18, height: 18, borderRadius: '50%',
-            background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'var(--overlay-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center',
             pointerEvents: 'none',
           }}>
-            <Play size={8} fill="#fff" color="#fff" />
+            <Play size={8} fill="var(--neutral-1000)" color="var(--neutral-1000)" />
           </span>
         )}
       </span>
@@ -174,7 +176,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
 
       {/* Modified time (relative) */}
       <div style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.md }}>
-        {fmtTime(entry.mtime)}
+        {fmtTime(entry.mtime, locale)}
       </div>
 
       {/* Size */}
@@ -189,10 +191,10 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
           e.stopPropagation();
           onFavoriteToggle?.(entry);
         }}
-        title={isFavorite ? '取消收藏' : '收藏'}
+        title={isFavorite ? t(locale, 'fileBrowser.unfavorite') : t(locale, 'fileBrowser.favorite')}
         style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-disabled)',
+          color: isFavorite ? 'var(--warning)' : 'var(--text-disabled)',
           cursor: 'pointer', background: 'none', border: 'none', padding: 0,
           transition: 'color 0.12s, transform 0.12s',
           opacity: isFavorite ? 1 : 0.5,

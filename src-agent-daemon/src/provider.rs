@@ -1,0 +1,604 @@
+//! Real provider adapter seam for the Agent Daemon (ARCH-002).
+//!
+//! Wraps `provider-adapters` adapters behind the Core's `EngineProvider`
+//! interface: streaming, request controls, credential resolution, history
+//! translation, and provider error mapping. Extracted from `production.rs`
+//! so the runtime facade no longer owns the provider wire seam.
+
+use agent_core::{
+    EngineError, EngineMessage, EngineProvider, EngineProviderContext, EngineProviderEvent,
+    EngineProviderEventStream, ToolSchema,
+};
+use futures_util::StreamExt;
+use provider_adapters::capabilities::{
+    history_message_to_provider, HistoryMessage, HistoryToolCall, ImageSource, ProviderAdapter,
+    ProviderError, ProviderRequest, ProviderTool, RequestControls,
+};
+use provider_adapters::stream::ProviderEvent;
+use tokio_util::sync::CancellationToken;
+
+use crate::production_credentials::resolve_credential_for_run;
+
+/// Real HTTP provider adapter wrapper (never returns offline mock tool-call text).
+pub struct RealProvider {
+    pub provider_id: String,
+    pub key_id: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl EngineProvider for RealProvider {
+    /// Stream with provider-default request controls.
+    ///
+    /// `EngineProvider` has no room for per-run controls, so anything that has
+    /// them (the router, which knows the run) calls
+    /// [`RealProvider::stream_with_controls`] directly instead.
+    async fn stream(
+        &self,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_controls(
+            &RequestControls::default(),
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    async fn stream_with_context(
+        &self,
+        context: EngineProviderContext,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_context_controls(
+            &context,
+            &RequestControls::default(),
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    async fn stream_turn(
+        &self,
+        request: agent_core::ProviderTurnRequest,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_typed_context_controls(
+            &request.context,
+            &RequestControls::default(),
+            &request.model,
+            request.messages,
+            &request.tools,
+            request.system_prompt.as_deref(),
+            cancel,
+        )
+        .await
+    }
+}
+
+impl RealProvider {
+    /// Stream one turn, applying caller-supplied [`RequestControls`].
+    pub async fn stream_with_controls(
+        &self,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_context_controls(
+            &EngineProviderContext {
+                run_id: "legacy-unbound".into(),
+                attempt: 0,
+            },
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
+    pub async fn stream_with_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages
+            .into_iter()
+            .map(engine_message_to_history)
+            .collect();
+        self.stream_with_history_context_controls(
+            context,
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
+    pub async fn stream_with_typed_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<agent_core::AgentMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let messages = messages.into_iter().map(agent_message_to_history).collect();
+        self.stream_with_history_context_controls(
+            context,
+            controls,
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
+    pub(crate) async fn stream_with_history_context_controls(
+        &self,
+        context: &EngineProviderContext,
+        controls: &RequestControls,
+        model: &str,
+        messages: Vec<HistoryMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        let credential =
+            resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), &context.run_id)
+                .map_err(EngineError::Message)?;
+        let protocol = credential
+            .provider_type
+            .clone()
+            .unwrap_or_else(|| self.provider_id.clone());
+        let key_id = credential.key_id.clone();
+        let route_key_id = key_id.as_deref().unwrap_or("default").to_string();
+        let base_url = credential.base_url.clone();
+        let adapter = resolve_adapter(&protocol);
+
+        if let Some(governor) = crate::global_governor() {
+            governor
+                .acquire(&self.provider_id, &route_key_id, cancel.clone())
+                .await
+                .map_err(|e| {
+                    if e == "cancelled" {
+                        EngineError::Cancelled
+                    } else {
+                        EngineError::Message(e)
+                    }
+                })?;
+        }
+
+        let provider_messages: Vec<_> = messages
+            .into_iter()
+            .map(history_message_to_provider)
+            .collect();
+        let provider_tools: Vec<ProviderTool> = tools
+            .iter()
+            .map(|t| ProviderTool {
+                name: t.name.clone(),
+                description: Some(t.description.clone()),
+                input_schema: t.input_schema.clone(),
+            })
+            .collect();
+
+        let mut request = ProviderRequest {
+            model: model.to_string(),
+            messages: provider_messages,
+            system_prompt: system_prompt.map(str::to_string),
+            tools: if provider_tools.is_empty() {
+                None
+            } else {
+                Some(provider_tools)
+            },
+            // `None` delegates the ceiling to the per-model profile in
+            // `provider_adapters::model_profile`, matching what `routing.rs`
+            // already does for the pooled path. Two reasons the hardcoded 4096
+            // had to go: it silently truncated every model with a larger output
+            // window, and Anthropic clamps `thinking.budget_tokens` to
+            // `max_tokens - 1` — so on this path low/medium/high reasoning
+            // effort all collapsed to 4095 and the effort wiring was inert.
+            // Models missing from the profile table still fall back to the
+            // adapter's own 4096, so nothing regresses.
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: controls.clone(),
+        };
+        crate::request_rectifier::rectify_provider_request(
+            &mut request,
+            crate::routing::rectifier_enabled(),
+        );
+
+        let stream = match adapter.stream(request, credential).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                if matches!(
+                    e.category,
+                    provider_adapters::capabilities::ProviderErrorCategory::RateLimit
+                ) {
+                    if let Some(governor) = crate::global_governor() {
+                        governor
+                            .record_rate_limit(&self.provider_id, &route_key_id, e.retry_after_ms)
+                            .await;
+                    }
+                }
+                return Err(EngineError::Provider {
+                    message: provider_error_message(
+                        &e,
+                        &self.provider_id,
+                        &protocol,
+                        model,
+                        key_id.as_deref(),
+                        base_url.as_deref(),
+                    ),
+                    code: e.code,
+                    retryable: e.retryable,
+                    category: format!("{:?}", e.category),
+                    retry_after_ms: e.retry_after_ms,
+                });
+            }
+        };
+        let provider_id = self.provider_id.clone();
+        let route_key_id = route_key_id.clone();
+        let governor = crate::global_governor();
+        let model = model.to_string();
+        let mapped = futures_util::stream::unfold((stream, cancel), move |(mut stream, cancel)| {
+            let provider_id = provider_id.clone();
+            let route_key_id = route_key_id.clone();
+            let governor = governor.clone();
+            let protocol = protocol.clone();
+            let model = model.clone();
+            let key_id = key_id.clone();
+            let base_url = base_url.clone();
+            async move {
+                if cancel.is_cancelled() {
+                    return None;
+                }
+                tokio::select! {
+                    ev = stream.next() => {
+                        let ev = ev?;
+                        if let ProviderEvent::Error(error) = &ev {
+                            if matches!(error.category, provider_adapters::capabilities::ProviderErrorCategory::RateLimit) {
+                                if let Some(governor) = &governor {
+                                    governor.record_rate_limit(&provider_id, &route_key_id, error.retry_after_ms).await;
+                                }
+                            }
+                        }
+                        let event = match ev {
+                                ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
+                                ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
+                                ProviderEvent::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                } => EngineProviderEvent::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                },
+                                ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
+                                    input_tokens: u.input_tokens,
+                                    output_tokens: u.output_tokens,
+                                    reasoning_tokens: u.reasoning_tokens,
+                                    cache_creation_tokens: u.cache_creation_tokens,
+                                    cache_read_tokens: u.cache_read_tokens,
+                                },
+                                ProviderEvent::Completed { reason } => EngineProviderEvent::CompletedWithReason {
+                                    reason: match reason {
+                                        provider_adapters::stream::ProviderStopReason::Stop => agent_core::ProviderStopReason::Stop,
+                                        provider_adapters::stream::ProviderStopReason::ToolUse => agent_core::ProviderStopReason::ToolUse,
+                                        provider_adapters::stream::ProviderStopReason::Length => agent_core::ProviderStopReason::Length,
+                                        provider_adapters::stream::ProviderStopReason::Cancelled => agent_core::ProviderStopReason::Cancelled,
+                                        provider_adapters::stream::ProviderStopReason::Error => agent_core::ProviderStopReason::Error,
+                                        provider_adapters::stream::ProviderStopReason::Unknown(value) => agent_core::ProviderStopReason::Unknown(value),
+                                    },
+                                },
+                                ProviderEvent::Error(e) => EngineProviderEvent::Error {
+                                        message: provider_error_message(&e, &provider_id, &protocol, &model, key_id.as_deref(), base_url.as_deref()),
+                                        code: e.code,
+                                        retryable: e.retryable,
+                                        category: format!("{:?}", e.category),
+                                        retry_after_ms: e.retry_after_ms,
+                                },
+                            };
+                        Some((event, (stream, cancel)))
+                    }
+                    _ = cancel.cancelled() => None,
+                }
+            }
+        });
+        Ok(Box::pin(mapped))
+    }
+}
+
+pub(crate) fn provider_error_message(
+    error: &ProviderError,
+    provider_id: &str,
+    protocol: &str,
+    model: &str,
+    key_id: Option<&str>,
+    base_url: Option<&str>,
+) -> String {
+    format!(
+        "provider={provider_id} protocol={protocol} model={model} key_id={} base_url={} code={} category={:?} retryable={} message={}",
+        key_id.unwrap_or("default"),
+        base_url.map(assistant_protocol::v2::redact_secrets).unwrap_or_else(|| "default".into()),
+        error.code,
+        error.category,
+        error.retryable,
+        assistant_protocol::v2::redact_secrets(&error.message),
+    )
+}
+
+/// Map engine history into provider history parts.
+///
+/// Preserves `tool_calls` / `tool_call_id` and image attachments. This is the
+/// only place the engine's modality-neutral `EngineImage` becomes the provider
+/// crate's `ImageSource`, so a new modality has exactly one seam to cross.
+pub(crate) fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
+    HistoryMessage {
+        role: m.role,
+        content: m.content,
+        tool_call_id: m.tool_call_id,
+        tool_name: m.tool_name,
+        tool_calls: m.tool_calls.map(|calls| {
+            calls
+                .into_iter()
+                .map(|c| HistoryToolCall {
+                    id: c.id,
+                    name: c.name,
+                    arguments: c.arguments,
+                })
+                .collect()
+        }),
+        images: m
+            .images
+            .into_iter()
+            .map(|image| ImageSource {
+                url: image.url,
+                detail: image.detail,
+                media_type: image.media_type,
+            })
+            .collect(),
+    }
+}
+
+/// Convert the Core-owned typed transcript directly to the provider adapter's
+/// neutral history shape. Production never needs to rebuild an `EngineMessage`
+/// just to cross the provider boundary; the old conversion above remains only
+/// for legacy callers and fixtures.
+pub(crate) fn agent_message_to_history(message: agent_core::AgentMessage) -> HistoryMessage {
+    fn content_parts(
+        blocks: &[agent_core::ContentBlock],
+    ) -> (String, Vec<ImageSource>, Option<Vec<HistoryToolCall>>) {
+        let mut text = String::new();
+        let mut images = Vec::new();
+        let mut calls = Vec::new();
+        for block in blocks {
+            match block {
+                agent_core::ContentBlock::Text { text: value }
+                | agent_core::ContentBlock::Thinking { text: value, .. } => text.push_str(value),
+                agent_core::ContentBlock::Image { source } => images.push(ImageSource {
+                    url: source.url.clone(),
+                    detail: source.detail.clone(),
+                    media_type: source.media_type.clone(),
+                }),
+                agent_core::ContentBlock::ToolCall(call) => calls.push(HistoryToolCall {
+                    id: call.tool_call_id.to_string(),
+                    name: call.name.clone(),
+                    arguments: call.arguments_json.clone(),
+                }),
+            }
+        }
+        (text, images, (!calls.is_empty()).then_some(calls))
+    }
+
+    fn result_text(blocks: &[agent_core::ToolResultBlock]) -> String {
+        blocks
+            .iter()
+            .map(|block| match block {
+                agent_core::ToolResultBlock::Text { text } => text.clone(),
+                agent_core::ToolResultBlock::Json { value } => value.to_string(),
+                agent_core::ToolResultBlock::Artifact {
+                    artifact_id,
+                    preview,
+                } => preview.clone().unwrap_or_else(|| artifact_id.clone()),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    match message {
+        agent_core::AgentMessage::User(message) => {
+            let (content, images, tool_calls) = content_parts(&message.content);
+            HistoryMessage {
+                role: "user".into(),
+                content,
+                images,
+                tool_calls,
+                ..Default::default()
+            }
+        }
+        agent_core::AgentMessage::Assistant(message) => {
+            let (content, images, tool_calls) = content_parts(&message.content);
+            HistoryMessage {
+                role: "assistant".into(),
+                content,
+                images,
+                tool_calls,
+                ..Default::default()
+            }
+        }
+        agent_core::AgentMessage::ToolResult(message) => HistoryMessage {
+            role: "tool".into(),
+            content: result_text(&message.content),
+            tool_call_id: Some(message.tool_call_id.to_string()),
+            tool_name: Some(message.tool_name),
+            ..Default::default()
+        },
+        agent_core::AgentMessage::System(message) => HistoryMessage {
+            role: "system".into(),
+            content: message.text,
+            ..Default::default()
+        },
+        agent_core::AgentMessage::Custom(message) => HistoryMessage {
+            role: message.kind,
+            content: message.payload.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+#[cfg(test)]
+mod typed_provider_history_tests {
+    use super::*;
+
+    #[test]
+    fn typed_boundary_preserves_blocks_and_tool_identity() {
+        let history = agent_message_to_history(agent_core::AgentMessage::Assistant(
+            agent_core::AssistantMessage {
+                message_id: agent_core::MessageId::from("message-1"),
+                content: vec![
+                    agent_core::ContentBlock::Thinking {
+                        text: "plan".into(),
+                        signature: Some("sig".into()),
+                    },
+                    agent_core::ContentBlock::Text {
+                        text: "calling".into(),
+                    },
+                    agent_core::ContentBlock::Image {
+                        source: agent_core::ImageSource {
+                            url: "data:image/png;base64,x".into(),
+                            media_type: Some("image/png".into()),
+                            detail: Some("high".into()),
+                        },
+                    },
+                    agent_core::ContentBlock::ToolCall(agent_core::ToolCall {
+                        tool_call_id: agent_core::ToolCallId::from("call-1"),
+                        name: "read_file".into(),
+                        arguments_json: r#"{"path":"a.txt"}"#.into(),
+                    }),
+                ],
+                stop_reason: Some(agent_core::StopReason::ToolUse),
+            },
+        ));
+
+        assert_eq!(history.role, "assistant");
+        assert_eq!(history.content, "plancalling");
+        assert_eq!(history.images.len(), 1);
+        let calls = history
+            .tool_calls
+            .expect("tool call must remain structured");
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments, r#"{"path":"a.txt"}"#);
+
+        let result = agent_message_to_history(agent_core::AgentMessage::ToolResult(
+            agent_core::ToolResultMessage {
+                message_id: agent_core::MessageId::from("result-1"),
+                tool_call_id: agent_core::ToolCallId::from("call-1"),
+                tool_name: "read_file".into(),
+                content: vec![agent_core::ToolResultBlock::Artifact {
+                    artifact_id: "artifact-1".into(),
+                    preview: Some("preview".into()),
+                }],
+                is_error: false,
+                code: None,
+            },
+        ));
+        assert_eq!(result.role, "tool");
+        assert_eq!(result.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(result.tool_name.as_deref(), Some("read_file"));
+        assert_eq!(result.content, "preview");
+    }
+}
+
+fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
+    let lower = provider_id.to_ascii_lowercase();
+    if lower.contains("anthropic") || lower.contains("claude") {
+        Box::new(provider_adapters::providers::anthropic::AnthropicAdapter::new())
+    } else if lower.contains("gemini") || lower.contains("google") {
+        Box::new(provider_adapters::providers::gemini::GeminiAdapter::new())
+    } else if lower.contains("deepseek") {
+        Box::new(provider_adapters::providers::deepseek::DeepSeekAdapter::new())
+    } else if lower.contains("ollama") {
+        Box::new(provider_adapters::providers::ollama::OllamaAdapter::new())
+    } else if lower.contains("compatible") || lower.contains("chat_completions") {
+        Box::new(provider_adapters::providers::openai_compatible::OpenAiCompatibleAdapter::new())
+    } else if lower.contains("responses") {
+        Box::new(
+            provider_adapters::providers::openai::OpenAiAdapter::new()
+                .with_api_mode(provider_adapters::providers::openai::OpenAiApiMode::Responses),
+        )
+    } else {
+        Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+    }
+}
+
+#[cfg(test)]
+mod provider_error_message_tests {
+    use super::*;
+    use provider_adapters::capabilities::ProviderErrorCategory;
+
+    #[test]
+    fn provider_error_message_includes_context_and_redacts_secrets() {
+        let msg = provider_error_message(
+            &ProviderError {
+                code: "http_401".into(),
+                message: "bad key sk-secret123".into(),
+                category: ProviderErrorCategory::Auth,
+                retryable: false,
+                retry_after_ms: None,
+            },
+            "p1",
+            "openai_chat_completions",
+            "deepseek-v4-flash",
+            Some("k1"),
+            Some("https://token.sensenova.cn/v1"),
+        );
+
+        assert!(msg.contains("provider=p1"));
+        assert!(msg.contains("protocol=openai_chat_completions"));
+        assert!(msg.contains("model=deepseek-v4-flash"));
+        assert!(msg.contains("retryable=false"));
+        assert!(!msg.contains("sk-secret123"));
+    }
+}

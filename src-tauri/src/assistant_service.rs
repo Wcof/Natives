@@ -1,25 +1,18 @@
 //! Assistant Host RPC facade: wire types and host-owned router (capabilities/provider/run/artifacts).
 //! Capability modules live under `assistant_service/`.
-use crate::daemon::data::DataStore;
+//!
+//! Host-owned methods are only the OS-bound / natives.db (Settings SoT) seams:
+//! `provider.list` (natives.db), `run.start` (preflight then Daemon authority),
+//! `artifact.open` / `artifact.reveal` (desktop shell) and
+//! `daemon.getCapabilities`. Everything else is forwarded to the Daemon. The
+//! Host no longer reads or writes the historical `assistant_*` runtime tables
+//! (MIG-004 / DATA-002).
+
 use crate::daemon_authority;
 
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
-use tauri::State;
-use tokio::sync::Mutex;
-
-/// Shared assistant data store managed by Tauri state
-pub struct AssistantStore {
-    pub store: Arc<DataStore>,
-}
-
-impl AssistantStore {
-    pub fn new(store: Arc<DataStore>) -> Self {
-        Self { store }
-    }
-}
 
 /// RPC request from frontend
 #[derive(Debug, Deserialize)]
@@ -49,55 +42,38 @@ pub struct RpcError {
 /// Dispatches RPC method calls to the assistant service.
 /// Frontend calls via: window.nativesAPI.assistantV2.request(method, params)
 #[tauri::command]
-pub async fn assistant_rpc_request(
-    store: State<'_, Mutex<AssistantStore>>,
-    method: String,
-    params: Option<Value>,
-) -> Result<RpcResponse> {
-    let store_ref = {
-        let guard = store.lock().await;
-        Arc::clone(&guard.store)
-    };
+pub async fn assistant_rpc_request(method: String, params: Option<Value>) -> Result<RpcResponse> {
     let params = params.unwrap_or(Value::Null);
-    let response = dispatch_rpc(&store_ref, &method, &params).await;
+    let response = dispatch_rpc(&method, &params).await;
     Ok(response)
 }
 
 /// Tauri command: assistant_status
-/// Lightweight health check — returns connected: true if the store is ready.
+/// Lightweight health check — reports whether the Daemon authority is reachable.
 #[tauri::command]
-pub async fn assistant_status(store: State<'_, Mutex<AssistantStore>>) -> Result<Value> {
-    let store_ref = {
-        let guard = store.lock().await;
-        Arc::clone(&guard.store)
-    };
-    let conn = store_ref.conn();
-    // Try a lightweight query to confirm DB is operational
-    match conn.execute_batch("SELECT 1") {
+pub async fn assistant_status() -> Result<Value> {
+    match daemon_authority::request("daemon.ping", Value::Null).await {
         Ok(_) => Ok(serde_json::json!({
             "connected": true,
             "error": null
         })),
         Err(e) => Ok(serde_json::json!({
             "connected": false,
-            "error": format!("Database error: {}", e)
+            "error": format!("Daemon unreachable: {e}")
         })),
     }
 }
 
 /// Dispatch RPC method to the appropriate handler.
 /// Host-owned methods stay local; everything else implemented goes to Daemon authority.
-async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value) -> RpcResponse {
+async fn dispatch_rpc(method: &str, params: &Value) -> RpcResponse {
     if is_host_owned_method(method) {
         return match method {
             "daemon.getCapabilities" => capabilities::handle_host_get_capabilities().await,
-            "provider.list" => provider_catalog::handle_provider_list(data_store, params).await,
-            "run.start" => run_gateway::handle_run_start(data_store, params).await,
-            "run.subscribe" => run_gateway::handle_run_subscribe(data_store, params).await,
-            "artifact.list" => artifacts::handle_artifact_list(data_store, params).await,
-            "artifact.open" | "artifact.reveal" => {
-                artifacts::handle_artifact_open(data_store, params).await
-            }
+            "provider.list" => provider_catalog::handle_provider_list(params).await,
+            "run.start" => run_gateway::handle_run_start(params).await,
+            "artifact.list" => artifacts::handle_artifact_list(params).await,
+            "artifact.open" | "artifact.reveal" => artifacts::handle_artifact_open(params).await,
             _ => error_response(
                 "METHOD_NOT_FOUND",
                 &format!("Unknown host-owned method: {method}"),
@@ -136,15 +112,14 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
     error_response("METHOD_NOT_FOUND", &format!("Unknown RPC method: {method}"))
 }
 
-/// Host retains only OS-bound / preflight methods. All other implemented methods
-/// default to Daemon authority (no parallel Host CRUD).
+/// Host retains only OS-bound / natives.db (Settings SoT) methods. All other
+/// implemented methods default to Daemon authority (no parallel Host CRUD).
 pub(crate) fn is_host_owned_method(method: &str) -> bool {
     matches!(
         method,
         "daemon.getCapabilities"
             | "provider.list"
             | "run.start"
-            | "run.subscribe"
             | "artifact.list"
             | "artifact.open"
             | "artifact.reveal"

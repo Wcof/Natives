@@ -323,7 +323,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
                         onFocus={() => {
                           if (models.length > 0 && discoveryCurrent) setDropdownOpen(true);
                         }}
-                        placeholder={locale.startsWith('zh') ? '输入或选择默认模型' : 'Enter or select default model'}
+                        placeholder={t(locale, 'addProviderDialog.modelPlaceholder')}
                         style={{ paddingRight: '32px' }}
                       />
                       {models.length > 0 && discoveryCurrent && (

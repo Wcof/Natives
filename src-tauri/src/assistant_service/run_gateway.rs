@@ -1,12 +1,10 @@
 //! Host preflight for run.start and long-poll subscribe forwarding.
-use crate::daemon::data::DataStore;
 use crate::daemon_authority;
 use crate::execution_engine_settings::{
     build_runtime_descriptors, load_execution_engine_settings, resolve_execution_policy,
     store_policy_snapshot, ResolvedExecutionPolicyV1,
 };
 use serde_json::Value;
-use std::sync::Arc;
 
 use super::provider_catalog::provider_model_pair_available;
 use super::{error_response, success_response, RpcResponse};
@@ -28,7 +26,7 @@ struct RunStartRequest {
     capability_selection: Option<assistant_protocol::v2::CapabilitySelection>,
 }
 
-pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+pub(crate) async fn handle_run_start(params: &Value) -> RpcResponse {
     let req = match parse_run_start_request(params) {
         Ok(r) => r,
         Err(resp) => return resp,
@@ -37,10 +35,10 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         Ok(a) => a,
         Err(resp) => return resp,
     };
-    if let Err(resp) = preflight_run_start(data_store, &req).await {
+    if let Err(resp) = preflight_run_start(&req).await {
         return resp;
     }
-    create_and_start_run(data_store, &req, normalized).await
+    create_and_start_run(&req, normalized).await
 }
 
 fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcResponse> {
@@ -200,10 +198,7 @@ fn normalize_attachments(attachments: &[Value]) -> Result<Vec<Value>, RpcRespons
     Ok(normalized_attachments)
 }
 
-async fn preflight_run_start(
-    data_store: &Arc<DataStore>,
-    req: &RunStartRequest,
-) -> Result<(), RpcResponse> {
+async fn preflight_run_start(req: &RunStartRequest) -> Result<(), RpcResponse> {
     if req.project_path.is_none()
         && std::env::var("NATIVES_REQUIRE_PROJECT_PATH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -214,14 +209,13 @@ async fn preflight_run_start(
             "project_path must be provided by UI (daemon cwd is not a valid default)",
         ));
     }
-    {
-        let conn = data_store.conn();
-        if !provider_model_pair_available(&req.provider_id, &req.model_id, &conn) {
-            return Err(error_response(
-                "INVALID_PARAM",
-                "Provider/model pair is not available",
-            ));
-        }
+    // Provider/model pair availability comes from the natives.db Settings SoT
+    // (no `assistant_*` mirror fallback — MIG-004 / DATA-002).
+    if !provider_model_pair_available(&req.provider_id, &req.model_id) {
+        return Err(error_response(
+            "INVALID_PARAM",
+            "Provider/model pair is not available",
+        ));
     }
     if let Ok(runs) = daemon_authority::list_runs(Some(&req.conversation_id)).await {
         if runs.iter().any(|r| !r.status.is_terminal()) {
@@ -328,8 +322,31 @@ fn build_start_run_request(
     }
 }
 
+/// RUN-001 fail-closed gate: persist the created Run's immutable execution
+/// policy snapshot.
+///
+/// Returns `Ok(())` to proceed to `run.start`, or an `RpcResponse` error that
+/// rejects the Run when the snapshot cannot be persisted. A Run whose policy
+/// snapshot is missing must NOT start — Resume/Retry and audits would inherit
+/// a policy the operator never approved. The old warning-only branch
+/// (`eprintln!` + continue) is replaced by this rejection.
+///
+/// `store` is injected so the fail-closed contract is unit-testable without a
+/// live DB: a store failure MUST produce a rejection, never a warning-continue.
+fn policy_snapshot_gate(
+    run_id: &str,
+    policy: &ResolvedExecutionPolicyV1,
+    store: impl FnOnce(&str, &ResolvedExecutionPolicyV1) -> Result<(), String>,
+) -> Result<(), RpcResponse> {
+    store(run_id, policy).map_err(|e| {
+        error_response(
+            "POLICY_SNAPSHOT_FAILED",
+            &format!("persist policy snapshot for {run_id}: {e}"),
+        )
+    })
+}
+
 async fn create_and_start_run(
-    _data_store: &Arc<DataStore>,
     req: &RunStartRequest,
     normalized_attachments: Vec<Value>,
 ) -> RpcResponse {
@@ -413,14 +430,12 @@ async fn create_and_start_run(
 
     // 固化 policy snapshot: the Run's immutable execution policy is persisted
     // so Resume/Retry and audits inherit it and later Settings edits cannot
-    // change an existing Run. A snapshot write failure is surfaced as a
-    // warning but does not fail the already-created Run (its maxSteps /
-    // runtimeId are baked into the daemon row).
-    if let Err(e) = store_policy_snapshot(&daemon_run.id, &policy) {
-        eprintln!(
-            "[run_gateway] policy snapshot for {} not persisted: {e}",
-            daemon_run.id
-        );
+    // change an existing Run. RUN-001 fail-closed: a snapshot write failure
+    // MUST reject the Run — without the snapshot, Resume/Retry and audits
+    // would inherit a policy the operator never approved. The old warning-only
+    // branch (eprintln! + continue) is removed.
+    if let Err(resp) = policy_snapshot_gate(&daemon_run.id, &policy, store_policy_snapshot) {
+        return resp;
     }
 
     let start_req = build_start_run_request(
@@ -458,101 +473,6 @@ async fn create_and_start_run(
         "authority_mode": mode_label,
         "daemon_run_id": started_daemon.id,
         "execution_policy": policy,
-    }))
-}
-
-pub(crate) async fn handle_run_subscribe(
-    _data_store: &Arc<DataStore>,
-    params: &Value,
-) -> RpcResponse {
-    let run_id = match params.get("run_id").and_then(Value::as_str) {
-        Some(id) => id,
-        None => return error_response("MISSING_PARAM", "run_id is required"),
-    };
-    let after_sequence = params
-        .get("after_sequence")
-        .or_else(|| params.get("last_sequence"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let wait_ms = params
-        .get("wait_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        .clamp(0, 30_000);
-    let want_push = params
-        .get("mode")
-        .and_then(Value::as_str)
-        .map(|m| m == "push" || m == "long_poll")
-        .unwrap_or(false)
-        || wait_ms > 0;
-
-    // Forward long-poll to daemon authority; then project host state before terminal:true.
-    let mut params_forward = params.clone();
-    if let Some(obj) = params_forward.as_object_mut() {
-        obj.insert("run_id".into(), Value::String(run_id.to_string()));
-        obj.insert("after_sequence".into(), serde_json::json!(after_sequence));
-        if want_push && wait_ms > 0 {
-            obj.insert("wait_ms".into(), serde_json::json!(wait_ms));
-            obj.insert("mode".into(), Value::String("push".into()));
-        }
-    }
-
-    // Forward only — no host projection of events/messages/runs.
-    let data = match daemon_authority::request("run.subscribe", params_forward).await {
-        Ok(data) => data,
-        Err(error) => match daemon_authority::replay_events(run_id, after_sequence).await {
-            Ok(events) => {
-                let daemon_terminal = daemon_authority::get_run(run_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| r.status.is_terminal())
-                    .unwrap_or(false);
-                let event_values: Vec<Value> = events
-                    .into_iter()
-                    .map(|e| {
-                        serde_json::json!({
-                            "run_id": e.run_id,
-                            "sequence": e.effective_run_sequence(),
-                            "timestamp": e.timestamp.to_rfc3339(),
-                            "type": e.payload.type_name(),
-                            "payload": e.payload,
-                        })
-                    })
-                    .collect();
-                return success_response(serde_json::json!({
-                    "run_id": run_id,
-                    "events": event_values,
-                    "terminal": daemon_terminal,
-                    "mode": "subscribe_fallback_replay",
-                    "error": error,
-                }));
-            }
-            Err(e2) => return error_response("DAEMON_RPC_ERROR", &format!("{error}; {e2}")),
-        },
-    };
-
-    let daemon_terminal = data
-        .get("terminal")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || daemon_authority::get_run(run_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.status.is_terminal())
-            .unwrap_or(false);
-
-    let out_events = data
-        .get("events")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-
-    success_response(serde_json::json!({
-        "run_id": run_id,
-        "events": out_events,
-        "terminal": daemon_terminal,
-        "mode": data.get("mode").cloned().unwrap_or(Value::String("subscribe_host".into())),
     }))
 }
 
@@ -644,12 +564,13 @@ mod tests {
     #[test]
     fn settings_default_runtime_reaches_created_run() {
         let mut settings = ExecutionEngineSettingsV2::default().normalized();
-        settings.default_runtime = crate::execution_engine_settings::RUNTIME_CLAUDE_CLI.to_string();
+        settings.default_runtime = crate::execution_engine_settings::RuntimeId::ClaudeCli;
         let runtimes = native_descriptors(&settings);
         // Application default resolves; claude is degraded → fail policy errors.
         // Use fallback_native to prove the source/fallback chain is honored and
         // the policy's resolved runtime (native) reaches the request.
-        settings.external_unavailable_policy = "fallback_native".to_string();
+        settings.external_unavailable_policy =
+            crate::execution_engine_settings::ExternalUnavailablePolicy::FallbackNative;
         let policy =
             resolve_execution_policy(&settings, &runtimes, None, None, None).expect("resolve");
         assert!(policy.fallback_used);
@@ -694,7 +615,8 @@ mod tests {
     #[test]
     fn explicit_external_unavailable_fails_before_create() {
         let mut settings = ExecutionEngineSettingsV2::default().normalized();
-        settings.external_unavailable_policy = "fallback_native".to_string();
+        settings.external_unavailable_policy =
+            crate::execution_engine_settings::ExternalUnavailablePolicy::FallbackNative;
         let runtimes = native_descriptors(&settings);
         let err = resolve_execution_policy(
             &settings,
@@ -706,6 +628,43 @@ mod tests {
         .expect_err("explicit unavailable must fail even with fallback_native");
         assert!(err.contains(crate::execution_engine_settings::RUNTIME_CLAUDE_CLI));
     }
-}
 
-// ─── Permission (host still dual-writes until task-04 integration) ───
+    /// RUN-001 fail-closed: a Run whose immutable policy snapshot cannot be
+    /// persisted must NOT start. The gate returns a rejection RpcResponse
+    /// instead of the old warning-only `eprintln!` + continue, so the Run is
+    /// rejected before any `run.start`.
+    #[test]
+    fn policy_snapshot_failure_rejects_run() {
+        use crate::execution_engine_settings::ResolvedExecutionPolicyV1;
+        let policy = ResolvedExecutionPolicyV1 {
+            version: 1,
+            runtime_id: crate::execution_engine_settings::RUNTIME_NATIVE.to_string(),
+            runtime_source: "application_default".to_string(),
+            settings_revision: 0,
+            max_steps: 50,
+            disabled_tools: vec!["run_terminal".to_string()],
+            fallback_used: false,
+            unavailable_policy: "fallback_native".to_string(),
+        };
+
+        // Store succeeds → gate passes (proceed to start).
+        assert!(
+            policy_snapshot_gate("run-1", &policy, |_, _| Ok(())).is_ok(),
+            "a successful snapshot write must allow the run to proceed"
+        );
+
+        // Store fails → gate rejects the Run (fail-closed, never warning-continue).
+        let resp = policy_snapshot_gate("run-1", &policy, |_, _| Err("disk full".into()))
+            .expect_err("snapshot failure must reject the run (fail-closed)");
+        assert!(!resp.success);
+        let err = resp.error.as_ref().expect("rejection must carry an error");
+        assert_eq!(
+            err.code, "POLICY_SNAPSHOT_FAILED",
+            "snapshot failure must surface as POLICY_SNAPSHOT_FAILED"
+        );
+        assert!(
+            err.message.contains("run-1"),
+            "rejection must identify the run whose snapshot failed"
+        );
+    }
+}

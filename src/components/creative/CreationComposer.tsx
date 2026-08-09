@@ -62,11 +62,11 @@ export default function CreationComposer({
   };
 
   return (
-    <section className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
-      <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+    <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-6">
+      <h2 className="text-lg font-semibold text-[var(--text)]">
         {t(locale, 'creative.composerTitle')}
       </h2>
-      <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mt-1 text-sm text-[var(--text-secondary)]">
         {t(locale, 'creative.composerSubtitle')}
       </p>
 
@@ -78,7 +78,7 @@ export default function CreationComposer({
         disabled={disabled || submitting}
         rows={3}
         placeholder={t(locale, 'creative.intentPlaceholder')}
-        className="mt-4 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-500 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+        className="mt-4 w-full resize-none rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--text-disabled)] focus:border-[var(--primary)] disabled:opacity-60"
       />
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -87,13 +87,13 @@ export default function CreationComposer({
           onChange={(e) => setName(e.target.value)}
           disabled={disabled || submitting}
           placeholder={t(locale, 'creative.namePlaceholder')}
-          className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-500 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+          className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--text-disabled)] focus:border-[var(--primary)] disabled:opacity-60"
         />
         <button
           type="button"
           onClick={() => void submit()}
           disabled={!canSubmit}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+          className="rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--accent-ink)] disabled:opacity-40"
         >
           {submitting
             ? t(locale, 'creative.generating')
@@ -103,14 +103,14 @@ export default function CreationComposer({
           type="button"
           onClick={onImport}
           disabled={disabled || submitting}
-          className="rounded-md border border-neutral-300 px-4 py-2 text-sm text-neutral-700 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"
+          className="rounded-md border border-[var(--border)] px-4 py-2 text-sm text-[var(--text-secondary)] disabled:opacity-40"
         >
           {t(locale, 'creative.importExisting')}
         </button>
       </div>
 
       {error && (
-        <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">
+        <p className="mt-3 text-sm text-[var(--danger)]" role="alert">
           {error}
         </p>
       )}

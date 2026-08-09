@@ -148,21 +148,6 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
     })
 }
 
-/// Open a project directory in the file browser / terminal.
-/// For now this is a no-op placeholder; the actual directory navigation
-/// is handled by the frontend ShellLayout/ContentArea.
-#[tauri::command]
-pub fn project_open(id: String) -> Result<()> {
-    // Touch last_opened_at so assistant project order follows real opens.
-    let now = chrono::Utc::now().to_rfc3339();
-    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-    let _ = conn.execute(
-        "UPDATE assistant_projects SET last_opened_at = ?1 WHERE id = ?2 OR path = ?2",
-        rusqlite::params![now, id],
-    );
-    Ok(())
-}
-
 /// Rename only the assistant-side project label. The source directory is never moved.
 #[tauri::command]
 pub fn project_rename(id: String, label: String) -> Result<()> {

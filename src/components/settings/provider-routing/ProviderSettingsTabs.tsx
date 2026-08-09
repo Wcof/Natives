@@ -15,7 +15,7 @@ export function ProviderSettingsTabs({ locale, activeTab, onChange }: {
   const tabs: Array<{ id: ProviderSettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'management', label: t(locale, 'settings.providerManagementTab'), icon: <Store size={15} /> },
     { id: 'routing', label: t(locale, 'settings.providerRoutingTab'), icon: <Route size={15} /> },
-    { id: 'subagents', label: zh ? '子智能体' : 'Subagents', icon: <Bot size={15} /> },
+    { id: 'subagents', label: t(locale, 'providerSettingsTabs.subagents'), icon: <Bot size={15} /> },
   ];
   return (
     <div role="tablist" aria-label={t(locale, 'settings.providerTabsLabel')} style={tabListStyle}>

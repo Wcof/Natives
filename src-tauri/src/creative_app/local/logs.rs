@@ -1,15 +1,14 @@
 //! Rotating file logs + in-memory ring buffer for local creative apps.
 //!
 //! Layout (CR-301: logs are runtime-instance scoped):
-//!   ~/.natives/logs/local-creative/{appId}/current.log            legacy app log (read-only aggregate)
 //!   ~/.natives/logs/local-creative/{appId}/runs/{runtimeId}/current.log     per-runtime log
 //!   ~/.natives/logs/local-creative/{appId}/runs/{runtimeId}/current.log.1   rotated
 //!   ~/.natives/logs/local-creative/{appId}/runs/{runtimeId}/current.log.2   rotated
 //!
 //! Single file ≤ 5 MiB, keep 3 files. Memory ring keeps last ~1 MiB.
-//! The legacy app-level `current.log` is only READ (aggregate view); new writes
-//! always target the per-runtime directory so two runs of the same app can never
-//! interleave (audit #22).
+//! All writes target the per-runtime directory so two runs of the same app can
+//! never interleave (audit #22). The retired app-level `current.log` (written
+//! before CR-301) is no longer read by the aggregate view.
 
 use crate::creative_app::paths::natives_home;
 use std::collections::VecDeque;
@@ -210,9 +209,9 @@ pub fn log_dir(app_id: &str, runtime_id: &str) -> PathBuf {
         .join(safe_segment(runtime_id))
 }
 
-/// Legacy / aggregate app-level log directory: `.../local-creative/{appId}`.
-/// The old `current.log` here is read-only after CR-301 (dual-read aggregation);
-/// per-runtime logs live under its `runs/` subdirectory.
+/// App-level log directory: `.../local-creative/{appId}`.
+/// Per-runtime logs live under its `runs/` subdirectory. The pre-CR-301
+/// app-level `current.log` is retired and no longer read.
 pub fn app_log_dir(app_id: &str) -> PathBuf {
     natives_home()
         .join("logs")
@@ -233,7 +232,7 @@ fn safe_segment(id: &str) -> String {
         .collect()
 }
 
-/// Delete the whole app log directory (legacy aggregate + all per-runtime runs).
+/// Delete the whole app log directory (all per-runtime runs).
 pub fn purge_app_logs(app_id: &str) {
     let _ = fs::remove_dir_all(app_log_dir(app_id));
 }
@@ -401,9 +400,9 @@ impl LogRegistry {
         purge_app_logs(app_id);
     }
 
-    /// App-level aggregate tail: the legacy app log plus every per-runtime run,
-    /// newest run last. Read-only — never writes to the legacy file (dual-read,
-    /// no long-term dual-write, CR-301).
+    /// App-level aggregate tail: every per-runtime run, newest run last.
+    /// Read-only — the retired app-level `current.log` (pre-CR-301) is no
+    /// longer part of the aggregate (MIG-004).
     pub fn app_aggregate_tail(&self, app_id: &str, max_bytes: usize) -> String {
         let mut parts: Vec<String> = Vec::new();
         let mut run_dirs: Vec<PathBuf> = Vec::new();
@@ -429,15 +428,9 @@ impl LogRegistry {
                 parts.push(tail);
             }
         }
-        // Legacy app-level log (pre-CR-301) last so it reads oldest-first.
-        let legacy = read_tail(&app_dir.join("current.log"), max_bytes).unwrap_or_default();
-        if !legacy.is_empty() {
-            parts.push(legacy);
-        }
         if parts.is_empty() {
             return String::new();
         }
-        // Join in chronological order (runs are chronological; legacy is oldest).
         let mut out = parts.join("\n");
         let cap = max_bytes;
         if out.len() > cap {
@@ -614,5 +607,29 @@ mod tests {
         let safe = log_dir("app/../..", "x/y");
         assert!(safe.to_string_lossy().contains("local-creative"));
         assert!(!safe.to_string_lossy().contains(".."));
+    }
+
+    /// MIG-004: the retired app-level `current.log` (pre-CR-301) is no longer
+    /// part of the aggregate tail — only per-runtime logs are read.
+    #[test]
+    fn aggregate_tail_ignores_retired_app_level_current_log() {
+        let store = LocalLogStore::open("app-agg", "run-1").expect("open store");
+        store.append(LogStream::Stdout, "per-runtime line");
+        let app_dir = app_log_dir("app-agg");
+        fs::write(app_dir.join("current.log"), "retired app-level line\n").expect("legacy file");
+
+        let registry = LogRegistry::default();
+        let tail = registry.app_aggregate_tail("app-agg", 64 * 1024);
+
+        let _ = fs::remove_dir_all(app_dir);
+
+        assert!(
+            tail.contains("per-runtime line"),
+            "per-runtime log must still be aggregated"
+        );
+        assert!(
+            !tail.contains("retired app-level line"),
+            "the retired app-level current.log must not be read: {tail}"
+        );
     }
 }
