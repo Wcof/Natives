@@ -3,7 +3,8 @@
 import { useCallback, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useAssistantDispatch, useAssistantGateway, useAssistantStore } from '@/lib/assistant-workspace';
-import { useToast } from '@/components/ui/Toast';
+// W4: useToast from lib — hooks never depend on component internals.
+import { useToast } from '@/lib/toast-context';
 import { classifyError } from '@/lib/error-classifier';
 import { t } from '@/i18n';
 import type { Locale } from '@/i18n';
@@ -15,11 +16,12 @@ import type {
   SubagentAssignmentInteraction,
   SubagentSession,
 } from '@/lib/assistant-protocol';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+// W4: shared types from lib — hooks never depend on component internals.
+import type { ProviderWithModels } from '@/lib/assistant-ui-types';
 import type {
   AssignmentKeyOption,
   SubagentAssignmentConfirmPayload,
-} from '@/components/assistant/SubagentAssignmentModal';
+} from '@/lib/subagent-assignment-types';
 import type { ProviderKeySummary } from '@/lib/tauri-adapter';
 
 /** Map a wire `subagent.list` payload to the typed session list used by the UI. */

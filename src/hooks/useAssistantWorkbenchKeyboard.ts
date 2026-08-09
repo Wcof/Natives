@@ -15,9 +15,8 @@ import { selectAssistantModel, toProviderInfo } from '@/lib/provider-model-selec
 import { t } from '@/i18n';
 import type { Locale } from '@/i18n';
 import type { Conversation } from '@/lib/assistant-protocol';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
-import type { AssistantCommand } from '@/components/assistant/CommandPalette';
-import type { AssistantNavigationSnapshot } from '@/components/assistant/AssistantWorkspaceContext';
+// W4: shared types from lib — hooks never depend on component internals.
+import type { ProviderWithModels, AssistantCommand, AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchKeyboardOptions {
   activeId: string | null;

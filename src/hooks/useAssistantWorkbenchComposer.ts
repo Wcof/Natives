@@ -7,7 +7,8 @@ import { resolveModelSelection, type ProviderReadiness } from '@/lib/provider-mo
 import { updateConversationCapabilities } from '@/lib/assistant-workspace/capability-admin';
 import { canSelectRunCapabilities } from '@/lib/assistant-workspace/capability-gate';
 import { sendOrQueue } from '@/lib/assistant-workspace/controller';
-import { useToast } from '@/components/ui/Toast';
+// W4: useToast from lib — hooks never depend on component internals.
+import { useToast } from '@/lib/toast-context';
 import { classifyError } from '@/lib/error-classifier';
 import { t } from '@/i18n';
 import type { Locale } from '@/i18n';
@@ -15,8 +16,8 @@ import { isTempConversationId } from '@/lib/assistant-temp-conversation';
 import { mapWireConversation } from '@/lib/assistant-protocol';
 import type { CapabilitySelection, Conversation } from '@/lib/assistant-protocol';
 import type { AssistantDraft } from '@/lib/assistant-composer';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
-import type { AssistantNavigationSnapshot } from '@/components/assistant/AssistantWorkspaceContext';
+// W4: shared types from lib — hooks never depend on component internals.
+import type { ProviderWithModels, AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchComposerOptions {
   /** Surface conversation id (child when a subagent is focused). */

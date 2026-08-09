@@ -1,23 +1,12 @@
 'use client';
 
-import { useState, useCallback, useEffect, createContext, useContext, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { XCircle, CheckCircle, AlertTriangle } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
-
-export type ToastType = 'info' | 'success' | 'error' | 'warning';
-
-interface ToastItem {
-  id: number;
-  message: string;
-  type: ToastType;
-  dismissing: boolean;
-}
-
-interface ToastContextValue {
-  toast: (message: string, type?: ToastType) => void;
-}
-
-const ToastContext = createContext<ToastContextValue>({ toast: () => {} });
+// W4: context contract lives in lib so hooks never depend on this component.
+export type { ToastType, ToastContextValue } from '@/lib/toast-context';
+export { useToast } from '@/lib/toast-context';
+import { ToastContext, type ToastItem } from '@/lib/toast-context';
 
 let nextId = 0;
 

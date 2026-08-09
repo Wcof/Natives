@@ -9,7 +9,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocale, t } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
 import type { CreativeAppSummary, CreativeAppWindow } from '@/lib/tauri-adapter';
-import type { CreativeDockTab } from '@/components/creative/CreativeDock';
+// W4: shared type from lib — hooks never depend on component internals.
+import type { CreativeDockTab } from '@/lib/creative-dock-types';
 
 const OPEN_BOUNDS = { x: 280, y: 80, width: 900, height: 640 };
 

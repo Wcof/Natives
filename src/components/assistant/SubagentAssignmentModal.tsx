@@ -18,32 +18,12 @@ import type {
   SubagentRouteBinding,
 } from '@/lib/assistant-protocol';
 
-export interface AssignmentKeyOption {
-  providerId: string;
-  providerName: string;
-  keyId: string;
-  keyLabel: string;
-  modelId: string;
-  models: Array<{ id: string; displayName?: string }>;
-  isActive?: boolean;
-  status?: 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable' | string;
-}
-
-export interface SubagentAssignmentConfirmPayload {
-  mode: SubagentAssignmentMode;
-  /** Per-task assignments (call_id → binding). Always filled for default/custom. */
-  assignments: Array<{
-    callId: string;
-    providerId: string;
-    keyId: string;
-    modelId: string;
-  }>;
-  /** Random-mode pool of valid keys (empty for other modes). */
-  pool: Array<{ providerId: string; keyId: string; modelId: string }>;
-  /** Flat bindings for legacy daemon path (policy upsert). */
-  bindings: SubagentRouteBinding[];
-  sessionId?: string | null;
-}
+// W4: shared types moved to lib so hooks never depend on component internals.
+export type {
+  AssignmentKeyOption,
+  SubagentAssignmentConfirmPayload,
+} from '@/lib/subagent-assignment-types';
+import type { AssignmentKeyOption, SubagentAssignmentConfirmPayload } from '@/lib/subagent-assignment-types';
 
 export interface SubagentAssignmentModalProps {
   open: boolean;

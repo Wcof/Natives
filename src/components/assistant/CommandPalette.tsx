@@ -2,15 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { t } from '@/i18n';
-
-export interface AssistantCommand {
-  id: string;
-  label: string;
-  description?: string;
-  shortcut?: string;
-  disabledReason?: string;
-  run: () => void;
-}
+// W4: shared type moved to lib so hooks never depend on component internals.
+export type { AssistantCommand } from '@/lib/assistant-ui-types';
+import type { AssistantCommand } from '@/lib/assistant-ui-types';
 
 interface CommandPaletteProps {
   open: boolean;

@@ -25,35 +25,10 @@ import {
   type TempConversationSession,
 } from '@/lib/assistant-temp-conversation';
 
-export interface AssistantNavigationSnapshot {
-  groups: AssistantProjectGroup[];
-  selectedId: string | null;
-  activeProjectPath: string | null;
-  loading: boolean;
-  /**
-   * @deprecated Write-only legacy field: published by AssistantWorkbench but never
-   * read anywhere (engine/provider readiness is surfaced elsewhere). Kept only so
-   * AssistantWorkbench.tsx keeps type-checking this round; removal is scheduled
-   * for the next pass together with its Workbench write site. Use `loadError` for
-   * navigation fetch failures instead.
-   */
-  creationState: AssistantProjectCreationState;
-  /**
-   * Localized message when the last host navigation refresh failed. While set,
-   * `groups` keeps the previous (possibly stale) data instead of being replaced
-   * by an empty list — an engine outage must never look like "history deleted".
-   * Optional so the Workbench (frozen this round) can keep publishing full
-   * snapshots without the field; absent means "no known failure".
-   */
-  loadError?: string | null;
-  isCreatingConversation: boolean;
-  pendingCreateProjectPath?: string | null;
-  /**
-   * Local-only blank session created after project pick / "new conversation".
-   * Never listed in `groups`, never written to the host DB until first send.
-   */
-  tempSession: TempConversationSession | null;
-}
+// W4: shared navigation snapshot type moved to lib so hooks never depend on
+// component internals. Re-exported here for backwards compatibility.
+export type { AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
+import type { AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
 
 export interface AssistantRuntimeSnapshot {
   conversationId: string | null;

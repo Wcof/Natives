@@ -9,7 +9,8 @@ import {
   respondPermission,
   retryRun,
 } from '@/lib/assistant-workspace/controller';
-import { useToast } from '@/components/ui/Toast';
+// W4: useToast from lib — hooks never depend on component internals.
+import { useToast } from '@/lib/toast-context';
 import { classifyError } from '@/lib/error-classifier';
 import { copyToClipboard } from '@/lib/clipboard';
 import type { Locale } from '@/i18n';

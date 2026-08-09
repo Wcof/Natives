@@ -11,16 +11,9 @@ import React, { useCallback } from 'react';
 import { useLocale, t } from '@/i18n';
 import { Minimize2, X } from 'lucide-react';
 import type { CreativeAppSummary, CreativeAppWindow } from '@/lib/tauri-adapter';
-
-export interface CreativeDockTab {
-  /** Stable key: `win:{windowId}` when the app has a window, else `app:{appId}`. */
-  key: string;
-  app: CreativeAppSummary;
-  /** The window this tab represents, or null when the app has none yet. */
-  window: CreativeAppWindow | null;
-  /** Displayed state derived from the real window snapshot. */
-  state: 'open' | 'minimized' | 'no-window';
-}
+// W4: shared tab type moved to lib so hooks never depend on component internals.
+export type { CreativeDockTab } from '@/lib/creative-dock-types';
+import type { CreativeDockTab } from '@/lib/creative-dock-types';
 
 export interface CreativeDockProps {
   tabs: CreativeDockTab[];

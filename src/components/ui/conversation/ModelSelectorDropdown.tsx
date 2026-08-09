@@ -3,37 +3,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { t } from '@/i18n';
-
-interface ModelInfo {
-  id: string;
-  displayName?: string;
-  contextWindow?: number;
-  maxOutput?: number;
-  capabilities?: {
-    streaming?: boolean;
-    toolCalling?: boolean;
-    imageInput?: boolean;
-    reasoning?: boolean;
-  };
-  source?: 'api_discovery' | 'cache' | 'preset' | 'manual';
-  discoveredAt?: string;
-}
-
-export interface ProviderWithModels {
-  id: string;
-  name: string;
-  presetName: string;
-  baseUrl: string;
-  keys: Array<{
-    id: string;
-    label: string;
-    maskedKey: string;
-    isActive?: boolean;
-    status?: 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable' | string;
-  }>;
-  models?: ModelInfo[];
-  defaultModel?: string | null;
-}
+// W4: shared types moved to lib so hooks never depend on component internals.
+export type { ModelInfo, ProviderWithModels } from '@/lib/assistant-ui-types';
+import type { ModelInfo, ProviderWithModels } from '@/lib/assistant-ui-types';
 
 interface ModelSelectorDropdownProps {
   providers: ProviderWithModels[];
