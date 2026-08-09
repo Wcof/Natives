@@ -67,6 +67,7 @@ pub mod repository;
 pub mod resume;
 pub mod retry;
 pub mod start;
+pub mod start_helpers;
 
 pub use manager::{global_run_manager, protocol_version, RunManager};
 #[cfg(test)]
