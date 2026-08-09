@@ -11,7 +11,6 @@ export function ProviderSettingsTabs({ locale, activeTab, onChange }: {
   activeTab: ProviderSettingsTab;
   onChange: (tab: ProviderSettingsTab) => void;
 }) {
-  const zh = locale.startsWith('zh');
   const tabs: Array<{ id: ProviderSettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'management', label: t(locale, 'settings.providerManagementTab'), icon: <Store size={15} /> },
     { id: 'routing', label: t(locale, 'settings.providerRoutingTab'), icon: <Route size={15} /> },

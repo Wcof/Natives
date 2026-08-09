@@ -35,6 +35,14 @@ export interface IframeInstance {
   isGenerated?: boolean;
 }
 
+/** Bridge proxy request shape from the sandbox (validated at the backend). */
+interface BridgeRequest {
+  namespace?: string;
+  method?: string;
+  requestId?: string;
+  args?: { key?: string; value?: unknown; prefix?: string };
+}
+
 const MAX_BACKGROUND = 5;
 
 // ── State persistence via unified IPC bridge (US16) ──
@@ -45,7 +53,7 @@ const MAX_BACKGROUND = 5;
 // state-persistence.ts used module_id='__system__'.
 
 function getStateApi() {
-  return (typeof window !== 'undefined' && (window as any).nativesAPI?.state) || null;
+  return (typeof window !== 'undefined' && window.nativesAPI?.state) || null;
 }
 
 async function persistModuleState(moduleId: string, state: Record<string, unknown>): Promise<void> {
@@ -141,7 +149,7 @@ export class IframeManager {
     if (wasCold) {
       retrieveModuleState(moduleId).then((saved) => {
         if (saved) {
-          instance.lastAccessed = (saved as any).lastAccessed || Date.now();
+          instance.lastAccessed = Number(saved.lastAccessed) || Date.now();
         }
       });
     }
@@ -362,13 +370,13 @@ export class IframeManager {
 
     try {
       // Generate token via Tauri backend (HMAC-SHA256, 24h TTL)
-      const token = await (window as any).nativesAPI?.bridge?.generateToken(moduleId);
+      const token = await window.nativesAPI?.bridge?.generateToken(moduleId);
       if (!token) return;
 
       instance.sessionToken = token;
 
       // Get the HTTP port for the bridge endpoint
-      const port = await (window as any).nativesAPI?.bridge?.getHttpPort();
+      const port = await window.nativesAPI?.bridge?.getHttpPort();
       const origin = port ? `http://localhost:${port}` : '*';
 
       // Stage 2: push token + module_id + namespace constraint into sandbox
@@ -454,13 +462,13 @@ export class IframeManager {
    */
   private async handleBridgeProxy(
     moduleId: string,
-    data: Record<string, any>,
+    data: Record<string, unknown>,
     iframe: HTMLIFrameElement,
   ): Promise<void> {
     const instance = this.instances.get(moduleId);
     if (!instance?.sessionToken) return;
 
-    const { namespace, method, args, requestId } = data;
+    const { namespace, method, args, requestId } = data as BridgeRequest;
     if (!namespace || !method || !requestId) return;
 
     // Verify the namespace matches this module's isolation scope
@@ -468,28 +476,28 @@ export class IframeManager {
     if (namespace !== expectedNs) return; // Block cross-namespace access
 
     try {
-      let result: any;
+      let result: unknown;
 
       // Namespace-isolated db operations
       if (method === 'db.get') {
-        const isolatedKey = `${expectedNs}/${args.key}`;
-        result = await (window as any).nativesAPI?.db?.get(isolatedKey);
+        const isolatedKey = `${expectedNs}/${args?.key}`;
+        result = await window.nativesAPI?.db?.get(isolatedKey);
       } else if (method === 'db.set') {
-        const isolatedKey = `${expectedNs}/${args.key}`;
-        await (window as any).nativesAPI?.db?.set(isolatedKey, args.value);
+        const isolatedKey = `${expectedNs}/${args?.key}`;
+        await window.nativesAPI?.db?.set(isolatedKey, args?.value);
         result = { ok: true };
       } else if (method === 'db.delete') {
-        const isolatedKey = `${expectedNs}/${args.key}`;
-        await (window as any).nativesAPI?.db?.delete(isolatedKey);
+        const isolatedKey = `${expectedNs}/${args?.key}`;
+        await window.nativesAPI?.db?.delete(isolatedKey);
         result = { ok: true };
       } else if (method === 'db.list') {
         // List only keys within this module's namespace
-        const prefix = `${expectedNs}/${args.prefix ?? ''}`;
-        result = await (window as any).nativesAPI?.db?.list(prefix);
+        const prefix = `${expectedNs}/${args?.prefix ?? ''}`;
+        result = await window.nativesAPI?.db?.list(prefix);
       } else if (method === 'settings.getTheme') {
-        result = await (window as any).nativesAPI?.getTheme?.();
+        result = await window.nativesAPI?.getTheme?.();
       } else if (method === 'settings.getLocale') {
-        result = await (window as any).nativesAPI?.getLocale?.();
+        result = await window.nativesAPI?.getLocale?.();
       } else {
         result = { error: `Blocked: method "${method}" not allowed in sandbox` };
       }
@@ -499,9 +507,9 @@ export class IframeManager {
         { type: 'bridge:response', requestId, result },
         '*',
       );
-    } catch (err: any) {
+    } catch (err) {
       iframe.contentWindow?.postMessage(
-        { type: 'bridge:response', requestId, result: { error: err?.message ?? 'Proxy error' } },
+        { type: 'bridge:response', requestId, result: { error: err instanceof Error ? err.message : String(err) } },
         '*',
       );
     }

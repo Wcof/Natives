@@ -19,10 +19,12 @@ function createMockIframe() {
   };
 }
 
-function setupMocks() {
-  const mockElements: ReturnType<typeof createMockIframe>[] = [];
+type MockIframeElement = ReturnType<typeof createMockIframe>;
 
-  (globalThis as any).document = {
+function setupMocks() {
+  const mockElements: MockIframeElement[] = [];
+
+  (globalThis as unknown as { document?: unknown }).document = {
     createElement: (tag: string) => {
       if (tag !== 'iframe') throw new Error(`Unexpected createElement('${tag}')`);
       const el = createMockIframe();
@@ -34,8 +36,7 @@ function setupMocks() {
 }
 
 function teardownMocks() {
-
-  delete (globalThis as any).document;
+  delete (globalThis as unknown as { document?: unknown }).document;
 }
 
 describe('IframeManager', () => {
@@ -65,8 +66,8 @@ describe('IframeManager', () => {
 
     it('should set sandbox and src attributes', () => {
       const el = mgr.createIframe('mod1', 'http://example.com');
-      assert.equal((el as any).getAttribute('sandbox'), 'allow-scripts allow-forms');
-      assert.equal((el as any).getAttribute('src'), 'http://example.com');
+      assert.equal((el as unknown as MockIframeElement).getAttribute('sandbox'), 'allow-scripts allow-forms');
+      assert.equal((el as unknown as MockIframeElement).getAttribute('src'), 'http://example.com');
     });
 
     it('should replace existing iframe when creating duplicate', () => {
@@ -75,7 +76,7 @@ describe('IframeManager', () => {
       assert.ok(el2);
       assert.deepEqual(mgr.getAllModuleIds(), ['mod1']);
       assert.equal(mgr.getInstance('mod1')?.element, el2);
-      assert.ok((el1 as any).removed);
+      assert.ok((el1 as unknown as MockIframeElement).removed);
     });
   });
 
@@ -121,7 +122,7 @@ describe('IframeManager', () => {
       assert.ok(inst?.element);
       mgr.destroyIframe('mod1');
       // After destroy, the element's onload should be nullified
-      assert.equal((inst.element as any).onload, null);
+      assert.equal((inst.element as unknown as MockIframeElement).onload, null);
     });
 
     it('should not throw when destroying nonexistent iframe', () => {
@@ -195,7 +196,7 @@ describe('IframeManager', () => {
       const inst = mgr.getInstance('mod1');
       assert.ok(inst?.element);
       const iframeWin = {};
-      (inst.element as any).contentWindow = iframeWin;
+      (inst.element as unknown as MockIframeElement & { contentWindow?: unknown }).contentWindow = iframeWin;
       assert.equal(mgr.isManagedMessageSource(iframeWin), true);
     });
 
@@ -210,7 +211,7 @@ describe('IframeManager', () => {
       const inst = mgr.getInstance('mod1');
       assert.ok(inst?.element);
       const iframeWin = {};
-      (inst.element as any).contentWindow = iframeWin;
+      (inst.element as unknown as MockIframeElement & { contentWindow?: unknown }).contentWindow = iframeWin;
       assert.equal(mgr.isManagedMessageSource(iframeWin), true);
       mgr.destroyIframe('mod1');
       assert.equal(mgr.isManagedMessageSource(iframeWin), false);

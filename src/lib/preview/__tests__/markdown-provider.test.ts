@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PreviewContext, PreviewRequest } from '../contracts';
-import { fatalError, PreviewProviderError } from '../errors';
+import { fatalError } from '../errors';
 import { markdownProvider } from '../providers/markdown';
 import {
   buildMarkdownRenderOptions,

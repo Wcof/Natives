@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { getBadgeExt, EXT_BADGES, KIND_COLORS } from '@/lib/file-badges';
-import type { FileEntry, FileKind } from '@/types/file';
+import type { FileEntry } from '@/types/file';
 
 /* ── SVG 图标系统（移植自 Natives2，强辨识度专属图形）── */
 

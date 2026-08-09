@@ -35,7 +35,7 @@ export function detectLanguage(filename: string): string {
  */
 export async function highlightCode(code: string, lang: string): Promise<string> {
   try {
-    const { codeToHtml, createHighlighter } = await import('shiki');
+    const { createHighlighter } = await import('shiki');
 
     // Detect theme from <html> data-theme attribute
     let theme = 'dark-plus';

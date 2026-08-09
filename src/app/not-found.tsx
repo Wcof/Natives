@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { t, type Locale } from '@/i18n';
-import { SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 
 export default function NotFound() {
   const [locale, setLocale] = useState<Locale>('zh');

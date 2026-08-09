@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Star, Play } from 'lucide-react';
 import { type FileEntry } from '@/types/file';
 import { t } from '@/i18n';
-import { EXT_BADGES, KIND_COLORS, getBadgeExt } from '@/lib/file-badges';
+import { EXT_BADGES, getBadgeExt } from '@/lib/file-badges';
 import { getFileIcon, getIconColor, FbFolder, FbImage } from '@/lib/file-icons';
 import { useThumbnail } from '@/lib/use-thumbnail';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';

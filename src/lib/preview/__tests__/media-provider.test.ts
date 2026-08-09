@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { AuthorizedPreviewFile, PreviewContext, PreviewRequest } from '../contracts';
+import type { PreviewContext, PreviewRequest } from '../contracts';
 import { PreviewProviderError } from '../errors';
 import { mediaProvider } from '../providers/media';
 import { pdfProvider } from '../providers/pdf';

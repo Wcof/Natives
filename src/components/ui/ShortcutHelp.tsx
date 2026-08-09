@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Keyboard, X } from 'lucide-react';
 import { useLocale } from '@/i18n';
 import { t } from '@/i18n';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface Shortcut {
   keys: string[];

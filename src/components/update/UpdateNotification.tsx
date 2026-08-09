@@ -24,8 +24,8 @@ interface UpdateInfo {
 
 export default function UpdateNotification({ locale }: UpdateNotificationProps) {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  const [checked, setChecked] = useState(false);
-  const [checking, setChecking] = useState(false);
+  const [, setChecked] = useState(false);
+  const [, setChecking] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const mounted = useHydrated();
 

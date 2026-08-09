@@ -24,11 +24,6 @@ const ARTIFACT_PATTERNS = [
   /\/DerivedData\//, /\/build\/Products\//,
 ];
 
-const NOEXT_TEXT = new Set([
-  'Makefile', 'Dockerfile', 'LICENSE', 'README', 'CHANGELOG', 'Gemfile',
-  'Rakefile', 'Vagrantfile', 'Procfile', 'Containerfile',
-]);
-
 export function getExt(path: string): string {
   const lastDot = path.lastIndexOf('.');
   if (lastDot <= 0) return ''; // no extension or dotfile like .gitignore

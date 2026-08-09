@@ -29,7 +29,6 @@ const PlanApprovalCard = lazy(() => import('../PlanApprovalCard'));
 import { useAssistantWorkbenchComposer } from '@/hooks/useAssistantWorkbenchComposer';
 import {
   normalizePermissionProfile,
-  type AssistantDraft,
   type AssistantPermissionProfile,
 } from '@/lib/assistant-composer';
 import {

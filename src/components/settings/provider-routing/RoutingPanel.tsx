@@ -26,7 +26,6 @@ export function RoutingPanel({ locale, providers, bindings, settings, loading, s
   if (loading) return <div style={stateStyle}>{t(locale, 'common.loading')}</div>;
   if (error || !settings) return <div role="alert" style={errorStyle}><span>{error ?? t(locale, 'settings.routingUnavailable')}</span><button type="button" className="btn" onClick={onRetry}>{t(locale, 'common.retry')}</button></div>;
   const update = (patch: Partial<ProviderRoutingSettings>) => void onSave({ ...settings, ...patch });
-  const zh = locale.startsWith('zh');
   const sections = [
     { id: 'subagent', icon: <Bot size={20} />, title: t(locale, 'routingPanel.subagentTitle'), description: t(locale, 'routingPanel.subagentDesc'), body: <SubagentProviderSettings locale={locale} providers={providers} /> },
     { id: 'local', icon: <Route size={20} />, title: t(locale, 'settings.localRouting'), description: t(locale, 'settings.localRoutingDesc'), body: <LocalRouting locale={locale} settings={settings} onSave={update} /> },
@@ -116,7 +115,6 @@ export function SubagentProviderSettings({
   locale: Locale;
   providers: ProviderSummary[];
 }) {
-  const zh = locale.startsWith('zh');
   const [allowedProviders, setAllowedProviders] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 

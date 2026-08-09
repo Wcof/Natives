@@ -83,9 +83,9 @@ test('host conversation.* is never dual-routed to UDS daemon', () => {
   assert.equal(hostServiceSrc.includes('| "conversation.create"'), false);
 });
 
-test('remove project confirm button is hard-coded zh/en, not raw i18n key', () => {
-  assert.match(sidebarSrc, /zh \? '移除' : 'Remove'/);
-  assert.equal(sidebarSrc.includes("t(locale, 'common.remove')"), false);
+test('remove project confirm button is i18n-keyed, no raw zh/en branch', () => {
+  assert.match(sidebarSrc, /t\(locale, 'assistant\.removeProject'\)/);
+  assert.equal(/zh \? '移除' : 'Remove'/.test(sidebarSrc), false);
 });
 
 test('goal chrome only when conversation.mode === goal; ordinary send uses agent mode', () => {

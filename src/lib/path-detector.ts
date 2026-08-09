@@ -22,7 +22,6 @@ interface ScrollbackEntry {
 
 const SCROLLBACK_MAX_LINES = 200;
 const SCROLLBACK_MAX_AGE_MS = 30_000; // 30 seconds
-const LOCATE_TIMEOUT_MS = 500;
 
 /* ── Scrollback Buffer ── */
 

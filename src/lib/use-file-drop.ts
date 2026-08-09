@@ -65,7 +65,9 @@ export function useFileDrop({ onFilesDropped, onUrlDropped, currentDir }: UseFil
     // 1. Real files from Finder
     const files = Array.from(dt.files || []);
     if (files.length > 0) {
-      const paths = files.map((f) => (f as any).path).filter(Boolean);
+      const paths = files
+        .map((f) => (f as File & { path?: string }).path)
+        .filter((p): p is string => Boolean(p));
       if (paths.length > 0 && onFilesDropped) {
         onFilesDropped(paths);
         return;

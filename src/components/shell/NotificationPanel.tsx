@@ -218,7 +218,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
 
 // ── Notification Badge (for sidebar/header) ──
 
-export function NotificationBadge({ locale }: { locale: Locale }) {
+export function NotificationBadge({ locale: _locale }: { locale: Locale }) {
   const [count, setCount] = useState(0);
 
   const loadCount = useCallback(async () => {

@@ -31,11 +31,6 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
   const [dismissedWarningKey, setDismissedWarningKey] = useState<string | null>(null);
   const [warningSeconds, setWarningSeconds] = useState(10);
 
-  // Export state
-  const [exportType, setExportType] = useState<'csv' | 'badge' | null>(null);
-  const [exportFilename, setExportFilename] = useState('');
-  const [isExporting, setIsExporting] = useState(false);
-
   // Handle directory selection via picker
   const handleSelectDir = useCallback(async () => {
     try {
@@ -76,7 +71,6 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
 
   // Filtered data
   const data = state.kind === 'ready' ? state.data : null;
-  const metadata = state.kind === 'ready' ? state.metadata : null;
   const warningKey = data?.warnings.map((warning) => `${warning.sourceId ?? 'system'}:${warning.code}`).sort().join('|') ?? '';
   const showWarning = warningKey.length > 0 && dismissedWarningKey !== warningKey;
 

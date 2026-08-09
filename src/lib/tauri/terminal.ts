@@ -12,7 +12,7 @@ import type { NativesAPI, RenderStatePayload } from './types';
 export const terminal: NativesAPI['terminal'] = {
   create: async (profileId?: string, cols?: number, rows?: number) => {
     const sessionId = await cmd<string>('terminal_create', { profileId, cols, rows });
-    return { sessionId } as any;
+    return { sessionId };
   },
   write: (sessionId: string, data: string) => cmd('terminal_write', { sessionId, data }),
   resize: (sessionId: string, cols: number, rows: number) =>
@@ -20,7 +20,7 @@ export const terminal: NativesAPI['terminal'] = {
   kill: (sessionId: string) => cmd('terminal_kill', { sessionId }),
   cwd: async (sessionId: string) => {
     const result = await cmd<{ cwd: string; source: string }>('terminal_cwd', { sessionId });
-    return result as any;
+    return result;
   },
   proc: (sessionId: string) => cmd<{ processName: string; pid: number }>('terminal_proc', { sessionId }),
   sessionState: (sessionId: string) => cmd<{

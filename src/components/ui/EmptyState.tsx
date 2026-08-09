@@ -3,7 +3,7 @@
 import { type ReactNode } from 'react';
 import { Inbox, AlertTriangle, RefreshCw } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 import { MathCurveLoader } from './MathCurveLoader';
 
 // ── Empty State (TASK-017) ──

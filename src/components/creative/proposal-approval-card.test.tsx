@@ -63,7 +63,7 @@ function proposal(overrides: Partial<CreativeAppProposal> = {}): CreativeAppProp
   };
 }
 
-function render(input: CreativeAppProposal, locale = 'en'): string {
+function render(input: CreativeAppProposal): string {
   return renderToStaticMarkup(
     React.createElement(ProposalApprovalCard, {
       proposal: input,
@@ -139,7 +139,7 @@ describe('ProposalApprovalCard rendering', () => {
 
   it('resolves every string through i18n in both locales', () => {
     for (const locale of ['en', 'zh'] as const) {
-      const html = render(proposal(), locale);
+      const html = render(proposal());
       assert.equal(
         html.includes('workshop.proposal'),
         false,

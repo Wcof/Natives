@@ -4,10 +4,7 @@
 
 import type {
   UsageDailyRecord,
-  UsageActivityBucket,
-  UsageSessionRecord,
   UsageMetrics,
-  UsageSourceStatus,
 } from '@/types/usage';
 
 // ── CSV Export ──

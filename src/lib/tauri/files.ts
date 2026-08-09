@@ -22,48 +22,48 @@ export const fs: NativesAPI['fs'] = {
         const entryType = type === 'folder' ? 'folder' : type;
         await cmd('fs_create_entry', { targetPath, entryType });
         return { ok: true };
-      } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
     renameEntry: async (oldPath: string, newPath: string) => {
       try {
         const path = await cmd<string>('fs_rename_entry', { oldPath, newPath });
         return { ok: true, path };
-      } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
     trashEntry: async (filePath: string) => {
       try {
         await cmd('fs_trash_entry', { filePath });
         return { ok: true };
-      } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
     moveEntry: async (from: string, to: string) => {
       try {
         const path = await cmd<string>('fs_move_entry', { from, to });
         return { ok: true, path };
-      } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
     copyEntry: async (from: string, to: string) => {
       try {
         const path = await cmd<string>('fs_copy_entry', { from, to });
         return { ok: true, path };
-      } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
     duplicateEntry: async (filePath: string) => {
       try {
         const path = await cmd<string>('fs_duplicate_entry', { filePath });
         return { ok: true, path };
-      } catch (e: any) {
-        return { ok: false, error: e?.message || String(e) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
     },
     stat: (filePath: string) => cmd('fs_stat', { filePath }),
@@ -79,22 +79,22 @@ export const fs: NativesAPI['fs'] = {
     trashEntries: async (paths: string[]) => {
       try {
         return await cmd('fs_trash_entries', { paths });
-      } catch (e: any) {
-        return { ok: false, errors: [{ path: '', error: e?.message || String(e) }] };
+      } catch (e) {
+        return { ok: false, errors: [{ path: '', error: e instanceof Error ? e.message : String(e) }] };
       }
     },
     moveEntries: async (paths: string[], destDir: string) => {
       try {
         return await cmd('fs_move_entries', { paths, destDir });
-      } catch (e: any) {
-        return { ok: false, errors: [{ path: '', error: e?.message || String(e) }] };
+      } catch (e) {
+        return { ok: false, errors: [{ path: '', error: e instanceof Error ? e.message : String(e) }] };
       }
     },
     copyEntries: async (paths: string[], destDir: string) => {
       try {
         return await cmd('fs_copy_entries', { paths, destDir });
-      } catch (e: any) {
-        return { ok: false, errors: [{ path: '', error: e?.message || String(e) }] };
+      } catch (e) {
+        return { ok: false, errors: [{ path: '', error: e instanceof Error ? e.message : String(e) }] };
       }
     },
     roots: () => cmd('fs_roots'),
@@ -103,14 +103,14 @@ export const fs: NativesAPI['fs'] = {
     clipboardCopyFiles: async (paths: string[]) => {
       try {
         return await cmd('fs_clipboard_copy_files', { paths });
-      } catch (e: any) {
+      } catch {
         return { ok: false, count: 0 };
       }
     },
     clipboardCopyImage: async (filePath: string) => {
       try {
         return await cmd('fs_clipboard_copy_image', { filePath });
-      } catch (e: any) {
+      } catch {
         return { ok: false };
       }
     },

@@ -3,7 +3,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { type Locale } from '@/i18n';
 import type { FileEntry } from '@/types/file';
-import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { getBuiltinTool } from '@/lib/builtin-tools';
 import { isSettingsView, getSettingsSection } from './settings-navigation';
@@ -11,7 +10,6 @@ import { isSettingsView, getSettingsSection } from './settings-navigation';
 // Lazy-loaded heavy page components
 const LazyWorkshopPage = lazy(() => import('./WorkshopPage'));
 const LazyFileBrowser = lazy(() => import('@/components/files/FileBrowser'));
-const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
 const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
 const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
 const LazyAssistantWorkbench = lazy(() => import('@/components/assistant/AssistantWorkbench'));
@@ -20,7 +18,7 @@ const LazyCapabilitiesPage = lazy(() => import('@/components/capabilities/Capabi
 const LazyLibraryPage = lazy(() => import('@/components/library/LibraryPage').then((m) => ({ default: m.LibraryPage })));
 const LazySettingsPage = lazy(() => import('./SettingsPage'));
 
-const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
+const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<React.ComponentType>> = {};
 
 const LazyFallback = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16 }}>
@@ -63,13 +61,6 @@ export interface MainContentProps {
 export default function MainContent({
   activeView,
   locale,
-  httpPort,
-  selectedFile,
-  setSelectedFile,
-  editMode,
-  setEditMode,
-  iframeReloadKey,
-  terminalSessionId,
   onFileSelect,
   onNavigate,
   children,

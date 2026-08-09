@@ -135,7 +135,6 @@ export default function PersonalOverview({ locale, onNavigate }: PersonalOvervie
     state: usageState,
     errorMsg: usageError,
     isSyncing: syncing,
-    lastSyncTime,
     sync: syncUsageData,
   } = useUsageData(buildViewRequest);
 

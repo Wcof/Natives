@@ -6,7 +6,7 @@ import { Star, Play } from 'lucide-react';
 import { t } from '@/i18n';
 import { fmtSize, fmtTime } from '@/lib/format';
 import { EXT_BADGES, getBadgeExt } from '@/lib/file-badges';
-import { getFileIcon, getIconColor, FbFolder, FbImage } from '@/lib/file-icons';
+import { getFileIcon, getIconColor, FbFolder } from '@/lib/file-icons';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileRowProps {

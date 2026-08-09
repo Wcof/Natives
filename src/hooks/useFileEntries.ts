@@ -156,7 +156,7 @@ export function useFileEntries({
           setDirProject(null);
         }
       }
-    } catch (err) {
+    } catch {
       if (rid !== loadIdRef.current) return;
       showToast(t(locale, 'fileBrowser.loadFailed'));
       setEntries([]);

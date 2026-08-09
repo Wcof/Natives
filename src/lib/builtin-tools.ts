@@ -87,7 +87,7 @@ export function getBuiltinTool(id: string): BuiltinTool | undefined {
  * This ensures the DB always has rows for all registered tools.
  */
 export async function seedAllBuiltinTools(): Promise<void> {
-  const api = (window as any).nativesAPI;
+  const api = window.nativesAPI;
   if (!api?.builtinTool?.seed) return;
   for (const tool of BUILTIN_TOOLS) {
     try {

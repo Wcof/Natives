@@ -24,8 +24,15 @@ export default tseslint.config(
       "react-hooks/immutability": "off",
       "react-hooks/refs": "off",
       "react-refresh/only-export-components": "off",
-      "@typescript-eslint/no-unused-vars": "off",
-      "@typescript-eslint/no-explicit-any": "off",
+      // `_`-prefixed names are the codebase convention for intentionally
+      // unused variables/params/caught errors (mock fixtures, optional props,
+      // future-ready API slots). The rule stays strict for everything else.
+      "@typescript-eslint/no-unused-vars": ["error", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+      }],
+      "@typescript-eslint/no-explicit-any": "error",
     },
   }
 );

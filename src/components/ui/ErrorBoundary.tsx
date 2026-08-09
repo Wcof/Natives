@@ -3,7 +3,7 @@
 import React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { t } from '@/i18n';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 // i18n messages for ErrorBoundary (class component can't use hooks)
 function getLocale(): string {

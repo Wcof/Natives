@@ -135,7 +135,7 @@ export function useFileNavigation({
       if (path === '~' || path.startsWith('~/')) {
         try {
           const roots = hasNativeFiles() ? await fsApi().roots() : null;
-          const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
+          const home = Array.isArray(roots) ? roots.find((r) => r.id === 'home') : null;
           if (home?.path && shouldApplyHomeFallback(currentPath, navigationIntentRef.current)) {
             path = path === '~' ? home.path : home.path + path.slice(1);
           }
@@ -197,7 +197,7 @@ export function useFileNavigation({
         const fs = hasNativeFiles() ? fsApi() : null;
         if (fs?.roots && currentPath === '/') {
           const roots = await fs.roots();
-          const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
+          const home = Array.isArray(roots) ? roots.find((r) => r.id === 'home') : null;
           if (home?.path) {
             historyRef.current = [home.path];
             historyIndexRef.current = 0;

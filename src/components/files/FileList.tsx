@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import { type FileEntry } from '@/types/file';
 import { SPACING, FONT_SIZE } from '@/lib/design-tokens';

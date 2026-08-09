@@ -65,7 +65,7 @@ export interface MarkdownRenderOptions {
 /** 按 urlPolicy 构建渲染选项；baseDir 仅 file markdown（authorized-file-assets）使用 */
 export function buildMarkdownRenderOptions(
   urlPolicy: PreviewUrlPolicy,
-  baseDir?: string,
+  _baseDir?: string,
 ): MarkdownRenderOptions {
   // SEC-001: authorized-file-assets 不再在 renderer 侧改写——相对路径 → asset URL
   // 的改写必须在 provider 里经 authorizeFile 逐资源授权后完成（见

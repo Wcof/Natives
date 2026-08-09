@@ -132,7 +132,7 @@ export function useFileOperations({
       } else {
         showToast(result?.error || t(locale, 'fileBrowser.renameFailed'));
       }
-    } catch (err) {
+    } catch {
       showToast(t(locale, 'fileBrowser.renameFailed'));
     }
     setRenameTarget(null);
@@ -481,7 +481,7 @@ export function useFileOperations({
       } else {
         showToast(result?.error || t(locale, 'fileBrowser.trashFailed'));
       }
-    } catch (err) {
+    } catch {
       showToast(t(locale, 'fileBrowser.trashFailed'));
     } finally {
       setTrashTarget(null);
@@ -509,7 +509,7 @@ export function useFileOperations({
       } else {
         showToast(result?.error || t(locale, 'fileBrowser.createFailed'));
       }
-    } catch (err) {
+    } catch {
       showToast(t(locale, 'fileBrowser.createFailed'));
     }
     setNewItemTarget(null);

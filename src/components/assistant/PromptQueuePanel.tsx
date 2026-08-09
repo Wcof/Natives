@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { GripVertical, Pencil, Trash2, Zap, X } from 'lucide-react';
+import { GripVertical, Pencil, Trash2, Zap } from 'lucide-react';
 import { t } from '@/i18n';
 import type { PromptQueueItem } from '@/lib/assistant-protocol';
 

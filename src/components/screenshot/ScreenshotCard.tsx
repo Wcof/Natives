@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Image, Terminal, FolderOpen, X } from 'lucide-react';
-import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
+import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
 import { useHydrated } from '@/hooks/useHydrated';
 

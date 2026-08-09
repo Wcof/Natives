@@ -8,7 +8,7 @@
 import '@xterm/xterm/css/xterm.css';
 
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
-import { Play, Square, List, X, Download, Trash2, RefreshCw } from 'lucide-react';
+import { Play, Square, X, RefreshCw } from 'lucide-react';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import { TERMINAL_THEMES } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';

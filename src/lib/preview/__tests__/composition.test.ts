@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PreviewRegistry } from '../registry';
 import { PreviewService } from '../service';
 import { PreviewRequestController } from '../request-controller';
 import { fatalError, PreviewProviderError } from '../errors';
 import { createBuiltinRegistry, BUILTIN_PROVIDERS } from '../composition';
-import type { PreviewContext, PreviewModel, PreviewRequest } from '../contracts';
+import type { PreviewContext } from '../contracts';
 
 function fakeContext(): PreviewContext {
   return {

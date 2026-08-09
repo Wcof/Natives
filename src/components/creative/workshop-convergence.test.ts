@@ -22,14 +22,6 @@ const catalogShellSource = readFileSync(
 
 const WORKSHOP_PAGE_LINE_LIMIT = 300;
 
-/** Count source lines (excluding blanks/comments) to approximate R-B9 scope. */
-function meaningfulLines(src: string): number {
-  return src
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith('//')).length;
-}
-
 describe('WorkshopPage convergence (T10)', () => {
   it('WorkshopPage is no longer a giant multi-responsibility controller', () => {
     assert.ok(
