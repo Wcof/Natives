@@ -1,7 +1,7 @@
 {
   "over_1000": {
     "src/app/globals.css": "2300 lines",
-    "src/components/assistant/ActivityInspector.tsx": "1151 lines",
+    "src/components/assistant/ActivityInspector.tsx": "1077 lines",
     "src/components/assistant/AssistantWorkbench.tsx": "1346 lines",
     "src/i18n/en.ts": "3267 lines",
     "src/i18n/zh.ts": "3254 lines",
@@ -82,17 +82,7 @@
     "crates/harness-core/src/hooks/definition.rs": "828 lines (review ledger)"
   },
   "ui_business": {},
-  "feature_cross": {
-    "src/components/ai/FollowRenderer.tsx:@/components/preview/PreviewSurface": "feature ai imports preview internals",
-    "src/components/assistant/ActivityInspector.tsx:@/components/preview/ArtifactPreviewSurface": "feature assistant imports preview internals",
-    "src/components/assistant/activity-inspector/panels.tsx:@/components/preview/ArtifactPreviewSurface": "feature assistant imports preview internals",
-    "src/components/creative/CreationSession.tsx:@/components/assistant/conversation/ConversationTimeline": "feature creative imports assistant internals",
-    "src/components/creative/CreationSession.tsx:@/components/assistant/conversation/MessageInput": "feature creative imports assistant internals",
-    "src/components/creative/CreationSession.tsx:@/components/assistant/conversation/ModelSelectorDropdown": "feature creative imports assistant internals",
-    "src/components/files/FilePreview.tsx:@/components/assistant/diff/MonacoDiffView": "feature files imports assistant internals",
-    "src/components/files/FilePreview.tsx:@/components/preview/PreviewSurface": "feature files imports preview internals",
-    "src/components/jobs/JobFormModal.tsx:@/components/capabilities/CapabilityPickerPopover": "feature jobs imports capabilities internals"
-  },
+  "feature_cross": {},
   "thick_page": {},
   "raw_invoke": {},
   "native_dialog": {},

@@ -173,23 +173,42 @@ function collectFeatureCross() {
   const map = new Map();
   const compRoot = join(ROOT, 'src/components');
   if (!existsSync(compRoot)) return map;
+  // Shared business domains that multiple features legitimately reuse:
+  // ui (atoms), shell, preview, capabilities, and the assistant conversation /
+  // diff subdomains (conversation UI + diff viewer are cross-feature shared
+  // components after W4's components/ui extraction). Importing those is not a
+  // horizontal feature import; importing another feature's private internals is.
+  const SHARED_DOMAINS = new Set(['ui', 'shell', 'preview', 'capabilities']);
   for (const p of walk(compRoot)) {
     if (!isHandwrittenTs(p)) continue;
     const rel = relToRoot(p);
     const m = /^src\/components\/([^/]+)\//.exec(rel);
     if (!m) continue;
     const myDomain = m[1];
-    if (myDomain === 'ui' || myDomain === 'shell') continue;
+    if (SHARED_DOMAINS.has(myDomain)) continue;
+    if (myDomain === 'assistant') {
+      // Assistant workspace is the shared conversation/activity owner; other
+      // features may reuse its conversation/diff shared components, but not
+      // arbitrary assistant internals.
+      const sub = /^src\/components\/assistant\/([^/]+)\//.exec(rel);
+      if (sub && SHARED_ASSISTANT_SUBDOMAINS.has(sub[1])) continue;
+    }
     const src = readFileSync(p, 'utf8');
     for (const spec of importsOf(p, src)) {
       if (!spec.startsWith('@/components/')) continue;
       const target = spec.slice('@/components/'.length).split('/')[0];
-      if (target === myDomain || target === 'ui' || target === 'shell') continue;
+      if (target === myDomain || SHARED_DOMAINS.has(target)) continue;
+      if (target === 'assistant') {
+        const sub = spec.slice('@/components/'.length).split('/')[1];
+        if (sub && SHARED_ASSISTANT_SUBDOMAINS.has(sub)) continue;
+      }
       map.set(`${rel}:${spec}`, `feature ${myDomain} imports ${target} internals`);
     }
   }
   return map;
 }
+
+const SHARED_ASSISTANT_SUBDOMAINS = new Set(['conversation', 'diff']);
 
 function collectThickPages() {
   const map = new Map();
