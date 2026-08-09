@@ -502,6 +502,20 @@ fn run_manager() -> &'static crate::run_manager::RunManager {
     crate::run_manager::global_run_manager()
 }
 
+/// CONTRACT-001: register the typed subtract-only `disabled_tools` for a
+/// created Run, keyed by `run.id`. `None`/empty = no subtraction (advertised
+/// surface unchanged). Consumes the typed `CreateRunRequest` field only — the
+/// raw `params.get("disabled_tools")` shadow read was deleted from the
+/// `run.create` handler, so this typed field is the single read path.
+async fn register_run_disabled_tools(disabled_tools: &Option<Vec<String>>, run_id: &str) {
+    if let Some(disabled) = disabled_tools.as_ref().filter(|list| !list.is_empty()) {
+        run_manager()
+            .runtime
+            .set_run_disabled_tools(run_id, disabled.clone())
+            .await;
+    }
+}
+
 /// Resolve a Provider adapter by id. Shared with the daemon's creative AI
 /// module so provider matching lives in exactly one place (R-B3).
 pub(crate) fn resolve_provider_adapter(
@@ -909,44 +923,39 @@ pub async fn handle_rpc(
         }
         names::RUN_CREATE => {
             match serde_json::from_value::<CreateRunRequest>(request.params.clone()) {
-                Ok(req) => match run_manager().create_run(req) {
-                    Ok(run) => {
-                        // P0-11: Host 的 subtract-only disabledTools 随 create
-                        // payload 到达，create 成功后按 run.id 注册；run.start
-                        // 时工具面构建做最终减法（Settings 只能减，不能扩权）。
-                        if let Some(disabled) = request
-                            .params
-                            .get("disabled_tools")
-                            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-                            .filter(|list| !list.is_empty())
-                        {
-                            run_manager()
-                                .runtime
-                                .set_run_disabled_tools(&run.id, disabled)
-                                .await;
+                Ok(req) => {
+                    // CONTRACT-001: disabled_tools arrives in the typed
+                    // CreateRunRequest (single source in assistant-protocol).
+                    // The old raw `params.get("disabled_tools")` shadow read is
+                    // deleted — the typed field is the only read path (a raw
+                    // value absent from the typed struct is ignored).
+                    let run_disabled_tools = req.disabled_tools.clone();
+                    match run_manager().create_run(req) {
+                        Ok(run) => {
+                            register_run_disabled_tools(&run_disabled_tools, &run.id).await;
+                            send_success(
+                                writer,
+                                &request.request_id,
+                                &request.client_id,
+                                &request.session_token,
+                                serde_json::to_value(run).unwrap_or_default(),
+                            )
+                            .await
                         }
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::to_value(run).unwrap_or_default(),
-                        )
-                        .await
+                        Err(e) => {
+                            send_error(
+                                writer,
+                                &DaemonError::new(
+                                    "run_create_failed",
+                                    ErrorCategory::Internal,
+                                    false,
+                                    e,
+                                ),
+                            )
+                            .await
+                        }
                     }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                "run_create_failed",
-                                ErrorCategory::Internal,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await
-                    }
-                },
+                }
                 Err(e) => {
                     send_error(
                         writer,
@@ -3919,6 +3928,49 @@ mod tests {
         assert!(caps.methods.iter().any(|m| m == "extension.list"));
         assert!(!caps.methods.iter().any(|m| m == "extension.enable"));
         assert!(caps.extensions);
+    }
+
+    /// CONTRACT-001: disabled_tools must flow through the typed CreateRunRequest
+    /// field, not a raw params shadow read. `Some(list)` registers per run.id;
+    /// `None`/empty (the raw-shadow-equivalent "absent from typed") is ignored —
+    /// the typed field is the single read path after the raw
+    /// `params.get("disabled_tools")` shadow read was deleted.
+    #[tokio::test]
+    async fn run_create_registers_typed_disabled_tools_only() {
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        let mgr = crate::run_manager::install_memory_global_for_test();
+
+        // Positive: typed Some(list) registers per run.id (run.start applies the
+        // final subtract-only step).
+        register_run_disabled_tools(&Some(vec!["read_file".to_string()]), "run-disabled-pos").await;
+        assert_eq!(
+            mgr.runtime
+                .take_run_disabled_tools("run-disabled-pos")
+                .await,
+            Some(vec!["read_file".to_string()]),
+            "typed disabled_tools must be registered for the created run"
+        );
+
+        // Negative: typed None is ignored (a raw-only shadow value would NOT be
+        // read anymore — the typed field is the single source).
+        register_run_disabled_tools(&None, "run-disabled-none").await;
+        assert_eq!(
+            mgr.runtime
+                .take_run_disabled_tools("run-disabled-none")
+                .await,
+            None,
+            "typed None must be ignored (no subtraction registered)"
+        );
+
+        // Negative: empty list is treated as no subtraction.
+        register_run_disabled_tools(&Some(vec![]), "run-disabled-empty").await;
+        assert_eq!(
+            mgr.runtime
+                .take_run_disabled_tools("run-disabled-empty")
+                .await,
+            None,
+            "empty typed list must be ignored (no subtraction registered)"
+        );
     }
 
     struct StaticStreamAdapter {

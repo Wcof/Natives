@@ -328,6 +328,30 @@ fn build_start_run_request(
     }
 }
 
+/// RUN-001 fail-closed gate: persist the created Run's immutable execution
+/// policy snapshot.
+///
+/// Returns `Ok(())` to proceed to `run.start`, or an `RpcResponse` error that
+/// rejects the Run when the snapshot cannot be persisted. A Run whose policy
+/// snapshot is missing must NOT start — Resume/Retry and audits would inherit
+/// a policy the operator never approved. The old warning-only branch
+/// (`eprintln!` + continue) is replaced by this rejection.
+///
+/// `store` is injected so the fail-closed contract is unit-testable without a
+/// live DB: a store failure MUST produce a rejection, never a warning-continue.
+fn policy_snapshot_gate(
+    run_id: &str,
+    policy: &ResolvedExecutionPolicyV1,
+    store: impl FnOnce(&str, &ResolvedExecutionPolicyV1) -> Result<(), String>,
+) -> Result<(), RpcResponse> {
+    store(run_id, policy).map_err(|e| {
+        error_response(
+            "POLICY_SNAPSHOT_FAILED",
+            &format!("persist policy snapshot for {run_id}: {e}"),
+        )
+    })
+}
+
 async fn create_and_start_run(
     _data_store: &Arc<DataStore>,
     req: &RunStartRequest,
@@ -413,14 +437,12 @@ async fn create_and_start_run(
 
     // 固化 policy snapshot: the Run's immutable execution policy is persisted
     // so Resume/Retry and audits inherit it and later Settings edits cannot
-    // change an existing Run. A snapshot write failure is surfaced as a
-    // warning but does not fail the already-created Run (its maxSteps /
-    // runtimeId are baked into the daemon row).
-    if let Err(e) = store_policy_snapshot(&daemon_run.id, &policy) {
-        eprintln!(
-            "[run_gateway] policy snapshot for {} not persisted: {e}",
-            daemon_run.id
-        );
+    // change an existing Run. RUN-001 fail-closed: a snapshot write failure
+    // MUST reject the Run — without the snapshot, Resume/Retry and audits
+    // would inherit a policy the operator never approved. The old warning-only
+    // branch (eprintln! + continue) is removed.
+    if let Err(resp) = policy_snapshot_gate(&daemon_run.id, &policy, store_policy_snapshot) {
+        return resp;
     }
 
     let start_req = build_start_run_request(
@@ -705,6 +727,45 @@ mod tests {
         )
         .expect_err("explicit unavailable must fail even with fallback_native");
         assert!(err.contains(crate::execution_engine_settings::RUNTIME_CLAUDE_CLI));
+    }
+
+    /// RUN-001 fail-closed: a Run whose immutable policy snapshot cannot be
+    /// persisted must NOT start. The gate returns a rejection RpcResponse
+    /// instead of the old warning-only `eprintln!` + continue, so the Run is
+    /// rejected before any `run.start`.
+    #[test]
+    fn policy_snapshot_failure_rejects_run() {
+        use crate::execution_engine_settings::ResolvedExecutionPolicyV1;
+        let policy = ResolvedExecutionPolicyV1 {
+            version: 1,
+            runtime_id: crate::execution_engine_settings::RUNTIME_NATIVE.to_string(),
+            runtime_source: "application_default".to_string(),
+            settings_revision: 0,
+            max_steps: 50,
+            disabled_tools: vec!["run_terminal".to_string()],
+            fallback_used: false,
+            unavailable_policy: "fallback_native".to_string(),
+        };
+
+        // Store succeeds → gate passes (proceed to start).
+        assert!(
+            policy_snapshot_gate("run-1", &policy, |_, _| Ok(())).is_ok(),
+            "a successful snapshot write must allow the run to proceed"
+        );
+
+        // Store fails → gate rejects the Run (fail-closed, never warning-continue).
+        let resp = policy_snapshot_gate("run-1", &policy, |_, _| Err("disk full".into()))
+            .expect_err("snapshot failure must reject the run (fail-closed)");
+        assert!(!resp.success);
+        let err = resp.error.as_ref().expect("rejection must carry an error");
+        assert_eq!(
+            err.code, "POLICY_SNAPSHOT_FAILED",
+            "snapshot failure must surface as POLICY_SNAPSHOT_FAILED"
+        );
+        assert!(
+            err.message.contains("run-1"),
+            "rejection must identify the run whose snapshot failed"
+        );
     }
 }
 

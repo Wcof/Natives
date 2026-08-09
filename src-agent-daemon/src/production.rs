@@ -94,9 +94,10 @@ pub struct ProductionRuntime {
     /// `Some(list)` = hard allowlist; entry removed once the run starts.
     pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
     /// Per-run disabled tool deny list (P0-11, subtract-only). Registered by
-    /// the Host via `run.create` params (`disabled_tools`) and consumed once by
-    /// the RunManager tool-surface build as the final `− disabledTools` step.
-    /// Settings can only subtract, never expand capability.
+    /// the Host via the typed `run.create` request (`CreateRunRequest.disabled_tools`,
+    /// single source in assistant-protocol — no raw params shadow field) and
+    /// consumed once by the RunManager tool-surface build as the final
+    /// `− disabledTools` step. Settings can only subtract, never expand capability.
     pub run_disabled_tools: Arc<Mutex<HashMap<String, Vec<String>>>>,
     /// Per-run agent directive: a system prompt the *parent* agent authored for
     /// one specific child run, registered before RunManager starts it and
