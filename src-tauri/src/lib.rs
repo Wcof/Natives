@@ -48,6 +48,8 @@ mod search;
 pub mod sequence_id;
 pub mod sidecar_supervisor;
 mod terminal;
+mod terminal_ghostty;
+mod terminal_process;
 mod terminal_recorder;
 mod thumbnail;
 mod token_manager;
