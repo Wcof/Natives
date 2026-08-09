@@ -43,6 +43,7 @@ pub mod storage;
 pub mod stream_protocol;
 pub mod subagent_store;
 pub mod task_store;
+pub mod tools;
 
 use governor::ProviderRequestGovernor;
 use std::sync::Arc;
