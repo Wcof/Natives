@@ -73,7 +73,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
 import CommandPalette from './CommandPalette';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/assistant/conversation/ModelSelectorDropdown';
 import WorkbenchHeader from './workbench/WorkbenchHeader';
 import WorkbenchTimelinePane from './workbench/WorkbenchTimelinePane';
 import WorkbenchComposer from './workbench/WorkbenchComposer';

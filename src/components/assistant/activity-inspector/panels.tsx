@@ -16,7 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import type { BackgroundTask, ContextUsage, Run } from '@/lib/assistant-protocol';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/assistant/conversation/ModelSelectorDropdown';
 import {
   mapSubagentUiStatus,
   todoStatusLabel,

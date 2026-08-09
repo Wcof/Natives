@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { computeLineDiff } from '@/lib/diff-utils';
 
-const MonacoDiffView = dynamic(() => import('@/components/ui/diff/MonacoDiffView'), {
+const MonacoDiffView = dynamic(() => import('@/components/assistant/diff/MonacoDiffView'), {
   ssr: false,
   loading: () => (
     <div className="grid h-48 place-items-center text-xs text-[var(--text-disabled)]">

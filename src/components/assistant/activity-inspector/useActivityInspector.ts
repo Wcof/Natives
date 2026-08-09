@@ -13,7 +13,7 @@ import type {
 } from '@/lib/assistant-protocol';
 import type { AssistantGateway } from '@/lib/assistant-gateway';
 import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/assistant/conversation/ModelSelectorDropdown';
 import type { InspectorTab } from '@/lib/assistant-workspace';
 import {
   canCancelTask,

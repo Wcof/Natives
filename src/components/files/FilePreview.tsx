@@ -14,7 +14,7 @@ import { fsApi, hasNativeFiles } from '@/lib/files-api';
 import { rewriteLocalImages, type LocalImageRewrite } from '@/lib/markdown-local-images';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { type PreviewSource, type PreviewSubMode } from '@/lib/preview/contracts';
-import MonacoDiffView from '@/components/ui/diff/MonacoDiffView';
+import MonacoDiffView from '@/components/assistant/diff/MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
 import PreviewSurface from '@/components/ui/preview/PreviewSurface';
 import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';

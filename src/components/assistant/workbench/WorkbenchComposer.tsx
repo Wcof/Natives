@@ -16,12 +16,12 @@ import {
 } from '@/lib/assistant-workspace/capability-gate';
 import { parsePlanApprovalRequest, type PlanApproval } from '../plan-approval';
 import { COMPOSER_COLUMN_CLASS } from '../InteractionPromptShell';
-import MessageInput, { type ComposerSubagent } from '@/components/ui/conversation/MessageInput';
+import MessageInput, { type ComposerSubagent } from '@/components/assistant/conversation/MessageInput';
 import PromptQueuePanel from '../PromptQueuePanel';
 import PermissionRequestCard from '../PermissionRequestCard';
 import AskUserPromptCard from '../AskUserPromptCard';
 // ADR-0016 capability picker — lazy so it stays out of the initial bundle (R-P7).
-const LazyCapabilityPickerPopover = lazy(() => import('@/components/ui/capability/CapabilityPickerPopover'));
+const LazyCapabilityPickerPopover = lazy(() => import('@/components/capabilities/CapabilityPickerPopover'));
 // R-P7: the plan checklist is a low-frequency surface. The predicate that
 // decides whether to show it is eager (plain module above); only the renderer
 // is split out.
@@ -43,7 +43,7 @@ import { t } from '@/i18n';
 import type { Conversation, PromptQueueItem } from '@/lib/assistant-protocol';
 import type { ConversationChangeSummary } from '@/lib/assistant-timeline';
 import type { ModelSelection, ProviderReadiness } from '@/lib/provider-model-selection';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/assistant/conversation/ModelSelectorDropdown';
 import type { AssistantNavigationSnapshot } from '../AssistantWorkspaceContext';
 
 export interface WorkbenchComposerProps {

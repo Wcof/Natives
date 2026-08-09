@@ -4,7 +4,7 @@ import { useAssistantDispatch, useAssistantGateway, useAssistantStore } from '@/
 import type { ContextUsage, FileChange, PlanApprovalInteraction, Run, RunEvent } from '@/lib/assistant-protocol';
 import type { Locale } from '@/i18n';
 import { t } from '@/i18n';
-import ConversationTimeline, { type Message } from '@/components/ui/conversation/ConversationTimeline';
+import ConversationTimeline, { type Message } from '@/components/assistant/conversation/ConversationTimeline';
 import GoalStatusBar from '../GoalStatusBar';
 
 export interface WorkbenchTimelinePaneProps {

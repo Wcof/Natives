@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
 import { fmtDateTime } from '@/lib/format';
-import CapabilityPickerPopover from '@/components/ui/capability/CapabilityPickerPopover';
+import CapabilityPickerPopover from '@/components/capabilities/CapabilityPickerPopover';
 import { createDefaultGateway } from '@/lib/assistant-gateway';
 import type { CapabilitySelection } from '@/lib/assistant-protocol';
 import { classifyError } from '@/lib/error-classifier';

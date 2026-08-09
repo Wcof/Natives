@@ -15,7 +15,7 @@ import type { Locale } from '@/i18n';
 import { t } from '@/i18n';
 import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ActivityInspector, { type ActivitySubagentView } from '../ActivityInspector';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/assistant/conversation/ModelSelectorDropdown';
 
 export interface WorkbenchPanelsProps {
   locale: Locale;
