@@ -57,7 +57,7 @@ export default function ShortcutHelp() {
     <div
       style={{
         position: 'fixed', inset: 0, zIndex: 10002,
-        background: 'rgba(0, 0, 0, 0.4)',
+        background: 'var(--overlay)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
       onClick={(e) => { if (e.target === e.currentTarget) setVisible(false); }}

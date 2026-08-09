@@ -143,7 +143,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
             {t(locale, 'notifications.title')}
           </span>
           {unreadCount > 0 && (
-            <span className="text-[0.625rem] font-semibold px-1.5 py-0.5 rounded bg-[var(--danger)] text-white">
+            <span className="text-[0.625rem] font-semibold px-1.5 py-0.5 rounded bg-[var(--danger)] text-[var(--neutral-1000)]">
               {unreadCount}
             </span>
           )}
@@ -253,7 +253,7 @@ export function NotificationBadge({ locale }: { locale: Locale }) {
   if (count === 0) return null;
 
   return (
-    <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center bg-[var(--danger)] text-white text-[9px] font-bold rounded-full px-[3px]">
+    <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center bg-[var(--danger)] text-[var(--neutral-1000)] text-[9px] font-bold rounded-full px-[3px]">
       {count > 99 ? '99+' : count}
     </span>
   );

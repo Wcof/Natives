@@ -94,7 +94,7 @@ export function WorkbenchTimelinePane({
           <div className="mt-2 flex gap-2">
             <button
               type="button"
-              className="rounded bg-[var(--primary)] px-3 py-1 text-white"
+              className="rounded bg-[var(--primary)] px-3 py-1 text-[var(--accent-ink)]"
               onClick={() =>
                 void gateway
                   .request('interaction.respond', {

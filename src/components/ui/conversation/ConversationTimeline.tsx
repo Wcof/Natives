@@ -144,13 +144,13 @@ function ChangeSummaryCard({
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--surface-hover)] text-[var(--text-secondary)]"><FileDiff size={20} /></div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-[var(--text)]">{t(locale, 'timeline.editedFiles', { count: summary.files.length })}</div>
-          <div className="mt-0.5 text-sm font-medium tabular-nums"><span className="text-emerald-500">+{summary.additions}</span><span className="ml-2 text-red-500">−{summary.deletions}</span></div>
+          <div className="mt-0.5 text-sm font-medium tabular-nums"><span className="text-[var(--diff-add)]">+{summary.additions}</span><span className="ml-2 text-[var(--diff-del)]">−{summary.deletions}</span></div>
         </div>
         {onRollbackChanges && !rolledBack && (
           confirming ? (
             <div className="flex shrink-0 items-center gap-1">
               <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(false); }} disabled={rollingBack} className="rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{t(locale, 'common.cancel')}</button>
-              <button type="button" onClick={(event) => { event.stopPropagation(); void restore(); }} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-red-500/10 disabled:opacity-50">{rollingBack ? t(locale, 'timeline.undoing') : t(locale, 'timeline.confirmUndo')}</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); void restore(); }} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-50">{rollingBack ? t(locale, 'timeline.undoing') : t(locale, 'timeline.confirmUndo')}</button>
             </div>
           ) : (
             <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(true); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><Undo2 size={15} />{t(locale, 'timeline.undo')}</button>
@@ -162,8 +162,8 @@ function ChangeSummaryCard({
         {summary.files.map((file) => (
           <div key={file.path} className="flex items-center gap-3 py-2 text-sm">
             <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{file.path}</span>
-            <span className="shrink-0 tabular-nums text-emerald-500">+{file.additions}</span>
-            <span className="shrink-0 tabular-nums text-red-500">−{file.deletions}</span>
+            <span className="shrink-0 tabular-nums text-[var(--diff-add)]">+{file.additions}</span>
+            <span className="shrink-0 tabular-nums text-[var(--diff-del)]">−{file.deletions}</span>
           </div>
         ))}
       </div>}
@@ -277,7 +277,7 @@ const MessageRow = memo(function MessageRow({
         className={
           user
             ? 'rounded-2xl rounded-br-md bg-[var(--surface-hover)] px-4 py-2.5 text-left text-[var(--text)]'
-            : 'text-left text-black dark:text-white'
+            : 'text-left text-[var(--neutral-0)] dark:text-[var(--neutral-1000)]'
         }
       >
         {!user && (thinking || toolActivity.length > 0) && (

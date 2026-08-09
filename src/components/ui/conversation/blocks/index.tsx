@@ -209,7 +209,7 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
           {block.toolOutput !== undefined && (
             <div
               className={`px-3 py-2 text-xs font-mono border-t border-[var(--border-subtle)] ${
-                block.isError ? 'border-red-400/30 bg-red-50 dark:bg-red-950/20 text-[var(--danger)]' : 'text-[var(--text-secondary)]'
+                block.isError ? 'border-[var(--danger)]/30 bg-[var(--danger-soft)] text-[var(--danger)]' : 'text-[var(--text-secondary)]'
               }`}
             >
               <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">
@@ -240,9 +240,9 @@ function ToolResultBlock({ block }: { block: ContentBlock }) {
     return <CreativeDraftCreatedCard block={block} />;
   }
   return (
-    <div className={`border rounded-lg my-2 overflow-hidden ${block.isError ? 'border-red-400/30' : ''}`}>
+    <div className={`border rounded-lg my-2 overflow-hidden ${block.isError ? 'border-[var(--danger)]/30' : ''}`}>
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
-        <span className={`w-2 h-2 rounded-full ${block.isError ? 'bg-red-500' : 'bg-green-500'}`} />
+        <span className={`w-2 h-2 rounded-full ${block.isError ? 'bg-[var(--danger)]' : 'bg-[var(--success)]'}`} />
         <span className="font-mono text-[var(--text-secondary)]">
           Tool Result{block.durationMs ? ` (${block.durationMs}ms)` : ''}
         </span>
@@ -266,7 +266,7 @@ function CreativeDraftCreatedCard({ block }: { block: ContentBlock }) {
   return (
     <div className="border rounded-lg my-2 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
-        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+        <span className="w-2 h-2 rounded-full bg-[var(--success)]" />
         <span className="font-medium">{t(locale, 'creative.draftCreatedTitle')}</span>
       </div>
       <div className="px-3 py-2 text-xs border-t space-y-1">
@@ -303,13 +303,13 @@ function CitationBlock({ block }: { block: ContentBlock }) {
 
 function ErrorBlock({ block }: { block: ContentBlock }) {
   return (
-    <div className="border border-red-400/30 rounded-lg px-3 py-2 my-2 bg-red-50 dark:bg-red-950/20">
-      <div className="flex items-center gap-2 text-xs font-medium text-red-600 dark:text-red-400">
+    <div className="border border-[var(--danger)]/30 rounded-lg px-3 py-2 my-2 bg-[var(--danger-soft)]">
+      <div className="flex items-center gap-2 text-xs font-medium text-[var(--danger)]">
         <span>Error{block.errorCode ? ` (${block.errorCode})` : ''}</span>
         {block.retryable && <span className="text-[var(--text-disabled)]">— Retryable</span>}
       </div>
       {block.errorMessage && (
-        <div className="mt-1 text-xs text-red-500 dark:text-red-400">{block.errorMessage}</div>
+        <div className="mt-1 text-xs text-[var(--danger)]">{block.errorMessage}</div>
       )}
     </div>
   );
@@ -343,9 +343,9 @@ function DiffBlock({ block }: { block: ContentBlock }) {
                 key={j}
                 className={
                   line.startsWith('+')
-                    ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+                    ? 'bg-[var(--diff-add)]/10 text-[var(--diff-add)]'
                     : line.startsWith('-')
-                      ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                      ? 'bg-[var(--diff-del)]/10 text-[var(--diff-del)]'
                       : ''
                 }
               >

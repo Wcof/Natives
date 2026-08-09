@@ -95,7 +95,7 @@ export function useTerminalSessions({
       fontSize: 14,
       fontFamily: '"JetBrainsMono Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "Hack Nerd Font", Menlo, Monaco, "Courier New", monospace',
       theme: {
-        background: 'rgba(0, 0, 0, 0)',
+        background: 'transparent',
         foreground: initialTerminalTheme.foreground,
         cursor: initialTerminalTheme.cursor,
         selectionBackground: initialTerminalTheme.selectionBackground || initialTerminalTheme.cursor + '33',
@@ -440,7 +440,7 @@ export function useTerminalSessions({
         const term = session.term as { setOption?: (key: string, value: unknown) => void };
         if (term?.setOption) {
           term.setOption('theme', {
-            background: 'rgba(0, 0, 0, 0)',
+            background: 'transparent',
             foreground: terminalTheme.foreground,
             cursor: terminalTheme.cursor,
             selectionBackground: terminalTheme.selectionBackground || terminalTheme.cursor + '33',

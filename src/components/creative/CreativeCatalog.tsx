@@ -80,31 +80,31 @@ const FAILED_STATES: CreativeAppState[] = [
 
 function StatusDot({ state }: { state: CreativeAppState }) {
   if (state === 'running') {
-    return <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />;
+    return <span className="h-2 w-2 rounded-full bg-[var(--success)] animate-pulse shrink-0" />;
   }
   // 过渡态用转圈而不是色点：用户要看出「正在变」，静止的点会被读成终态。
   if (isActionBusy(state)) {
     return <RefreshCw size={12} className="animate-spin text-[var(--primary)] shrink-0" />;
   }
-  const color = FAILED_STATES.includes(state) ? 'bg-rose-500' : 'bg-zinc-400 dark:bg-zinc-500';
+  const color = FAILED_STATES.includes(state) ? 'bg-[var(--danger)]' : 'bg-[var(--text-disabled)]';
   return <span className={`h-2 w-2 rounded-full shrink-0 ${color}`} />;
 }
 
 /** 来源徽章的三种画法收在一处，卡片里不再出现三层三元表达式。 */
 const BADGE_STYLE = {
-  github: { cls: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20', Icon: Github, labelKey: 'workshop.sourceGithub' },
-  local: { cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20', Icon: Folder, labelKey: 'workshop.sourceLocal' },
-  internal: { cls: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20', Icon: Code2, labelKey: 'workshop.sourceInternal' },
+  github: { cls: 'bg-[var(--source-github)]/10 text-[var(--source-github)] border-[var(--source-github)]/20', Icon: Github, labelKey: 'workshop.sourceGithub' },
+  local: { cls: 'bg-[var(--source-local)]/10 text-[var(--source-local)] border-[var(--source-local)]/20', Icon: Folder, labelKey: 'workshop.sourceLocal' },
+  internal: { cls: 'bg-[var(--source-internal)]/10 text-[var(--source-internal)] border-[var(--source-internal)]/20', Icon: Code2, labelKey: 'workshop.sourceInternal' },
 } as const;
 
 const BTN_PRIMARY =
-  'h-8 px-3 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-40 disabled:pointer-events-none';
+  'h-8 px-3 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-40 disabled:pointer-events-none';
 const BTN_SECONDARY =
   'h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0';
 const BTN_ICON =
   'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0';
 const BTN_DANGER =
-  'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-rose-500 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all flex items-center justify-center gap-1.5 shrink-0 ml-auto';
+  'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--danger)] hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]/20 transition-all flex items-center justify-center gap-1.5 shrink-0 ml-auto';
 
 export interface CreativeCatalogProps {
   apps: CreativeAppSummary[];
@@ -175,7 +175,7 @@ function CardShell({ app, locale, onResolveOrphan, children }: CardShellProps) {
         )}
 
         {app.lastError && (
-          <div className="text-[11px] text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2 rounded-lg mb-2 flex items-start gap-1.5">
+          <div className="text-[11px] text-[var(--danger)] bg-[var(--danger-soft)] border border-[var(--danger)]/20 p-2 rounded-lg mb-2 flex items-start gap-1.5">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span className="line-clamp-2">{app.statusDetail?.message || app.lastError}</span>
           </div>

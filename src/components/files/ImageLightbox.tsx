@@ -38,7 +38,7 @@ export default function ImageLightbox({ src, alt, onClose }: ImageLightboxProps)
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.85)',
+        background: 'var(--overlay-dense)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -62,7 +62,7 @@ export default function ImageLightbox({ src, alt, onClose }: ImageLightboxProps)
         bottom: 20,
         left: '50%',
         transform: 'translateX(-50%)',
-        color: 'rgba(255,255,255,0.5)',
+        color: 'color-mix(in srgb, var(--neutral-1000) 50%, transparent)',
         fontSize: FONT_SIZE.md,
         pointerEvents: 'none',
       }}>

@@ -29,11 +29,11 @@ const BADGE_LABELS: Record<string, string> = {
 };
 
 const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  node: { bg: '#3fb95018', text: '#3fb950', border: '#3fb95066' },
+  node: { bg: 'color-mix(in srgb, var(--lang-node) 10%, transparent)', text: 'var(--lang-node)', border: 'color-mix(in srgb, var(--lang-node) 40%, transparent)' },
   web: { bg: 'var(--primary-soft)', text: 'var(--primary)', border: 'color-mix(in srgb, var(--primary) 50%, transparent)' },
-  python: { bg: '#4b8bbe18', text: '#4b8bbe', border: '#4b8bbe66' },
-  rust: { bg: '#d2691e18', text: '#d2691e', border: '#d2691e66' },
-  go: { bg: '#00add818', text: '#00add8', border: '#00add866' },
+  python: { bg: 'color-mix(in srgb, var(--lang-python) 10%, transparent)', text: 'var(--lang-python)', border: 'color-mix(in srgb, var(--lang-python) 40%, transparent)' },
+  rust: { bg: 'color-mix(in srgb, var(--lang-rust) 10%, transparent)', text: 'var(--lang-rust)', border: 'color-mix(in srgb, var(--lang-rust) 40%, transparent)' },
+  go: { bg: 'color-mix(in srgb, var(--lang-go) 10%, transparent)', text: 'var(--lang-go)', border: 'color-mix(in srgb, var(--lang-go) 40%, transparent)' },
   git: { bg: 'transparent', text: 'var(--text-secondary)', border: 'var(--border)' },
 };
 
@@ -154,7 +154,7 @@ export default function FileCard({ entry, locale, onSelect, onContextMenu, selec
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
         border: `1px solid ${dropTarget ? 'var(--primary)' : selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)'}`,
-        background: dropTarget ? 'var(--accent-soft, rgba(205,242,75,0.12))' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        background: dropTarget ? 'var(--accent-soft)' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
         boxShadow: isChanged
           ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--primary) calc(55% * ${heat}), transparent)`
           : selected ? '0 0 0 1px var(--primary)' : 'none',
@@ -219,10 +219,10 @@ export default function FileCard({ entry, locale, onSelect, onContextMenu, selec
           <span style={{
             position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
             width: 34, height: 34, borderRadius: '50%',
-            background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'var(--overlay)', display: 'flex', alignItems: 'center', justifyContent: 'center',
             pointerEvents: 'none',
           }}>
-            <Play size={16} fill="#fff" color="#fff" />
+            <Play size={16} fill="var(--neutral-1000)" color="var(--neutral-1000)" />
           </span>
         )}
 
@@ -250,7 +250,7 @@ export default function FileCard({ entry, locale, onSelect, onContextMenu, selec
         title={isFavorite ? t(locale, 'fileBrowser.unfavorite') : t(locale, 'fileBrowser.favorite')}
         style={{
           position: 'absolute', top: 6, right: 6,
-          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-disabled)',
+          color: isFavorite ? 'var(--warning)' : 'var(--text-disabled)',
           cursor: 'pointer',
           background: 'none', border: 'none', padding: 0,
           lineHeight: 0,

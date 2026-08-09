@@ -105,7 +105,7 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
       fontSize: 12,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       theme: {
-        background: 'rgba(0, 0, 0, 0)',
+        background: 'transparent',
         foreground: initialTerminalTheme.foreground,
         cursor: initialTerminalTheme.cursor,
         selectionBackground: initialTerminalTheme.selectionBackground || initialTerminalTheme.cursor + '33',

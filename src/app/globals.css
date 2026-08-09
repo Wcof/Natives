@@ -174,6 +174,37 @@
 
   /* ── Modal overlay scrim (R-U1: token, no raw rgba in components) ── */
   --overlay: rgba(0, 0, 0, 0.5);
+  --overlay-soft: rgba(0, 0, 0, 0.3);
+  --overlay-strong: rgba(0, 0, 0, 0.6);
+  --overlay-dense: rgba(0, 0, 0, 0.85);
+
+  /* ── File badge accents (FileCard language colors) ── */
+  --lang-node: #3fb950;
+  --lang-python: #4b8bbe;
+  --lang-rust: #d2691e;
+  --lang-go: #00add8;
+
+  /* ── Workshop source badges (CreativeCatalog) ── */
+  --source-github: #2563EB;
+  --source-local: #059669;
+  --source-internal: #7C3AED;
+
+  /* ── Agent avatar accents (MessageInput) ── */
+  --agent-accent-1: #2563EB;
+  --agent-accent-2: #7C3AED;
+  --agent-accent-3: #0891B2;
+  --agent-accent-4: #C2410C;
+  --agent-accent-5: #BE185D;
+
+  /* ── Annotation / pen palette (user-facing drawing colors) ── */
+  --pen-red: #ff3b30;
+  --annotate-red: #ff4444;
+  --annotate-orange: #ff8800;
+  --annotate-yellow: #ffdd00;
+  --annotate-green: #44cc44;
+  --annotate-blue: #4488ff;
+  --annotate-white: #ffffff;
+  --annotate-black: #000000;
 }
 
 [data-theme="dark"] {

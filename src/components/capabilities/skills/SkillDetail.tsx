@@ -118,7 +118,7 @@ export default function SkillDetail({ locale, gateway, skill, onClose, onChanged
 
   return (
     <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={t(locale, 'capabilities.skills.detail')}>
-      <div className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.4)' }} onClick={onClose} aria-hidden />
+      <div className="absolute inset-0" style={{ background: 'var(--overlay)' }} onClick={onClose} aria-hidden />
       <aside
         ref={dialogRef}
         tabIndex={-1}

@@ -97,11 +97,11 @@ const PERMISSION_LABEL_KEYS: Record<AssistantPermissionProfile, string> = {
 } as const;
 
 const AGENT_ACCENTS = [
-  { solid: '#2563eb', soft: 'rgba(37,99,235,.12)', border: 'rgba(37,99,235,.38)' },
-  { solid: '#7c3aed', soft: 'rgba(124,58,237,.12)', border: 'rgba(124,58,237,.38)' },
-  { solid: '#0891b2', soft: 'rgba(8,145,178,.12)', border: 'rgba(8,145,178,.38)' },
-  { solid: '#c2410c', soft: 'rgba(194,65,12,.12)', border: 'rgba(194,65,12,.38)' },
-  { solid: '#be185d', soft: 'rgba(190,24,93,.12)', border: 'rgba(190,24,93,.38)' },
+  { solid: 'var(--agent-accent-1)', soft: 'color-mix(in srgb, var(--agent-accent-1) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-1) 38%, transparent)' },
+  { solid: 'var(--agent-accent-2)', soft: 'color-mix(in srgb, var(--agent-accent-2) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-2) 38%, transparent)' },
+  { solid: 'var(--agent-accent-3)', soft: 'color-mix(in srgb, var(--agent-accent-3) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-3) 38%, transparent)' },
+  { solid: 'var(--agent-accent-4)', soft: 'color-mix(in srgb, var(--agent-accent-4) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-4) 38%, transparent)' },
+  { solid: 'var(--agent-accent-5)', soft: 'color-mix(in srgb, var(--agent-accent-5) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-5) 38%, transparent)' },
 ];
 
 function agentAccent(id: string) {
@@ -492,7 +492,7 @@ export default function MessageInput(props: MessageInputProps) {
                 aria-pressed={selected}
                 title={t(locale, 'messageInput.openAgentConversation', { name: agent.name })}
               >
-                <span className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white" style={{ backgroundColor: accent.solid }} aria-hidden>{agent.name.slice(0, 1).toUpperCase()}</span>
+                <span className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-[var(--neutral-1000)]" style={{ backgroundColor: accent.solid }} aria-hidden>{agent.name.slice(0, 1).toUpperCase()}</span>
                 <span className="max-w-32 truncate">{agent.name}</span>
               </button>
             );
@@ -501,8 +501,8 @@ export default function MessageInput(props: MessageInputProps) {
             <span className="ml-auto flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" title={t(locale, 'messageInput.conversationChanges')}>
               <Bot size={14} className="text-[var(--text-disabled)]" />
               <span>{t(locale, 'messageInput.fileCount', { count: changeSummary.fileCount })}</span>
-              <span className="font-medium text-emerald-500">+{changeSummary.additions}</span>
-              <span className="font-medium text-red-500">−{changeSummary.deletions}</span>
+              <span className="font-medium text-[var(--diff-add)]">+{changeSummary.additions}</span>
+              <span className="font-medium text-[var(--diff-del)]">−{changeSummary.deletions}</span>
             </span>
           ) : null}
         </div>

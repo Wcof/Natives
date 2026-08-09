@@ -28,6 +28,14 @@ interface Point { x: number; y: number; }
 const MAX_UNDO = 25;
 const OOM_LIMIT = 60_000_000; // 60MP
 
+/** Resolve a theme token (var(--x)) to a concrete CSS color for canvas / color-picker use. */
+function resolveColor(color: string): string {
+  if (!color.startsWith('var(')) return color;
+  const name = color.slice(5, -1);
+  if (typeof document === 'undefined') return 'black';
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || 'black';
+}
+
 export default function ImageEditor({ imagePath, imageName, onSave, onClose }: ImageEditorProps) {
   const locale = useLocale();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -43,7 +51,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
     undo: HTMLCanvasElement[];
     dirty: boolean;
   }>({
-    tool: 'pen', color: '#ff3b30', size: 5, dragging: false,
+    tool: 'pen', color: 'var(--pen-red)', size: 5, dragging: false,
     sx: 0, sy: 0, lastX: 0, lastY: 0, base: null,
     undo: [], dirty: false,
   });
@@ -51,7 +59,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
   const [loading, setLoading] = useState(true);
   const [oomError, setOomError] = useState(false);
   const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState('#ff3b30');
+  const [color, setColor] = useState('var(--pen-red)');
   const [size, setSize] = useState(5);
   const [format, setFormat] = useState<'png' | 'jpeg' | 'webp'>('png');
   const [width, setWidth] = useState(0);
@@ -83,8 +91,8 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
   // Draw shape based on current tool
   const drawShape = useCallback((ctx: CanvasRenderingContext2D, st: typeof stateRef.current, x0: number, y0: number, x1: number, y1: number) => {
     ctx.save();
-    ctx.strokeStyle = st.color;
-    ctx.fillStyle = st.color;
+    ctx.strokeStyle = resolveColor(st.color);
+    ctx.fillStyle = resolveColor(st.color);
     ctx.lineWidth = st.size;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -215,7 +223,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
 
     if (st.tool === 'pen') {
       ctx.save();
-      ctx.strokeStyle = st.color;
+      ctx.strokeStyle = resolveColor(st.color);
       ctx.lineWidth = st.size;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
@@ -232,7 +240,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
     if (st.base) ctx.drawImage(st.base, 0, 0);
     if (st.tool === 'mosaic') {
       ctx.save();
-      ctx.strokeStyle = st.color;
+      ctx.strokeStyle = resolveColor(st.color);
       ctx.setLineDash([6, 4]);
       ctx.lineWidth = 2;
       ctx.strokeRect(st.sx, st.sy, x - st.sx, y - st.sy);
@@ -367,7 +375,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
         </div>
         <input
           type="color"
-          value={color}
+          value={resolveColor(color)}
           onChange={(e) => setColor(e.target.value)}
           title={t(locale, 'imageEditor.color')}
           className="w-7 h-7 rounded cursor-pointer border-0"
@@ -463,7 +471,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           className="flex items-center gap-1 px-3 py-1.5 rounded text-xs transition-colors"
           style={{
             background: 'var(--primary)',
-            color: '#FFFFFF',
+            color: 'var(--accent-ink)',
           }}
         >
           <Save size={14} />
@@ -475,13 +483,13 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
         <div style={{
           position: 'fixed', inset: 0, zIndex: 100,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.3)',
+          background: 'var(--overlay-soft)',
         }} onClick={() => setShowTextInput(false)}>
           <div
             style={{
               background: 'var(--surface)', borderRadius: 12,
               border: '1px solid var(--border)', padding: 20,
-              boxShadow: '0 20px 40px rgba(0,0,0,0.12)',
+              boxShadow: 'var(--shadow-modal)',
               minWidth: 280,
             }}
             onClick={(e) => e.stopPropagation()}
@@ -503,7 +511,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
                   st.undo.push(snapshot(canvas));
                   if (st.undo.length > MAX_UNDO) st.undo.shift();
                   ctx.save();
-                  ctx.fillStyle = st.color;
+                  ctx.fillStyle = resolveColor(st.color);
                   ctx.textBaseline = 'top';
                   ctx.font = `600 ${Math.max(14, st.size * 6)}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui') || 'sans-serif'}`;
                   ctx.fillText(textInput.trim(), pendingTextPos.x, pendingTextPos.y);
@@ -542,7 +550,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
                   st.undo.push(snapshot(canvas));
                   if (st.undo.length > MAX_UNDO) st.undo.shift();
                   ctx.save();
-                  ctx.fillStyle = st.color;
+                  ctx.fillStyle = resolveColor(st.color);
                   ctx.textBaseline = 'top';
                   ctx.font = `600 ${Math.max(14, st.size * 6)}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui') || 'sans-serif'}`;
                   ctx.fillText(textInput.trim(), pendingTextPos.x, pendingTextPos.y);
@@ -553,7 +561,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
                 style={{
                   padding: '6px 14px', borderRadius: 8,
                   background: 'var(--primary)', border: 'none',
-                  color: '#FFFFFF', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                  color: 'var(--accent-ink)', cursor: 'pointer', fontSize: 13, fontWeight: 600,
                 }}
               >
                 {t(locale, 'common.ok')}

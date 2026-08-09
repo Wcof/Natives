@@ -23,13 +23,21 @@ interface DrawAction {
   text?: string;
 }
 
-const COLORS = ['#ff4444', '#ff8800', '#ffdd00', '#44cc44', '#4488ff', '#ffffff', '#000000'];
+const COLORS = ['--annotate-red', '--annotate-orange', '--annotate-yellow', '--annotate-green', '--annotate-blue', '--annotate-white', '--annotate-black'];
+
+/** Resolve a theme token (bare `--name` or `var(--name)`) to a concrete CSS color for canvas use. */
+function resolveColor(color: string): string {
+  if (!color.startsWith('--')) return color;
+  const name = color.startsWith('var(') ? color.slice(5, -1) : color;
+  if (typeof document === 'undefined') return 'black';
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || 'black';
+}
 
 export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: AnnotationEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trap = useFocusTrap();
   const [tool, setTool] = useState<Tool>('brush');
-  const [color, setColor] = useState('#ff4444');
+  const [color, setColor] = useState('--annotate-red');
   const [size, setSize] = useState(3);
   const [isDrawing, setIsDrawing] = useState(false);
   const [actions, setActions] = useState<DrawAction[]>([]);
@@ -165,7 +173,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
         position: 'fixed',
         inset: 0,
         zIndex: 10000,
-        background: 'rgba(0,0,0,0.85)',
+        background: 'var(--overlay-dense)',
         display: 'flex',
         flexDirection: 'column',
       }}
@@ -214,7 +222,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
                   width: 20,
                   height: 20,
                   borderRadius: '50%',
-                  background: c,
+                  background: `var(${c})`,
                   border: color === c ? '2px solid var(--primary)' : '1px solid var(--border)',
                   cursor: 'pointer',
                 }}
@@ -312,8 +320,8 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
 
 function drawAction(ctx: CanvasRenderingContext2D, action: DrawAction) {
   ctx.save();
-  ctx.strokeStyle = action.color;
-  ctx.fillStyle = action.color;
+  ctx.strokeStyle = resolveColor(action.color);
+  ctx.fillStyle = resolveColor(action.color);
   ctx.lineWidth = action.size;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -397,7 +405,7 @@ function drawAction(ctx: CanvasRenderingContext2D, action: DrawAction) {
         const minY = Math.min(...ys);
         const maxX = Math.max(...xs);
         const maxY = Math.max(...ys);
-        ctx.fillStyle = '#000000';
+        ctx.fillStyle = resolveColor('--annotate-black');
         ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
       }
       break;

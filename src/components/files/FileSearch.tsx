@@ -149,18 +149,18 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
         position: 'fixed', inset: 0, zIndex: 999,
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
         paddingTop: '12vh',
-        background: 'rgba(0,0,0,0.55)',
+        background: 'var(--overlay-strong)',
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
         style={{
           width: 620, maxHeight: '68vh', overflow: 'hidden',
-          background: 'var(--panel, #0e0f0c)',
+          background: 'var(--panel)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius, 8px)',
           display: 'flex', flexDirection: 'column',
-          boxShadow: '0 16px 48px rgba(0,0,0,0.4)',
+          boxShadow: 'var(--shadow-modal)',
         }}
       >
         <div style={{ padding: 12, borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -207,7 +207,7 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
                 fontSize: FONT_SIZE.xs, padding: '4px 8px', borderRadius: BORDER_RADIUS.sm,
                 border: '1px solid var(--border)',
                 background: mode === 'content' ? 'var(--primary)' : 'var(--surface)',
-                color: mode === 'content' ? '#111' : 'var(--text-secondary)',
+                color: mode === 'content' ? 'var(--text)' : 'var(--text-secondary)',
                 cursor: 'pointer',
               }}
               title={t('fileBrowser.toggleSearchMode')}
