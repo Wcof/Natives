@@ -40,6 +40,7 @@ pub mod log_sanitizer;
 mod module_manager;
 mod permission_center;
 pub mod provider_accounts;
+mod provider_accounts_parse;
 pub mod provider_key_manager;
 mod release_wizard;
 mod runtime;
