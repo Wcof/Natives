@@ -5,22 +5,18 @@ import { Eye, Edit2, Pencil } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
-import { getExt, isMarkdownFile, isCsvFile, isArchiveFile, shouldPreviewAsCode } from '@/lib/follow-mode';
-import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
+import { getExt, isMarkdownFile, shouldPreviewAsCode } from '@/lib/follow-mode';
+import { detectLanguage } from '@/lib/shiki-utils';
 import { parseUnifiedDiff } from '@/lib/diff-utils';
 import { useFileContent } from '@/lib/useFileContent';
 import { useEditorSave } from '@/lib/use-editor-save';
-import { fsApi, fsWatchApiOrNull, hasNativeFiles } from '@/lib/files-api';
+import { fsApi, hasNativeFiles } from '@/lib/files-api';
 import { rewriteLocalImages, type LocalImageRewrite } from '@/lib/markdown-local-images';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { type PreviewSubMode } from '@/lib/preview/contracts';
+import { type PreviewSource, type PreviewSubMode } from '@/lib/preview/contracts';
 import MonacoDiffView from './MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
-import CsvTable from './CsvTable';
-import ArchivePreview from './ArchivePreview';
-import FileMarkdownPreview from './FileMarkdownPreview';
-import { getHttpPort } from '@/lib/natives-http-port';
-import PreviewSurface from '@/components/preview/PreviewSurface';
+import PreviewSurface from '@/components/ui/preview/PreviewSurface';
 import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
 import { PreviewService } from '@/lib/preview/service';
 
@@ -38,12 +34,16 @@ interface FilePreviewProps {
 }
 
 /**
- * Preview Capability V2 是唯一只读预览 pipeline(T201):legacy rollback flag
- * 已物理删除,不再有 localStorage 'natives:preview-capability-v2' 回退分支。
- * Editor 写路径(editMode)独立于只读预览。
+ * Preview Capability 唯一只读预览 pipeline（T19/T201）。
+ *
+ * 只读预览（!editMode）一律走统一 PreviewSurface（builtin registry / PreviewService
+ * / usePreview）。旧的 localStorage rollback 开关与 legacy 预览分支已物理删除
+ * （MIG-003），不再有运行时回退路径。
+ *
+ * Editor 写路径（editMode）独立于只读预览：code → Monaco、markdown → Milkdown、
+ * image → ImageEditor；video/audio/pdf/csv/archive/html 等无编辑能力类型仍经
+ * PreviewSurface 只读呈现。Feature 只持有选择/布局状态，不复制预览算法（R-E3）。
  */
-
-export { type PreviewSubMode };
 
 export default function FilePreview({ entry, subMode, onClose, editMode = false, onEditModeChange }: FilePreviewProps) {
   const [gitDiff, setGitDiff] = useState<string | null>(null);
@@ -110,26 +110,26 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
     return () => { cancelled = true; };
   }, [subMode, entry.path, entry.name, entry.isDir, locale]);
 
-  const [httpPort, setHttpPort] = useState<number | null>(null);
   const ext = getExt(entry.name);
   const isMarkdown = isMarkdownFile(entry.name);
-  const isCsv = isCsvFile(entry.name);
-  const isArchive = isArchiveFile(entry.name);
   const isCode = shouldPreviewAsCode(entry.kind, entry.name, editMode);
 
-  // Preview V2 只读管线（surface-local controller 由 PreviewSurface 内部持有）
+  // 统一只读预览管线（surface-local controller 由 usePreview 持有）
   const previewService = useMemo(
     () => new PreviewService(createBuiltinRegistry(), createDefaultContext()),
     [],
   );
-  // T201: V2 PreviewSurface is the ONLY readonly preview pipeline. The legacy
-  // rollback flag is deleted; `subMode === 'preview' && !editMode` always goes
-  // through PreviewSurface.
-  const v2ReadonlyPreview = subMode === 'preview' && !editMode;
-
-  useEffect(() => {
-    getHttpPort().then(setHttpPort).catch(() => {});
-  }, []);
+  const previewSource = useMemo<PreviewSource>(
+    () => ({
+      type: 'file',
+      path: entry.path,
+      name: entry.name,
+      kind: entry.kind,
+      size: entry.size,
+      mtime: entry.mtime,
+    }),
+    [entry.path, entry.name, entry.kind, entry.size, entry.mtime],
+  );
 
   return (
     <div ref={containerRef} tabIndex={-1} role="dialog" aria-label={entry.name} style={{
@@ -144,45 +144,25 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
         flex: 1,
         minHeight: 0,
         overflow: 'auto',
-        padding: isMarkdown || isCsv || (subMode === 'preview' && isCode && editMode) ? 0 : '0 4px',
+        padding: isMarkdown || (subMode === 'preview' && isCode && editMode) ? 0 : '0 4px',
         display: 'flex',
         flexDirection: 'column',
       }}>
         {subMode === 'preview' && (
-          v2ReadonlyPreview ? (
-            <PreviewSurface
-              source={{
-                type: 'file',
-                path: entry.path,
-                name: entry.name,
-                kind: entry.kind,
-                size: entry.size,
-                mtime: entry.mtime,
-              }}
-              surface="files"
-              service={previewService}
-            />
+          editMode ? (
+            // ── Editor 写路径（独立于只读预览）──
+            isCode ? (
+              <CodeEditPane entry={entry} locale={locale} ext={ext} />
+            ) : isMarkdown ? (
+              <MdWysiwygEditor path={entry.path} locale={locale} />
+            ) : entry.kind === 'image' ? (
+              <ImageEditPane entry={entry} locale={locale} onImageClick={setLightboxSrc} />
+            ) : (
+              // 无编辑能力的类型（video/audio/pdf/csv/archive/html/…）仍只读呈现
+              <PreviewSurface source={previewSource} surface="files" service={previewService} />
+            )
           ) : (
-            isCode
-              ? (
-                <CodePreview
-                  entry={entry}
-                  locale={locale}
-                  editMode={editMode}
-                  ext={ext}
-                />
-              )
-              : (
-                <PreviewContent
-                  entry={entry}
-                  locale={locale}
-                  isMarkdown={isMarkdown}
-                  isCsv={isCsv}
-                  isArchive={isArchive}
-                  editMode={editMode}
-                  onImageClick={setLightboxSrc}
-                />
-              )
+            <PreviewSurface source={previewSource} surface="files" service={previewService} />
           )
         )}
         {subMode === 'git' && (
@@ -201,10 +181,30 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false,
   );
 }
 
-// ── Preview Content ──
+// ── Code Edit Pane（Monaco 写路径；只读代码预览统一走 PreviewSurface）──
 
-/** Build a blob URL for a file via Tauri IPC. Returns null for binary types that need a URL. */
-function useFileBlobUrl(path: string, kind?: string): string | null {
+function CodeEditPane({ entry, locale, ext }: {
+  entry: FileEntry;
+  locale: Locale;
+  ext: string;
+}) {
+  const { content: code, loading, mtime, reload } = useFileContent(entry.path);
+
+  if (loading || code === null) {
+    return (
+      <div style={{ color: 'var(--text-disabled)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+        {t(locale, 'common.loading')}
+      </div>
+    );
+  }
+
+  return <CodeEditorPane entry={entry} code={code} mtime={mtime} reload={reload} locale={locale} ext={ext} />;
+}
+
+// ── Image Edit Pane（写路径：只读预览由 PreviewSurface 呈现，此处仅编辑入口）──
+
+/** 为图像编辑构建可被 canvas 读取的 URL（HEIC/TIFF 走后端 sips 转码，失败回退 convertFileSrc）。 */
+function useImageEditUrl(path: string): string | null {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -212,9 +212,8 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
     const fs = fsApi();
 
     // HEIC/TIFF：webview 不支持直接解码，走后端 sips 转码缓存（W8）。
-    // 转码失败（非 macOS 等）回退 convertFileSrc——大概率仍裂，但不阻断其它类型。
     const lowerExt = path.split('.').pop()?.toLowerCase() || '';
-    if (kind === 'image' && ['heic', 'heif', 'tif', 'tiff'].includes(lowerExt) && fs.convertImagePreview) {
+    if (['heic', 'heif', 'tif', 'tiff'].includes(lowerExt) && fs.convertImagePreview) {
       let cancelled = false;
       (async () => {
         try {
@@ -229,212 +228,129 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
       return () => { cancelled = true; };
     }
 
-    if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
-      if (fs.convertFileSrc) {
-        startTransition(() => { setUrl(fs.convertFileSrc?.(path) ?? ""); });
-        return;
-      }
+    if (fs.convertFileSrc) {
+      startTransition(() => { setUrl(fs.convertFileSrc?.(path) ?? ""); });
+      return;
     }
 
+    // 浏览器 dev 兜底：readFile → Blob URL（编辑需要可读字节，不能只用 asset URL）
     let cancelled = false;
-    // Track the object URL created by *this* effect so cleanup revokes only its own.
     let createdUrl: string | null = null;
     (async () => {
       try {
-        {
-          const result = await fs.readFile(path) as any;
-          if (cancelled) return;
-          const content = typeof result === 'string' ? result : result?.content;
-          if (!content) return;
-          // Infer MIME from extension
-          const ext = path.split('.').pop()?.toLowerCase() || '';
-          const mimeMap: Record<string, string> = {
-            png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-            gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-            mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
-            mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
-            pdf: 'application/pdf',
-          };
-          const mime = mimeMap[ext] || 'application/octet-stream';
-          // If encoding is base64, decode it
-          let blob: Blob;
-          if (result?.encoding === 'base64') {
-            const byteString = atob(content);
-            const ab = new ArrayBuffer(byteString.length);
-            const ia = new Uint8Array(ab);
-            for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-            blob = new Blob([ab], { type: mime });
-          } else {
-            blob = new Blob([content], { type: mime });
-          }
-          if (!cancelled) {
-            createdUrl = URL.createObjectURL(blob);
-            setUrl(createdUrl);
-          }
+        const result = await fs.readFile(path) as any;
+        if (cancelled) return;
+        const content = typeof result === 'string' ? result : result?.content;
+        if (!content) return;
+        const ext = path.split('.').pop()?.toLowerCase() || '';
+        const mimeMap: Record<string, string> = {
+          png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+          gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+        };
+        const mime = mimeMap[ext] || 'application/octet-stream';
+        let blob: Blob;
+        if (result?.encoding === 'base64') {
+          const byteString = atob(content);
+          const ab = new ArrayBuffer(byteString.length);
+          const ia = new Uint8Array(ab);
+          for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+          blob = new Blob([ab], { type: mime });
+        } else {
+          blob = new Blob([content], { type: mime });
+        }
+        if (!cancelled) {
+          createdUrl = URL.createObjectURL(blob);
+          setUrl(createdUrl);
         }
       } catch { /* ignore */ }
     })();
     return () => {
       cancelled = true;
-      // Revoke the blob URL created by this effect to avoid leaking one per file switch/unmount.
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [path, kind]);
+  }, [path]);
 
   return url;
 }
 
-function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, editMode, onImageClick }: {
+function ImageEditPane({ entry, locale, onImageClick }: {
   entry: FileEntry;
   locale: Locale;
-  isMarkdown: boolean;
-  isCsv: boolean;
-  isArchive: boolean;
-  editMode: boolean;
   onImageClick: (src: string) => void;
 }) {
-  const blobUrl = useFileBlobUrl(entry.path, entry.kind);
+  const imageUrl = useImageEditUrl(entry.path);
   const [imageEditing, setImageEditing] = useState(false);
 
-  // Image with lightbox + edit button
-  if (entry.kind === 'image' && blobUrl) {
-    if (imageEditing) {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
-            <button
-              onClick={() => setImageEditing(false)}
-              className="text-xs px-2 py-1 rounded"
-              style={{ background: 'var(--surface)', color: 'var(--text-secondary)' }}
-            >
-              {t(locale, 'filePreview.backToPreview')}
-            </button>
-            <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>{entry.name}</span>
-          </div>
-          <Suspense fallback={<MathCurveLoader />}>
-            <ImageEditor
-              imagePath={blobUrl}
-              imageName={entry.name}
-              onSave={(dataUrl, ext, asNew) => {
-                if (dataUrl && hasNativeFiles()) {
-                  const base64 = dataUrl.split(',')[1] || '';
-                  const p = entry.path || '';
-                  const dir = p.substring(0, p.lastIndexOf('/')) || '/';
-                  const entryName = entry.name || 'image';
-                  const name = asNew
-                    ? entryName.replace(/\.[^.]+$/, '') + '-edited.' + ext
-                    : entryName;
-                  fsApi().saveBlob(dir, name, base64).catch(() => {});
-                }
-                setImageEditing(false);
-              }}
-              onClose={() => setImageEditing(false)}
-            />
-          </Suspense>
+  if (!imageUrl) return null;
+
+  if (imageEditing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+          <button
+            onClick={() => setImageEditing(false)}
+            className="text-xs px-2 py-1 rounded"
+            style={{ background: 'var(--surface)', color: 'var(--text-secondary)' }}
+          >
+            {t(locale, 'filePreview.backToPreview')}
+          </button>
+          <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>{entry.name}</span>
         </div>
-      );
-    }
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, position: 'relative' }}>
-        <img
-          src={blobUrl}
-          alt={entry.name}
-          onClick={() => onImageClick(blobUrl)}
-          style={{
-            maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
-            background: 'repeating-conic-gradient(#80808033 0% 25%, transparent 0% 50%) 50% / 20px 20px',
-            cursor: 'zoom-in',
-          }}
-        />
-        <button
-          onClick={(e) => { e.stopPropagation(); setImageEditing(true); }}
-          title={t(locale, 'filePreview.editImage')}
-          style={{
-            position: 'absolute', top: 8, right: 8,
-            display: 'flex', alignItems: 'center', gap: 4,
-            padding: '4px 8px', borderRadius: 6, fontSize: 12,
-            background: 'var(--surface)', color: 'var(--text-secondary)',
-            border: '1px solid var(--border)', cursor: 'pointer',
-          }}
-        >
-          <Pencil size={13} />
-          {t(locale, 'filePreview.editImage')}
-        </button>
+        <Suspense fallback={<MathCurveLoader />}>
+          <ImageEditor
+            imagePath={imageUrl}
+            imageName={entry.name}
+            onSave={(dataUrl, ext, asNew) => {
+              if (dataUrl && hasNativeFiles()) {
+                const base64 = dataUrl.split(',')[1] || '';
+                const p = entry.path || '';
+                const dir = p.substring(0, p.lastIndexOf('/')) || '/';
+                const entryName = entry.name || 'image';
+                const name = asNew
+                  ? entryName.replace(/\.[^.]+$/, '') + '-edited.' + ext
+                  : entryName;
+                fsApi().saveBlob(dir, name, base64).catch(() => {});
+              }
+              setImageEditing(false);
+            }}
+            onClose={() => setImageEditing(false)}
+          />
+        </Suspense>
       </div>
     );
-  }
-
-  if (entry.kind === 'video' && blobUrl) {
-    return (
-      <video controls style={{ maxWidth: '100%', maxHeight: '100%' }}>
-        <source src={blobUrl} />
-      </video>
-    );
-  }
-
-  if (entry.kind === 'audio' && blobUrl) {
-    return (
-      <audio controls style={{ width: '100%' }}>
-        <source src={blobUrl} />
-      </audio>
-    );
-  }
-
-  if (entry.kind === 'pdf' && blobUrl) {
-    return (
-      <iframe
-        src={blobUrl}
-        style={{ width: '100%', height: '100%', border: 'none' }}
-      />
-    );
-  }
-
-  // CSV/TSV table
-  if (isCsv) {
-    return <CsvPreview path={entry.path} locale={locale} delimiter={entry.name.endsWith('.tsv') ? '\t' : ','} />;
-  }
-
-  // Markdown WYSIWYG (Milkdown Crepe)
-  if (isMarkdown) {
-    return editMode
-      ? <MdWysiwygEditor path={entry.path} locale={locale} />
-      : <FileMarkdownPreview path={entry.path} locale={locale} />;
-  }
-
-  // HTML 文档预览：H0 gate BLOCKED（无真实 Tauri/WebKit headed evidence）。
-  // FilePreview 不再 raw useFileContent + srcDoc；统一走 Preview V2 管线，
-  // HTML provider 缺席时以显式 unsupported 呈现，禁止假绿。
-  if (entry.name.endsWith('.html') || entry.name.endsWith('.htm')) {
-    return (
-      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }} data-preview-kind="html-unsupported">
-        {t(locale, 'filePreview.noPreview').replace('{kind}', 'html')}
-      </div>
-    );
-  }
-
-  // Archive preview
-  if (isArchive) {
-    return <ArchivePreview path={entry.path} locale={locale} />;
   }
 
   return (
-    <div style={{ color: 'var(--text-disabled)', fontSize: 12, padding: 20, textAlign: 'center' }}>
-      {t(locale, 'filePreview.noPreview').replace('{kind}', entry.kind)}
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, position: 'relative' }}>
+      <img
+        src={imageUrl}
+        alt={entry.name}
+        onClick={() => onImageClick(imageUrl)}
+        style={{
+          maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+          background: 'repeating-conic-gradient(#80808033 0% 25%, transparent 0% 50%) 50% / 20px 20px',
+          cursor: 'zoom-in',
+        }}
+      />
+      <button
+        onClick={(e) => { e.stopPropagation(); setImageEditing(true); }}
+        title={t(locale, 'filePreview.editImage')}
+        style={{
+          position: 'absolute', top: 8, right: 8,
+          display: 'flex', alignItems: 'center', gap: 4,
+          padding: '4px 8px', borderRadius: 6, fontSize: 12,
+          background: 'var(--surface)', color: 'var(--text-secondary)',
+          border: '1px solid var(--border)', cursor: 'pointer',
+        }}
+      >
+        <Pencil size={13} />
+        {t(locale, 'filePreview.editImage')}
+      </button>
     </div>
   );
 }
 
-// ── CSV Preview ──
-
-function CsvPreview({ path, locale, delimiter }: { path: string; locale: Locale; delimiter: string }) {
-  const { content } = useFileContent(path);
-  if (content === null) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
-  }
-  return <CsvTable content={content} delimiter={delimiter} />;
-}
-
-// ── Markdown WYSIWYG Preview ──
+// ── Markdown WYSIWYG Editor（写路径）──
 
 function MdWysiwygEditor({ path, locale }: { path: string; locale: Locale }) {
   const { content, mtime, reload } = useFileContent(path);
@@ -516,97 +432,6 @@ function SaveConflictDialog({ open, fileName, locale, onOverwrite, onDismiss }: 
       onConfirm={onOverwrite}
       onCancel={onDismiss}
     />
-  );
-}
-
-function CodePreview({ entry, locale, editMode, ext }: {
-  entry: FileEntry;
-  locale: Locale;
-  editMode: boolean;
-  ext: string;
-}) {
-  const [highlightedHtml, setHighlightedHtml] = useState<string>('');
-  const { content: code, loading, mtime, reload } = useFileContent(entry.path);
-
-  // shiki syntax highlighting
-  useEffect(() => {
-    if (editMode || !code || ext === 'json') return;
-    let cancelled = false;
-    highlightCode(code, detectLanguage(entry.name)).then(html => {
-      if (!cancelled) setHighlightedHtml(html);
-    });
-    return () => { cancelled = true; };
-  }, [code, ext, entry.name, editMode]);
-
-  // 只读预览也跟随外部变更（agent 改文件 → 内容自动跟新）
-  useEffect(() => {
-    if (editMode) return;
-    const api = fsWatchApiOrNull();
-    if (!api) return;
-    const off = api.onChange((event: { path: string; kind: string }) => {
-      if (event.path === entry.path && event.kind !== 'remove') reload();
-    });
-    return off;
-  }, [editMode, entry.path, reload]);
-
-  if (loading || code === null) {
-    return (
-      <div style={{ color: 'var(--text-disabled)', fontSize: 12, padding: 20, textAlign: 'center' }}>
-        {t(locale, 'common.loading')}
-      </div>
-    );
-  }
-
-  // JSON: pretty print
-  if (ext === 'json' && !editMode) {
-    try {
-      const pretty = JSON.stringify(JSON.parse(code), null, 2);
-      return (
-    // eslint-disable-next-line react-hooks/error-boundaries
-        <pre style={{
-          margin: 0, fontSize: 12, lineHeight: 1.6,
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-          background: 'transparent', padding: 12,
-        }}>
-          {pretty}
-        </pre>
-      );
-    } catch { /* fall through to shiki */ }
-  }
-
-  // Edit mode: Monaco Editor（自动保存 + 乐观锁 + 外部变更热重载）
-  if (editMode) {
-    return <CodeEditorPane entry={entry} code={code} mtime={mtime} reload={reload} locale={locale} ext={ext} />;
-  }
-
-  // View mode: shiki syntax highlighting
-  if (highlightedHtml) {
-    return (
-      <div
-        dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-        style={{
-          fontSize: 12,
-          lineHeight: 1.6,
-          fontFamily: 'var(--font-mono)',
-          background: 'transparent',
-          padding: 12,
-          overflow: 'auto',
-        }}
-      />
-    );
-  }
-
-  // Fallback: plain text
-  return (
-    <pre style={{
-      margin: 0, fontSize: 12, lineHeight: 1.6,
-      fontFamily: 'var(--font-mono)',
-      color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      background: 'transparent', padding: 12,
-    }}>
-      {code}
-    </pre>
   );
 }
 

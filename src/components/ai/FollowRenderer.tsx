@@ -1,69 +1,42 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Package } from 'lucide-react';
-import { followPriority, changedRange, getFollowState, recordTerminalActivity, getExt } from '@/lib/follow-mode';
+import { followPriority, getFollowState } from '@/lib/follow-mode';
 import { getScrollbackLines } from '@/lib/path-detector';
 import { parseAgentAction, composeNarration } from '@/lib/agent-narration';
-import { highlightCode, extToLanguage } from '@/lib/shiki-utils';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
-import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
-import { fsApi, hasNativeFiles } from '@/lib/files-api';
-import { useTheme } from '@/context/ThemeContext';
+import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 import { t, useLocale } from '@/i18n';
-import MarkdownRenderer from '@/components/preview/renderers/MarkdownRenderer';
+import PreviewSurface from '@/components/ui/preview/PreviewSurface';
+import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
+import { PreviewService } from '@/lib/preview/service';
 
 interface FollowRendererProps {
   filePath: string | null;
 }
 
+/**
+ * FollowRenderer — 文件跟随（file-follow）只读呈现。
+ *
+ * 文件内容统一走 Preview Capability（PreviewService → PreviewSurface →
+ * usePreview），不再自行 readFile / Shiki / Markdown / Blob iframe（PREV-002）。
+ * 本组件只保留 follow 域自己的状态：narration 状态条（观察终端活动，非文件
+ * 预览轮询）与 artifact 卡片。R-E3：只消费共享 UI 原子，不复制预览算法。
+ */
+
 export default function FollowRenderer({ filePath }: FollowRendererProps) {
   const locale = useLocale();
-  const [content, setContent] = useState<string | null>(null);
-  const [lastContent, setLastContent] = useState<string | null>(null);
-  const [readError, setReadError] = useState<boolean>(false);
   const [narration, setNarration] = useState('');
-  const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
-  const contentRef = useRef<string | null>(null);
 
-  // Fetch file content when path changes — use Tauri IPC fs.readFile
-  useEffect(() => {
+  // 统一只读预览管线（surface-local controller 由 usePreview 持有）
+  const service = useMemo(
+    () => new PreviewService(createBuiltinRegistry(), createDefaultContext()),
+    [],
+  );
 
-    if (!filePath) { setContent(null); setReadError(false); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        // fs_read_file 返回 ReadFileResult 对象，正文在 .content；
-        // 旧实现把整个对象当字符串向下游传，代码/markdown 预览必然崩溃
-        const result = await fsApi().readFile(filePath) as { content?: string } | string | undefined;
-        if (cancelled || result === undefined) return;
-        const text = typeof result === 'string' ? result : result?.content;
-        if (typeof text !== 'string') { setReadError(true); return; }
-        setReadError(false);
-        setLastContent(contentRef.current);
-        contentRef.current = text;
-        setContent(text);
-      } catch {
-        if (!cancelled) setReadError(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [filePath]);
-
-  // Compute changed lines
-  useEffect(() => {
-
-    if (!content || !lastContent) { setHighlightedLines(new Set()); return; }
-    const range = changedRange(lastContent, content);
-    const lines = new Set<number>();
-    for (let i = range.start; i < range.end; i++) lines.add(i);
-    setHighlightedLines(lines);
-    // Clear highlight after 2s
-    const timer = setTimeout(() => setHighlightedLines(new Set()), 2000);
-    return () => clearTimeout(timer);
-  }, [content, lastContent]);
-
-  // Narration polling — connect to terminal output buffer
+  // Narration：观察绑定终端输出以合成「agent 正在做什么」状态条。
+  // 这是 follow 域自己的活动状态（非文件预览轮询），终端输出无事件总线，
+  // 以低频 1.2s 观察滚动缓冲；文件内容渲染不经此路径。
   useEffect(() => {
     const interval = setInterval(() => {
       const state = getFollowState();
@@ -99,12 +72,9 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
     );
   }
 
-  const ext = getExt(filePath);
-  const isHtml = ['html', 'htm'].includes(ext);
-  const isMd = ['md', 'markdown'].includes(ext);
   const prio = followPriority(filePath);
 
-  // Artifacts: show card
+  // Artifacts: show card (build artifacts are not readable text; skip preview)
   if (prio === 0) {
     return (
       <div style={{ padding: SPACING.xl, textAlign: 'center' }}>
@@ -120,327 +90,14 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
     );
   }
 
-  // HTML: double-buffered iframe
-  if (isHtml) {
-    return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <LiveHtmlPreview path={filePath} />
-        {narration && <NarrationBar text={narration} />}
-      </div>
-    );
-  }
-
-  // Markdown: rendered preview（复用 Preview V2 统一管线；本地文件 → authorized-file-assets policy）
-  if (isMd && content) {
-    const lastSlash = filePath.lastIndexOf('/');
-    return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
-          <MarkdownRenderer
-            model={{
-              kind: 'markdown',
-              source: content,
-              truncated: false,
-              baseDir: lastSlash > 0 ? filePath.slice(0, lastSlash) : undefined,
-              urlPolicy: 'authorized-file-assets',
-            }}
-          />
-        </div>
-        {narration && <NarrationBar text={narration} />}
-      </div>
-    );
-  }
-
-  // Code: syntax highlighted with change lines
-  if (content) {
-    return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <LiveCodePreview content={content} highlightedLines={highlightedLines} ext={ext} />
-        {narration && <NarrationBar text={narration} />}
-      </div>
-    );
-  }
-
-  // 读取失败：明示错误而非停留在上一个文件的旧内容（R-E10）
-  if (readError) {
-    return (
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: 'var(--danger)', fontSize: 'var(--fs-sm)',
-        padding: SPACING.md, textAlign: 'center',
-      }}>
-        {t(locale, 'terminal.followReadError')}
-      </div>
-    );
-  }
-
-  return null;
-}
-
-// ── Live HTML Preview (double-buffered iframe) ──
-
-function LiveHtmlPreview({ path }: { path: string }) {
-  const [currentSrc, setCurrentSrc] = useState<string>('');
-  const [nextSrc, setNextSrc] = useState<string | null>(null);
-  const swappingRef = useRef(false);
-  const dirtyRef = useRef(false);
-  const nextSrcRef = useRef<string | null>(null);
-  const currentIframeRef = useRef<HTMLIFrameElement>(null);
-  const nextIframeRef = useRef<HTMLIFrameElement>(null);
-  const lastUrlRef = useRef('');
-  const { themeId } = useTheme();
-
-  // Get theme CSS variables to pass into sandboxed iframes
-  const getThemeCSS = useCallback((): string => {
-    const root = document.documentElement;
-    const computed = getComputedStyle(root);
-    const vars: string[] = [];
-    // Extract key CSS custom properties for theme coherence
-    const keys = [
-      '--bg', '--text', '--text-dim', '--text-faint', '--accent',
-      '--vibe-toolbar-bg', '--vibe-content-bg', '--vibe-btn-border', '--vibe-btn-text',
-      '--mac-red', '--mac-yellow', '--mac-green',
-      '--font-sans', '--font-mono', '--fs-sm', '--fs-md',
-    ];
-    for (const key of keys) {
-      const val = computed.getPropertyValue(key).trim();
-      if (val) vars.push(`${key}: ${val};`);
-    }
-    return vars.join('\n');
-  }, []);
-
-  // Send theme CSS to iframe via postMessage
-  const sendThemeToIframe = useCallback((iframe: HTMLIFrameElement | null) => {
-    if (!iframe?.contentWindow) return;
-    try {
-      iframe.contentWindow.postMessage(
-        { type: 'natives-theme-update', css: getThemeCSS(), themeId },
-        '*', // targetOrigin '*' is safe here because the iframe is sandboxed (no allow-same-origin)
-      );
-    } catch { /* cross-origin errors are expected if iframe navigated */ }
-  }, [getThemeCSS, themeId]);
-
-  // Re-send theme CSS on themeId change. Do NOT put currentSrc in deps and
-  // do NOT cache-bust via setCurrentSrc(...Date.now()) — that re-triggers this
-  // effect forever (Maximum update depth exceeded).
-  useEffect(() => {
-    sendThemeToIframe(currentIframeRef.current);
-  }, [themeId, sendThemeToIframe]);
-
-  // Load file into a blob URL when the path changes (not on every currentSrc update).
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        // files-api 契约：fs 不可用（浏览器 dev）时保持原告警降级
-        if (!hasNativeFiles()) {
-          console.warn('[FollowRenderer] fs.readFile not available');
-          return;
-        }
-
-        const result = await fsApi().readFile(path);
-        if (cancelled || !result) return;
-        const content = typeof result === 'string' ? result : (result as { content?: string }).content;
-        const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';
-        const blob = new Blob([content || ''], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-
-        if (!lastUrlRef.current) {
-          setCurrentSrc(url);
-          lastUrlRef.current = url;
-          return;
-        }
-        if (swappingRef.current) {
-          dirtyRef.current = true;
-          // Drop the unused blob if we defer the swap.
-          URL.revokeObjectURL(url);
-          return;
-        }
-        swappingRef.current = true;
-        nextSrcRef.current = url;
-        setNextSrc(url);
-      } catch (err) {
-        console.error('[FollowRenderer] Failed to load file:', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [path]);
-
-  const handleNextLoad = useCallback(async () => {
-    if (!swappingRef.current) return;
-    swappingRef.current = false;
-    const loadedSrc = nextSrcRef.current;
-    if (loadedSrc) setCurrentSrc(loadedSrc);
-    setNextSrc(null);
-    nextSrcRef.current = null;
-
-    // Send theme to newly loaded iframe
-    sendThemeToIframe(currentIframeRef.current);
-
-    if (dirtyRef.current) {
-      dirtyRef.current = false;
-      try {
-        // files-api 契约：fs 可用才重读（与原可选链探测语义等价）
-        if (hasNativeFiles()) {
-          const result = await fsApi().readFile(path);
-          if (result) {
-            const content = typeof result === 'string' ? result : (result as any).content;
-            const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';
-            const blob = new Blob([content || ''], { type: mimeType });
-            setCurrentSrc(URL.createObjectURL(blob));
-          }
-        }
-      } catch { /* ignore fallback */ }
-    }
-  }, [path, sendThemeToIframe]);
-
-  // Force swap after 2.5s
-  useEffect(() => {
-    if (!nextSrc) return;
-    const timer = setTimeout(handleNextLoad, 2500);
-    return () => clearTimeout(timer);
-  }, [nextSrc, handleNextLoad]);
-
-  // 换页后回收上一个 blob URL（旧实现从不 revoke，长时间跟随 HTML 文件会缓慢泄漏）
-  useEffect(() => {
-    return () => {
-      if (currentSrc && currentSrc.startsWith('blob:')) URL.revokeObjectURL(currentSrc);
-    };
-  }, [currentSrc]);
-
+  // 其余类型（HTML/Markdown/Code/Media/…）统一走 Preview Capability 只读管线
   return (
-    <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-      {currentSrc && (
-        <iframe
-          ref={currentIframeRef}
-          src={currentSrc}
-          sandbox={IFRAME_SANDBOX}
-          onLoad={() => sendThemeToIframe(currentIframeRef.current)}
-          style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
-        />
-      )}
-      {nextSrc && (
-        <iframe
-          ref={nextIframeRef}
-          src={nextSrc}
-          sandbox={IFRAME_SANDBOX}
-          onLoad={() => {
-            handleNextLoad();
-            sendThemeToIframe(nextIframeRef.current);
-          }}
-          style={{
-            position: 'absolute', inset: 0,
-            width: '100%', height: '100%',
-            border: 'none', background: '#fff',
-            opacity: 0, // Hidden until swap
-          }}
-        />
-      )}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <PreviewSurface source={{ type: 'file', path: filePath }} surface="follow" service={service} />
+      </div>
+      {narration && <NarrationBar text={narration} />}
     </div>
-  );
-}
-
-// ── HTML Sanitization ──
-const ESC_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' };
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, c => ESC_MAP[c] || c);
-}
-
-function sanitizeHtml(html: string): string {
-  // Strip script/event-handler tags, keep safe HTML
-  return html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/\son\w+='[^']*'/gi, '');
-}
-
-// ── Live Markdown Preview ──
-
-function LiveMarkdownPreview({ content }: { content: string }) {
-  const [renderedHtml, setRenderedHtml] = useState('');
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { marked } = await import('marked');
-        const html = await marked(content);
-        setRenderedHtml(sanitizeHtml(html as string));
-      } catch {
-        setRenderedHtml(`<pre>${escapeHtml(content)}</pre>`);
-      }
-    })();
-  }, [content]);
-
-  return (
-    <div
-      className="markdown-body"
-      dangerouslySetInnerHTML={{ __html: renderedHtml }}
-      style={{
-        fontSize: 'var(--fs-md)', lineHeight: 1.7, color: 'var(--text)',
-        fontFamily: 'var(--font-sans, system-ui)',
-      }}
-    />
-  );
-}
-
-// ── Live Code Preview ──
-
-function LiveCodePreview({ content, highlightedLines, ext }: {
-  content: string;
-  highlightedLines: Set<number>;
-  ext: string;
-}) {
-  const [highlightedHtml, setHighlightedHtml] = useState<string>('');
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    highlightCode(content, extToLanguage(ext))
-      .then(html => {
-        if (!cancelled) setHighlightedHtml(html);
-      })
-      .catch(() => {
-        // 高亮失败降级为纯文本 <pre>（下方 fallback 分支）
-        if (!cancelled) setHighlightedHtml('');
-      });
-    return () => { cancelled = true; };
-  }, [content, ext]);
-
-  // Scroll to first changed line
-  useEffect(() => {
-    if (highlightedLines.size === 0 || !containerRef.current) return;
-    const firstLine = Math.min(...highlightedLines);
-    const lineEl = containerRef.current.querySelector(`[data-line="${firstLine}"]`);
-    lineEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [highlightedLines]);
-
-  if (highlightedHtml) {
-    return (
-      <div
-        ref={containerRef}
-        dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-        style={{
-          flex: 1, overflow: 'auto', padding: 12,
-          fontSize: 'var(--fs-sm)', lineHeight: 1.6,
-          fontFamily: 'var(--font-mono, monospace)',
-          background: 'var(--surface)',
-        }}
-      />
-    );
-  }
-
-  return (
-    <pre ref={containerRef as any} style={{
-      flex: 1, overflow: 'auto', margin: 0, padding: 12,
-      fontSize: 'var(--fs-sm)', lineHeight: 1.6,
-      fontFamily: 'var(--font-mono, monospace)',
-      color: 'var(--text)', whiteSpace: 'pre-wrap',
-      background: 'var(--surface)',
-    }}>
-      {content}
-    </pre>
   );
 }
 
