@@ -15,6 +15,7 @@ pub mod grant_store;
 pub mod install;
 pub mod local;
 pub mod model;
+pub mod model_runtime;
 pub mod non_owned;
 pub mod oauth;
 pub mod operation;
