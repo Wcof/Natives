@@ -328,7 +328,7 @@ function ImageEditPane({ entry, locale, onImageClick }: {
         onClick={() => onImageClick(imageUrl)}
         style={{
           maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
-          background: 'repeating-conic-gradient(#80808033 0% 25%, transparent 0% 50%) 50% / 20px 20px',
+          background: 'repeating-conic-gradient(color-mix(in srgb, var(--neutral-500) 20%, transparent) 0% 25%, transparent 0% 50%) 50% / 20px 20px',
           cursor: 'zoom-in',
         }}
       />

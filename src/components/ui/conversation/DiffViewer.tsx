@@ -59,8 +59,8 @@ export default function DiffViewer({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 text-[0.625rem]">
-          <span className="text-green-500">+{result.additions}</span>
-          <span className="text-red-500">−{result.deletions}</span>
+          <span className="text-[var(--diff-add)]">+{result.additions}</span>
+          <span className="text-[var(--diff-del)]">−{result.deletions}</span>
           <button
             type="button"
             className="underline text-[var(--text-secondary)] hover:text-[var(--text)]"
@@ -80,7 +80,7 @@ export default function DiffViewer({
             <button
               type="button"
               onClick={onRollback}
-              className="text-amber-500 underline hover:text-amber-400"
+              className="text-[var(--diff-mod)] underline hover:text-[var(--diff-mod)]"
               data-testid="diff-rollback"
             >
               {t(locale, 'diffViewer.rollback')}
@@ -117,9 +117,9 @@ export default function DiffViewer({
                 {hunk.lines.map((line, li) => {
                   const bg =
                     line.kind === 'add'
-                      ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+                      ? 'bg-[var(--diff-add)]/10 text-[var(--diff-add)]'
                       : line.kind === 'del'
-                        ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                        ? 'bg-[var(--diff-del)]/10 text-[var(--diff-del)]'
                         : 'text-[var(--text-secondary)]';
                   const mark = line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' ';
                   return (

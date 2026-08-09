@@ -478,7 +478,7 @@ function ActiveLiquidGlass({
         'relative isolate overflow-hidden text-brand-jade-glow font-semibold',
         'animate-liquid-surface-in transition-transform duration-[400ms] ease-ease-out-expo',
         useCssFallback
-          ? 'border border-white/25 bg-white/10 mix-blend-plus-lighter shadow-liquid-edge'
+          ? 'border border-[var(--neutral-1000)]/25 bg-[var(--neutral-1000)]/10 mix-blend-plus-lighter shadow-liquid-edge'
           : 'border border-glass-edge/[0.28] bg-glass-active/[0.12] shadow-liquid-edge shadow-glass-ambient',
         className,
       )}
@@ -514,7 +514,7 @@ export default function LiquidGlass({
     return (
       <div
         className={mergeClasses(
-          'bg-brand-olive-sidebar transition-all duration-[400ms] ease-ease-out-expo hover:bg-white/[0.04]',
+          'bg-brand-olive-sidebar transition-all duration-[400ms] ease-ease-out-expo hover:bg-[var(--neutral-1000)]/[0.04]',
           className,
         )}
         style={style}

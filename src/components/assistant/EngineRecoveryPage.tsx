@@ -42,7 +42,7 @@ export default function EngineRecoveryPage({
       data-testid="engine-recovery-page"
       role="alert"
     >
-      <div className="flex h-14 w-14 items-center justify-center rounded-full border border-red-400/30 bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-300">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full border border-[var(--danger)]/30 bg-[var(--danger-soft)] text-[var(--danger)]">
         {connection === 'incompatible' ? <AlertTriangle size={24} /> : <WifiOff size={24} />}
       </div>
       <div className="max-w-md space-y-2">
@@ -62,7 +62,7 @@ export default function EngineRecoveryPage({
           <button
             type="button"
             onClick={onRetry}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-[var(--accent-ink)]"
             data-testid="engine-recovery-retry"
           >
             <RefreshCw size={14} />
@@ -75,7 +75,7 @@ export default function EngineRecoveryPage({
             onClick={onCopyDiagnostics}
             className={
               connection === 'incompatible'
-                ? 'inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white'
+                ? 'inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-[var(--accent-ink)]'
                 : 'inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
             }
             data-testid="engine-recovery-copy"

@@ -251,7 +251,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
               onClick={handleLogin}
               disabled={loginLoading}
               className="px-4 py-2 rounded text-sm"
-              style={{ background: 'var(--primary)', color: '#FFFFFF', opacity: loginLoading ? 0.7 : 1 }}
+              style={{ background: 'var(--primary)', color: 'var(--accent-ink)', opacity: loginLoading ? 0.7 : 1 }}
             >
               {loginLoading ? t(locale, 'wechat.loading') : t(locale, 'wechat.getQrcode')}
             </button>
@@ -296,7 +296,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
             onClick={handleSend}
             disabled={sending || !message.trim()}
             className="p-1.5 rounded"
-            style={{ background: 'var(--primary)', color: '#FFFFFF', opacity: sending || !message.trim() ? 0.6 : 1 }}
+            style={{ background: 'var(--primary)', color: 'var(--accent-ink)', opacity: sending || !message.trim() ? 0.6 : 1 }}
             title={sending ? t(locale, 'wechat.sending') : undefined}
           >
             <Send size={14} />

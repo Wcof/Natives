@@ -651,7 +651,7 @@ export default function ActivityInspector({
             <Row label={t(locale, 'activityInspector.model')} value={providerLabel(run.providerId, run.modelId)} />
             {run.activity && <Row label={t(locale, 'activityInspector.activity')} value={run.activity} />}
             {run.errorMessage && (
-              <div className="rounded border border-red-400/30 bg-red-50 p-2 text-red-600 dark:bg-red-950/20">
+              <div className="rounded border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-2 text-[var(--danger)]">
                 {run.errorMessage}
               </div>
             )}
@@ -659,7 +659,7 @@ export default function ActivityInspector({
               <button
                 type="button"
                 onClick={onRetry}
-                className="rounded bg-[var(--primary)] px-3 py-1.5 text-white"
+                className="rounded bg-[var(--primary)] px-3 py-1.5 text-[var(--accent-ink)]"
               >
                 {t(locale, 'common.retry')}
               </button>
@@ -730,7 +730,7 @@ export default function ActivityInspector({
                     compact
                   />
                 ) : tasksError ? (
-                  <div className="rounded border border-red-400/30 bg-red-50 p-2 text-red-600 dark:bg-red-950/20">
+                  <div className="rounded border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-2 text-[var(--danger)]">
                     {tasksError}
                   </div>
                 ) : backgroundExecTasks.length === 0 ? (
@@ -873,15 +873,15 @@ export default function ActivityInspector({
             ) : auditLoading ? (
               <Empty locale={locale} messageKey="activityInspector.loadingGitStatus" compact />
             ) : auditError ? (
-              <div className="rounded border border-red-400/30 p-2 text-[var(--danger)]">{auditError}</div>
+              <div className="rounded border border-[var(--danger)]/30 p-2 text-[var(--danger)]">{auditError}</div>
             ) : (
               <>
                 <div className="shrink-0 rounded border border-[var(--border)] p-2">
                   <div className="flex items-center gap-2">
                     <GitBranch size={13} />
                     <span className="min-w-0 flex-1 truncate font-mono">{auditStatus?.branch ?? 'unknown'}</span>
-                    <span className="text-emerald-500">+{auditCounts.additions}</span>
-                    <span className="text-red-500">−{auditCounts.deletions}</span>
+                    <span className="text-[var(--diff-add)]">+{auditCounts.additions}</span>
+                    <span className="text-[var(--diff-del)]">−{auditCounts.deletions}</span>
                     <button
                       type="button"
                       onClick={() => void refreshAudit()}
@@ -902,7 +902,7 @@ export default function ActivityInspector({
                       type="button"
                       disabled={committing || !commitMessage.trim()}
                       onClick={() => void runGitAction('commit')}
-                      className="rounded bg-[var(--primary)] px-2 py-1 text-white disabled:opacity-40"
+                      className="rounded bg-[var(--primary)] px-2 py-1 text-[var(--accent-ink)] disabled:opacity-40"
                     >
                       {committing ? t(locale, 'activityInspector.committing') : t(locale, 'activityInspector.commit')}
                     </button>
@@ -933,11 +933,11 @@ export default function ActivityInspector({
                             key={idx}
                             className={
                               isAdd
-                                ? 'bg-emerald-500/10 text-emerald-500'
+                                ? 'bg-[var(--diff-add)]/10 text-[var(--diff-add)]'
                                 : isDel
-                                  ? 'bg-red-500/10 text-red-500'
+                                  ? 'bg-[var(--diff-del)]/10 text-[var(--diff-del)]'
                                   : isHunk
-                                    ? 'text-blue-400 font-semibold'
+                                    ? 'text-[var(--info)] font-semibold'
                                     : 'text-[var(--text-secondary)]'
                             }
                           >
@@ -991,11 +991,11 @@ export default function ActivityInspector({
                             <span
                               className={
                                 entry.status === 'deleted'
-                                  ? 'text-red-500'
+                                  ? 'text-[var(--diff-del)]'
                                   : entry.status === 'added' || entry.status === 'untracked'
-                                    ? 'text-emerald-500'
+                                    ? 'text-[var(--diff-add)]'
                                     : entry.status === 'modified'
-                                      ? 'text-orange-400'
+                                      ? 'text-[var(--diff-mod)]'
                                       : 'text-transparent'
                               }
                             >

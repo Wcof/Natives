@@ -327,7 +327,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                     disabled={navigation.isCreatingConversation}
                     aria-label={t(locale, 'assistant.newConversation')}
                     title={t(locale, 'assistant.newConversation')}
-                    className="drag-none rounded-md p-1 text-inherit hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-35 transition-all"
+                    className="drag-none rounded-md p-1 text-inherit hover:bg-[var(--neutral-0)]/10 dark:hover:bg-[var(--neutral-1000)]/10 disabled:opacity-35 transition-all"
                   >
                     {navigation.isCreatingConversation ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
                   </button>
@@ -346,7 +346,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                         event.stopPropagation();
                         openMenu(`project:${group.id}`, event.currentTarget);
                       }}
-                      className="drag-none rounded-md p-1 text-inherit hover:bg-black/10 dark:hover:bg-white/10 transition-all"
+                      className="drag-none rounded-md p-1 text-inherit hover:bg-[var(--neutral-0)]/10 dark:hover:bg-[var(--neutral-1000)]/10 transition-all"
                     >
                       <MoreHorizontal size={12} />
                     </button>
@@ -547,7 +547,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
       {/* ── Delete Modal ── */}
       <Modal isOpen={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} title={t(locale, 'assistant.deleteConversation')} width={420}>
         <p className="text-sm text-[var(--text-secondary)]">{t(locale, 'assistant.deleteConversationConfirm', { title: deleteTarget?.title || '' })}</p>
-        <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={deletingConversation} onClick={() => setDeleteTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="button" disabled={deletingConversation} onClick={() => void confirmDeleteConversation()} className="btn btn-sm bg-[var(--danger)] text-white disabled:opacity-60">{deletingConversation ? t(locale, 'assistantSidebar.deletingShort') : t(locale, 'common.delete')}</button></div>
+        <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={deletingConversation} onClick={() => setDeleteTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="button" disabled={deletingConversation} onClick={() => void confirmDeleteConversation()} className="btn btn-sm bg-[var(--danger)] text-[var(--neutral-1000)] disabled:opacity-60">{deletingConversation ? t(locale, 'assistantSidebar.deletingShort') : t(locale, 'common.delete')}</button></div>
       </Modal>
 
       <Modal isOpen={Boolean(removeProjectTarget)} onClose={() => setRemoveProjectTarget(null)} title={t(locale, 'assistant.removeProject')} width={420}>
@@ -586,7 +586,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
               setRemoveProjectTarget(null);
               toast(t(locale, 'assistantSidebar.projectRemoved'), 'success');
             })()}
-            className="btn btn-sm bg-[var(--danger)] text-white"
+            className="btn btn-sm bg-[var(--danger)] text-[var(--neutral-1000)]"
           >
             {removingProject ? t(locale, 'assistantSidebar.removingShort') : t(locale, 'assistantSidebar.removeShort')}
           </button>

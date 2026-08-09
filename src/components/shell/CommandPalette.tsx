@@ -310,7 +310,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '20vh',
-        background: 'rgba(0, 0, 0, 0.4)',
+        background: 'var(--overlay)',
         animation: 'fadeIn 150ms ease',
       }}
       onClick={onClose}

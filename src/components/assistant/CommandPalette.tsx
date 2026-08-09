@@ -74,7 +74,7 @@ export default function CommandPalette({ open, onClose, commands, locale }: Comm
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/40 pt-[12vh]"
+      className="fixed inset-0 z-[80] flex items-start justify-center bg-[var(--overlay)] pt-[12vh]"
       role="dialog"
       aria-modal="true"
       aria-label={t(locale, 'assistantCommandPalette.title')}

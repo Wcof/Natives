@@ -332,7 +332,7 @@ export default function SubagentAssignmentModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] p-4"
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -504,7 +504,7 @@ export default function SubagentAssignmentModal({
           {error ? (
             <div
               role="alert"
-              className="rounded border border-red-400/30 bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950/20"
+              className="rounded border border-[var(--danger)]/30 bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]"
             >
               {error}
             </div>
@@ -550,7 +550,7 @@ export default function SubagentAssignmentModal({
             </button>
             <button
               type="button"
-              className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white disabled:opacity-50"
+              className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--accent-ink)] disabled:opacity-50"
               disabled={confirmDisabled}
               onClick={() => void handleConfirm()}
               data-testid="subagent-assignment-confirm"

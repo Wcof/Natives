@@ -73,7 +73,7 @@ export default function PromptQueuePanel({
                 <div className="flex gap-1">
                   <button
                     type="button"
-                    className="rounded bg-[var(--primary)] px-2 py-0.5 text-white"
+                    className="rounded bg-[var(--primary)] px-2 py-0.5 text-[var(--accent-ink)]"
                     onClick={() => {
                       onEdit(item.id, draft);
                       setEditingId(null);

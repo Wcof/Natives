@@ -126,7 +126,7 @@ export default function FileArea({
             pointerEvents: 'none',
             border: '2px dashed var(--primary)',
             borderRadius: 'var(--radius, 4px)',
-            background: 'var(--accent-soft, rgba(205,242,75,0.08))',
+            background: 'var(--accent-soft)',
             color: 'var(--primary)',
             fontSize: FONT_SIZE.lg,
             fontWeight: 600,

@@ -116,7 +116,7 @@ export default function AskUserPromptCard({
               type="button"
               disabled={submitting || !freeText.trim()}
               onClick={() => void run(() => onAnswer(interaction.id, freeText.trim()))}
-              className={`w-full rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
+              className={`w-full rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--accent-ink)] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
             >
               {submitLabel}
             </button>
@@ -128,7 +128,7 @@ export default function AskUserPromptCard({
             type="button"
             disabled={submitting}
             onClick={() => void run(() => onCancel(interaction.id))}
-            className={`w-full rounded-lg border border-red-300/50 bg-transparent px-3 py-2 text-left text-xs font-medium text-red-600 dark:border-red-800/50 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-60 ${focusRing}`}
+            className={`w-full rounded-lg border border-[var(--danger)]/50 bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-60 ${focusRing}`}
           >
             {cancelLabel}
           </button>

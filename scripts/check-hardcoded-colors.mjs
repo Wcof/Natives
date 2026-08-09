@@ -4,26 +4,26 @@
  * Scans src/components and src/app for color literals (#hex, rgb/rgba/hsl,
  * Tailwind fixed-color classes) that bypass the theme token system.
  *
- * Existing violations are grandfathered in scripts/hardcoded-colors-baseline.json
- * (per-file hit counts). The check fails when a file gains new hits or a new
- * file introduces any. Shrinking a file's count prints a reminder to re-baseline.
+ * The check FAILS on any hardcoded color. There is no grandfather baseline:
+ * every color literal must reference a design token (var(--*) semantic
+ * variable) or a token constant from src/lib/design-tokens.ts. Raw color
+ * literals are only allowed inside src/app/globals.css (the token
+ * definitions) — that file is exempt by design.
  *
  * Usage:
- *   node scripts/check-hardcoded-colors.mjs                 # check against baseline
- *   node scripts/check-hardcoded-colors.mjs --update-baseline
+ *   node scripts/check-hardcoded-colors.mjs
  */
 
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve, relative, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const BASELINE_PATH = resolve(__dirname, 'hardcoded-colors-baseline.json');
 
 const SCAN_DIRS = ['src/components', 'src/app'];
 const SCAN_EXT = /\.(tsx?|css)$/;
-// Token definition files where raw color literals are the point.
+// Token definition file where raw color literals are the point.
 const EXEMPT = new Set(['src/app/globals.css']);
 
 const HEX_RE = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g;
@@ -69,45 +69,18 @@ for (const dir of SCAN_DIRS) {
   }
 }
 
-if (process.argv.includes('--update-baseline')) {
-  const baseline = {};
-  for (const [file, hits] of [...results.entries()].sort()) baseline[file] = hits.length;
-  writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n');
-  const total = [...results.values()].reduce((n, h) => n + h.length, 0);
-  console.log(`Baseline updated: ${results.size} files, ${total} hits`);
-  process.exit(0);
-}
-
-let baseline = {};
-try {
-  baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
-} catch {
-  console.error('No baseline found. Run: node scripts/check-hardcoded-colors.mjs --update-baseline');
-  process.exit(1);
-}
-
 let exitCode = 0;
-let shrunk = 0;
 for (const [file, hits] of [...results.entries()].sort()) {
-  const allowed = baseline[file] ?? 0;
-  if (hits.length > allowed) {
-    exitCode = 1;
-    console.error(`\n❌ ${file}: ${hits.length} hardcoded color(s), baseline allows ${allowed}`);
-    hits.forEach(h => console.error(`   ${file}:${h.line}  [${h.match}]  ${h.text}`));
-    console.error('   Use theme tokens (var(--*), .btn classes) instead — see docs/standards/ui-ux/01-design-tokens.md R-U1.');
-  } else if (hits.length < allowed) {
-    shrunk++;
-  }
-}
-for (const file of Object.keys(baseline)) {
-  if (!results.has(file) && baseline[file] > 0) shrunk++;
+  exitCode = 1;
+  console.error(`\n❌ ${file}: ${hits.length} hardcoded color(s)`);
+  hits.forEach(h => console.error(`   ${file}:${h.line}  [${h.match}]  ${h.text}`));
+  console.error('   Use theme tokens (var(--*), .btn classes) instead — see docs/standards/ui-ux/01-design-tokens.md R-U1.');
 }
 
 const total = [...results.values()].reduce((n, h) => n + h.length, 0);
 if (exitCode === 0) {
-  console.log(`✅ Hardcoded colors: no new violations (${total} grandfathered in ${results.size} files)`);
-  if (shrunk > 0) {
-    console.log(`   ${shrunk} file(s) improved — run with --update-baseline to lock in the progress.`);
-  }
+  console.log('✅ Hardcoded colors: none found. All colors reference design tokens.');
+} else {
+  console.error(`\n${total} hardcoded color(s) in ${results.size} file(s). There is no grandfather baseline — fix them to design tokens.`);
 }
 process.exit(exitCode);

@@ -228,7 +228,7 @@ export default function CreationSession({
         onRetry={activeRunId ? () => void retry(activeRunId) : undefined}
       />
       {error && (
-        <p className="px-4 py-2 text-sm text-red-600 dark:text-red-400" role="alert">
+        <p className="px-4 py-2 text-sm text-[var(--danger)]" role="alert">
           {error}
         </p>
       )}

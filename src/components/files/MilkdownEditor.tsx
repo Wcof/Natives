@@ -136,9 +136,9 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange, locale 
       {lossyLocked && (
         <div style={{
           padding: '6px 12px', fontSize: 12, lineHeight: 1.5,
-          color: 'var(--warning, #b8860b)',
-          background: 'color-mix(in srgb, var(--warning, #b8860b) 10%, transparent)',
-          borderBottom: '1px solid color-mix(in srgb, var(--warning, #b8860b) 30%, transparent)',
+          color: 'var(--warning)',
+          background: 'color-mix(in srgb, var(--warning) 10%, transparent)',
+          borderBottom: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
         }}>
           {t(locale, 'filePreview.lossyLocked')}
         </div>

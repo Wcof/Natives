@@ -372,7 +372,7 @@ export default function FileNavShell({
               borderRadius: BORDER_RADIUS.md,
               border: '1px solid var(--border)',
               background: 'var(--surface)',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+              boxShadow: 'var(--shadow-popup)',
               padding: 4,
             }}
           >
@@ -505,7 +505,7 @@ export default function FileNavShell({
           type="button"
           style={{
             ...btnStyle(true),
-            color: isFavorite ? 'var(--warning, #f5a524)' : 'var(--text)',
+            color: isFavorite ? 'var(--warning)' : 'var(--text)',
           }}
           onClick={onToggleFavorite}
           title={isFavorite ? t(locale, 'fileBrowser.removeFromFavorites') : t(locale, 'fileBrowser.addToFavorites')}

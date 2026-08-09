@@ -53,7 +53,7 @@ export default function ConnectionBanner({
 
   const tone =
     connection === 'fatal' || connection === 'incompatible'
-      ? 'border-red-400/40 bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'
+      ? 'border-[var(--danger)]/40 bg-[var(--danger-soft)] text-[var(--danger)]'
       : connection === 'offline'
         ? 'border-[var(--border)] bg-[var(--surface-hover)] text-[var(--text-secondary)]'
         : 'border-[var(--primary)]/30 bg-[var(--primary)]/5 text-[var(--text-secondary)]';
