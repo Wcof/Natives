@@ -16,7 +16,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { type PreviewSource, type PreviewSubMode } from '@/lib/preview/contracts';
 import MonacoDiffView from '@/components/assistant/diff/MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
-import PreviewSurface from '@/components/ui/preview/PreviewSurface';
+import PreviewSurface from '@/components/preview/PreviewSurface';
 import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
 import { PreviewService } from '@/lib/preview/service';
 

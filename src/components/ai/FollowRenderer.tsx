@@ -7,7 +7,7 @@ import { getScrollbackLines } from '@/lib/path-detector';
 import { parseAgentAction, composeNarration } from '@/lib/agent-narration';
 import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 import { t, useLocale } from '@/i18n';
-import PreviewSurface from '@/components/ui/preview/PreviewSurface';
+import PreviewSurface from '@/components/preview/PreviewSurface';
 import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
 import { PreviewService } from '@/lib/preview/service';
 
