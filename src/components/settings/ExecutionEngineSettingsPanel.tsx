@@ -17,11 +17,14 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { t, type Locale } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
 import nativesAPI from '@/lib/tauri-adapter';
-import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
+import { classifyError } from '@/lib/error-classifier';
+import {
+  clearPreferredRuntimeId,
+  loadPreferredRuntimeId,
+} from '@/lib/assistant-workspace/persistence';
 
 const adapter = nativesAPI;
 
@@ -100,20 +103,23 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
     setBusy(true);
     setError(null);
     try {
-      // Pass the legacy localStorage runtime pref so the backend performs the
-      // one-shot durable migration into Settings V2 defaultRuntime (no-op once
-      // the backend is authoritative — never repeated, never clobbers).
-      const snap = (await invoke<ExecutionEngineSnapshot>('execution_engine_get_snapshot', {
-        legacy_runtime_id: loadPreferredRuntimeId(),
-      })) as unknown as ExecutionEngineSnapshot;
+      // MIG-001：仅首次（本地仍残留旧 key 时）把 legacy localStorage runtime pref
+      // 作为一次性迁移种子传给后端，后端做 one-way 迁移到 Settings V2 defaultRuntime
+      // （revision CAS 保证只迁一次，绝不覆盖已权威的 V2）。迁移成功/无需迁移后
+      // 立即清除旧 key — 此后 getter 不再读取旧值，新 Run 默认完全由 V2 决定。
+      const snap = (await adapter.executionEngine.getSnapshot(
+        loadPreferredRuntimeId(),
+      )) as unknown as ExecutionEngineSnapshot;
+      clearPreferredRuntimeId();
       setSnapshot(snap);
-      setMaxStepsDraft(snap?.settings?.native?.maxSteps ?? 50);
+      setMaxStepsDraft(snap.settings.native.maxSteps ?? 50);
     } catch (err) {
-      setError(String(err));
+      const classified = classifyError(err, { locale });
+      setError(classified.userMessage);
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     void refresh();

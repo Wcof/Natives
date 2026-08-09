@@ -743,7 +743,8 @@ pub fn run() {
             // Runtime abstraction (Slice B)
             commands::runtime::runtime_list_available,
             commands::runtime::runtime_detect_cli,
-            commands::runtime::runtime_set_capability_enabled,
+            // runtime_set_capability_enabled 退役（MIG-002）：能力开关归
+            // Execution Engine Settings V2 唯一权威。不注册。
             // Jobs（任务模块，Job Module — 契约第 5 节）
             commands::jobs::job_list,
             commands::jobs::job_get,
@@ -800,10 +801,7 @@ pub fn run() {
             commands::capability_secret::capability_secret_list,
             // MCP OAuth 浏览器流 (ADR-0016 决策 7) — Host 侧 loopback + PKCE
             commands::mcp_oauth::mcp_oauth_start,
-            // Execution Engine settings（PRD 3.4）
-            commands::executor_settings::executor_get_settings,
-            commands::executor_settings::executor_save_settings,
-            // Execution Engine settings V2（唯一持久化权威）
+            // Execution Engine settings V2（唯一持久化权威；旧 executor_* 写入口已注销，MIG-002）
             commands::execution_engine::execution_engine_get_snapshot,
             commands::execution_engine::execution_engine_save_settings,
             commands::execution_engine::execution_engine_detect_runtimes,
