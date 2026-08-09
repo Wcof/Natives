@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PreviewContext, PreviewRequest } from '../contracts';
+import { fatalError, PreviewProviderError } from '../errors';
 import { markdownProvider } from '../providers/markdown';
 import {
   buildMarkdownRenderOptions,
   isAuthorizedAssetUrl,
+  rewriteAuthorizedLocalImages,
   transformAuthorizedFileUrl,
 } from '../providers/markdown-policy';
 
@@ -93,10 +95,105 @@ test('authorized asset URL is not filtered by file markdown policy', () => {
   assert.equal(transformAuthorizedFileUrl('javascript:alert(1)', 'href', { tagName: 'a' }), '');
 });
 
-test('buildMarkdownRenderOptions rewrites local images only for authorized-file-assets', () => {
+test('buildMarkdownRenderOptions never produces asset URLs itself (SEC-001)', () => {
+  // SEC-001: renderer 侧不得自行把相对路径改写为 asset:// URL——没有 ctx，
+  // 无法逐资源授权；改写必须发生在 provider（rewriteAuthorizedLocalImages）。
   const fileOpts = buildMarkdownRenderOptions('authorized-file-assets', '/docs');
-  const out = fileOpts.rewrite!('![a](./img/x.png)');
-  assert.ok(out.includes('asset://localhost'), out);
+  assert.equal(fileOpts.rewrite, undefined);
   const safeOpts = buildMarkdownRenderOptions('assistant-safe');
   assert.equal(safeOpts.rewrite, undefined);
+});
+
+test('authorized embedded local images are rewritten and listed in authorizedAssets (SEC-001 positive)', async () => {
+  const ctx = makeContext({
+    readText: async () => ({
+      content: '![a](./img/x.png)\n\n![](/docs/img/y.png)',
+      truncated: false,
+      size: 60,
+      mtime: 1,
+      kind: 'text',
+      encoding: 'utf-8',
+    }),
+  });
+  const model = await markdownProvider.prepare(fileReq('/docs/a.md'), ctx);
+  assert.equal(model.kind, 'markdown');
+  if (model.kind === 'markdown') {
+    assert.ok(model.source.includes('asset://localhost/docs/img/x.png'), model.source);
+    assert.ok(model.source.includes('asset://localhost/docs/img/y.png'), model.source);
+    assert.ok(model.authorizedAssets?.includes('/docs/img/x.png'));
+    assert.ok(model.authorizedAssets?.includes('/docs/img/y.png'));
+  }
+});
+
+test('unauthorized embedded image produces no asset URL and is authorized per-resource (SEC-001 negative)', async () => {
+  const authorizedPaths: string[] = [];
+  const ctx = makeContext({
+    readText: async () => ({
+      content: '![a](./img/secret.png)',
+      truncated: false,
+      size: 30,
+      mtime: 1,
+      kind: 'text',
+      encoding: 'utf-8',
+    }),
+    authorizeFile: async (path) => {
+      authorizedPaths.push(path);
+      // 主文档授权成功；文档内图片引用授权失败（无访问权）→ 不产出 asset URL
+      if (path === '/docs/a.md') return { path, name: 'a.md', kind: 'text', size: 30, mtime: 1 };
+      throw fatalError('permission_denied', 'blocked');
+    },
+  });
+  const model = await markdownProvider.prepare(fileReq('/docs/a.md'), ctx);
+  assert.equal(model.kind, 'markdown');
+  if (model.kind === 'markdown') {
+    // 未授权：原始引用保留，不产出可访问的 asset:// URL
+    assert.ok(!model.source.includes('asset://localhost'), model.source);
+    assert.ok(model.source.includes('./img/secret.png'), model.source);
+    assert.deepEqual(model.authorizedAssets, []);
+  }
+  // 主文档与文档内引用都经同一 authorizeFile 通道（非 baseDir 字符串判断），
+  // 图片引用确实被逐资源授权且被拒
+  assert.deepEqual(authorizedPaths, ['/docs/a.md', '/docs/img/secret.png']);
+});
+
+test('markdown ref outside baseDir is never authorized and produces no asset URL (SEC-001)', async () => {
+  const ctx = makeContext({
+    readText: async () => ({
+      content: '![x](../../etc/passwd)',
+      truncated: false,
+      size: 30,
+      mtime: 1,
+      kind: 'text',
+      encoding: 'utf-8',
+    }),
+    authorizeFile: async (path) => {
+      // 越根引用绝不被授权：authorizeFile 只应收到主文档授权请求
+      assert.equal(path, '/docs/a.md', `authorizeFile must not be called for out-of-base refs, got ${path}`);
+      return { path, name: 'a.md', kind: 'text', size: 30, mtime: 1 };
+    },
+  });
+  const model = await markdownProvider.prepare(fileReq('/docs/a.md'), ctx);
+  assert.equal(model.kind, 'markdown');
+  if (model.kind === 'markdown') {
+    assert.ok(!model.source.includes('asset://localhost'), model.source);
+    assert.deepEqual(model.authorizedAssets, []);
+  }
+});
+
+test('rewriteAuthorizedLocalImages authorizes each unique ref through the same channel (SEC-001)', async () => {
+  const calls: string[] = [];
+  const authorizeFile: PreviewContext['authorizeFile'] = async (path) => {
+    calls.push(path);
+    return { path, name: path.split('/').pop() ?? path, kind: 'image', size: 4, mtime: 1 };
+  };
+  const { text, authorizedAssets } = await rewriteAuthorizedLocalImages(
+    '![a](./img/a.png) ![b](./img/a.png) ![c](./img/b.png)',
+    '/docs',
+    authorizeFile,
+  );
+  // 同一引用只授权一次；每篇图片都产 asset URL
+  assert.deepEqual(calls, ['/docs/img/a.png', '/docs/img/b.png']);
+  assert.ok(text.includes('asset://localhost/docs/img/a.png'), text);
+  assert.ok(text.includes('asset://localhost/docs/img/b.png'), text);
+  assert.deepEqual(authorizedAssets.sort(), ['/docs/img/a.png', '/docs/img/b.png']);
 });
