@@ -3,7 +3,7 @@
 import { Sparkles } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { categoryLabel } from '../shared/CategoryFilterBar';
-import type { CapabilitySkill } from '../shared/capability-types';
+import type { CapabilitySkill } from '@/types/capability';
 
 interface SkillListProps {
   locale: Locale;

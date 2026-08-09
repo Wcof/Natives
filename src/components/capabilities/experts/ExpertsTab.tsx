@@ -17,7 +17,7 @@ import Modal from '@/components/ui/Modal';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/Toast';
-import type { CapabilityExpert, CapabilityExpertTeam, CapabilitySkill } from '../shared/capability-types';
+import type { CapabilityExpert, CapabilityExpertTeam, CapabilitySkill } from '@/types/capability';
 import ExpertList from './ExpertList';
 import ExpertEditForm from './ExpertEditForm';
 import ExpertTeamEditDialog from './ExpertTeamEditDialog';

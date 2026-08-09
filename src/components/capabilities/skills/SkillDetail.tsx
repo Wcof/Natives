@@ -13,7 +13,7 @@ import { classifyError } from '@/lib/error-classifier';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 import { useToast } from '@/components/ui/Toast';
 import { Skeleton } from '@/components/ui/EmptyState';
-import { SKILL_CATEGORIES, type CapabilitySkill, type CapabilitySkillDetail } from '../shared/capability-types';
+import { SKILL_CATEGORIES, type CapabilitySkill, type CapabilitySkillDetail } from '@/types/capability';
 
 interface SkillDetailProps {
   locale: Locale;

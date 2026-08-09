@@ -10,7 +10,7 @@ import {
 import { classifyError } from '@/lib/error-classifier';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import type { CapabilityExpert, CapabilitySkill } from '../shared/capability-types';
+import type { CapabilityExpert, CapabilitySkill } from '@/types/capability';
 
 interface ExpertEditFormProps {
   locale: Locale;

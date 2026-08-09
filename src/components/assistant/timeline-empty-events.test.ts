@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const timelineSrc = readFileSync(
-  fileURLToPath(new URL('./ConversationTimeline.tsx', import.meta.url)),
+  fileURLToPath(new URL('../ui/conversation/ConversationTimeline.tsx', import.meta.url)),
   'utf8',
 );
 const workbenchSrc = readFileSync(

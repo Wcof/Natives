@@ -17,7 +17,7 @@ import type {
   McpHubSearchResult,
   McpJsonImportResult,
   SkillRescanResult,
-} from '@/components/capabilities/shared/capability-types';
+} from '@/types/capability';
 
 export interface McpAdminSnapshot {
   servers: unknown[];

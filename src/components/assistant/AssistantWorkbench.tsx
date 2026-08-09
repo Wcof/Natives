@@ -83,10 +83,10 @@ import type {
 } from '@/lib/assistant-protocol';
 import { messagePlainText } from '@/lib/assistant-message-view';
 import { copyToClipboard } from '@/lib/clipboard';
-import ConversationTimeline from './ConversationTimeline';
-import MessageInput from './MessageInput';
+import ConversationTimeline from '@/components/ui/conversation/ConversationTimeline';
+import MessageInput from '@/components/ui/conversation/MessageInput';
 // ADR-0016 capability picker — lazy so it stays out of the initial bundle (R-P7).
-const LazyCapabilityPickerPopover = lazy(() => import('./CapabilityPickerPopover'));
+const LazyCapabilityPickerPopover = lazy(() => import('@/components/ui/capability/CapabilityPickerPopover'));
 import PermissionRequestCard from './PermissionRequestCard';
 import { parsePlanApprovalRequest, type PlanApproval } from './plan-approval';
 // R-P7: the plan checklist is a low-frequency surface. The predicate that
@@ -111,7 +111,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
 import CommandPalette, { type AssistantCommand } from './CommandPalette';
-import type { ProviderWithModels } from './ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
 import {
   useAssistantNavigation,
   useAssistantWorkspaceApi,

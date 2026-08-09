@@ -8,7 +8,7 @@ import { installMcpHubEntry, searchMcpHub } from '@/lib/assistant-workspace/capa
 import { classifyError } from '@/lib/error-classifier';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/Toast';
-import type { McpHubEntry } from '../shared/capability-types';
+import type { McpHubEntry } from '@/types/capability';
 
 interface McpHubBrowserProps {
   locale: Locale;

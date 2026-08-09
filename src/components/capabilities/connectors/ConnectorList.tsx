@@ -8,7 +8,7 @@ import { deleteCapabilityMcpServer } from '@/lib/assistant-workspace/capability-
 import { classifyError } from '@/lib/error-classifier';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/Toast';
-import type { CapabilityMcpServer } from '../shared/capability-types';
+import type { CapabilityMcpServer } from '@/types/capability';
 
 interface ConnectorListProps {
   locale: Locale;

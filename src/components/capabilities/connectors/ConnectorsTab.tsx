@@ -9,7 +9,7 @@ import { canBrowseMcpHub } from '@/lib/assistant-workspace/capability-gate';
 import { listCapabilityMcpServers } from '@/lib/assistant-workspace/capability-admin';
 import { classifyError } from '@/lib/error-classifier';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/EmptyState';
-import type { CapabilityMcpServer } from '../shared/capability-types';
+import type { CapabilityMcpServer } from '@/types/capability';
 import ConnectorList from './ConnectorList';
 import ConnectorEditDialog from './ConnectorEditDialog';
 import ConnectorJsonImportDialog from './ConnectorJsonImportDialog';

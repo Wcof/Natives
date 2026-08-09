@@ -6,7 +6,7 @@ import type { AssistantGateway } from '@/lib/assistant-gateway';
 import { exportCapabilityExpertMd } from '@/lib/assistant-workspace/capability-admin';
 import { classifyError } from '@/lib/error-classifier';
 import { useToast } from '@/components/ui/Toast';
-import type { CapabilityExpert, CapabilityExpertTeam } from '../shared/capability-types';
+import type { CapabilityExpert, CapabilityExpertTeam } from '@/types/capability';
 
 interface ExpertListProps {
   locale: Locale;
