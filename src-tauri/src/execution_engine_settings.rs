@@ -630,6 +630,12 @@ pub fn load_policy_snapshot(run_id: &str) -> Result<Option<ResolvedExecutionPoli
 /// first successful CAS save the backend is authoritative, the localStorage
 /// key is removed by the caller, and any later invocation is a no-op — the
 /// migration can never run twice or clobber an explicit Settings V2 choice.
+///
+/// Fail-closed (MIG-001): an unknown / un-adoptable runtime id is an explicit
+/// error, never a silent fallback to the old value. `codex_cli` is a
+/// deliberate no-op (fail-closed until the app-server is real); it is refused
+/// as `defaultRuntime` because adopting it would only produce guaranteed run
+/// failures — the caller still deletes the obsolete localStorage key.
 pub fn migrate_legacy_runtime_pref(
     legacy_runtime_id: Option<String>,
 ) -> Result<ExecutionEngineSettingsV2, String> {
@@ -639,18 +645,24 @@ pub fn migrate_legacy_runtime_pref(
     }
     let pref = legacy_runtime_id
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != RUNTIME_NATIVE)
+        .filter(|s| !s.is_empty())
         .unwrap_or_default();
-    if pref.is_empty() {
+    if pref.is_empty() || pref == RUNTIME_NATIVE {
         return Ok(settings); // no legacy pref to adopt
     }
-    if pref != RUNTIME_CLAUDE_CLI {
-        // codex_cli is fail-closed until the app-server is real; adopting it as
-        // defaultRuntime would only produce guaranteed run failures.
-        return Ok(settings);
+    match pref.as_str() {
+        RUNTIME_CLAUDE_CLI => {
+            settings.default_runtime = pref;
+            save_execution_engine_settings(settings)
+        }
+        // codex_cli is fail-closed until the app-server is real; refusing to
+        // adopt it as defaultRuntime is the honest result (no fallback to the
+        // old value, no guarantee of run failures).
+        RUNTIME_CODEX_CLI => Ok(settings),
+        _ => Err(format!(
+            "legacy runtime pref '{pref}' is not a known runtime id; refusing to adopt it (no fallback to the old value)"
+        )),
     }
-    settings.default_runtime = pref;
-    save_execution_engine_settings(settings)
 }
 
 /// Detect which external CLIs exist right now (snapshot refresh action).
@@ -970,6 +982,37 @@ mod tests {
         let keep = migrate_legacy_runtime_pref(Some("native".into())).expect("no clobber");
         assert_eq!(keep.default_runtime, RUNTIME_CLAUDE_CLI);
         assert_eq!(keep.revision, migrated.revision);
+    }
+
+    /// MIG-001 negative: a bad old localStorage value fails with an explicit
+    /// diagnostic — the old value is never silently adopted as the default.
+    #[test]
+    fn legacy_runtime_pref_bad_value_fails_explicitly() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, _pool) = temp_main_pool();
+        // Unknown runtime id → explicit error, V2 stays pristine (no fallback).
+        let err = migrate_legacy_runtime_pref(Some("garbage_runtime".into()))
+            .expect_err("unknown pref must be a hard error");
+        assert!(
+            err.contains("not a known runtime id"),
+            "diagnostic must name the rejection: {err}"
+        );
+        let after = load_execution_engine_settings().expect("V2 readable");
+        assert_eq!(after.revision, 0, "failed migration must not bump revision");
+        assert_eq!(after.default_runtime, RUNTIME_NATIVE);
+    }
+
+    /// MIG-001 negative: codex_cli is fail-closed — the migration refuses to
+    /// adopt it as defaultRuntime (no guarantee of run failures) and stays on
+    /// the safe default without inventing a fallback value.
+    #[test]
+    fn legacy_runtime_pref_codex_fail_closed_not_adopted() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let (_dir, _pool) = temp_main_pool();
+        let result = migrate_legacy_runtime_pref(Some(RUNTIME_CODEX_CLI.into()))
+            .expect("fail-closed refusal is a success no-op");
+        assert_eq!(result.default_runtime, RUNTIME_NATIVE);
+        assert_eq!(result.revision, 0, "no durable adoption for codex");
     }
 
     #[test]

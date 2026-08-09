@@ -51,8 +51,6 @@ import {
   selectSurfaceConversationId,
   type InspectorTab,
 } from '@/lib/assistant-workspace';
-// runtime pref loaded via persistence export
-import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
 import {
   canInterject,
   canRewind,
@@ -1175,8 +1173,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             size: a.size,
           })),
           forceImmediate,
-          // Preferred runtime from RuntimePanel (persisted); omit → daemon default native.
-          runtimeId: loadPreferredRuntimeId(),
+          // MIG-001: 不再从 localStorage 静默读 runtimePref — 运行默认值由
+          // Settings V2 defaultRuntime（或引擎自身决策）唯一权威。仅当用户
+          // 本次 Run 显式选择 runtime 时才通过 controller 传 explicit override。
           // Promotion happened this tick — the store lookup would still miss it.
           ...(promotedCapabilitySelection
             ? { capabilitySelection: promotedCapabilitySelection }

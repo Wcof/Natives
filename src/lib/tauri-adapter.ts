@@ -1189,14 +1189,12 @@ export interface NativesAPI {
     poll: () => Promise<unknown>;
     shutdown: () => Promise<unknown>;
   };
-  /** 执行引擎设置（PRD 3.4） */
-  executorSettings: {
-    get: () => Promise<{ enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }>;
-    save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) => Promise<void>;
-  };
+  // MIG-002: legacy executor_get_settings / executor_save_settings 已物理注销，
+  // adapter 不再暴露旧写入口。执行引擎设置唯一权威 = executionEngine（V2）。
   /** 执行引擎设置 V2（唯一持久化权威 — A6 backend） */
   executionEngine: {
-    getSnapshot: () => Promise<Record<string, unknown>>;
+    /** legacyRuntimeId 仅用于一次性迁移（MIG-001），日常为 null。 */
+    getSnapshot: (legacyRuntimeId?: string | null) => Promise<Record<string, unknown>>;
     saveSettings: (settings: Record<string, unknown>) => Promise<Record<string, unknown>>;
     detectRuntimes: () => Promise<unknown[]>;
     getDiagnostics: () => Promise<Record<string, unknown>>;
@@ -1227,7 +1225,6 @@ export interface NativesAPI {
   runtime: {
     listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
     detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
-    setCapabilityEnabled: (name: string, enabled: boolean) => Promise<void>;
   };
   /** Library (fanbox clone — G4) */
   library: {
@@ -2057,16 +2054,15 @@ const nativesAPI: NativesAPI = {
     shutdown: () => cmd('daemon_supervisor_shutdown'),
   },
 
-  // Execution Engine settings（PRD 3.4）
-  executorSettings: {
-    get: () => cmd('executor_get_settings'),
-    save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) =>
-      cmd('executor_save_settings', { settings }),
-  },
+  // MIG-002: executor_get_settings / executor_save_settings 已物理注销（见 lib.rs），
+  // 旧 executorSettings facade 不保留。
 
   // Execution Engine settings V2（唯一持久化权威 — A6 backend）
   executionEngine: {
-    getSnapshot: () => cmd('execution_engine_get_snapshot'),
+    // legacyRuntimeId = 一次性迁移种子（MIG-001）：首个快照仅传旧 localStorage
+    // 值让后端做 one-way 迁移；迁移完成后前端立即清除旧 key，此后恒为 null。
+    getSnapshot: (legacyRuntimeId?: string | null) =>
+      cmd('execution_engine_get_snapshot', { legacy_runtime_id: legacyRuntimeId ?? null }),
     saveSettings: (settings: Record<string, unknown>) =>
       cmd('execution_engine_save_settings', { settings }),
     detectRuntimes: () => cmd('execution_engine_detect_runtimes'),
@@ -2077,8 +2073,6 @@ const nativesAPI: NativesAPI = {
   runtime: {
     listAvailable: () => cmd('runtime_list_available'),
     detectCli: () => cmd('runtime_detect_cli'),
-    setCapabilityEnabled: (name: string, enabled: boolean) =>
-      cmd('runtime_set_capability_enabled', { name, enabled }),
   },
 
   // Job module（任务）— 契约 v1：入参 JSON snake_case，与后端命令面一致

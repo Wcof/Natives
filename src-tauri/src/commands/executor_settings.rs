@@ -1,17 +1,11 @@
-// 执行引擎设置持久化（PRD 3.4 + CONTEXT「执行边界」）
+// 执行引擎设置遗留数据模型（MIG-002：写入口已退役）
 //
-// 复用 natives.db 的 KV `settings` 表，键 `executor:settings`，值 JSON：
-//   { "enabledTools": { "read_file": true, ... }, "maxSelfHeal": 3 }
-//
-// Daemon-native run start reads this configuration, overriding catalog defaults
-// and the hard-coded self-heal limit so Settings → Execution Engine takes
-// effect without depending on the retired executor run path.
+// 只保留迁移读源：Execution Engine Settings V2（`execution_engine:settings:v2`）
+// 是唯一持久化权威。旧 `executor:settings` 键不再可写 — `executor_get_settings` /
+// `executor_save_settings` 已从 invoke_handler 物理注销，前端经
+// `executionEngine.saveSettings` 写 V2。本文件仅保留迁移所需的类型与键常量。
 
-use crate::{db, emit_db_state_changed, Error, Result};
 use serde::{Deserialize, Serialize};
-use tauri::State;
-
-use crate::AppState;
 
 pub const EXECUTOR_KEY: &str = "executor:settings";
 
@@ -32,61 +26,4 @@ pub struct ExecutorSettings {
 
 fn default_max_self_heal() -> u32 {
     3
-}
-
-/// 读 DB 覆盖默认值。未配置时返回 catalog 默认工具 + 3。
-pub fn load_executor_settings() -> ExecutorSettings {
-    let defaults = ExecutorSettings {
-        enabled_tools: crate::executor_catalog::default_enabled_tools(),
-        max_self_heal: 3,
-        max_steps: None,
-    };
-    // Runtime settings are application configuration, so they live with the
-    // provider/runtime registry in natives.db. Assistant DB is run data only.
-    let Ok(pool_conn) = db::get_main_conn() else {
-        return defaults;
-    };
-    let conn: &rusqlite::Connection = &pool_conn;
-    match db::get_setting(conn, EXECUTOR_KEY) {
-        Ok(Some(json)) => serde_json::from_str::<ExecutorSettings>(&json).unwrap_or(defaults),
-        _ => defaults,
-    }
-}
-
-#[tauri::command]
-pub fn executor_get_settings(state: State<'_, AppState>) -> Result<ExecutorSettings> {
-    let pool_conn = state
-        .db
-        .get()
-        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &pool_conn;
-    let defaults = ExecutorSettings {
-        enabled_tools: crate::executor_catalog::default_enabled_tools(),
-        max_self_heal: 3,
-        max_steps: None,
-    };
-    Ok(db::get_setting(conn, EXECUTOR_KEY)?
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(defaults))
-}
-
-#[tauri::command]
-pub fn executor_save_settings(
-    settings: ExecutorSettings,
-    app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<()> {
-    let pool_conn = state
-        .db
-        .get()
-        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &pool_conn;
-    let json = serde_json::to_string(&settings).map_err(|e| Error::Internal(e.to_string()))?;
-    db::set_setting(conn, EXECUTOR_KEY, &json)?;
-    emit_db_state_changed(
-        &app_handle,
-        "executor",
-        serde_json::json!({ "settings": settings }),
-    );
-    Ok(())
 }
