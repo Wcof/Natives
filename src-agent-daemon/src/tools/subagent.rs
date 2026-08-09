@@ -728,12 +728,10 @@ impl PermissionGatedTools {
             }
         }
 
-        let created = match crate::global_run_manager().create_run(
-            assistant_protocol::v2::CreateRunRequest {
+        let created = match crate::child_run_orchestrator::create_child_run(
+            crate::child_run_orchestrator::ChildRunSpec {
                 // Child runs never inherit the parent conversation's selection;
                 // member skills come from the member profile at child resolve.
-                capability_selection: None,
-                disabled_tools: None,
                 conversation_id: child_conversation_id.clone(),
                 provider_id: child_provider.clone(),
                 model_id: child_model.clone(),
@@ -743,15 +741,14 @@ impl PermissionGatedTools {
                 agent_profile_id: child_profile_id.clone(),
                 permission_profile: Some(child_perm.clone()),
                 content: Some(prompt.clone()),
-                attachments: None,
                 max_steps: Some(child_max_steps),
                 parent_run_id: Some(self.parent_run_id.clone()),
                 project_path: project_path.clone(),
-                idempotency_key: None,
-                effort: None,
                 runtime_id: Some("native".into()),
             },
-        ) {
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 // Saga compensation: release the reserved slot, close session.
@@ -820,16 +817,12 @@ impl PermissionGatedTools {
         // Apply child tool surface + parent-authored system prompt before
         // RunManager starts the engine. Both are keyed by the child run id and
         // consumed once by `ProductionRuntime::start_run`.
-        crate::global_run_manager()
-            .runtime
-            .set_run_tool_allowlist(&child_run_id, child_allowlist.clone())
-            .await;
-        if let Some(directive) = child_directive.clone() {
-            crate::global_run_manager()
-                .runtime
-                .set_run_agent_directive(&child_run_id, directive)
-                .await;
-        }
+        crate::child_run_orchestrator::apply_child_surface(
+            &child_run_id,
+            child_allowlist.clone(),
+            child_directive.clone(),
+        )
+        .await;
 
         if let Err(error) = self.events.append_checked(
             &self.parent_run_id,
@@ -873,7 +866,7 @@ impl PermissionGatedTools {
             },
         );
 
-        let start_result = crate::run_manager::RunManager::start_detached_global(
+        let start_result = crate::child_run_orchestrator::start_child_run(
             assistant_protocol::v2::StartRunRequest {
                 agent_profile_id: None,
                 capability_selection: None,
@@ -892,7 +885,8 @@ impl PermissionGatedTools {
                 effort: None,
                 runtime_id: Some("native".into()),
             },
-        );
+        )
+        .await;
         if let Err(e) = start_result {
             // The child never started, so nothing will consume its directive.
             let _ = crate::global_run_manager()
@@ -2140,10 +2134,8 @@ async fn requeue_child_run(
     } else {
         session.task.to_string()
     };
-    let created =
-        crate::global_run_manager().create_run(assistant_protocol::v2::CreateRunRequest {
-            capability_selection: None,
-            disabled_tools: None,
+    let created = crate::child_run_orchestrator::create_child_run(
+        crate::child_run_orchestrator::ChildRunSpec {
             conversation_id: child_conversation_id.to_string(),
             provider_id: binding.provider_id.clone(),
             model_id: binding.model_id.clone(),
@@ -2151,25 +2143,24 @@ async fn requeue_child_run(
             agent_profile_id: child_profile_id.clone(),
             permission_profile: Some(child_perm.to_string()),
             content: Some(prompt.clone()),
-            attachments: None,
             max_steps: Some(child_max_steps),
             parent_run_id: Some(parent_run_id.to_string()),
             project_path,
-            idempotency_key: None,
-            effort: None,
             runtime_id: Some("native".into()),
-        })?;
-    crate::global_run_manager()
-        .runtime
-        .set_run_tool_allowlist(&created.id, child_allowlist.to_vec())
-        .await;
-    if !directive_text.is_empty() {
-        crate::global_run_manager()
-            .runtime
-            .set_run_agent_directive(&created.id, directive_text)
-            .await;
-    }
-    crate::run_manager::RunManager::start_detached_global(
+        },
+    )
+    .await?;
+    crate::child_run_orchestrator::apply_child_surface(
+        &created.id,
+        child_allowlist.to_vec(),
+        if directive_text.is_empty() {
+            None
+        } else {
+            Some(directive_text)
+        },
+    )
+    .await;
+    crate::child_run_orchestrator::start_child_run(
         assistant_protocol::v2::StartRunRequest {
             agent_profile_id: None,
             capability_selection: None,
@@ -2188,7 +2179,8 @@ async fn requeue_child_run(
             effort: None,
             runtime_id: Some("native".into()),
         },
-    )?;
+    )
+    .await?;
     let _ = crate::subagent_store::bump_subagent_retry(session_id);
     Ok(created.id)
 }
