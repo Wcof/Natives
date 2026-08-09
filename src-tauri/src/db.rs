@@ -72,6 +72,23 @@ pub fn clear_main_pool_for_tests() {
     *guard = None;
 }
 
+/// 为测试注册一个指向临时路径的 assistant.db pool(仅测试用)。让依赖
+/// `get_assistant_db_conn()` 的 host-owned 方法(如 provider.list 的模型缓存
+/// 富化)在单测中命中临时库,而不会惰性初始化写入真实 `~/.natives`。
+/// 不使用 `#[cfg(test)]`——集成测试链接非 test 编译产物。
+#[doc(hidden)]
+pub fn set_assistant_pool_for_tests(pool: DbPool) {
+    let mut guard = ASSISTANT_DB_POOL.lock().unwrap();
+    *guard = Some(pool);
+}
+
+/// 清空 assistant.db pool(仅测试用),避免单测之间通过全局 pool 互相污染。
+#[doc(hidden)]
+pub fn clear_assistant_pool_for_tests() {
+    let mut guard = ASSISTANT_DB_POOL.lock().unwrap();
+    *guard = None;
+}
+
 /// 获取主 natives.db pool 的连接（runtime 等无 State 上下文场景）
 pub fn get_main_conn() -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
     let guard = MAIN_DB_POOL.lock().unwrap();
@@ -85,6 +102,14 @@ pub fn get_main_conn() -> Result<r2d2::PooledConnection<SqliteConnectionManager>
 
 /// Initialize the assistant database pool at ~/.natives/assistant.db.
 /// This is a separate SQLite database isolated from the core natives.db.
+///
+/// D2-01 (MIG-004/DATA-002): the historical `assistant_sessions` /
+/// session-based `assistant_messages` DDL is retired — the Host no longer
+/// maintains an active `assistant_*` runtime schema. Old databases keep those
+/// tables and the startup-only legacy migration service
+/// (`daemon::data::LegacyMigrationService`) converts them one-way. This pool
+/// exists only for the Host-owned tables (jobs `scheduled_tasks`/`task_runs`
+/// and the provider mirror written by `commands/provider.rs`).
 pub fn init_assistant_db() -> Result<()> {
     let data_dir = dirs::home_dir()
         .ok_or_else(|| Error::Internal("Cannot find home dir".to_string()))?
@@ -94,69 +119,11 @@ pub fn init_assistant_db() -> Result<()> {
     let db_path = data_dir.join("assistant.db");
     let pool = init_db_pool(&db_path)?;
 
-    // Create assistant-specific tables
+    // scheduled_tasks + task_runs 表（Job 任务模块复用扩展；
+    // DDL 与条件补列的单一来源在 jobs::store::ensure_schema）
     let conn = pool
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS assistant_sessions (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            title TEXT NOT NULL DEFAULT '',
-            model_id TEXT NOT NULL DEFAULT '',
-            provider_id TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            summary TEXT NOT NULL DEFAULT '',
-            token_used INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'active'
-        );
-
-        CREATE TABLE IF NOT EXISTS assistant_messages (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL REFERENCES assistant_sessions(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL DEFAULT '',
-            tool_calls TEXT,
-            tool_result TEXT,
-            status TEXT NOT NULL DEFAULT '',
-            token_count INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            sequence INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_assistant_messages_session
-            ON assistant_messages(session_id, sequence);
-        ",
-    )?;
-
-    // 增量迁移：assistant_sessions 加 runtime_override / sdk_session_id 字段（Slice B）
-    // R-D3：用 PRAGMA table_info 检查列存在，ALTER TABLE ADD COLUMN 补齐，禁 DROP
-    let existing_cols: Vec<String> = conn
-        .prepare("PRAGMA table_info(assistant_sessions)")
-        .map_err(Error::Database)?
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(Error::Database)?
-        .filter_map(|r| r.ok())
-        .collect();
-    if !existing_cols.iter().any(|c| c == "runtime_override") {
-        conn.execute(
-            "ALTER TABLE assistant_sessions ADD COLUMN runtime_override TEXT",
-            [],
-        )
-        .map_err(Error::Database)?;
-    }
-    if !existing_cols.iter().any(|c| c == "sdk_session_id") {
-        conn.execute(
-            "ALTER TABLE assistant_sessions ADD COLUMN sdk_session_id TEXT",
-            [],
-        )
-        .map_err(Error::Database)?;
-    }
-
-    // scheduled_tasks + task_runs 表（Job 任务模块复用扩展；
-    // DDL 与条件补列的单一来源在 jobs::store::ensure_schema）
     crate::jobs::store::ensure_schema(&conn)?;
 
     let mut guard = ASSISTANT_DB_POOL.lock().unwrap();
