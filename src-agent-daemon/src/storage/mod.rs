@@ -99,6 +99,50 @@ pub fn test_db_override() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     Some((db, art))
 }
 
+/// W2: the single Daemon DataStore open path. Every store module (`conversation_store`,
+/// `subagent_store`, `task_store`, `capability`, `interaction_store`, `prompt_queue_store`,
+/// `harness::repository`, `runtime::tool_policy`) must call this instead of re-deriving
+/// the path from env vars — one authority for the assistant.db location, one test hook.
+pub fn open_daemon_store() -> Result<DataStore, String> {
+    #[cfg(test)]
+    let _env_guard = DataStore::env_test_lock();
+    #[cfg(test)]
+    if let Some((db_path, artifact_dir)) = test_db_override() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
+    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("NATIVES_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+        });
+    #[cfg(test)]
+    let db_path = db_path.ok_or_else(|| {
+        "store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)"
+            .to_string()
+    })?;
+    #[cfg(not(test))]
+    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            PathBuf::from(home).join(".natives").join("runtime")
+        })
+        .join("artifacts");
+    DataStore::new(&db_path, &artifact_dir)
+}
+
 /// Test-only RAII guard: captures the `NATIVES_*` env vars and restores them on
 /// drop so one test's fixture can never leak a deleted temp path into a later
 /// test (T01 hermeticity). Use together with [`DataStore::env_test_lock`].

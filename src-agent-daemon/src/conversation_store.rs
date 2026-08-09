@@ -6,7 +6,6 @@ use base64::Engine as _;
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 /// Max bytes of attachment content inlined into the model context (T209).
 /// Oversized attachments degrade to an explicit marker instead of being read.
@@ -151,45 +150,8 @@ pub fn persist_queued_input_and_ack(
 }
 
 pub(crate) fn store() -> Result<DataStore, String> {
-    // Phase 0: Daemon conversation/run authority is assistant.db.
-    // Prefer NATIVES_ASSISTANT_DB_PATH; fall back to NATIVES_DB_PATH for tests that
-    // still use a single temp file; finally default_assistant_db_path().
-    #[cfg(test)]
-    let _env_guard = crate::storage::DataStore::env_test_lock();
-    #[cfg(test)]
-    if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        return DataStore::new(&db_path, &artifact_dir);
-    }
-    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("NATIVES_DB_PATH")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .map(PathBuf::from)
-        });
-    #[cfg(test)]
-    let db_path = db_path.ok_or_else(|| {
-        "test store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)".to_string()
-    })?;
-    #[cfg(not(test))]
-    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join(".natives").join("runtime")
-        })
-        .join("artifacts");
-    DataStore::new(&db_path, &artifact_dir)
+    // W2: single Daemon DataStore open path (assistant.db authority + test hook).
+    crate::storage::open_daemon_store()
 }
 
 fn row_to_conversation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
