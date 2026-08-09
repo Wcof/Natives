@@ -43,7 +43,7 @@ import type {
   CapabilityExpertTeam,
   CapabilityMcpServer,
   CapabilitySkill,
-} from '@/components/capabilities/shared/capability-types';
+} from '@/types/capability';
 import { classifyError } from '@/lib/error-classifier';
 import { SPACING } from '@/lib/design-tokens';
 import { useToast } from '@/components/ui/Toast';

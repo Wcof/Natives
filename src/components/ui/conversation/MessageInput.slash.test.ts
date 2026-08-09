@@ -4,12 +4,12 @@ import test from 'node:test';
 import {
   detectSlashInput,
   listSlashCommands,
-} from '../../lib/assistant-slash';
+} from '../../../lib/assistant-slash';
 
 const messageInput = readFileSync(new URL('./MessageInput.tsx', import.meta.url), 'utf8');
 const slashPopover = readFileSync(new URL('./SlashCommandPopover.tsx', import.meta.url), 'utf8');
-const zh = readFileSync(new URL('../../i18n/zh.ts', import.meta.url), 'utf8');
-const en = readFileSync(new URL('../../i18n/en.ts', import.meta.url), 'utf8');
+const zh = readFileSync(new URL('../../../i18n/zh.ts', import.meta.url), 'utf8');
+const en = readFileSync(new URL('../../../i18n/en.ts', import.meta.url), 'utf8');
 
 const FAKE_COMMANDS = ['/create-app', '/modify-app', '/list-apps', '/uninstall-app'];
 

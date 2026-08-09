@@ -1,7 +1,7 @@
 'use client';
 
 import { t, type Locale } from '@/i18n';
-import { SKILL_CATEGORIES, type CategoryFilterValue } from './capability-types';
+import { SKILL_CATEGORIES, type CategoryFilterValue } from '@/types/capability';
 
 interface CategoryFilterBarProps {
   locale: Locale;

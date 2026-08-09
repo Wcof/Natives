@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t, type Locale } from '@/i18n';
-import ConversationTimeline from '@/components/assistant/ConversationTimeline';
-import MessageInput from '@/components/assistant/MessageInput';
+import ConversationTimeline from '@/components/ui/conversation/ConversationTimeline';
+import MessageInput from '@/components/ui/conversation/MessageInput';
 import {
   useAssistantDispatch,
   useAssistantGateway,
@@ -21,7 +21,7 @@ import { readActiveProject } from '@/lib/active-project';
 import { mapWireProviders } from '@/lib/provider-model-selection';
 import type { Conversation } from '@/lib/assistant-protocol';
 import type { AssistantDraft } from '@/lib/assistant-composer';
-import type { ProviderWithModels } from '@/components/assistant/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
 import type { CreativeDraft } from '@/lib/tauri-adapter';
 
 /** Must match CREATIVE_DRAFT_AGENT_KIND in the daemon's production.rs. */

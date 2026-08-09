@@ -17,7 +17,7 @@ import {
 import { classifyError } from '@/lib/error-classifier';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import type { CapabilityMcpServer, McpAuthMode, McpTransport } from '../shared/capability-types';
+import type { CapabilityMcpServer, McpAuthMode, McpTransport } from '@/types/capability';
 import KeyValueRows, { collectKvRows, newKvRow, type KvRow } from './KeyValueRows';
 
 interface ConnectorEditDialogProps {

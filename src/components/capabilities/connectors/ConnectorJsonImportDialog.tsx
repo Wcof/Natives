@@ -7,7 +7,7 @@ import { importCapabilityMcpJson } from '@/lib/assistant-workspace/capability-ad
 import { classifyError } from '@/lib/error-classifier';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
-import type { McpJsonImportResult } from '../shared/capability-types';
+import type { McpJsonImportResult } from '@/types/capability';
 
 interface ConnectorJsonImportDialogProps {
   locale: Locale;

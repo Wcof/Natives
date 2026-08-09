@@ -17,15 +17,15 @@ const messageInputSrc = readFileSync(
   'utf8',
 );
 const workbenchSrc = readFileSync(
-  fileURLToPath(new URL('./AssistantWorkbench.tsx', import.meta.url)),
+  fileURLToPath(new URL('../../assistant/AssistantWorkbench.tsx', import.meta.url)),
   'utf8',
 );
 const storeContextSrc = readFileSync(
-  fileURLToPath(new URL('../../lib/assistant-workspace/context.tsx', import.meta.url)),
+  fileURLToPath(new URL('../../../lib/assistant-workspace/context.tsx', import.meta.url)),
   'utf8',
 );
 const workspaceContextSrc = readFileSync(
-  fileURLToPath(new URL('./AssistantWorkspaceContext.tsx', import.meta.url)),
+  fileURLToPath(new URL('../../assistant/AssistantWorkspaceContext.tsx', import.meta.url)),
   'utf8',
 );
 

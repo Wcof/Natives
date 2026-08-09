@@ -30,11 +30,11 @@ test('formats reasoning elapsed time', () => {
 
 test('timeline footer and thinking duration share the bounded 1Hz clock', () => {
   const timeline = readFileSync(
-    resolve(process.cwd(), 'src/components/assistant/ConversationTimeline.tsx'),
+    resolve(process.cwd(), 'src/components/ui/conversation/ConversationTimeline.tsx'),
     'utf8',
   );
   const thinking = readFileSync(
-    resolve(process.cwd(), 'src/components/assistant/ThinkingActivity.tsx'),
+    resolve(process.cwd(), 'src/components/ui/conversation/ThinkingActivity.tsx'),
     'utf8',
   );
   // One parent clock updates all live durations, keeping pure time counters bounded to 1Hz.

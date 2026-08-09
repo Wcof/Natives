@@ -9,7 +9,7 @@ import { classifyError } from '@/lib/error-classifier';
 import { useToast } from '@/components/ui/Toast';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/EmptyState';
 import CategoryFilterBar, { matchesCategory } from '../shared/CategoryFilterBar';
-import type { CapabilitySkill, CategoryFilterValue } from '../shared/capability-types';
+import type { CapabilitySkill, CategoryFilterValue } from '@/types/capability';
 import SkillList from './SkillList';
 import SkillDetail from './SkillDetail';
 import SkillImportDialog from './SkillImportDialog';
