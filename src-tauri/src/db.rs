@@ -61,10 +61,12 @@ pub fn register_main_pool(pool: DbPool) {
     *guard = Some(pool);
 }
 
-/// 清空主 natives.db pool（仅测试用）：让依赖 natives.db SoT 的 host-owned
-/// 方法(如 provider.list)在单测中确定性回退到 :memory: DataStore,避免测试
-/// 之间通过全局 pool 互相污染导致 flaky。
-#[cfg(test)]
+/// 清空主 natives.db pool(仅测试用,集成测试也使用):让依赖 natives.db SoT
+/// 的 host-owned 方法(如 provider.list)在单测中确定性回退到 :memory:
+/// DataStore,避免测试之间通过全局 pool 互相污染导致 flaky。
+/// 说明:不使用 `#[cfg(test)]`——src-tauri/tests/* 集成测试链接的是非 test
+/// 编译产物,cfg(test) 函数对它们不可见;本函数不参与生产逻辑。
+#[doc(hidden)]
 pub fn clear_main_pool_for_tests() {
     let mut guard = MAIN_DB_POOL.lock().unwrap();
     *guard = None;

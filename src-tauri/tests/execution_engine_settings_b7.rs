@@ -17,6 +17,10 @@ use natives_lib::execution_engine_settings::{
 fn register_temp_pool() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("natives-b7.db");
+    // Clear the global main pool first: other integration tests register their
+    // own main pool concurrently, and a stale/foreign pool would make this
+    // test's get_main_conn()/set_setting() read a different DB (flaky).
+    natives_lib::db::clear_main_pool_for_tests();
     let pool = db::init_db_pool(&db_path).expect("init db pool");
     {
         let conn = pool.get().expect("conn");
