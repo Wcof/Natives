@@ -123,7 +123,6 @@ pub async fn handle_rpc(
         names::RUN_CONTINUE => dispatch_run(writer, request).await,
         names::RUN_RESUME => dispatch_run(writer, request).await,
         names::RUN_REPLAY | names::RUN_GET_EVENTS => dispatch_run(writer, request).await,
-        names::RUN_SUBSCRIBE => dispatch_run(writer, request).await,
         names::RUN_WATCH => dispatch_run(writer, request).await,
         names::RUN_LIST => dispatch_run(writer, request).await,
         names::RUN_LIST_CHILDREN => dispatch_run(writer, request).await,
@@ -185,9 +184,7 @@ pub async fn handle_rpc(
         names::SKILL_LIST => dispatch_discovery(writer, request).await,
         names::MEMORY_SEARCH => dispatch_discovery(writer, request).await,
         names::MEMORY_ADD => dispatch_discovery(writer, request).await,
-        "run.rewindPreview" | "run.rewind" | "workspace.restorePreview" | "workspace.restore" => {
-            dispatch_run(writer, request).await
-        }
+        "workspace.restorePreview" | "workspace.restore" => dispatch_run(writer, request).await,
         method
             if method.starts_with(names::HARNESS_PREFIX)
                 || matches!(

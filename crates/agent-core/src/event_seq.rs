@@ -108,11 +108,7 @@ impl EventSequencer {
                 }
             };
             if !loaded.is_empty() {
-                let max_seq = loaded
-                    .iter()
-                    .map(|ev| ev.effective_run_sequence())
-                    .max()
-                    .unwrap_or(0);
+                let max_seq = loaded.iter().map(|ev| ev.run_sequence).max().unwrap_or(0);
                 inner.sequences.insert(run_id.to_string(), max_seq);
                 inner.events.insert(run_id.to_string(), loaded);
                 return;
@@ -147,7 +143,7 @@ impl EventSequencer {
             }
             match serde_json::from_str::<RunEventV2>(line) {
                 Ok(ev) => {
-                    max_seq = max_seq.max(ev.effective_run_sequence());
+                    max_seq = max_seq.max(ev.run_sequence);
                     loaded.push(ev);
                 }
                 Err(error) => {
@@ -276,17 +272,17 @@ impl EventSequencer {
     pub fn inject_committed(&self, event: RunEventV2) {
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, &event.run_id);
-        let seq = event.effective_run_sequence();
+        let seq = event.run_sequence;
         let entry = inner.sequences.entry(event.run_id.clone()).or_insert(0);
         if seq > *entry {
             *entry = seq;
         }
         let events = inner.events.entry(event.run_id.clone()).or_default();
-        if events.iter().any(|e| e.effective_run_sequence() == seq) {
+        if events.iter().any(|e| e.run_sequence == seq) {
             return;
         }
         events.push(event.clone());
-        events.sort_by_key(|e| e.effective_run_sequence());
+        events.sort_by_key(|e| e.run_sequence);
         let sender = inner
             .buses
             .entry(event.run_id.clone())
@@ -315,7 +311,7 @@ impl EventSequencer {
             .map(|events| {
                 events
                     .iter()
-                    .filter(|e| e.effective_run_sequence() > after_sequence)
+                    .filter(|e| e.run_sequence > after_sequence)
                     .cloned()
                     .collect()
             })
@@ -405,11 +401,11 @@ mod tests {
                 role: "assistant".into(),
             },
         );
-        assert_eq!(a.sequence, 1);
-        assert_eq!(b.sequence, 2);
+        assert_eq!(a.run_sequence, 1);
+        assert_eq!(b.run_sequence, 2);
         let replay = log.replay_after(&run_id, 1);
         assert_eq!(replay.len(), 1);
-        assert_eq!(replay[0].sequence, 2);
+        assert_eq!(replay[0].run_sequence, 2);
     }
 
     #[test]
@@ -476,8 +472,8 @@ mod tests {
         let log2 = EventSequencer::new();
         let replay = log2.replay_after(&run_id, 0);
         assert_eq!(replay.len(), 2);
-        assert_eq!(replay[0].sequence, 1);
-        assert_eq!(replay[1].sequence, 2);
+        assert_eq!(replay[0].run_sequence, 1);
+        assert_eq!(replay[1].run_sequence, 2);
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("NATIVES_EVENT_LOG_DIR");
     }
@@ -524,7 +520,7 @@ mod tests {
         }
         // Durable kinds remain writable.
         let ok = log.append(&run_id, RunEventKind::Started);
-        assert_eq!(ok.sequence, 1);
+        assert_eq!(ok.run_sequence, 1);
         std::env::remove_var("NATIVES_EVENT_LOG_DISABLE");
     }
 
@@ -541,7 +537,7 @@ mod tests {
         let mut rx = log.subscribe(&run_id);
         let event = log.append(&run_id, RunEventKind::Started);
 
-        assert_eq!(event.effective_run_sequence(), 1);
+        assert_eq!(event.run_sequence, 1);
         assert!(matches!(
             event.payload,
             RunEventKind::Failed { ref code, .. } if code == "PERSISTENCE_FAILED"

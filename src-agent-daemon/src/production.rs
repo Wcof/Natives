@@ -859,13 +859,13 @@ impl ProductionRuntime {
                 assistant_protocol::v2::RunEventKind::CheckpointCreated {
                     label: Some(label),
                     ..
-                } if label == "run_start" => Some(event.effective_run_sequence()),
+                } if label == "run_start" => Some(event.run_sequence),
                 _ => None,
             })
             .unwrap_or(0);
         let run_events: Vec<_> = run_events
             .into_iter()
-            .filter(|event| event.effective_run_sequence() >= run_start_watermark)
+            .filter(|event| event.run_sequence >= run_start_watermark)
             .collect();
         if let Some(turn_id) = run_events
             .iter()

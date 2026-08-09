@@ -2,8 +2,8 @@
 //! Capability modules live under `assistant_service/`.
 //!
 //! Host-owned methods are only the OS-bound / natives.db (Settings SoT) seams:
-//! `provider.list` (natives.db), `run.start` / `run.subscribe` (preflight then
-//! Daemon authority), `artifact.open` / `artifact.reveal` (desktop shell) and
+//! `provider.list` (natives.db), `run.start` (preflight then Daemon authority),
+//! `artifact.open` / `artifact.reveal` (desktop shell) and
 //! `daemon.getCapabilities`. Everything else is forwarded to the Daemon. The
 //! Host no longer reads or writes the historical `assistant_*` runtime tables
 //! (MIG-004 / DATA-002).
@@ -72,7 +72,6 @@ async fn dispatch_rpc(method: &str, params: &Value) -> RpcResponse {
             "daemon.getCapabilities" => capabilities::handle_host_get_capabilities().await,
             "provider.list" => provider_catalog::handle_provider_list(params).await,
             "run.start" => run_gateway::handle_run_start(params).await,
-            "run.subscribe" => run_gateway::handle_run_subscribe(params).await,
             "artifact.list" => artifacts::handle_artifact_list(params).await,
             "artifact.open" | "artifact.reveal" => artifacts::handle_artifact_open(params).await,
             _ => error_response(
@@ -121,7 +120,6 @@ pub(crate) fn is_host_owned_method(method: &str) -> bool {
         "daemon.getCapabilities"
             | "provider.list"
             | "run.start"
-            | "run.subscribe"
             | "artifact.list"
             | "artifact.open"
             | "artifact.reveal"

@@ -227,8 +227,8 @@ pub(crate) async fn dispatch_daemon(
             let caps = crate::run_manager::RunManager::capabilities();
             let mut value = serde_json::to_value(&caps).unwrap_or_default();
             // event_stream_v1: persistent run event stream (`run.watch`) with
-            // after_sequence reconnect; negotiated by the host, long-poll
-            // `run.subscribe` remains the compatibility fallback.
+            // after_sequence reconnect; negotiated by the host. The legacy
+            // `run.subscribe` long-poll surface is retired (MIG-004).
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("event_stream_v1".into(), serde_json::json!(true));
                 obj.insert(

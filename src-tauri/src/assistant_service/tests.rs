@@ -15,7 +15,6 @@ fn host_owned_router_table() {
     assert!(is_host_owned_method("provider.list"));
     assert!(is_host_owned_method("daemon.getCapabilities"));
     assert!(is_host_owned_method("run.start"));
-    assert!(is_host_owned_method("run.subscribe"));
     assert!(!is_host_owned_method("permission.respond"));
     assert!(!is_host_owned_method("permission.listPending"));
     assert!(daemon_owned_method("permission.respond"));
@@ -121,7 +120,6 @@ fn run_start_is_always_host_owned() {
     }
     assert!(daemon_owned_method("run.list"));
     assert!(daemon_owned_method("run.cancel"));
-    assert!(!daemon_owned_method("run.subscribe"));
     assert!(daemon_owned_method("provider.test"));
     assert!(daemon_owned_method("mcp.list"));
     assert!(daemon_owned_method("conversation.list"));

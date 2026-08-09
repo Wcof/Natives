@@ -207,6 +207,8 @@ const RUN_EVENT_ENVELOPE_KEYS = new Set([
   'run_id',
   'runId',
   'sequence',
+  'run_sequence',
+  'runSequence',
   'timestamp',
   'type',
   'event_type',
@@ -236,7 +238,7 @@ export function mapWireRunEvent(raw: Record<string, unknown>): RunEvent {
   }
   return {
     runId: str(raw.run_id ?? raw.runId),
-    sequence: Number(raw.sequence ?? 0),
+    sequence: Number(raw.run_sequence ?? raw.runSequence ?? raw.sequence ?? 0),
     timestamp: str(raw.timestamp ?? raw.emitted_at ?? raw.emittedAt, new Date().toISOString()),
     type,
     payload,

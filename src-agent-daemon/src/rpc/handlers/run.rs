@@ -5,7 +5,7 @@
 use assistant_protocol::v2::RunEventV2;
 
 // {A2-03} MAX_WIRE_REPLAY_EVENTS const (moved verbatim from rpc.rs)
-/// Cap on how many run events a single `run.getEvents` / `run.subscribe`
+/// Cap on how many run events a single `run.getEvents` / `run.replay` / `run.watch`
 /// wire response carries (R-P4 / T11). A run's full history can exceed
 /// `MAX_FRAME_BYTES` once serialized; the client pages forward through its
 /// `last_sequence` cursor, and the Renderer keeps only a 2000-event window.
@@ -36,7 +36,6 @@ mod wire_replay_cap_tests {
             global_sequence: seq,
             run_id: run_id.to_string(),
             run_sequence: seq,
-            sequence: seq,
             timestamp: chrono::Utc::now(),
             payload: assistant_protocol::v2::RunEventKind::TextDelta {
                 text: format!("d{seq}"),
@@ -54,12 +53,12 @@ mod wire_replay_cap_tests {
         let capped = cap_wire_replay(big);
         assert_eq!(capped.len(), MAX_WIRE_REPLAY_EVENTS);
         assert_eq!(
-            capped.first().map(|e| e.effective_run_sequence()),
+            capped.first().map(|e| e.run_sequence),
             Some(1),
             "oldest events are kept so the client cursor advances monotonically"
         );
         assert_eq!(
-            capped.last().map(|e| e.effective_run_sequence()),
+            capped.last().map(|e| e.run_sequence),
             Some(MAX_WIRE_REPLAY_EVENTS as u64)
         );
     }
@@ -279,21 +278,6 @@ pub(crate) async fn handle_rewind_rpc(
         .runtime
         .checkpoint_manager();
     match method {
-        "run.rewindPreview" | "run.rewind" => {
-            // Deprecated: ambiguous "whole run rewind". Prefer workspace.restore*.
-            let replacement = if method.contains("Preview") {
-                "workspace.restorePreview"
-            } else {
-                "workspace.restore"
-            };
-            Ok(serde_json::json!({
-                "deprecated": true,
-                "method": method,
-                "scope": "workspace_file_only",
-                "message": "run.rewind/run.rewindPreview are deprecated. Use workspace.restorePreview / workspace.restore for checkpoint-covered files only. Conversation rewind and execution replay are separate APIs. External side-effects are not rolled back.",
-                "replacement": replacement,
-            }))
-        }
         "workspace.restorePreview" => {
             let preview = mgr
                 .rewind_preview_async(run_id, &project_path, paths.as_deref())
@@ -844,129 +828,6 @@ pub(crate) async fn dispatch_run(
             }
         }
 
-        names::RUN_SUBSCRIBE => {
-            // Hybrid subscribe:
-            // 1) Always return replay after_sequence (sequence gap fill).
-            // 2) Optional wait_ms / mode=push: block up to wait_ms for *new*
-            //    broadcast events (real-time push over long-poll style).
-            // Continuous multi-line push on a dedicated connection is future work;
-            // this unblocks UI without blocking cancel on a second connection.
-            let after = request
-                .params
-                .get("after_sequence")
-                .or_else(|| request.params.get("last_sequence"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let run_id = request
-                .params
-                .get("run_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let wait_ms = request
-                .params
-                .get("wait_ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let want_push = request
-                .params
-                .get("mode")
-                .and_then(|v| v.as_str())
-                .map(|m| m == "push" || m == "long_poll")
-                .unwrap_or(false)
-                || wait_ms > 0;
-
-            let mut events = match run_manager().replay_checked(ReplayRunRequest {
-                run_id: run_id.clone(),
-                after_sequence: after,
-            }) {
-                Ok(events) => events,
-                Err(error) => {
-                    send_error(
-                        writer,
-                        &DaemonError::new(
-                            error_codes::INTERNAL_ERROR,
-                            ErrorCategory::Internal,
-                            false,
-                            format!("authoritative event replay failed: {error}"),
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let mut mode = "subscribe_poll";
-            if want_push && events.is_empty() {
-                let timeout = std::time::Duration::from_millis(wait_ms.clamp(1, 30_000));
-                let mut rx = run_manager().events().subscribe(&run_id);
-                mode = "subscribe_push_wait";
-                let deadline = tokio::time::Instant::now() + timeout;
-                loop {
-                    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-                    if left.is_zero() {
-                        break;
-                    }
-                    match tokio::time::timeout(left, rx.recv()).await {
-                        Ok(Ok(ev)) if ev.effective_run_sequence() > after => {
-                            events.push(ev);
-                            // Drain a small batch without extra waits.
-                            while let Ok(more) = rx.try_recv() {
-                                if more.effective_run_sequence() > after {
-                                    events.push(more);
-                                }
-                            }
-                            break;
-                        }
-                        Ok(Ok(_)) => continue,
-                        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-                            events = match run_manager().replay_checked(ReplayRunRequest {
-                                run_id: run_id.clone(),
-                                after_sequence: after,
-                            }) {
-                                Ok(events) => events,
-                                Err(error) => {
-                                    send_error(
-                                        writer,
-                                        &DaemonError::new(
-                                            error_codes::INTERNAL_ERROR,
-                                            ErrorCategory::Internal,
-                                            false,
-                                            format!("authoritative event replay failed: {error}"),
-                                        ),
-                                    )
-                                    .await;
-                                    return;
-                                }
-                            };
-                            break;
-                        }
-                        Ok(Err(_)) | Err(_) => break,
-                    }
-                }
-            }
-            // R-P4 / T11: bound the wire batch (same cap as run.getEvents) so a
-            // run that accumulated a long history while the client was away
-            // never produces an oversized frame. The client pages forward.
-            let events = cap_wire_replay(events);
-            let terminal = run_manager()
-                .get_run(&run_id)
-                .map(|r| r.status.is_terminal())
-                .unwrap_or(false);
-            send_success(
-                writer,
-                &request.request_id,
-                &request.client_id,
-                &request.session_token,
-                serde_json::json!({
-                    "run_id": run_id,
-                    "events": events,
-                    "terminal": terminal,
-                    "mode": mode,
-                }),
-            )
-            .await;
-        }
-
         names::RUN_WATCH => {
             // Persistent event stream (RunWatchStreamV2, STREAM-CONTRACT-V2):
             // 1) validate the run exists,
@@ -1069,7 +930,7 @@ pub(crate) async fn dispatch_run(
             };
             let mut durable_seq = after_durable;
             for event in cap_wire_replay(replayed) {
-                let seq = event.effective_run_sequence();
+                let seq = event.run_sequence;
                 durable_seq = durable_seq.max(seq);
                 if write_stream_frame(
                     writer,
@@ -1140,7 +1001,7 @@ pub(crate) async fn dispatch_run(
                     result = durable_rx.recv() => {
                         match result {
                             Ok(event) => {
-                                let seq = event.effective_run_sequence();
+                                let seq = event.run_sequence;
                                 if seq <= durable_seq {
                                     continue; // already forwarded
                                 }
@@ -1163,7 +1024,7 @@ pub(crate) async fn dispatch_run(
                                     Err(_) => return,
                                 };
                                 for event in cap_wire_replay(replay) {
-                                    let seq = event.effective_run_sequence();
+                                    let seq = event.run_sequence;
                                     if seq <= durable_seq {
                                         continue;
                                     }
@@ -1342,7 +1203,7 @@ pub(crate) async fn dispatch_run(
         // Unimplemented catalogue methods: fail closed (not empty success).
         // Method disposition: known→unsupported, unknown→unsupported (invalid only for bad shape).
         // promptQueue.* is handled above via prompt_queue_store (daemon DB + harness).
-        "run.rewindPreview" | "run.rewind" | "workspace.restorePreview" | "workspace.restore" => {
+        "workspace.restorePreview" | "workspace.restore" => {
             match handle_rewind_rpc(&request.method, &request.params).await {
                 Ok(value) => {
                     send_success(

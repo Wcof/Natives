@@ -1526,7 +1526,7 @@ fn spawn_subagent_progress(
                 Err(_) => break,
             };
             for event in child_events {
-                cursor = cursor.max(event.effective_run_sequence());
+                cursor = cursor.max(event.run_sequence);
                 match event.payload {
                     RunEventKind::TextDelta { text } | RunEventKind::ReasoningDelta { text } => {
                         pending.push_str(&text)
@@ -4077,7 +4077,7 @@ async fn watch_subagent_run(
         match events.replay_after_checked(&child_run_id, cursor) {
             Ok(replayed) => {
                 for e in &replayed {
-                    cursor = cursor.max(e.effective_run_sequence());
+                    cursor = cursor.max(e.run_sequence);
                 }
                 let delta = usage_delta_from_events(&replayed);
                 if delta > 0 && budget_exceeded.is_none() {

@@ -180,7 +180,8 @@ async fn run_watch_task(
         Err(error) => {
             set_error(&state, &run_id, error.clone());
             // Tell the Renderer the persistent path is unavailable so it can
-            // fall back to legacy `run.subscribe`.
+            // surface the error / retry (the legacy `run.subscribe` long-poll
+            // fallback is retired, MIG-004).
             let _ = app.emit(
                 WATCH_FRAME_EVENT,
                 WatchFrameEvent {
@@ -253,7 +254,8 @@ async fn run_watch_task(
 }
 
 /// Open the daemon stream. Requires UDS mode; the embedded authority has no
-/// sidecar stream and the Renderer falls back to legacy `run.subscribe`.
+/// sidecar stream (the Renderer gets a WatchStreamUnavailableError — the
+/// legacy `run.subscribe` long-poll fallback is retired, MIG-004).
 async fn open_stream(
     run_id: &str,
     after_durable_sequence: u64,
