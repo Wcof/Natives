@@ -341,6 +341,36 @@ function collectHooksReverse() {
   return map;
 }
 
+// Minimal feasible a11y gate (W4): non-semantic clickable elements. A
+// <div>/<span>/<li> with onClick must carry role="button" (or a semantic
+// alternative) AND keyboard activation (onKeyDown), or it is flagged. Real
+// <button>/<a>/<input> are fine. The ledger allows the remaining pre-existing
+// violations while the fix wave clears them.
+function collectA11yClickable() {
+  const map = new Map();
+  const roots = [join(ROOT, 'src/components'), join(ROOT, 'src/app')];
+  for (const root of roots) {
+    for (const p of walk(root)) {
+      if (!isHandwrittenTs(p)) continue;
+      if (/\.test\.(ts|tsx)$/.test(p)) continue;
+      const lines = readFileSync(p, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        const t = line.trim();
+        if (!/<(div|span|li|section|header|footer|p|ul)[^>]*onClick=/.test(t)) return;
+        // Decorative overlay / modal chrome: aria-hidden or presentation/dialog
+        // roles provide the semantics; keyboard activation is provided by the
+        // dialog/menu's own Escape/focus path (never by the overlay itself).
+        if (/aria-hidden|role=["'](presentation|dialog|alertdialog)["']/.test(t)) return;
+        if (/role=["'](button|link|menuitem|tab|checkbox|switch)["']/.test(t)) return;
+        if (/onKeyDown|onKeyUp|onKeyPress/.test(t)) return;
+        if (/<button|<a |<input|<select|<textarea/.test(t)) return;
+        map.set(`${relToRoot(p)}:${i + 1}`, t.slice(0, 110));
+      });
+    }
+  }
+  return map;
+}
+
 function collectBudgetFunctions() {
   const map = new Map();
   for (const root of [join(ROOT, 'src-tauri/src'), join(ROOT, 'src-agent-daemon/src'), join(ROOT, 'crates')]) {
@@ -398,6 +428,7 @@ const CHECKS = [
   { id: 'global_singleton', collect: collectGlobalSingleton, fail: true },
   { id: 'unregistered_interval', collect: collectUnregisteredInterval, fail: false },
   { id: 'hooks_reverse', collect: collectHooksReverse, fail: true },
+  { id: 'a11y_clickable', collect: collectA11yClickable, fail: true },
   { id: 'budget_functions', collect: collectBudgetFunctions, fail: false },
 ];
 

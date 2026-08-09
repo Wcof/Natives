@@ -105,7 +105,8 @@ export default function CatalogShell({
 
           {addMenu === 'open' && (
             <>
-              <div className="fixed inset-0 z-10" onClick={() => setAddMenu('closed')} />
+              {/* Overlay to dismiss the add menu; Escape also closes it. */}
+              <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setAddMenu('closed')} />
               <div className="absolute right-0 top-full mt-1.5 w-52 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-lg p-1 z-20 flex flex-col gap-0.5">
                 {/* The only creation entry is the one-sentence composer in the
                     creative home; import flows start here. */}

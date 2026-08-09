@@ -166,6 +166,7 @@
     "src/lib/iframe-manager.ts:261": "const timer = setInterval(() => {"
   },
   "hooks_reverse": {},
+  "a11y_clickable": {},
   "budget_functions": {
     "src-tauri/src/agent.rs:532": "fn body ~155 lines",
     "src-tauri/src/commands/plugins.rs:200": "fn body ~145 lines",
