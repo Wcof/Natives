@@ -723,7 +723,6 @@ pub fn run() {
             // Project （统一项目目录 API）
             commands::project::project_list,
             commands::project::project_register,
-            commands::project::project_open,
             commands::project::project_rename,
             commands::project::project_remove,
             // Widget
