@@ -1,12 +1,10 @@
 //! Host preflight for run.start and long-poll subscribe forwarding.
-use crate::daemon::data::DataStore;
 use crate::daemon_authority;
 use crate::execution_engine_settings::{
     build_runtime_descriptors, load_execution_engine_settings, resolve_execution_policy,
     store_policy_snapshot, ResolvedExecutionPolicyV1,
 };
 use serde_json::Value;
-use std::sync::Arc;
 
 use super::provider_catalog::provider_model_pair_available;
 use super::{error_response, success_response, RpcResponse};
@@ -28,7 +26,7 @@ struct RunStartRequest {
     capability_selection: Option<assistant_protocol::v2::CapabilitySelection>,
 }
 
-pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+pub(crate) async fn handle_run_start(params: &Value) -> RpcResponse {
     let req = match parse_run_start_request(params) {
         Ok(r) => r,
         Err(resp) => return resp,
@@ -37,10 +35,10 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         Ok(a) => a,
         Err(resp) => return resp,
     };
-    if let Err(resp) = preflight_run_start(data_store, &req).await {
+    if let Err(resp) = preflight_run_start(&req).await {
         return resp;
     }
-    create_and_start_run(data_store, &req, normalized).await
+    create_and_start_run(&req, normalized).await
 }
 
 fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcResponse> {
@@ -200,10 +198,7 @@ fn normalize_attachments(attachments: &[Value]) -> Result<Vec<Value>, RpcRespons
     Ok(normalized_attachments)
 }
 
-async fn preflight_run_start(
-    data_store: &Arc<DataStore>,
-    req: &RunStartRequest,
-) -> Result<(), RpcResponse> {
+async fn preflight_run_start(req: &RunStartRequest) -> Result<(), RpcResponse> {
     if req.project_path.is_none()
         && std::env::var("NATIVES_REQUIRE_PROJECT_PATH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -214,14 +209,13 @@ async fn preflight_run_start(
             "project_path must be provided by UI (daemon cwd is not a valid default)",
         ));
     }
-    {
-        let conn = data_store.conn();
-        if !provider_model_pair_available(&req.provider_id, &req.model_id, &conn) {
-            return Err(error_response(
-                "INVALID_PARAM",
-                "Provider/model pair is not available",
-            ));
-        }
+    // Provider/model pair availability comes from the natives.db Settings SoT
+    // (no `assistant_*` mirror fallback — MIG-004 / DATA-002).
+    if !provider_model_pair_available(&req.provider_id, &req.model_id) {
+        return Err(error_response(
+            "INVALID_PARAM",
+            "Provider/model pair is not available",
+        ));
     }
     if let Ok(runs) = daemon_authority::list_runs(Some(&req.conversation_id)).await {
         if runs.iter().any(|r| !r.status.is_terminal()) {
@@ -353,7 +347,6 @@ fn policy_snapshot_gate(
 }
 
 async fn create_and_start_run(
-    _data_store: &Arc<DataStore>,
     req: &RunStartRequest,
     normalized_attachments: Vec<Value>,
 ) -> RpcResponse {
@@ -483,10 +476,7 @@ async fn create_and_start_run(
     }))
 }
 
-pub(crate) async fn handle_run_subscribe(
-    _data_store: &Arc<DataStore>,
-    params: &Value,
-) -> RpcResponse {
+pub(crate) async fn handle_run_subscribe(params: &Value) -> RpcResponse {
     let run_id = match params.get("run_id").and_then(Value::as_str) {
         Some(id) => id,
         None => return error_response("MISSING_PARAM", "run_id is required"),
@@ -768,5 +758,3 @@ mod tests {
         );
     }
 }
-
-// ─── Permission (host still dual-writes until task-04 integration) ───

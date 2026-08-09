@@ -1,33 +1,42 @@
-//! Host legacy data store — SQLite access and *one-way* legacy migration for
-//! the `assistant_*` tables that predate the Agent Daemon authority.
+//! Host legacy migration service — startup-only, one-way migration reader for
+//! the historical `assistant_*` tables that predate the Agent Daemon authority.
 //!
 //! Authority: the Agent Daemon owns `assistant.db` schema migrations and the
 //! canonical `conversation` / `message` / `run` / `run_event` / `prompt_queue`
-//! tables. This store keeps the historical `assistant_*` tables readable as a
-//! startup-only, one-way migration source (merged into the canonical tables by
-//! `src-agent-daemon/src/storage/host_authority_migration.rs`).
+//! tables. The Host no longer maintains an active `assistant_*` runtime schema:
+//! the conversation / run / message / event / queue tables are Daemon authority
+//! and are deliberately NOT created or written by the Host at normal runtime
+//! (MIG-004 / DATA-002).
 //!
-//! DATA-001 remediation (R-D3 MUST): the historical v10/v13 CHECK-widening
-//! table rebuilds (`DROP TABLE` + rename) and the message-block FK repair
-//! rebuild were removed. SQLite cannot modify a CHECK constraint or a foreign
-//! key in place, and R-D3 forbids rebuilding a table to change them, so the
-//! wider enum is validated at the business layer. The remaining migrations are
-//! non-destructive (CREATE TABLE IF NOT EXISTS / guarded ALTER / dedup) and the
-//! legacy conversion never drops or overwrites preserved data.
+//! What this service does at startup only (from `lib.rs` setup, never from a
+//! request handler):
+//! - Creates/upgrades the Host-owned tables that share the `assistant.db` file:
+//!   the provider mirror (`assistant_provider_configs` / `assistant_provider_keys`
+//!   / `assistant_model_cache`), `assistant_projects`, and `settings`.
+//!   `src-tauri/src/commands/provider.rs` mirrors Settings (natives.db) rows into
+//!   these tables and `provider.list` reads the model cache.
+//! - Runs the one-way legacy conversions: old session-based messages are
+//!   converted to the historical `assistant_*` conversation format so the
+//!   Daemon's `host_authority_migration` (`src-agent-daemon/src/storage/`) can
+//!   merge them into the canonical tables. Both steps are idempotent and never
+//!   DROP or rebuild tables (R-D3).
+//!
+//! Normal runtime never reaches this service: business request paths (assistant
+//! RPC handlers) read the Daemon or natives.db only.
 
 use crate::Result;
 use rusqlite::Connection;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
-/// Main data store for the daemon.
-pub struct DataStore {
+/// Startup-only, one-way legacy migration service for `assistant.db`.
+pub struct LegacyMigrationService {
     conn: Mutex<Connection>,
     db_path: String,
 }
 
-impl DataStore {
-    /// Open or create a database at the given path.
-    pub fn new(db_path: &str) -> Result<Self> {
+impl LegacyMigrationService {
+    /// Open `assistant.db` and prepare it for a one-way legacy migration.
+    pub fn open(db_path: &str) -> Result<Self> {
         let conn = Connection::open(db_path)
             .map_err(|e| crate::Error::Internal(format!("Failed to open database: {e}")))?;
 
@@ -39,172 +48,23 @@ impl DataStore {
         )
         .map_err(|e| crate::Error::Internal(format!("Failed to set pragmas: {e}")))?;
 
-        let store = DataStore {
+        Ok(LegacyMigrationService {
             conn: Mutex::new(conn),
             db_path: db_path.to_string(),
-        };
-
-        // Run schema migrations automatically
-        store.run_migrations()?;
-
-        Ok(store)
+        })
     }
 
-    /// Run all pending migrations.
-    pub fn run_migrations(&self) -> Result<()> {
-        // Step 0: Pre-migration — ensure assistant_messages has all V1 columns
-        // if the table already exists from old db.rs init_assistant_db
-        {
-            let conn = self.conn();
-            let has_table: bool = conn
-                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_messages'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false);
-            if has_table {
-                let existing_cols: Vec<String> = conn
-                    .prepare("PRAGMA table_info(assistant_messages)")
-                    .and_then(|mut stmt| {
-                        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-                        let cols: Vec<String> = rows.filter_map(|r| r.ok()).collect();
-                        Ok(cols)
-                    })
-                    .unwrap_or_default();
-                let v1_cols: Vec<(&str, &str)> = vec![
-                    (
-                        "conversation_id",
-                        "TEXT REFERENCES assistant_conversations(id) ON DELETE CASCADE",
-                    ),
-                    ("parent_message_id", "TEXT"),
-                    ("role", "TEXT NOT NULL DEFAULT 'user'"),
-                    ("status", "TEXT NOT NULL DEFAULT 'complete'"),
-                    ("input_tokens", "INTEGER DEFAULT 0"),
-                    ("output_tokens", "INTEGER DEFAULT 0"),
-                    ("reasoning_tokens", "INTEGER"),
-                    ("cost_usd", "REAL"),
-                ];
-                for (col, def) in v1_cols {
-                    if !existing_cols.contains(&col.to_string()) {
-                        let sql =
-                            format!("ALTER TABLE assistant_messages ADD COLUMN {} {}", col, def);
-                        let _ = conn.execute_batch(&sql);
-                    }
-                }
-            }
-
-            let has_runs: bool = conn
-                .prepare(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_runs'",
-                )
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false);
-            if has_runs {
-                for (column, definition) in [
-                    (
-                        "parent_run_id",
-                        "TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE",
-                    ),
-                    ("subagent_definition_id", "TEXT"),
-                    ("effort", "TEXT"),
-                ] {
-                    let exists = conn
-                        .prepare("PRAGMA table_info(assistant_runs)")
-                        .and_then(|mut stmt| {
-                            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-                            Ok(rows.filter_map(|row| row.ok()).any(|name| name == column))
-                        })
-                        .unwrap_or(false);
-                    if !exists {
-                        let _ = conn.execute(
-                            &format!("ALTER TABLE assistant_runs ADD COLUMN {column} {definition}"),
-                            [],
-                        );
-                    }
-                }
-                let _ = conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_runs_parent ON assistant_runs(parent_run_id)",
-                    [],
-                );
-            }
-        }
-
-        // Step 1: Run schema migrations within a transaction
-        {
-            let mut conn = self
-                .conn
-                .lock()
-                .map_err(|e| crate::Error::Internal(e.to_string()))?;
-            let tx = conn.transaction().map_err(|e| {
-                crate::Error::Internal(format!("Migration transaction failed: {e}"))
-            })?;
-
-            // Ensure schema version table exists
-            tx.execute_batch(
-                "CREATE TABLE IF NOT EXISTS _schema_version (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );",
-            )
-            .map_err(|e| {
-                crate::Error::Internal(format!("Schema version table creation failed: {e}"))
-            })?;
-
-            let current_version: i64 = tx
-                .query_row(
-                    "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-
-            // Apply migrations sequentially. DATA-001 remediation: the
-            // historical v10/v13 table rebuilds (widening a CHECK enum via
-            // DROP TABLE + rename) are retired — R-D3 forbids rebuilds, SQLite
-            // cannot modify a CHECK in place, and the wider enum is now
-            // validated at the business layer. This list is therefore only the
-            // non-destructive CREATE TABLE IF NOT EXISTS / ALTER / dedup
-            // migrations; the legacy `assistant_*` tables stay readable as a
-            // one-way migration source and the Daemon owns the canonical schema.
-            let migrations: Vec<(i64, &str)> = vec![
-                (1, MIGRATION_001),
-                (2, MIGRATION_002),
-                (3, MIGRATION_003),
-                (4, MIGRATION_004),
-                (5, MIGRATION_005),
-                (6, MIGRATION_006),
-                (7, MIGRATION_007),
-                (8, MIGRATION_008),
-                (11, MIGRATION_011),
-                (12, MIGRATION_012),
-                (14, MIGRATION_014),
-            ];
-
-            for (version, sql) in migrations {
-                if version > current_version {
-                    tx.execute_batch(sql).map_err(|e| {
-                        crate::Error::Internal(format!("Migration v{version} failed: {e}"))
-                    })?;
-                    tx.execute(
-                        "INSERT INTO _schema_version (version) VALUES (?1)",
-                        rusqlite::params![version],
-                    )
-                    .map_err(|e| {
-                        crate::Error::Internal(format!(
-                            "Failed to record migration v{version}: {e}"
-                        ))
-                    })?;
-                }
-            }
-
-            tx.commit()
-                .map_err(|e| crate::Error::Internal(format!("Migration commit failed: {e}")))?;
-        } // conn MutexGuard dropped here before legacy migration
-
-        // Step 2: Run legacy data migration in a fresh transaction.
-        // One-way, startup-only: reads old structures, writes the new legacy
-        // assistant_* tables, idempotent, and never drops or rebuilds tables.
+    /// Run the startup one-way migration. Idempotent; safe to call repeatedly.
+    ///
+    /// Step 1 applies the schema for Host-owned tables only. Step 2 runs the
+    /// one-way legacy conversions. No Daemon-authority table
+    /// (conversation/run/message/event/queue) is created or written here.
+    pub fn run(&self) -> Result<()> {
+        self.run_schema_migrations()?;
         self.migrate_legacy_provider_keys()?;
         self.migrate_legacy_assistant_messages()?;
-        self.recover_stale_runs()?;
+        // v9 is the historical marker for the legacy session migration; record
+        // it after the conversion like the pre-D2-01 flow did.
         {
             let conn = self.conn();
             conn.execute(
@@ -213,14 +73,77 @@ impl DataStore {
             )
             .map_err(|e| crate::Error::Internal(format!("Failed to record migration v9: {e}")))?;
         }
-        self.cleanup_orphaned_rows()?;
+        Ok(())
+    }
 
+    /// Apply the schema for Host-owned tables (provider mirror / projects /
+    /// settings) within a transaction. The Daemon-authority `assistant_*`
+    /// runtime schema is intentionally absent.
+    fn run_schema_migrations(&self) -> Result<()> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| crate::Error::Internal(format!("Migration transaction failed: {e}")))?;
+
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS _schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .map_err(|e| {
+            crate::Error::Internal(format!("Schema version table creation failed: {e}"))
+        })?;
+
+        let current_version: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Only Host-owned tables. The legacy conversation/run/message/event/
+        // queue schema is Daemon authority — on fresh installs it is never
+        // created by the Host (the Daemon's host_authority_migration records
+        // "no host tables" and skips); on upgraded installs the historical
+        // tables persist as a read-only migration source.
+        let migrations: Vec<(i64, &str)> = vec![
+            (4, MIGRATION_004_PROVIDERS),
+            (5, MIGRATION_005),
+            (6, MIGRATION_006),
+            (7, MIGRATION_007),
+            (8, MIGRATION_008),
+            (12, MIGRATION_012),
+            (14, MIGRATION_014),
+        ];
+
+        for (version, sql) in migrations {
+            if version > current_version {
+                tx.execute_batch(sql).map_err(|e| {
+                    crate::Error::Internal(format!("Migration v{version} failed: {e}"))
+                })?;
+                tx.execute(
+                    "INSERT INTO _schema_version (version) VALUES (?1)",
+                    rusqlite::params![version],
+                )
+                .map_err(|e| {
+                    crate::Error::Internal(format!("Failed to record migration v{version}: {e}"))
+                })?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| crate::Error::Internal(format!("Migration commit failed: {e}")))?;
         Ok(())
     }
 
     /// Migrate provider keys from old legacy tables (user_providers / provider_api_keys).
     /// Only runs if the legacy tables exist. Idempotent — INSERT OR IGNORE.
-    pub fn migrate_legacy_provider_keys(&self) -> Result<()> {
+    fn migrate_legacy_provider_keys(&self) -> Result<()> {
         let mut conn = self
             .conn
             .lock()
@@ -468,6 +391,32 @@ impl DataStore {
         };
 
         if has_sessions {
+            // The historical `assistant_conversations` table is the migration
+            // source the Daemon's host_authority_migration reads. On upgraded
+            // installs it already exists (the pre-D2-01 Host created it); when a
+            // very old DB has only the session tables, create the conversation
+            // shape so the conversion below has a target that is idempotent and
+            // never DROPs anything (R-D3). Fresh installs skip this block.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS assistant_conversations (
+                    id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat','agent')),
+                    project_id TEXT,
+                    title TEXT NOT NULL DEFAULT '',
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    permission_profile_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                );",
+            )
+            .map_err(|e| {
+                crate::Error::Internal(format!(
+                    "Failed to prepare assistant_conversations for legacy migration: {e}"
+                ))
+            })?;
+
             let insert_convs_sql = if attached {
                 "INSERT OR IGNORE INTO assistant_conversations
                     (id, project_id, title, provider_id, model_id, created_at, updated_at)
@@ -534,12 +483,11 @@ impl DataStore {
             return Ok(());
         }
 
-        // DATA-001 remediation (R-D3): this one-way legacy conversion no longer
-        // drops anything. The session-based rows are preserved under
-        // `legacy_assistant_messages` (created only when the name is free,
-        // never overwritten, backfilled only when empty), and the session →
-        // conversation rename only happens when the target name is free. A
-        // partial prior run that left an inconsistent state fails closed
+        // This one-way legacy conversion never drops anything. The session-based
+        // rows are preserved under `legacy_assistant_messages` (created only when
+        // the name is free, never overwritten, backfilled only when empty), and
+        // the session → conversation rename only happens when the target name is
+        // free. A partial prior run that left an inconsistent state fails closed
         // instead of dropping data to make room.
         let legacy_exists: bool = conn
             .prepare(
@@ -649,14 +597,18 @@ impl DataStore {
             ));
         }
 
-        // Migrate legacy assistant messages to new schema
+        // Migrate legacy assistant messages to new schema. The session schema
+        // defaulted `status` to '' which the conversation-schema CHECK rejects;
+        // normalize invalid statuses to 'complete' instead of letting
+        // INSERT OR IGNORE silently drop rows (data preservation).
         conn.execute_batch(
             "INSERT OR IGNORE INTO assistant_messages
                 (id, conversation_id, role, status, created_at)
              SELECT
                  m.id, m.session_id,
                  COALESCE(m.role, 'user'),
-                 COALESCE(m.status, 'complete'),
+                 CASE WHEN m.status IN ('sending','streaming','complete','failed','interrupted')
+                      THEN m.status ELSE 'complete' END,
                  m.created_at
              FROM legacy_assistant_messages m
              JOIN assistant_conversations c ON c.id = m.session_id;",
@@ -690,273 +642,19 @@ impl DataStore {
         Ok(())
     }
 
-    /// Finish runs left active by an interrupted app process and preserve any
-    /// streamed text/reasoning that was already recorded in run events.
-    fn recover_stale_runs(&self) -> Result<()> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-        let stale: Vec<(String, String)> = {
-            let mut stmt = conn.prepare(
-                "SELECT id, conversation_id FROM assistant_runs WHERE status IN ('queued','preparing','running','waiting_permission','cancelling')"
-            ).map_err(|e| crate::Error::Internal(format!("Failed to inspect stale runs: {e}")))?;
-            let rows = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-                .map_err(|e| crate::Error::Internal(format!("Failed to read stale runs: {e}")))?;
-            let mut result = Vec::new();
-            for row in rows.flatten() {
-                result.push(row);
-            }
-            result
-        };
-
-        for (run_id, conversation_id) in stale {
-            let events: Vec<(String, String)> = {
-                let mut stmt = conn.prepare(
-                    "SELECT event_type, payload FROM assistant_run_events WHERE run_id = ?1 ORDER BY sequence ASC"
-                ).map_err(|e| crate::Error::Internal(format!("Failed to inspect stale run events: {e}")))?;
-                let rows = stmt
-                    .query_map(rusqlite::params![run_id], |row| {
-                        Ok((row.get(0)?, row.get(1)?))
-                    })
-                    .map_err(|e| {
-                        crate::Error::Internal(format!("Failed to read stale run events: {e}"))
-                    })?;
-                let mut result = Vec::new();
-                for row in rows.flatten() {
-                    result.push(row);
-                }
-                result
-            };
-            let mut text = String::new();
-            let mut reasoning = String::new();
-            for (event_type, payload) in &events {
-                let value: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-                match event_type.as_str() {
-                    "assistant_delta" | "text_delta" => text.push_str(
-                        value
-                            .get("text")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or_default(),
-                    ),
-                    "reasoning_delta" => reasoning.push_str(
-                        value
-                            .get("text")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or_default(),
-                    ),
-                    _ => {}
-                }
-            }
-
-            let tx = conn
-                .transaction()
-                .map_err(|e| crate::Error::Internal(format!("Stale run recovery failed: {e}")))?;
-            let now = chrono::Utc::now().to_rfc3339();
-            if !text.is_empty() || !reasoning.is_empty() {
-                let message_id = uuid::Uuid::new_v4().to_string();
-                tx.execute(
-                    "INSERT INTO assistant_messages (id, conversation_id, role, status, created_at) VALUES (?1, ?2, 'assistant', 'interrupted', ?3)",
-                    rusqlite::params![message_id, conversation_id, now],
-                ).map_err(|e| crate::Error::Internal(format!("Failed to recover assistant message: {e}")))?;
-                let mut index = 0_i64;
-                if !reasoning.is_empty() {
-                    tx.execute(
-                        "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'reasoning', ?3, ?4)",
-                        rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, index, serde_json::json!({"reasoning": reasoning}).to_string()],
-                    ).map_err(|e| crate::Error::Internal(format!("Failed to recover reasoning block: {e}")))?;
-                    index += 1;
-                }
-                if !text.is_empty() {
-                    tx.execute(
-                        "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'text', ?3, ?4)",
-                        rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, index, text],
-                    ).map_err(|e| crate::Error::Internal(format!("Failed to recover text block: {e}")))?;
-                }
-            }
-            tx.execute("UPDATE assistant_permission_requests SET status = 'rejected', responded_at = ?1 WHERE run_id = ?2 AND status = 'pending'", rusqlite::params![now, run_id])
-                .map_err(|e| crate::Error::Internal(format!("Failed to close stale permission request: {e}")))?;
-            tx.execute("UPDATE assistant_runs SET status = 'interrupted', error_code = COALESCE(error_code, 'app_restarted'), finished_at = ?1 WHERE id = ?2", rusqlite::params![now, run_id])
-                .map_err(|e| crate::Error::Internal(format!("Failed to recover stale run: {e}")))?;
-            let sequence: i64 = tx.query_row("SELECT COALESCE(MAX(sequence), 0) + 1 FROM assistant_run_events WHERE run_id = ?1", rusqlite::params![run_id], |row| row.get(0))
-                .unwrap_or(1);
-            tx.execute("INSERT INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload) VALUES (?1, ?2, ?3, 'interrupted', ?4)", rusqlite::params![run_id, sequence, now, serde_json::json!({"reason":"app_restarted"}).to_string()])
-                .map_err(|e| crate::Error::Internal(format!("Failed to record stale run recovery: {e}")))?;
-            tx.commit().map_err(|e| {
-                crate::Error::Internal(format!("Stale run recovery commit failed: {e}"))
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Clean up any orphaned rows that violate foreign key constraints to keep database integrity.
-    fn cleanup_orphaned_rows(&self) -> Result<()> {
-        let conn = self.conn();
-        conn.execute_batch(
-            "DELETE FROM assistant_messages WHERE conversation_id NOT IN (SELECT id FROM assistant_conversations);
-             DELETE FROM assistant_message_blocks WHERE message_id NOT IN (SELECT id FROM assistant_messages);
-             DELETE FROM assistant_runs WHERE conversation_id NOT IN (SELECT id FROM assistant_conversations);
-             DELETE FROM assistant_run_events WHERE run_id NOT IN (SELECT id FROM assistant_runs);
-             DELETE FROM assistant_tool_calls WHERE run_id NOT IN (SELECT id FROM assistant_runs);
-             DELETE FROM assistant_permission_requests WHERE run_id NOT IN (SELECT id FROM assistant_runs);
-             DELETE FROM assistant_artifacts WHERE run_id NOT IN (SELECT id FROM assistant_runs);
-             DELETE FROM assistant_context_snapshots WHERE run_id NOT IN (SELECT id FROM assistant_runs);"
-        ).map_err(|e| crate::Error::Internal(format!("Failed to clean up orphaned database rows: {e}")))?;
-        Ok(())
-    }
-
-    /// Get a reference to the underlying connection.
-    pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn
             .lock()
-            .expect("DataStore connection lock poisoned")
-    }
-
-    /// Get the database file path.
-    pub fn db_path(&self) -> &str {
-        &self.db_path
+            .expect("LegacyMigrationService connection lock poisoned")
     }
 }
 
-// Migration SQL definitions
+// Migration SQL definitions — Host-owned tables only.
 
-/// v1: Core assistant tables
-const MIGRATION_001: &str = "
-CREATE TABLE IF NOT EXISTS assistant_conversations (
-    id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat','agent')),
-    project_id TEXT,
-    title TEXT NOT NULL DEFAULT '',
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    permission_profile_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    archived_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS assistant_messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
-    parent_message_id TEXT,
-    role TEXT NOT NULL CHECK(role IN ('system','user','assistant')),
-    status TEXT NOT NULL DEFAULT 'complete' CHECK(status IN ('sending','streaming','complete','failed','interrupted')),
-    input_tokens INTEGER DEFAULT 0,
-    output_tokens INTEGER DEFAULT 0,
-    reasoning_tokens INTEGER,
-    cost_usd REAL,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_conversation ON assistant_messages(conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_messages_parent ON assistant_messages(parent_message_id);
-";
-
-/// v2: Message content blocks and runs
-const MIGRATION_002: &str = "
-CREATE TABLE IF NOT EXISTS assistant_message_blocks (
-    id TEXT PRIMARY KEY,
-    message_id TEXT NOT NULL REFERENCES assistant_messages(id) ON DELETE CASCADE,
-    block_type TEXT NOT NULL,
-    block_index INTEGER NOT NULL DEFAULT 0,
-    content TEXT NOT NULL,
-    metadata TEXT
-);
-
-CREATE TABLE IF NOT EXISTS assistant_runs (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
-    parent_run_id TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    subagent_definition_id TEXT,
-    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','preparing','running','waiting_permission','cancelling','completed','failed','cancelled','interrupted')),
-    trigger_message_id TEXT,
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    runtime_id TEXT,
-    permission_profile TEXT,
-    max_steps INTEGER,
-    max_duration_secs INTEGER,
-    token_budget INTEGER,
-    started_at TEXT,
-    finished_at TEXT,
-    error_code TEXT,
-    step_count INTEGER DEFAULT 0,
-    total_input_tokens INTEGER DEFAULT 0,
-    total_output_tokens INTEGER DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_runs_conversation ON assistant_runs(conversation_id);
-";
-
-/// v3: Run events, tool calls, and permissions
-const MIGRATION_003: &str = "
-CREATE TABLE IF NOT EXISTS assistant_run_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    sequence INTEGER NOT NULL,
-    timestamp TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    payload TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_run_events_sequence ON assistant_run_events(run_id, sequence);
-
-CREATE TABLE IF NOT EXISTS assistant_tool_calls (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    conversation_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    tool_call_id TEXT NOT NULL,
-    input TEXT,
-    output TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    is_error INTEGER DEFAULT 0,
-    duration_ms INTEGER,
-    correlation_id TEXT,
-    created_at TEXT NOT NULL,
-    finished_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS assistant_permission_requests (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    tool_call_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    input TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','expired')),
-    scope TEXT,
-    created_at TEXT NOT NULL,
-    responded_at TEXT
-);
-";
-
-/// v4: Artifacts, context snapshots, provider configs
-const MIGRATION_004: &str = "
-CREATE TABLE IF NOT EXISTS assistant_artifacts (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    conversation_id TEXT NOT NULL,
-    source_tool TEXT NOT NULL,
-    path TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    size INTEGER NOT NULL,
-    mime_type TEXT NOT NULL,
-    label TEXT,
-    kind TEXT NOT NULL DEFAULT 'file',
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS assistant_context_snapshots (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    before_tokens INTEGER NOT NULL,
-    after_tokens INTEGER NOT NULL,
-    summary TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
+/// v4: Provider configs and keys (Host-owned mirror; the old `assistant_artifacts`
+/// and `assistant_context_snapshots` tables were Daemon authority and are no
+/// longer created by the Host).
+const MIGRATION_004_PROVIDERS: &str = "
 CREATE TABLE IF NOT EXISTS assistant_provider_configs (
     id TEXT PRIMARY KEY,
     provider_type TEXT NOT NULL,
@@ -986,7 +684,8 @@ CREATE TABLE IF NOT EXISTS assistant_provider_keys (
 );
 ";
 
-/// v5: Model cache, extensions, extension permissions
+/// v5: Model cache (Host-owned mirror; the old `assistant_extensions` /
+/// `assistant_extension_permissions` tables are unused and no longer created).
 const MIGRATION_005: &str = "
 CREATE TABLE IF NOT EXISTS assistant_model_cache (
     id TEXT PRIMARY KEY,
@@ -1000,29 +699,7 @@ CREATE TABLE IF NOT EXISTS assistant_model_cache (
     discovered_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS assistant_extensions (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    version TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    description TEXT,
-    manifest TEXT,
-    health TEXT NOT NULL DEFAULT 'healthy',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS assistant_extension_permissions (
-    id TEXT PRIMARY KEY,
-    extension_id TEXT NOT NULL REFERENCES assistant_extensions(id) ON DELETE CASCADE,
-    permission TEXT NOT NULL,
-    granted INTEGER NOT NULL DEFAULT 0,
-    granted_at TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_model_cache_provider ON assistant_model_cache(provider_id, model_id);
-CREATE INDEX IF NOT EXISTS idx_extension_permissions_ext ON assistant_extension_permissions(extension_id);
 ";
 
 /// v6: encrypted application settings used by env_manager and provider keys.
@@ -1092,22 +769,6 @@ CREATE TABLE IF NOT EXISTS assistant_projects (
 );
 ";
 
-/// v11: Host-owned prompt queue.
-const MIGRATION_011: &str = "
-CREATE TABLE IF NOT EXISTS assistant_prompt_queue (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
-    content TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'user',
-    attachments TEXT,
-    position INTEGER NOT NULL DEFAULT 0,
-    client_temp_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_prompt_queue_conversation ON assistant_prompt_queue(conversation_id, position);
-";
-
 /// v12: Collapse duplicate model cache rows and enforce uniqueness per provider.
 const MIGRATION_012: &str = "
 DELETE FROM assistant_model_cache
@@ -1129,51 +790,163 @@ ALTER TABLE assistant_projects ADD COLUMN deleted_at TEXT;
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_data_store_creation() {
-        let store = DataStore::new(":memory:").unwrap();
-        assert!(store.conn().is_autocommit());
+    fn open_fresh() -> LegacyMigrationService {
+        LegacyMigrationService::open(":memory:").expect("open migration service")
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+            rusqlite::params![name],
+            |row| row.get(0),
+        )
+        .unwrap_or(false)
     }
 
     #[test]
-    fn test_migrations_run_successfully() {
-        let store = DataStore::new(":memory:").unwrap();
-        store.run_migrations().unwrap();
+    fn test_service_opens_fresh_db() {
+        let service = open_fresh();
+        service.run().expect("one-way migration runs");
+        assert!(service.conn().is_autocommit());
+    }
 
-        // Verify tables exist
-        let tables: Vec<String> = store
-            .conn()
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
+    /// Negative assertion (MIG-004/DATA-002): the Host migration service does
+    /// NOT create the Daemon-authority `assistant_*` runtime schema. On a fresh
+    /// database, none of the conversation/run/message/event/queue tables exist.
+    #[test]
+    fn host_does_not_own_assistant_runtime_schema() {
+        let service = open_fresh();
+        service.run().unwrap();
 
-        assert!(tables.contains(&"assistant_conversations".to_string()));
-        assert!(tables.contains(&"assistant_messages".to_string()));
-        assert!(tables.contains(&"assistant_message_blocks".to_string()));
-        assert!(tables.contains(&"assistant_runs".to_string()));
-        assert!(tables.contains(&"assistant_run_events".to_string()));
-        assert!(tables.contains(&"assistant_tool_calls".to_string()));
-        assert!(tables.contains(&"assistant_permission_requests".to_string()));
-        assert!(tables.contains(&"assistant_artifacts".to_string()));
-        assert!(tables.contains(&"assistant_context_snapshots".to_string()));
-        assert!(tables.contains(&"assistant_provider_configs".to_string()));
-        assert!(tables.contains(&"assistant_provider_keys".to_string()));
-        assert!(tables.contains(&"assistant_model_cache".to_string()));
-        assert!(tables.contains(&"assistant_extensions".to_string()));
-        assert!(tables.contains(&"assistant_extension_permissions".to_string()));
+        // Daemon-authority tables must NOT be created by the Host.
+        for table in [
+            "assistant_conversations",
+            "assistant_messages",
+            "assistant_message_blocks",
+            "assistant_runs",
+            "assistant_run_events",
+            "assistant_tool_calls",
+            "assistant_permission_requests",
+            "assistant_artifacts",
+            "assistant_context_snapshots",
+            "assistant_prompt_queue",
+        ] {
+            assert!(
+                !table_exists(&service.conn(), table),
+                "Host must not own assistant runtime schema: {table} was created"
+            );
+        }
+
+        // Host-owned tables still exist (provider mirror / projects / settings).
+        // (`scheduled_tasks` / `task_runs` are created by the separate
+        // `db::init_assistant_db` pool setup, not by this migration service.)
+        for table in [
+            "assistant_provider_configs",
+            "assistant_provider_keys",
+            "assistant_model_cache",
+            "assistant_projects",
+            "settings",
+        ] {
+            assert!(
+                table_exists(&service.conn(), table),
+                "Host-owned table {table} must exist"
+            );
+        }
+    }
+
+    /// Negative assertion: the Host no longer writes run lifecycle tables at
+    /// startup. A stale `assistant_runs` row (left by a pre-D2-01 version) is
+    /// left untouched by the migration service — run recovery is Daemon
+    /// authority (`run_manager.rs`), never the Host.
+    #[test]
+    fn host_never_writes_stale_run_state() {
+        let tmp =
+            std::env::temp_dir().join(format!("natives-host-legacy-{}.db", uuid::Uuid::new_v4()));
+        {
+            // Build an old-style DB: legacy run tables with a stale active run.
+            let conn = rusqlite::Connection::open(&tmp).unwrap();
+            conn.execute_batch(
+                "PRAGMA foreign_keys=ON;
+                 CREATE TABLE assistant_conversations (
+                    id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'chat',
+                    project_id TEXT,
+                    title TEXT NOT NULL DEFAULT '',
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    permission_profile_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                 );
+                 CREATE TABLE assistant_runs (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    started_at TEXT
+                 );
+                 CREATE TABLE assistant_run_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                 );
+                 INSERT INTO assistant_conversations
+                   (id, mode, title, provider_id, model_id, created_at, updated_at)
+                 VALUES ('c1', 'agent', 't', 'p', 'm', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                 INSERT INTO assistant_runs (id, conversation_id, status, provider_id, model_id, started_at)
+                 VALUES ('r1', 'c1', 'running', 'p', 'm', '2026-01-01T00:00:00Z');
+                 INSERT INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload)
+                 VALUES ('r1', 1, '2026-01-01T00:00:00Z', 'text_delta', '{\"text\":\"partial\"}');",
+            )
+            .unwrap();
+        }
+
+        let service = LegacyMigrationService::open(&tmp.to_string_lossy()).expect("open");
+        service.run().expect("migration runs");
+
+        let conn = service.conn();
+        // The stale run row and its events are untouched (Host no longer owns
+        // run recovery — that is Daemon authority).
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM assistant_runs WHERE id='r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "running",
+            "Host migration service must not rewrite stale run state"
+        );
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assistant_run_events WHERE run_id='r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            event_count, 1,
+            "Host migration service must not add recovery events"
+        );
+
+        drop(conn);
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
     fn test_migration_idempotency() {
-        let store = DataStore::new(":memory:").unwrap();
-        // Running migrations twice should be safe
-        store.run_migrations().unwrap();
-        store.run_migrations().unwrap();
+        let service = open_fresh();
+        // Running the one-way migration twice should be safe
+        service.run().unwrap();
+        service.run().unwrap();
 
-        let version: i64 = store
+        let version: i64 = service
             .conn()
             .query_row(
                 "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
@@ -1184,63 +957,95 @@ mod tests {
         assert_eq!(version, 14);
     }
 
+    /// One-way session → conversation conversion still works on old DBs: a
+    /// session-schema `assistant_messages` table is preserved and converted so
+    /// the Daemon's host_authority_migration can read the conversation shape.
     #[test]
-    fn stale_run_recovery_preserves_text_delta() {
-        let store = DataStore::new(":memory:").unwrap();
-        store.run_migrations().unwrap();
-        let conn = store.conn();
-        conn.execute(
-            "INSERT INTO assistant_conversations (id, title, provider_id, model_id, created_at, updated_at) VALUES ('c1', 'C', 'p1', 'm1', 'now', 'now')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO assistant_runs (id, conversation_id, status, provider_id, model_id, started_at) VALUES ('r1', 'c1', 'running', 'p1', 'm1', 'now')",
-            [],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload) VALUES ('r1', 1, 'now', 'text_delta', '{\"text\":\"partial answer\"}')",
-            [],
-        ).unwrap();
+    fn legacy_session_messages_are_converted_not_dropped() {
+        let tmp =
+            std::env::temp_dir().join(format!("natives-host-sessions-{}.db", uuid::Uuid::new_v4()));
+        {
+            let conn = rusqlite::Connection::open(&tmp).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE assistant_sessions (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    title TEXT NOT NULL DEFAULT '',
+                    model_id TEXT NOT NULL DEFAULT '',
+                    provider_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    token_used INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active'
+                 );
+                 CREATE TABLE assistant_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    tool_calls TEXT,
+                    tool_result TEXT,
+                    status TEXT NOT NULL DEFAULT '',
+                    token_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    sequence INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO assistant_sessions
+                   (id, project_id, title, model_id, provider_id, created_at, updated_at)
+                 VALUES ('s1', NULL, 'Old session', 'm', 'p', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                 INSERT INTO assistant_messages
+                   (id, session_id, role, content, created_at, sequence)
+                 VALUES ('m1', 's1', 'user', 'hello old', '2026-01-01T00:00:00Z', 1);",
+            )
+            .unwrap();
+        }
+
+        let service = LegacyMigrationService::open(&tmp.to_string_lossy()).expect("open");
+        service.run().expect("migration runs");
+
+        let conn = service.conn();
+        // The original rows are preserved under legacy_assistant_messages.
+        let preserved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM legacy_assistant_messages",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, 1, "old rows must be preserved");
+        // The conversation shape now holds the converted conversation + message.
+        let conversations: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assistant_conversations WHERE id='s1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(conversations, 1, "session must convert into a conversation");
+        let messages: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assistant_messages WHERE id='m1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(messages, 1, "session message must convert");
+
         drop(conn);
-
-        store.recover_stale_runs().unwrap();
-
-        let content: String = store.conn().query_row(
-            "SELECT content FROM assistant_message_blocks WHERE message_id IN (SELECT id FROM assistant_messages WHERE conversation_id = 'c1' AND role = 'assistant')",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        assert!(content.contains("partial answer"));
+        let _ = std::fs::remove_file(&tmp);
     }
 
-    #[test]
-    fn test_foreign_keys_enforced() {
-        let store = DataStore::new(":memory:").unwrap();
-        store.run_migrations().unwrap();
-
-        // Try to insert a message with a non-existent conversation_id
-        let result = store.conn().execute(
-            "INSERT INTO assistant_messages (id, conversation_id, role, created_at) VALUES ('msg1', 'nonexistent', 'user', '2024-01-01T00:00:00Z')",
-            [],
-        );
-        assert!(result.is_err());
-    }
-
-    /// DATA-001 regression (Host side): no active migration constant may drop
-    /// or rename-rebuild a table. The historical v10/v13 rebuilds were removed;
-    /// what remains is CREATE TABLE IF NOT EXISTS / ALTER / dedup only.
+    /// R-D3 regression: no active migration constant may DROP or rename-rebuild
+    /// a table. What remains is CREATE TABLE IF NOT EXISTS / ALTER / dedup only.
     #[test]
     fn no_active_migration_drops_tables() {
         let active: Vec<(&str, &str)> = vec![
-            ("001", MIGRATION_001),
-            ("002", MIGRATION_002),
-            ("003", MIGRATION_003),
-            ("004", MIGRATION_004),
+            ("004", MIGRATION_004_PROVIDERS),
             ("005", MIGRATION_005),
             ("006", MIGRATION_006),
             ("007", MIGRATION_007),
             ("008", MIGRATION_008),
-            ("011", MIGRATION_011),
             ("012", MIGRATION_012),
             ("014", MIGRATION_014),
         ];
@@ -1257,18 +1062,30 @@ mod tests {
         }
     }
 
-    /// DATA-001 regression: the legacy message-block FK repair (a DROP-based
-    /// table rebuild) is retired. Running migrations against a database whose
-    /// `assistant_message_blocks` FK points at a legacy table must leave both
-    /// tables intact — the legacy tables are a read-only one-way migration
-    /// source and are never rebuilt.
+    /// Legacy tables from old installs stay readable as a one-way migration
+    /// source: re-running the migration service against a DB that already has
+    /// the conversation schema must leave both `assistant_conversations` and
+    /// `assistant_messages` intact.
     #[test]
-    fn legacy_message_block_fk_is_left_intact_not_rebuilt() {
-        let store = DataStore::new(":memory:").unwrap();
+    fn legacy_conversation_schema_is_left_intact_not_rebuilt() {
+        let tmp =
+            std::env::temp_dir().join(format!("natives-host-conv-{}.db", uuid::Uuid::new_v4()));
         {
-            let conn = store.conn();
+            let conn = rusqlite::Connection::open(&tmp).unwrap();
             conn.execute_batch(
-                "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;
+                "PRAGMA foreign_keys=ON;
+                 CREATE TABLE assistant_conversations (
+                    id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'chat',
+                    project_id TEXT,
+                    title TEXT NOT NULL DEFAULT '',
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    permission_profile_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                 );
                  CREATE TABLE assistant_messages (
                     id TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
@@ -1280,31 +1097,41 @@ mod tests {
                     reasoning_tokens INTEGER,
                     cost_usd REAL,
                     created_at TEXT NOT NULL
-                 );"
-            ).unwrap();
+                 );",
+            )
+            .unwrap();
         }
 
-        // Re-running migrations must not DROP/rebuild either table.
-        store.run_migrations().unwrap();
-        let tables: Vec<String> = store
-            .conn()
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-        assert!(tables.contains(&"legacy_assistant_messages".to_string()));
-        assert!(tables.contains(&"assistant_messages".to_string()));
-        assert!(tables.contains(&"assistant_message_blocks".to_string()));
+        let service = LegacyMigrationService::open(&tmp.to_string_lossy()).expect("open");
+        service.run().expect("migration runs");
 
-        // The legacy table stays readable (one-way migration source).
-        let count: i64 = store
-            .conn()
-            .query_row("SELECT COUNT(*) FROM assistant_messages", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, 0);
+        let conn = service.conn();
+        assert!(
+            table_exists(&conn, "assistant_conversations"),
+            "legacy migration source table must stay readable"
+        );
+        assert!(
+            table_exists(&conn, "assistant_messages"),
+            "legacy migration source table must stay readable"
+        );
+
+        drop(conn);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Foreign keys on Host-owned tables are enforced.
+    #[test]
+    fn test_foreign_keys_enforced() {
+        let service = open_fresh();
+        service.run().unwrap();
+
+        // Try to insert a provider key with a non-existent provider_id
+        let result = service.conn().execute(
+            "INSERT INTO assistant_provider_keys
+                (id, provider_id, encrypted_key, masked_key, created_at)
+             VALUES ('k1', 'nonexistent', 'enc', '***', '2024-01-01T00:00:00Z')",
+            [],
+        );
+        assert!(result.is_err());
     }
 }

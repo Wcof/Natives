@@ -49,43 +49,42 @@ fn provider_list_is_host_owned_not_daemon_owned() {
     }
 }
 
+/// provider.list reads the natives.db Settings SoT (user_providers + active
+/// keys) — the historical `assistant_*` mirror fallback is retired (MIG-004).
 #[tokio::test]
-async fn provider_list_returns_mirrored_user_provider_models() {
+async fn provider_list_reads_natives_db_settings_sot() {
     let _g = daemon_env_lock();
-    // Clear the global natives.db pool so handle_provider_list deterministically
-    // falls back to the :memory: DataStore mirror (avoids flaky from other tests
-    // registering a main pool that would make provider.list read natives.db).
-    crate::db::clear_main_pool_for_tests();
-    let store = Arc::new(DataStore::new(":memory:").unwrap());
-    store
-        .conn()
-        .execute(
-            "INSERT INTO assistant_provider_configs
-             (id, provider_type, display_name, api_base_url, default_model, health_status, created_at, updated_at)
-             VALUES ('p1', 'openai_compatible', 'SenseNova', 'https://api.example/v1', 'deepseek-v4-flash', 'unknown', 'now', 'now')",
-            [],
+    let main_pool_dir =
+        std::env::temp_dir().join(format!("natives-prov-main-{}.db", uuid::Uuid::new_v4()));
+    let main_pool = crate::db::init_db_pool(&main_pool_dir).expect("init main pool");
+    {
+        let conn = main_pool.get().expect("main conn");
+        conn.execute_batch(
+            "ALTER TABLE user_providers ADD COLUMN default_model TEXT;
+             ALTER TABLE provider_api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;
+             INSERT INTO user_providers
+                 (id, preset_name, api_protocol, name, website_url, base_url,
+                  default_model, created_at, updated_at)
+             VALUES ('p1', 'openai_compatible', 'openai_chat_completions', 'SenseNova',
+                     '', 'https://api.example/v1', 'deepseek-v4-flash',
+                     datetime('now'), datetime('now'));
+             INSERT INTO provider_api_keys
+                 (id, provider_id, label, api_key_encrypted, dek_encrypted,
+                  is_active, created_at)
+             VALUES ('k1', 'p1', 'API Key', 'enc', 'dek', 1, datetime('now'));",
         )
-        .unwrap();
-    store
-        .conn()
-        .execute(
-            "INSERT INTO assistant_provider_keys
-             (id, provider_id, encrypted_key, masked_key, label, is_active, created_at)
-             VALUES ('k1', 'p1', 'enc', 'sk-…abcd', 'API Key', 1, 'now')",
-            [],
-        )
-        .unwrap();
-    store
-        .conn()
-        .execute(
-            "INSERT INTO assistant_model_cache
-             (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
-             VALUES ('p1:deepseek-v4-flash', 'p1', 'deepseek-v4-flash', 'DeepSeek V4 Flash', '{}', 0, 0, 'manual', 'now')",
-            [],
-        )
-        .unwrap();
+        .expect("seed natives.db SoT provider");
+    }
+    crate::db::register_main_pool(main_pool);
 
-    let response = dispatch_rpc(&store, "provider.list", &serde_json::json!({})).await;
+    // Give the assistant pool a temp path so the model-cache enrichment read
+    // never touches the real ~/.natives.
+    let assistant_dir =
+        std::env::temp_dir().join(format!("natives-prov-asst-{}.db", uuid::Uuid::new_v4()));
+    let assistant_pool = crate::db::init_db_pool(&assistant_dir).expect("init assistant pool");
+    crate::db::set_assistant_pool_for_tests(assistant_pool);
+
+    let response = dispatch_rpc("provider.list", &serde_json::json!({})).await;
     assert!(
         response.success,
         "provider.list failed: {:?}",
@@ -99,7 +98,13 @@ async fn provider_list_returns_mirrored_user_provider_models() {
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0]["id"], "p1");
     assert_eq!(providers[0]["has_active_key"], true);
+    // Empty model cache → default_model surfaced (never a fabricated entry).
     assert_eq!(providers[0]["models"][0]["id"], "deepseek-v4-flash");
+
+    crate::db::clear_main_pool_for_tests();
+    crate::db::clear_assistant_pool_for_tests();
+    let _ = std::fs::remove_file(&main_pool_dir);
+    let _ = std::fs::remove_file(&assistant_dir);
 }
 
 #[test]
@@ -126,8 +131,7 @@ fn run_start_is_always_host_owned() {
 
 #[tokio::test]
 async fn implemented_daemon_method_is_not_rejected_by_legacy_dispatch() {
-    let store = Arc::new(DataStore::new(":memory:").unwrap());
-    let response = dispatch_rpc(&store, "mcp.list", &serde_json::json!({})).await;
+    let response = dispatch_rpc("mcp.list", &serde_json::json!({})).await;
     assert_ne!(
         response.error.as_ref().map(|error| error.code.as_str()),
         Some("METHOD_NOT_FOUND")
@@ -177,14 +181,12 @@ async fn conversation_permission_and_attachments_round_trip() {
         .expect("seed natives.db SoT provider");
     }
     crate::db::register_main_pool(main_pool);
-    let store = Arc::new(DataStore::new(":memory:").unwrap());
     let attachment_path = std::path::PathBuf::from(format!(
         "/tmp/natives-assistant-test-{}.txt",
         uuid::Uuid::new_v4()
     ));
     std::fs::write(&attachment_path, "example attachment").unwrap();
     let created = dispatch_rpc(
-        &store,
         "conversation.create",
         &serde_json::json!({
             "mode": "agent",
@@ -202,7 +204,6 @@ async fn conversation_permission_and_attachments_round_trip() {
     assert_eq!(created_data["permission_profile_id"], "readonly");
 
     let got = dispatch_rpc(
-        &store,
         "conversation.get",
         &serde_json::json!({ "id": conversation_id }),
     )
@@ -213,12 +214,7 @@ async fn conversation_permission_and_attachments_round_trip() {
         "readonly"
     );
 
-    store.conn().execute("INSERT INTO assistant_provider_configs (id, provider_type, display_name, api_base_url, created_at, updated_at) VALUES ('provider', 'openai', 'Provider', 'https://example.com', datetime('now'), datetime('now'))", []).unwrap();
-    store.conn().execute("INSERT INTO assistant_provider_keys (id, provider_id, encrypted_key, masked_key, created_at) VALUES ('key', 'provider', 'encrypted', '***', datetime('now'))", []).unwrap();
-    store.conn().execute("INSERT INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES ('model-cache', 'provider', 'model', 'model', '{}', 0, 0, 'manual', datetime('now'))", []).unwrap();
-
     let started = dispatch_rpc(
-        &store,
         "run.start",
         &serde_json::json!({
             "conversation_id": conversation_id,
@@ -240,7 +236,7 @@ async fn conversation_permission_and_attachments_round_trip() {
     assert_eq!(run["permission_profile"], "readonly", "run payload: {run}");
     let run_id = run["id"].as_str().unwrap();
 
-    let conversations = dispatch_rpc(&store, "conversation.list", &Value::Null)
+    let conversations = dispatch_rpc("conversation.list", &Value::Null)
         .await
         .data
         .unwrap();
@@ -256,7 +252,6 @@ async fn conversation_permission_and_attachments_round_trip() {
     assert_eq!(found.unwrap()["permission_profile_id"], "readonly");
 
     let runs = dispatch_rpc(
-        &store,
         "run.list",
         &serde_json::json!({ "conversation_id": conversation_id }),
     )
@@ -273,7 +268,6 @@ async fn conversation_permission_and_attachments_round_trip() {
     assert_eq!(run_list[0]["id"], run_id);
 
     let messages = dispatch_rpc(
-        &store,
         "conversation.getMessages",
         &serde_json::json!({ "conversation_id": conversation_id }),
     )
@@ -292,6 +286,7 @@ async fn conversation_permission_and_attachments_round_trip() {
     let _ = std::fs::remove_file(&attachment_path);
     let _ = std::fs::remove_file(&tmp_db);
     crate::daemon_authority::reset_authority_cache().await;
+    crate::db::clear_main_pool_for_tests();
     if let Some(mode) = previous_daemon_mode {
         std::env::set_var("NATIVES_DAEMON_MODE", mode);
     } else {
@@ -318,9 +313,7 @@ async fn structured_assistant_blocks_round_trip() {
         tmp_db.to_string_lossy().as_ref(),
     );
     crate::daemon_authority::reset_authority_cache().await;
-    let store = Arc::new(DataStore::new(":memory:").unwrap());
     let created = dispatch_rpc(
-        &store,
         "conversation.create",
         &serde_json::json!({
             "mode": "agent", "title": "Blocks", "provider_id": "p", "model_id": "m", "project_id": "/project/test"
@@ -329,14 +322,17 @@ async fn structured_assistant_blocks_round_trip() {
     .await;
     assert!(created.success, "create failed: {:?}", created.error);
     let conversation_id = created.data.unwrap()["id"].as_str().unwrap().to_string();
-    let appended = dispatch_rpc(&store, "conversation.appendMessage", &serde_json::json!({
-        "conversation_id": conversation_id,
-        "role": "assistant",
-        "blocks": [{ "type": "reasoning", "reasoning": "checked" }, { "type": "text", "text": "done" }]
-    })).await;
+    let appended = dispatch_rpc(
+        "conversation.appendMessage",
+        &serde_json::json!({
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "blocks": [{ "type": "reasoning", "reasoning": "checked" }, { "type": "text", "text": "done" }]
+        }),
+    )
+    .await;
     assert!(appended.success, "append failed: {:?}", appended.error);
     let messages = dispatch_rpc(
-        &store,
         "conversation.getMessages",
         &serde_json::json!({ "conversation_id": conversation_id }),
     )
