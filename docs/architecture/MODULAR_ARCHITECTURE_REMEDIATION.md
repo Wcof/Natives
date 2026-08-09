@@ -330,6 +330,21 @@ rtk npm run perf:check
 
 若协议文件成为共享热点：先由集成负责人冻结 schema 并提交，A/B 再基于该提交工作。Subagent 只跑精确轻量检查，完整构建由集成负责人统一执行一次。
 
+### 6.1 文件级 ownership map（冻结于 2026-08-09）
+
+整改分支 `codex/modular-architecture-remediation` 的文件 ownership 按下表冻结。任何 Agent 在开始修改前必须 grep 全部 caller；同一文件同一时刻只允许一个 Agent 编辑。
+
+| owner | 独占文件范围（相对仓库根） | 覆盖波次 |
+|---|---|---|
+| 集成负责人（主 Agent） | `crates/assistant-protocol/**`、`Cargo.toml`、`crates/*/Cargo.toml`、`package.json`、`scripts/architecture-check.mjs`（及新门禁脚本）、`tsconfig*.json`、`docs/**`、`src/types/generated/**`（仅协议生成物） | W0–W6 全部 |
+| Subagent A（Daemon/Engine） | `crates/agent-core/**`（engine_core、provider、tool_runtime、conversion、error）、`src-agent-daemon/src/run/**`、`src-agent-daemon/src/conversation/**`、`src-agent-daemon/src/checkpoint*.rs`、`src-agent-daemon/src/subagent*.rs`、`src-agent-daemon/src/tools/**`、`src-agent-daemon/src/harness/**`、`src-agent-daemon/src/agent-engine*/**`、`src-agent-daemon/src/production*.rs`、`src-agent-daemon/src/prepared_session*.rs`、`src-agent-daemon/src/event_log*.rs`、`src-agent-daemon/tests/**`（对应域） | W2 |
+| Subagent B（Host/Data） | `src-tauri/**`（lib.rs 除外共享热点）、`src-tauri/src/commands/**`、`src-tauri/src/db*.rs`、`src-tauri/src/natives_db*.rs`、`src-tauri/src/daemon/**`、`src-tauri/src/usage*.rs`、`src-tauri/src/creative_app*/**`、`src-tauri/src/sidecar_supervisor*.rs`、`src-tauri/src/process_supervisor*.rs`、`src-tauri/migrations/**` | W1、W3 |
+| Subagent C（Frontend/UI） | `src/components/assistant/**`、`src/components/ui/**`、`src/components/activity-inspector/**`、`src/components/preview/**`、`src/components/capabilities/**`、`src/lib/assistant-workspace/**`、`src/lib/assistant-gateway/**`、`src/lib/tauri/**`、`src/lib/preview*/**`、`src/hooks/**`、`src/i18n/**`、`src/app/globals.css`、`src/app/**/page.tsx`（薄化）、`src/types/**`（手写部分） | W4 |
+
+> 共享热点（须先由集成负责人冻结后解锁）：`crates/assistant-protocol/src/v2/**`（wire types / methods）、`src-tauri/src/lib.rs`（composition root 装配）、`src/lib/tauri/types.ts`（domain type 拆分入口）。任一 Agent 需要改动共享热点时，先以小批提交提请集成负责人冻结，再基于该提交并行。
+
+例外：本 map 冻结后新增文件的归属按「波次职责」判定，遇争议由集成负责人裁决并回写本表。
+
 ## 7. 低磁盘与构建复用
 
 本 Goal 必须遵循 `natives-agent-build-cache-and-disk-policy.md`，并追加：
