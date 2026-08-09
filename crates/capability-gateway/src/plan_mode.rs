@@ -560,11 +560,7 @@ pub fn is_active(run_id: &str) -> bool {
     // T112 (P0-019): after a daemon restart the in-memory map is empty. A
     // persisted Planning latch must stay closed — restore from disk before
     // answering, and never default to "open" just because memory lost it.
-    if let Some(s) = sessions()
-        .lock()
-        .ok()
-        .and_then(|g| g.get(run_id).cloned())
-    {
+    if let Some(s) = sessions().lock().ok().and_then(|g| g.get(run_id).cloned()) {
         return s.state == PlanState::Planning;
     }
     restore_planning_from_disk(run_id)
