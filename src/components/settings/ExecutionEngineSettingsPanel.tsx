@@ -193,7 +193,6 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
     return <div style={{ padding: 24 }}>{t(locale, 'common.loading')}</div>;
   }
 
-  const defaultRt = snapshot.runtimes.find((r) => r.id === snapshot.settings.defaultRuntime);
   const resolved = snapshot.resolvedDefault;
   // SETTINGS-002: capability rows come from the real daemon-advertised matrix
   // projected into each descriptor — never a hardcoded feature list.

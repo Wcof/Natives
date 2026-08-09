@@ -684,7 +684,6 @@ test('subscribeRun transport error sets reconnecting; next event clears it', asy
     },
   });
   // Seed last sequence so subscribe sees progress from afterSequence.
-  const after = Math.max(0, (state.lastSequenceByRun[runId] ?? 1) - 1);
   // Force connection back to reconnecting then prove a live event clears it.
   state = workspaceReducer(state, {
     type: 'connection/set',

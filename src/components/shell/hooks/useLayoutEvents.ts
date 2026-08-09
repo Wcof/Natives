@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import type { Locale } from '@/i18n';
 import { FILE_EVENTS, onFileEvent } from '@/lib/file-events';
+import type { ShellState } from '../useShellState';
 
 export interface LayoutPersistSnapshot {
   sidebarWidth: number;
@@ -13,11 +14,11 @@ export interface LayoutPersistSnapshot {
 }
 
 interface UseLayoutEventsOptions {
-  stateRef: React.RefObject<any>;
+  stateRef: React.RefObject<ShellState>;
   /** Layout fields that should be debounced to `_state:sidebar`. */
   layoutPersist: LayoutPersistSnapshot;
   toggleTerminal: () => void;
-  setState: (fn: (prev: any) => any) => void;
+  setState: React.Dispatch<React.SetStateAction<ShellState>>;
   setLocale: (locale: Locale) => void;
 }
 
@@ -128,15 +129,15 @@ export function useLayoutEvents({
   // 展开终端事件（幂等：仅在折叠时展开，绝不关闭已打开面板；file-events 契约）
   useEffect(
     () => onFileEvent(FILE_EVENTS.openTerminal, () => {
-      setState((prev: any) => (prev.terminalCollapsed ? { ...prev, terminalCollapsed: false } : prev));
+      setState((prev) => (prev.terminalCollapsed ? { ...prev, terminalCollapsed: false } : prev));
     }),
     [setState],
   );
 
   // Open/toggle command palette from UI chrome (e.g. collapsed sidebar search)
   useEffect(() => {
-    const openHandler = () => setState((prev: any) => ({ ...prev, cmdkOpen: true }));
-    const toggleHandler = () => setState((prev: any) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
+    const openHandler = () => setState((prev) => ({ ...prev, cmdkOpen: true }));
+    const toggleHandler = () => setState((prev) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
     window.addEventListener('open-cmdk', openHandler);
     window.addEventListener('toggle-cmdk', toggleHandler);
     return () => {
@@ -150,19 +151,19 @@ export function useLayoutEvents({
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !e.shiftKey) {
         e.preventDefault();
-        setState((prev: any) => ({ ...prev, sidebarCollapsed: !prev.sidebarCollapsed }));
+        setState((prev) => ({ ...prev, sidebarCollapsed: !prev.sidebarCollapsed }));
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !e.shiftKey) {
         // 终端有焦点时让位给终端的 Cmd+K 清屏（否则双重触发）
         const target = e.target as HTMLElement | null;
         if (target?.closest?.('.terminal-panel')) return;
         e.preventDefault();
-        setState((prev: any) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
+        setState((prev) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
       }
       if (e.key === 'Escape') {
         // 只在面板开着时发 setState，避免每次 Esc 都发一次空更新并
         // 与其他 Esc 消费者（模态等）抢事件
-        setState((prev: any) => (prev.cmdkOpen ? { ...prev, cmdkOpen: false } : prev));
+        setState((prev) => (prev.cmdkOpen ? { ...prev, cmdkOpen: false } : prev));
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !e.shiftKey) {
         e.preventDefault();

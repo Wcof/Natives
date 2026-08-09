@@ -4,7 +4,6 @@ import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense
 import { type Locale } from '@/i18n';
 import Sidebar, { SIDEBAR_COLLAPSED_WIDTH, clampSidebarWidth } from './Sidebar';
 import RightPanel, { clampRightPanelWidth } from './RightPanel';
-import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
 import Header from './Header';
 import TerminalPanel from './Terminal';
@@ -62,18 +61,6 @@ import { useModuleEvents } from './hooks/useModuleEvents';
 import { useFileEvents } from './hooks/useFileEvents';
 import { isSettingsView, normalizeSettingsTarget } from './settings-navigation';
 
-interface ShellState {
-  sidebarCollapsed: boolean;
-  sidebarWidth: number;
-  rightPanelMode: RightPanelMode;
-  rightPanelWidth: number;
-  previewSubMode: PreviewSubMode;
-  terminalCollapsed: boolean;
-  terminalHeight: number;
-  terminalMaximized: boolean;
-  cmdkOpen: boolean;
-}
-
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
   const {
     state, setState, stateRef,
@@ -88,7 +75,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     selectedFile, setSelectedFile,
     editMode, setEditMode,
     followMode, cycleFollowMode,
-    crashedModules, setCrashedModules,
+    setCrashedModules,
     needsOnboarding, setNeedsOnboarding,
     annotatingFile, setAnnotatingFile,
     annotationImageUrl, setAnnotationImageUrl,
@@ -138,11 +125,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setSelectedFile,
     setRightPanelMode,
   });
-
-  // ── Global Background Visual Config (shared with ControlHub & Settings) ──
-
-  // Crash state: track crashed modules for overlay display
-  const [iframeReloadKey, setIframeReloadKey] = useState(0);
 
   // ── 文件跟随（file-follow）：状态机产出 → 右面板 FollowRenderer ──
   // follow-mode.ts 的引擎（fs_watch 喂 followChange）在切到该档位时启动；
@@ -249,26 +231,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   const setPreviewSubMode = useCallback((mode: PreviewSubMode) => {
     setState((prev) => ({ ...prev, previewSubMode: mode }));
-  }, []);
-  const openCmdk = useCallback(() => {
-    setState((prev) => ({ ...prev, cmdkOpen: true }));
-  }, []);
-
-  const handleInstallModule = useCallback(async (source: string) => {
-    try {
-      const api = window.nativesAPI;
-      if (!api?.module?.install) {
-        console.warn('[Shell] Module install API not available');
-        return;
-      }
-      const result = await api.module.install(source);
-      const installResult = result as { success?: boolean; error?: string; moduleId: string };
-      if (!installResult.success && installResult.error) {
-        console.error('[Shell] Module install failed:', installResult.error);
-      }
-    } catch (err) {
-      console.error('[Shell] Module install error:', err);
-    }
   }, []);
 
   const handleModuleSelect = useCallback((moduleId: string) => {
@@ -514,7 +476,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
                 entry={selectedFile}
                 subMode={state.previewSubMode}
                 editMode={editMode}
-                onEditModeChange={setEditMode}
                 onClose={() => {
                   setSelectedFile(null);
                   setRightPanelMode('closed');
@@ -584,8 +545,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
               }
             }
             if (hasNativeFiles()) {
-              const result = await fsApi().readFile(filePath) as any;
-              if (result?.content && result?.encoding === 'base64') {
+              const result = await fsApi().readFile(filePath) as string | { content?: string; encoding?: string };
+              if (typeof result !== 'string' && result?.content && result?.encoding === 'base64') {
                 const ext = (filePath.split('.').pop() || 'png').toLowerCase();
                 const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
                 setAnnotationImageUrl(`data:${mime};base64,${result.content}`);

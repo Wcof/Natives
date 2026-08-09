@@ -35,7 +35,7 @@ export default function ProposalInbox({
 }: ProposalInboxProps) {
   const locale = useLocale();
   // Track which proposal ids are being processed (disables double-submit).
-  const [processing, setProcessing] = useState<Set<string>>(new Set());
+  const [, setProcessing] = useState<Set<string>>(new Set());
 
   if (proposals.length === 0) return null;
 

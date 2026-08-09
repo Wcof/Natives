@@ -21,26 +21,39 @@ interface FetchCall {
   options: { headers: Record<string, string> };
 }
 
+interface FakeNatives {
+  db: { get: (key: string) => Promise<unknown> };
+  meta: { moduleId: string | null };
+}
+
+interface FakeWindow {
+  parent: { postMessage: () => void };
+  addEventListener: (type: string, cb: (event: unknown) => void) => void;
+  postMessage: () => void;
+  natives: FakeNatives;
+}
+
 interface SdkHarness {
-  win: any;
-  parent: any;
-  listeners: Array<(event: any) => void>;
+  win: FakeWindow;
+  parent: { postMessage: () => void };
+  listeners: Array<(event: unknown) => void>;
   fetchCalls: FetchCall[];
   dispatch(event: { source: unknown; origin: string; data: unknown }): void;
 }
 
 function loadSdk(): SdkHarness {
-  const listeners: Array<(event: any) => void> = [];
-  const parent: any = { postMessage: () => {} };
-  const win: any = {
+  const listeners: Array<(event: unknown) => void> = [];
+  const parent: { postMessage: () => void } = { postMessage: () => {} };
+  const win: FakeWindow = {
     parent,
-    addEventListener: (type: string, cb: (event: any) => void) => {
+    addEventListener: (type: string, cb: (event: unknown) => void) => {
       if (type === 'message') listeners.push(cb);
     },
     postMessage: () => {},
+    natives: { db: { get: async () => '' }, meta: { moduleId: null } },
   };
   const fetchCalls: FetchCall[] = [];
-  const fetchMock = async (url: string, options: any) => {
+  const fetchMock = async (url: string, options: { headers: Record<string, string> }) => {
     fetchCalls.push({ url, options });
     return { json: async () => ({ ok: true }) };
   };

@@ -143,7 +143,6 @@ export default function FileContextMenu({
     if (!entry) return [];
 
     const p = entry.path;
-    const parent = entry.isDir ? p : p.substring(0, p.lastIndexOf('/')) || '/';
 
     if (mode === 'dir') {
       return [

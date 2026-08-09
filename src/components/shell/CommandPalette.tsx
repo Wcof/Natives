@@ -14,7 +14,6 @@ import {
   Sliders,
   Terminal,
   Sun,
-  BookOpen,
   Package,
   Search,
   FileText,
@@ -23,7 +22,7 @@ import {
   BookMarked,
   CalendarClock,
 } from 'lucide-react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useHydrated } from '@/hooks/useHydrated';
 import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 import { searchApi } from '@/lib/files-api';

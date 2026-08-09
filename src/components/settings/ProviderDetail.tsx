@@ -9,8 +9,6 @@ import {
   Edit3,
   KeyRound,
   Loader,
-  Lock,
-  Pencil,
   Plus,
   RefreshCw,
   Search,

@@ -4,7 +4,6 @@ import {
   ArchiveRestore,
   Bot,
   Braces,
-  CheckCircle2,
   CircleStop,
   Flag,
   GitBranch,

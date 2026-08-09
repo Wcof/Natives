@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 // Lightweight LRU tracker for "recently used modules" on the Dashboard.
 //

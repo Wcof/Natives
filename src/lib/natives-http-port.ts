@@ -31,7 +31,7 @@ export async function getHttpPort(): Promise<number> {
   if (pendingPromise) return pendingPromise;
 
   pendingPromise = (async (): Promise<number> => {
-    const api = (window as any).nativesAPI;
+    const api = window.nativesAPI;
     if (!api?.bridge?.getHttpPort) {
       throw new HttpPortNotAvailableError();
     }

@@ -21,7 +21,6 @@ function TextBlock({ block }: { block: ContentBlock }) {
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
   const live = Boolean(block.live);
-  const blockLocale = block.locale ?? 'zh';
   const [expanded, setExpanded] = React.useState(live);
   const userOverrideRef = React.useRef(false);
 

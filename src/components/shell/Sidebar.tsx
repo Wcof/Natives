@@ -16,7 +16,6 @@ import {
   FileText,
   Layers,
   LayoutDashboard,
-  MessageSquare,
   Monitor,
   Search,
   Settings,

@@ -232,8 +232,6 @@ export default function ActivityInspector({
   activeTab,
   onTabChange,
   developerMode = true,
-  onOpenArtifact,
-  onRevealArtifact,
   onSelectChild,
   onRetry,
   onOpenFile,
@@ -268,7 +266,6 @@ export default function ActivityInspector({
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
-  const [artifactSubTab, setArtifactSubTab] = useState<'created' | 'modified'>('created');
   /** T40：产物文件内联预览（Preview V2 artifact surface；普通 chat 不迁移） */
   const [artifactPreviewPath, setArtifactPreviewPath] = useState<string | null>(null);
   const [auditStatus, setAuditStatus] = useState<{

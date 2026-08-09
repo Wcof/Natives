@@ -2,7 +2,9 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useRef, useState, useEffect } from 'react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import type { editor } from 'monaco-editor';
+import type { OnMount } from '@monaco-editor/react';
+import { FONT_SIZE } from '@/lib/design-tokens';
 
 // Dynamic import — Monaco Editor is ~2MB, only load when actually editing code
 const Editor = dynamic(() => import('@monaco-editor/react').then((m) => m.default), {
@@ -35,7 +37,7 @@ const EXT_TO_LANG: Record<string, string> = {
 const WORD_WRAP_EXTS = new Set(['md', 'markdown', 'txt', 'log', 'srt', 'vtt', 'ass']);
 
 export default function MonacoEditor({ content, language, onSave, onChange, readOnly }: MonacoEditorProps) {
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
   const lang = EXT_TO_LANG[language] || 'plaintext';
   const wordWrap = WORD_WRAP_EXTS.has(language) ? 'on' : 'off';
@@ -66,7 +68,7 @@ export default function MonacoEditor({ content, language, onSave, onChange, read
     };
   }, []);
 
-  const handleMount = useCallback((editor: any, monaco: any) => {
+  const handleMount = useCallback<OnMount>((editor, monaco) => {
     editorRef.current = editor;
     // Cmd+S save
     if (onSave) {

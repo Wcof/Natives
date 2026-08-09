@@ -31,7 +31,7 @@ export default function UsagePanel() {
       if (result.state === 'ready') {
         setUsageData(result.response);
       }
-    } catch (err: any) {
+    } catch (err) {
       const classified = classifyError(err);
       setError(classified.userMessage);
     } finally {
@@ -55,7 +55,7 @@ export default function UsagePanel() {
         },
       })) as { metadata: unknown; response: UsageDashboardResponse };
       setUsageData(result.response);
-    } catch (err: any) {
+    } catch (err) {
       const classified = classifyError(err);
       setError(classified.userMessage);
     } finally {

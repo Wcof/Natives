@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Pen, Square, Minus, ArrowRight, Type, Grid3x3, Undo2, Save, FileOutput, X } from 'lucide-react';
+import { Pen, Square, Minus, ArrowRight, Type, Grid3x3, Undo2, Save, FileOutput } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 
 /**

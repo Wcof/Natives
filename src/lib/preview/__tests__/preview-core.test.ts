@@ -160,11 +160,10 @@ test('aborted signal during prepare throws cancelled without noise', async () =>
 
 test('simultaneous Files + Assistant requests stay independent', async () => {
   const reg = new PreviewRegistry();
-  let calls = 0;
   reg.register(provider({
     id: 'code',
     priority: 10,
-    prepare: async () => { calls++; return { kind: 'code', source: 'x', language: 'text', truncated: false }; },
+    prepare: async () => ({ kind: 'code', source: 'x', language: 'text', truncated: false }),
   }));
   const filesCtrl = new PreviewRequestController();
   const assistantCtrl = new PreviewRequestController();

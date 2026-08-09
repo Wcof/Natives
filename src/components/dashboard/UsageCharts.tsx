@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { SPACING } from '@/lib/design-tokens';
 import { useLocale, t } from '@/i18n';
 import type { UsageDailyRecord, UsageActivityBucket, UsageSourceStatus } from '@/types/usage';
 import {
@@ -11,6 +11,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
+import type { TooltipContentProps } from 'recharts';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { BarChart3, Clock, Folder, PieChart } from 'lucide-react';
 import { fmtCount, fmtDurationCompact } from '@/lib/format';
@@ -159,10 +160,10 @@ export function UsageCharts({ daily, activity, sources }: Props) {
 
   /** Recharts default tooltip content — shows label + each series with name, value, share. */
   const renderSeriesTooltip = useCallback(
-    (props: any) => {
+    (props: TooltipContentProps) => {
       const { active, payload, label } = props ?? {};
       if (!active || !payload || payload.length === 0) return null;
-      const rows = (payload as any[]).filter((e) => e && e.value != null && e.value !== 0);
+      const rows = payload.filter((e) => e && e.value != null && e.value !== 0);
       if (rows.length === 0) {
         // Still show zero-state so hover never looks empty.
         return (
@@ -178,7 +179,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
           <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
           {rows.map((entry, i) => {
             const v = Number(entry.value) || 0;
-            const name = entry.name ?? entry.dataKey ?? '';
+            const name = String(entry.name ?? entry.dataKey ?? '');
             const isMoney = String(entry.dataKey).toLowerCase().includes('cost') || name === t(locale, 'usage.costLabel');
             const isMinutes = String(entry.dataKey).toLowerCase().includes('minute')
               || name === t(locale, 'usage.estimatedActiveDuration');
@@ -210,17 +211,19 @@ export function UsageCharts({ daily, activity, sources }: Props) {
 
   /** Horizontal distribution bars: name + tokens + share of total. */
   const renderDistTooltip = useCallback(
-    (props: any, kind: 'source' | 'model' | 'project') => {
+    (props: TooltipContentProps, kind: 'source' | 'model' | 'project') => {
       const { active, payload } = props ?? {};
       if (!active || !payload || payload.length === 0) return null;
       const row = payload[0]?.payload ?? {};
-      const label =
-        kind === 'model'
-          ? (row.label ?? row.modelId ?? t(locale, 'usage.unrecordedModel'))
-          : (row.label ?? row.sourceId ?? row.id ?? '—');
+      const rawLabel = kind === 'model'
+        ? (row.label ?? row.modelId)
+        : (row.label ?? row.sourceId ?? row.id);
+      const label = rawLabel == null
+        ? (kind === 'model' ? t(locale, 'usage.unrecordedModel') : '—')
+        : String(rawLabel);
       const tokens = Number(row.totalTokens ?? payload[0]?.value ?? 0);
       const percentage = typeof row.percentage === 'number' ? row.percentage : null;
-      const fullPath = kind === 'project' ? row.fullLabel : null;
+      const fullPath = kind === 'project' && row.fullLabel != null ? String(row.fullLabel) : null;
       return (
         <div style={tipPanelStyle}>
           <div style={{ fontWeight: 600, marginBottom: 2, wordBreak: 'break-all' }}>{label}</div>

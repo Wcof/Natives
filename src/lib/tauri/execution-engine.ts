@@ -6,7 +6,7 @@
  */
 
 import { cmd } from './core';
-import type { NativesAPI, ExecutionEngineSettings, ExecutionEngineSnapshot } from './types';
+import type { NativesAPI, ExecutionEngineSettings } from './types';
 
   // Execution Engine settings V2（唯一持久化权威 — A6 backend）
 export const executionEngine: NativesAPI['executionEngine'] = {

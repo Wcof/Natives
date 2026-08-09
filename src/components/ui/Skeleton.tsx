@@ -1,5 +1,5 @@
 'use client';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 
 /**
  * Skeleton loading placeholder — shows animated gray bars

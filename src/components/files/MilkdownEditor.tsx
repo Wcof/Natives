@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback, useState } from 'react';
+import type { Crepe } from '@milkdown/crepe';
 import { semanticEqual } from '@/lib/markdown-semantic';
 import { t, type Locale } from '@/i18n';
 
@@ -24,7 +25,7 @@ interface MilkdownEditorProps {
  */
 export default function MilkdownEditor({ content, onSave, onDirtyChange, locale = 'zh' }: MilkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<Crepe | null>(null);
   const getValueRef = useRef<() => string>(() => content);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const baselineRef = useRef<string>(content);

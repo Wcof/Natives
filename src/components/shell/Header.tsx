@@ -319,7 +319,7 @@ export default function Header({
     <header
       ref={headerRef}
       data-tauri-drag-region
-      className="flex items-center gap-3 px-4 bg-[var(--surface)] border-b border-[var(--border)] min-h-[40px] tb-hide"
+      className={`flex items-center gap-3 px-4 bg-[var(--surface)] border-b border-[var(--border)] min-h-[40px] tb-hide ${tbClass}`}
       style={{
         userSelect: 'none',
       }}
@@ -441,7 +441,7 @@ export default function Header({
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                     }`}
                     onClick={() => dispatchAction({ type: 'gridSize', value: opt.key })}
-                    title={t(locale, `fileBrowser.gridSize${opt.key.toUpperCase()}` as any)}
+                    title={t(locale, `fileBrowser.gridSize${opt.key.toUpperCase()}`)}
                   >
                     {opt.label}
                   </button>

@@ -52,7 +52,7 @@ export function useFileDrop({
           } else {
             showToast(t(locale, 'fileBrowser.importApiUnavailable'));
           }
-        } catch (err) {
+        } catch {
           showToast(t(locale, 'fileBrowser.importFailed'));
         }
       },

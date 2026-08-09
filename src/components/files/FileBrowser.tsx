@@ -114,7 +114,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    entry: FileEntry;
+    entry: FileEntry | null;
     mode: 'file' | 'dir' | 'blank';
   } | null>(null);
   const openContextMenu = useCallback((x: number, y: number, entry: FileEntry, mode: 'file' | 'dir') => {
@@ -638,7 +638,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           sel.lastClickedIndexRef.current = -1;
         }}
         onBlankContextMenu={(x, y) => {
-          setContextMenu({ x, y, entry: null as any, mode: 'blank' as const });
+          setContextMenu({ x, y, entry: null, mode: 'blank' as const });
         }}
         gridSize={gridSize}
         sortBy={sortBy}
@@ -686,7 +686,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       {/* Context menu */}
       {contextMenu && (
         <FileContextMenu
-          entry={contextMenu.entry}
+          entry={contextMenu.entry ?? undefined}
           x={contextMenu.x}
           y={contextMenu.y}
           mode={contextMenu.mode}

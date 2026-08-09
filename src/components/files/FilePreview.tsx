@@ -1,7 +1,7 @@
 'use client';
 
 import { startTransition, useState, useEffect, useCallback, useMemo, lazy, Suspense, useRef } from 'react';
-import { Eye, Edit2, Pencil } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
@@ -30,7 +30,6 @@ interface FilePreviewProps {
   subMode: PreviewSubMode;
   onClose: () => void;
   editMode?: boolean;
-  onEditModeChange?: (mode: boolean) => void;
 }
 
 /**
@@ -45,7 +44,7 @@ interface FilePreviewProps {
  * PreviewSurface 只读呈现。Feature 只持有选择/布局状态，不复制预览算法（R-E3）。
  */
 
-export default function FilePreview({ entry, subMode, onClose, editMode = false, onEditModeChange }: FilePreviewProps) {
+export default function FilePreview({ entry, subMode, onClose, editMode = false }: FilePreviewProps) {
   const [gitDiff, setGitDiff] = useState<string | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitStatus, setGitStatus] = useState<string | null>(null);
@@ -238,7 +237,7 @@ function useImageEditUrl(path: string): string | null {
     let createdUrl: string | null = null;
     (async () => {
       try {
-        const result = await fs.readFile(path) as any;
+        const result = (await fs.readFile(path)) as string | { content?: string; encoding?: string };
         if (cancelled) return;
         const content = typeof result === 'string' ? result : result?.content;
         if (!content) return;
@@ -249,7 +248,7 @@ function useImageEditUrl(path: string): string | null {
         };
         const mime = mimeMap[ext] || 'application/octet-stream';
         let blob: Blob;
-        if (result?.encoding === 'base64') {
+        if (typeof result !== 'string' && result?.encoding === 'base64') {
           const byteString = atob(content);
           const ab = new ArrayBuffer(byteString.length);
           const ia = new Uint8Array(ab);

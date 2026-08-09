@@ -265,10 +265,10 @@ export const nativesAPI: NativesAPI = {
 
 // Expose to window (replaces contextBridge.exposeInMainWorld)
 if (typeof window !== 'undefined') {
-  (window as unknown as { nativesAPI: NativesAPI }).nativesAPI = nativesAPI;
+  window.nativesAPI = nativesAPI;
   // Expose cmd helper so DaemonClient and other modules can invoke
   // Tauri commands without importing @tauri-apps/api/core directly.
-  (window as any).__nativesCmd = cmd;
+  window.__nativesCmd = cmd;
 }
 
 export default nativesAPI;

@@ -40,7 +40,7 @@ function makeContext(overrides: Partial<PreviewContext> = {}): PreviewContext & 
   }) as PreviewContext & { __authorizeCalls(): number; __readCalls(): number };
 }
 
-function fileReq(path: string, content = '{"a":1}'): PreviewRequest {
+function fileReq(path: string): PreviewRequest {
   return { source: { type: 'file', path, kind: 'text' }, mode: 'preview', surface: 'files' };
 }
 

@@ -114,7 +114,6 @@ function ChangeSummaryCard({
   fileChanges: FileChange[];
   onRollbackChanges?: (changes: Array<{ path: string; runId?: string }>) => Promise<boolean>;
 }) {
-  const zh = locale.startsWith('zh');
   const summary = useMemo(
     () => summarizeConversationChanges(events, fileChanges),
     [events, fileChanges],
@@ -174,7 +173,6 @@ function ChangeSummaryCard({
 const MessageRow = memo(function MessageRow({
   message,
   locale,
-  zh,
   now,
   isLastRetryable,
   onRetry,
