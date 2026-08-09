@@ -2003,69 +2003,108 @@ impl RunManager {
                 "project_path is required for daemon runs; process cwd fallback is disabled"
                     .to_string()
             })?;
-            // Skills are selection-scoped when Capability Hub supplied an
-            // explicit selection; otherwise retain the existing trusted project
-            // catalog. Bodies remain progressive-disclosure only.
-            let skill_prompt = capability_snapshot
-                .skill_prompt
-                .clone()
-                .unwrap_or_else(|| crate::skill_store::prompt_for_project(project_root));
             let child_directive = self.runtime.take_run_agent_directive(&run.id).await;
-            // P1-01: warm prepare — the static prompt layers are keyed by
-            // project identity + instruction digest + capability audit +
-            // provider/model/runtime. The cache is never used when a per-run
-            // child directive is present (those are run-specific and cannot be
-            // frozen). Credentials/permission/run-id are never part of the key
-            // or the payload.
-            let cache_key = if child_directive.is_none() {
-                Some(crate::prepared_session::PreparedAgentSessionKey {
-                    project_identity: project_root.to_string_lossy().to_string(),
-                    project_instruction_digest: crate::prepared_session::project_instruction_digest(
-                        project_root,
-                    ),
-                    capability_revision: crate::prepared_session::capability_audit_revision(
+            // P1-01 / PERF-002: warm prepare — the static prompt layers are
+            // keyed by project identity + instruction fingerprint + capability
+            // audit + provider/model/runtime. The cache is never used when a
+            // per-run child directive is present (those are run-specific and
+            // cannot be frozen). Credentials/permission/run-id are never part
+            // of the key or the payload.
+            //
+            // PERF-002: the lookup is two-tier. The fast tier builds the key
+            // from a METADATA fingerprint (canonical path + mtime/size +
+            // skill-directory generation) — no instruction content is read and
+            // no skill body is scanned before the lookup. Only when that
+            // misses does the slow tier compute the full content SHA-256 and
+            // consult the durable content-verified key. The skill prompt is
+            // likewise deferred to the rebuild branch, so a warm hit performs
+            // zero instruction I/O and zero skill discovery.
+            use crate::prepared_session::PreparedResolve;
+            let resolve = if child_directive.is_none() {
+                self.runtime.prepared.resolve(
+                    project_root,
+                    &project_root.to_string_lossy(),
+                    crate::prepared_session::capability_audit_revision(
                         &capability_snapshot.to_audit_json(),
                     ),
-                    harness_revision: 0,
-                    provider_id: provider_id.clone(),
-                    model_id: model_id.clone(),
-                    runtime_id: runtime_id.clone(),
-                    app_schema_revision: 0,
-                })
+                    0,
+                    &provider_id,
+                    &model_id,
+                    &runtime_id,
+                    0,
+                )
             } else {
-                None
+                // A per-run child directive cannot be frozen into a cache key.
+                PreparedResolve::NoCache
             };
-            let cached = cache_key
-                .as_ref()
-                .and_then(|key| self.runtime.prepared.get(key));
-            let effective_prompt = if let Some(session) = cached {
-                session.effective_prompt.clone()
-            } else {
-                let compiled = crate::production::compile_effective_prompt(
-                    capability_snapshot
-                        .agent_profile_id
-                        .as_deref()
-                        .or(run.agent_profile_id.as_deref()),
-                    capability_snapshot.profile.as_ref(),
-                    child_directive.as_deref(),
-                    Some(project_root),
-                    (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
-                    &harness_plan.prompt_blocks,
-                    &harness_plan.builtin_prompt_replacements,
-                    capability_snapshot.extra_system_prompt.as_deref(),
-                );
-                if let Some(key) = cache_key {
-                    self.runtime.prepared.insert(
-                        key,
-                        crate::prepared_session::PreparedAgentSession {
-                            effective_prompt: compiled.clone(),
-                            prompt_digest: compiled.effective_full_text.clone(),
-                            frozen_tool_schemas: frozen_tool_schemas.clone(),
-                            skill_catalog_metadata: Vec::new(),
-                        },
-                    );
+            let effective_prompt = match resolve {
+                // Warm metadata-tier hit: no skill scan, no instruction read.
+                PreparedResolve::Hit(session) | PreparedResolve::ContentUnchanged(session) => {
+                    session.effective_prompt.clone()
                 }
-                compiled
+                PreparedResolve::Miss {
+                    fast_key,
+                    full_digest,
+                } => {
+                    // Skills are selection-scoped when Capability Hub supplied
+                    // an explicit selection; otherwise retain the existing
+                    // trusted project catalog. Bodies remain progressive-
+                    // disclosure only. Deferred to this branch (PERF-002).
+                    let skill_prompt = capability_snapshot
+                        .skill_prompt
+                        .clone()
+                        .unwrap_or_else(|| crate::skill_store::prompt_for_project(project_root));
+                    let compiled = crate::production::compile_effective_prompt(
+                        capability_snapshot
+                            .agent_profile_id
+                            .as_deref()
+                            .or(run.agent_profile_id.as_deref()),
+                        capability_snapshot.profile.as_ref(),
+                        child_directive.as_deref(),
+                        Some(project_root),
+                        (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
+                        &harness_plan.prompt_blocks,
+                        &harness_plan.builtin_prompt_replacements,
+                        capability_snapshot.extra_system_prompt.as_deref(),
+                    );
+                    let session = crate::prepared_session::PreparedAgentSession {
+                        effective_prompt: compiled.clone(),
+                        prompt_digest: compiled.effective_full_text.clone(),
+                        frozen_tool_schemas: frozen_tool_schemas.clone(),
+                        skill_catalog_metadata: Vec::new(),
+                    };
+                    // Index under BOTH keys: the full content digest is the
+                    // durable content-verified key; the metadata key makes the
+                    // next identical lookup hit without any content I/O.
+                    let full_key = crate::prepared_session::PreparedAgentSessionKey {
+                        project_instruction_digest: full_digest,
+                        ..fast_key.clone()
+                    };
+                    self.runtime.prepared.insert(full_key, session.clone());
+                    self.runtime.prepared.insert(fast_key, session);
+                    compiled
+                }
+                // Child-directive path: rebuild, never insert a run-specific
+                // prompt into the static cache.
+                PreparedResolve::NoCache => {
+                    let skill_prompt = capability_snapshot
+                        .skill_prompt
+                        .clone()
+                        .unwrap_or_else(|| crate::skill_store::prompt_for_project(project_root));
+                    crate::production::compile_effective_prompt(
+                        capability_snapshot
+                            .agent_profile_id
+                            .as_deref()
+                            .or(run.agent_profile_id.as_deref()),
+                        capability_snapshot.profile.as_ref(),
+                        child_directive.as_deref(),
+                        Some(project_root),
+                        (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
+                        &harness_plan.prompt_blocks,
+                        &harness_plan.builtin_prompt_replacements,
+                        capability_snapshot.extra_system_prompt.as_deref(),
+                    )
+                }
             };
             effective_prompt
         } else {
