@@ -1,60 +1,9 @@
 'use client';
 
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  DragEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactNode,
-} from 'react';
-import type { LucideIcon } from 'lucide-react';
-import {
-  Bell,
-  Blocks,
-  BookMarked,
-  CalendarClock,
-  Download,
-  FileText,
-  Layers,
-  LayoutDashboard,
-  Monitor,
-  Search,
-  Settings,
-  Square,
-  ArrowLeft,
-  ChevronDown,
-  ChevronRight,
-  FolderPlus,
-  Palette,
-  Plug,
-  SlidersHorizontal,
-  Cpu,
-  PanelLeft,
-  PanelLeftClose,
-  Star,
-  Folder,
-  File,
-  X,
-  Minus,
-  Maximize2,
-} from 'lucide-react';
-import * as LucideIcons from 'lucide-react';
-import { t, type Locale } from '@/i18n';
-import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
-import {
-  useFavorites,
-  favoritesNavTarget,
-  removeAndPersistFavorite,
-  FAVORITES_SIDEBAR_PREVIEW,
-  type FavoriteItem,
-} from '@/lib/favorites-client';
-import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
-import SidebarDirTree from './SidebarDirTree';
-import { useAssistantActions } from '@/components/assistant/AssistantWorkspaceContext';
-import {
-  isSettingsView,
-  getSettingsSection,
-  type SettingsSection,
-} from './settings-navigation';
+import { t } from '@/i18n';
+import { useSidebar, type SidebarProps } from './sidebar/useSidebar';
+import { SidebarChrome } from './sidebar/parts';
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './sidebar/model';
 
 export {
   SIDEBAR_COLLAPSED_WIDTH,
