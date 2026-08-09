@@ -723,7 +723,14 @@ export type AssistantMethod =
   | 'harness.trace.list'
   | 'harness.audit.export'
   | 'project.identity.register'
-  | 'project.identity.list';
+  | 'project.identity.list'
+  | 'credential.lease.acquire'
+  | 'credential.lease.revoke'
+  | 'credential.lease.status'
+  | 'credential.pool.acquire'
+  | 'credential.routing.settings'
+  | 'credential.secret.acquire'
+  | 'credential.setting.get';
 
 /**
  * Capability library selection carried on run.start / conversation rows

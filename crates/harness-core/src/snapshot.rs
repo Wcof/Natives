@@ -367,4 +367,57 @@ mod tests {
         assert!(!persisted.contains("available skill summary"));
         assert!(!persisted.contains("redacted_preview"));
     }
+
+    /// NE-P0-04 / single-authority evidence: the persisted PromptPlanSummary is
+    /// projected from the exact CompiledPromptPlan the Provider receives, so
+    /// the snapshot's effective hash equals SHA-256 of the raw text the
+    /// Provider/Dispatcher uses, and capability-contributed layers (expert,
+    /// skill, team) are recorded as real content digests without persisting
+    /// the raw bodies.
+    #[test]
+    fn snapshot_plan_hash_matches_the_provider_raw_text_and_records_capability_digests() {
+        let mut builder = crate::PromptPlanBuilder::new();
+        builder
+            .add_builtin_surface("native", "base instructions")
+            .add_skill_catalog("skills", "skill summary")
+            .add_capability_expert("expert", "expert prompt body")
+            .add_team_roster("team roster body");
+        let compiled = builder.build();
+
+        // Provider / Dispatcher side: the raw text is exactly what they send.
+        assert_eq!(
+            sha256_hex(&compiled.effective_full_text),
+            compiled.effective_prompt_hash
+        );
+
+        // Snapshot side: the persisted summary carries the SAME hash plus the
+        // capability-contributed layer digests, and never the raw text.
+        let summary: PromptPlanSummary = (&compiled).into();
+        assert_eq!(
+            summary.effective_prompt_hash,
+            compiled.effective_prompt_hash
+        );
+        assert_eq!(summary.layers.len(), 4);
+        let expected_texts = [
+            "base instructions",
+            "skill summary",
+            "expert prompt body",
+            "team roster body",
+        ];
+        for (index, layer) in summary.layers.iter().enumerate() {
+            assert_eq!(
+                layer.digest,
+                sha256_hex(expected_texts[index]),
+                "layer {index} digest must be the real content digest"
+            );
+        }
+        assert_eq!(summary.source_digests.len(), 4);
+        let persisted = serde_json::to_string(&summary).unwrap();
+        for text in expected_texts {
+            assert!(
+                !persisted.contains(text),
+                "raw prompt body must never be persisted"
+            );
+        }
+    }
 }

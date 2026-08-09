@@ -171,6 +171,26 @@ pub fn merge_agent_directive(
 /// This is the sole ordering authority for Native prompt layers. Callers may
 /// project the returned summaries into a Run snapshot, but only
 /// `effective_full_text` is passed to the engine and it is never persisted.
+///
+/// Natives-owned prompt blocks are consumed exactly once per placement
+/// (NE-P0-03), anchored to the layer they describe:
+///
+/// ```text
+/// BuiltinSurface (agent kind / replacement)
+/// SkillCatalog
+///   -> NativesPromptBlock placement BeforeProfile
+/// CapabilityExpert (profile / expert prompt)
+///   -> NativesPromptBlock placement AfterProfile
+/// ChildDirective
+/// InstructionFiles (project instructions)
+///   -> NativesPromptBlock placement AfterProjectInstructions (the default)
+/// TeamRoster
+///   -> NativesPromptBlock placement Final
+/// ```
+///
+/// Block order inside each group is stable: `add_prompt_blocks` sorts the
+/// matching blocks by their `order` field. The four groups above are the only
+/// places Natives prompt blocks may appear and each is emitted at most once.
 #[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
 pub(crate) fn compile_effective_prompt(
     agent_kind: Option<&str>,
@@ -202,6 +222,12 @@ pub(crate) fn compile_effective_prompt(
         builder.add_skill_catalog("selected_skill_catalog", skill_prompt);
     }
 
+    // BeforeProfile: anchored immediately before the Capability Expert layer.
+    builder.add_prompt_blocks(
+        prompt_blocks,
+        harness_core::blueprint::PromptBlockPlacement::BeforeProfile,
+    );
+
     if let Some(profile) = profile {
         if let Some(prompt) = profile
             .system_prompt
@@ -211,6 +237,12 @@ pub(crate) fn compile_effective_prompt(
             builder.add_capability_expert(profile.id.clone(), prompt);
         }
     }
+
+    // AfterProfile: anchored immediately after the Capability Expert layer.
+    builder.add_prompt_blocks(
+        prompt_blocks,
+        harness_core::blueprint::PromptBlockPlacement::AfterProfile,
+    );
 
     if let Some(child_directive) = child_directive.filter(|prompt| !prompt.trim().is_empty()) {
         builder.add_child_directive(child_directive);
@@ -223,17 +255,22 @@ pub(crate) fn compile_effective_prompt(
         }
     }
 
-    for placement in [
-        harness_core::blueprint::PromptBlockPlacement::BeforeProfile,
-        harness_core::blueprint::PromptBlockPlacement::AfterProfile,
-        harness_core::blueprint::PromptBlockPlacement::Final,
-    ] {
-        builder.add_prompt_blocks(prompt_blocks, placement);
-    }
+    // AfterProjectInstructions (the PromptBlockPlacement default): anchored
+    // immediately after the project instruction files.
+    builder.add_prompt_blocks(
+        prompt_blocks,
+        harness_core::blueprint::PromptBlockPlacement::AfterProjectInstructions,
+    );
 
     if let Some(team_roster) = team_roster.filter(|prompt| !prompt.trim().is_empty()) {
         builder.add_team_roster(team_roster);
     }
+
+    // Final: the very last layer, after the team roster.
+    builder.add_prompt_blocks(
+        prompt_blocks,
+        harness_core::blueprint::PromptBlockPlacement::Final,
+    );
 
     builder.build()
 }
@@ -1668,13 +1705,135 @@ mod builtin_prompt_replacement_tests {
                 harness_core::PromptLayerKind::CapabilityExpert,
                 harness_core::PromptLayerKind::ChildDirective,
                 harness_core::PromptLayerKind::InstructionFiles,
-                harness_core::PromptLayerKind::NativesPromptBlock,
                 harness_core::PromptLayerKind::TeamRoster,
+                harness_core::PromptLayerKind::NativesPromptBlock,
             ]
         );
         assert_eq!(
             harness_core::sha256_hex(&compiled.effective_full_text),
             compiled.effective_prompt_hash
+        );
+    }
+
+    /// NE-P0-03: each of the four `PromptBlockPlacement` groups is consumed
+    /// exactly once and lands in the correct relative order inside the
+    /// Provider capture. Table-driven: every row carries one block per
+    /// placement with a distinctive marker, then the test asserts the full
+    /// layer-kind sequence, the raw-text order, and that every marker appears
+    /// exactly once.
+    #[test]
+    fn prompt_placements_are_consumed_exactly_once_in_design_order() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".git")).unwrap();
+        std::fs::write(project.path().join("AGENTS.md"), "project instruction").unwrap();
+        let profile = agent_core::AgentProfile {
+            id: "expert".into(),
+            name: "Expert".into(),
+            system_prompt: Some("expert prompt".into()),
+            ..Default::default()
+        };
+        let placements = [
+            harness_core::blueprint::PromptBlockPlacement::BeforeProfile,
+            harness_core::blueprint::PromptBlockPlacement::AfterProfile,
+            harness_core::blueprint::PromptBlockPlacement::AfterProjectInstructions,
+            harness_core::blueprint::PromptBlockPlacement::Final,
+        ];
+        let markers = [
+            "BLOCK_BEFORE_PROFILE",
+            "BLOCK_AFTER_PROFILE",
+            "BLOCK_AFTER_PROJECT",
+            "BLOCK_FINAL",
+        ];
+        let blocks: Vec<harness_core::blueprint::PromptBlockSpecV3> = placements
+            .iter()
+            .copied()
+            .zip(markers.iter().copied())
+            .enumerate()
+            .map(
+                |(index, (placement, marker))| harness_core::blueprint::PromptBlockSpecV3 {
+                    id: format!("block-{index}"),
+                    name: format!("block-{index}"),
+                    markdown: marker.to_string(),
+                    enabled: true,
+                    order: 0,
+                    placement,
+                },
+            )
+            .collect();
+
+        let compiled = compile_effective_prompt(
+            Some("creative_draft"),
+            Some(&profile),
+            Some("child directive"),
+            Some(project.path()),
+            Some("skill catalog"),
+            &blocks,
+            &[],
+            Some("team roster"),
+        );
+
+        // Every placement appears exactly once in the layer-kind sequence.
+        let kinds = compiled
+            .layers
+            .iter()
+            .map(|layer| layer.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| **kind == harness_core::PromptLayerKind::NativesPromptBlock)
+                .count(),
+            4,
+            "each of the four placements must be captured exactly once"
+        );
+        assert_eq!(
+            kinds,
+            vec![
+                harness_core::PromptLayerKind::BuiltinSurface,
+                harness_core::PromptLayerKind::SkillCatalog,
+                harness_core::PromptLayerKind::NativesPromptBlock,
+                harness_core::PromptLayerKind::CapabilityExpert,
+                harness_core::PromptLayerKind::NativesPromptBlock,
+                harness_core::PromptLayerKind::ChildDirective,
+                harness_core::PromptLayerKind::InstructionFiles,
+                harness_core::PromptLayerKind::NativesPromptBlock,
+                harness_core::PromptLayerKind::TeamRoster,
+                harness_core::PromptLayerKind::NativesPromptBlock,
+            ]
+        );
+
+        // Raw-text order proves the semantic anchor of each placement.
+        let text = &compiled.effective_full_text;
+        let expected = [
+            "skill catalog",
+            "BLOCK_BEFORE_PROFILE",
+            "expert prompt",
+            "BLOCK_AFTER_PROFILE",
+            "child directive",
+            "project instruction",
+            "BLOCK_AFTER_PROJECT",
+            "team roster",
+            "BLOCK_FINAL",
+        ];
+        let mut cursor = 0usize;
+        for needle in expected {
+            let at = text[cursor..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing layer text {needle:?} in Provider capture"));
+            cursor += at + needle.len();
+        }
+
+        for marker in markers {
+            assert_eq!(
+                text.matches(marker).count(),
+                1,
+                "{marker} must appear exactly once in the Provider capture"
+            );
+        }
+        assert_eq!(
+            harness_core::sha256_hex(text),
+            compiled.effective_prompt_hash,
+            "Snapshot/Provider hash must equal SHA-256 of the captured raw text"
         );
     }
 }

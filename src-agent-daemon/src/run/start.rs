@@ -198,10 +198,21 @@ impl RunManager {
             let child_directive = self.runtime.take_run_agent_directive(&run.id).await;
             // P1-01 / PERF-002: warm prepare — the static prompt layers are
             // keyed by project identity + instruction fingerprint + capability
-            // audit + provider/model/runtime. The cache is never used when a
-            // per-run child directive is present (those are run-specific and
-            // cannot be frozen). Credentials/permission/run-id are never part
-            // of the key or the payload.
+            // revision + harness revision + app schema revision +
+            // provider/model/runtime. The cache is never used when a per-run
+            // child directive is present (those are run-specific and cannot be
+            // frozen). Credentials/permission/run-id are never part of the key
+            // or the payload.
+            //
+            // NE-P0-04: the revisions are real values, never bare zeros —
+            //   capability_revision folds the audit AND the prompt-contributing
+            //     content (profile/expert prompt, skill catalog, team roster),
+            //   harness_revision folds the real ResolvedHarnessSnapshot
+            //     canonical hash (published layers + Harness-owned prompt
+            //     blocks/replacements + frozen tool plan),
+            //   app_schema_revision is the daemon migration set head.
+            // Any of them changing forces the next Run to rebuild instead of
+            // reusing the previous compiled Prompt.
             //
             // PERF-002: the lookup is two-tier. The fast tier builds the key
             // from a METADATA fingerprint (canonical path + mtime/size +
@@ -216,14 +227,14 @@ impl RunManager {
                 self.runtime.prepared.resolve(
                     project_root,
                     &project_root.to_string_lossy(),
-                    crate::prepared_session::capability_audit_revision(
-                        &capability_snapshot.to_audit_json(),
+                    crate::prepared_session::capability_prompt_revision(&capability_snapshot),
+                    crate::prepared_session::harness_revision(
+                        &harness_plan.snapshot.canonical_hash(),
                     ),
-                    0,
                     &provider_id,
                     &model_id,
                     &runtime_id,
-                    0,
+                    crate::prepared_session::app_schema_revision(),
                 )
             } else {
                 // A per-run child directive cannot be frozen into a cache key.

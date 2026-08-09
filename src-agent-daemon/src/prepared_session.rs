@@ -546,6 +546,13 @@ pub fn project_instruction_digest(project_root: &Path) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// First 8 bytes of SHA-256 as a little-endian u64. Deterministic and cheap.
+fn sha256_prefix_u64(bytes: &[u8]) -> u64 {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    u64::from_le_bytes(digest[..8].try_into().expect("sha256 prefix"))
+}
+
 /// Deterministic capability audit revision for the prepare cache key.
 ///
 /// The resolved capability snapshot has no numeric revision field, so we fold
@@ -553,11 +560,75 @@ pub fn project_instruction_digest(project_root: &Path) -> String {
 /// a SHA-256 and take a u64 prefix. Any capability selection change bumps the
 /// revision and misses the cache.
 pub fn capability_audit_revision(audit: &serde_json::Value) -> u64 {
+    sha256_prefix_u64(audit.to_string().as_bytes())
+}
+
+/// Deterministic revision of every capability input that contributes to the
+/// prepared prompt (NE-P0-04).
+///
+/// The audit projection alone only carries stable IDs, so a content-only edit
+/// of an Expert/Profile prompt, a Skill body, or a Team roster keeps the same
+/// IDs and would silently reuse the previous compiled Prompt. This folds the
+/// audit AND the prompt-contributing content (profile system prompt, selected
+/// skill catalog, team roster text, team member descriptions) into one digest
+/// so any content change invalidates the prepared session on the next Run.
+pub fn capability_prompt_revision(
+    snapshot: &crate::capability_resolution::ResolvedCapabilitySnapshot,
+) -> u64 {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(audit.to_string().as_bytes());
-    let digest = hasher.finalize();
-    u64::from_le_bytes(digest[..8].try_into().expect("sha256 prefix"))
+    hasher.update(snapshot.to_audit_json().to_string().as_bytes());
+    hasher.update(b"\0capability-content\0");
+    if let Some(profile) = &snapshot.profile {
+        if let Some(prompt) = profile.system_prompt.as_deref() {
+            hasher.update(prompt.as_bytes());
+        }
+    }
+    hasher.update(b"\0");
+    if let Some(skill) = snapshot.skill_prompt.as_deref() {
+        hasher.update(skill.as_bytes());
+    }
+    hasher.update(b"\0");
+    if let Some(team) = snapshot.extra_system_prompt.as_deref() {
+        hasher.update(team.as_bytes());
+    }
+    hasher.update(b"\0");
+    if let Some(team) = &snapshot.team {
+        hasher.update(team.lead_expert_id.as_bytes());
+        for member in &team.members {
+            hasher.update(member.expert_id.as_bytes());
+            hasher.update(member.name.as_bytes());
+            hasher.update(member.description.as_bytes());
+            hasher.update(member.role_hint.as_bytes());
+        }
+    }
+    hasher.update(b"\0");
+    u64::from_le_bytes(hasher.finalize()[..8].try_into().expect("sha256 prefix"))
+}
+
+/// Deterministic harness revision for the prepare cache key (NE-P0-04).
+///
+/// The harness evidence snapshot has no numeric revision field either; its
+/// `canonical_hash` already covers every published layer/version plus the
+/// prompt-block / builtin-replacement source digests and the frozen tool plan,
+/// so we fold the same SHA-256 hex string into a u64 prefix exactly like
+/// [`capability_audit_revision`]. Publishing a new Harness version or editing
+/// any Harness-owned prompt content bumps the hash and misses the cache.
+pub fn harness_revision(snapshot_canonical_hash: &str) -> u64 {
+    sha256_prefix_u64(snapshot_canonical_hash.as_bytes())
+}
+
+/// App schema/upgrade revision for the prepare cache key (NE-P0-04).
+///
+/// This is the highest daemon migration version this binary knows about: adding
+/// a migration changes the value, so every cached `PreparedAgentSession` from
+/// an older binary misses on the next Run — a migration is exactly the point
+/// where the compiled static prompt may change shape.
+pub fn app_schema_revision() -> u64 {
+    crate::storage::migrations::ALL
+        .last()
+        .map(|(version, _)| *version as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -928,5 +999,143 @@ mod tests {
             PreparedResolve::Hit(_) => {}
             other => panic!("expected Hit after re-indexing, got {other:?}"),
         }
+    }
+
+    /// NE-P0-04: a harness, capability, or app-schema revision change must make
+    /// the next Run miss instead of reusing the previous compiled Prompt.
+    #[test]
+    fn harness_or_capability_or_schema_revision_change_invalidates_the_cache() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("AGENTS.md"), "v1 rules").unwrap();
+        let cache = PreparedAgentSessionCache::new();
+        let resolve = |capability_revision, harness_revision, app_schema_revision| {
+            cache.resolve(
+                p,
+                &p.to_string_lossy(),
+                capability_revision,
+                harness_revision,
+                "openai",
+                "gpt-4o",
+                "native",
+                app_schema_revision,
+            )
+        };
+
+        let fast_key = match resolve(1, 1, 37) {
+            PreparedResolve::Miss {
+                fast_key,
+                full_digest,
+            } => {
+                let full_key = PreparedAgentSessionKey {
+                    project_instruction_digest: full_digest,
+                    ..fast_key.clone()
+                };
+                cache.insert(full_key, session());
+                cache.insert(fast_key.clone(), session());
+                fast_key
+            }
+            other => panic!("expected Miss on a cold cache, got {other:?}"),
+        };
+        assert!(
+            cache.get(&fast_key).is_some(),
+            "primed entry must be present"
+        );
+
+        // Harness edits (a new published version / prompt block) cannot reuse
+        // the old prepared Prompt.
+        match resolve(1, 2, 37) {
+            PreparedResolve::Miss { .. } => {}
+            other => panic!("harness revision bump must invalidate, got {other:?}"),
+        }
+        // Capability content/selection edits cannot reuse the old Prompt.
+        match resolve(2, 1, 37) {
+            PreparedResolve::Miss { .. } => {}
+            other => panic!("capability revision bump must invalidate, got {other:?}"),
+        }
+        // App schema upgrades (new migration set) drop every cached session.
+        match resolve(1, 1, 38) {
+            PreparedResolve::Miss { .. } => {}
+            other => panic!("app schema revision bump must invalidate, got {other:?}"),
+        }
+        // Identical revisions still hit.
+        match resolve(1, 1, 37) {
+            PreparedResolve::Hit(_) => {}
+            other => panic!("identical revisions must hit, got {other:?}"),
+        }
+    }
+
+    /// NE-P0-04: Expert/Skill/Team content edits change the capability prompt
+    /// revision even when every stable ID stays the same.
+    #[test]
+    fn capability_prompt_revision_tracks_content_not_just_ids() {
+        use crate::capability_resolution::ResolvedCapabilitySnapshot;
+        let base = ResolvedCapabilitySnapshot {
+            selection_active: true,
+            agent_profile_id: Some("expert".into()),
+            profile: Some(agent_core::AgentProfile {
+                id: "expert".into(),
+                name: "Expert".into(),
+                system_prompt: Some("expert prompt v1".into()),
+                ..Default::default()
+            }),
+            skill_ids: vec!["grep".into()],
+            skill_prompt: Some("skill catalog v1".into()),
+            extra_system_prompt: Some("team roster v1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            capability_prompt_revision(&base),
+            capability_prompt_revision(&base.clone()),
+            "identical content must produce the same revision"
+        );
+
+        let mut profile_edit = base.clone();
+        profile_edit.profile.as_mut().unwrap().system_prompt = Some("expert prompt v2".into());
+        assert_ne!(
+            capability_prompt_revision(&base),
+            capability_prompt_revision(&profile_edit),
+            "a profile/expert prompt edit must invalidate the prepared session"
+        );
+
+        let mut skill_edit = base.clone();
+        skill_edit.skill_prompt = Some("skill catalog v2".into());
+        assert_ne!(
+            capability_prompt_revision(&base),
+            capability_prompt_revision(&skill_edit),
+            "a skill catalog content edit must invalidate the prepared session"
+        );
+
+        let mut team_edit = base.clone();
+        team_edit.extra_system_prompt = Some("team roster v2".into());
+        assert_ne!(
+            capability_prompt_revision(&base),
+            capability_prompt_revision(&team_edit),
+            "a team roster content edit must invalidate the prepared session"
+        );
+    }
+
+    /// NE-P0-04: the harness revision is a deterministic fold of the real
+    /// snapshot canonical hash, so a harness edit changes it.
+    #[test]
+    fn harness_revision_follows_the_snapshot_canonical_hash() {
+        let zeros = "0000000000000000000000000000000000000000000000000000000000000000";
+        let ffff = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        assert_eq!(harness_revision(zeros), harness_revision(zeros));
+        assert_ne!(harness_revision(zeros), harness_revision(ffff));
+    }
+
+    /// NE-P0-04: the app schema revision tracks the daemon migration set.
+    #[test]
+    fn app_schema_revision_tracks_the_daemon_migration_set() {
+        let highest = crate::storage::migrations::ALL
+            .last()
+            .map(|(version, _)| *version as u64)
+            .unwrap_or(0);
+        assert_eq!(app_schema_revision(), highest);
+        assert!(
+            app_schema_revision() >= 1,
+            "the daemon schema must be revisioned"
+        );
     }
 }

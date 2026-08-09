@@ -281,4 +281,94 @@ mod tests {
             "Harness Blueprint (Replaced base)"
         );
     }
+
+    /// NE-P0-03: every `PromptBlockPlacement` is consumed exactly once and the
+    /// builder emits the blocks in the anchor order the production compiler
+    /// uses (BeforeProfile -> AfterProfile -> AfterProjectInstructions -> Final).
+    #[test]
+    fn all_four_placements_are_consumed_in_anchor_order() {
+        fn block(id: &str, markdown: &str, placement: PromptBlockPlacement) -> PromptBlockSpecV3 {
+            PromptBlockSpecV3 {
+                id: id.into(),
+                name: id.into(),
+                markdown: markdown.into(),
+                enabled: true,
+                order: 0,
+                placement,
+            }
+        }
+        let blocks = vec![
+            block("a1", "A_BEFORE", PromptBlockPlacement::BeforeProfile),
+            block("a2", "A_AFTER_PROFILE", PromptBlockPlacement::AfterProfile),
+            block(
+                "a3",
+                "A_AFTER_PROJECT",
+                PromptBlockPlacement::AfterProjectInstructions,
+            ),
+            block("a4", "A_FINAL", PromptBlockPlacement::Final),
+        ];
+
+        let mut builder = PromptPlanBuilder::new();
+        builder
+            .add_builtin_surface("base", "base")
+            .add_skill_catalog("skills", "skills");
+        builder.add_prompt_blocks(&blocks, PromptBlockPlacement::BeforeProfile);
+        builder.add_capability_expert("expert", "expert");
+        builder.add_prompt_blocks(&blocks, PromptBlockPlacement::AfterProfile);
+        builder.add_child_directive("directive");
+        builder.add_instruction_file("AGENTS.md", "project");
+        builder.add_prompt_blocks(&blocks, PromptBlockPlacement::AfterProjectInstructions);
+        builder.add_team_roster("roster");
+        builder.add_prompt_blocks(&blocks, PromptBlockPlacement::Final);
+
+        let plan = builder.build();
+        let kinds = plan
+            .layers
+            .iter()
+            .map(|layer| layer.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                PromptLayerKind::BuiltinSurface,
+                PromptLayerKind::SkillCatalog,
+                PromptLayerKind::NativesPromptBlock,
+                PromptLayerKind::CapabilityExpert,
+                PromptLayerKind::NativesPromptBlock,
+                PromptLayerKind::ChildDirective,
+                PromptLayerKind::InstructionFiles,
+                PromptLayerKind::NativesPromptBlock,
+                PromptLayerKind::TeamRoster,
+                PromptLayerKind::NativesPromptBlock,
+            ]
+        );
+
+        // Each placement contributed its block exactly once.
+        for marker in ["A_BEFORE", "A_AFTER_PROFILE", "A_AFTER_PROJECT", "A_FINAL"] {
+            assert_eq!(
+                plan.effective_full_text.matches(marker).count(),
+                1,
+                "{marker} must appear exactly once"
+            );
+        }
+
+        // Raw-text order proves the semantic anchor of every placement.
+        let expected = [
+            "A_BEFORE",
+            "expert",
+            "A_AFTER_PROFILE",
+            "directive",
+            "project",
+            "A_AFTER_PROJECT",
+            "roster",
+            "A_FINAL",
+        ];
+        let mut cursor = 0usize;
+        for needle in expected {
+            let at = plan.effective_full_text[cursor..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing {needle} in assembled prompt"));
+            cursor += at + needle.len();
+        }
+    }
 }

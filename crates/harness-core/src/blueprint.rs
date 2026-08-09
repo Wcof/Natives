@@ -240,6 +240,27 @@ pub struct NativeHookSpecV3 {
 
 pub type NativeHookSpec = NativeHookSpecV3;
 
+/// Where a Natives-owned prompt block is anchored in the fixed Prompt Plan.
+///
+/// The production compiler (`compile_effective_prompt` in
+/// `src-agent-daemon/src/production.rs`) consumes every placement exactly once
+/// and anchors each group to the layer its name describes:
+///
+/// - [`PromptBlockPlacement::BeforeProfile`] — immediately before the
+///   Capability Expert (profile) layer;
+/// - [`PromptBlockPlacement::AfterProfile`] — immediately after the Capability
+///   Expert (profile) layer;
+/// - [`PromptBlockPlacement::AfterProjectInstructions`] (the serde default) —
+///   immediately after the project instruction files;
+/// - [`PromptBlockPlacement::Final`] — the very last layer, after the team
+///   roster.
+///
+/// Blocks whose JSON omits `placement` deserialize to
+/// [`PromptBlockPlacement::AfterProjectInstructions`], so a defaulted block is
+/// never silently dropped (NE-P0-03). The variant order above is the canonical
+/// reference order and matches how the builder consumes each group: each
+/// placement is handled independently by `PromptPlanBuilder::add_prompt_blocks`
+/// and sorted by `order` within the group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptBlockPlacement {
