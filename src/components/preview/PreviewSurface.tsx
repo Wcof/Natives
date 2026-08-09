@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t, useLocale } from '@/i18n';
+import { classifyError } from '@/lib/error-classifier';
 import type { PreviewModel, PreviewRequest, PreviewSource } from '@/lib/preview/contracts';
 import { PreviewRequestController } from '@/lib/preview/request-controller';
 import type { PreviewService } from '@/lib/preview/service';
@@ -61,7 +62,10 @@ export default function PreviewSurface({ source, surface, service, autoLoad = tr
     } catch (e) {
       if (!ctrl.isCurrent(generation)) return;
       if (e instanceof PreviewProviderError && e.code === 'cancelled') return; // 静默
-      setError(e instanceof PreviewProviderError ? e : new PreviewProviderError('host_error', String(e)));
+      // PREV-006：非 PreviewProviderError 的意外错误不把 String(e)（可能含本地
+      // 绝对路径）带进 error.message——classifyError 的 UNKNOWN 分支会把 rawMessage
+      // 拼进用户可见文案，因此 message 必须在源头保证无路径。
+      setError(e instanceof PreviewProviderError ? e : new PreviewProviderError('host_error', 'preview failed'));
       setStatus('error');
     }
   }, [source, surface, service, controller]);
@@ -80,9 +84,15 @@ export default function PreviewSurface({ source, surface, service, autoLoad = tr
   }
 
   if (status === 'error') {
+    // PREV-006: 经错误分类器产出用户可见文案（userMessage/actionHint），
+    // 原始 error.message（不得含本地绝对路径，见 context.ts）不进用户可见拷贝。
+    const classified = classifyError(error, { locale });
     return (
       <div data-preview-status="error" data-error-code={error?.code} style={{ padding: 24, color: 'var(--danger)' }}>
-        {t(locale, 'preview.error', { code: error?.code ?? 'unknown', message: error?.message ?? 'unknown' })}
+        <div>{classified.userMessage}</div>
+        {classified.actionHint ? (
+          <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 4 }}>{classified.actionHint}</div>
+        ) : null}
       </div>
     );
   }

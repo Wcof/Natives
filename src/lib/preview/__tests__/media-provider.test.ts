@@ -79,3 +79,31 @@ test('heic text-kind file maps to image via ext', async () => {
   const model = await mediaProvider.prepare(fileReq('/a/photo.heic', 'text'), ctx);
   assert.equal(model.kind, 'image');
 });
+
+// ── PREV-004: kind 判断用真实 key 空间；Host kind 优先；未知扩展名不误判 image ──
+
+test('unknown extension with Host kind video uses Host kind (PREV-004)', async () => {
+  const ctx = makeContext();
+  const model = await mediaProvider.prepare(fileReq('/a/clip.xyz', 'video'), ctx);
+  assert.equal(model.kind, 'video');
+  if (model.kind === 'video') {
+    assert.deepEqual(ctx.__toAssetUrlCalls(), ['/a/clip.xyz']);
+  }
+});
+
+test('Host kind wins over extension when they disagree (PREV-004)', async () => {
+  const ctx = makeContext();
+  const model = await mediaProvider.prepare(fileReq('/a/strange.mp3', 'image'), ctx);
+  assert.equal(model.kind, 'image');
+});
+
+test('unknown extension with text kind is not misclassified as image (PREV-004)', async () => {
+  const ctx = makeContext();
+  assert.equal(mediaProvider.accepts(fileReq('/a/unknown.xyz', 'text')), false);
+  const err = await mediaProvider.prepare(fileReq('/a/unknown.xyz', 'text'), ctx).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  assert.ok(err instanceof PreviewProviderError);
+  assert.equal((err as PreviewProviderError).code, 'not_applicable');
+});

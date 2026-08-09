@@ -65,6 +65,11 @@ export type PreviewModel =
       truncated: boolean;
       baseDir?: string;
       urlPolicy: PreviewUrlPolicy;
+      /**
+       * SEC-001：file markdown 渲染前已逐资源经 PreviewContext.authorizeFile 授权、
+       * 并改写为 asset URL 的本地引用绝对路径清单（renderer 侧不得再自行改写）。
+       */
+      authorizedAssets?: string[];
     }
   | { kind: 'html'; revision: string; previewUrl?: string; html?: string; sandbox: string }
   | { kind: 'json'; value: unknown; formatted: string; nodeCount: number; truncated: boolean }
