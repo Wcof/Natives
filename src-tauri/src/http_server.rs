@@ -584,9 +584,10 @@ fn serve_preview_file(
 /// The runtime instance id is part of the URL and must be the app's ACTIVE
 /// running instance: a stopped (or superseded) run's URL answers 410, so a
 /// static preview URL is revocable and can never keep serving files after stop
-/// (audit #03). A legacy `/local-projects/{creativeId}/…` URL is redirected to
-/// the active tokenized URL only while the app runs, and dies (410) after stop.
-/// No Workshop Bridge injection; no Tauri capability.
+/// (audit #03). The retired single-segment `/local-projects/{creativeId}/…`
+/// URL (pre-CR-303) is not redirected: it answers 410 Gone like any other
+/// unknown/dead path (MIG-004). No Workshop Bridge injection; no Tauri
+/// capability.
 fn serve_local_project_file(
     request: Request,
     db_path: &Path,
@@ -614,7 +615,7 @@ fn serve_local_project_file(
     let creative_id = rest_seg.next().unwrap_or("").to_string();
     let rel = rest_seg.next().unwrap_or("").to_string();
 
-    // 1. Tokenized: seg1 must be an ACTIVE runtime instance of the named project.
+    // seg1 must be an ACTIVE runtime instance of the named project.
     if !creative_id.is_empty() && !creative_id.contains("..") && !creative_id.contains('\0') {
         if let Some(project_root) = lookup_servable_runtime(db_path, seg1, &creative_id) {
             return serve_project_files(
@@ -627,19 +628,8 @@ fn serve_local_project_file(
             );
         }
     }
-    // 2. Legacy: seg1 is the creative id. While the app runs, redirect to the
-    //    active tokenized URL (read-only redirect, never a permanent rewrite);
-    //    after stop the legacy URL is dead like the tokenized one.
-    if let Some((active_rt, _root)) = lookup_active_runtime_for_project(db_path, seg1) {
-        let target = format!("/local-projects/{active_rt}/{seg1}/{rest}");
-        let resp = Response::empty(302).with_header(csp).with_header(
-            Header::from_bytes("Location", target.clone().into_bytes())
-                .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap()),
-        );
-        request.respond(resp)?;
-        return Ok(());
-    }
-    // 3. Dead URL (stopped / superseded / unknown): 410 Gone.
+    // Dead URL (stopped / superseded / unknown, including the retired
+    // single-segment legacy shape): 410 Gone.
     let resp = Response::from_string("Gone").with_status_code(410);
     request.respond(resp)?;
     Ok(())
@@ -768,32 +758,6 @@ fn lookup_servable_runtime(db_path: &Path, runtime_id: &str, creative_id: &str) 
     )
     .ok()
     .map(PathBuf::from)
-}
-
-/// Legacy single-segment route: while the app is running, resolve its active
-/// runtime instance id (for the redirect target); None once stopped.
-fn lookup_active_runtime_for_project(
-    db_path: &Path,
-    creative_id: &str,
-) -> Option<(String, PathBuf)> {
-    let conn = Connection::open(db_path).ok()?;
-    conn.query_row(
-        "SELECT ri.id, lc.canonical_project_root
-         FROM local_creative_apps lc
-         JOIN applications a ON a.source = 'local_project' AND a.source_id = lc.id
-         JOIN runtime_instances ri ON ri.application_id = a.id
-         WHERE lc.id = ?1 AND lc.state = 'running'
-           AND ri.status IN ('running','starting')
-         ORDER BY ri.created_at DESC LIMIT 1",
-        [creative_id],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                PathBuf::from(row.get::<_, String>(1)?),
-            ))
-        },
-    )
-    .ok()
 }
 
 /// Insert `<base href>` before `</head>` so relative subresources on a
@@ -1361,10 +1325,11 @@ mod tests {
         );
     }
 
-    /// CR-303: a legacy `/local-projects/{creativeId}/…` URL redirects to the
-    /// active tokenized URL only while the app runs; after stop it dies (410).
+    /// MIG-004: the retired single-segment `/local-projects/{creativeId}/…`
+    /// URL is never redirected — it answers 410 Gone like any other dead path,
+    /// even while the app is running.
     #[test]
-    fn legacy_local_url_redirects_while_running_then_dies() {
+    fn legacy_local_url_is_gone_not_redirected() {
         use crate::creative_app::model::CreativeAppSource;
         let f = fixture();
         let app_id = "loc-legacy";
@@ -1401,21 +1366,17 @@ mod tests {
         let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
         let port = server.start(0).expect("start server");
 
-        // Running: legacy URL 302-redirects to the tokenized URL.
-        let redirect = http_get(port, &format!("/local-projects/{app_id}/"));
-        assert!(redirect.starts_with("HTTP/1.1 302"), "{redirect}");
-        assert!(
-            redirect.contains(&format!("Location: /local-projects/{iid}/{app_id}/")),
-            "{redirect}"
-        );
+        // The tokenized URL still serves while the app is running…
+        let ok = http_get(port, &format!("/local-projects/{iid}/{app_id}/"));
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
 
-        // After stop the legacy URL is gone too.
-        crate::creative_app::runtime_store::mark_stopped(&f.conn, &iid).unwrap();
+        // …but the retired single-segment URL is gone, not a 302 redirect.
         let gone = http_get(port, &format!("/local-projects/{app_id}/"));
         assert!(
             gone.starts_with("HTTP/1.1 410"),
-            "legacy stopped URL must die: {gone}"
+            "retired legacy URL must answer 410, not redirect: {gone}"
         );
+        assert!(!gone.contains("Location:"), "no redirect header: {gone}");
     }
 
     // ── PREV-001: authorized /fs/{token}/{path} preview resources ──
