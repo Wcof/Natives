@@ -1,9 +1,8 @@
 //! Protocol v2 wire envelopes.
 //!
-//! These types are the formal v2 request/response/event surface. Call sites
-//! should prefer them over the legacy v1 `RpcRequest` / `RpcResponse` shells.
-//! During migration, servers may still accept v1-shaped JSON and normalize
-//! into these types.
+//! These types are the formal v2 request/response/event surface and the only
+//! wire shape for protocol v2 (MIG-004: v1 `RpcRequest` / `RpcResponse` shell
+//! normalization is retired).
 
 use crate::error::{DaemonError, ErrorCategory};
 use serde::{Deserialize, Serialize};
@@ -226,101 +225,6 @@ impl V2Response {
     }
 }
 
-/// Normalize a legacy v1-style JSON object into a [`V2Request`] when possible.
-pub fn parse_request_compat(value: &Value) -> Result<V2Request, String> {
-    if let Ok(req) = serde_json::from_value::<V2Request>(value.clone()) {
-        if !req.method.is_empty() {
-            return Ok(req);
-        }
-    }
-    // Legacy RpcRequest shape
-    let protocol_version = value
-        .get("protocol_version")
-        .and_then(|v| v.as_str())
-        .unwrap_or(PROTOCOL_V2)
-        .to_string();
-    let request_id = value
-        .get("request_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let client_id = value
-        .get("client_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let session_token = value
-        .get("session_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let method = value
-        .get("method")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing method".to_string())?
-        .to_string();
-    let params = value.get("params").cloned().unwrap_or(Value::Null);
-    let session_id = value
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let run_id = value
-        .get("run_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let idempotency_key = value
-        .get("idempotency_key")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    if request_id.is_empty() {
-        return Err("missing request_id".into());
-    }
-    Ok(V2Request {
-        protocol_version,
-        request_id,
-        session_id,
-        client_id,
-        session_token,
-        run_id,
-        idempotency_key,
-        method,
-        params,
-    })
-}
-
-/// Convert a v2 response into the legacy RpcResponse-shaped JSON for old clients.
-pub fn response_to_legacy_json(resp: &V2Response) -> Value {
-    match resp {
-        V2Response::Success(s) => serde_json::json!({
-            "protocol_version": s.protocol_version,
-            "request_id": s.request_id,
-            "success": true,
-            "data": s.data,
-            "error": null,
-            "session_id": s.session_id,
-            "run_id": s.run_id,
-        }),
-        V2Response::Error(e) => serde_json::json!({
-            "protocol_version": e.protocol_version,
-            "request_id": e.request_id,
-            "success": false,
-            "data": null,
-            "error": {
-                "code": e.error.code,
-                "category": e.error.category,
-                "retryable": e.error.retryable,
-                "technical_message": e.error.message,
-                "message": e.error.message,
-                "details": e.error.details,
-                "method_status": e.error.method_status,
-                "correlation_id": e.error.correlation_id,
-            },
-            "session_id": e.session_id,
-            "run_id": e.run_id,
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,31 +248,5 @@ mod tests {
         assert!(!err.success);
         assert_eq!(err.error.method_status, Some(MethodStatus::Unsupported));
         assert_eq!(err.error.code, "unsupported");
-    }
-
-    #[test]
-    fn parse_legacy_rpc_request() {
-        let v = serde_json::json!({
-            "protocol_version": "2.0.0",
-            "request_id": "r1",
-            "client_id": "c",
-            "session_token": "t",
-            "method": "daemon.ping",
-            "params": {}
-        });
-        let req = parse_request_compat(&v).unwrap();
-        assert_eq!(req.method, "daemon.ping");
-        assert_eq!(req.request_id, "r1");
-    }
-
-    #[test]
-    fn legacy_response_shape() {
-        let ok = V2Response::Success(V2SuccessResponse::new(
-            "r",
-            serde_json::json!({"pong": true}),
-        ));
-        let j = response_to_legacy_json(&ok);
-        assert_eq!(j["success"], true);
-        assert_eq!(j["data"]["pong"], true);
     }
 }

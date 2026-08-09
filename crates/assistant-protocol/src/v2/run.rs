@@ -367,9 +367,3 @@ pub struct ReplayRunRequest {
     pub run_id: String,
     pub after_sequence: u64,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscribeRunRequest {
-    pub run_id: String,
-    pub after_sequence: u64,
-}

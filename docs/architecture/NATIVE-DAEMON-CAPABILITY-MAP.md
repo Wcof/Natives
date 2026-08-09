@@ -79,7 +79,7 @@ Daemon 是**本地 sidecar 微服务**：会话 / Run / 工具 / 供应商流式
 | **能力库（配置权威）** | `capability/`（skills/mcp/experts/hub 存储 + bootstrap 可信配置源）+ `capability_resolution`（run 级 resolve） | `capability.*` / `conversation.updateCapabilities` | run 行 `capability_snapshot_json`（仅 id，无密钥） | ADR-0016；专家/专家团唯一归属；MCP 注册唯一入口；resolve fail-closed |
 | **会话 / 消息** | `conversation_store` | `conversation.*` | — | 生产 UDS 下 daemon-owned |
 | **提示词队列** | `prompt_queue_store` + harness | `promptQueue.*` | — | 插话仅安全点生效 |
-| **检查点 / 回放** | `checkpoint` + `event_log` | `run.rewind*` / `run.replay` / `subscribe` | sequence | persist-first |
+| **检查点 / 回放** | `checkpoint` + `event_log` | `workspace.restore*` / `run.replay` / `run.watch` | sequence | persist-first |
 | **MCP** | `mcp_runtime`（配置来自能力库 `capability_mcp_server`） | `mcp.*`（运行时面）；配置 CRUD 走 `capability.mcp.*` | MCP 相关 | OAuth 浏览器流 host 侧（`mcp_oauth_start`）；按选可用 + 引用计数/闲置回收 |
 | **调度（Hub，不是 Daemon 能力）** | Host `src-tauri/src/jobs/` | `job_*` Tauri 命令；执行经 `daemon_authority` | Host 30 秒 tick → UDS `run.*` | ADR-0015；Daemon 不广告 `scheduler.*` |
 | **技能** | `skill_store`（发现器）+ 能力库 `capability_skill`（元数据/开关权威） | `skill.list`（运行时面）；`capability.skill.*`（配置面）；注入 system prompt | — | 仅 trusted+enabled 注入；会话选用时按 id 集合注入（fail-closed） |
@@ -197,7 +197,7 @@ NATIVES_RUNTIME_DIR → socket、memory、artifacts；旧 `scheduler/jobs.json` 
 | 守护进程 | `daemon.getCapabilities` `getStatus` `ping` |
 | 供应商 | `provider.list` `discoverModels` `test` |
 | 会话 | `conversation.create/list/get/fork/getMessages/appendMessage/rename/update_model/update_permission/archive/delete` `getContextUsage` |
-| Run | `run.create/start/cancel/retry/subscribe/replay/list/getEvents` `rewind` `rewindPreview` |
+| Run | `run.create/start/cancel/retry/continue/resume/watch/replay/list/getEvents/listChildren/finish/getActivity` `workspace.restore*` |
 | 权限/交互 | `permission.respond` `interaction.listPending/respond` |
 | 提示词队列 | `promptQueue.list/enqueue/update/remove/reorder/sendNow/interject` |
 | 工具 | `tool.list` |

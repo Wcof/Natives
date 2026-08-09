@@ -2151,7 +2151,7 @@ mod tests {
                 .map(|e| {
                     serde_json::json!({
                         "run_id": e.run_id,
-                        "sequence": e.effective_run_sequence(),
+                        "sequence": e.run_sequence,
                         "type": e.payload.type_name(),
                     })
                 })
@@ -2790,7 +2790,7 @@ mod tests {
                 .iter()
                 .map(|e| {
                     serde_json::json!({
-                        "sequence": e.effective_run_sequence(),
+                        "sequence": e.run_sequence,
                         "type": e.payload.type_name(),
                     })
                 })

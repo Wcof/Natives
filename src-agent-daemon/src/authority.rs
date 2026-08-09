@@ -11,7 +11,6 @@
 use assistant_protocol::v2::{
     CancelRunRequest, ContinueRunRequest, CreateRunRequest, CreativeLocalAnalyzeRequest,
     ReplayRunRequest, ResumeRunRequest, RetryRunRequest, RunEventV2, RunV2, StartRunRequest,
-    SubscribeRunRequest,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -58,11 +57,6 @@ pub trait ExecutionAuthority: Send + Sync {
     async fn get_run(&self, run_id: &str) -> Result<Option<RunV2>, AuthorityError>;
     async fn list_runs(&self, conversation_id: Option<&str>) -> Result<Vec<RunV2>, AuthorityError>;
     async fn replay_events(
-        &self,
-        run_id: &str,
-        after_sequence: u64,
-    ) -> Result<Vec<RunEventV2>, AuthorityError>;
-    async fn subscribe_events(
         &self,
         run_id: &str,
         after_sequence: u64,
@@ -222,18 +216,6 @@ impl ExecutionAuthority for EmbeddedAuthority {
                 serde_json::to_value(self.replay_events(run_id, after).await?)
                     .map_err(|e| AuthorityError::Message(e.to_string()))
             }
-            "run.subscribe" => {
-                let run_id = params
-                    .get("run_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| AuthorityError::Message("run_id required".into()))?;
-                let after = params
-                    .get("after_sequence")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let events = self.subscribe_events(run_id, after).await?;
-                Ok(serde_json::json!({ "run_id": run_id, "events": events }))
-            }
             "creative.local.analyze" => {
                 let req: CreativeLocalAnalyzeRequest = serde_json::from_value(params)
                     .map_err(|e| AuthorityError::Message(e.to_string()))?;
@@ -322,25 +304,6 @@ impl ExecutionAuthority for EmbeddedAuthority {
         after_sequence: u64,
     ) -> Result<Vec<RunEventV2>, AuthorityError> {
         self.install_broker();
-        global_run_manager()
-            .replay_checked(ReplayRunRequest {
-                run_id: run_id.to_string(),
-                after_sequence,
-            })
-            .map_err(Into::into)
-    }
-
-    async fn subscribe_events(
-        &self,
-        run_id: &str,
-        after_sequence: u64,
-    ) -> Result<Vec<RunEventV2>, AuthorityError> {
-        self.install_broker();
-        // Poll batch (push subscribe is a later phase enhancement).
-        let _ = SubscribeRunRequest {
-            run_id: run_id.to_string(),
-            after_sequence,
-        };
         global_run_manager()
             .replay_checked(ReplayRunRequest {
                 run_id: run_id.to_string(),
@@ -566,24 +529,6 @@ impl ExecutionAuthority for UdsAuthority {
         let data = self
             .call(
                 "run.replay",
-                serde_json::json!({
-                    "run_id": run_id,
-                    "after_sequence": after_sequence,
-                }),
-            )
-            .await?;
-        let events = data.get("events").cloned().unwrap_or_else(|| data.clone());
-        serde_json::from_value(events).map_err(|e| AuthorityError::Message(e.to_string()))
-    }
-
-    async fn subscribe_events(
-        &self,
-        run_id: &str,
-        after_sequence: u64,
-    ) -> Result<Vec<RunEventV2>, AuthorityError> {
-        let data = self
-            .call(
-                "run.subscribe",
                 serde_json::json!({
                     "run_id": run_id,
                     "after_sequence": after_sequence,

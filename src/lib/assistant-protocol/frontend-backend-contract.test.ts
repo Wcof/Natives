@@ -47,7 +47,6 @@ const UI_CALLED_METHODS = [
   'run.retry',
   'run.list',
   'run.getEvents',
-  'run.subscribe',
   'permission.respond',
   'permission.listPending',
   'interaction.respond',
@@ -83,7 +82,8 @@ test('UI-called methods are implemented (daemon or host)', () => {
     ...extractArrayConst(src, 'IMPLEMENTED_METHODS'),
     ...extractArrayConst(src, 'HOST_IMPLEMENTED_METHODS'),
   ]);
-  // run.subscribe may be daemon-only; still must be implemented somewhere.
+  // run.watch is the persistent stream surface (daemon-owned); every UI-called
+  // method must be implemented somewhere to avoid a fail-closed gap.
   for (const m of UI_CALLED_METHODS) {
     assert.ok(
       implemented.has(m),

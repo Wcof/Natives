@@ -244,7 +244,7 @@ Dashboard
 │   ├── Run 级文件快照（写前/写后捕获、终态固化）           P0
 │   ├── 回滚预演（冲突清单；有冲突 fail-closed 拒绝撤销）   P0
 │   ├── 会话级「撤销全部文件改动」卡片                     P1 ← ConversationTimeline.tsx
-│   └── 对话级回退 run.rewind（后端已实现，前端未接线）    P2
+│   └── 对话级回退（workspace.restore* 已覆盖文件，对话/执行回放另列）   P2
 ├── 权限审批与用户交互                                   P0
 │   ├── 权限请求卡片（once/this_run/session/project 四种批准作用域） P0 ← PermissionRequestCard.tsx
 │   ├── 审批期间接管输入区（防绕过）                       P0 ← AssistantWorkbench.tsx

@@ -29,15 +29,12 @@ pub const ALL_METHODS: &[&str] = &[
     "run.retry",
     "run.continue",
     "run.resume",
-    "run.subscribe",
     "run.watch",
     "run.replay",
     "run.list",
     "run.getEvents",
     "run.listChildren",
     "run.finish",
-    "run.rewind",
-    "run.rewindPreview",
     "workspace.restore",
     "workspace.restorePreview",
     "permission.respond",
@@ -199,7 +196,6 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "run.retry",
     "run.continue",
     "run.resume",
-    "run.subscribe",
     "run.watch",
     "run.replay",
     "run.list",
@@ -245,8 +241,6 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "promptQueue.reorder",
     "promptQueue.sendNow",
     "promptQueue.interject",
-    "run.rewindPreview",
-    "run.rewind",
     "workspace.restorePreview",
     "workspace.restore",
     "conversation.getContextUsage",
@@ -351,7 +345,6 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
 pub const HOST_IMPLEMENTED_METHODS: &[&str] = &[
     // Run preflight + host projection boundary (host intercepts, then delegates).
     "run.start",
-    "run.subscribe",
     // OS-bound artifact actions: only the host can talk to the desktop shell.
     // `artifact.reveal` is host-ONLY — the daemon deliberately has no dispatch arm,
     // because "show in file manager" is not a daemon capability.
@@ -398,7 +391,6 @@ pub mod names {
     pub const RUN_RETRY: &str = "run.retry";
     pub const RUN_CONTINUE: &str = "run.continue";
     pub const RUN_RESUME: &str = "run.resume";
-    pub const RUN_SUBSCRIBE: &str = "run.subscribe";
     pub const RUN_WATCH: &str = "run.watch";
     pub const RUN_REPLAY: &str = "run.replay";
     pub const RUN_LIST: &str = "run.list";
@@ -406,8 +398,6 @@ pub mod names {
     pub const RUN_LIST_CHILDREN: &str = "run.listChildren";
     pub const RUN_FINISH: &str = "run.finish";
     pub const RUN_GET_ACTIVITY: &str = "run.getActivity";
-    pub const RUN_REWIND: &str = "run.rewind";
-    pub const RUN_REWIND_PREVIEW: &str = "run.rewindPreview";
     pub const WORKSPACE_RESTORE: &str = "workspace.restore";
     pub const WORKSPACE_RESTORE_PREVIEW: &str = "workspace.restorePreview";
     pub const PERMISSION_RESPOND: &str = "permission.respond";
@@ -627,7 +617,6 @@ mod tests {
             "run.retry",
             "run.continue",
             "run.resume",
-            "run.subscribe",
             "run.replay",
             "permission.respond",
             "tool.list",
@@ -689,8 +678,6 @@ mod tests {
             );
         }
         // Phase 3 methods are now implemented on daemon
-        assert!(is_implemented_method("run.rewind"));
-        assert!(is_implemented_method("run.rewindPreview"));
         assert!(is_implemented_method("conversation.getContextUsage"));
         assert!(is_implemented_method("promptQueue.interject"));
         assert!(is_implemented_method("task.list"));

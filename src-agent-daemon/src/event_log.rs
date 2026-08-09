@@ -123,8 +123,7 @@ impl EventLog {
         }
         let mut stored = event.clone();
         stored.event_id = event_id.clone();
-        let run_seq = stored.effective_run_sequence();
-        stored.set_run_sequence(run_seq);
+        let run_seq = stored.run_sequence;
         let payload = serde_json::to_string(&stored)
             .map_err(|e| format!("Failed to serialize event: {e}"))?;
         let (turn_id, message_id) = match &stored.payload {
@@ -583,7 +582,7 @@ fn decode_event_v2(
 ) -> Result<RunEventV2, String> {
     if let Ok(mut event) = serde_json::from_str::<RunEventV2>(payload_str) {
         event.run_id = run_id.to_string();
-        event.set_run_sequence(sequence);
+        event.run_sequence = sequence;
         return Ok(event);
     }
     let payload = decode_payload_v2(event_type, payload_str)?;
@@ -599,7 +598,6 @@ fn decode_event_v2(
         global_sequence: 0,
         run_id: run_id.to_string(),
         run_sequence: sequence,
-        sequence,
         timestamp: dt,
         payload,
     })
@@ -842,9 +840,8 @@ mod tests {
         let event = RunEventV2 {
             event_id: uuid::Uuid::new_v4().to_string(),
             global_sequence: 0,
-            run_sequence: 0,
+            run_sequence: 1,
             run_id: run_id.clone(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::UsageUpdated {
                 input_tokens: 10,
@@ -891,9 +888,8 @@ mod tests {
         let event = RunEventV2 {
             event_id: uuid::Uuid::new_v4().to_string(),
             global_sequence: 0,
-            run_sequence: 0,
+            run_sequence: 1,
             run_id: run_id.clone(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::UsageUpdated {
                 input_tokens: 3,
@@ -955,7 +951,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: 1,
             run_id: run_id.clone(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::ToolCallCompleted {
                 id: "call-1".into(),
@@ -1014,7 +1009,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: 1,
             run_id: run_id.clone(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::ToolCallCompleted {
                 id: "call-u".into(),
@@ -1059,7 +1053,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: 1,
             run_id: run_id.clone(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::ToolCallCompleted {
                 id: "call-x".into(),
@@ -1129,7 +1122,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: 1,
             run_id: run_id.clone(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::ToolCallCompleted {
                 id: "call-a".into(),

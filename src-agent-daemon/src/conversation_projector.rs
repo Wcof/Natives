@@ -589,13 +589,13 @@ fn project_committed_turn(
     let assistant_id = assistant_message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let last_sequence = events
         .iter()
-        .map(|event| event.effective_run_sequence())
+        .map(|event| event.run_sequence)
         .max()
         .unwrap_or(0);
     let turn_sequence = events
         .iter()
         .find_map(|event| match &event.payload {
-            RunEventKind::TurnStarted { .. } => Some(event.effective_run_sequence()),
+            RunEventKind::TurnStarted { .. } => Some(event.run_sequence),
             _ => None,
         })
         .unwrap_or(0);
@@ -978,7 +978,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: sequence,
             run_id: run_id.into(),
-            sequence,
             timestamp: chrono::Utc::now(),
             payload,
         }
@@ -1285,7 +1284,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1335,7 +1334,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1440,7 +1439,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(&event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1537,7 +1536,7 @@ mod tests {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         run,
-                        event.effective_run_sequence() as i64,
+                        event.run_sequence as i64,
                         event.payload.type_name(),
                         serde_json::to_string(event).unwrap(),
                         event.timestamp.to_rfc3339(),
@@ -1555,7 +1554,6 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, mut e)| {
-                e.sequence += 7;
                 e.run_sequence += 7;
                 e.global_sequence += 7;
                 e.event_id = format!("evt-{run}-{}", 8 + i as u64);
@@ -1660,7 +1658,6 @@ mod incremental_projection_tests {
             global_sequence: 0,
             run_sequence: sequence,
             run_id: run_id.into(),
-            sequence,
             timestamp: chrono::Utc::now(),
             payload,
         }
@@ -1747,7 +1744,7 @@ mod incremental_projection_tests {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     run_id.to_string(),
-                    event.effective_run_sequence() as i64,
+                    event.run_sequence as i64,
                     event.payload.type_name().to_string(),
                     serde_json::to_string(event).unwrap(),
                     event.timestamp.to_rfc3339(),

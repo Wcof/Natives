@@ -1592,7 +1592,7 @@ fn persist_turn_record(
     let sequence = events
         .iter()
         .filter_map(|event| match &event.payload {
-            RunEventKind::TurnStarted { .. } => Some(event.effective_run_sequence()),
+            RunEventKind::TurnStarted { .. } => Some(event.run_sequence),
             _ => None,
         })
         .next()
@@ -1677,7 +1677,7 @@ fn persist_context_snapshots_from_events(
             .query_row(
                 "SELECT COUNT(*) FROM context_snapshot
                  WHERE run_id = ?1 AND sequence = ?2 AND snapshot_type = 'compaction'",
-                params![run_id, event.effective_run_sequence() as i64],
+                params![run_id, event.run_sequence as i64],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -1697,10 +1697,7 @@ fn persist_context_snapshots_from_events(
                     conversation_id.as_deref(),
                     run_id,
                     None,
-                    &format!(
-                        "context-summary-{run_id}-{}",
-                        event.effective_run_sequence()
-                    ),
+                    &format!("context-summary-{run_id}-{}", event.run_sequence),
                     summary,
                 )?;
             }
@@ -1708,9 +1705,7 @@ fn persist_context_snapshots_from_events(
         }
         let event_turn_id = events[..events
             .iter()
-            .position(|candidate| {
-                candidate.effective_run_sequence() == event.effective_run_sequence()
-            })
+            .position(|candidate| candidate.run_sequence == event.run_sequence)
             .unwrap_or(0)]
             .iter()
             .rev()
@@ -1723,10 +1718,7 @@ fn persist_context_snapshots_from_events(
             .as_ref()
             .and_then(|value| value.6.map(str::to_string))
             .or(event_turn_id);
-        let mechanical_summary_id = format!(
-            "context-summary-{run_id}-{}",
-            event.effective_run_sequence()
-        );
+        let mechanical_summary_id = format!("context-summary-{run_id}-{}", event.run_sequence);
         let snapshot_id = snapshot_id
             .map(str::to_string)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -1759,7 +1751,7 @@ fn persist_context_snapshots_from_events(
                 "mechanical-v1".into(),
                 None,
                 None,
-                event.effective_run_sequence(),
+                event.run_sequence,
                 serde_json::json!([{
                     "message_id": mechanical_summary_id,
                     "role": "system",
@@ -1785,7 +1777,7 @@ fn persist_context_snapshots_from_events(
                 conversation_id,
                 branch_id,
                 turn_id,
-                event.effective_run_sequence() as i64,
+                event.run_sequence as i64,
                 estimated_tokens,
                 summary,
                 source_revision as i64,
@@ -2784,9 +2776,8 @@ mod tests {
                 RunEventV2 {
                     event_id: uuid::Uuid::new_v4().to_string(),
                     global_sequence: 0,
-                    run_sequence: 0,
+                    run_sequence: 1,
                     run_id: "run-1".into(),
-                    sequence: 1,
                     timestamp: reasoning_started,
                     payload: RunEventKind::ReasoningDelta {
                         text: "inspect persisted path".into(),
@@ -2795,9 +2786,8 @@ mod tests {
                 RunEventV2 {
                     event_id: uuid::Uuid::new_v4().to_string(),
                     global_sequence: 0,
-                    run_sequence: 0,
+                    run_sequence: 2,
                     run_id: "run-1".into(),
-                    sequence: 2,
                     timestamp: reasoning_finished,
                     payload: RunEventKind::TextDelta {
                         text: "done".into(),
@@ -2806,9 +2796,8 @@ mod tests {
                 RunEventV2 {
                     event_id: uuid::Uuid::new_v4().to_string(),
                     global_sequence: 0,
-                    run_sequence: 0,
+                    run_sequence: 3,
                     run_id: "run-1".into(),
-                    sequence: 3,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ToolCallCompleted {
                         id: "tool-1".into(),
@@ -2895,9 +2884,8 @@ mod tests {
                 RunEventV2 {
                     event_id: uuid::Uuid::new_v4().to_string(),
                     global_sequence: 0,
-                    run_sequence: 0,
+                    run_sequence: 7,
                     run_id: "compact-run".into(),
-                    sequence: 7,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ContextCompressed {
                         before_tokens: 100,
@@ -2908,9 +2896,8 @@ mod tests {
                 RunEventV2 {
                     event_id: uuid::Uuid::new_v4().to_string(),
                     global_sequence: 0,
-                    run_sequence: 0,
+                    run_sequence: 8,
                     run_id: "compact-run".into(),
-                    sequence: 8,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::TextDelta {
                         text: "current answer".into(),
@@ -3182,7 +3169,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: seq,
             run_id: "replay-id-run".into(),
-            sequence: seq,
             timestamp: chrono::Utc::now(),
             payload,
         };
@@ -3347,7 +3333,6 @@ mod tests {
             global_sequence: 0,
             run_sequence: 1,
             run_id: "backfill-run".into(),
-            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::ContextSnapshotCommitted {
                 snapshot_id: "snapshot-backfill".into(),
@@ -3458,7 +3443,6 @@ mod tests {
                     global_sequence: 0,
                     run_sequence: 1,
                     run_id: "incomplete-run".into(),
-                    sequence: 1,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::TurnStarted {
                         turn_id: "turn-incomplete".into(),
@@ -3469,7 +3453,6 @@ mod tests {
                     global_sequence: 0,
                     run_sequence: 2,
                     run_id: "incomplete-run".into(),
-                    sequence: 2,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::MessageStarted {
                         turn_id: "turn-incomplete".into(),
@@ -3482,7 +3465,6 @@ mod tests {
                     global_sequence: 0,
                     run_sequence: 3,
                     run_id: "incomplete-run".into(),
-                    sequence: 3,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::TextDelta {
                         text: "partial".into(),

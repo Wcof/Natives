@@ -219,7 +219,7 @@ fn host_intercepted_exemptions_are_still_host_only() {
 /// Neither list is wrong on its own — they disagree. Pin them against each other.
 ///
 /// Note this is deliberately *not* a "HOST and IMPLEMENTED must be disjoint" assertion.
-/// Overlap is real and correct: `run.start` / `run.subscribe` are host-preflighted and
+/// Overlap is real and correct: `run.start` is host-preflighted and
 /// then genuinely executed by the daemon, and `artifact.open` is served by both. Demanding
 /// disjointness would force removing true daemon arms from the advertisement — a lie in the
 /// opposite direction. What must hold is narrower and actually load-bearing: the methods

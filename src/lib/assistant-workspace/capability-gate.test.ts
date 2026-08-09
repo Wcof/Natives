@@ -42,13 +42,13 @@ test('hasMethod is false for null/empty capabilities', () => {
 test('hasMethod matches advertised methods only', () => {
   const c = caps(['run.start', 'run.cancel']);
   assert.equal(hasMethod(c, 'run.start'), true);
-  assert.equal(hasMethod(c, 'run.rewind'), false);
+  assert.equal(hasMethod(c, 'run.getActivity'), false);
 });
 
 test('canRewind requires both non-deprecated workspace restore methods', () => {
   assert.equal(canRewind(null), false);
   assert.equal(canRewind(caps(['run.start'])), false);
-  assert.equal(canRewind(caps(['run.rewind', 'run.rewindPreview'])), false);
+  assert.equal(canRewind(caps(['run.start', 'run.getActivity'])), false);
   assert.equal(canRewind(caps(['workspace.restore'])), false);
   assert.equal(canRewind(caps(['workspace.restore', 'workspace.restorePreview'])), true);
 });

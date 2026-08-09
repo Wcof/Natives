@@ -55,7 +55,7 @@ pub(crate) async fn write_event_envelope(
         protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
         session_id: None,
         run_id: event.run_id.clone(),
-        sequence: event.effective_run_sequence(),
+        sequence: event.run_sequence,
         event_type: event.payload.type_name().to_string(),
         payload: serde_json::to_value(&event.payload).unwrap_or_default(),
         emitted_at: Some(event.timestamp.to_rfc3339()),
