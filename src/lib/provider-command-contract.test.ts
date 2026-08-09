@@ -1,15 +1,25 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-const adapter = readFileSync(new URL('./tauri-adapter.ts', import.meta.url), 'utf8');
+// ARCH-002: provider commands live in the domain facade `./tauri/provider.ts`,
+// not the barrel `./tauri-adapter.ts`. The contract test scans the facade
+// (the single place the provider domain may issue these commands).
+const adapter = readFileSync(new URL('./tauri/provider.ts', import.meta.url), 'utf8');
 const dialog = readFileSync(new URL('../components/settings/AddProviderDialog.tsx', import.meta.url), 'utf8');
 const settings = readFileSync(new URL('../components/shell/SettingsPage.tsx', import.meta.url), 'utf8');
 const commands = readFileSync(new URL('../../src-tauri/src/commands/provider.rs', import.meta.url), 'utf8');
 const commandRegistry = readFileSync(new URL('../../src-tauri/src/lib.rs', import.meta.url), 'utf8');
 // T202/T302: legacy daemon/rpc_server.rs was physically deleted (orphan, 0 refs).
-// The provider command contract now lives solely in the Agent Daemon rpc.rs.
-const agentDaemonRpc = readFileSync(new URL('../../src-agent-daemon/src/rpc.rs', import.meta.url), 'utf8');
+// A2-03 split the Agent Daemon RPC authority into rpc/{dispatch,server,handlers}.
+// Read the whole rpc/ tree so the contract stays authoritative under the split.
+const rpcDir = fileURLToPath(new URL('../../src-agent-daemon/src/rpc/', import.meta.url));
+const agentDaemonRpc = readdirSync(rpcDir, { recursive: true })
+  .filter((f): f is string => typeof f === 'string' && f.endsWith('.rs'))
+  .map((f) => readFileSync(join(rpcDir, f), 'utf8'))
+  .join('\n');
 
 describe('provider renderer/Tauri contract', () => {
   it('wraps struct command arguments in input', () => {

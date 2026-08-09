@@ -134,7 +134,10 @@ test('Harness run start requires explicit project/provider/model instead of copy
     'utf8',
   );
 
-  assert.match(panel, /nativesAPI\.provider\.list\(\)/);
+  // ARCH-002: providers load via the domain facade `providerApi` (tauri/provider)
+  // instead of the barrel's `nativesAPI.provider` — the run must resolve an
+  // explicit provider from the real catalog, never copy a global run.
+  assert.match(panel, /providerApi\.list\(\)/);
   assert.match(panel, /engineEngineeringRunConfigRequired/);
   assert.match(panel, /engineEngineeringRunTrialTitle/);
   assert.match(panel, /engineEngineeringRunTrialDesc/);

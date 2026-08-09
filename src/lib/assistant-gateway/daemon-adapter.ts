@@ -29,8 +29,7 @@ import {
   createProjectionState,
 } from '@/lib/assistant-protocol';
 import type { AssistantGateway } from './gateway';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { cmd, subscribe } from '@/lib/tauri/core';
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -100,11 +99,11 @@ function createTauriWatchBridge(): HostWatchBridge | null {
   return {
     async start(runId, afterDurableSequence, afterLiveSequence) {
       try {
-        const result = (await invoke('run_watch_start', {
+        const result = await cmd<{ ok?: boolean; error?: string }>('run_watch_start', {
           run_id: runId,
           after_durable_sequence: afterDurableSequence,
           after_live_sequence: afterLiveSequence,
-        })) as { ok?: boolean; error?: string };
+        });
         return { ok: Boolean(result.ok), error: result.error };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -112,21 +111,15 @@ function createTauriWatchBridge(): HostWatchBridge | null {
     },
     async stop(runId) {
       try {
-        await invoke('run_watch_stop', { run_id: runId });
+        await cmd('run_watch_stop', { run_id: runId });
       } catch {
         // best-effort unsubscribe
       }
     },
     listen(listener) {
-      let unlisten: (() => void) | null = null;
-      void listen<WatchFrameEvent>(WATCH_FRAME_EVENT, (event) => {
-        listener(event.payload.frame);
-      }).then((fn) => {
-        unlisten = fn;
+      return subscribe<WatchFrameEvent>(WATCH_FRAME_EVENT, (payload) => {
+        listener(payload.frame);
       });
-      return () => {
-        unlisten?.();
-      };
     },
   };
 }

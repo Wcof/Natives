@@ -22,8 +22,9 @@ import type { CreativeAppProposal } from '@/lib/tauri-adapter';
 
 const cardSource = readFileSync(new URL('./ProposalApprovalCard.tsx', import.meta.url), 'utf8');
 const inboxSource = readFileSync(new URL('./ProposalInbox.tsx', import.meta.url), 'utf8');
+// ARCH-002: type declarations moved from the barrel to the tauri/types module.
 const adapterSource = readFileSync(
-  new URL('../../lib/tauri-adapter.ts', import.meta.url),
+  new URL('../../lib/tauri/types.ts', import.meta.url),
   'utf8',
 );
 
