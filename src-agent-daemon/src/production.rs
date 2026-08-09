@@ -114,8 +114,9 @@ pub use crate::production_credentials::{
 pub use crate::production_hooks::{build_production_hooks, build_production_hooks_for_project};
 pub use crate::production_tools::{DaemonToolProgressSink, PermissionGatedTools};
 
+pub use crate::provider::RealProvider;
 pub(crate) use crate::provider::{
-    agent_message_to_history, engine_message_to_history, provider_error_message, RealProvider,
+    agent_message_to_history, engine_message_to_history, provider_error_message,
 };
 
 pub use crate::runtime::TaskRecord;
@@ -1389,7 +1390,9 @@ pub fn run_request_controls(effort: Option<&str>) -> RequestControls {
 #[cfg(test)]
 mod run_controls_tests {
     use super::*;
-    use provider_adapters::capabilities::{history_message_to_provider, HistoryMessage, ProviderRequest};
+    use provider_adapters::capabilities::{
+        history_message_to_provider, HistoryMessage, ProviderRequest,
+    };
     use provider_adapters::providers::anthropic::build_messages_body;
 
     fn request(model: &str, effort: Option<&str>) -> ProviderRequest {
