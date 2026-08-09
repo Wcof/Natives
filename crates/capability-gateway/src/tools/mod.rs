@@ -45,11 +45,13 @@ pub async fn atomic_write_file(path: &str, content: &[u8]) -> Result<String, Too
 
     // Write + fsync the temp file.
     {
-        let mut f = tokio::fs::File::create(&tmp_path).await.map_err(|e| ToolError {
-            code: "write_error".into(),
-            message: format!("atomic write create temp failed: {e}"),
-            retryable: true,
-        })?;
+        let mut f = tokio::fs::File::create(&tmp_path)
+            .await
+            .map_err(|e| ToolError {
+                code: "write_error".into(),
+                message: format!("atomic write create temp failed: {e}"),
+                retryable: true,
+            })?;
         f.write_all(content).await.map_err(|e| ToolError {
             code: "write_error".into(),
             message: format!("atomic write temp failed: {e}"),

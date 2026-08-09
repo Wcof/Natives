@@ -674,10 +674,7 @@ mod memory_tool_tests {
 
         // Read path: search finds the seeded entry.
         let search = tool
-            .execute(
-                serde_json::json!({ "query": "deploy token" }),
-                &context,
-            )
+            .execute(serde_json::json!({ "query": "deploy token" }), &context)
             .await
             .unwrap();
         let matches = search.result["matches"].as_array().unwrap();
