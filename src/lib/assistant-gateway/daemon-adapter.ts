@@ -79,9 +79,20 @@ export interface WatchStartResult {
 }
 
 /**
+ * Result of `run_watch_state` — the host-side dual-cursor recovery source.
+ */
+export interface WatchStateResult {
+  active: boolean;
+  lastDurableSequence?: number;
+  lastLiveSequence?: number;
+  terminal?: boolean;
+  error?: string | null;
+}
+
+/**
  * Host watch bridge seam. The Renderer never talks to the UDS socket directly
- * — only Tauri commands (`run_watch_start`/`run_watch_stop`) and the
- * `run-watch-frame` event.
+ * — only Tauri commands (`run_watch_start`/`run_watch_stop`/`run_watch_state`)
+ * and the `run-watch-frame` event.
  */
 export interface HostWatchBridge {
   start(
@@ -90,6 +101,12 @@ export interface HostWatchBridge {
     afterLiveSequence: number,
   ): Promise<WatchStartResult>;
   stop(runId: string): Promise<void>;
+  /**
+   * Query the host's current watch state. Optional so injected test bridges
+   * don't have to implement it; when absent the adapter keeps its local dual
+   * cursors (which already track durable/live on every consumed frame).
+   */
+  state?(runId: string): Promise<WatchStateResult>;
   listen(listener: (frame: WatchFrame) => void): () => void;
 }
 
@@ -114,6 +131,33 @@ function createTauriWatchBridge(): HostWatchBridge | null {
         await cmd('run_watch_stop', { run_id: runId });
       } catch {
         // best-effort unsubscribe
+      }
+    },
+    async state(runId) {
+      try {
+        const result = await cmd<{
+          active?: boolean;
+          lastDurableSequence?: number;
+          lastLiveSequence?: number;
+          terminal?: boolean;
+          error?: string | null;
+        }>('run_watch_state', { run_id: runId });
+        return {
+          active: Boolean(result.active),
+          lastDurableSequence: result.lastDurableSequence ?? 0,
+          lastLiveSequence: result.lastLiveSequence ?? 0,
+          terminal: Boolean(result.terminal),
+          error: result.error ?? null,
+        };
+      } catch {
+        // run_watch_state unavailable (older host) — adapter keeps local cursors.
+        return {
+          active: false,
+          lastDurableSequence: 0,
+          lastLiveSequence: 0,
+          terminal: false,
+          error: null,
+        };
       }
     },
     listen(listener) {
@@ -284,6 +328,14 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     let firstStart = true;
 
     while (!signal.aborted) {
+      // Dual-cursor recovery via `run_watch_state`: when the host is ALREADY
+      // actively streaming this run (late re-subscribe / Renderer restart), its
+      // lastDurableSequence/lastLiveSequence are the authoritative forward
+      // cursors. We only advance forward and never move a cursor backward;
+      // inactive/terminal records are not used to skip durable history.
+      const recovered = await this.recoverCursors(bridge, runId, durableSeq, liveSeq);
+      durableSeq = recovered.durable;
+      liveSeq = recovered.live;
       const started = await bridge
         .start(runId, durableSeq, liveSeq)
         .catch(() => ({ ok: false as const, error: 'watch_start_failed' }));
@@ -353,6 +405,35 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       await sleep(200);
     }
     this.liveCursorByRun.set(runId, liveSeq);
+  }
+
+  /**
+   * Recover the dual cursors from the host watch state before (re)starting the
+   * stream. The local `durableSeq`/`liveSeq` are the authoritative floor — the
+   * host cursors are only used to advance FORWARD when it is actively watching
+   * the run (late re-subscribe / Renderer restart), so durable history is never
+   * skipped on reconnect. Inactive/terminal records and query failures fall
+   * back to the local dual cursors.
+   */
+  private async recoverCursors(
+    bridge: HostWatchBridge,
+    runId: string,
+    localDurable: number,
+    localLive: number,
+  ): Promise<{ durable: number; live: number }> {
+    if (!bridge.state) return { durable: localDurable, live: localLive };
+    try {
+      const st = await bridge.state(runId);
+      if (st.active) {
+        return {
+          durable: Math.max(localDurable, st.lastDurableSequence ?? 0),
+          live: Math.max(localLive, st.lastLiveSequence ?? 0),
+        };
+      }
+    } catch {
+      // run_watch_state unavailable — keep the local dual cursors.
+    }
+    return { durable: localDurable, live: localLive };
   }
 
   /**
