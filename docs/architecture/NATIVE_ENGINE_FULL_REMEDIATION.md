@@ -2,7 +2,7 @@
 
 > **唯一进度与契约源**（2026-07-23 文档清理后）：其它 `NATIVE_ENGINE_*` 快照 / task pack / linkage 状态文档已删除，请只更新本文件 + [`NATIVE-DAEMON-CAPABILITY-MAP.md`](./NATIVE-DAEMON-CAPABILITY-MAP.md) + [`NATIVE_ENGINE_ENV.md`](./NATIVE_ENGINE_ENV.md)。  
 > 冻结日期：2026-07-17（契约）；进度随代码更新  
-> **最近一次增量核对**：2026-07-29，Native Harness 证据闭环与 ADR-0015 Job/Scheduler 收敛
+> **最近一次增量核对**：2026-08-09，助理 / 执行引擎 / Harness / Subagent 生产化独立审计（见第 19 节）
 > **2026-08-04（B00 可信基线）**：冻结基线 `9584c3c2`；建立 native/compat/test 三类执行入口矩阵与 10 点 crash matrix（`scripts/runtime-crash-matrix.json`）；生成 `natives-runtime/b00-baseline` 稳定标签
 > 基座：`agent-core` / `provider-adapters` / `capability-gateway` / `assistant-protocol` / `src-agent-daemon` / `src-tauri`  
 > 分层约束：[`standards/technical/01-layering.md`](../standards/technical/01-layering.md)  
@@ -541,3 +541,116 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 - 分级：仅回滚 Wave2 可 revert `c3170992`（保留 Wave1 P0 流式闭环）；仅回滚 Settings 可 revert `e7a98298` 后手工保留 live/stream 部分（P0-09~P0-14 依赖该提交，需同步还原 run_gateway）。
 - 旧 `MessageDelta` / `executor:settings` / localStorage runtimePref 读路径均保留兼容，可安全 downgrade。
 - P0-11 集中修复（`run_disabled_tools` 存储 + 工具面减法）仅影响 run.create/start 工具面，可单独 revert 且不影响流式链路。
+
+---
+
+## 19. 2026-08-09 助理 / 执行引擎 / Harness / Subagent 生产化方案
+
+> 审计基线：`d25aa644d2f6a71d1d50752627fc9f8032ce7438`。本节是本文件现行整改入口；第 18 节及更早的 `production_done` 只代表对应历史切片，不覆盖本节发现的桌面装配、凭证边界、冻结执行和证据真实性问题。进度只更新本节，不另建引擎进度表。
+>
+> 并行构建与低磁盘规则：[`../development/natives-agent-build-cache-and-disk-policy.md`](../development/natives-agent-build-cache-and-disk-policy.md) 第 10 节。
+
+### 19.1 发布结论
+
+当前主执行链是真实实现，但仍为 **production_blocked**。以下 P0 全部关闭、真实打包 App 验收完成前，不得宣称生产级：
+
+| ID | 阻断项 | 当前证据 | 目标状态 |
+|---|---|---|---|
+| NE-P0-01 | Renderer 依赖持久 `run.watch`，Host 未管理 `WatchBridgeState`、未注册 `run_watch_start/stop/state` | `src/lib/assistant-gateway/daemon-adapter.ts`；`src-tauri/src/daemon/watch_bridge.rs`；`src-tauri/src/lib.rs` | 真实 Tauri Host TextDelta→paint 与双 cursor 重连通过 |
+| NE-P0-02 | Daemon 直接打开 Host `natives.db`、读取 `provider_kek` 并解密 Provider Key | `src-agent-daemon/src/natives_db_broker.rs` | Host 提供 Run-bound、短 TTL、可撤销凭证租约；Daemon 不再读取 Host DB/KEK |
+| NE-P0-03 | Prompt placement 漏掉默认 `AfterProjectInstructions`，Before/After/Final 顺序错误 | `src-agent-daemon/src/production.rs` | 四种 placement 在 Provider capture 中顺序唯一正确 |
+| NE-P0-04 | Prepared Session 的 harness/app revision 为裸 `0`，Expert/Skill/Team 内容变化可能继续复用旧 Prompt | `src-agent-daemon/src/run/start.rs`；`prepared_session.rs` | 内容 digest/revision 变化使下一 Run 必然失效，Snapshot 与 Provider hash 一致 |
+| NE-P0-05 | Permission、Notification、SubagentStart/Stop 重新扫描当前 Hook，没有执行 Run 冻结计划 | `tools/permission.rs`、`tools/gated.rs`、`tools/subagent.rs` | Engine 和所有工具路径共享 Run 级只读 Hook Dispatcher |
+| NE-P0-06 | Harness UI 从 `selectedRun` 推断 Permission/Subagent/Compact 等节点已执行 | `src/components/settings/native-harness/model.ts` | 只从 durable RunEvent、HookInvocation、Snapshot 生成 executed；否则 no_evidence |
+| NE-P0-07 | `BeforeTool` Safe Point 无真实调用；多个 Safe Point 被映射为同一位置；truth test 缺源时静默通过 | `crates/agent-core/src/engine/engine_core.rs`；`tests/harness_topology_truth.rs` | Safe Point 语义真实且测试缺源即失败，不用字符串出现冒充 dispatch |
+| NE-P0-08 | 动态 Child Directive 只在内存中；Native Agent Hook 绕过标准 Child Run 调度 | `tools/subagent.rs`；`production_hooks.rs` | Directive 可 crash recovery；task/Agent Hook 共用标准 ChildRunOrchestrator |
+
+附加 P1：补齐 task schema 中已被 executor 消费但未广告的预算/失败策略字段；统一 DB/file Expert loader；接入或删除 Team 死配置；移除 legacy Host subagent API、直读 `window.nativesAPI` 的配置路径和 synthetic conversation fallback。
+
+### 19.2 Harness 逐节点判定
+
+| Stage | 判定 | 收敛要求 |
+|---|---|---|
+| Session | partial | Hook 生效；补齐 Started/Completed trace |
+| Context | incorrect | 修复 placement、cache invalidation、Provider/Snapshot hash |
+| Provider | partial | 核心重试/overflow 保留；补 Host stream assembly 与真桌面证据 |
+| ToolGate | partial | `PreToolUse` 保留；实现真实 BeforeTool 或从拓扑移除 |
+| Permission | partial | 保持 fail-closed；改用冻结 Run Hook plan |
+| ToolExecute | partial | 补完整 HookInvocation；UI 说明 Post Hook 不能回滚既有副作用 |
+| Subagent | partial | 保留真实 Child Run；持久化 Persona、统一调度、移除死配置 |
+| Compact | partial | 保留压缩；补 Pre/Post trace 与真实执行证据 |
+| Stop | partial | 保留唯一终态提交；补 Stop/StopFailure trace |
+| Terminal | partial | 保留可靠终态；补 Error/SessionEnd trace |
+| CrossStage | incorrect | Notification 使用冻结 Dispatcher，不重新发现 Hook |
+
+### 19.3 Subagent Prompt 产品边界
+
+当前已经支持：
+
+- Capability Expert 持久 `systemPrompt` 手工配置。
+- 父 Agent 经 `task.system_prompt` 为本次 Child Run 自动生成 Persona。
+- Child 工具、权限和预算只能收窄，不能扩大父级范围。
+- Child 使用真实 Conversation、Session、Run；Prompt digest 进入 Harness Snapshot。
+
+本轮补齐：
+
+1. 动态 Child Directive 持久到受保护的 pending execution plan，Snapshot 成功后再消费；restart/retry/continue 保持同一文本和 digest。
+2. DB Expert 与 file Profile 走同一 authoritative loader。
+3. 配置页“AI 生成 Expert Prompt”复用普通 Assistant Run：生成草稿 → preview/diff → 用户确认 → 保存现有 Capability Expert。不得新建第二个 Prompt Generator 服务。
+4. Team `taskTemplate/strategy/failurePolicy/maxConcurrent` 要么进入真实运行契约和测试，要么从 UI 删除/隐藏。
+5. Parent Tool Input 中的 `system_prompt` 采用字段级可见性与导出/日志脱敏规则。
+
+### 19.4 并行实施计划
+
+并发上限按“主 Agent + 3 个 Subagent”执行，分两波复用 Agent；任务 Worktree 不运行重型门禁。
+
+第一波：
+
+| 负责人 | 文件所有权与交付 |
+|---|---|
+| stream_host_assembly | `watch_bridge.rs`、Host State/handler 装配、参数命名、双 cursor 恢复、真实 Host assembly test；对 `lib.rs` 单独提交最小增量 |
+| credential_lease | 协议单一来源、Host broker、Daemon lease client、删除 direct DB/KEK broker、TTL/撤销/脱敏测试 |
+| prompt_cache_integrity | Prompt placement、Prepared Session revision、Provider/Snapshot hash、表驱动 capture tests |
+| 主 Agent | 冻结跨包契约、协议绑定生成、冲突审阅与集成 |
+
+第二波：
+
+| 负责人 | 文件所有权与交付 |
+|---|---|
+| topology_trace_truth | Safe Point、truth test、projection、UI `configured/executed/no_evidence` |
+| frozen_hook_runtime | Run 级 Hook Dispatcher、所有路径共享冻结 plan、完整 HookInvocation trace |
+| subagent_persona | Durable Child Directive、统一 Expert loader、ChildRunOrchestrator、Team 配置、Prompt 生成/预览/确认 |
+| 主 Agent | 助理 adapter/error/data honesty、移除 legacy API、真实打包 App 集成 |
+
+合并后在唯一集成 HEAD 串行执行一次完整门禁；两个任务分支不得各自执行 workspace test、`perf:check` 或 Tauri/Release 构建。
+
+### 19.5 完成门槛
+
+- 四种 Prompt placement 在 Provider capture 中顺序准确且只出现一次。
+- Harness/Expert/Skill/Team 内容变化使下一 Run 缓存失效。
+- Run 中途修改 Hook 只影响新 Run。
+- Snapshot、Dispatcher、Provider Prompt、Trace 使用相同 plan hash。
+- 每个 advertised Harness dispatch 都有真实调用和 Started/Completed；缺源测试必须失败。
+- DB Expert 可被 `subagent_type` 使用；Child 创建后崩溃可恢复完全相同 Persona。
+- Native Agent Hook 不继承父凭证，不绕过预算、并发、深度和 persist-first。
+- Harness UI 不把 configured 显示为 executed。
+- 真实 App 覆盖 plain/tool/permission/subagent/cancel/retry/restart/reconnect/长流，无事件丢失或重复。
+- 最终门禁遵守共享构建政策；测试不稳定或环境不足必须标记 blocked，不能循环重跑成绿色。
+
+### 19.6 Goal 启动提示词
+
+```text
+请创建并持续执行一个 Goal：将 Natives 的助理模块、Native 执行引擎、Harness 控制面与 Subagent Persona 链修复到可生产发布。
+
+使用独立分支 `codex/assistant-engine-production` 和仅源码 Worktree；若调用方已经创建对应分支/Worktree，则复用而不是再创建。开始前完整阅读 AGENTS.md、docs/README.md、docs/architecture/NATIVE_ENGINE_FULL_REMEDIATION.md 第 19 节、docs/development/natives-agent-build-cache-and-disk-policy.md 第 10 节以及第 19 节列出的 standards/architecture 输入。第 19 节是本 Goal 的范围、P0、工作包和完成门槛唯一来源；不要复制新的进度文档。
+
+使用主 Agent + 3 个 Subagent，严格按第 19.4 节分两波并行。主 Agent 先冻结跨包契约和文件所有权。两个 Goal 会并行修改 src-tauri/src/lib.rs：本 Goal 只把 run.watch State/handler 装配做成独立原子提交，不改 Tray/窗口生命周期。
+
+当前磁盘约 17 GiB 可用。进入低磁盘模式：任务 Worktree 不安装 node_modules，不生成自己的 target/.next/release/app/dmg，不运行 npm typecheck/test/perf:check、cargo workspace test/check/clippy 或 tauri build。Rust 定向测试只有经集成负责人批准后才能使用主仓库唯一 /Users/ldh/Downloads/project/AiNative/Natives/target，且任何时刻只允许一个 Cargo 命令。开发期默认只跑 git diff --check、cargo fmt --check 和必要的无构建静态检查。
+
+批次结束执行磁盘监控。可以自动清理的只有本 Goal 自己创建并已验证为 ignored/generated、无进程占用的精确绝对路径；禁止 cargo clean、git clean -fdx、通配符删除，禁止触碰主 target、node_modules、~/.cargo、~/.npm、SQLite、用户项目、证据和未提交文件。分支完成后提交所有改动，保留 Worktree 给集成者；不要自行删除仍未合并的 Worktree。
+
+严格保持 Renderer → Host → UDS → Daemon、Host/Daemon SQLite 分权威、credential lease、no fake evidence、广告 ⊆ 可调。不得新增第二执行引擎、第二 Prompt 权威或通用 Workflow DAG。完整实现第 19.1–19.5 节；任何 P0、真机 E2E 或证据门未关闭时 Goal 不得 complete。
+
+两个方案都开发完成后，由集成负责人合并到同一 HEAD，并只在主工作区串行运行第 10.5 节完整门禁和一次 Tauri/Release smoke。最终报告列出变更、关闭的 P0/P1、定向测试、未在任务分支重复运行的全量门禁、磁盘前后数据、真实 App 证据、剩余 blocker 与回滚点。
+```

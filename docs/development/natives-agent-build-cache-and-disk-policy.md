@@ -2,15 +2,15 @@
 
 ## 1. 当前基线
 
-记录时间：2026-08-04；源码基线 `9584c3c263c1e83b1066e4208e1ab2d678a9deeb`。
+记录时间：2026-08-09；源码基线 `d25aa644d2f6a71d1d50752627fc9f8032ce7438`。
 
 | 项目 | 当前值 |
 |---|---|
-| 文件系统可用空间 | 约 34 GiB |
-| 现有共享 Cargo Target | `/Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared`，7.8 GiB |
-| 主工作区 node_modules | 1.0 GiB |
-| Cargo registry | 1.3 GiB |
-| npm cache | 4.7 GiB |
+| 文件系统可用空间 | 约 17 GiB（已进入低磁盘模式） |
+| 唯一共享 Cargo Target | `/Users/ldh/Downloads/project/AiNative/Natives/target`，约 11 GiB |
+| 主工作区 node_modules | 约 891 MiB |
+| Cargo registry | 约 307 MiB |
+| npm cache | 约 193 MiB |
 | Rust | `rustc/cargo 1.96.0` |
 | Workspace crates | natives、agent-core、assistant-protocol、harness-core、capability-gateway、contract-linter、provider-adapters、natives-agent-daemon |
 | 包管理器 | npm；`package-lock.json`；未声明 `packageManager` 字段 |
@@ -22,7 +22,7 @@
 
 ```bash
 export NATIVES_REPO_ROOT=/Users/ldh/Downloads/project/AiNative/Natives
-export CARGO_TARGET_DIR="$NATIVES_REPO_ROOT/.cargo-target-shared"
+export CARGO_TARGET_DIR="$NATIVES_REPO_ROOT/target"
 export CARGO_BUILD_JOBS=2
 export RUST_TEST_THREADS=2
 export CARGO_INCREMENTAL=0
@@ -30,7 +30,7 @@ export CARGO_INCREMENTAL=0
 
 规则：
 
-- 主工作区和唯一任务 Worktree复用该目录，不建立任务专属target。
+- 主工作区和所有获准任务 Worktree 只复用该目录，不建立任务专属 target。
 - 同一时刻只运行一个Cargo命令；共享目录用于复用，不用于并发吞吐。
 - Debug/Check/Test共享现有target。Release/Tauri仅最终阶段在同一target串行执行一次，避免另建一套依赖缓存。
 - 不同toolchain/target triple若未来确有需要，必须使用共享根下按toolchain/target命名的单个子目录并先做磁盘评估；任务Agent无权自行创建。
@@ -67,10 +67,11 @@ export CARGO_INCREMENTAL=0
 
 ## 5. Worktree空间政策
 
-- 最大总数：2（主工作区 + 1任务Worktree）。
+- 常规最大总数：2（主工作区 + 1 个任务 Worktree）。
+- 本文第 10 节的“双 Goal 低磁盘模式”可临时放宽为 3（主工作区 + 2 个**仅源码**任务 Worktree）；两个任务 Worktree 禁止产生各自的 `target`、`node_modules`、`.next`、coverage、release、app 或 DMG。
 - Worktree必须位于项目父目录，名称包含任务号和唯一时间戳。
-- 只有计划明确的并行组002/003、015/016可创建Worktree。
-- 创建前必须确认两个任务不修改同一核心文件、预计超过30分钟且可用空间≥25 GiB。
+- 只有计划明确的并行组或第 10 节登记的两个 Goal 可创建 Worktree。
+- 创建前必须确认共享文件冲突已指定合并顺序，任务预计超过 30 分钟，并估算创建后可用空间仍 ≥15 GiB。
 - Worktree不得包含自己的target、node_modules、`.next`、release、app或DMG。
 - 合并并验收后立即移除精确Worktree路径；删除前确认clean/commit存在。禁止递归删除模糊路径。
 
@@ -79,8 +80,8 @@ export CARGO_INCREMENTAL=0
 | 条件 | 动作 |
 |---|---|
 | 可用空间 ≥25 GiB 且 Target <20 GiB | 可执行计划内任务/批次测试 |
-| 可用空间 20–25 GiB | 禁止新Worktree和Release；只做定向测试 |
-| 可用空间 <20 GiB 或 Target >25 GiB | 暂停重型测试，分析增量；不得清理用户数据 |
+| 可用空间 20–25 GiB | 禁止 Release；只做定向测试；新 Worktree 必须是计划登记的仅源码 Worktree |
+| 可用空间 15–20 GiB 或 Target >25 GiB | 进入低磁盘模式：允许已登记的仅源码 Worktree，暂停 npm/Cargo 重型测试与构建 |
 | 可用空间 <15 GiB | 停止所有Cargo/npm build |
 | Target >35 GiB | 停止Cargo test |
 | Target >45 GiB | 停止全部Cargo并请求人工处理 |
@@ -93,7 +94,7 @@ export CARGO_INCREMENTAL=0
 
 ```bash
 df -h .
-du -sh /Users/ldh/Downloads/project/AiNative/Natives/.cargo-target-shared 2>/dev/null || true
+du -sh /Users/ldh/Downloads/project/AiNative/Natives/target 2>/dev/null || true
 du -sh /Users/ldh/Downloads/project/AiNative/Natives/node_modules 2>/dev/null || true
 du -sh /Users/ldh/.cargo/registry 2>/dev/null || true
 du -sh /Users/ldh/.npm 2>/dev/null || true
@@ -132,3 +133,113 @@ pgrep -afil 'cargo|rustc|rustdoc|vitest|jest|tsx|next|vite' || true
 - 并行Cargo workspace命令。
 - 每Worktree生成`.next`、APP、DMG或Release。
 - 为引入缓存而安装sccache/ccache；只有未来有独立基础设施任务和测量收益时再评估。
+
+## 10. 双 Goal 低磁盘模式（2026-08-09）
+
+适用任务：
+
+1. `codex/assistant-engine-production`：助理 / Native 执行引擎 / Harness / Subagent 生产化。
+2. `codex/macos-menubar-overview`：macOS 菜单栏常驻与个人概览浮窗。
+
+### 10.1 分支与 Worktree
+
+- 两个 Goal 使用不同 `codex/` 分支和两个仅源码 Worktree 并行开发。
+- 主工作区保留为最终集成与唯一重型验证位置，不在两个任务 Worktree 中复制依赖。
+- 两个方案都可能修改 `src-tauri/src/lib.rs`：引擎分支只提交 `run.watch` State/handler 装配；菜单栏分支提交 Tray/窗口生命周期，并在引擎分支合并后 rebase。
+- 创建第二个任务 Worktree 后必须立即复测可用空间；若低于 15 GiB，停止构建并移除尚未开始、clean 且无提交的精确 Worktree，不得删除缓存腾挪。
+
+### 10.2 开发期门禁
+
+任务 Worktree 默认只运行：
+
+```bash
+rtk git diff --check
+rtk cargo fmt --check
+```
+
+按文件或纯逻辑测试确有必要时，可由集成负责人批准在唯一共享 `target` 中串行执行一次精确测试。任务 Agent 禁止自行运行：
+
+- `cargo test --workspace`
+- `cargo check --workspace`
+- `cargo clippy --workspace --all-targets`
+- `npm run typecheck`
+- `npm run test`
+- `npm run perf:check`
+- `npm run build`
+- `tauri build`
+
+前端任务 Worktree 不安装依赖、不复制或软链接 `node_modules`。前端完整检查在提交进入主集成分支后，复用主工作区现有依赖统一执行。
+
+### 10.3 构建租约
+
+- 任意时刻只有集成负责人可以发起 Cargo/npm 重型命令。
+- 开始前记录进程、磁盘和 Target 大小；发现已有 `cargo`、`rustc`、`next`、`tsx` 等进程时，先确认所有者，不得并发启动第二套门禁。
+- 同一失败命令最多重跑一次；先定位根因。超时或锁等待不是循环重跑的理由。
+- 两个 Goal 都完成定向测试后，合并到同一集成分支，再串行运行一次完整门禁和一次 Tauri/Release smoke；不得每个分支各构建一份 App/DMG。
+
+### 10.4 安全自动清理
+
+任务 Agent 可在每个批次结束自动清理，但范围仅限它自己创建且可重新生成的产物：
+
+- 任务 Worktree 内意外产生的 `.next`、`coverage`、`dist`、`out` 或任务专属 `target`。
+- 任务创建、带任务唯一前缀并记录在交付报告中的临时目录。
+- 已合并、已提交、`git status --short` 为空的精确任务 Worktree，由集成负责人使用 `git worktree remove <absolute-path>` 回收。
+
+执行清理前必须同时满足：
+
+1. 目标是经过解析的绝对路径，且位于该任务 Worktree 或该任务登记的临时目录内。
+2. `git check-ignore` 或任务记录证明它是生成物；不得删除 tracked 或未提交文件。
+3. `pgrep` 证明没有进程正在使用该目录。
+4. 先输出目标和大小，再按精确路径删除；禁止通配符、未解析变量、`git clean -fdx` 或递归清理父目录。
+
+自动清理永远不得触碰：
+
+- 主工作区 `/Users/ldh/Downloads/project/AiNative/Natives/target`
+- 主工作区 `node_modules`
+- `~/.cargo`、`~/.npm`
+- 任意 SQLite、用户项目、凭证、日志证据或未提交文件
+
+### 10.5 最终唯一门禁
+
+两个分支合并到同一个集成 HEAD 后，由集成负责人在主工作区串行执行：
+
+```bash
+rtk npm run typecheck
+rtk npm run lint
+rtk npm run test
+rtk npm run protocol:check
+rtk npm run verify:native-engine
+rtk cargo fmt --check
+rtk cargo test --workspace
+rtk npm run perf:check
+```
+
+涉及的专项测试先于全量门禁运行。`tauri build` / Release smoke 只在上述门禁通过且可用空间满足预算后执行一次。空间不足时标记最终打包为 `blocked_by_disk`，不得让两个 Goal 各自重复构建。
+
+## 11. 全仓模块化整改与最终 deploy 集成（2026-08-09）
+
+适用任务：`codex/modular-architecture-remediation`，详细范围见 `../architecture/MODULAR_ARCHITECTURE_REMEDIATION.md`。
+
+### 11.1 单 Worktree、共享 Subagent
+
+- 本任务只允许一个源码 Worktree；最多三个 Subagent 在同一共享文件系统中按互斥 ownership 并行，禁止每个 Subagent 再创建 Worktree。
+- 当前主工作区加两个已登记 Goal Worktree 已达到低磁盘临时上限；在其中一个完成、提交、合并并安全移除前，不得创建模块化整改 Worktree。
+- 等待槽位期间只允许只读审计或不冲突的文档工作，不得借机在主工作区并发修改其他 Goal ownership 文件。
+- 所有 Subagent 复用第 2 节的唯一 Cargo target；不得建立任务 target、node_modules、`.next`、coverage、dist、out、release、APP 或 DMG。
+
+### 11.2 分支吸收与唯一构建
+
+1. 从最新 `deploy` 创建 `codex/modular-architecture-remediation`。
+2. 记录所有本地分支及 `--no-merged deploy` 结果；已是祖先的分支记为 no-op。
+3. 正在开发分支完成后，依次合入整改集成分支；对合并结果做全仓规模、依赖、数据 authority、UI/UX、性能与安全复审并继续整改。
+4. 所有分支与整改提交进入同一 integration HEAD 后，才在主工作区复用现有 node_modules 和共享 Cargo target 串行运行一次完整门禁。
+5. 门禁通过后更新本地 `deploy`；不因本任务自动 push。
+
+不得在每个分支各执行 typecheck、workspace Cargo test、Next build 或 Tauri build。冲突必须逐块解决，禁止 `ours/theirs` 整文件覆盖、`reset --hard`、`checkout --` 或 `git clean -fdx`。
+
+### 11.3 自动清理与卡死控制
+
+- 每批开始和结束执行第 7 节监控命令；低于 15 GiB 停止所有 build/test，15–20 GiB 只运行静态扫描和经批准的 exact test。
+- 超过 60 秒仍无可解释进展的命令先读取输出、确认是否等待锁/磁盘/进程，再由集成负责人终止；同一失败命令最多重跑一次。
+- 可自动清理的范围仅为本 Goal 自己产生且 `git check-ignore` 可证明的精确 `.next`、coverage、dist、out、任务 target、带任务唯一前缀的临时目录，以及已合并/已提交/status clean 的精确 Worktree。
+- 清理前必须解析并打印绝对路径与大小，确认无进程占用。禁止清理主共享 target、node_modules、Cargo/npm cache、数据库、日志证据、源码、用户文件或未提交内容。

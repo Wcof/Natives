@@ -1,6 +1,6 @@
 # Natives 文档索引
 
-> **最后整理**: 2026-07-26  
+> **最后整理**: 2026-08-09  
 > **原则**: 约束进 `standards/`；决策进 `adr/`；现状与领域设计进 `architecture/`。冲突时 **standards > ADR（产品冻结类）> architecture 现状描述 > 历史讨论**。
 
 ---
@@ -52,7 +52,12 @@ docs/
 │   ├── NATIVE-DAEMON-CAPABILITY-MAP.md
 │   ├── NATIVE_ENGINE_FULL_REMEDIATION.md   引擎契约与进度（唯一进度源）
 │   ├── EXECUTION-ENGINE-CAPABILITY-AUDIT.md 执行引擎能力审计（进度表标签的证据源）
+│   ├── MODULAR_ARCHITECTURE_REMEDIATION.md 全仓模块化审计、整改与最终分支集成
+│   ├── macos-menubar-personal-overview.md   macOS 菜单栏常驻与个人概览浮窗
 │   └── NATIVE_ENGINE_ENV.md
+├── development/               ← 发布门禁与协作运行策略
+│   ├── natives-agent-build-cache-and-disk-policy.md  共享构建/低磁盘/双 Goal 策略
+│   └── natives-agent-t12-release-gate-report.md
 ├── superpowers/              ← harness 控制面设计稿
 │   └── specs/2026-07-26-native-harness-control-plane-design.md
 └── img/                      说明性截图
@@ -75,6 +80,10 @@ docs/
 | 性能改动 | `standards/technical/04-performance.md` + `application-performance-remediation.md` |
 | Provider 路由 / 账号池 | `provider-routing-sub2api.md` |
 | Agent 引擎能力与整改 | `NATIVE_ENGINE_FULL_REMEDIATION.md` + `NATIVE-DAEMON-CAPABILITY-MAP.md` |
+| 助理 / 引擎 / Harness / Subagent 生产化 | `NATIVE_ENGINE_FULL_REMEDIATION.md` 第 19 节 |
+| 全仓模块化 / 超大文件 / 数据权威 / 合并 deploy | `MODULAR_ARCHITECTURE_REMEDIATION.md` |
+| macOS 菜单栏常驻 / 个人概览浮窗 | `macos-menubar-personal-overview.md` |
+| 并行 Goal / 构建缓存 / 磁盘不足 | `development/natives-agent-build-cache-and-disk-policy.md` 第 10 节 |
 | 发布门禁 / T12 验收 | `development/natives-agent-t12-release-gate-report.md` |
 | 引擎缺口定级 / 对标 Claude Code | `EXECUTION-ENGINE-CAPABILITY-AUDIT.md` |
 | 历史决策溯源 | `DESIGN_DISCUSSION.md`（以 ADR 修订为准） |
