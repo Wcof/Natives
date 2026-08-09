@@ -6,7 +6,7 @@
  * until the final answer completes, never in the answer body.
  */
 
-import type { ContentBlock } from '@/components/assistant/blocks';
+import type { ContentBlock } from '@/types/assistant-content';
 import { computeLineDiff } from '@/lib/diff-utils';
 import type { FileChange, RunEvent } from '@/lib/assistant-protocol';
 

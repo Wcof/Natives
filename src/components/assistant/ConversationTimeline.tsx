@@ -11,7 +11,8 @@ import {
   filterTimelineBodyBlocks,
   summarizeConversationChanges,
 } from '@/lib/assistant-timeline';
-import { renderBlocks, type ContentBlock } from './blocks';
+import { renderBlocks } from './blocks';
+import type { ContentBlock } from '@/types/assistant-content';
 import ThinkingActivity from './ThinkingActivity';
 import type { FileChange } from '@/lib/assistant-protocol';
 

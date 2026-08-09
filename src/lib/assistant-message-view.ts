@@ -1,4 +1,4 @@
-import type { ContentBlock } from '@/components/assistant/blocks';
+import type { ContentBlock } from '@/types/assistant-content';
 
 export function formatElapsed(durationMs: number | null | undefined): string | null {
   if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 100) {
