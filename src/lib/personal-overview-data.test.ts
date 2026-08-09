@@ -198,9 +198,11 @@ test('overviewCoverageStatus reports stale when the snapshot is older than the f
 test('overviewCoverageStatus reports partial when a source is partial or unavailable', () => {
   const now = Date.parse('2026-07-28T09:00:00Z');
   const data = usageFixture();
-  data.sources[0] = { ...data.sources[0], state: 'partial' };
+  const first = data.sources[0];
+  if (!first) throw new Error('fixture sources must not be empty');
+  data.sources[0] = { ...first, state: 'partial' };
   const info = overviewCoverageStatus(data, metadataAt(now), now);
   assert.equal(info.status, 'partial');
-  assert.equal(info.sources[0].incomplete, true);
+  assert.equal(info.sources[0]?.incomplete, true);
   assert.match(info.sourceStateSummary, /\(partial\)/);
 });
