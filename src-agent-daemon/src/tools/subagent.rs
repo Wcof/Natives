@@ -2467,10 +2467,17 @@ mod tests {
 
     #[test]
     fn directive_for_requeue_falls_back_when_durable_missing_or_corrupt() {
-        // No durable copy: legacy session → in-memory arg wins.
+        // No durable copy: legacy session → in-memory arg wins. The text is
+        // preserved byte-for-byte (19.3-①: retry restores the same text and
+        // digest — trimming would silently re-roll the persona).
         let got =
             directive_for_requeue(None, Some("  in-memory persona  ")).expect("in-memory fallback");
-        assert_eq!(got.0, "in-memory persona", "in-memory arg is trimmed");
+        assert_eq!(got.0, "  in-memory persona  ", "in-memory arg is preserved");
+        assert_eq!(
+            got.1,
+            crate::subagent_store::directive_sha256_hex("  in-memory persona  "),
+            "digest matches the preserved text"
+        );
         // Digest mismatch (corruption signal): never silently re-roll the
         // durable text — fall back to the in-memory arg instead.
         let corrupt = Some(crate::subagent_store::PendingDirective {

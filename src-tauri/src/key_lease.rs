@@ -234,7 +234,7 @@ pub fn migrate_lease_columns(conn: &rusqlite::Connection) -> Result<()> {
         .map_err(|e| Error::Internal(e.to_string()))?
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|e| Error::Internal(e.to_string()))?
-        .filter_map(Result::ok)
+        .filter_map(|row| row.ok())
         .collect();
     if !columns.iter().any(|c| c == "lease_id") {
         conn.execute_batch("ALTER TABLE provider_key_leases ADD COLUMN lease_id TEXT")

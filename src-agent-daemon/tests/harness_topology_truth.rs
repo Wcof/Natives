@@ -36,7 +36,6 @@
 //! UI that invites a user to configure something inert.
 
 use harness_core::hooks::HookEvent;
-use harness_core::session_actor::SafePoint;
 use harness_core::topology::{TriggerSite, STAGES};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -188,7 +187,9 @@ fn safe_point_dispatch_in(source: &str, variant: &str) -> bool {
     for opener in SAFE_POINT_DISPATCHERS {
         let mut search_from = 0usize;
         while let Some(relative) = source[search_from..].find(opener) {
-            let open = search_from + relative + opener.len();
+            // `opener` ends with `(`; matching_close_paren expects the index of
+            // the `(` itself so the opening paren raises depth to 1.
+            let open = search_from + relative + opener.len() - 1;
             match matching_close_paren(source, open) {
                 Some(close) => {
                     if names_token(&source[open..close], &needle) {

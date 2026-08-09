@@ -599,7 +599,7 @@ mod tests {
         std::env::remove_var("NATIVES_DAEMON_BOOTSTRAP");
         std::env::remove_var("NATIVES_DAEMON_SOCKET");
         let err = open_stream("run-x", 0, 0).await;
-        let message = err.expect_err("embedded mode must fail, no silent fallback");
+        let message = err.err().expect("embedded mode must fail, no silent fallback");
         assert!(
             message.contains("UDS"),
             "embedded must fail closed naming UDS, got: {message}"
