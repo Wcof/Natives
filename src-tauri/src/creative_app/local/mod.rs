@@ -6,6 +6,7 @@
 pub mod ai;
 pub mod deps;
 pub mod lifecycle;
+pub mod lifecycle_process;
 pub mod logs;
 pub mod path;
 pub mod plan;
