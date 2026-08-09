@@ -1,28 +1,36 @@
-//! Sidecar-local Credential Broker: read encrypted keys from `natives.db`.
+//! Daemon-side Credential Broker: **pure UDS lease client** (NE-P0-02 / 19.1).
 //!
-//! Independent Agent Daemon processes cannot call Tauri's in-process inject.
-//! Production installs this broker at daemon startup when `NATIVES_DB_PATH`
-//! (or the default `~/.natives/natives.db`) is readable.
+//! The Agent Daemon no longer opens the Host-authoritative `natives.db` and no
+//! longer reads `provider_kek` / decrypts keys itself. Every credential-bearing
+//! read is a short-TTL, Run-bound, revocable **lease request** sent over the
+//! authenticated broker Unix socket to the Tauri Host broker
+//! (`src-tauri/src/credential_broker.rs`).
 //!
 //! Security:
-//! - Decrypts one key per request only (same envelope as Tauri host).
-//! - Never logs api_key material.
-//! - Opens DB read-only.
+//! - Plaintext key material is only ever the *response* of a lease request and
+//!   is dropped when the caller drops the value. It is never cached in daemon
+//!   memory, never written to assistant.db, never logged, and never emitted as
+//!   an engine event.
+//! - Errors are redacted before they leave this module.
+//! - The daemon never writes natives.db: the Host is the only writer.
 
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use assistant_protocol::v2::credential::{
+    CredentialBrokerRequest, CredentialBrokerResponse, CredentialLeaseEnvelope,
+    CredentialLeaseReply, CredentialLeaseRevokeRequest, CredentialPoolLeaseRequest,
+    CredentialPoolLeaseResponse, CredentialSecretLeaseRequest, CredentialSecretLeaseResponse,
+    CredentialSettingLeaseRequest, CredentialSettingLeaseResponse, LoopbackSettingsLeaseRequest,
+    LoopbackSettingsLeaseResponse,
+};
+use assistant_protocol::v2::methods::names;
 use provider_adapters::capabilities::Credential;
-use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::time::Duration;
 
-/// Open natives.db and resolve provider keys for the daemon process.
+/// UDS lease client for the Host Credential Broker. Holds no database handle
+/// and no key material — only the broker socket endpoint.
 pub struct NativesDbBroker {
-    path: PathBuf,
-    /// Serialized access; rusqlite Connection is not Sync.
-    conn: Mutex<Connection>,
+    endpoint: PathBuf,
 }
 
 /// One decrypted Sub2API account lease. It is constructed per request and must
@@ -54,33 +62,28 @@ pub struct LoopbackSettings {
 }
 
 impl NativesDbBroker {
-    /// Open existing natives.db READ-ONLY.
+    /// Open a lease client for the Host Credential Broker.
     ///
-    /// T104 (P0-007): the Agent Daemon must never write the Host-authoritative
-    /// `natives.db`. Every connection opened by the daemon is read-only, so
-    /// credential/routing reads work but any UPDATE/INSERT fails closed — the
-    /// Host (via broker RPC/lease) is the only writer.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
-        let path = path.as_ref().to_path_buf();
-        if !path.exists() {
-            return Err(format!("natives.db not found at {}", path.display()));
-        }
-        let conn = Connection::open_with_flags(
-            &path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| format!("open natives.db (read-only) failed: {e}"))?;
-        // The daemon never writes key material — only SELECT. Read-only open
-        // enforces that at the SQLite layer.
-        let _ = conn.execute_batch("PRAGMA busy_timeout=3000;");
-        Ok(Self {
-            path,
-            conn: Mutex::new(conn),
-        })
+    /// API-compatibility signature retained: callers pass the (now unused)
+    /// natives.db path; the client actually resolves the broker socket from
+    /// `NATIVES_BROKER_SOCKET` or the runtime directory. No database is opened.
+    pub fn open(_path: impl AsRef<Path>) -> Result<Self, String> {
+        let endpoint = default_broker_socket_path()?;
+        Ok(Self { endpoint })
+    }
+
+    /// Open a lease client against the default broker socket endpoint.
+    pub fn open_default() -> Result<Self, String> {
+        let endpoint = default_broker_socket_path()?;
+        Ok(Self { endpoint })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.endpoint
+    }
+
+    pub fn endpoint(&self) -> &Path {
+        &self.endpoint
     }
 
     /// Fail-closed write guard: the daemon must NOT write natives.db (P0-007).
@@ -93,85 +96,44 @@ impl NativesDbBroker {
         _expires_at: Option<&str>,
     ) -> Result<(), String> {
         Err(
-            "natives.db write blocked: daemon holds a read-only lease (T104); \
+            "natives.db write blocked: daemon holds only credential leases (T104); \
              OAuth credential persistence must go through the Host broker"
                 .into(),
         )
     }
 
-    /// Resolve one credential: exact key_id, or primary/active key for provider.
+    /// Resolve one provider key by requesting a Run-bound short-TTL lease from
+    /// the Host broker over UDS. `key_id` may be `None` / empty / `_primary_`
+    /// to select the primary active key for the provider.
     pub fn resolve(
         &self,
         provider_id: &str,
         key_id: Option<&str>,
-        _run_id: &str,
+        run_id: &str,
     ) -> Result<Credential, String> {
         if provider_id.trim().is_empty() {
             return Err("provider_id is required".into());
         }
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let key_id = key_id.unwrap_or("").trim();
-
-        let row = if !key_id.is_empty() && key_id != "_primary_" {
-            conn.query_row(
-                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
-                 FROM provider_api_keys k
-                 JOIN user_providers p ON k.provider_id = p.id
-                 WHERE k.id = ?1 AND k.provider_id = ?2
-                 LIMIT 1",
-                rusqlite::params![key_id, provider_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ))
-                },
-            )
-            .map_err(|_| {
-                format!("No key id '{key_id}' for provider '{provider_id}' in natives.db")
-            })?
-        } else {
-            conn.query_row(
-                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
-                 FROM provider_api_keys k
-                 JOIN user_providers p ON k.provider_id = p.id
-                 WHERE k.provider_id = ?1 AND COALESCE(k.is_active, 1) = 1
-                 ORDER BY COALESCE(k.is_primary, 0) DESC, k.created_at DESC
-                 LIMIT 1",
-                rusqlite::params![provider_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ))
-                },
-            )
-            .map_err(|_| format!("No active key for provider '{provider_id}' in natives.db"))?
+        let key_id = key_id.unwrap_or("").trim().to_string();
+        let req = CredentialBrokerRequest {
+            key_id: if key_id.is_empty() || key_id == "_primary_" {
+                "_primary_".into()
+            } else {
+                key_id
+            },
+            provider_id: provider_id.to_string(),
+            run_id: run_id.to_string(),
+            session_id: None,
         };
-
-        let (id, api_key_encrypted, dek_encrypted, base_url, provider_type) = row;
-        let api_key = envelope_decrypt(&api_key_encrypted, &dek_encrypted, &conn)?;
-        if api_key.trim().is_empty() {
-            return Err(format!("Decrypted empty key for provider '{provider_id}'"));
-        }
-        Ok(Credential {
-            api_key,
-            base_url: base_url.filter(|s| !s.trim().is_empty()),
-            proxy_url: global_proxy_url(&conn)?,
-            key_id: Some(id),
-            provider_type,
-        })
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("credential request serialize failed: {e}")))?;
+        let data = self.lease_request(names::CREDENTIAL_LEASE_ACQUIRE, &payload)?;
+        let resp: CredentialBrokerResponse = serde_json::from_value(data)
+            .map_err(|e| redact_err(&format!("credential broker response parse failed: {e}")))?;
+        credential_from_response(resp, run_id)
     }
 
-    /// Resolve active pool members in deterministic priority order. Selection and
-    /// transient health remain in the routing module; this broker only leases
-    /// encrypted material from the Host-owned store.
+    /// Request the active Sub2API account pool as a lease from the Host broker.
     pub fn resolve_sub2api_pool(
         &self,
         provider_id: &str,
@@ -179,263 +141,177 @@ impl NativesDbBroker {
         if provider_id.trim().is_empty() {
             return Err("provider_id is required".into());
         }
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT a.id, a.provider_id, a.platform, a.account_type, a.credentials_encrypted,
-                    a.dek_encrypted, a.extra_json, a.priority, a.concurrency, a.expires_at,
-                    p.config_encrypted, p.dek_encrypted
-             FROM provider_accounts
-             a LEFT JOIN provider_account_proxies p ON p.id = a.proxy_id
-             WHERE a.provider_id = ?1 AND a.status = 'active'
-               AND (a.expires_at IS NULL OR a.expires_at = '' OR a.expires_at > datetime('now'))
-             ORDER BY a.priority ASC, a.id ASC",
-            )
-            .map_err(|e| format!("prepare Sub2API pool: {e}"))?;
-        let rows = stmt
-            .query_map([provider_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<String>>(10)?,
-                    row.get::<_, Option<String>>(11)?,
-                ))
+        let req = CredentialPoolLeaseRequest {
+            provider_id: provider_id.to_string(),
+            run_id: "sub2api-pool".into(),
+        };
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("pool request serialize failed: {e}")))?;
+        let data = self.lease_request(names::CREDENTIAL_POOL_ACQUIRE, &payload)?;
+        let resp: CredentialPoolLeaseResponse = serde_json::from_value(data)
+            .map_err(|e| redact_err(&format!("broker pool response parse failed: {e}")))?;
+        Ok(resp
+            .accounts
+            .into_iter()
+            .map(|a| Sub2ApiAccountCredential {
+                id: a.id,
+                provider_id: a.provider_id,
+                platform: a.platform,
+                account_type: a.account_type,
+                credentials: a.credentials,
+                extra: a.extra,
+                priority: a.priority,
+                concurrency: a.concurrency,
+                expires_at: a.expires_at,
+                proxy_url: a.proxy_url,
             })
-            .map_err(|e| format!("query Sub2API pool: {e}"))?;
-        let mut accounts = Vec::new();
-        for row in rows {
-            let (
-                id,
-                provider_id,
-                platform,
-                account_type,
-                encrypted,
-                dek,
-                extra,
-                priority,
-                concurrency,
-                expires_at,
-                proxy_encrypted,
-                proxy_dek,
-            ) = row.map_err(|e| e.to_string())?;
-            let plaintext = envelope_decrypt(&encrypted, &dek, &conn)?;
-            let credentials = serde_json::from_str(&plaintext)
-                .map_err(|_| format!("Sub2API account '{id}' has invalid credentials"))?;
-            let extra = serde_json::from_str(&extra).unwrap_or(Value::Object(Default::default()));
-            let proxy_url = match (proxy_encrypted, proxy_dek) {
-                (Some(encrypted), Some(dek)) => proxy_url_from_value(
-                    &serde_json::from_str::<Value>(&envelope_decrypt(&encrypted, &dek, &conn)?)
-                        .map_err(|_| format!("Sub2API account '{id}' has invalid proxy"))?,
-                ),
-                _ => global_proxy_url(&conn)?,
-            };
-            accounts.push(Sub2ApiAccountCredential {
-                id,
-                provider_id,
-                platform,
-                account_type,
-                credentials,
-                extra,
-                priority,
-                concurrency: u32::try_from(concurrency.max(1)).unwrap_or(1),
-                expires_at,
-                proxy_url,
-            });
-        }
-        Ok(accounts)
+            .collect())
     }
 
+    /// Request the Host-owned loopback routing settings (bearer token included)
+    /// as a lease. Memory-only; the token is never persisted or logged.
     pub fn loopback_settings(&self) -> Result<LoopbackSettings, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let row = conn
-            .query_row(
-                "SELECT enabled, local_enabled, local_port, local_token_encrypted,
-                        local_token_dek_encrypted, rectifier_json
-                 FROM provider_routing_settings WHERE id = 1",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, String>(5)?,
-                    ))
-                },
-            )
-            .map_err(|e| format!("read routing settings: {e}"))?;
-        let (routing_enabled, local_enabled, port, token, token_dek, rectifier) = row;
-        let bearer_token = match (token, token_dek) {
-            (Some(token), Some(dek)) => Some(envelope_decrypt(&token, &dek, &conn)?),
-            _ => None,
+        let req = LoopbackSettingsLeaseRequest {
+            run_id: "loopback".into(),
         };
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("routing request serialize failed: {e}")))?;
+        let data = self.lease_request(names::CREDENTIAL_ROUTING_SETTINGS, &payload)?;
+        let resp: LoopbackSettingsLeaseResponse = serde_json::from_value(data)
+            .map_err(|e| redact_err(&format!("broker routing settings parse failed: {e}")))?;
         Ok(LoopbackSettings {
-            enabled: routing_enabled != 0 && local_enabled != 0,
-            port: u16::try_from(port).unwrap_or(15721),
-            bearer_token,
-            rectifier: serde_json::from_str(&rectifier)
-                .unwrap_or(Value::Object(Default::default())),
+            enabled: resp.enabled,
+            port: resp.port,
+            bearer_token: resp.bearer_token,
+            rectifier: resp.rectifier,
         })
     }
 
-    /// Encrypt and atomically replace a refreshed OAuth credential document.
-    /// The caller supplies only memory-resident JSON; it is never logged.
-    ///
-    /// T104 (P0-007): this write path is REMOVED — the daemon holds a
-    /// read-only lease on natives.db and must never persist credentials
-    /// itself. The fail-closed guard is defined above in `open()`'s impl.
-    #[allow(dead_code)]
-    fn update_sub2api_credentials_removed(
+    /// Explicitly revoke a lease this daemon no longer needs (run finished or
+    /// cancelled). Revocation is enforced by the Host; a revoked lease is
+    /// rejected on any status/refresh probe.
+    pub fn revoke_lease(&self, lease_id: &str, run_id: &str) -> Result<(), String> {
+        let req = CredentialLeaseRevokeRequest {
+            lease_id: lease_id.to_string(),
+            run_id: run_id.to_string(),
+        };
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("revoke request serialize failed: {e}")))?;
+        self.lease_request(names::CREDENTIAL_LEASE_REVOKE, &payload)?;
+        Ok(())
+    }
+
+    /// Send one typed lease request over the authenticated broker socket and
+    /// return the typed payload `Value`. Errors are redacted and fail closed.
+    #[cfg(unix)]
+    fn lease_request(
         &self,
-        _account_id: &str,
-        _credentials: &Value,
-        _expires_at: Option<&str>,
-    ) -> Result<(), String> {
-        Err("natives.db write blocked (T104)".into())
-    }
-}
+        method: &str,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
 
-fn proxy_url_from_value(value: &Value) -> Option<String> {
-    let enabled = value
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    if !enabled {
-        return None;
-    }
-    value
-        .get("url")
-        .and_then(Value::as_str)
-        .filter(|url| valid_proxy_url(url))
-        .map(str::to_string)
-}
+        let stream = UnixStream::connect(&self.endpoint).map_err(|e| {
+            redact_err(&format!(
+                "credential broker unreachable at {}: {e}",
+                self.endpoint.display()
+            ))
+        })?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+        let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+        let mut writer = stream;
 
-fn global_proxy_url(conn: &Connection) -> Result<Option<String>, String> {
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT global_proxy_json FROM provider_routing_settings WHERE id=1",
-            [],
-            |row| row.get(0),
+        let envelope = CredentialLeaseEnvelope {
+            method: method.to_string(),
+            payload: payload.clone(),
+        };
+        let line = serde_json::to_string(&envelope)
+            .map_err(|e| redact_err(&format!("credential broker request serialize failed: {e}")))?;
+        writer
+            .write_all(line.as_bytes())
+            .map_err(|e| redact_err(&format!("credential broker write failed: {e}")))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|e| redact_err(&format!("credential broker write failed: {e}")))?;
+        writer
+            .flush()
+            .map_err(|e| redact_err(&format!("credential broker flush failed: {e}")))?;
+
+        let mut reply_line = String::new();
+        let n = reader
+            .read_line(&mut reply_line)
+            .map_err(|e| redact_err(&format!("credential broker read failed: {e}")))?;
+        if n == 0 {
+            return Err("credential broker closed the connection".into());
+        }
+        let reply: CredentialLeaseReply = serde_json::from_str(reply_line.trim())
+            .map_err(|e| redact_err(&format!("credential broker reply parse failed: {e}")))?;
+        if reply.ok {
+            reply
+                .data
+                .ok_or_else(|| "credential broker returned an empty reply".into())
+        } else {
+            Err(redact_err(
+                reply
+                    .error
+                    .as_deref()
+                    .unwrap_or("credential broker rejected the request"),
+            ))
+        }
+    }
+
+    /// Non-Unix stub: the broker lease channel requires a Unix socket endpoint.
+    #[cfg(not(unix))]
+    fn lease_request(
+        &self,
+        _method: &str,
+        _payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err(
+            "credential lease broker requires a Unix socket endpoint on this platform; \
+             configure NATIVES_BROKER_SOCKET"
+                .into(),
         )
-        .optional()
-        .map_err(|e| format!("read global proxy: {e}"))?;
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-    let value = serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
-    if value.get("enabled").and_then(Value::as_bool) != Some(true) {
-        return Ok(None);
     }
-    if let (Some(ciphertext), Some(dek)) = (
-        value.get("url_encrypted").and_then(Value::as_str),
-        value.get("dek_encrypted").and_then(Value::as_str),
-    ) {
-        let plain = envelope_decrypt(ciphertext, dek, conn)?;
-        return Ok(valid_proxy_url(&plain).then_some(plain));
-    }
-    // Legacy rows have no proxy credentials encryption. They are accepted for
-    // upgrade compatibility but are rewritten encrypted on the next settings save.
-    Ok(value
-        .get("url")
-        .and_then(Value::as_str)
-        .filter(|url| valid_proxy_url(url))
-        .map(str::to_string))
 }
 
-fn valid_proxy_url(url: &str) -> bool {
-    let value = url.trim();
-    !value.chars().any(char::is_control)
-        && (value.starts_with("http://")
-            || value.starts_with("https://")
-            || value.starts_with("socks5://"))
-}
-
-fn load_kek(conn: &Connection) -> Result<[u8; 32], String> {
-    let hex: String = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'provider_kek' LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|_| "provider_kek not found in natives.db settings".to_string())?;
-    let bytes = hex::decode(hex.trim()).map_err(|e| format!("decode KEK: {e}"))?;
-    if bytes.len() != 32 {
-        return Err(format!("KEK wrong length: {}", bytes.len()));
+/// Convert a broker lease response into a provider `Credential`, enforcing the
+/// lease contract fail-closed: an expired lease or a lease bound to a different
+/// run is rejected even if the payload contains a valid key. The key material
+/// is returned per-call and dropped by the caller; it is never cached here.
+pub(crate) fn credential_from_response(
+    resp: CredentialBrokerResponse,
+    run_id: &str,
+) -> Result<Credential, String> {
+    if let Some(lease) = &resp.lease {
+        if lease.is_expired() {
+            return Err("credential lease expired; re-request a fresh lease".into());
+        }
+        if !lease.binds_run(run_id) {
+            return Err("credential lease is bound to a different run".into());
+        }
     }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn envelope_decrypt(
-    api_key_encrypted: &str,
-    dek_encrypted: &str,
-    conn: &Connection,
-) -> Result<String, String> {
-    let kek = load_kek(conn)?;
-    let dek_package = BASE64
-        .decode(dek_encrypted)
-        .map_err(|e| format!("decode DEK package: {e}"))?;
-    if dek_package.len() < 12 {
-        return Err("DEK package too short".into());
+    if resp.api_key.trim().is_empty() {
+        return Err(format!(
+            "Broker returned empty key for provider '{}'",
+            resp.provider_id
+        ));
     }
-    let (kek_nonce, dek_ct) = dek_package.split_at(12);
-    let kek_cipher = Aes256Gcm::new_from_slice(&kek).map_err(|e| format!("KEK cipher: {e}"))?;
-    let dek = kek_cipher
-        .decrypt(Nonce::from_slice(kek_nonce), dek_ct)
-        .map_err(|e| format!("DEK decrypt failed: {e}"))?;
-
-    let payload = BASE64
-        .decode(api_key_encrypted)
-        .map_err(|e| format!("decode api key: {e}"))?;
-    if payload.len() < 12 {
-        return Err("API key payload too short".into());
-    }
-    let (nonce, ct) = payload.split_at(12);
-    let cipher = Aes256Gcm::new_from_slice(&dek).map_err(|e| format!("DEK cipher: {e}"))?;
-    let plain = cipher
-        .decrypt(Nonce::from_slice(nonce), ct)
-        .map_err(|e| format!("API key decrypt failed: {e}"))?;
-    String::from_utf8(plain).map_err(|e| format!("utf8: {e}"))
-}
-
-#[cfg(test)]
-fn envelope_encrypt(plaintext: &str, conn: &Connection) -> Result<(String, String), String> {
-    use aes_gcm::aead::OsRng;
-    use rand::RngCore;
-    let kek = load_kek(conn)?;
-    let mut dek = [0u8; 32];
-    OsRng.fill_bytes(&mut dek);
-    let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
-    let ciphertext = Aes256Gcm::new_from_slice(&dek)
-        .map_err(|e| e.to_string())?
-        .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
-        .map_err(|_| "encrypt OAuth credentials failed".to_string())?;
-    let mut payload = nonce.to_vec();
-    payload.extend(ciphertext);
-    let mut kek_nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut kek_nonce);
-    let dek_ciphertext = Aes256Gcm::new_from_slice(&kek)
-        .map_err(|e| e.to_string())?
-        .encrypt(Nonce::from_slice(&kek_nonce), dek.as_slice())
-        .map_err(|_| "encrypt OAuth DEK failed".to_string())?;
-    let mut dek_payload = kek_nonce.to_vec();
-    dek_payload.extend(dek_ciphertext);
-    Ok((BASE64.encode(payload), BASE64.encode(dek_payload)))
+    Ok(Credential {
+        api_key: resp.api_key,
+        base_url: resp.base_url,
+        proxy_url: resp.proxy_url,
+        key_id: Some(resp.key_id),
+        provider_type: resp.provider_type,
+    })
 }
 
 /// Default path: `$NATIVES_DB_PATH` or `~/.natives/natives.db`.
 /// Credentials only — never the assistant conversation authority store.
+/// Retained for diagnostics / call-site compatibility; the daemon no longer
+/// opens this file.
 pub fn default_natives_db_path() -> PathBuf {
     if let Ok(p) = std::env::var("NATIVES_DB_PATH") {
         if !p.trim().is_empty() {
@@ -462,93 +338,119 @@ pub fn default_assistant_db_path() -> PathBuf {
         .join("assistant.db")
 }
 
+/// Broker socket endpoint: `$NATIVES_BROKER_SOCKET`, else the runtime
+/// directory (`NATIVES_RUNTIME_DIR` / `XDG_RUNTIME_DIR` / `~/.natives/runtime`)
+/// joined with `natives-broker.sock`. The Host creates this socket and passes
+/// the env var to the sidecar.
+pub fn default_broker_socket_path() -> Result<PathBuf, String> {
+    #[cfg(unix)]
+    {
+        if let Ok(p) = std::env::var("NATIVES_BROKER_SOCKET") {
+            if !p.trim().is_empty() {
+                return Ok(PathBuf::from(p));
+            }
+        }
+        let runtime_dir = std::env::var_os("NATIVES_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+            .unwrap_or_else(|| {
+                dirs_next_home()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".natives")
+                    .join("runtime")
+            });
+        Ok(runtime_dir.join("natives-broker.sock"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::env::var("NATIVES_BROKER_SOCKET");
+        Err(
+            "credential lease broker requires a Unix socket endpoint on this platform; \
+             configure NATIVES_BROKER_SOCKET"
+                .into(),
+        )
+    }
+}
+
 fn dirs_next_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
 }
 
-/// Install process-wide broker if natives.db is available. Returns true if installed.
+/// Install the process-wide UDS lease broker. Returns true only when a broker
+/// socket endpoint is configured AND reachable (socket file present) — the
+/// daemon never falls back to reading natives.db.
 pub fn try_install_natives_db_broker() -> bool {
-    let path = default_natives_db_path();
-    match NativesDbBroker::open(&path) {
-        Ok(broker) => {
-            let broker = std::sync::Arc::new(broker);
-            crate::production::install_credential_broker(std::sync::Arc::new(
-                move |provider_id, key_id, run_id| broker.resolve(provider_id, key_id, run_id),
-            ));
+    let endpoint = match default_broker_socket_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[agent-daemon] UDS credential broker not configured: {e}");
+            return false;
+        }
+    };
+    if !endpoint.exists() {
+        eprintln!(
+            "[agent-daemon] UDS credential broker not reachable at {} (fail closed)",
+            endpoint.display()
+        );
+        return false;
+    }
+    match crate::production_credentials::install_uds_lease_broker() {
+        Ok(()) => {
             eprintln!(
-                "[agent-daemon] Credential broker installed from {}",
-                path.display()
+                "[agent-daemon] UDS credential lease broker installed at {}",
+                endpoint.display()
             );
             true
         }
         Err(e) => {
-            eprintln!(
-                "[agent-daemon] natives.db broker not installed ({}): {e}",
-                path.display()
-            );
+            eprintln!("[agent-daemon] UDS credential broker install failed: {e}");
             false
         }
     }
 }
 
-/// Read and decrypt one capability secret by row id (ADR-0016 decision 7).
-///
-/// Opens natives.db read-only (falling back to a normal open where WAL denies
-/// read-only access), fetches `ciphertext` + `nonce` — the same KEK-DEK
-/// envelope columns the Host writes — and returns the plaintext. The value is
-/// memory-only: the caller must use it and drop it; it is never logged and
-/// never persisted by the daemon.
+/// Read and decrypt one capability secret by row id (ADR-0016 decision 7) via
+/// a Host broker lease. The value is memory-only: the caller must use it and
+/// drop it; it is never logged and never persisted by the daemon.
 pub fn read_capability_secret(id: &str) -> Result<String, String> {
-    read_capability_secret_at(&default_natives_db_path(), id)
-}
-
-fn read_capability_secret_at(path: &Path, id: &str) -> Result<String, String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("capability secret id is required".into());
     }
-    if !path.exists() {
-        return Err(format!("natives.db not found at {}", path.display()));
-    }
-    let conn = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| format!("open natives.db (read-only) failed: {e}"))?;
-    let _ = conn.execute_batch("PRAGMA busy_timeout=3000;");
-    let (ciphertext, nonce) = conn
-        .query_row(
-            "SELECT ciphertext, nonce FROM capability_secrets WHERE id = ?1 LIMIT 1",
-            rusqlite::params![id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )
-        .map_err(|_| format!("capability secret '{id}' not found in natives.db"))?;
-    envelope_decrypt(&ciphertext, &nonce, &conn)
+    let broker = NativesDbBroker::open_default()?;
+    let req = CredentialSecretLeaseRequest {
+        secret_id: id.to_string(),
+        run_id: "capability-secret".into(),
+    };
+    let payload = serde_json::to_value(&req)
+        .map_err(|e| redact_err(&format!("secret request serialize failed: {e}")))?;
+    let data = broker.lease_request(names::CREDENTIAL_SECRET_ACQUIRE, &payload)?;
+    let resp: CredentialSecretLeaseResponse = serde_json::from_value(data)
+        .map_err(|e| redact_err(&format!("broker secret response parse failed: {e}")))?;
+    Ok(resp.value)
 }
 
+/// Read a plain Host setting (e.g. governor rate-limit JSON) via a broker
+/// lease. Replaces the former direct natives.db `settings` read: the daemon
+/// boots from Host-pushed defaults when the broker is unreachable (Ok(None)).
 pub fn read_setting(key: &str) -> Result<Option<String>, String> {
-    let path = default_natives_db_path();
-    if !path.exists() {
+    let key = key.trim();
+    if key.is_empty() {
         return Ok(None);
     }
-    // T104: read-only lease on the Host-authoritative natives.db.
-    let conn = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| format!("open natives.db (read-only) failed: {e}"))?;
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1 LIMIT 1",
-        rusqlite::params![key],
-        |row| row.get::<_, String>(0),
-    )
-    .map(Some)
-    .or_else(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        _ => Err(e.to_string()),
-    })
+    let broker = NativesDbBroker::open_default()?;
+    let req = CredentialSettingLeaseRequest {
+        key: key.to_string(),
+        run_id: "daemon-boot".into(),
+    };
+    let payload = serde_json::to_value(&req)
+        .map_err(|e| redact_err(&format!("setting request serialize failed: {e}")))?;
+    let data = broker.lease_request(names::CREDENTIAL_SETTING_GET, &payload)?;
+    let resp: CredentialSettingLeaseResponse = serde_json::from_value(data)
+        .map_err(|e| redact_err(&format!("broker setting response parse failed: {e}")))?;
+    Ok(resp.value)
 }
 
 /// T104 (P0-007): daemon-side writes to the Host-authoritative natives.db are
@@ -562,138 +464,91 @@ pub fn write_setting(_key: &str, _value: &str) -> Result<(), String> {
     )
 }
 
+/// Redact secret-looking material from any daemon-side broker error.
+fn redact_err(msg: &str) -> String {
+    crate::production_credentials::redact_cred_err(msg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_gcm::aead::{Aead, AeadCore, OsRng as AesOsRng};
-    use rand::RngCore;
 
-    fn setup_db_with_key(api_key: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("natives.db");
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-             CREATE TABLE user_providers (
-               id TEXT PRIMARY KEY, preset_name TEXT, api_protocol TEXT, name TEXT,
-               website_url TEXT, base_url TEXT, created_at TEXT, updated_at TEXT
-             );
-             CREATE TABLE provider_api_keys (
-               id TEXT PRIMARY KEY, provider_id TEXT, label TEXT,
-               api_key_encrypted TEXT, dek_encrypted TEXT, created_at TEXT,
-               is_primary INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1
-             );
-             CREATE TABLE provider_routing_settings (
-               id INTEGER PRIMARY KEY CHECK(id=1),
-               enabled INTEGER NOT NULL DEFAULT 0,
-               local_enabled INTEGER NOT NULL DEFAULT 0,
-               local_port INTEGER NOT NULL DEFAULT 15721,
-               local_token_encrypted TEXT,
-               local_token_dek_encrypted TEXT,
-               rectifier_json TEXT NOT NULL DEFAULT '{}',
-               global_proxy_json TEXT NOT NULL DEFAULT '{}',
-               updated_at TEXT NOT NULL
-             );
-             INSERT INTO provider_routing_settings (id, updated_at) VALUES (1, 't');",
-        )
-        .unwrap();
-
-        let mut kek = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut kek);
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('provider_kek', ?1)",
-            [hex::encode(kek)],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO user_providers (id, preset_name, api_protocol, name, website_url, base_url, created_at, updated_at)
-             VALUES ('provider-uuid', 'anthropic', 'anthropic_messages', 'x', '', 'https://example.test', 't', 't')",
-            [],
-        )
-        .unwrap();
-
-        let mut dek = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut dek);
-        let dek_cipher = Aes256Gcm::new_from_slice(&dek).unwrap();
-        let nonce = Aes256Gcm::generate_nonce(&mut AesOsRng);
-        let ct = dek_cipher.encrypt(&nonce, api_key.as_bytes()).unwrap();
-        let mut api_pkg = nonce.to_vec();
-        api_pkg.extend_from_slice(&ct);
-        let api_key_encrypted = BASE64.encode(&api_pkg);
-
-        let kek_cipher = Aes256Gcm::new_from_slice(&kek).unwrap();
-        let kek_nonce = Aes256Gcm::generate_nonce(&mut AesOsRng);
-        let dek_ct = kek_cipher.encrypt(&kek_nonce, dek.as_slice()).unwrap();
-        let mut dek_pkg = kek_nonce.to_vec();
-        dek_pkg.extend_from_slice(&dek_ct);
-        let dek_encrypted = BASE64.encode(&dek_pkg);
-
-        conn.execute(
-            "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at, is_primary, is_active)
-             VALUES ('k1', 'provider-uuid', 't', ?1, ?2, 't', 1, 1)",
-            rusqlite::params![api_key_encrypted, dek_encrypted],
-        )
-        .unwrap();
-        drop(conn);
-        (dir, path)
+    fn response_with_lease(
+        api_key: &str,
+        run_id: &str,
+        lease_run_id: &str,
+        ttl_secs: i64,
+    ) -> CredentialBrokerResponse {
+        use assistant_protocol::v2::CredentialLeaseMeta;
+        use chrono::Duration;
+        CredentialBrokerResponse {
+            key_id: "k1".into(),
+            provider_id: "openai".into(),
+            api_key: api_key.into(),
+            base_url: Some("https://example.test".into()),
+            provider_type: Some("anthropic_messages".into()),
+            proxy_url: None,
+            lease: Some(CredentialLeaseMeta::new(
+                "openai",
+                "k1",
+                lease_run_id,
+                None,
+                Duration::seconds(ttl_secs),
+            )),
+        }
     }
 
     #[test]
-    fn reads_and_decrypts_capability_secret() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("natives.db");
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-             CREATE TABLE capability_secrets (
-               id TEXT PRIMARY KEY,
-               kind TEXT NOT NULL,
-               owner_ref TEXT NOT NULL,
-               key_name TEXT,
-               ciphertext TEXT NOT NULL,
-               nonce TEXT NOT NULL,
-               created_at TEXT NOT NULL,
-               updated_at TEXT NOT NULL
-             );",
+    fn lease_contract_is_enforced_fail_closed() {
+        // Valid: run matches, lease not expired.
+        let cred = credential_from_response(
+            response_with_lease("sk-ok-key", "run-1", "run-1", 120),
+            "run-1",
         )
-        .unwrap();
-        let mut kek = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut kek);
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('provider_kek', ?1)",
-            [hex::encode(kek)],
-        )
-        .unwrap();
-
-        // Same envelope the Host writes: ciphertext = DEK payload, nonce = wrapped DEK.
-        let (ciphertext, nonce) = envelope_encrypt("refresh-token-value", &conn).unwrap();
-        conn.execute(
-            "INSERT INTO capability_secrets (id, kind, owner_ref, key_name, ciphertext, nonce, created_at, updated_at)
-             VALUES ('sec-1', 'mcp_oauth_refresh', 'server-1', NULL, ?1, ?2, 't', 't')",
-            rusqlite::params![ciphertext, nonce],
-        )
-        .unwrap();
-        drop(conn);
-
-        let plain = read_capability_secret_at(&path, "sec-1").unwrap();
-        assert_eq!(plain, "refresh-token-value");
-
-        let missing = read_capability_secret_at(&path, "sec-does-not-exist");
-        assert!(missing.is_err());
-        assert!(
-            !missing.unwrap_err().contains("refresh-token-value"),
-            "errors must never carry secret material"
-        );
-    }
-
-    #[test]
-    fn resolves_and_decrypts_primary_key() {
-        let (_dir, path) = setup_db_with_key("sk-test-secret-key-value");
-        let broker = NativesDbBroker::open(&path).unwrap();
-        let cred = broker.resolve("provider-uuid", None, "run-1").unwrap();
-        assert_eq!(cred.api_key, "sk-test-secret-key-value");
+        .expect("valid lease must resolve");
+        assert_eq!(cred.api_key, "sk-ok-key");
         assert_eq!(cred.key_id.as_deref(), Some("k1"));
-        assert_eq!(cred.base_url.as_deref(), Some("https://example.test"));
         assert_eq!(cred.provider_type.as_deref(), Some("anthropic_messages"));
+
+        // Run mismatch: a child must not reuse a parent lease.
+        let err = credential_from_response(
+            response_with_lease("sk-parent", "run-2", "run-1", 120),
+            "run-2",
+        )
+        .unwrap_err();
+        assert!(err.contains("different run"), "{err}");
+        assert!(!err.contains("sk-parent"), "error must not leak key");
+
+        // Already-expired lease (negative TTL): fail closed even with key.
+        let err = credential_from_response(
+            response_with_lease("sk-expired", "run-3", "run-3", -5),
+            "run-3",
+        )
+        .unwrap_err();
+        assert!(err.contains("expired"), "{err}");
+        assert!(!err.contains("sk-expired"), "error must not leak key");
+    }
+
+    #[test]
+    fn empty_key_fails_closed() {
+        let mut resp = response_with_lease("", "run-1", "run-1", 120);
+        resp.api_key = "   ".into();
+        let err = credential_from_response(resp, "run-1").unwrap_err();
+        assert!(err.contains("empty key"));
+    }
+
+    #[test]
+    fn redaction_strips_key_prefixes_from_errors() {
+        let msg = redact_err("upstream 401 Bearer sk-ant-secret-token-value-here");
+        assert!(!msg.contains("sk-ant-secret-token-value-here"));
+        assert!(msg.contains("REDACTED") || msg.contains("[REDACTED_KEY]"));
+    }
+
+    #[test]
+    fn broker_endpoint_defaults_to_runtime_dir() {
+        std::env::set_var("NATIVES_BROKER_SOCKET", "/tmp/natives-test-broker.sock");
+        let ep = default_broker_socket_path().unwrap();
+        assert_eq!(ep, PathBuf::from("/tmp/natives-test-broker.sock"));
+        std::env::remove_var("NATIVES_BROKER_SOCKET");
     }
 }

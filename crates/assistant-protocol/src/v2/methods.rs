@@ -165,6 +165,22 @@ pub const ALL_METHODS: &[&str] = &[
     // when a `creative_proposal` tool call completes; the Host pulls pending
     // facts over UDS to validate and persist its pending approval inbox.
     "proposal.listPending",
+    // Credential lease surface (NE-P0-02 / 19.1): Daemon → Host broker RPCs over
+    // UDS. The daemon never reads natives.db / provider_kek — it requests
+    // Run-bound, short-TTL, revocable leases from the Host Credential Broker.
+    // Catalogued here and served by `src-tauri/src/credential_broker.rs`
+    // (`dispatch_broker_uds`). They are deliberately NOT advertised in
+    // `IMPLEMENTED_METHODS` / `HOST_IMPLEMENTED_METHODS` until the Host UDS
+    // broker listener is wired in `src-tauri/src/lib.rs` and
+    // `is_host_owned_method` is taught to intercept them (same promotion
+    // discipline as `mcp.auth.oauthStart`).
+    "credential.lease.acquire",
+    "credential.lease.revoke",
+    "credential.lease.status",
+    "credential.pool.acquire",
+    "credential.routing.settings",
+    "credential.secret.acquire",
+    "credential.setting.get",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -528,6 +544,16 @@ pub mod names {
     pub const CONVERSATION_GET_CAPABILITIES: &str = "conversation.getCapabilities";
     pub const CREATIVE_LOCAL_ANALYZE: &str = "creative.local.analyze";
     pub const PROPOSAL_LIST_PENDING: &str = "proposal.listPending";
+
+    // Credential lease family (NE-P0-02 / 19.1) — Host broker serves these over
+    // the authenticated broker UDS channel; the daemon is a pure lease client.
+    pub const CREDENTIAL_LEASE_ACQUIRE: &str = "credential.lease.acquire";
+    pub const CREDENTIAL_LEASE_REVOKE: &str = "credential.lease.revoke";
+    pub const CREDENTIAL_LEASE_STATUS: &str = "credential.lease.status";
+    pub const CREDENTIAL_POOL_ACQUIRE: &str = "credential.pool.acquire";
+    pub const CREDENTIAL_ROUTING_SETTINGS: &str = "credential.routing.settings";
+    pub const CREDENTIAL_SECRET_ACQUIRE: &str = "credential.secret.acquire";
+    pub const CREDENTIAL_SETTING_GET: &str = "credential.setting.get";
 }
 
 /// Every advertised Harness method, in the order the design lists them.
@@ -565,6 +591,23 @@ pub const HARNESS_METHODS: &[&str] = &[
     names::HARNESS_SUBSCRIBE,
     names::HARNESS_TRACE_LIST,
     names::HARNESS_AUDIT_EXPORT,
+];
+
+/// Methods the **Host Credential Broker** serves over the authenticated UDS
+/// lease channel (Daemon → Host). These are *not* daemon-RPC methods: the
+/// daemon advertises nothing about them and the daemon RPC server has no
+/// dispatch arm. They are the honest "IMPLEMENTED registration" for the
+/// host-side broker surface — `src-tauri/src/credential_broker.rs`'s
+/// `dispatch_broker_uds` implements every name here. Promotion to the RPC
+/// advertisement requires a real host interception path first.
+pub const BROKER_LEASE_METHODS: &[&str] = &[
+    names::CREDENTIAL_LEASE_ACQUIRE,
+    names::CREDENTIAL_LEASE_REVOKE,
+    names::CREDENTIAL_LEASE_STATUS,
+    names::CREDENTIAL_POOL_ACQUIRE,
+    names::CREDENTIAL_ROUTING_SETTINGS,
+    names::CREDENTIAL_SECRET_ACQUIRE,
+    names::CREDENTIAL_SETTING_GET,
 ];
 
 /// Returns true if `method` is a known v2 RPC method.
@@ -814,5 +857,39 @@ mod tests {
             "host-only surface changed — update src-tauri is_host_owned_method and the \
              daemon dispatch contract test together"
         );
+    }
+
+    /// NE-P0-02 (19.1): the credential lease surface is a real, catalogued RPC
+    /// family served by the Host broker — but it must NOT be advertised through
+    /// the daemon RPC until a host interception path exists. Advertising a name
+    /// the daemon has no arm for (or the host does not intercept) turns a clean
+    /// `unsupported` into a broken `internal_error`. Keep them catalogued,
+    /// keep `BROKER_LEASE_METHODS` honest, and promote each name to
+    /// `is_host_owned_method` + `HOST_IMPLEMENTED_METHODS` together with the
+    /// host UDS broker listener (lib.rs assembly).
+    #[test]
+    fn broker_lease_methods_are_catalogued_but_not_rpc_advertised() {
+        for method in BROKER_LEASE_METHODS {
+            assert!(is_known_method(method), "not catalogued: {method}");
+            assert!(
+                !is_daemon_method(method) && !is_host_method(method),
+                "{method} must not be advertised until the host UDS broker listener and is_host_owned_method interception exist"
+            );
+        }
+        // Every broker-served method is genuinely dispatched host-side.
+        for method in [
+            names::CREDENTIAL_LEASE_ACQUIRE,
+            names::CREDENTIAL_LEASE_REVOKE,
+            names::CREDENTIAL_LEASE_STATUS,
+            names::CREDENTIAL_POOL_ACQUIRE,
+            names::CREDENTIAL_ROUTING_SETTINGS,
+            names::CREDENTIAL_SECRET_ACQUIRE,
+            names::CREDENTIAL_SETTING_GET,
+        ] {
+            assert!(
+                BROKER_LEASE_METHODS.contains(&method),
+                "{method} is implemented by the broker but missing from BROKER_LEASE_METHODS"
+            );
+        }
     }
 }

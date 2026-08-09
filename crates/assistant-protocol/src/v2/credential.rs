@@ -2,6 +2,11 @@
 //!
 //! Plaintext keys travel only on authenticated host↔daemon IPC and must never
 //! appear in events, logs, errors, or frontend payloads.
+//!
+//! NE-P0-02 (19.1): the Agent Daemon never reads `natives.db` / `provider_kek`
+//! directly. It requests **Run-bound, short-TTL, revocable credential leases**
+//! from the Host Credential Broker over UDS. Every wire type for that lease
+//! RPC lives here (single protocol source of truth).
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,6 +61,14 @@ pub struct CredentialBrokerResponse {
     pub provider_id: String,
     pub api_key: String,
     pub base_url: Option<String>,
+    /// Provider protocol identifier (e.g. `anthropic_messages`) — Host-owned,
+    /// returned in the same lease round trip so the daemon never performs a
+    /// second Host-side lookup.
+    #[serde(default)]
+    pub provider_type: Option<String>,
+    /// Host-resolved proxy URL for the provider call (memory-only).
+    #[serde(default)]
+    pub proxy_url: Option<String>,
     /// Short-lived lease metadata (no secret in lease id).
     #[serde(default)]
     pub lease: Option<CredentialLeaseMeta>,
@@ -103,6 +116,155 @@ impl CredentialLeaseMeta {
     pub fn binds_run(&self, run_id: &str) -> bool {
         self.run_id == run_id
     }
+}
+
+/// One JSON-line request envelope on the authenticated broker UDS channel
+/// (Daemon → Host). `method` is a `credential.*` name from [`super::names`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialLeaseEnvelope {
+    pub method: String,
+    pub payload: serde_json::Value,
+}
+
+/// One JSON-line reply envelope on the authenticated broker UDS channel
+/// (Host → Daemon). `error` is always redacted — it must never carry key
+/// material. `data` carries the typed response payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialLeaseReply {
+    pub ok: bool,
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl CredentialLeaseReply {
+    pub fn ok(data: serde_json::Value) -> Self {
+        Self {
+            ok: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn err(message: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            data: None,
+            error: Some(message.into()),
+        }
+    }
+}
+
+/// Explicit revocation of a previously issued lease (Daemon → Host).
+/// Binds the revoke to the run that owns the lease; mismatched runs are
+/// rejected so a child cannot revoke a parent's lease.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialLeaseRevokeRequest {
+    pub lease_id: String,
+    pub run_id: String,
+}
+
+/// Status probe for an issued lease (no secret material).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialLeaseStatusRequest {
+    pub lease_id: String,
+}
+
+/// Public lease status — safe to log / persist (never contains key material).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialLeaseStatus {
+    pub lease_id: String,
+    pub provider_id: String,
+    pub key_id: String,
+    pub run_id: String,
+    pub active: bool,
+    pub revoked: bool,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Sub2API pool lease request (Daemon → Host).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialPoolLeaseRequest {
+    pub provider_id: String,
+    pub run_id: String,
+}
+
+/// One decrypted Sub2API account, lease-bound and memory-only. The daemon
+/// never persists this value into assistant.db.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialPoolAccount {
+    pub id: String,
+    pub provider_id: String,
+    pub platform: String,
+    pub account_type: String,
+    pub credentials: serde_json::Value,
+    pub extra: serde_json::Value,
+    pub priority: i64,
+    pub concurrency: u32,
+    pub expires_at: Option<String>,
+    /// Account proxy wins over the global proxy. Both stay daemon-memory only.
+    pub proxy_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialPoolLeaseResponse {
+    pub provider_id: String,
+    #[serde(default)]
+    pub lease: Option<CredentialLeaseMeta>,
+    #[serde(default)]
+    pub accounts: Vec<CredentialPoolAccount>,
+}
+
+/// Loopback routing-settings lease (Daemon → Host). The bearer token rides in
+/// plaintext over the authenticated socket only; it is never persisted by the
+/// daemon and never emitted as an engine event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopbackSettingsLeaseRequest {
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopbackSettingsLeaseResponse {
+    pub enabled: bool,
+    pub port: u16,
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    pub rectifier: serde_json::Value,
+    #[serde(default)]
+    pub lease: Option<CredentialLeaseMeta>,
+}
+
+/// Capability-secret lease (Daemon → Host), e.g. MCP env / bearer / OAuth
+/// refresh material stored in the Host `capability_secrets` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSecretLeaseRequest {
+    pub secret_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSecretLeaseResponse {
+    pub secret_id: String,
+    pub value: String,
+    #[serde(default)]
+    pub lease: Option<CredentialLeaseMeta>,
+}
+
+/// Plain, non-secret Host setting read (Daemon → Host), e.g. governor
+/// rate-limit JSON. This is how the daemon boots without touching natives.db.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSettingLeaseRequest {
+    pub key: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSettingLeaseResponse {
+    pub key: String,
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 /// Validate broker request fields (fail closed; no secrets in errors).
@@ -170,5 +332,48 @@ mod tests {
         assert!(!msg.contains("secretvalue"));
         assert!(msg.contains("REDACTED"));
         assert!(!msg.contains("sk-abc"));
+    }
+
+    #[test]
+    fn lease_reply_envelope_roundtrips_without_secrets() {
+        let ok = CredentialLeaseReply::ok(serde_json::json!({"leaseId": "L-1"}));
+        let line = serde_json::to_string(&ok).unwrap();
+        let back: CredentialLeaseReply = serde_json::from_str(&line).unwrap();
+        assert!(back.ok);
+        assert_eq!(back.data.unwrap()["leaseId"], "L-1");
+
+        let err = CredentialLeaseReply::err("No active key for provider openai");
+        let line = serde_json::to_string(&err).unwrap();
+        assert!(!line.contains("sk-"));
+        let back: CredentialLeaseReply = serde_json::from_str(&line).unwrap();
+        assert!(!back.ok);
+        assert!(back.error.unwrap().contains("No active key"));
+    }
+
+    #[test]
+    fn response_serializes_provider_type_and_proxy_but_never_redacts_wrongly() {
+        let resp = CredentialBrokerResponse {
+            key_id: "k1".into(),
+            provider_id: "openai".into(),
+            api_key: "sk-ant-secret-value-here".into(),
+            base_url: Some("https://example.test".into()),
+            provider_type: Some("anthropic_messages".into()),
+            proxy_url: Some("http://127.0.0.1:8080".into()),
+            lease: Some(CredentialLeaseMeta::new(
+                "openai",
+                "k1",
+                "run-1",
+                None,
+                Duration::seconds(120),
+            )),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        // Lease metadata must carry no key material even when it is logged.
+        let lease_json = serde_json::to_value(&json["lease"]).unwrap();
+        assert!(!lease_json.to_string().contains("sk-ant"));
+        // Wire round trip keeps the new host-owned fields.
+        let back: CredentialBrokerResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.provider_type.as_deref(), Some("anthropic_messages"));
+        assert_eq!(back.proxy_url.as_deref(), Some("http://127.0.0.1:8080"));
     }
 }

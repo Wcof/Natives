@@ -1,7 +1,13 @@
 //! Credential resolution (extracted from `production.rs`, task-01 structure).
 //!
-//! Order: 1) authenticated Tauri broker (natives.db, run-bound lease) 2) explicit
-//! test/dev env keys 3) fail closed. Never invents offline success; never logs api_key.
+//! NE-P0-02 (19.1): the production broker is a **pure UDS lease client** — it
+//! requests Run-bound, short-TTL, revocable leases from the Host Credential
+//! Broker over the authenticated broker socket. The daemon never opens
+//! natives.db and never reads provider_kek.
+//!
+//! Order: 1) UDS lease broker (Host natives.db decrypts, run-bound lease)
+//! 2) explicit test/dev env keys 3) fail closed. Never invents offline success;
+//! never logs api_key.
 
 use provider_adapters::capabilities::Credential;
 use std::sync::Arc;
@@ -14,11 +20,26 @@ pub type CredentialBrokerFn =
 static CREDENTIAL_BROKER: std::sync::Mutex<Option<CredentialBrokerFn>> =
     std::sync::Mutex::new(None);
 
-/// Install the authenticated Credential Broker (from Tauri host).
+/// Install the authenticated Credential Broker (from Tauri host or a UDS
+/// lease client). Used by the embedded inject (lib.rs) and by
+/// [`install_uds_lease_broker`] for sidecar mode.
 pub fn install_credential_broker(broker: CredentialBrokerFn) {
     if let Ok(mut slot) = CREDENTIAL_BROKER.lock() {
         *slot = Some(broker);
     }
+}
+
+/// Install the production UDS lease broker: every credential resolve becomes a
+/// Run-bound short-TTL lease request to the Host broker over the broker socket
+/// (`NATIVES_BROKER_SOCKET` or the runtime directory default). Returns an error
+/// when no broker endpoint is configured — the daemon never falls back to
+/// reading natives.db.
+pub fn install_uds_lease_broker() -> Result<(), String> {
+    let broker = crate::natives_db_broker::NativesDbBroker::open_default()?;
+    install_credential_broker(Arc::new(move |provider_id, key_id, run_id| {
+        broker.resolve(provider_id, key_id, run_id)
+    }));
+    Ok(())
 }
 
 /// Clear broker (tests only).
@@ -29,7 +50,8 @@ pub fn clear_credential_broker_for_tests() {
     }
 }
 
-/// Resolve credentials: 1) installed Tauri broker (natives.db) 2) test env 3) fail.
+/// Resolve credentials: 1) installed UDS lease broker (Host natives.db decrypts,
+/// Run-bound short-TTL lease) 2) explicit test env 3) fail.
 /// Never invent mock completion text. Never log api_key.
 pub fn resolve_credential(provider_id: &str, key_id: Option<&str>) -> Result<Credential, String> {
     // Legacy callers without a run must fail closed for lease binding in production
@@ -46,8 +68,10 @@ pub fn resolve_credential_for_run(
     if run_id.trim().is_empty() {
         return Err("run_id required for credential lease binding".into());
     }
-    // 1. Authenticated broker path (production): Tauri decrypts natives.db.
-    //    Child agents must pass their own run_id — never inherit parent lease.
+    // 1. Authenticated broker path (production): the UDS lease client asks the
+    //    Host broker to decrypt natives.db and return a Run-bound short-TTL
+    //    lease. Child agents must pass their own run_id — never inherit parent
+    //    lease (the client rejects a lease bound to a different run).
     let broker = CREDENTIAL_BROKER.lock().ok().and_then(|g| g.clone());
     if let Some(broker) = broker {
         match broker(provider_id, key_id, run_id) {
