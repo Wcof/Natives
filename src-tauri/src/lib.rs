@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 mod agent;
+mod agent_skill_stats;
 mod archive;
 mod archive_ops;
 pub mod assistant_service;
