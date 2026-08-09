@@ -97,7 +97,7 @@ test('Settings exposes one execution-engine entry containing capabilities and Ha
     'utf8',
   );
   const sidebar = fs.readFileSync(
-    path.join(process.cwd(), 'src/components/shell/Sidebar.tsx'),
+    path.join(process.cwd(), 'src/components/shell/sidebar/model.ts'),
     'utf8',
   );
   const workspace = fs.readFileSync(

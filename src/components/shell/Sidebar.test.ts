@@ -2,7 +2,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const sidebar = readFileSync(new URL('./Sidebar.tsx', import.meta.url), 'utf8');
+// R4-04: Sidebar split into shell + controller hook + presentational parts +
+// model. Static checks run against the whole module family so render markers
+// (titlebar, favorites, assistant section) keep resolving.
+const readSidebarFamily = () => [
+  './Sidebar.tsx',
+  './sidebar/parts.tsx',
+  './sidebar/useSidebar.ts',
+  './sidebar/model.ts',
+]
+  .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+  .join('\n');
+
+const sidebar = readSidebarFamily();
 const header = readFileSync(new URL('./Header.tsx', import.meta.url), 'utf8');
 const workbench = readFileSync(new URL('../assistant/AssistantWorkbench.tsx', import.meta.url), 'utf8');
 const assistantSidebar = readFileSync(new URL('../assistant/AssistantSidebarSection.tsx', import.meta.url), 'utf8');
