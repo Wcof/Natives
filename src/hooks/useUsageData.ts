@@ -116,10 +116,14 @@ export function useUsageData(
   // Re-read the snapshot cache whenever the Host finishes a usage_sync
   // (`usage:snapshot-changed`, R-T5). loadCached is read-only
   // (usage_get_cached never scans), so this cannot loop back into usage_sync.
+  // Visibility-gated (R-P3/R-P5): while the window is hidden no IPC/scan runs,
+  // and the surface re-reads the cache on hidden→visible anyway.
   // The effect cleanup unsubscribes on unmount.
   useEffect(() => {
     return subscribeUsageSnapshotChanged(() => {
-      void loadCached();
+      if (document.visibilityState === 'visible') {
+        void loadCached();
+      }
     });
   }, [loadCached]);
 

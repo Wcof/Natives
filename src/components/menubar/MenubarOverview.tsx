@@ -22,7 +22,7 @@ import { EmptyState, ErrorState, Skeleton } from '@/components/ui/EmptyState';
 // 共享纯计算模块（metrics 子代理所有权；Settings 与 Menubar 共用）。
 import { buildOverviewTrend, summarizeOverviewUsage } from '@/lib/personal-overview-data';
 import type { UsageViewRequest } from '@/types/usage';
-import { invokeMenubar, subscribeSnapshotChanged } from './menubar-bridge';
+import { invokeMenubar } from './menubar-bridge';
 import styles from './MenubarOverview.module.css';
 
 /** 快照超过 24 小时视为「陈旧」——仍显示真实更新时间，不伪装新。 */
@@ -119,14 +119,9 @@ export default function MenubarOverview() {
     return () => document.removeEventListener('visibilitychange', update);
   }, [loadCached, refreshRegisteredProjects]);
 
-  // 跨窗口事件 usage:snapshot-changed → 可见时重读缓存。
-  useEffect(() => {
-    return subscribeSnapshotChanged(() => {
-      if (document.visibilityState === 'visible') {
-        void loadCached();
-      }
-    });
-  }, [loadCached]);
+  // 跨窗口事件 usage:snapshot-changed 的缓存刷新已收敛在共享 useUsageData
+  // （含可见性门控，R-P3/R-P5）。此处不再重复订阅，避免同一事件触发两次
+  // loadCached IPC（契约：Popup 隐藏时无重复 IPC）。
 
   // 只有用户明确点击「刷新」才调用 sync（扫描本机记录）。
   const handleRefresh = useCallback(async () => {

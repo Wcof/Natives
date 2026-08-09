@@ -10,8 +10,6 @@
  * 在浏览器开发模式（无 Tauri）下静默 no-op。
  */
 
-import { subscribe } from '@/lib/tauri-adapter';
-
 type MenubarCommand = 'menubar_hide' | 'menubar_open_main' | 'menubar_quit';
 
 export type MenubarFacade = {
@@ -42,18 +40,4 @@ export async function invokeMenubar(command: MenubarCommand): Promise<void> {
   } catch {
     // Browser dev mode — no Tauri commands.
   }
-}
-
-/**
- * `usage:snapshot-changed` 跨窗口事件订阅。
- * 偏好 tauri/usage facade 暴露的 `onSnapshotChanged`（metrics 子代理收口）；
- * 未暴露时回退到冻结事件名 `usage:snapshot-changed`。
- */
-export function subscribeSnapshotChanged(handler: () => void): () => void {
-  const facade = (window.nativesAPI as unknown as {
-    usage?: { onSnapshotChanged?: (cb: () => void) => () => void };
-  })?.usage;
-  const off = facade?.onSnapshotChanged?.(handler);
-  if (typeof off === 'function') return off;
-  return subscribe<unknown>('usage:snapshot-changed', handler);
 }
