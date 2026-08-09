@@ -28,18 +28,19 @@
         "name": "next"
       }
     ],
-    "allowJs": true,
+    "allowJs": false,
     "noEmit": true
   },
   "include": [
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     "next-env.d.ts",
-    "out/types/**/*.ts"
+    ".next/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    "src-tauri"
+    "src-tauri",
+    "out",
+    ".next/archive"
   ]
 }
