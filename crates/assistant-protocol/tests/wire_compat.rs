@@ -422,3 +422,74 @@ fn test_active_state_detection() {
     assert!(!RunStatus::Queued.is_active());
     assert!(!RunStatus::Completed.is_active());
 }
+
+// ---------------------------------------------------------------------------
+// v2 CreateRunRequest: disabled_tools round-trip (CONTRACT-001)
+// ---------------------------------------------------------------------------
+
+/// CONTRACT-001: `disabled_tools` is a typed field on v2 `CreateRunRequest`
+/// (single source in the protocol crate). It must round-trip through JSON in
+/// both directions — serialization must emit the field, and deserialization
+/// must restore it, so the Daemon never needs a raw params shadow read.
+#[test]
+fn test_v2_create_run_request_disabled_tools_roundtrip() {
+    use assistant_protocol::v2::CreateRunRequest;
+
+    let req = CreateRunRequest {
+        conversation_id: "conv-001".to_string(),
+        provider_id: "openai".to_string(),
+        model_id: "gpt-4o".to_string(),
+        key_id: None,
+        agent_profile_id: None,
+        permission_profile: Some("full_access".to_string()),
+        content: Some("hello".to_string()),
+        attachments: None,
+        max_steps: Some(50),
+        parent_run_id: None,
+        project_path: None,
+        idempotency_key: Some("k-1".to_string()),
+        effort: None,
+        runtime_id: Some("native".to_string()),
+        capability_selection: None,
+        disabled_tools: Some(vec!["read_file".to_string(), "run_terminal".to_string()]),
+    };
+
+    let json = serde_json::to_value(&req).unwrap();
+    // The typed field must be present on the wire (snake_case).
+    assert_eq!(
+        json["disabled_tools"],
+        serde_json::json!(["read_file", "run_terminal"]),
+        "disabled_tools must serialize onto the typed request wire"
+    );
+
+    let deserialized: CreateRunRequest = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized.disabled_tools, req.disabled_tools);
+    assert_eq!(
+        deserialized.disabled_tools.as_deref(),
+        Some(["read_file".to_string(), "run_terminal".to_string()].as_slice())
+    );
+}
+
+/// CONTRACT-001 negative: a raw JSON with NO `disabled_tools` key deserializes
+/// to `None` (serde default), and `null` also maps to `None` — both are ignored
+/// by the Daemon's typed read path (no subtraction registered).
+#[test]
+fn test_v2_create_run_request_disabled_tools_defaults_to_none() {
+    use assistant_protocol::v2::CreateRunRequest;
+
+    let base = serde_json::json!({
+        "conversation_id": "conv-001",
+        "provider_id": "openai",
+        "model_id": "gpt-4o",
+    });
+
+    // Missing key → None.
+    let req: CreateRunRequest = serde_json::from_value(base.clone()).unwrap();
+    assert_eq!(req.disabled_tools, None);
+
+    // Explicit null → None.
+    let mut with_null = base.clone();
+    with_null["disabled_tools"] = serde_json::Value::Null;
+    let req: CreateRunRequest = serde_json::from_value(with_null).unwrap();
+    assert_eq!(req.disabled_tools, None);
+}
