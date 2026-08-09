@@ -60,7 +60,6 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
   const { navigation, publishNavigation } = useAssistantNavigation();
   const { actions } = useAssistantActions();
   const { toast } = useToast();
-  const zh = locale.startsWith('zh');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -243,21 +242,21 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
     if (!deleteTarget || deletingConversation) return;
     // Only through Workspace actions → Gateway (no direct daemon RPC).
     if (!actions?.deleteConversation) {
-      toast(zh ? '工作台未就绪，无法删除' : 'Workbench not ready — cannot delete', 'error');
+      toast(t(locale, 'assistantSidebar.workbenchNotReadyDelete'), 'error');
       return;
     }
     setDeletingConversation(true);
     try {
       const deleted = await actions.deleteConversation(deleteTarget.id);
-      if (!deleted) throw new Error(zh ? '删除会话失败' : 'Failed to delete conversation');
+      if (!deleted) throw new Error(t(locale, 'assistantSidebar.deleteConversationFailed'));
       setDeleteTarget(null);
-      toast(zh ? '会话已删除' : 'Conversation deleted', 'success');
+      toast(t(locale, 'assistantSidebar.conversationDeleted'), 'success');
     } catch (error) {
-      toast(error instanceof Error ? error.message : (zh ? '删除会话失败' : 'Failed to delete conversation'), 'error');
+      toast(error instanceof Error ? error.message : t(locale, 'assistantSidebar.deleteConversationFailed'), 'error');
     } finally {
       setDeletingConversation(false);
     }
-  }, [actions, deleteTarget, deletingConversation, toast, zh]);
+  }, [actions, deleteTarget, deletingConversation, toast]);
 
   return (
     <div className="mb-3">
@@ -534,21 +533,21 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
           const renamed = await actions.renameProject(target.path, target.label.trim());
           setRenamingProject(false);
           if (!renamed) {
-            toast(zh ? '重命名项目失败，请重试' : 'Could not rename project. Please retry.', 'error');
+            toast(t(locale, 'assistantSidebar.renameProjectFailed'), 'error');
             return;
           }
           setRenameProjectTarget(null);
-          toast(zh ? '项目已重命名' : 'Project renamed', 'success');
+          toast(t(locale, 'assistantSidebar.projectRenamed'), 'success');
         })()}>
           <input autoFocus value={renameProjectTarget?.label ?? ''} onChange={event => setRenameProjectTarget(target => target ? { ...target, label: event.target.value } : null)} className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]" />
-          <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={renamingProject} onClick={() => setRenameProjectTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="submit" disabled={renamingProject || !renameProjectTarget?.label.trim()} className="btn btn-sm btn-primary">{renamingProject ? (zh ? '保存中…' : 'Saving…') : t(locale, 'common.save')}</button></div>
+          <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={renamingProject} onClick={() => setRenameProjectTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="submit" disabled={renamingProject || !renameProjectTarget?.label.trim()} className="btn btn-sm btn-primary">{renamingProject ? t(locale, 'assistantSidebar.savingShort') : t(locale, 'common.save')}</button></div>
         </form>
       </Modal>
 
       {/* ── Delete Modal ── */}
       <Modal isOpen={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} title={t(locale, 'assistant.deleteConversation')} width={420}>
         <p className="text-sm text-[var(--text-secondary)]">{t(locale, 'assistant.deleteConversationConfirm', { title: deleteTarget?.title || '' })}</p>
-        <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={deletingConversation} onClick={() => setDeleteTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="button" disabled={deletingConversation} onClick={() => void confirmDeleteConversation()} className="btn btn-sm bg-[var(--danger)] text-white disabled:opacity-60">{deletingConversation ? (zh ? '删除中…' : 'Deleting…') : t(locale, 'common.delete')}</button></div>
+        <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={deletingConversation} onClick={() => setDeleteTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="button" disabled={deletingConversation} onClick={() => void confirmDeleteConversation()} className="btn btn-sm bg-[var(--danger)] text-white disabled:opacity-60">{deletingConversation ? t(locale, 'assistantSidebar.deletingShort') : t(locale, 'common.delete')}</button></div>
       </Modal>
 
       <Modal isOpen={Boolean(removeProjectTarget)} onClose={() => setRemoveProjectTarget(null)} title={t(locale, 'assistant.removeProject')} width={420}>
@@ -568,7 +567,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
               if (!removeProjectTarget) return;
               if (!actions?.removeProject) {
                 toast(
-                  zh ? '工作台未就绪，无法移除项目' : 'Workbench not ready — cannot remove project',
+                  t(locale, 'assistantSidebar.workbenchNotReadyRemove'),
                   'error',
                 );
                 return;
@@ -577,7 +576,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
               const removed = await actions.removeProject(removeProjectTarget.path);
               setRemovingProject(false);
               if (!removed) {
-                toast(zh ? '移除项目失败，请重试' : 'Could not remove project. Please retry.', 'error');
+                toast(t(locale, 'assistantSidebar.removeProjectFailed'), 'error');
                 return;
               }
               const next = new Set(pinned);
@@ -585,11 +584,11 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
               setPinned(next);
               void window.nativesAPI?.db?.set('assistant:pinnedProjects', JSON.stringify([...next]));
               setRemoveProjectTarget(null);
-              toast(zh ? '已移除项目' : 'Project removed', 'success');
+              toast(t(locale, 'assistantSidebar.projectRemoved'), 'success');
             })()}
             className="btn btn-sm bg-[var(--danger)] text-white"
           >
-            {removingProject ? (zh ? '移除中…' : 'Removing…') : (zh ? '移除' : 'Remove')}
+            {removingProject ? t(locale, 'assistantSidebar.removingShort') : t(locale, 'assistantSidebar.removeShort')}
           </button>
         </div>
       </Modal>

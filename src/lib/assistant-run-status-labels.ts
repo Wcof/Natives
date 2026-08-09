@@ -1,5 +1,4 @@
-// i18n-pending: run 状态标签暂以硬编码双语表维护（原分散在 RunStatusBar /
-// GoalStatusBar / assistant-notifications），后续统一收敛到 src/i18n。
+import { t } from '@/i18n';
 import type { RunStatus } from '@/lib/assistant-protocol';
 
 /**
@@ -15,33 +14,28 @@ export type DisplayRunStatus =
   | 'reconnecting'
   | 'recovering';
 
-export interface RunStatusLabel {
-  readonly zh: string;
-  readonly en: string;
-}
-
-/** Single source of truth for run status → bilingual label. */
-export const RUN_STATUS_LABELS: Readonly<Record<DisplayRunStatus, RunStatusLabel>> = {
-  created: { zh: '已创建', en: 'Created' },
-  connecting: { zh: '连接中', en: 'Connecting' },
-  queued: { zh: '排队中', en: 'Queued' },
-  preparing: { zh: '准备中', en: 'Preparing' },
-  reasoning: { zh: '思考中', en: 'Reasoning' },
-  generating: { zh: '生成中', en: 'Generating' },
-  running: { zh: '运行中', en: 'Running' },
-  running_tool: { zh: '执行工具', en: 'Running tool' },
-  waiting_permission: { zh: '等待权限', en: 'Permission needed' },
-  waiting_user: { zh: '等待你的回答', en: 'Waiting for your answer' },
-  waiting_subagent: { zh: '等待子任务', en: 'Waiting subagent' },
-  compacting: { zh: '压缩上下文', en: 'Compacting' },
-  reconnecting: { zh: '重连中', en: 'Reconnecting' },
-  recovering: { zh: '恢复中', en: 'Recovering' },
-  cancelling: { zh: '正在停止', en: 'Cancelling' },
-  completed: { zh: '已完成', en: 'Completed' },
-  failed: { zh: '失败', en: 'Failed' },
-  cancelled: { zh: '已取消', en: 'Cancelled' },
-  interrupted: { zh: '已中断', en: 'Interrupted' },
-  background_watching: { zh: '后台监视', en: 'Background' },
+/** Single source of truth for run status → i18n key. */
+export const RUN_STATUS_KEYS: Readonly<Record<DisplayRunStatus, string>> = {
+  created: 'runStatus.created',
+  connecting: 'runStatus.connecting',
+  queued: 'runStatus.queued',
+  preparing: 'runStatus.preparing',
+  reasoning: 'runStatus.reasoning',
+  generating: 'runStatus.generating',
+  running: 'runStatus.running',
+  running_tool: 'runStatus.runningTool',
+  waiting_permission: 'runStatus.waitingPermission',
+  waiting_user: 'runStatus.waitingUser',
+  waiting_subagent: 'runStatus.waitingSubagent',
+  compacting: 'runStatus.compacting',
+  reconnecting: 'runStatus.reconnecting',
+  recovering: 'runStatus.recovering',
+  cancelling: 'runStatus.cancelling',
+  completed: 'runStatus.completed',
+  failed: 'runStatus.failed',
+  cancelled: 'runStatus.cancelled',
+  interrupted: 'runStatus.interrupted',
+  background_watching: 'runStatus.backgroundWatching',
 };
 
 /**
@@ -52,13 +46,12 @@ export const RUN_STATUS_LABELS: Readonly<Record<DisplayRunStatus, RunStatusLabel
  *   (e.g. goal mode presents `interrupted` as 已暂停 / Paused).
  */
 export function runStatusLabel(
+  locale: string,
   status: string | null | undefined,
-  zh: boolean,
-  overrides?: Partial<Record<DisplayRunStatus, RunStatusLabel>>,
+  overrides?: Partial<Record<DisplayRunStatus, string>>,
 ): string {
-  if (!status) return zh ? '待命' : 'Idle';
-  const label =
-    overrides?.[status as DisplayRunStatus] ?? RUN_STATUS_LABELS[status as DisplayRunStatus];
-  if (!label) return status;
-  return zh ? label.zh : label.en;
+  if (!status) return t(locale, 'runStatus.idle');
+  const key = overrides?.[status as DisplayRunStatus] ?? RUN_STATUS_KEYS[status as DisplayRunStatus];
+  if (!key) return status;
+  return t(locale, key);
 }

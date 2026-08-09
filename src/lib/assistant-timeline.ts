@@ -6,6 +6,7 @@
  * until the final answer completes, never in the answer body.
  */
 
+import { t } from '@/i18n';
 import type { ContentBlock } from '@/types/assistant-content';
 import { computeLineDiff } from '@/lib/diff-utils';
 import type { FileChange, RunEvent } from '@/lib/assistant-protocol';
@@ -298,5 +299,5 @@ export function selectActiveToolActivity(tools: TimelineToolActivity[]): Timelin
 }
 
 export function genericThinkingTitle(locale: string): string {
-  return locale.startsWith('zh') ? '思考过程' : 'Thinking';
+  return t(locale, 'thinkingActivity.title');
 }

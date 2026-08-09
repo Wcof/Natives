@@ -1,6 +1,7 @@
 'use client';
 
 import { WifiOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { t } from '@/i18n';
 import type { ConnectionState } from '@/lib/assistant-protocol';
 
 interface ConnectionBannerProps {
@@ -26,20 +27,19 @@ export default function ConnectionBanner({
   clientVersion,
   daemonVersion,
 }: ConnectionBannerProps) {
-  const zh = locale.startsWith('zh');
   if (connection === 'connected' || connection === 'disconnected') return null;
 
-  const messages: Record<string, [string, string]> = {
-    starting_daemon: ['正在启动引擎…', 'Starting engine…'],
-    connecting: ['正在连接…', 'Connecting…'],
-    reconnecting: ['正在重连', 'Reconnecting'],
-    recovering: ['正在恢复事件…', 'Recovering events…'],
-    offline: ['已离线 — 内容与草稿已保留', 'Offline — content and drafts kept'],
-    incompatible: ['协议不兼容', 'Protocol incompatible'],
-    fatal: ['引擎致命错误', 'Engine fatal error'],
+  const messageKeys: Record<string, string> = {
+    starting_daemon: 'connectionBanner.startingDaemon',
+    connecting: 'connectionBanner.connecting',
+    reconnecting: 'connectionBanner.reconnecting',
+    recovering: 'connectionBanner.recovering',
+    offline: 'connectionBanner.offline',
+    incompatible: 'connectionBanner.incompatible',
+    fatal: 'connectionBanner.fatal',
   };
-  const pair = messages[connection] ?? [connection, connection];
-  let text = zh ? pair[0] : pair[1];
+  const messageKey = messageKeys[connection];
+  let text = messageKey ? t(locale, messageKey) : connection;
   if (connection === 'reconnecting' && reconnectAttempts > 0) {
     text += ` (${reconnectAttempts})`;
   }
@@ -47,11 +47,8 @@ export default function ConnectionBanner({
     text += ` · client ${clientVersion} / daemon ${daemonVersion}`;
   }
   if (connection === 'incompatible') {
-    // i18n-pending: i18n files frozen this round; follow file-local zh/en pattern.
     // Retry can never fix a version mismatch — guide towards diagnostics/upgrade.
-    text += zh
-      ? ' — 重试无法解决版本不匹配，请复制诊断并升级客户端或引擎'
-      : ' — retrying cannot fix a version mismatch; copy diagnostics and upgrade the client or engine';
+    text += t(locale, 'connectionBanner.incompatibleHint');
   }
 
   const tone =
@@ -82,17 +79,17 @@ export default function ConnectionBanner({
           incompatible is deliberately excluded: retry gives false hope there. */}
       {onReconnect && (connection === 'offline' || connection === 'reconnecting' || connection === 'fatal') && (
         <button type="button" onClick={onReconnect} className="pointer-events-auto underline">
-          {zh ? '重试' : 'Retry'}
+          {t(locale, 'common.retry')}
         </button>
       )}
       {onRestartDaemon && (connection === 'fatal' || connection === 'offline') && (
         <button type="button" onClick={onRestartDaemon} className="pointer-events-auto underline">
-          {zh ? '重启引擎' : 'Restart engine'}
+          {t(locale, 'connectionBanner.restartEngine')}
         </button>
       )}
       {onCopyDiagnostics && (
         <button type="button" onClick={onCopyDiagnostics} className="pointer-events-auto underline">
-          {zh ? '复制诊断' : 'Copy diagnostics'}
+          {t(locale, 'assistant.engineCopyDiagnostics')}
         </button>
       )}
     </div>

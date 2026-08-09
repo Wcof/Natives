@@ -14,13 +14,13 @@
 
 export interface BuiltinToolDriver {
   id: string;
-  label: { zh: string; en: string };
+  labelKey: string;
 }
 
 export interface BuiltinTool {
   id: string;
   icon: string;             // lucide icon name: 'Terminal' | 'Code2' | 'Globe'
-  label: { zh: string; en: string };
+  labelKey: string;
   /** 驱动列表（仅编辑器/浏览器等需要选择外部工具的类型使用） */
   drivers?: BuiltinToolDriver[];
   defaultDriver?: string;
@@ -37,7 +37,7 @@ export const BUILTIN_TOOLS: readonly BuiltinTool[] = [
   {
     id: 'terminal',
     icon: 'Terminal',
-    label: { zh: '终端', en: 'Terminal' },
+    labelKey: 'nav.terminal',
     // 无 drivers 列表 = 仅原生，无驱动选择，只有启用/关闭
     componentPath: 'shell/Terminal',
     displayMode: 'panel-bottom',
@@ -46,14 +46,14 @@ export const BUILTIN_TOOLS: readonly BuiltinTool[] = [
   {
     id: 'ghostty',
     icon: 'Terminal',
-    label: { zh: 'Ghostty', en: 'Ghostty' },
+    labelKey: 'builtinTools.ghostty',
     displayMode: 'content',
   },
   // ── Future tools: add one entry each ──
   // {
   //   id: 'editor',
   //   icon: 'Code2',
-  //   label: { zh: '编辑器', en: 'Editor' },
+  //   labelKey: 'builtinTools.editor',
   //   drivers: [
   //     { id: 'native', label: { zh: '原生', en: 'Native' } },
   //     { id: 'vscode', label: { zh: 'VS Code', en: 'VS Code' } },
@@ -65,7 +65,7 @@ export const BUILTIN_TOOLS: readonly BuiltinTool[] = [
   // {
   //   id: 'browser',
   //   icon: 'Globe',
-  //   label: { zh: '浏览器', en: 'Browser' },
+  //   labelKey: 'builtinTools.browser',
   //   drivers: [
   //     { id: 'native', label: { zh: '原生', en: 'Native' } },
   //     { id: 'chromium', label: { zh: 'Chromium', en: 'Chromium' } },

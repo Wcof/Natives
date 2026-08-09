@@ -26,7 +26,7 @@ export default function LocalConfirmStep({ w, locale }: LocalConfirmStepProps) {
         <pre className="whitespace-pre-wrap pt-2">
           {planSummaryLines(
             w.launchMode === 'custom' ? w.applyCustomPlan() : w.plan ?? w.scan?.rulePlan,
-            locale === 'en' ? 'en' : 'zh',
+            locale,
           ).join('\n')}
         </pre>
       </div>

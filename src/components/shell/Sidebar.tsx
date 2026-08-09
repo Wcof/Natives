@@ -884,7 +884,7 @@ export default function Sidebar({
                     const toolDef = BUILTIN_TOOLS.find((tool) => tool.id === et.id);
                     if (!toolDef) return null;
                     const navigationId = `builtin:${et.id}`;
-                    const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
+                    const toolLabel = t(locale, toolDef.labelKey);
                     // Dynamic icon lookup from lucide
                     const IconComp = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[toolDef.icon];
                     return (

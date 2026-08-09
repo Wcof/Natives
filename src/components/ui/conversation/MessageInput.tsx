@@ -90,10 +90,10 @@ interface MessageInputProps {
 /** Idle ms before pushing draft text into the workspace store. */
 const DRAFT_PERSIST_DEBOUNCE_MS = 200;
 
-const permissionLabels = {
-  readonly: { zh: '只读', en: 'Read only' },
-  ask: { zh: '需要时询问', en: 'Ask when needed' },
-  full_access: { zh: '完全访问', en: 'Full access' },
+const PERMISSION_LABEL_KEYS: Record<AssistantPermissionProfile, string> = {
+  readonly: 'messageInput.permissionReadonly',
+  ask: 'messageInput.permissionAsk',
+  full_access: 'messageInput.permissionFullAccess',
 } as const;
 
 const AGENT_ACCENTS = [
@@ -119,7 +119,6 @@ export default function MessageInput(props: MessageInputProps) {
     subagents = [], activeSubagent = null, onSelectSubagent, changeSummary = null,
     onToggleCapabilities, capabilityCount = 0, capabilityPickerSlot = null,
   } = props;
-  const zh = locale.startsWith('zh');
   const { toast } = useToast();
   const [input, setInput] = useState(draftText ?? '');
   const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
@@ -467,10 +466,10 @@ export default function MessageInput(props: MessageInputProps) {
   };
 
   const placeholder = inputDisabledReason === 'creating'
-    ? (zh ? '正在创建会话…' : 'Starting conversation…')
+    ? t(locale, 'messageInput.startingConversation')
     : inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model'
-      ? (zh ? '请先配置可用的供应商和模型' : 'Configure a provider and model first')
-      : (zh ? '描述任务，或输入 / 使用指令' : 'Describe a task, or type / for commands');
+      ? t(locale, 'messageInput.configureProviderFirst')
+      : t(locale, 'messageInput.describeTask');
 
   return (
     <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
@@ -491,7 +490,7 @@ export default function MessageInput(props: MessageInputProps) {
                   borderColor: selected ? accent.border : 'var(--border-subtle)',
                 }}
                 aria-pressed={selected}
-                title={zh ? `进入 ${agent.name} 的会话` : `Open ${agent.name}'s conversation`}
+                title={t(locale, 'messageInput.openAgentConversation', { name: agent.name })}
               >
                 <span className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white" style={{ backgroundColor: accent.solid }} aria-hidden>{agent.name.slice(0, 1).toUpperCase()}</span>
                 <span className="max-w-32 truncate">{agent.name}</span>
@@ -499,9 +498,9 @@ export default function MessageInput(props: MessageInputProps) {
             );
           })}
           {changeSummary && changeSummary.fileCount > 0 ? (
-            <span className="ml-auto flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" title={zh ? '本次对话文件变更' : 'Changes in this conversation'}>
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" title={t(locale, 'messageInput.conversationChanges')}>
               <Bot size={14} className="text-[var(--text-disabled)]" />
-              <span>{zh ? `${changeSummary.fileCount} 个文件` : `${changeSummary.fileCount} files`}</span>
+              <span>{t(locale, 'messageInput.fileCount', { count: changeSummary.fileCount })}</span>
               <span className="font-medium text-emerald-500">+{changeSummary.additions}</span>
               <span className="font-medium text-red-500">−{changeSummary.deletions}</span>
             </span>
@@ -533,7 +532,7 @@ export default function MessageInput(props: MessageInputProps) {
             {attachments.map(file => (
               <div key={file.path} title={file.path} className="flex max-w-52 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)] px-2 py-1 text-xs text-[var(--text-secondary)]">
                 <Paperclip size={12} /><span className="truncate">{file.name}</span>
-                <button type="button" onClick={() => setAttachments(items => items.filter(item => item.path !== file.path))} className="rounded p-0.5 hover:bg-[var(--surface-active)]" aria-label={zh ? '移除附件' : 'Remove attachment'}><X size={11} /></button>
+                <button type="button" onClick={() => setAttachments(items => items.filter(item => item.path !== file.path))} className="rounded p-0.5 hover:bg-[var(--surface-active)]" aria-label={t(locale, 'messageInput.removeAttachment')}><X size={11} /></button>
               </div>
             ))}
           </div>
@@ -556,10 +555,8 @@ export default function MessageInput(props: MessageInputProps) {
           placeholder={
             isStreaming && allowQueueWhileStreaming
               ? onInterject
-                ? (zh
-                    ? '运行中：Enter 入队，⌘Enter 插话到当前运行'
-                    : 'Running: Enter queues, ⌘Enter interjects into run')
-                : (zh ? '运行中：Enter 入队，⌘Enter 取消并立即发送' : 'Running: Enter queues, ⌘Enter cancel & send')
+                ? t(locale, 'messageInput.runningEnterQueue')
+                : t(locale, 'messageInput.runningEnterCancelSend')
               : placeholder
           }
           disabled={effectiveDisabled}
@@ -573,7 +570,7 @@ export default function MessageInput(props: MessageInputProps) {
               type="button"
               onClick={() => void handleAddFiles()}
               disabled={effectiveDisabled}
-              title={zh ? '添加附件' : 'Add attachment'}
+              title={t(locale, 'messageInput.addAttachment')}
               className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
             >
               <Plus size={18} />
@@ -583,16 +580,16 @@ export default function MessageInput(props: MessageInputProps) {
                 type="button"
                 onClick={() => setPermissionOpen(open => !open)}
                 disabled={effectiveDisabled}
-                title={zh ? '权限配置' : 'Permission profile'}
+                title={t(locale, 'messageInput.permissionProfile')}
                 className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
               >
                 <ShieldCheck size={15} />
-                <span>{permissionLabels[permissionProfile][zh ? 'zh' : 'en']}</span>
+                <span>{t(locale, PERMISSION_LABEL_KEYS[permissionProfile])}</span>
                 <ChevronDown size={12} />
               </button>
               {permissionOpen && !effectiveDisabled && (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup">
-                  {(Object.keys(permissionLabels) as AssistantPermissionProfile[]).map(profile => (
+                  {(Object.keys(PERMISSION_LABEL_KEYS) as AssistantPermissionProfile[]).map(profile => (
                     <button
                       key={profile}
                       type="button"
@@ -602,7 +599,7 @@ export default function MessageInput(props: MessageInputProps) {
                       }}
                       className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
                     >
-                      {permissionLabels[profile][zh ? 'zh' : 'en']}
+                      {t(locale, PERMISSION_LABEL_KEYS[profile])}
                       {permissionProfile === profile && <Check size={14} />}
                     </button>
                   ))}
@@ -640,9 +637,9 @@ export default function MessageInput(props: MessageInputProps) {
           <div className="flex min-w-0 items-center gap-1">
             <ModelSelectorDropdown providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel} onSelect={onSelectModel} locale={locale} />
             {isStreaming || submitting ? (
-              <button type="button" onClick={onStop} disabled={isStopping} title={isStopping ? (zh ? '停止中…' : 'Stopping…') : (zh ? '停止生成' : 'Stop')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] disabled:opacity-50"><Square size={12} fill="currentColor" /></button>
+              <button type="button" onClick={onStop} disabled={isStopping} title={isStopping ? t(locale, 'messageInput.stopping') : t(locale, 'assistant.stopGeneration')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] disabled:opacity-50"><Square size={12} fill="currentColor" /></button>
             ) : (
-              <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={zh ? '发送' : 'Send'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>
+              <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={t(locale, 'assistant.send')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>
             )}
           </div>
         </div>

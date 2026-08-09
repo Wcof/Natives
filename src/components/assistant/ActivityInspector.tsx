@@ -107,13 +107,13 @@ interface ActivityInspectorProps {
   projectPath?: string | null;
 }
 
-const TABS: Array<{ id: InspectorTab; zh: string; en: string; icon: typeof Play; devOnly?: boolean }> = [
-  { id: 'run', zh: '运行', en: 'Run', icon: Play },
-  { id: 'tasks', zh: '任务', en: 'Tasks', icon: ListTree },
-  { id: 'changes', zh: '审计', en: 'Audit', icon: FileDiff },
-  { id: 'artifacts', zh: '产物', en: 'Artifacts', icon: Package },
-  { id: 'context', zh: '上下文', en: 'Context', icon: Brain },
-  { id: 'events', zh: '事件', en: 'Events', icon: Radio, devOnly: true },
+const TABS: Array<{ id: InspectorTab; labelKey: string; icon: typeof Play; devOnly?: boolean }> = [
+  { id: 'run', labelKey: 'activityInspector.tabRun', icon: Play },
+  { id: 'tasks', labelKey: 'activityInspector.tabTasks', icon: ListTree },
+  { id: 'changes', labelKey: 'activityInspector.tabChanges', icon: FileDiff },
+  { id: 'artifacts', labelKey: 'activityInspector.tabArtifacts', icon: Package },
+  { id: 'context', labelKey: 'activityInspector.tabContext', icon: Brain },
+  { id: 'events', labelKey: 'activityInspector.tabEvents', icon: Radio, devOnly: true },
 ];
 
 function StatusIcon({ status }: { status: string }) {
@@ -175,17 +175,15 @@ function snippet(text: string | null | undefined, max = 120): string {
 
 function TodoList({
   todos,
-  zh,
-  emptyZh,
-  emptyEn,
+  locale,
+  emptyKey,
 }: {
   todos: ActivityTodo[];
-  zh: boolean;
-  emptyZh: string;
-  emptyEn: string;
+  locale: string;
+  emptyKey: string;
 }) {
   if (todos.length === 0) {
-    return <Empty zh={zh} zhMsg={emptyZh} enMsg={emptyEn} compact />;
+    return <Empty locale={locale} messageKey={emptyKey} compact />;
   }
   return (
     <ul className="space-y-1" data-testid="todo-list">
@@ -198,7 +196,7 @@ function TodoList({
           <div className="min-w-0 flex-1">
             <div className="truncate text-[var(--text-secondary)]">{todo.content}</div>
             <div className="text-[10px] text-[var(--text-disabled)]">
-              {todoStatusLabel(todo.status, zh)}
+              {todoStatusLabel(locale, todo.status)}
             </div>
           </div>
         </li>
@@ -255,7 +253,6 @@ export default function ActivityInspector({
   providers = [],
   projectPath = null,
 }: ActivityInspectorProps) {
-  const zh = locale.startsWith('zh');
   const allowContextUsage = canShowContextUsage(capabilities);
   const allowTasks = canListTasks(capabilities);
   const useTaskList = canListTaskDepth(capabilities);
@@ -607,10 +604,7 @@ export default function ActivityInspector({
             aria-disabled={tab.disabled}
             title={
               tab.disabled
-                ? // i18n-pending: i18n files frozen this round; follow file-local zh/en pattern.
-                  zh
-                  ? '引擎未广播该能力（task.list / run.listChildren）'
-                  : 'Engine did not advertise this capability (task.list / run.listChildren)'
+                ? t(locale, 'activityInspector.engineCapabilityMissing')
                 : undefined
             }
             className={`inline-flex items-center gap-1 px-2.5 py-2 text-[11px] font-medium transition-colors ${
@@ -623,7 +617,7 @@ export default function ActivityInspector({
             data-testid={`inspector-tab-${tab.id}${tab.disabled ? '-disabled' : ''}`}
           >
             <tab.icon size={12} />
-            {zh ? tab.zh : tab.en}
+            {t(locale, tab.labelKey)}
           </button>
         ))}
       </div>
@@ -634,19 +628,16 @@ export default function ActivityInspector({
             className="py-8 text-center text-[var(--text-disabled)]"
             data-testid="tasks-capability-not-ready"
           >
-            {/* i18n-pending: i18n files frozen this round; follow file-local zh/en pattern. */}
-            <div>{zh ? '任务面板暂不可用' : 'Tasks panel unavailable'}</div>
+            <div>{t(locale, 'activityInspector.tasksUnavailable')}</div>
             <div className="mt-1 text-[10px]">
-              {zh
-                ? '引擎未广播任务能力（task.list / run.listChildren）。等待引擎连接就绪，或升级引擎后重试。'
-                : 'The engine did not advertise task capabilities (task.list / run.listChildren). Wait for the engine to connect, or upgrade the engine.'}
+              {t(locale, 'activityInspector.engineTasksMissing')}
             </div>
           </div>
         )}
 
         {!run && !tasksCapabilityMissing && (
           <div className="grid h-full place-items-center text-[var(--text-disabled)]">
-            {zh ? '选择运行以查看详情' : 'Select a run to inspect'}
+            {t(locale, 'activityInspector.selectRunToInspect')}
           </div>
         )}
 
@@ -657,8 +648,8 @@ export default function ActivityInspector({
               <span className="font-mono text-[var(--text-secondary)]">{run.id.slice(0, 10)}</span>
               <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5">{run.status}</span>
             </div>
-            <Row label={zh ? '模型' : 'Model'} value={providerLabel(run.providerId, run.modelId)} />
-            {run.activity && <Row label={zh ? '活动' : 'Activity'} value={run.activity} />}
+            <Row label={t(locale, 'activityInspector.model')} value={providerLabel(run.providerId, run.modelId)} />
+            {run.activity && <Row label={t(locale, 'activityInspector.activity')} value={run.activity} />}
             {run.errorMessage && (
               <div className="rounded border border-red-400/30 bg-red-50 p-2 text-red-600 dark:bg-red-950/20">
                 {run.errorMessage}
@@ -670,7 +661,7 @@ export default function ActivityInspector({
                 onClick={onRetry}
                 className="rounded bg-[var(--primary)] px-3 py-1.5 text-white"
               >
-                {zh ? '重试' : 'Retry'}
+                {t(locale, 'common.retry')}
               </button>
             )}
           </div>
@@ -710,7 +701,7 @@ export default function ActivityInspector({
               <div className="mb-2 flex items-center gap-2 rounded bg-[var(--surface-hover)] px-2 py-1.5">
                 <StatusIcon status={resolvedMainStatus} />
                 <span className="text-[var(--text-secondary)]">
-                  {todoStatusLabel(resolvedMainStatus, zh)}
+                  {todoStatusLabel(locale, resolvedMainStatus)}
                 </span>
                 {run.status ? (
                   <span className="ml-auto font-mono text-[10px] text-[var(--text-disabled)]">
@@ -723,9 +714,8 @@ export default function ActivityInspector({
               </div>
               <TodoList
                 todos={resolvedMainTodos}
-                zh={zh}
-                emptyZh={t(locale, 'assistant.activity.noTodos')}
-                emptyEn={t(locale, 'assistant.activity.noTodos')}
+                locale={locale}
+                emptyKey="assistant.activity.noTodos"
               />
             </section>
 
@@ -735,9 +725,8 @@ export default function ActivityInspector({
               {useTaskList ? (
                 tasksLoading && backgroundExecTasks.length === 0 ? (
                   <Empty
-                    zh={zh}
-                    zhMsg={t(locale, 'assistant.activity.loadingTasks')}
-                    enMsg={t(locale, 'assistant.activity.loadingTasks')}
+                    locale={locale}
+                    messageKey="assistant.activity.loadingTasks"
                     compact
                   />
                 ) : tasksError ? (
@@ -746,9 +735,8 @@ export default function ActivityInspector({
                   </div>
                 ) : backgroundExecTasks.length === 0 ? (
                   <Empty
-                    zh={zh}
-                    zhMsg={t(locale, 'assistant.activity.noBackground')}
-                    enMsg={t(locale, 'assistant.activity.noBackground')}
+                    locale={locale}
+                    messageKey="assistant.activity.noBackground"
                     compact
                   />
                 ) : (
@@ -778,7 +766,7 @@ export default function ActivityInspector({
                         {allowCancelTask && active ? (
                           <button
                             type="button"
-                            title={zh ? '取消任务' : 'Cancel task'}
+                            title={t(locale, 'activityInspector.cancelTask')}
                             disabled={cancellingTaskId === task.id}
                             className="shrink-0 rounded p-1 text-[var(--danger)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
                             onClick={() => void handleCancelTask(task.id)}
@@ -792,9 +780,8 @@ export default function ActivityInspector({
                 )
               ) : (
                 <Empty
-                  zh={zh}
-                  zhMsg={t(locale, 'assistant.activity.backgroundNotReady')}
-                  enMsg={t(locale, 'assistant.activity.backgroundNotReady')}
+                  locale={locale}
+                  messageKey="assistant.activity.backgroundNotReady"
                   compact
                 />
               )}
@@ -871,9 +858,8 @@ export default function ActivityInspector({
                 />
                 <TodoList
                   todos={selectedSubTodos}
-                  zh={zh}
-                  emptyZh={t(locale, 'assistant.activity.noSubTasks')}
-                  emptyEn={t(locale, 'assistant.activity.noSubTasks')}
+                  locale={locale}
+                  emptyKey="assistant.activity.noSubTasks"
                 />
               </section>
             ) : null}
@@ -883,9 +869,9 @@ export default function ActivityInspector({
         {effectiveTab === 'changes' && (
           <div className="flex flex-col h-full min-h-0 space-y-2">
             {!projectPath ? (
-              <Empty zh={zh} zhMsg="未选择项目" enMsg="No project selected" />
+              <Empty locale={locale} messageKey="activityInspector.noProjectSelected" />
             ) : auditLoading ? (
-              <Empty zh={zh} zhMsg="正在读取 Git 状态" enMsg="Loading Git status" compact />
+              <Empty locale={locale} messageKey="activityInspector.loadingGitStatus" compact />
             ) : auditError ? (
               <div className="rounded border border-red-400/30 p-2 text-[var(--danger)]">{auditError}</div>
             ) : (
@@ -900,7 +886,7 @@ export default function ActivityInspector({
                       type="button"
                       onClick={() => void refreshAudit()}
                       className="rounded p-1 hover:bg-[var(--surface-hover)]"
-                      title={zh ? '刷新' : 'Refresh'}
+                      title={t(locale, 'common.refresh')}
                     >
                       <RefreshCw size={12} />
                     </button>
@@ -909,7 +895,7 @@ export default function ActivityInspector({
                     <input
                       value={commitMessage}
                       onChange={(event) => setCommitMessage(event.target.value)}
-                      placeholder={zh ? '提交说明' : 'Commit message'}
+                      placeholder={t(locale, 'activityInspector.commitMessage')}
                       className="min-w-0 flex-1 rounded border border-[var(--border)] bg-transparent px-2 py-1"
                     />
                     <button
@@ -918,14 +904,14 @@ export default function ActivityInspector({
                       onClick={() => void runGitAction('commit')}
                       className="rounded bg-[var(--primary)] px-2 py-1 text-white disabled:opacity-40"
                     >
-                      {committing ? (zh ? '提交中' : 'Committing') : (zh ? '提交' : 'Commit')}
+                      {committing ? t(locale, 'activityInspector.committing') : t(locale, 'activityInspector.commit')}
                     </button>
                     <button
                       type="button"
                       disabled={pushing}
                       onClick={() => void runGitAction('push')}
                       className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-40"
-                      title={zh ? '推送' : 'Push'}
+                      title={t(locale, 'activityInspector.push')}
                     >
                       <Upload size={12} />
                     </button>
@@ -961,7 +947,7 @@ export default function ActivityInspector({
                       })
                     ) : (
                       <span className="text-[var(--text-disabled)]">
-                        {zh ? '选择文件以预览' : 'Select a file to preview'}
+                        {t(locale, 'activityInspector.selectFileToPreview')}
                       </span>
                     )}
                   </div>
@@ -975,7 +961,7 @@ export default function ActivityInspector({
                       <input
                         value={auditQuery}
                         onChange={(event) => setAuditQuery(event.target.value)}
-                        placeholder={zh ? '筛选文件…' : 'Filter files…'}
+                        placeholder={t(locale, 'activityInspector.filterFiles')}
                         className="min-w-0 flex-1 bg-transparent outline-none"
                       />
                     </label>
@@ -1020,7 +1006,7 @@ export default function ActivityInspector({
                         );
                       })}
                       {filteredAuditEntries.length === 0 && (
-                        <Empty zh={zh} zhMsg="无未提交修改" enMsg="No uncommitted changes" compact />
+                        <Empty locale={locale} messageKey="activityInspector.noUncommittedChanges" compact />
                       )}
                     </div>
                   </div>
@@ -1041,7 +1027,7 @@ export default function ActivityInspector({
                     onClick={() => setArtifactPreviewPath(null)}
                     className="text-[10px] text-[var(--text-disabled)] hover:text-[var(--text)]"
                   >
-                    {zh ? '关闭' : 'Close'}
+                    {t(locale, 'common.close')}
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
@@ -1053,19 +1039,19 @@ export default function ActivityInspector({
               </div>
             )}
             {[
-              { key: 'used' as const, titleZh: '使用文件', titleEn: 'Used Files', items: artifactBuckets.used },
-              { key: 'modified' as const, titleZh: '编辑', titleEn: 'Modified', items: artifactBuckets.modified },
-              { key: 'created' as const, titleZh: '新增', titleEn: 'Created', items: artifactBuckets.created },
+              { key: 'used' as const, titleKey: 'activityInspector.bucketUsed', items: artifactBuckets.used },
+              { key: 'modified' as const, titleKey: 'activityInspector.bucketModified', items: artifactBuckets.modified },
+              { key: 'created' as const, titleKey: 'activityInspector.bucketCreated', items: artifactBuckets.created },
             ].map((section) => (
               <div key={section.key} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--border)] p-2">
                 <div className="mb-1 flex items-center justify-between font-medium text-[var(--text-secondary)]">
-                  <span>{zh ? section.titleZh : section.titleEn}</span>
+                  <span>{t(locale, section.titleKey)}</span>
                   <span className="text-[10px] text-[var(--text-disabled)]">{section.items.length}</span>
                 </div>
                 <div className="flex-1 overflow-y-auto space-y-0.5">
                   {section.items.length === 0 ? (
                     <div className="py-2 text-center text-[10px] text-[var(--text-disabled)]">
-                      {zh ? '暂无文件' : 'No files'}
+                      {t(locale, 'activityInspector.noFiles')}
                     </div>
                   ) : (
                     section.items.map((item) => (
@@ -1110,12 +1096,12 @@ export default function ActivityInspector({
                   />
                 </div>
                 <Row
-                  label={zh ? '用量' : 'Usage'}
+                  label={t(locale, 'activityInspector.usage')}
                   value={`${contextUsage.usedTokens} / ${contextUsage.maxTokens}`}
                 />
               </>
             ) : (
-              <Empty zh={zh} zhMsg="暂无上下文数据" enMsg="No context usage" />
+              <Empty locale={locale} messageKey="activityInspector.noContextUsage" />
             )}
           </div>
         )}
@@ -1123,7 +1109,7 @@ export default function ActivityInspector({
         {run && effectiveTab === 'events' && (
           <div className="space-y-0.5 font-mono">
             {events.length === 0 ? (
-              <Empty zh={zh} zhMsg="暂无事件" enMsg="No events" />
+              <Empty locale={locale} messageKey="activityInspector.noEvents" />
             ) : (
               eventGroups.map((event) => (
                 <div key={`${event.type}-${event.first}`} className="flex gap-2 px-1 py-0.5 hover:bg-[var(--surface-hover)]">
@@ -1149,21 +1135,19 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function Empty({
-  zh,
-  zhMsg,
-  enMsg,
+  locale,
+  messageKey,
   compact = false,
 }: {
-  zh: boolean;
-  zhMsg: string;
-  enMsg: string;
+  locale: string;
+  messageKey: string;
   compact?: boolean;
 }) {
   return (
     <div
       className={`${compact ? 'py-3' : 'py-8'} text-center text-[var(--text-disabled)]`}
     >
-      {zh ? zhMsg : enMsg}
+      {t(locale, messageKey)}
     </div>
   );
 }

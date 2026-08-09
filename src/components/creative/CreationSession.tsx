@@ -141,7 +141,7 @@ export default function CreationSession({
     if (conversationId) return conversationId;
     if (!provider || !modelId) throw new Error(t(locale, 'creative.session.noModel'));
     const projectId = await readActiveProject(window.nativesAPI);
-    if (!projectId) throw new Error(locale === 'zh' ? '请先选择项目文件夹' : 'Select a project directory first');
+    if (!projectId) throw new Error(t(locale, 'creativeSession.selectProjectFirst'));
 
     setCreating(true);
     try {

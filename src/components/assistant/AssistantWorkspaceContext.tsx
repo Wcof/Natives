@@ -17,6 +17,7 @@ import type { AssistantFileChange, AssistantRunEvent } from '@/lib/assistant-typ
 import { readActiveProject, writeActiveProject } from '@/lib/active-project';
 import { classifyError } from '@/lib/error-classifier';
 import { useToast } from '@/components/ui/Toast';
+import { t } from '@/i18n';
 import {
   createTempSession,
   isTempConversationId,
@@ -194,7 +195,7 @@ function uiLocale(): string {
 }
 
 function newConversationTitle(): string {
-  return uiLocale() === 'zh' ? '新会话' : 'New conversation';
+  return t(uiLocale(), 'assistant.commandNewConversation');
 }
 
 const PINNED_CONVERSATIONS_KEY = 'assistant:pinnedConversations';
@@ -395,7 +396,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     } catch {
       /* keep zh */
     }
-    const unassignedLabel = savedLocale.startsWith('zh') ? '未关联项目' : 'Unassigned';
+    const unassignedLabel = t(savedLocale, 'assistant.unassignedProjects');
 
     // `null` = request failed (≠ honest empty list). An engine outage must keep
     // the previous groups + surface loadError instead of wiping the sidebar.

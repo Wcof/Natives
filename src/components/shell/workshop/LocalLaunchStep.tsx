@@ -150,7 +150,7 @@ export default function LocalLaunchStep({ w, locale }: LocalLaunchStepProps) {
       <pre className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg p-3 whitespace-pre-wrap">
         {planSummaryLines(
           w.launchMode === 'custom' ? w.applyCustomPlan() : w.plan ?? w.scan?.rulePlan,
-          locale === 'en' ? 'en' : 'zh',
+          locale,
         ).join('\n')}
       </pre>
       <div className="flex justify-between gap-2">

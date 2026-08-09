@@ -28,7 +28,7 @@ export function RoutingPanel({ locale, providers, bindings, settings, loading, s
   const update = (patch: Partial<ProviderRoutingSettings>) => void onSave({ ...settings, ...patch });
   const zh = locale.startsWith('zh');
   const sections = [
-    { id: 'subagent', icon: <Bot size={20} />, title: zh ? '子智能体供应商' : 'Subagent Providers', description: zh ? '配置允许子智能体使用的供应商范围' : 'Select allowed providers for subagents', body: <SubagentProviderSettings locale={locale} providers={providers} /> },
+    { id: 'subagent', icon: <Bot size={20} />, title: t(locale, 'routingPanel.subagentTitle'), description: t(locale, 'routingPanel.subagentDesc'), body: <SubagentProviderSettings locale={locale} providers={providers} /> },
     { id: 'local', icon: <Route size={20} />, title: t(locale, 'settings.localRouting'), description: t(locale, 'settings.localRoutingDesc'), body: <LocalRouting locale={locale} settings={settings} onSave={update} /> },
     { id: 'failover', icon: <HeartPulse size={20} />, title: t(locale, 'settings.autoFailover'), description: t(locale, 'settings.autoFailoverDesc'), body: <FailoverSettings locale={locale} providers={providers} bindings={bindings} onSave={onSaveBindings} /> },
     { id: 'rectifier', icon: <Sparkles size={20} />, title: t(locale, 'settings.requestRectifier'), description: t(locale, 'settings.requestRectifierDesc'), body: <ToggleRow locale={locale} labelKey="settings.requestRectifierEnabled" checked={settings.rectifierEnabled} onChange={(checked) => update({ rectifierEnabled: checked })} /> },
@@ -155,9 +155,7 @@ export function SubagentProviderSettings({
   return (
     <div style={formStyle}>
       <p style={hintStyle}>
-        {zh
-          ? '多选允许子智能体使用的供应商。未勾选时默认仅允许使用主会话的供应商。'
-          : 'Select allowed providers for subagents. Defaults to main session provider when unconfigured.'}
+        {t(locale, 'routingPanel.subagentHint')}
       </p>
       <div style={{ display: 'grid', gap: SPACING.xs }}>
         {providers.map((p) => {
@@ -189,12 +187,8 @@ export function SubagentProviderSettings({
               </div>
               <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>
                 {hasKeys
-                  ? zh
-                    ? `${p.keys.length} 个有效密钥`
-                    : `${p.keys.length} keys`
-                  : zh
-                    ? '无密钥'
-                    : 'No keys'}
+                  ? t(locale, 'routingPanel.keyCount', { count: p.keys.length })
+                  : t(locale, 'routingPanel.noKeys')}
               </span>
             </label>
           );

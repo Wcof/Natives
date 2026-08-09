@@ -35,14 +35,14 @@ const STATUS_ICON: Record<ProviderKeyStatus, React.ReactNode> = {
 };
 
 function keyStatusLabel(locale: Locale, status: ProviderKeyStatus) {
-  const zh = locale === 'zh';
-  return {
-    valid: zh ? '可用' : 'Ready',
-    invalid: zh ? '无效' : 'Invalid',
-    rate_limited: zh ? '受限' : 'Limited',
-    unavailable: zh ? '不可用' : 'Unavailable',
-    untested: zh ? '未测试' : 'Untested',
-  }[status];
+  const keys: Record<ProviderKeyStatus, string> = {
+    valid: 'providerDetail.statusReady',
+    invalid: 'providerDetail.statusInvalid',
+    rate_limited: 'providerDetail.statusLimited',
+    unavailable: 'providerDetail.statusUnavailable',
+    untested: 'providerDetail.statusUntested',
+  };
+  return t(locale, keys[status]);
 }
 
 export default function ProviderDetail({ locale, providers, loading, showAddProvider, onSaveDefaults, onAddKey, onTestKey, onSetPrimaryKey, onDeleteKey, onDeleteProvider }: {
@@ -57,7 +57,6 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
   onDeleteKey: (pid: string, keyId: string) => Promise<void>;
   onDeleteProvider: (pid: string) => void;
 }) {
-  const zh = locale === 'zh';
   const { toast } = useToast();
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(providers[0]?.id ?? null);
@@ -109,7 +108,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       <div className="settings-state settings-state-empty">
         <span className="settings-state-icon"><Server size={22} /></span>
         <strong>{t(locale, 'settings.noProviders')}</strong>
-        <span>{zh ? '添加一个供应商后，即可配置模型和 API Key。' : 'Add a provider to configure models and API keys.'}</span>
+        <span>{t(locale, 'providerDetail.addProviderHint')}</span>
         <button className="btn btn-primary" onClick={showAddProvider}><Plus size={15} />{t(locale, 'settings.addProvider')}</button>
       </div>
     );
@@ -146,7 +145,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     setSaveSuccessMsg(null);
     try {
       await onSaveDefaults(selected.id, value || null);
-      const msg = zh ? '配置与默认模型保存成功！' : 'Configuration saved successfully!';
+      const msg = t(locale, 'providerDetail.saved');
       setSaveSuccessMsg(msg);
       toast(msg, 'success');
       setIsEditingModel(false);
@@ -168,7 +167,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       await onAddKey(selected.id, keyName, newKey);
       setNewLabel('');
       setNewKey('');
-      toast(zh ? `API Key "${keyName}" 添加成功` : `API Key "${keyName}" added`, 'success');
+      toast(t(locale, 'providerDetail.keyAdded', { name: keyName }), 'success');
     } catch (error) {
       const errMsg = classifyError(error, { locale }).userMessage;
       setAddError(errMsg);
@@ -187,14 +186,14 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       setTestResults((current) => ({ ...current, [key.id]: { status: result.status, testedAt: result.testedAt, error: result.userMessage } }));
       toast(
         isOk
-          ? (zh ? `Key "${key.label}" 连接测试成功` : `Key "${key.label}" test succeeded`)
-          : (zh ? `Key "${key.label}" 测试失败: ${result.userMessage || '无法连接'}` : `Key "${key.label}" test failed`),
+          ? t(locale, 'providerDetail.keyTestSucceeded', { name: key.label })
+          : t(locale, 'providerDetail.keyTestFailed', { name: key.label, detail: result.userMessage || t(locale, 'providerDetail.cannotConnect') }),
         isOk ? 'success' : 'error'
       );
     } catch (error) {
       const errMsg = classifyError(error, { locale }).userMessage;
       setTestResults((current) => ({ ...current, [key.id]: { status: 'unavailable', testedAt: new Date().toISOString(), error: errMsg } }));
-      toast(zh ? `Key "${key.label}" 测试失败` : `Key "${key.label}" test failed`, 'error');
+      toast(t(locale, 'providerDetail.keyTestFailedSimple', { name: key.label }), 'error');
     } finally {
       setTestingId(null);
     }
@@ -204,7 +203,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     if (!selected) return;
     try {
       await onSetPrimaryKey(selected.id, keyId);
-      toast(zh ? '主 Key 设置成功' : 'Primary Key updated', 'success');
+      toast(t(locale, 'providerDetail.primaryKeySet'), 'success');
     } catch (error) {
       toast(classifyError(error, { locale }).userMessage, 'error');
     }
@@ -214,7 +213,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     if (!deleteTarget) return;
     try {
       await onDeleteKey(deleteTarget.providerId, deleteTarget.keyId);
-      toast(zh ? 'API Key 已删除' : 'API Key deleted', 'success');
+      toast(t(locale, 'providerDetail.keyDeleted'), 'success');
     } catch (error) {
       toast(classifyError(error, { locale }).userMessage, 'error');
     } finally {
@@ -227,7 +226,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     setDiscovering(true);
     try {
       const providerApi = window.nativesAPI?.provider;
-      if (!providerApi?.discoverModelsSaved) throw new Error(zh ? '不支持的模型获取' : 'Model discovery not available');
+      if (!providerApi?.discoverModelsSaved) throw new Error(t(locale, 'providerDetail.discoveryUnsupported'));
       const result = await providerApi.discoverModelsSaved({
         providerId: selected.id,
         keyId: selected.primaryKeyId,
@@ -240,9 +239,9 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
           setModels((current) => ({ ...current, [selected.id]: firstModel.id }));
         }
         setDropdownOpen(true);
-        toast(zh ? `成功获取 ${result.length} 个可用模型` : `Discovered ${result.length} models`, 'success');
+        toast(t(locale, 'providerDetail.modelsDiscovered', { count: result.length }), 'success');
       } else {
-        toast(zh ? '未获取到任何可用模型' : 'No models discovered', 'warning');
+        toast(t(locale, 'providerDetail.noModelsDiscovered'), 'warning');
       }
     } catch (error) {
       const errMsg = classifyError(error, { locale }).userMessage;
@@ -257,7 +256,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     if (!selected || !selected.primaryKeyId || testing) return;
     const value = (models[selected.id] ?? selected.defaultModel ?? '').trim();
     if (!value) {
-      const msg = zh ? '请先输入或选择一个模型' : 'Please enter or select a model first';
+      const msg = t(locale, 'providerDetail.enterOrSelectModel');
       setDetailTestResult({ success: false, error: msg });
       toast(msg, 'warning');
       return;
@@ -271,8 +270,8 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       setDetailTestResult({ success: isOk, error: resMsg });
       toast(
         isOk
-          ? (zh ? `模型 "${value}" 测试连接成功` : `Model "${value}" connection test succeeded`)
-          : (zh ? `模型 "${value}" 测试连接失败` : `Model "${value}" test failed`),
+          ? t(locale, 'providerDetail.modelTestSucceeded', { name: value })
+          : t(locale, 'providerDetail.modelTestFailed', { name: value }),
         isOk ? 'success' : 'error'
       );
     } catch (error) {
@@ -325,7 +324,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
               <div>
                 <div className="provider-title-line">
                   <h3>{selected.displayName}</h3>
-                  {selected.primaryKeyId && <span className="settings-badge">{zh ? '已连接' : 'Connected'}</span>}
+                  {selected.primaryKeyId && <span className="settings-badge">{t(locale, 'providerDetail.connected')}</span>}
                 </div>
                 <code>{selected.baseUrl}</code>
               </div>
@@ -338,18 +337,18 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
             <section className="settings-section-card">
               <div className="settings-section-heading settings-section-heading-row">
                 <div>
-                  <h4>{zh ? '基础配置' : 'Configuration'}</h4>
-                  <p>{zh ? '请求地址由供应商预设提供，指定默认模型后需点击保存。' : 'The provider preset supplies the endpoint; edit to update default model.'}</p>
+                  <h4>{t(locale, 'providerDetail.configuration')}</h4>
+                  <p>{t(locale, 'providerDetail.configDesc')}</p>
                 </div>
                 {!isEditingModel ? (
                   <button
                     type="button"
                     className="btn"
                     onClick={startEdit}
-                    title={zh ? '编辑配置' : 'Edit Configuration'}
+                    title={t(locale, 'providerDetail.editConfiguration')}
                   >
                     <Edit3 size={14} />
-                    {zh ? '编辑配置' : 'Edit'}
+                    {t(locale, 'providerDetail.edit')}
                   </button>
                 ) : (
                   <div className="flex items-center gap-2">
@@ -358,20 +357,20 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                       className="btn"
                       onClick={cancelEdit}
                       disabled={savingModel === selected.id}
-                      title={zh ? '取消编辑' : 'Cancel'}
+                      title={t(locale, 'providerDetail.cancelEdit')}
                     >
                       <X size={14} />
-                      {zh ? '取消' : 'Cancel'}
+                      {t(locale, 'common.cancel')}
                     </button>
                     <button
                       type="button"
                       className="btn btn-primary"
                       onClick={saveModel}
                       disabled={savingModel === selected.id}
-                      title={zh ? '保存默认模型' : 'Save default model'}
+                      title={t(locale, 'providerDetail.saveDefaultModel')}
                     >
                       {savingModel === selected.id ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
-                      {zh ? '保存配置' : 'Save'}
+                      {t(locale, 'providerDetail.saveConfig')}
                     </button>
                   </div>
                 )}
@@ -391,7 +390,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                   <div className="settings-readonly-field">
                     <span>{t(locale, 'assistant.defaultModel')}</span>
                     <code className="text-xs font-semibold">
-                      {selected.defaultModel || (zh ? '未配置默认模型' : 'Not configured')}
+                      {selected.defaultModel || t(locale, 'providerDetail.noDefaultModel')}
                     </code>
                   </div>
                 </div>
@@ -516,20 +515,20 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                         className="btn"
                         onClick={discoverModels}
                         disabled={!selected.primaryKeyId || discovering}
-                        title={zh ? '获取可用模型列表' : 'Fetch available models'}
+                        title={t(locale, 'providerDetail.fetchModelsTitle')}
                       >
                         {discovering ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                        {zh ? '获取模型' : 'Fetch'}
+                        {t(locale, 'providerDetail.fetchModels')}
                       </button>
                       <button
                         type="button"
                         className="btn"
                         onClick={testModelConnection}
                         disabled={!selected.primaryKeyId || testing}
-                        title={zh ? '测试模型连接' : 'Test model connection'}
+                        title={t(locale, 'providerDetail.testConnectionTitle')}
                       >
                         {testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
-                        {zh ? '测试' : 'Test'}
+                        {t(locale, 'providerDetail.test')}
                       </button>
                     </div>
                   </div>
@@ -551,10 +550,10 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                   {detailTestResult.success ? (
                     <>
                       <Check size={14} />
-                      {zh ? '测试连接成功' : 'Connection test succeeded'}
+                      {t(locale, 'providerDetail.connectionTestSucceeded')}
                     </>
                   ) : (
-                    detailTestResult.error || (zh ? '测试连接失败' : 'Connection test failed')
+                    detailTestResult.error || t(locale, 'providerDetail.connectionTestFailed')
                   )}
                 </div>
               )}
@@ -564,14 +563,14 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
             {/* ── API Keys ── */}
             <section className="settings-section-card">
               <div className="settings-section-heading settings-section-heading-row">
-                <div><h4>API Keys</h4><p>{zh ? '管理供应商的 API 访问密钥。' : 'Manage API access keys for this provider.'}</p></div>
+                <div><h4>API Keys</h4><p>{t(locale, 'providerDetail.keysDesc')}</p></div>
                 <span className="settings-count">{selected.keys.filter((key) => key.isActive).length} / {selected.keys.length}</span>
               </div>
 
               {selected.keys.length === 0 ? (
                 <div className="provider-key-empty">
                   <KeyRound size={18} />
-                  {zh ? '还没有 API Key（点击上方的“编辑配置”可添加 Key）' : 'No API keys yet (click Edit above to add)'}
+                  {t(locale, 'providerDetail.noKeys')}
                 </div>
               ) : (
                 <div className="provider-key-list">
@@ -591,18 +590,18 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                         </div>
                         <div className="provider-key-meta">
                           <span className={`key-status ${status}`}>{STATUS_ICON[status]}{keyStatusLabel(locale, status)}</span>
-                          <span>{testedAt ? new Date(testedAt).toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' }) : (zh ? '尚未测试' : 'Not tested')}</span>
+                          <span>{testedAt ? new Date(testedAt).toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' }) : t(locale, 'providerDetail.notTested')}</span>
                         </div>
                         <div className="provider-key-actions">
                           {/* 测试连接在任何模式下均可用 */}
-                          <button type="button" onClick={() => testKey(key)} disabled={testing} className="settings-icon-button" title={zh ? '测试连接' : 'Test connection'}>{testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}</button>
+                          <button type="button" onClick={() => testKey(key)} disabled={testing} className="settings-icon-button" title={t(locale, 'providerDetail.testConnection')}>{testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}</button>
                           
                           {/* 编辑模式下开放 设为主 Key 和 删除 选项 */}
                           {isEditingModel && !key.isPrimary && (
-                            <button type="button" onClick={() => handleSetPrimaryKey(key.id)} disabled={key.status !== 'valid'} className="settings-icon-button" title={key.status !== 'valid' ? (zh ? '请先测试连接' : 'Test first') : t(locale, 'assistant.setPrimaryKey')}><Star size={14} /></button>
+                            <button type="button" onClick={() => handleSetPrimaryKey(key.id)} disabled={key.status !== 'valid'} className="settings-icon-button" title={key.status !== 'valid' ? t(locale, 'providerDetail.testFirst') : t(locale, 'assistant.setPrimaryKey')}><Star size={14} /></button>
                           )}
                           {isEditingModel && !key.isPrimary && (
-                            <button type="button" onClick={() => setDeleteTarget({ providerId: selected.id, keyId: key.id })} className="settings-icon-button danger" title={zh ? '删除 Key' : 'Delete key'}><Trash2 size={14} /></button>
+                            <button type="button" onClick={() => setDeleteTarget({ providerId: selected.id, keyId: key.id })} className="settings-icon-button danger" title={t(locale, 'providerDetail.deleteKey')}><Trash2 size={14} /></button>
                           )}
                         </div>
                       </div>
@@ -614,11 +613,11 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
               {/* 仅在点击“编辑配置”进入编辑模式后，才渲染“添加新 Key”的输入框和“添加”按钮 */}
               {isEditingModel && (
                 <div className="provider-add-key" style={{ marginTop: '16px' }}>
-                  <div className="provider-add-key-title"><Plus size={14} />{zh ? '添加新 Key' : 'Add key'}</div>
+                  <div className="provider-add-key-title"><Plus size={14} />{t(locale, 'providerDetail.addKey')}</div>
                   <div className="provider-add-key-fields">
-                    <input className="settings-input" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder={zh ? '名称（例如：工作账号）' : 'Label (e.g. Work)'} />
-                    <input className="settings-input" type="password" value={newKey} onChange={(event) => setNewKey(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addKey()} placeholder={zh ? '粘贴 API Key' : 'Paste API key'} />
-                    <button type="button" className="btn btn-primary" onClick={addKey} disabled={!newKey.trim() || addingKey === selected.id}>{addingKey === selected.id ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />}{zh ? '添加' : 'Add'}</button>
+                    <input className="settings-input" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder={t(locale, 'providerDetail.labelPlaceholder')} />
+                    <input className="settings-input" type="password" value={newKey} onChange={(event) => setNewKey(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addKey()} placeholder={t(locale, 'providerDetail.apiKeyPlaceholder')} />
+                    <button type="button" className="btn btn-primary" onClick={addKey} disabled={!newKey.trim() || addingKey === selected.id}>{addingKey === selected.id ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />}{t(locale, 'providerDetail.add')}</button>
                   </div>
                   {addError && <p className="settings-error">{addError}</p>}
                 </div>
@@ -628,7 +627,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
         </div>
       )}
 
-      <ConfirmDialog open={deleteTarget !== null} title={zh ? '删除 Key' : 'Delete key'} message={zh ? '确定删除这个 API Key？此操作不可撤销。' : 'Delete this API key? This action cannot be undone.'} confirmLabel={zh ? '删除' : 'Delete'} cancelLabel={zh ? '取消' : 'Cancel'} danger onConfirm={handleConfirmDeleteKey} onCancel={() => setDeleteTarget(null)} />
+      <ConfirmDialog open={deleteTarget !== null} title={t(locale, 'providerDetail.deleteKey')} message={t(locale, 'providerDetail.deleteKeyMessage')} confirmLabel={t(locale, 'common.delete')} cancelLabel={t(locale, 'common.cancel')} danger onConfirm={handleConfirmDeleteKey} onCancel={() => setDeleteTarget(null)} />
     </section>
   );
 }

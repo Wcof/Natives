@@ -161,6 +161,7 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
             <FileCard
               key={entry.path}
               entry={entry}
+              locale={locale}
               onSelect={(ent, ev) => onSelect(ent, ev)}
               onContextMenu={onContextMenu}
               selected={selectedPaths ? selectedPaths.has(entry.path) : index === selectedIndex}

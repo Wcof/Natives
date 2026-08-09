@@ -30,7 +30,6 @@ export default function AskUserPromptCard({
   onAnswer,
   onCancel,
 }: AskUserPromptCardProps) {
-  const zh = locale.startsWith('zh');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freeText, setFreeText] = useState('');
@@ -39,7 +38,7 @@ export default function AskUserPromptCard({
   const processing = t(locale, 'assistant.permission.processing');
   const errorFallback = t(locale, 'assistant.permission.errorFallback');
   const cancelLabel = t(locale, 'assistant.permission.reject');
-  const submitLabel = zh ? '提交' : 'Submit';
+  const submitLabel = t(locale, 'askUserCard.submit');
 
   const run = useCallback(
     async (action: () => void | Promise<void>) => {
@@ -110,7 +109,7 @@ export default function AskUserPromptCard({
               onChange={(e) => setFreeText(e.target.value)}
               disabled={submitting}
               rows={3}
-              placeholder={zh ? '输入你的回答…' : 'Type your answer…'}
+              placeholder={t(locale, 'askUserCard.inputPlaceholder')}
               className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:opacity-60"
             />
             <button
