@@ -22,7 +22,7 @@ import { t } from '@/i18n';
 import type { Locale } from '@/i18n';
 import type { Conversation, RunEvent } from '@/lib/assistant-protocol';
 import type { ProviderReadiness } from '@/lib/provider-model-selection';
-import type { AssistantNavigationSnapshot, AssistantRuntimeSnapshot } from '@/components/assistant/AssistantWorkspaceContext';
+import type { AssistantNavigationSnapshot, AssistantRuntimeSnapshot } from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchPublishersOptions {
   locale: Locale;

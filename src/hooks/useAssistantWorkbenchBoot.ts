@@ -23,7 +23,7 @@ import {
   type ProviderReadiness,
 } from '@/lib/provider-model-selection';
 import { readActiveProject } from '@/lib/active-project';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchBootOptions {
   setProviders: (providers: ProviderWithModels[]) => void;

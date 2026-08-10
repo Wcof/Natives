@@ -6,6 +6,7 @@
  */
 import type { AssistantProjectGroup, AssistantProjectCreationState } from './assistant-project-groups';
 import type { TempConversationSession } from './assistant-temp-conversation';
+import type { AssistantFileChange, AssistantRunEvent } from './assistant-types';
 
 /** Discovered model metadata (kept in the provider option). */
 export interface ModelInfo {
@@ -82,4 +83,46 @@ export interface AssistantNavigationSnapshot {
    * Never listed in `groups`, never written to the host DB until first send.
    */
   tempSession: TempConversationSession | null;
+}
+
+/**
+ * Runtime snapshot published by the workspace provider: the currently visible
+ * conversation/run/artifacts/usage for the assistant pane. Moved out of the
+ * component file (W5) so hooks never depend on component internals.
+ */
+export interface AssistantRuntimeSnapshot {
+  conversationId: string | null;
+  conversationTitle: string | null;
+  conversationMode: 'chat' | 'agent' | 'goal';
+  providerId: string;
+  modelId: string;
+  runId: string | null;
+  runStatus: string;
+  runStartedAt: string | null;
+  runFinishedAt: string | null;
+  events: AssistantRunEvent[];
+  fileChanges: AssistantFileChange[];
+  artifacts: Array<{ id: string; path: string; label?: string; size: number; kind: string }>;
+  usage: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null };
+}
+
+/**
+ * The single action bag the workspace shell drives. Registered by the Workbench
+ * while mounted; `registerActions(null)` on unmount. Moved out of the component
+ * file (W5) so hooks never depend on component internals.
+ */
+export interface AssistantWorkspaceActions {
+  selectConversation(id: string): void;
+  selectProject(path: string | null): void;
+  addProjectFolder(): void;
+  createConversation(): void;
+  createConversationInProject(path: string): void;
+  removeProject(path: string): Promise<boolean>;
+  renameProject(path: string, label: string): Promise<boolean>;
+  renameConversation(id: string, title: string): void;
+  archiveConversation(id: string): void;
+  deleteConversation(id: string): Promise<boolean>;
+  pinConversation(id: string, projectId: string | null, pinned: boolean): void;
+  retryRun(): void;
+  respondPermission(requestId: string, approved: boolean): void;
 }

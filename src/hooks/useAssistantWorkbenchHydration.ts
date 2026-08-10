@@ -28,10 +28,10 @@ import type { Locale } from '@/i18n';
 import type {
   Conversation,
 } from '@/lib/assistant-protocol';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/lib/assistant-ui-types';
 import type {
   AssistantNavigationSnapshot,
-} from '@/components/assistant/AssistantWorkspaceContext';
+} from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchHydrationOptions {
   locale: Locale;

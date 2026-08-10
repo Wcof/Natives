@@ -43,7 +43,7 @@ import type {
 import { messagePlainText } from '@/lib/assistant-message-view';
 import { extractTodosFromEvents } from '@/lib/assistant-activity-view';
 import { summarizeConversationChanges } from '@/lib/assistant-timeline';
-import type { ProviderWithModels } from '@/components/ui/conversation/ModelSelectorDropdown';
+import type { ProviderWithModels } from '@/lib/assistant-ui-types';
 
 /** Shared empty child-event list — avoid `[]` literal thrashing useMemo deps. */
 const EMPTY_CHILD_EVENTS: RunEvent[] = [];

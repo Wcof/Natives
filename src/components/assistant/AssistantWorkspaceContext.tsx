@@ -25,42 +25,14 @@ import {
   type TempConversationSession,
 } from '@/lib/assistant-temp-conversation';
 
-// W4: shared navigation snapshot type moved to lib so hooks never depend on
-// component internals. Re-exported here for backwards compatibility.
-export type { AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
+// W4/W5: shared navigation/runtime/actions types moved to lib so hooks never
+// depend on component internals. Re-exported here for backwards compatibility.
+export type {
+  AssistantNavigationSnapshot,
+  AssistantRuntimeSnapshot,
+  AssistantWorkspaceActions,
+} from '@/lib/assistant-ui-types';
 import type { AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
-
-export interface AssistantRuntimeSnapshot {
-  conversationId: string | null;
-  conversationTitle: string | null;
-  conversationMode: 'chat' | 'agent' | 'goal';
-  providerId: string;
-  modelId: string;
-  runId: string | null;
-  runStatus: string;
-  runStartedAt: string | null;
-  runFinishedAt: string | null;
-  events: AssistantRunEvent[];
-  fileChanges: AssistantFileChange[];
-  artifacts: Array<{ id: string; path: string; label?: string; size: number; kind: string }>;
-  usage: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null };
-}
-
-export interface AssistantWorkspaceActions {
-  selectConversation(id: string): void;
-  selectProject(path: string | null): void;
-  addProjectFolder(): void;
-  createConversation(): void;
-  createConversationInProject(path: string): void;
-  removeProject(path: string): Promise<boolean>;
-  renameProject(path: string, label: string): Promise<boolean>;
-  renameConversation(id: string, title: string): void;
-  archiveConversation(id: string): void;
-  deleteConversation(id: string): Promise<boolean>;
-  pinConversation(id: string, projectId: string | null, pinned: boolean): void;
-  retryRun(): void;
-  respondPermission(requestId: string, approved: boolean): void;
-}
 
 type PublishNavigation = (
   snapshot:
