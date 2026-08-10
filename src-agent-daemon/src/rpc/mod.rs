@@ -60,6 +60,9 @@ pub(crate) mod handlers {
     pub(crate) mod permission;
     pub(crate) mod provider;
     pub(crate) mod run;
+    pub(crate) mod run_finish;
+    pub(crate) mod run_query;
+    pub(crate) mod run_wire;
     pub(crate) mod task;
 }
 
