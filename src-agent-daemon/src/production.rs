@@ -135,7 +135,7 @@ pub(crate) use self::production_builtins::{
     compile_effective_prompt, merge_agent_directive, CREATIVE_DRAFT_AGENT_KIND,
     CREATIVE_DRAFT_PROMPT_SURFACE_ID, TASK_DIRECTIVE_PROFILE_ID,
 };
-pub(crate) use self::production_fixture::{FixtureMode, FixtureProvider};
+pub use self::production_fixture::{FixtureMode, FixtureProvider};
 use self::production_reaper::lookup_model_context_window;
 #[cfg(not(test))]
 use self::production_reaper::spawn_subagent_reaper;

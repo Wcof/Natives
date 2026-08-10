@@ -65,6 +65,8 @@ mod experts_profile;
 #[path = "experts_team.rs"]
 mod experts_team;
 pub(crate) use experts_migrate::{import_host_subagent_rows, migrate_host_subagents};
+#[cfg(test)]
+pub(crate) use experts_migrate::migrate_host_subagents_from;
 pub(crate) use experts_profile::{load_agent_profile, load_expert_profile_from_db};
 pub(crate) use experts_team::{
     team_create, team_delete, team_get, team_list, team_to_json, team_update,

@@ -87,7 +87,7 @@ pub fn trace_from_completed_event(
 }
 
 /// Map the registry's error-category string onto the structured model enum.
-fn parse_error_category(category: &str) -> Option<HookErrorCategory> {
+pub(crate) fn parse_error_category(category: &str) -> Option<HookErrorCategory> {
     match category {
         "handler_failure" => Some(HookErrorCategory::HandlerFailure),
         "spawn_failure" => Some(HookErrorCategory::SpawnFailure),

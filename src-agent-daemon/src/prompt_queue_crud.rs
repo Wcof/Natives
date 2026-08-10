@@ -315,7 +315,7 @@ pub(crate) fn interject(params: Value) -> Result<Value, String> {
     }))
 }
 
-async fn send_now(params: Value) -> Result<Value, String> {
+pub(crate) async fn send_now(params: Value) -> Result<Value, String> {
     let id = params
         .get("id")
         .and_then(Value::as_str)

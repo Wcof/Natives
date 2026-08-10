@@ -45,7 +45,9 @@ mod prompt_queue_crud;
 mod prompt_queue_receiver;
 #[path = "prompt_queue_snapshot.rs"]
 mod prompt_queue_snapshot;
-pub(crate) use prompt_queue_crud::{enqueue, interject, list, remove, reorder, request, update};
+pub(crate) use prompt_queue_crud::{
+    enqueue, interject, list, remove, reorder, request, send_now, update,
+};
 pub(crate) use prompt_queue_receiver::{DurableInputReceiver, DurableSafePointReceiver};
 pub(crate) use prompt_queue_snapshot::{
     hydrate_conversation, load_actor_snapshot, persist_actor_snapshot,

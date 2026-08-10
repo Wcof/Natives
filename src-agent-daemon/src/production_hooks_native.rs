@@ -97,7 +97,7 @@ impl HookHandler for NativeMcpHook {
     }
 }
 
-fn substitute_hook_input(value: &mut Value, input: &Value) {
+pub(crate) fn substitute_hook_input(value: &mut Value, input: &Value) {
     match value {
         Value::String(text) if text == "${input}" => *value = input.clone(),
         Value::Array(items) => {
@@ -195,7 +195,7 @@ impl HookHandler for NativePromptHook {
     }
 }
 
-fn prompt_decision(text: &str) -> HookOutcome {
+pub(crate) fn prompt_decision(text: &str) -> HookOutcome {
     let parsed = serde_json::from_str::<Value>(text.trim()).ok();
     let decision = parsed
         .as_ref()

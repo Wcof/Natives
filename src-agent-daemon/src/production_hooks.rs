@@ -484,10 +484,14 @@ use self::production_hooks_trace::parse_error_category;
 pub use self::production_hooks_trace::{trace_from_completed_event, trace_from_started_event};
 
 #[cfg(test)]
+#[path = "production_hooks_discovery_tests.rs"]
 mod production_hooks_discovery_tests;
 #[cfg(test)]
+#[path = "production_hooks_frozen_tests.rs"]
 mod production_hooks_frozen_tests;
 #[cfg(test)]
+#[path = "production_hooks_native_tests.rs"]
 mod production_hooks_native_tests;
 #[cfg(test)]
+#[path = "production_hooks_trace_tests.rs"]
 mod production_hooks_trace_tests;

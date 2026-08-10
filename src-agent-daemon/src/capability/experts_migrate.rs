@@ -147,7 +147,7 @@ pub fn migrate_host_subagents_from(natives_db: &Path) -> Result<u32, String> {
         rows.into_iter()
             .map(
                 |(id, name, role, instructions, tools, provider_id, key_id, model_id, enabled)| {
-                    crate::natives_db_broker::HostSubagentRow {
+                    HostSubagentRow {
                         id,
                         name,
                         role: Some(role),
