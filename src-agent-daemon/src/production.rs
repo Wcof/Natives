@@ -894,6 +894,9 @@ mod active_snapshot_resolution_tests;
 #[path = "production_permission_bind_tests.rs"]
 mod permission_bind_tests;
 #[cfg(test)]
+#[path = "production_prompt_cache_integrity_tests.rs"]
+mod prompt_cache_integrity_tests;
+#[cfg(test)]
 #[path = "production_run_controls_tests.rs"]
 mod run_controls_tests;
 #[cfg(test)]
