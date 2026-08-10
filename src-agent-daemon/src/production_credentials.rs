@@ -101,34 +101,24 @@ pub fn resolve_credential_for_run(
     }
 
     // 2. Explicit test/dev env keys (NATIVES_TEST_*) — never invent offline success text.
-    // Anthropic also accepts common local env names used by CLI tooling (never logged).
+    // W3 P1-1: generic ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN env fallbacks were
+    // removed — in production they would bind a credential without a run-bound
+    // lease (bypassing Broker TTL). Only explicit NATIVES_TEST_* keys apply.
     let lower = provider_id.to_ascii_lowercase();
     if lower.contains("anthropic") || lower.contains("claude") {
         let api_key = std::env::var("NATIVES_TEST_ANTHROPIC_KEY")
             .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                std::env::var("ANTHROPIC_API_KEY")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            })
-            .or_else(|| {
-                std::env::var("ANTHROPIC_AUTH_TOKEN")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            });
+            .filter(|s| !s.trim().is_empty());
         return match api_key {
             Some(api_key) => Ok(Credential {
                 api_key,
-                base_url: std::env::var("NATIVES_TEST_ANTHROPIC_BASE")
-                    .ok()
-                    .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok()),
+                base_url: std::env::var("NATIVES_TEST_ANTHROPIC_BASE").ok(),
                 proxy_url: None,
                 key_id: key_id.map(str::to_string),
                 provider_type: Some("anthropic".into()),
             }),
             None => Err(format!(
-                "No credential for provider '{provider_id}' (broker + NATIVES_TEST_ANTHROPIC_KEY/ANTHROPIC_API_KEY unavailable)"
+                "No credential for provider '{provider_id}' (broker + NATIVES_TEST_ANTHROPIC_KEY unavailable)"
             )),
         };
     }

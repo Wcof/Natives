@@ -571,3 +571,29 @@ ALTER TABLE side_effect_record ADD COLUMN started_at TEXT;
 ALTER TABLE side_effect_record ADD COLUMN completed_at TEXT;
 ALTER TABLE resume_plan ADD COLUMN decision TEXT NOT NULL DEFAULT 'RequiresUserConfirmation';
 ";
+
+/// Migration 038: creative draft tables move under the Daemon-authoritative
+/// assistant.db (W3 P0-2). The capability gateway previously opened the
+/// Host-owned natives.db directly; the draft metadata now lives in the daemon
+/// store so no daemon process path touches the Host database. Idempotent.
+const MIGRATION_038: &str = "
+CREATE TABLE IF NOT EXISTS creative_drafts (
+    draft_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    conversation_id TEXT,
+    origin_module_id TEXT,
+    current_revision INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'drafting'
+        CHECK(state IN ('drafting','generating','ready','publishing','published','archived')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS creative_draft_revisions (
+    draft_id TEXT NOT NULL REFERENCES creative_drafts(draft_id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (draft_id, revision)
+);
+";

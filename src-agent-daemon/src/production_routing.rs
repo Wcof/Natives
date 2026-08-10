@@ -211,12 +211,14 @@ pub async fn restart_subagent_with_binding(
         effort: None,
         runtime_id: Some("native".into()),
     })?;
-    if !sess.tool_allowlist.is_empty() {
-        crate::global_run_manager()
-            .runtime
-            .set_run_tool_allowlist(&created.id, sess.tool_allowlist.clone())
-            .await;
-    }
+    // W3 P0-1: always persist the child allowlist, including an EMPTY list
+    // (explicit zero permission). The old `if !is_empty()` guard skipped empty
+    // lists, so a restored session fell back to the unrestricted builtin
+    // surface — a permission escalation on route restart.
+    crate::global_run_manager()
+        .runtime
+        .set_run_tool_allowlist(&created.id, sess.tool_allowlist.clone())
+        .await;
     let run = crate::run_manager::RunManager::start_detached_global(
         assistant_protocol::v2::StartRunRequest {
             agent_profile_id: sess.agent_profile_id.clone(),
