@@ -215,34 +215,49 @@ pub async fn restart_subagent_with_binding(
     // (explicit zero permission). The old `if !is_empty()` guard skipped empty
     // lists, so a restored session fell back to the unrestricted builtin
     // surface — a permission escalation on route restart.
+    // NE-P0-08 §19.3: a route restart must restore the EXACT persona. The
+    // durable pending directive (verified SHA-256 digest) is the authority; a
+    // missing or corrupt durable copy fails closed (None) rather than
+    // inventing a persona on restart.
+    let (directive_text, _directive_digest) = crate::tools::subagent::directive_for_requeue(
+        crate::subagent_store::pending_directive_for_session(sid)
+            .ok()
+            .flatten(),
+        None,
+    )
+    .map(|(text, digest)| (text, digest))
+    .unwrap_or_default();
     crate::child_run_orchestrator::apply_child_surface(
         &created.id,
         sess.tool_allowlist.clone(),
-        None,
-    )
-    .await;
-    crate::child_run_orchestrator::start_child_run(
-        assistant_protocol::v2::StartRunRequest {
-            agent_profile_id: sess.agent_profile_id.clone(),
-            capability_selection: None,
-            run_id: Some(created.id.clone()),
-            conversation_id: Some(sess.child_conversation_id.clone()),
-            provider_id: Some(binding.provider_id.clone()),
-            model_id: Some(binding.model_id.clone()),
-            key_id: Some(binding.key_id.clone()),
-            content: Some(prompt),
-            attachments: None,
-            trigger_message_id: None,
-            permission_profile: Some(permission_profile),
-            max_steps: Some(max_steps),
-            project_path: Some(project_path),
-            idempotency_key: None,
-            effort: None,
-            runtime_id: Some("native".into()),
+        if directive_text.is_empty() {
+            None
+        } else {
+            Some(directive_text)
         },
     )
+    .await;
+    crate::child_run_orchestrator::start_child_run(assistant_protocol::v2::StartRunRequest {
+        agent_profile_id: sess.agent_profile_id.clone(),
+        capability_selection: None,
+        run_id: Some(created.id.clone()),
+        conversation_id: Some(sess.child_conversation_id.clone()),
+        provider_id: Some(binding.provider_id.clone()),
+        model_id: Some(binding.model_id.clone()),
+        key_id: Some(binding.key_id.clone()),
+        content: Some(prompt),
+        attachments: None,
+        trigger_message_id: None,
+        permission_profile: Some(permission_profile),
+        max_steps: Some(max_steps),
+        project_path: Some(project_path),
+        idempotency_key: None,
+        effort: None,
+        runtime_id: Some("native".into()),
+    })
     .await?;
-    let run = rm.get_run(&created.id)
+    let run = rm
+        .get_run(&created.id)
         .ok_or_else(|| "route restart run vanished after orchestrator start".to_string())?;
 
     // Index task_output so reaper / kill see the new run.

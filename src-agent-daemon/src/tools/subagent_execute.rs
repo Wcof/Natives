@@ -4,8 +4,8 @@
 //! hands the child over to the background watcher (`subagent_watcher`).
 
 use agent_core::{
-    default_subagent_tool_allowlist, FailurePolicy, HookEvent, HookRegistry, HookRequest,
-    SubAgentStatus, ToolExecutionResult,
+    default_subagent_tool_allowlist, FailurePolicy, HookRegistry, SubAgentStatus,
+    ToolExecutionResult,
 };
 use assistant_protocol::v2::RunEventKind;
 use serde_json::Value;
@@ -446,29 +446,29 @@ impl PermissionGatedTools {
         // logged: this event is the only place a policy can stop a run from
         // fanning out, and a hook that says no must not be overruled by the
         // model having asked nicely.
-        let subagent_hooks = crate::production_hooks::build_production_hooks_for_project(
-            project_path.as_deref().map(std::path::Path::new),
+        // NE-P0-05 §19.5: SubagentStart dispatches through the Run's frozen
+        // Hook Dispatcher — the same read-only plan the permission gate and
+        // notification hook share — so a mid-Run hooks.json edit only reaches
+        // the next Run. HookInvocation telemetry flows through the same
+        // EventSequencer the engine uses (single durable source).
+        let start_responses = crate::tools::subagent::fire_subagent_start_frozen(
+            &self.parent_run_id,
+            self.events.clone(),
+            &project_path,
+            &serde_json::json!({
+                "prompt": prompt.clone(),
+                "name": name.clone(),
+                "agent_profile_id": child_profile_id.clone(),
+                "permission_profile": child_perm.clone(),
+                "tool_allowlist": child_allowlist.clone(),
+                "model_id": child_model.clone(),
+                // 19.3-⑤: field-level visibility — hooks see the persona's
+                // digest, never its text. The text lives only in the
+                // protected pending execution plan.
+                "system_prompt_digest": child_directive_digest.clone(),
+            }),
         )
-        .with_events(self.events.clone());
-        let start_responses = subagent_hooks
-            .dispatch(HookRequest {
-                event: HookEvent::SubagentStart,
-                run_id: self.parent_run_id.clone(),
-                tool_name: Some("task".into()),
-                input: serde_json::json!({
-                    "prompt": prompt.clone(),
-                    "name": name.clone(),
-                    "agent_profile_id": child_profile_id.clone(),
-                    "permission_profile": child_perm.clone(),
-                    "tool_allowlist": child_allowlist.clone(),
-                    "model_id": child_model.clone(),
-                    // 19.3-⑤: field-level visibility — hooks see the persona's
-                    // digest, never its text. The text lives only in the
-                    // protected pending execution plan.
-                    "system_prompt_digest": child_directive_digest.clone(),
-                }),
-            })
-            .await;
+        .await;
         if let Err(reason) = HookRegistry::aggregate_allow(&start_responses) {
             // E04: the hidden session was created before the hook ran — close
             // it so a denied spawn leaves no persistent session orphan.

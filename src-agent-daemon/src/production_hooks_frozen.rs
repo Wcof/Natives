@@ -242,7 +242,6 @@ pub fn resolve_frozen_dispatcher(
 ///
 /// `parent_run_id` is the Run whose frozen plan governs the subagent
 /// lifecycle; `project` is the project root for the lazy compile fallback.
-#[allow(dead_code)] // seam for subagent.rs::frozen_subagent_dispatcher (callers not yet switched)
 pub fn resolve_frozen_dispatcher_for_subagent(
     parent_run_id: &str,
     events: EventSequencer,

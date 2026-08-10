@@ -21,6 +21,7 @@ use super::gated::PermissionGatedTools;
 // Helpers relocated to `subagent_requeue`; re-exported here so the external
 // paths `crate::tools::subagent::redact_task_input_system_prompt` and
 // `crate::tools::subagent::fail_parent_and_cancel_siblings` keep working.
+pub(crate) use super::subagent_requeue::directive_for_requeue;
 pub(crate) use super::subagent_requeue::fail_parent_and_cancel_siblings;
 pub use super::subagent_requeue::redact_task_input_system_prompt;
 
@@ -43,7 +44,6 @@ pub use super::subagent_requeue::redact_task_input_system_prompt;
 /// with the permission gate and the notification hook. Re-scanning
 /// `hooks.json` happens at most once per Run (the lazy compile fallback), and
 /// never on a lifecycle event once the Run is frozen.
-#[allow(dead_code)] // seam for subagent_execute / subagent_requeue (outside ownership this round)
 pub(crate) fn frozen_subagent_dispatcher(
     parent_run_id: &str,
     events: agent_core::EventSequencer,
@@ -57,7 +57,6 @@ pub(crate) fn frozen_subagent_dispatcher(
 /// `project_path` is the project root (used only for the lazy compile fallback
 /// when the Run has not been frozen yet). Returns the hook responses so the
 /// caller can aggregate them (`FrozenHookDispatcher::aggregate_allow`).
-#[allow(dead_code)] // seam for subagent_execute (outside ownership this round)
 pub(crate) async fn fire_subagent_start_frozen(
     parent_run_id: &str,
     events: agent_core::EventSequencer,
@@ -85,7 +84,6 @@ pub(crate) async fn fire_subagent_start_frozen(
 /// when the Run has not been frozen yet). The responses are returned for
 /// telemetry; a `SubagentStop` is an observation event and the caller does not
 /// gate on the verdict.
-#[allow(dead_code)] // seam for subagent_requeue (outside ownership this round)
 pub(crate) async fn fire_subagent_stop_frozen(
     parent_run_id: &str,
     events: agent_core::EventSequencer,
