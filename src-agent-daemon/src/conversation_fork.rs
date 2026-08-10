@@ -344,4 +344,58 @@ mod tests {
                 if matches!(&message.content[0], ContentBlock::Text { text } if text == "hello")
         ));
     }
+
+    /// §19.3: a fork inherits transcript metadata only; permissions are
+    /// re-resolved to `ask` and a pending grant is never copied. The fork
+    /// does not carry any directive or permission escalation from the
+    /// source — it starts fresh with the safe default.
+    #[test]
+    fn fork_resets_permissions_to_ask_and_carries_no_pending_grant() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("fork-perm.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+
+        // Source has full_access — the fork must reset to ask.
+        let source = create(serde_json::json!({
+            "mode": "agent",
+            "title": "Source",
+            "provider_id": "openai",
+            "model_id": "gpt-4o",
+            "project_id": "project-1",
+            "permission_profile_id": "full_access"
+        }))
+        .unwrap();
+        let source_id = source["id"].as_str().unwrap();
+        append_agent_message(
+            source_id,
+            None,
+            None,
+            &AgentMessage::User(agent_core::UserMessage {
+                message_id: agent_core::MessageId::from("source-perm-user"),
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+            }),
+        )
+        .unwrap();
+
+        let forked = fork(serde_json::json!({ "conversation_id": source_id })).unwrap();
+        // The fork always resets to ask — never inherits full_access.
+        assert_eq!(forked["permission_profile_id"], "ask");
+        assert_ne!(
+            forked["permission_profile_id"], "full_access",
+            "fork must not inherit the source permission escalation"
+        );
+    }
 }

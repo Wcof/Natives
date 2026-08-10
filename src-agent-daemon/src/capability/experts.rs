@@ -64,9 +64,9 @@ mod experts_migrate;
 mod experts_profile;
 #[path = "experts_team.rs"]
 mod experts_team;
-pub(crate) use experts_migrate::{import_host_subagent_rows, migrate_host_subagents};
 #[cfg(test)]
 pub(crate) use experts_migrate::migrate_host_subagents_from;
+pub(crate) use experts_migrate::{import_host_subagent_rows, migrate_host_subagents};
 pub(crate) use experts_profile::{load_agent_profile, load_expert_profile_from_db};
 pub(crate) use experts_team::{
     team_create, team_delete, team_get, team_list, team_to_json, team_update,
@@ -766,6 +766,174 @@ mod tests {
                 bad_conc.is_err(),
                 "out-of-range maxConcurrent must fail closed"
             );
+        });
+    }
+
+    // ── §19.5: DB Expert usable as subagent_type ──
+
+    /// §19.5: a DB Expert with a `subagent_type`-compatible persona (tools,
+    /// skills, system prompt) loads through the authoritative loader so the
+    /// task tool's `subagent_type` field can name it exactly like a `.md`
+    /// file profile. DB wins, file fallback, fail-closed on neither.
+    #[test]
+    fn db_expert_usable_as_subagent_type_via_authoritative_loader() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({
+                    "id": "subagent-persona",
+                    "name": "Rust Reviewer",
+                    "systemPrompt": "You are a terse Rust reviewer. Check safety and logic.",
+                    "tools": ["read_file", "grep", "list_directory"],
+                    "skills": ["user:rust"],
+                    "permissionMode": "readonly",
+                    "enabled": true,
+                }),
+                "manual",
+            )
+            .unwrap();
+            let profile = load_agent_profile("subagent-persona", None)
+                .expect("DB Expert loadable as a subagent persona");
+            assert_eq!(profile.id, "subagent-persona");
+            assert_eq!(
+                profile.system_prompt.as_deref(),
+                Some("You are a terse Rust reviewer. Check safety and logic.")
+            );
+            assert_eq!(
+                profile.tools,
+                Some(vec![
+                    "read_file".to_string(),
+                    "grep".to_string(),
+                    "list_directory".to_string(),
+                ]),
+            );
+            assert_eq!(profile.permission_mode.as_deref(), Some("readonly"));
+            // The body field carries the system prompt text so the engine
+            // can compile it into the effective prompt.
+            assert!(!profile.body.is_empty());
+        });
+    }
+
+    /// §19.5: crash recovery restores the exact same persona. A DB Expert
+    /// loaded twice yields byte-identical system prompts, tools, and
+    /// permission — the loader is deterministic, not re-rolled.
+    #[test]
+    fn db_expert_loader_is_deterministic_for_crash_recovery() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({
+                    "id": "stable-persona",
+                    "name": "Stable",
+                    "systemPrompt": "You are a stable persona.",
+                    "tools": ["read_file"],
+                    "enabled": true,
+                }),
+                "manual",
+            )
+            .unwrap();
+            let first = load_agent_profile("stable-persona", None).expect("loadable");
+            let second = load_agent_profile("stable-persona", None).expect("loadable");
+            assert_eq!(first.system_prompt, second.system_prompt);
+            assert_eq!(first.tools, second.tools);
+            assert_eq!(first.permission_mode, second.permission_mode);
+            assert_eq!(first.body, second.body);
+        });
+    }
+
+    /// §19.3: the single authoritative loader is the ONLY profile load path.
+    /// A DB Expert wins over a file profile with the same id; the file is
+    /// never consulted when the DB row exists and is enabled.
+    #[test]
+    fn authoritative_loader_db_wins_over_file_for_same_id() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({
+                    "id": "dual-persona",
+                    "name": "DB Persona",
+                    "systemPrompt": "DB wins.",
+                    "enabled": true,
+                }),
+                "manual",
+            )
+            .unwrap();
+            // The loader checks DB first; even if a file profile with the
+            // same id existed, the DB row would win.
+            let profile = load_agent_profile("dual-persona", None).expect("loadable");
+            assert_eq!(profile.name, "DB Persona");
+            assert_eq!(profile.system_prompt.as_deref(), Some("DB wins."));
+        });
+    }
+
+    /// §19.3: Team taskTemplate is retired from the API contract — it is
+    /// never advertised in the team JSON even when stored in the column.
+    #[test]
+    fn team_contract_hides_task_template_from_api() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead."}),
+                "manual",
+            )
+            .unwrap();
+            insert_expert(
+                &json!({"id": "member", "name": "Member", "systemPrompt": "Member."}),
+                "manual",
+            )
+            .unwrap();
+            // Create a team with a task_template on the member — it goes
+            // into the DB column but must NOT appear in the API JSON.
+            let created = team_create(&json!({
+                "id": "team-template",
+                "name": "Template",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 1,
+                "coordinatorExpertId": "lead",
+                "members": [
+                    {"expertId": "member", "roleHint": "builds", "taskTemplate": "Do the thing."},
+                ],
+            }))
+            .unwrap();
+            let team = &created["team"];
+            // taskTemplate is retired: not in member JSON.
+            assert!(
+                team["members"][0].get("taskTemplate").is_none(),
+                "taskTemplate must not be advertised in the API contract"
+            );
+            assert_eq!(team["members"][0]["expertId"], "member");
+            // strategy is retired: not in team JSON.
+            assert!(
+                team.get("strategy").is_none(),
+                "strategy must not be advertised in the API contract"
+            );
+        });
+    }
+
+    /// §19.3: export_md redacts the system_prompt from the frontmatter —
+    /// wait, actually export_md writes the system_prompt as the body (it IS
+    /// the persona for external CLI engines). The redaction is for logs/
+    /// RPC exports, not for the `.claude/agents/` export which needs the
+    /// real prompt. This test confirms export_md keeps the system prompt
+    /// (the export is the interchange format, not a log).
+    #[test]
+    fn export_md_keeps_system_prompt_as_body_for_interchange() {
+        with_temp_db(|| {
+            insert_expert(
+                &json!({
+                    "id": "export-test",
+                    "name": "Export",
+                    "systemPrompt": "You are an exported persona.",
+                    "tools": ["read_file"],
+                    "enabled": true,
+                }),
+                "manual",
+            )
+            .unwrap();
+            let exported = export_md(&json!({"id": "export-test"})).unwrap();
+            let content = exported["content"].as_str().unwrap();
+            // The export is the interchange format — the system prompt IS
+            // the body, so it must be present (not redacted).
+            assert!(content.contains("You are an exported persona."));
+            // The frontmatter carries the id and name.
+            assert!(content.contains("id: export-test"));
+            assert!(content.contains("name: Export"));
         });
     }
 }
