@@ -31,12 +31,34 @@
 
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'fs';
 import { resolve, dirname, relative, join, sep } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const MANIFEST = join(__dirname, 'architecture-debt-manifest.json');
 const BASELINE = process.argv.includes('--baseline');
+
+// typescript is resolved lazily: local node_modules first, then the main
+// workspace's node_modules (worktrees never install their own node_modules).
+const requireLocal = createRequire(import.meta.url);
+let tsModule = null;
+function loadTypeScript() {
+  if (tsModule) return tsModule;
+  const candidates = ['typescript', join(ROOT, 'node_modules', 'typescript')];
+  // Worktree fallback: the main workspace lives next to this worktree.
+  const mainWs = join(ROOT, '..', 'Natives', 'node_modules', 'typescript');
+  if (mainWs !== join(ROOT, 'node_modules', 'typescript')) candidates.push(mainWs);
+  for (const c of candidates) {
+    try {
+      tsModule = requireLocal(c);
+      return tsModule;
+    } catch {
+      /* try next */
+    }
+  }
+  throw new Error('typescript package unavailable (needed for AST checks)');
+}
 
 // ---------------------------------------------------------------------------
 // Scan helpers
@@ -108,17 +130,22 @@ function relToRoot(p) {
 // Collectors (return Map<key, reason>)
 // ---------------------------------------------------------------------------
 
-function collectOver1000() {
+function collectOver1000(root = ROOT) {
   const map = new Map();
   const roots = [
-    join(ROOT, 'src'),
-    join(ROOT, 'src-tauri/src'),
-    join(ROOT, 'src-agent-daemon/src'),
-    join(ROOT, 'crates'),
+    join(root, 'src'),
+    join(root, 'src-tauri/src'),
+    join(root, 'src-tauri/tests'),
+    join(root, 'src-agent-daemon/src'),
+    join(root, 'src-agent-daemon/tests'),
+    join(root, 'crates'),
+    join(root, 'extension-host'),
+    join(root, 'scripts'),
   ];
-  for (const root of roots) {
-    for (const p of walk(root)) {
-      if (!/\.(ts|tsx|css|rs)$/.test(p)) continue;
+  for (const r of roots) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
+      if (!/\.(ts|tsx|css|rs|mjs)$/.test(p)) continue;
       if (GENERATED_RE.test(p)) continue;
       const n = countLines(p);
       if (n > 1000) map.set(relToRoot(p), `${n} lines`);
@@ -127,10 +154,11 @@ function collectOver1000() {
   return map;
 }
 
-function collectOver700() {
+function collectOver700(root = ROOT) {
   const map = new Map();
-  for (const root of [join(ROOT, 'src'), join(ROOT, 'src-tauri/src'), join(ROOT, 'src-agent-daemon/src'), join(ROOT, 'crates')]) {
-    for (const p of walk(root)) {
+  for (const r of [join(root, 'src'), join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src'), join(root, 'crates')]) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
       if (!/\.(ts|tsx|css|rs)$/.test(p)) continue;
       const n = countLines(p);
       if (n > 700 && n <= 1000) map.set(relToRoot(p), `${n} lines (review ledger)`);
@@ -139,9 +167,9 @@ function collectOver700() {
   return map;
 }
 
-function collectUiBusiness() {
+function collectUiBusiness(root = ROOT) {
   const map = new Map();
-  const uiRoot = join(ROOT, 'src/components/ui');
+  const uiRoot = join(root, 'src/components/ui');
   if (!existsSync(uiRoot)) return map;
   // UI atoms may only import: external packages, other ui files, design-tokens,
   // i18n (framework), pure type files, and generic UI infrastructure libs
@@ -169,9 +197,9 @@ function collectUiBusiness() {
   return map;
 }
 
-function collectFeatureCross() {
+function collectFeatureCross(root = ROOT) {
   const map = new Map();
-  const compRoot = join(ROOT, 'src/components');
+  const compRoot = join(root, 'src/components');
   if (!existsSync(compRoot)) return map;
   // Shared business domains that multiple features legitimately reuse:
   // ui (atoms), shell, preview, capabilities, and the assistant conversation /
@@ -210,9 +238,9 @@ function collectFeatureCross() {
 
 const SHARED_ASSISTANT_SUBDOMAINS = new Set(['conversation', 'diff']);
 
-function collectThickPages() {
+function collectThickPages(root = ROOT) {
   const map = new Map();
-  const appRoot = join(ROOT, 'src/app');
+  const appRoot = join(root, 'src/app');
   if (!existsSync(appRoot)) return map;
   for (const p of walk(appRoot)) {
     if (!p.endsWith('page.tsx') && !p.endsWith('page.ts')) continue;
@@ -222,9 +250,9 @@ function collectThickPages() {
   return map;
 }
 
-function collectRawInvoke() {
+function collectRawInvoke(root = ROOT) {
   const map = new Map();
-  for (const p of walk(join(ROOT, 'src'))) {
+  for (const p of walk(join(root, 'src'))) {
     if (!isHandwrittenTs(p)) continue;
     const rel = relToRoot(p);
     if (rel.startsWith('src/lib/tauri/') || rel.startsWith('src/lib/tauri-adapter')) continue;
@@ -235,9 +263,9 @@ function collectRawInvoke() {
   return map;
 }
 
-function collectNativeDialog() {
+function collectNativeDialog(root = ROOT) {
   const map = new Map();
-  for (const p of walk(join(ROOT, 'src'))) {
+  for (const p of walk(join(root, 'src'))) {
     if (!isHandwrittenTs(p)) continue;
     for (const h of nonCommentLines(p, /(^|[^\w.])(alert|prompt|confirm)\s*\(/)) {
       map.set(`${relToRoot(p)}:${h.line}`, h.text);
@@ -246,9 +274,9 @@ function collectNativeDialog() {
   return map;
 }
 
-function collectCrossDbDaemon() {
+function collectCrossDbDaemon(root = ROOT) {
   const map = new Map();
-  const daemonRoot = join(ROOT, 'src-agent-daemon/src');
+  const daemonRoot = join(root, 'src-agent-daemon/src');
   if (!existsSync(daemonRoot)) return map;
   for (const p of walk(daemonRoot)) {
     if (!p.endsWith('.rs')) continue;
@@ -262,13 +290,24 @@ function collectCrossDbDaemon() {
     for (const h of nonCommentLines(p, re)) {
       map.set(`${relToRoot(p)}:${h.line}`, h.text);
     }
+    // Variable-path opens (env fallback / caller-provided path) that reference
+    // the natives.db literal elsewhere in the same file are flagged as
+    // candidates (fail-closed; ledger may review false positives).
+    const src = readFileSync(p, 'utf8');
+    if (/natives\.db/.test(src) && !/NativesDbBroker|default_assistant_db_path/.test(src)) {
+      const opens = nonCommentLines(p, /(Connection::open|open_with_flags)\(/);
+      for (const h of opens) {
+        const key = `${relToRoot(p)}:${h.line}`;
+        if (!map.has(key)) map.set(key, `variable-path open near natives.db literal — ${h.text}`);
+      }
+    }
   }
   return map;
 }
 
-function collectCrossDbHost() {
+function collectCrossDbHost(root = ROOT) {
   const map = new Map();
-  const hostRoot = join(ROOT, 'src-tauri/src');
+  const hostRoot = join(root, 'src-tauri/src');
   if (!existsSync(hostRoot)) return map;
   for (const p of walk(hostRoot)) {
     if (!p.endsWith('.rs')) continue;
@@ -281,14 +320,25 @@ function collectCrossDbHost() {
     for (const h of nonCommentLines(p, re)) {
       map.set(`${relToRoot(p)}:${h.line}`, h.text);
     }
+    // Variable-path opens (caller-provided db path) referencing the assistant.db
+    // literal in the same file are flagged as candidates (fail-closed).
+    const src = readFileSync(p, 'utf8');
+    if (/assistant\.db/.test(src) && !/NATIVES_ASSISTANT_DB_PATH/.test(src)) {
+      const opens = nonCommentLines(p, /(Connection::open|open_with_flags)\(/);
+      for (const h of opens) {
+        const key = `${relToRoot(p)}:${h.line}`;
+        if (!map.has(key)) map.set(key, `variable-path open near assistant.db literal — ${h.text}`);
+      }
+    }
   }
   return map;
 }
 
-function collectEmbeddedProd() {
+function collectEmbeddedProd(root = ROOT) {
   const map = new Map();
-  for (const root of [join(ROOT, 'src-tauri/src'), join(ROOT, 'src-agent-daemon/src')]) {
-    for (const p of walk(root)) {
+  for (const r of [join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src')]) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
       if (!p.endsWith('.rs')) continue;
       if (isTestFile(p)) continue;
       for (const h of nonCommentLines(p, /EmbeddedAuthority/)) {
@@ -299,10 +349,11 @@ function collectEmbeddedProd() {
   return map;
 }
 
-function collectGlobalSingleton() {
+function collectGlobalSingleton(root = ROOT) {
   const map = new Map();
-  for (const root of [join(ROOT, 'src-tauri/src'), join(ROOT, 'src-agent-daemon/src'), join(ROOT, 'crates')]) {
-    for (const p of walk(root)) {
+  for (const r of [join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src'), join(root, 'crates')]) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
       if (!p.endsWith('.rs')) continue;
       if (isTestFile(p)) continue;
       for (const h of nonCommentLines(p, /static\s+mut|OnceLock<|lazy_static!|static\s+Lazy</)) {
@@ -313,9 +364,9 @@ function collectGlobalSingleton() {
   return map;
 }
 
-function collectUnregisteredInterval() {
+function collectUnregisteredInterval(root = ROOT) {
   const map = new Map();
-  for (const p of walk(join(ROOT, 'src'))) {
+  for (const p of walk(join(root, 'src'))) {
     if (!isHandwrittenTs(p)) continue;
     const rel = relToRoot(p);
     for (const h of nonCommentLines(p, /setInterval\s*\(/)) {
@@ -325,9 +376,9 @@ function collectUnregisteredInterval() {
   return map;
 }
 
-function collectHooksReverse() {
+function collectHooksReverse(root = ROOT) {
   const map = new Map();
-  const hooksRoot = join(ROOT, 'src/hooks');
+  const hooksRoot = join(root, 'src/hooks');
   if (!existsSync(hooksRoot)) return map;
   for (const p of walk(hooksRoot)) {
     if (!isHandwrittenTs(p)) continue;
@@ -341,40 +392,93 @@ function collectHooksReverse() {
   return map;
 }
 
-// Minimal feasible a11y gate (W4): non-semantic clickable elements. A
-// <div>/<span>/<li> with onClick must carry role="button" (or a semantic
-// alternative) AND keyboard activation (onKeyDown), or it is flagged. Real
-// <button>/<a>/<input> are fine. The ledger allows the remaining pre-existing
-// violations while the fix wave clears them.
-function collectA11yClickable() {
+// W4/W1: non-semantic clickable elements. A <div>/<span>/<li> with onClick must
+// carry role="button" (or a semantic alternative) AND keyboard activation
+// (onKeyDown), or it is flagged. Real <button>/<a>/<input> are fine.
+// W1: uses the TSX AST so MULTILINE attributes are detected (the old line-based
+// regex missed onClick spread over several lines).
+function collectA11yClickable(root = ROOT) {
   const map = new Map();
-  const roots = [join(ROOT, 'src/components'), join(ROOT, 'src/app')];
-  for (const root of roots) {
-    for (const p of walk(root)) {
+  const roots = [join(root, 'src/components'), join(root, 'src/app')];
+  for (const r of roots) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
       if (!isHandwrittenTs(p)) continue;
       if (/\.test\.(ts|tsx)$/.test(p)) continue;
-      const lines = readFileSync(p, 'utf8').split('\n');
-      lines.forEach((line, i) => {
-        const t = line.trim();
-        if (!/<(div|span|li|section|header|footer|p|ul)[^>]*onClick=/.test(t)) return;
-        // Decorative overlay / modal chrome: aria-hidden or presentation/dialog
-        // roles provide the semantics; keyboard activation is provided by the
-        // dialog/menu's own Escape/focus path (never by the overlay itself).
-        if (/aria-hidden|role=["'](presentation|dialog|alertdialog)["']/.test(t)) return;
-        if (/role=["'](button|link|menuitem|tab|checkbox|switch)["']/.test(t)) return;
-        if (/onKeyDown|onKeyUp|onKeyPress/.test(t)) return;
-        if (/<button|<a |<input|<select|<textarea/.test(t)) return;
-        map.set(`${relToRoot(p)}:${i + 1}`, t.slice(0, 110));
-      });
+      const src = readFileSync(p, 'utf8');
+      // Fast path: no onClick anywhere -> skip AST parse.
+      if (!/onClick\s*=/.test(src)) continue;
+      const hits = a11yAstHits(src, relToRoot(p));
+      for (const h of hits) map.set(h.key, h.text);
     }
   }
   return map;
 }
 
-function collectBudgetFunctions() {
+function a11yAstHits(src, rel) {
+  const hits = [];
+  let ts;
+  try {
+    ts = loadTypeScript();
+  } catch {
+    // No typescript available: fall back to the line-based heuristic so the
+    // gate still flags single-line violations (best effort, not a pass).
+    const lines = src.split('\n');
+    lines.forEach((line, i) => {
+      const t = line.trim();
+      if (!/<(div|span|li|section|header|footer|p|ul)[^>]*onClick=/.test(t)) return;
+      if (/aria-hidden|role=["'](presentation|dialog|alertdialog)["']/.test(t)) return;
+      if (/role=["'](button|link|menuitem|tab|checkbox|switch)["']/.test(t)) return;
+      if (/onKeyDown|onKeyUp|onKeyPress/.test(t)) return;
+      if (/<button|<a |<input|<select|<textarea/.test(t)) return;
+      hits.push({ key: `${rel}:${i + 1}`, text: t.slice(0, 110) });
+    });
+    return hits;
+  }
+  const sf = ts.createSourceFile('x.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const NON_SEMANTIC = new Set(['div', 'span', 'li', 'section', 'header', 'footer', 'p', 'ul']);
+  function attrsOf(elem) {
+    if (ts.isJsxElement(elem)) return elem.openingElement.attributes?.properties;
+    if (ts.isJsxSelfClosingElement(elem)) return elem.attributes?.properties;
+    return undefined;
+  }
+  function attr(elem, name) {
+    return attrsOf(elem)?.find((a) => ts.isJsxAttribute(a) && a.name?.text === name);
+  }
+  function visit(node) {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = ts.isJsxElement(node)
+        ? node.openingElement.tagName?.text
+        : node.tagName?.text;
+      if (tag && NON_SEMANTIC.has(tag) && attr(node, 'onClick')) {
+        const hasSemanticRole = ['button', 'link', 'menuitem', 'tab', 'checkbox', 'switch'].some((r) => {
+          const role = attr(node, 'role');
+          return role && role.initializer && role.initializer.text === r;
+        });
+        const hasKeyboard =
+          attr(node, 'onKeyDown') || attr(node, 'onKeyUp') || attr(node, 'onKeyPress');
+        const hasAriaHidden = attr(node, 'aria-hidden');
+        const hasDialogRole = ['presentation', 'dialog', 'alertdialog'].some((r) => {
+          const role = attr(node, 'role');
+          return role && role.initializer && role.initializer.text === r;
+        });
+        if (!(hasSemanticRole || hasKeyboard || hasAriaHidden || hasDialogRole)) {
+          const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+          hits.push({ key: `${rel}:${pos.line + 1}`, text: src.slice(node.getStart(sf), node.getEnd(sf)).slice(0, 110) });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sf);
+  return hits;
+}
+
+function collectBudgetFunctions(root = ROOT) {
   const map = new Map();
-  for (const root of [join(ROOT, 'src-tauri/src'), join(ROOT, 'src-agent-daemon/src'), join(ROOT, 'crates')]) {
-    for (const p of walk(root)) {
+  for (const r of [join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src'), join(root, 'crates')]) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
       if (!p.endsWith('.rs')) continue;
       if (isTestFile(p)) continue;
       const lines = readFileSync(p, 'utf8').split('\n');
@@ -441,60 +545,121 @@ function loadManifest() {
   }
 }
 
-function main() {
+// W1 fail-closed helpers (exported for the mutation fixtures):
+//  - fatal checks (fail:true) are NEVER silenced by the manifest: any found
+//    entry makes the gate fail, regardless of whether it is a known debt.
+//  - an empty scan scope (zero scanned files) is fatal: it must not be
+//    indistinguishable from "everything clean".
+function isFatalCheck(id) {
+  const c = CHECKS.find((x) => x.id === id);
+  return Boolean(c && c.fail);
+}
+
+function shouldFailCheck(check, found, known) {
+  if (!check.fail) return false;
+  return found.size > 0;
+}
+
+function shouldFailEmptyScope(summary) {
+  return summary.scannedFiles === 0;
+}
+
+function runChecks(root = ROOT) {
   const manifest = loadManifest();
+  const rows = [];
+  let scannedFiles = 0;
   let newCount = 0;
   let knownCount = 0;
-  const rows = [];
-
+  const violations = [];
   for (const check of CHECKS) {
-    const found = check.collect();
+    const found = check.collect(root);
     const known = manifest[check.id] || {};
     const knownKeys = new Set(Object.keys(known));
-    const newEntries = [];
-    const knownEntries = [];
+    let newEntries = 0;
+    let knownEntries = 0;
     for (const [key, reason] of found) {
-      if (knownKeys.has(key)) knownEntries.push({ key, reason });
-      else newEntries.push({ key, reason });
+      if (knownKeys.has(key)) knownEntries += 1;
+      else newEntries += 1;
     }
-    knownCount += knownEntries.length;
-    newCount += newEntries.length;
-    rows.push({ id: check.id, fail: check.fail, found: found.size, known: knownEntries.length, new: newEntries.length });
-
-    if (BASELINE) continue;
-    for (const e of newEntries) {
-      const severity = check.fail ? 'ERROR' : 'WARN';
-      console.log(`[${severity}] ${check.id}: ${e.key} — ${e.reason}`);
+    scannedFiles += found.size > 0 ? 1 : 0;
+    knownCount += knownEntries;
+    newCount += newEntries;
+    const fail = shouldFailCheck(check, found, known);
+    rows.push({
+      id: check.id,
+      fail: check.fail,
+      total: found.size,
+      known: knownEntries,
+      new: newEntries,
+      status: fail ? 'FAIL' : check.fail ? 'ok' : 'ledger',
+    });
+    for (const [key, reason] of found) {
+      violations.push({ check: check.id, severity: check.fail ? 'ERROR' : 'WARN', key, reason });
     }
   }
+  return { rows, violations, newCount, knownCount, scannedFiles };
+}
 
+function main() {
+  const rootArg = process.argv[2];
+  const root = rootArg && !rootArg.startsWith('--') ? resolve(ROOT, rootArg) : ROOT;
   if (BASELINE) {
     const next = {};
     for (const check of CHECKS) {
-      const found = check.collect();
+      const found = check.collect(root);
       next[check.id] = Object.fromEntries(found);
     }
     writeFileSync(MANIFEST, `${JSON.stringify(next, null, 2)}\n`);
     console.log('architecture:check baseline written to scripts/architecture-debt-manifest.json');
-    console.log('  violations snapshotted:');
-    for (const r of rows) console.log(`  - ${r.id}: ${r.found}`);
+    for (const k of Object.keys(next)) console.log(`  - ${k}: ${Object.keys(next[k]).length}`);
     process.exit(0);
   }
 
-  const failing = rows.filter((r) => r.fail && r.new > 0);
-  console.log('---');
-  console.log(
-    `architecture:check ${failing.length ? 'FAILED' : 'OK'} — known(debt): ${knownCount}, new: ${newCount}`,
-  );
-  for (const r of rows) {
-    const tag = r.fail ? (r.new > 0 ? 'FAIL' : 'ok') : 'ledger';
-    console.log(`  [${tag}] ${r.id}: total=${r.found} known=${r.known} new=${r.new}`);
+  const summary = runChecks(root);
+  const emptyScope = shouldFailEmptyScope(summary);
+  for (const v of summary.violations) {
+    console.log(`[${v.severity}] ${v.check}: ${v.key} — ${v.reason}`);
   }
-  if (failing.length) {
-    console.error('New architecture violations detected. Fix them or, during an approved migration step, run --baseline.');
+  console.log('---');
+  for (const r of summary.rows) console.log(`  [${r.status}] ${r.id}: total=${r.total} known=${r.known} new=${r.new}`);
+  const failing = summary.rows.filter((r) => r.status === 'FAIL');
+  const failed = failing.length > 0 || emptyScope;
+  console.log(
+    `architecture:check ${failed ? 'FAILED' : 'OK'} — known(debt): ${summary.knownCount}, new: ${summary.newCount}, scanned-files: ${summary.scannedFiles}`,
+  );
+  // Machine-readable summary (JSON) on stdout for CI/evidence.
+  process.stdout.write(`${JSON.stringify({ ok: !failed, emptyScope, fatal: failing.map((r) => r.id), newCount: summary.newCount, knownCount: summary.knownCount, scannedFiles: summary.scannedFiles }, null, 2)}\n`);
+  if (failed) {
+    if (emptyScope) console.error('Empty scan scope: nothing scanned, cannot claim clean.');
     process.exit(1);
   }
   process.exit(0);
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
+
+export {
+  collectOver1000,
+  collectOver700,
+  collectUiBusiness,
+  collectFeatureCross,
+  collectThickPages,
+  collectRawInvoke,
+  collectNativeDialog,
+  collectCrossDbDaemon,
+  collectCrossDbHost,
+  collectEmbeddedProd,
+  collectGlobalSingleton,
+  collectUnregisteredInterval,
+  collectHooksReverse,
+  collectA11yClickable,
+  collectBudgetFunctions,
+  isFatalCheck,
+  shouldFailCheck,
+  shouldFailEmptyScope,
+  runChecks,
+  CHECKS,
+  loadManifest,
+};

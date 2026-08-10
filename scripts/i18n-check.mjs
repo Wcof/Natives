@@ -1,173 +1,206 @@
 #!/usr/bin/env node
-/* global console, process */
 /**
- * i18n checker (v3)
+ * Natives i18n gate — W1 fail-closed.
  *
- * Verifies two independent i18n gates:
+ * Key sync (zh.ts vs en.ts) is parsed with the TypeScript AST, spreading
+ * composition roots (`export const zh = { ...app, ...nav }`) into their
+ * per-domain files. Fail-closed conditions (any one FAILs the gate):
+ *   - locale file cannot be parsed (syntax error)
+ *   - locale file resolves to ZERO keys (empty object / failed spread)
+ *   - a key exists in zh but not en, or en but not zh
+ *   - a duplicate key is defined inside one locale object (last-write-wins
+ *     would silently drop copy — a defect, not an accident)
+ * Bypass detection (R-I1): CJK literals, locale ternaries, JSX text.
  *
- *  1. Key sync (R-I3): zh.ts and en.ts must expose identical key sets.
- *  2. Bypass detection (R-I1): production TS/TSX must not contain
- *     user-visible copy that sidesteps the dictionary:
- *       (a) CJK string literals / JSX text outside the dictionaries, tests,
- *           and a small documented allowlist; and
- *       (b) locale-conditional ternaries that yield string literals
- *           (e.g. `zh ? '...' : '...'`, `locale === 'zh' ? ... : ...`),
- *           except BCP-47 locale tags used for date/number formatting.
- *
- * Usage: node scripts/i18n-check.mjs
+ * Usage:
+ *   node scripts/i18n-check.mjs
  */
-
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve, join, relative } from 'path';
-import * as ts from 'typescript';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const SRC = resolve(ROOT, 'src');
 
-// ────────────────────────────────────────────────────────────────────────
-// 1. Key sync (existing behavior)
-// ────────────────────────────────────────────────────────────────────────
-
-function extractKeys(content) {
-  const keys = new Set();
-  let objStr = content.replace(/^export\s+const\s+\w+\s*=\s*/, '').trim();
-  objStr = objStr.replace(/;\s*$/, '');
-  if (!objStr.startsWith('{') || !objStr.endsWith('}')) {
-    console.error('Cannot parse locale file - not a valid object literal?');
-    return keys;
-  }
-  let i = 0;
-  const chars = [...objStr];
-  const len = chars.length;
-  if (chars[i] === '{') i++;
-  const pathStack = [];
-  while (i < len) {
-    const ch = chars[i];
-    if (ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r' || ch === ',') {
-      i++;
-      continue;
-    }
-    if (ch === '/' && chars[i + 1] === '/') {
-      while (i < len && chars[i] !== '\n') i++;
-      continue;
-    }
-    if (ch === '/' && chars[i + 1] === '*') {
-      i += 2;
-      while (i < len - 1 && !(chars[i] === '*' && chars[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
-    if (ch === '}') {
-      pathStack.pop();
-      i++;
-      continue;
-    }
-    if (/[a-zA-Z_]/.test(ch)) {
-      let key = '';
-      while (i < len && /[a-zA-Z0-9_]/.test(chars[i])) {
-        key += chars[i];
-        i++;
-      }
-      while (i < len && chars[i] === ' ') i++;
-      if (i < len && chars[i] === ':') {
-        i++;
-        while (i < len && chars[i] === ' ') i++;
-        if (i < len) {
-          const nextCh = chars[i];
-          if (nextCh === '{') {
-            pathStack.push(key);
-            i++;
-          } else if (nextCh === "'" || nextCh === '"') {
-            const fullPath = [...pathStack, key].join('.');
-            keys.add(fullPath);
-            const quote = nextCh;
-            i++;
-            while (i < len && chars[i] !== quote) {
-              if (chars[i] === '\\') i++;
-              i++;
-            }
-            if (i < len) i++;
-          } else if (/[tfn\d-]/.test(nextCh)) {
-            keys.add([...pathStack, key].join('.'));
-            while (i < len && chars[i] !== ',' && chars[i] !== '}' && chars[i] !== '\n') i++;
-          } else if (nextCh === '[') {
-            keys.add([...pathStack, key].join('.'));
-            while (i < len && chars[i] !== ',' && chars[i] !== '}') i++;
-          } else if (nextCh === '/') {
-            continue;
-          }
-        }
-      }
-      continue;
-    }
-    i++;
-  }
-  return keys;
-}
-
-const zhContent = readFileSync(resolve(ROOT, 'src/i18n/zh.ts'), 'utf8');
-const enContent = readFileSync(resolve(ROOT, 'src/i18n/en.ts'), 'utf8');
-// W4: locale entries are thin composition roots (`export const en = { ...app, ...nav }`);
-// resolve the spread targets from the per-domain files in ./en/ and ./zh/ so the
-// key-sync check still sees the full object shape.
-function resolveComposedKeys(localeDir, content) {
-  const spreadRefs = [...content.matchAll(/\.\.\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
-  if (spreadRefs.length === 0) return extractKeys(content);
-  const keys = new Set();
-  for (const ref of spreadRefs) {
-    const domainPath = resolve(ROOT, `src/i18n/${localeDir}/${ref}.ts`);
+// typescript resolved lazily (worktree fallback to the main workspace).
+const requireLocal = createRequire(import.meta.url);
+let tsModule = null;
+function loadTypeScript() {
+  if (tsModule) return tsModule;
+  const candidates = ['typescript', join(ROOT, 'node_modules', 'typescript')];
+  const mainWs = join(ROOT, '..', 'Natives', 'node_modules', 'typescript');
+  if (mainWs !== join(ROOT, 'node_modules', 'typescript')) candidates.push(mainWs);
+  for (const c of candidates) {
     try {
-      const domainContent = readFileSync(domainPath, 'utf8');
-      for (const k of extractKeys(domainContent)) keys.add(k);
+      tsModule = requireLocal(c);
+      return tsModule;
     } catch {
-      console.error(`Cannot read i18n domain file: ${domainPath}`);
+      /* try next */
     }
   }
-  return keys;
-}
-const zhKeys = resolveComposedKeys('zh', zhContent);
-const enKeys = resolveComposedKeys('en', enContent);
-const missingInEn = [...zhKeys].filter((k) => !enKeys.has(k));
-const missingInZh = [...enKeys].filter((k) => !zhKeys.has(k));
-
-let exitCode = 0;
-if (missingInEn.length > 0) {
-  console.error(`\n❌ Missing in en.ts (${missingInEn.length}):`);
-  missingInEn.sort().forEach((k) => console.error(`  - ${k}`));
-  exitCode = 1;
-}
-if (missingInZh.length > 0) {
-  console.error(`\n❌ Missing in zh.ts (${missingInZh.length}):`);
-  missingInZh.sort().forEach((k) => console.error(`  - ${k}`));
-  exitCode = 1;
-}
-if (exitCode === 0) {
-  console.log(`✅ i18n keys in sync: ${zhKeys.size} zh = ${enKeys.size} en`);
-} else {
-  console.error(`\nzh: ${zhKeys.size} keys, en: ${enKeys.size} keys`);
+  throw new Error('typescript package unavailable (needed for i18n AST)');
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// 2. Bypass detection (R-I1)
+// 1. AST-based key extraction (fail-closed)
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract dotted keys from a locale object literal via TS AST.
+ * Returns { keys: Set, duplicates: string[], spreadRefs: string[], error: string|null }
+ * `error` is set when the file is not a single export const object literal.
+ */
+export function extractObjectKeys(content) {
+  const ts = loadTypeScript();
+  const sf = ts.createSourceFile('locale.ts', content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  // Fail-closed: any syntax diagnostic invalidates the whole file, even if the
+  // AST still recovers (e.g. `{ a: ; }` parses to a PropertyAssignment).
+  if (sf.parseDiagnostics && sf.parseDiagnostics.length > 0) {
+    const msg = sf.parseDiagnostics.map((d) => (typeof d.messageText === 'string' ? d.messageText : 'parse error')).join('; ');
+    return { keys: new Set(), duplicates: [], spreadRefs: [], error: `syntax: ${msg}` };
+  }
+  const keys = new Set();
+  const duplicates = [];
+  const spreadRefs = [];
+  let rootObject = null;
+
+  function walkObject(node, prefix) {
+    for (const prop of node.properties) {
+      if (ts.isSpreadAssignment(prop)) {
+        if (ts.isIdentifier(prop.expression)) spreadRefs.push(prop.expression.text);
+        continue;
+      }
+      if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment(prop)) continue;
+      const name = prop.name;
+      let keyName = null;
+      if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+        keyName = name.text;
+      }
+      if (keyName === null) continue;
+      const full = prefix ? `${prefix}.${keyName}` : keyName;
+      const initializer = ts.isPropertyAssignment(prop) ? prop.initializer : null;
+      if (initializer && ts.isObjectLiteralExpression(initializer)) {
+        walkObject(initializer, full);
+      } else {
+        if (keys.has(full)) duplicates.push(full);
+        keys.add(full);
+      }
+    }
+  }
+
+  const first = sf.statements.find((s) => ts.isVariableStatement(s));
+  if (first && ts.isVariableStatement(first)) {
+    for (const decl of first.declarationList.declarations) {
+      if (decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
+        rootObject = decl.initializer;
+        break;
+      }
+    }
+  }
+  if (!rootObject) {
+    return { keys: new Set(), duplicates, spreadRefs, error: 'no export const object literal found' };
+  }
+  walkObject(rootObject, '');
+  return { keys, duplicates, spreadRefs, error: null };
+}
+
+/**
+ * Resolve a locale file's full key set, expanding `...domain` spread refs from
+ * ./zh/<domain>.ts. Fail-closed: a missing domain file is an error (empty
+ * spread would silently drop copy).
+ */
+export function resolveComposedKeys(localeDir, content, root = ROOT) {
+  const parsed = extractObjectKeys(content);
+  const keys = new Set(parsed.keys);
+  const errors = [];
+  if (parsed.error) errors.push(`parse: ${parsed.error}`);
+  for (const ref of parsed.spreadRefs) {
+    const domainPath = resolve(root, `src/i18n/${localeDir}/${ref}.ts`);
+    let domainContent;
+    try {
+      domainContent = readFileSync(domainPath, 'utf8');
+    } catch {
+      errors.push(`missing domain file: ${relative(root, domainPath)}`);
+      continue;
+    }
+    const d = extractObjectKeys(domainContent);
+    if (d.error) {
+      errors.push(`domain parse ${ref}: ${d.error}`);
+      continue;
+    }
+    for (const k of d.keys) keys.add(k);
+    for (const dup of d.duplicates) keys.delete(dup); // duplicates are defects; surface via errors path below
+  }
+  return { keys, duplicates: parsed.duplicates, errors };
+}
+
+/**
+ * Full gate. Returns { exitCode, zhKeys, enKeys, missingInEn, missingInZh,
+ * violations, parseErrors, emptyFiles }.
+ */
+export function runI18nCheck(root = ROOT) {
+  const src = join(root, 'src');
+  const zhPath = join(src, 'i18n/zh.ts');
+  const enPath = join(src, 'i18n/en.ts');
+  const violations = [];
+  const parseErrors = [];
+  const emptyFiles = [];
+  let exitCode = 0;
+
+  function fatal(msg) {
+    violations.push(msg);
+  }
+
+  let zhContent;
+  let enContent;
+  try {
+    zhContent = readFileSync(zhPath, 'utf8');
+  } catch {
+    fatal(`cannot read zh locale: ${relative(root, zhPath)}`);
+    zhContent = '';
+  }
+  try {
+    enContent = readFileSync(enPath, 'utf8');
+  } catch {
+    fatal(`cannot read en locale: ${relative(root, enPath)}`);
+    enContent = '';
+  }
+
+  const zhRes = zhContent ? resolveComposedKeys('zh', zhContent, root) : { keys: new Set(), duplicates: [], errors: ['missing file'] };
+  const enRes = enContent ? resolveComposedKeys('en', enContent, root) : { keys: new Set(), duplicates: [], errors: ['missing file'] };
+
+  for (const [label, res] of [['zh', zhRes], ['en', enRes]]) {
+    for (const err of res.errors) fatal(`[${label}] ${err}`);
+    for (const dup of res.duplicates) fatal(`[${label}] duplicate key: ${dup}`);
+    if (res.keys.size === 0 && !res.errors.some((e) => e.startsWith('missing domain'))) {
+      emptyFiles.push(label);
+      fatal(`[${label}] locale resolved to ZERO keys (empty object or parse failure)`);
+    }
+  }
+
+  const missingInEn = [...zhRes.keys].filter((k) => !enRes.keys.has(k));
+  const missingInZh = [...enRes.keys].filter((k) => !zhRes.keys.has(k));
+  for (const k of missingInEn) fatal(`missing in en: ${k}`);
+  for (const k of missingInZh) fatal(`missing in zh: ${k}`);
+
+  if (violations.length > 0) exitCode = 1;
+  return { exitCode, zhKeys: zhRes.keys.size, enKeys: enRes.keys.size, missingInEn, missingInZh, violations, parseErrors, emptyFiles };
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// 2. Bypass detection (R-I1) — unchanged behavior, now also fail-closed
 // ────────────────────────────────────────────────────────────────────────
 
 const CJK_RE = /[㐀-鿿]/;
 
-/**
- * Allowlisted files: structured data / model-facing content, not UI chrome.
- * - provider-presets.ts: bilingual provider registry (proper nouns + metadata,
- *   consumed data-driven via `nameZh`/`descriptionZh` fields).
- * - prompt-context-injector.ts: generator LLM prompt template (Chinese spec
- *   text sent to the model — not user-visible UI copy).
- */
+/** Allowlisted structured-data files (see original rationale). */
 const FILE_ALLOWLIST = new Set([
   resolve(SRC, 'lib/provider-presets.ts'),
   resolve(SRC, 'lib/prompt-context-injector.ts'),
 ]);
 
-/** BCP-47 locale tags are data for Intl formatting, not copy. */
 const FORMAT_TOKEN_ALLOWLIST = new Set(['zh', 'en', 'zh-CN', 'en-US']);
 
 function walkFiles(dir, out) {
@@ -189,41 +222,32 @@ function walkFiles(dir, out) {
 
 function isLocaleRef(node) {
   if (!node) return false;
-  if (ts.isIdentifier(node)) {
+  if (tsModule.isIdentifier(node)) {
     return node.text === 'locale' || node.text === 'zh' || node.text === 'isZh';
   }
-  if (ts.isParenthesizedExpression(node)) return isLocaleRef(node.expression);
+  if (tsModule.isParenthesizedExpression(node)) return isLocaleRef(node.expression);
   return false;
 }
 
 function isLocaleCondition(node) {
   if (!node) return false;
   if (isLocaleRef(node)) return true;
-  if (ts.isCallExpression(node)) {
+  if (tsModule.isCallExpression(node)) {
     const expr = node.expression;
-    if (ts.isPropertyAccessExpression(expr)) {
-      // locale.startsWith(...) / locale.includes(...) — only when the
-      // receiver is a locale reference (NOT `line.includes(...)` etc).
+    if (tsModule.isPropertyAccessExpression(expr)) {
       if (isLocaleRef(expr.expression)) return true;
     }
-    if (ts.isIdentifier(expr) && expr.text === 'uiLocale') return true;
+    if (tsModule.isIdentifier(expr) && expr.text === 'uiLocale') return true;
     return isLocaleCondition(expr);
   }
-  if (ts.isBinaryExpression(node)) {
+  if (tsModule.isBinaryExpression(node)) {
     return isLocaleCondition(node.left) || isLocaleCondition(node.right);
   }
-  if (ts.isPropertyAccessExpression(node)) return isLocaleCondition(node.expression);
-  if (ts.isParenthesizedExpression(node)) return isLocaleCondition(node.expression);
+  if (tsModule.isPropertyAccessExpression(node)) return isLocaleCondition(node.expression);
+  if (tsModule.isParenthesizedExpression(node)) return isLocaleCondition(node.expression);
   return false;
 }
 
-/**
- * Is a string literal branch user-visible copy rather than a class name /
- * field identifier / format token? Copy heuristic:
- *  - contains CJK, or
- *  - contains a space with letters (multi-word sentence), or
- *  - starts with an uppercase letter followed by lowercase (Capitalized word).
- */
 function isCopyString(text) {
   if (!text || text === '') return false;
   if (CJK_RE.test(text)) return true;
@@ -233,8 +257,8 @@ function isCopyString(text) {
 }
 
 function stringLiteralText(node) {
-  if (ts.isStringLiteral(node)) return node.text;
-  if (ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  if (tsModule.isStringLiteral(node)) return node.text;
+  if (tsModule.isNoSubstitutionTemplateLiteral(node)) return node.text;
   return null;
 }
 
@@ -245,18 +269,16 @@ function isFormatToken(text) {
 function checkFile(file, violations) {
   const rel = relative(ROOT, file);
   const source = readFileSync(file, 'utf8');
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const sf = tsModule.createSourceFile(file, source, tsModule.ScriptTarget.Latest, true, file.endsWith('.tsx') ? tsModule.ScriptKind.TSX : tsModule.ScriptKind.TS);
 
   function visit(node) {
-    // Rule (a): CJK string literals / template literals.
     const litText = stringLiteralText(node);
     if (litText !== null && CJK_RE.test(litText)) {
       const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
       violations.push(`CJK literal (bypasses t()): ${rel}:${line + 1}  ${JSON.stringify(litText)}`);
     }
 
-    // Rule (b): locale-conditional expressions yielding string literals.
-    if (ts.isConditionalExpression(node)) {
+    if (tsModule.isConditionalExpression(node)) {
       if (isLocaleCondition(node.condition)) {
         for (const branch of [node.whenTrue, node.whenFalse]) {
           const text = stringLiteralText(branch);
@@ -267,8 +289,7 @@ function checkFile(file, violations) {
         }
       }
     }
-    // `zh && '...'` / `zh || '...'` short-circuit copy.
-    if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+    if (tsModule.isBinaryExpression(node) && (node.operatorToken.kind === tsModule.SyntaxKind.AmpersandAmpersandToken || node.operatorToken.kind === tsModule.SyntaxKind.BarBarToken)) {
       if (isLocaleCondition(node.left)) {
         const text = stringLiteralText(node.right);
         if (text !== null && !isFormatToken(text) && isCopyString(text)) {
@@ -278,31 +299,59 @@ function checkFile(file, violations) {
       }
     }
 
-    // Rule (a) also covers CJK JSX text nodes.
-    if (ts.isJsxText(node) && CJK_RE.test(node.text.trim())) {
+    if (tsModule.isJsxText(node) && CJK_RE.test(node.text.trim())) {
       const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
       violations.push(`CJK JSX text (bypasses t()): ${rel}:${line + 1}  ${JSON.stringify(node.text.trim().slice(0, 60))}`);
     }
 
-    ts.forEachChild(node, visit);
+    tsModule.forEachChild(node, visit);
   }
   visit(sf);
 }
 
-const prodFiles = [];
-walkFiles(SRC, prodFiles);
-const violations = [];
-for (const file of prodFiles) {
-  if (FILE_ALLOWLIST.has(file)) continue;
-  checkFile(file, violations);
+function runBypassScan(root = ROOT) {
+  const src = join(root, 'src');
+  const violations = [];
+  const prodFiles = [];
+  walkFiles(src, prodFiles);
+  for (const file of prodFiles) {
+    if (FILE_ALLOWLIST.has(file)) continue;
+    checkFile(file, violations);
+  }
+  return { prodFiles: prodFiles.length, violations };
 }
 
-if (violations.length > 0) {
-  exitCode = 1;
-  console.error(`\n❌ i18n bypass violations (${violations.length}):`);
-  for (const v of violations) console.error(`  - ${v}`);
-} else {
-  console.log(`✅ i18n bypass scan clean: ${prodFiles.length} production files scanned`);
+export function main() {
+  loadTypeScript();
+  let exitCode = 0;
+  const gate = runI18nCheck(ROOT);
+  exitCode = gate.exitCode;
+  if (gate.missingInEn.length > 0) {
+    console.error(`\n❌ Missing in en.ts (${gate.missingInEn.length}):`);
+    gate.missingInEn.sort().forEach((k) => console.error(`  - ${k}`));
+  }
+  if (gate.missingInZh.length > 0) {
+    console.error(`\n❌ Missing in zh.ts (${gate.missingInZh.length}):`);
+    gate.missingInZh.sort().forEach((k) => console.error(`  - ${k}`));
+  }
+  if (exitCode === 0) {
+    console.log(`✅ i18n keys in sync: ${gate.zhKeys} zh = ${gate.enKeys} en`);
+  } else {
+    for (const v of gate.violations) console.error(`❌ ${v}`);
+    console.error(`\nzh: ${gate.zhKeys} keys, en: ${gate.enKeys} keys`);
+  }
+
+  const bypass = runBypassScan(ROOT);
+  if (bypass.violations.length > 0) {
+    exitCode = 1;
+    console.error(`\n❌ i18n bypass violations (${bypass.violations.length}):`);
+    for (const v of bypass.violations) console.error(`  - ${v}`);
+  } else {
+    console.log(`✅ i18n bypass scan clean: ${bypass.prodFiles} production files scanned`);
+  }
+  process.exit(exitCode);
 }
 
-process.exit(exitCode);
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  main();
+}
