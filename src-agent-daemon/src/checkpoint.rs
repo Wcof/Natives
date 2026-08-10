@@ -984,7 +984,6 @@ pub fn estimate_context_usage(
     })
 }
 
-
 #[cfg(test)]
 #[path = "checkpoint_tests.rs"]
 mod tests;

@@ -4,9 +4,7 @@
 //! executable resolution, port probing, preview URL derivation. No manager
 //! state lives here — the manager composes these.
 
-use crate::creative_app::model::{
-    LaunchPlan, LaunchProgram, LocalLaunchRuntime, ProcessIdentity,
-};
+use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, ProcessIdentity};
 use crate::{Error, Result};
 use std::path::Path;
 use std::time::{Duration, Instant};

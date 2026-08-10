@@ -1,7 +1,6 @@
 use super::*;
 use std::time::Duration;
 
-
 #[tokio::test]
 async fn list_and_kill_task_roundtrip() {
     let rt = ProductionRuntime::new();

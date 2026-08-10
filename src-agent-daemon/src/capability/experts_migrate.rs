@@ -1,6 +1,6 @@
 //! Host subagent migration (W9 split from capability/experts.rs).
 
-use super::experts::{ensure_expert_exists, now_iso, insert_expert};
+use super::experts::{ensure_expert_exists, insert_expert, now_iso};
 use crate::natives_db_broker::HostSubagentRow;
 use rusqlite::params;
 use serde_json::Value;
@@ -21,14 +21,16 @@ pub fn migrate_host_subagents() -> Result<u32, String> {
             return Ok(0);
         }
     }
-    let resp = crate::natives_db_broker::NativesDbBroker::open_default()?
-        .host_subagents("daemon-boot")?;
+    let resp =
+        crate::natives_db_broker::NativesDbBroker::open_default()?.host_subagents("daemon-boot")?;
     import_host_subagent_rows(resp.rows)
 }
 
 /// Import one batch of legacy Host subagent rows into the capability library.
 /// Shared by the production broker lease path and the test fixture reader.
-fn import_host_subagent_rows(rows: Vec<crate::natives_db_broker::HostSubagentRow>) -> Result<u32, String> {
+fn import_host_subagent_rows(
+    rows: Vec<crate::natives_db_broker::HostSubagentRow>,
+) -> Result<u32, String> {
     let mut migrated = 0u32;
     for row in rows {
         let id = row.id;
@@ -141,19 +143,21 @@ pub fn migrate_host_subagents_from(natives_db: &Path) -> Result<u32, String> {
 
     import_host_subagent_rows(
         rows.into_iter()
-            .map(|(id, name, role, instructions, tools, provider_id, key_id, model_id, enabled)| {
-                crate::natives_db_broker::HostSubagentRow {
-                    id,
-                    name,
-                    role: Some(role),
-                    instructions: Some(instructions),
-                    tools: Some(tools),
-                    provider_id,
-                    provider_key_id: key_id,
-                    model_id: Some(model_id),
-                    enabled,
-                }
-            })
+            .map(
+                |(id, name, role, instructions, tools, provider_id, key_id, model_id, enabled)| {
+                    crate::natives_db_broker::HostSubagentRow {
+                        id,
+                        name,
+                        role: Some(role),
+                        instructions: Some(instructions),
+                        tools: Some(tools),
+                        provider_id,
+                        provider_key_id: key_id,
+                        model_id: Some(model_id),
+                        enabled,
+                    }
+                },
+            )
             .collect(),
     )
 }
@@ -161,4 +165,3 @@ pub fn migrate_host_subagents_from(natives_db: &Path) -> Result<u32, String> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-

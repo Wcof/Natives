@@ -6,8 +6,8 @@ use super::checkpoint::{
     MAX_CAPTURE_FILE_CONTENT_BYTES,
 };
 use super::checkpoint_stream::stream_read_capped;
-use std::path::{Path, PathBuf};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 /// Paths whose contents must never be captured in a checkpoint. Only redacted
 /// metadata + hash are stored; rewind reports these files as non-restorable.
@@ -155,7 +155,8 @@ pub(super) fn apply_rewind_files(
                         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                     }
                     // Atomic-ish write: temp + rename
-                    let tmp = abs.with_extension(format!("natives-restore-tmp-{}", uuid::Uuid::new_v4()));
+                    let tmp =
+                        abs.with_extension(format!("natives-restore-tmp-{}", uuid::Uuid::new_v4()));
                     std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
                     std::fs::rename(&tmp, &abs).map_err(|e| {
                         let _ = std::fs::remove_file(&tmp);

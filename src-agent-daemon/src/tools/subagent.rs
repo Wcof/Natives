@@ -21,8 +21,8 @@ use super::gated::PermissionGatedTools;
 // Helpers relocated to `subagent_requeue`; re-exported here so the external
 // paths `crate::tools::subagent::redact_task_input_system_prompt` and
 // `crate::tools::subagent::fail_parent_and_cancel_siblings` keep working.
-pub use super::subagent_requeue::redact_task_input_system_prompt;
 pub(crate) use super::subagent_requeue::fail_parent_and_cancel_siblings;
+pub use super::subagent_requeue::redact_task_input_system_prompt;
 
 /// Step budget for a subagent turn loop when neither the caller nor the
 /// selected agent profile asks for one.

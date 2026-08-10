@@ -18,8 +18,8 @@
 use assistant_protocol::v2::{RunEventKind, RunEventV2};
 use rusqlite::params;
 
-use crate::conversation_store;
 use self::conversation_projector_commit::{group_turns, project_committed_turn, quarantine};
+use crate::conversation_store;
 
 /// A projection write that failed inside the per-turn transaction. The
 /// `Conflict` variant must be quarantined AFTER the transaction rolls back —
@@ -364,10 +364,7 @@ pub fn project_run_incremental(
 /// Explicit projector for usage aggregates (W2): the EventLog only appends and
 /// replays durable events; all read-model projection lives here. Called by the
 /// EventLog append path when a `UsageUpdated` event is persisted.
-pub fn project_usage_rollup(
-    conn: &rusqlite::Connection,
-    event: &RunEventV2,
-) -> Result<(), String> {
+pub fn project_usage_rollup(conn: &rusqlite::Connection, event: &RunEventV2) -> Result<(), String> {
     let RunEventKind::UsageUpdated {
         input_tokens,
         output_tokens,

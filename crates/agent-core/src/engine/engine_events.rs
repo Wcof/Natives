@@ -8,7 +8,11 @@ use assistant_protocol::v2::RunEventKind;
 use serde_json::json;
 
 impl AgentEngine {
-    pub(super) fn append_critical(&self, run_id: &str, event: RunEventKind) -> Result<(), EngineError> {
+    pub(super) fn append_critical(
+        &self,
+        run_id: &str,
+        event: RunEventKind,
+    ) -> Result<(), EngineError> {
         self.events
             .append_checked(run_id, event)
             .map(|_| ())

@@ -2,11 +2,10 @@
 //! transaction, write the turn row, assistant message + blocks, tool result
 //! messages + blocks, and the projection watermark (TASK-005 / A8).
 
-use super::*;
 use super::conversation_projector_blocks::{
-    content_blocks_to_json, error_code_for, parse_stop_reason, result_blocks_for,
-    tool_result_block,
+    content_blocks_to_json, error_code_for, parse_stop_reason, result_blocks_for, tool_result_block,
 };
+use super::*;
 use crate::conversation_store;
 use agent_core::{AssistantMessage, ContentBlock, MessageId, ToolResultMessage};
 use serde_json::Value;

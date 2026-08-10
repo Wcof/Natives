@@ -393,14 +393,3 @@ CREATE INDEX IF NOT EXISTS idx_subagent_session_parent_run
 CREATE INDEX IF NOT EXISTS idx_subagent_session_activity
     ON subagent_session(status, last_activity_at);
 ";
-
-/// Migration 011: subagent status vocabulary + parent heartbeat.
-///
-/// Rewritten during the DATA-001 remediation. The original implementation
-/// rebuilt `subagent_session` (create-copy-drop-rename) purely to widen its
-/// status CHECK, and R-D3 forbids DROP TABLE rebuilds. SQLite cannot modify a
-/// CHECK constraint in place without a rebuild, so the wider status vocabulary
-/// is now enforced at the business layer (`subagent_store`) and fresh databases
-/// receive the full vocabulary directly from MIGRATION_010's CREATE TABLE. The
-/// only schema delta that actually needs SQL here is the parent heartbeat
-/// column; the `ADD COLUMN` is idempotent and the runner tolerates re-entry.

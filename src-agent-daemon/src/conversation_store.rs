@@ -8,19 +8,19 @@ mod conversation_fork;
 mod conversation_messages;
 
 pub use conversation_context::{
-    ActiveContextSnapshot, backfill_context_snapshots, load_active_context_messages,
-    load_active_context_snapshot, load_active_context_snapshot_for_checkpoint,
+    backfill_context_snapshots, load_active_context_messages, load_active_context_snapshot,
+    load_active_context_snapshot_for_checkpoint, ActiveContextSnapshot,
 };
 pub(crate) use conversation_context::{
-    block_image, block_text, latest_context_summary, parse_content_block,
-    parse_tool_result_blocks, reasoning_block_from_events,
+    block_image, block_text, latest_context_summary, parse_content_block, parse_tool_result_blocks,
+    reasoning_block_from_events,
 };
+pub(crate) use conversation_fork::fork;
 pub use conversation_messages::{
     append_agent_message, append_trigger_message, delete_message, engine_history,
     load_agent_messages,
 };
 pub(crate) use conversation_messages::{append_message, get_messages, get_messages_page};
-pub(crate) use conversation_fork::fork;
 
 /// Max bytes of attachment content inlined into the model context (T209).
 /// Oversized attachments degrade to an explicit marker instead of being read.
@@ -659,8 +659,8 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_support::*;
     use assistant_protocol::v2::{RunEventKind, RunEventV2};
+    use test_support::*;
 
     #[tokio::test]
     async fn conversation_create_requires_project_id() {

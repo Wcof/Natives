@@ -155,9 +155,7 @@ pub(crate) fn outbound_http_client(
 // ─────────────────────────────────────────────────────────────────────────────
 // Lease registry (short TTL + revocation) — moved to `credential_broker_lease`.
 // ─────────────────────────────────────────────────────────────────────────────
-pub use crate::credential_broker_lease::{
-    lease_registry, CredentialLeaseRegistry, LeaseEntry,
-};
+pub use crate::credential_broker_lease::{lease_registry, CredentialLeaseRegistry, LeaseEntry};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lease handlers (wire protocol) — used by the UDS broker dispatch and by the

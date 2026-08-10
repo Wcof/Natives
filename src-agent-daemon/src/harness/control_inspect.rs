@@ -2,11 +2,11 @@
 //! aggregation, template list, prompt preview, run snapshots, external
 //! runtime inspection, and project identity bookkeeping.
 
-use super::control_profile::{layers_json, project_path, resolved_context};
 use super::super::external_inspector;
 use super::super::projection;
 use super::super::repository;
 use super::super::{opt_str, req_str, HarnessError};
+use super::control_profile::{layers_json, project_path, resolved_context};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

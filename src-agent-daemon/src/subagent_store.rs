@@ -7,13 +7,13 @@
 //! reservations in [`subagent_reservation`]. All their public items are
 //! re-exported here so `crate::subagent_store::*` keeps working unchanged.
 
-mod subagent_route;
 mod subagent_directive;
 mod subagent_reservation;
+mod subagent_route;
 
-pub use subagent_route::*;
 pub use subagent_directive::*;
 pub use subagent_reservation::*;
+pub use subagent_route::*;
 
 use crate::storage::DataStore;
 use rusqlite::{params, OptionalExtension};

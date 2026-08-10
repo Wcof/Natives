@@ -277,34 +277,33 @@ impl HookHandler for NativeAgentHook {
             Ok(value) => value,
             Err(reason) => return HookOutcome::Failed { reason },
         };
-        let created =
-            match crate::child_run_orchestrator::create_child_run(
-                crate::child_run_orchestrator::ChildRunSpec {
-                    conversation_id,
-                    provider_id: parent.provider_id,
-                    model_id,
-                    key_id: Some(key_id),
-                    agent_profile_id: None,
-                    permission_profile: Some("readonly".into()),
-                    content: Some(task),
-                    max_steps: Some(self.max_steps.clamp(1, 32)),
-                    parent_run_id: Some(parent.id.clone()),
-                    project_path: parent.project_path.clone(),
-                    runtime_id: Some("native".into()),
-                },
-            )
-            .await
-            {
-                Ok(run) => run,
-                Err(reason) => {
-                    let _ = crate::subagent_store::close_subagent_session(
-                        &session_id,
-                        "failed",
-                        Some(&reason),
-                    );
-                    return HookOutcome::Failed { reason };
-                }
-            };
+        let created = match crate::child_run_orchestrator::create_child_run(
+            crate::child_run_orchestrator::ChildRunSpec {
+                conversation_id,
+                provider_id: parent.provider_id,
+                model_id,
+                key_id: Some(key_id),
+                agent_profile_id: None,
+                permission_profile: Some("readonly".into()),
+                content: Some(task),
+                max_steps: Some(self.max_steps.clamp(1, 32)),
+                parent_run_id: Some(parent.id.clone()),
+                project_path: parent.project_path.clone(),
+                runtime_id: Some("native".into()),
+            },
+        )
+        .await
+        {
+            Ok(run) => run,
+            Err(reason) => {
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some(&reason),
+                );
+                return HookOutcome::Failed { reason };
+            }
+        };
         crate::child_run_orchestrator::apply_child_surface(
             &created.id,
             self.readonly_tools.clone(),

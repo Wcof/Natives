@@ -131,10 +131,10 @@ pub(super) fn resolve_trust(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill_store::{
-        load_skill_for_project, prompt_for_project, SKILL_ROOTS, SkillRecord, SkillScope,
-    };
     use crate::skill_store::test_support::Fixture;
+    use crate::skill_store::{
+        load_skill_for_project, prompt_for_project, SkillRecord, SkillScope, SKILL_ROOTS,
+    };
 
     // ─── Trust ───
 

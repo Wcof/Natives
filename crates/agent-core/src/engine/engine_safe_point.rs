@@ -1,8 +1,8 @@
 //! Safe-point application + provider backoff (W9 split from engine_core.rs).
 
+use super::conversion::provider_backoff_ms;
 use super::engine_core::AgentEngine;
 use super::error::EngineError;
-use super::conversion::provider_backoff_ms;
 
 impl AgentEngine {
     /// Wait out a provider backoff before the next generation attempt.

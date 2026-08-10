@@ -97,9 +97,7 @@ pub struct HistoryMessage {
 /// message body ([`ImageSource::degraded_note`]) rather than drop them.
 /// History-message → provider-message conversion moved to
 /// `capabilities_history` (W9); re-exported for compatibility.
-pub use crate::capabilities_history::{
-    history_message_to_provider, history_messages_to_provider,
-};
+pub use crate::capabilities_history::{history_message_to_provider, history_messages_to_provider};
 
 /// Image source for provider requests.
 ///

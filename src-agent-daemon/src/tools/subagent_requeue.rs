@@ -72,26 +72,24 @@ pub(crate) async fn requeue_child_run(
         },
     )
     .await;
-    crate::child_run_orchestrator::start_child_run(
-        assistant_protocol::v2::StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
-            run_id: Some(created.id.clone()),
-            conversation_id: Some(child_conversation_id.to_string()),
-            provider_id: Some(binding.provider_id.clone()),
-            model_id: Some(binding.model_id.clone()),
-            key_id: Some(binding.key_id.clone()),
-            content: Some(prompt),
-            attachments: None,
-            trigger_message_id: None,
-            permission_profile: Some(child_perm.to_string()),
-            max_steps: Some(child_max_steps),
-            project_path: session.project_path.clone(),
-            idempotency_key: None,
-            effort: None,
-            runtime_id: Some("native".into()),
-        },
-    )
+    crate::child_run_orchestrator::start_child_run(assistant_protocol::v2::StartRunRequest {
+        agent_profile_id: None,
+        capability_selection: None,
+        run_id: Some(created.id.clone()),
+        conversation_id: Some(child_conversation_id.to_string()),
+        provider_id: Some(binding.provider_id.clone()),
+        model_id: Some(binding.model_id.clone()),
+        key_id: Some(binding.key_id.clone()),
+        content: Some(prompt),
+        attachments: None,
+        trigger_message_id: None,
+        permission_profile: Some(child_perm.to_string()),
+        max_steps: Some(child_max_steps),
+        project_path: session.project_path.clone(),
+        idempotency_key: None,
+        effort: None,
+        runtime_id: Some("native".into()),
+    })
     .await?;
     let _ = crate::subagent_store::bump_subagent_retry(session_id);
     Ok(created.id)
@@ -326,12 +324,7 @@ mod tests {
             Err(e) => panic!("queued → failed must be legal for FailFast: {e}"),
         }
 
-        fail_parent_and_cancel_siblings(
-            &subagents,
-            &parent.id,
-            "injected child failure",
-        )
-        .await;
+        fail_parent_and_cancel_siblings(&subagents, &parent.id, "injected child failure").await;
 
         assert_eq!(
             subagents.get(&a.id).await.unwrap().status,

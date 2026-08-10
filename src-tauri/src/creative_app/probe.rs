@@ -10,8 +10,8 @@ use std::path::Path;
 
 // Backward-compatible re-exports: compose analysis now lives in `super::compose`.
 pub use super::compose::{
-    analyze_compose_file, analyze_compose_yaml, collect_host_ports,
-    normalize_compose_to_localhost, ComposeAnalysis, ComposeServiceInfo,
+    analyze_compose_file, analyze_compose_yaml, collect_host_ports, normalize_compose_to_localhost,
+    ComposeAnalysis, ComposeServiceInfo,
 };
 
 #[derive(Debug, Clone, Deserialize)]

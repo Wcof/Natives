@@ -84,4 +84,3 @@ pub fn load_expert_profile_from_db(id: &str) -> Option<AgentProfile> {
         source_path: None,
     })
 }
-

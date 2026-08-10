@@ -200,8 +200,7 @@ async fn resolve_frozen_dispatcher_compiles_once_and_is_immune_to_mid_run_edits(
     let run_id = format!("run-resolve-{}", uuid::Uuid::new_v4());
     let events = EventSequencer::memory_only();
 
-    let first =
-        resolve_frozen_dispatcher(&run_id, events.clone(), Some(project.root.as_path()));
+    let first = resolve_frozen_dispatcher(&run_id, events.clone(), Some(project.root.as_path()));
     let plan_hash = first.plan_hash().to_string();
     assert_eq!(
         frozen_dispatcher_for_run(&run_id).unwrap().plan_hash(),

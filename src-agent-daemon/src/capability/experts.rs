@@ -55,7 +55,6 @@ fn expert_row_to_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 /// the fallback (interchange format). Used by run-level capability resolution,
 /// run start, and the `task` tool's `subagent_type` — so a DB Expert is usable
 /// as a subagent persona exactly like a file profile.
-
 // W9 split: agent profile loading -> experts_profile, expert team CRUD ->
 // experts_team, host subagent migration -> experts_migrate. Public paths are
 // re-exported below so external `capability::experts::*` keeps working.
@@ -67,7 +66,6 @@ pub(crate) use experts_profile::{load_agent_profile, load_expert_profile_from_db
 pub(crate) use experts_team::{
     team_create, team_delete, team_get, team_list, team_to_json, team_update,
 };
-
 
 pub fn list(params_value: &Value) -> Result<Value, String> {
     let enabled_only = params_value
@@ -615,7 +613,6 @@ fn required_str<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| format!("{key} required"))
 }
-
 
 #[cfg(test)]
 mod tests {

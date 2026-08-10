@@ -1,10 +1,10 @@
 //! Install orchestration for external GitHub creative apps.
 
+use super::compose;
 use super::docker;
 use super::github::{self, GhRelease};
 use super::model::*;
 use super::paths::{self, MAX_ASSET_BYTES, MAX_TOTAL_BYTES};
-use super::compose;
 use super::probe::{self, ProbeOutcome};
 use super::state_machine;
 use super::store;
@@ -456,7 +456,13 @@ async fn install_compose(
     }
 
     let dest = runtime_dir.join("docker-compose.yml");
-    compose::normalize_compose_to_localhost(&compose_src, &dest, service, host_port, container_port)?;
+    compose::normalize_compose_to_localhost(
+        &compose_src,
+        &dest,
+        service,
+        host_port,
+        container_port,
+    )?;
 
     let project = paths::compose_project_name(app_id);
     emit_progress(

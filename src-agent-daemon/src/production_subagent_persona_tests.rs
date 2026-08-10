@@ -11,8 +11,7 @@ struct ProfileFixture {
 
 impl ProfileFixture {
     fn new() -> Self {
-        let root =
-            std::env::temp_dir().join(format!("natives-persona-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("natives-persona-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join(".agents").join("agents")).unwrap();
         ProfileFixture { root }
     }
@@ -428,11 +427,7 @@ async fn explicit_request_plus_hostile_profile_still_capped_by_parent() {
     // parent's own profile: readonly parent + full_access request +
     // full_access profile → readonly.
     assert_eq!(
-        agent_core::resolve_child_permission(
-            "readonly",
-            Some("full_access"),
-            Some("full_access")
-        ),
+        agent_core::resolve_child_permission("readonly", Some("full_access"), Some("full_access")),
         "readonly"
     );
     assert_eq!(

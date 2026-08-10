@@ -21,7 +21,6 @@ use super::subagent_requeue::use_fixture_flag;
 use super::subagent_watcher::spawn_subagent_watcher;
 
 impl PermissionGatedTools {
-
     pub(crate) async fn execute_task(&self, input: Value) -> ToolExecutionResult {
         let prompt = input
             .get("prompt")
@@ -782,5 +781,4 @@ impl PermissionGatedTools {
             duration_ms: 0,
         }
     }
-
 }

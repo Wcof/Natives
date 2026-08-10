@@ -2,9 +2,7 @@
 //! capabilities.rs). Owns the role/content/tool-call/tool-result/image
 //! encoding rules shared by every provider adapter.
 
-use super::{
-    HistoryMessage, ImageSource, ProviderContentBlock, ProviderMessage, HistoryToolCall,
-};
+use super::{HistoryMessage, HistoryToolCall, ImageSource, ProviderContentBlock, ProviderMessage};
 use serde::{Deserialize, Serialize};
 
 /// Map a single history message into a provider message.

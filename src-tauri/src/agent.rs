@@ -5,8 +5,8 @@ use std::path::Path;
 mod skills;
 
 pub use skills::{
-    invalidate_skills_cache, scan_skills, validate_skill_dir, SkillHealth, SkillInfo,
-    SkillsData, SkillsOverview,
+    invalidate_skills_cache, scan_skills, validate_skill_dir, SkillHealth, SkillInfo, SkillsData,
+    SkillsOverview,
 };
 
 // ── 数据结构 ──

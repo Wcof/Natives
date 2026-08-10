@@ -13,8 +13,8 @@
 //! W2 rule: do not add a second spawn path. If a caller needs a different
 //! spawn shape, extend this module — never bypass it.
 
-use assistant_protocol::v2::{CreateRunRequest, RunV2, StartRunRequest};
 use crate::run_manager::RunManager;
+use assistant_protocol::v2::{CreateRunRequest, RunV2, StartRunRequest};
 
 /// Everything needed to create one child run. Callers build this after they
 /// created the hidden child session / reservation.
@@ -113,11 +113,15 @@ pub async fn spawn_child_run(
     apply_child_surface(&run_id, tool_allowlist, agent_directive).await;
     let mut start = start;
     start.run_id = Some(run_id.clone());
-    start.conversation_id = start.conversation_id.or(Some(created.conversation_id.clone()));
+    start.conversation_id = start
+        .conversation_id
+        .or(Some(created.conversation_id.clone()));
     start.provider_id = start.provider_id.or(Some(created.provider_id.clone()));
     start.model_id = start.model_id.or(Some(created.model_id.clone()));
     start.key_id = start.key_id.or(created.key_id.clone());
-    start.permission_profile = start.permission_profile.or(created.permission_profile.clone());
+    start.permission_profile = start
+        .permission_profile
+        .or(created.permission_profile.clone());
     start.max_steps = start.max_steps.or(created.max_steps);
     start.project_path = start.project_path.or(created.project_path.clone());
     start.runtime_id = start.runtime_id.or(created.runtime_id.clone());

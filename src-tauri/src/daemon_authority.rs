@@ -7,12 +7,11 @@
 //! Production: set `NATIVES_DAEMON_MODE=uds` / `NATIVES_REQUIRE_UDS=1`.
 //! UDS failure must not silently become Embedded (see SidecarSupervisor).
 
-use natives_agent_daemon::{
-    resolve_run_authority_mode, AuthorityError, ExecutionAuthority,
-    RunAuthorityMode, UdsAuthority,
-};
 #[cfg(any(test, feature = "diagnostic"))]
 use natives_agent_daemon::EmbeddedAuthority;
+use natives_agent_daemon::{
+    resolve_run_authority_mode, AuthorityError, ExecutionAuthority, RunAuthorityMode, UdsAuthority,
+};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 

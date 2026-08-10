@@ -409,7 +409,6 @@ pub fn collect_host_ports(text: &str) -> Result<BTreeSet<u16>> {
     Ok(set)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -64,11 +64,7 @@ impl Drop for TempProject {
     }
 }
 
-async fn dispatch(
-    hooks: &HookRegistry,
-    event: HookEvent,
-    tool: Option<&str>,
-) -> Vec<HookResponse> {
+async fn dispatch(hooks: &HookRegistry, event: HookEvent, tool: Option<&str>) -> Vec<HookResponse> {
     hooks
         .dispatch(HookRequest {
             event,

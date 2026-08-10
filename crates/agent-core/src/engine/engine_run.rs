@@ -10,10 +10,10 @@ use super::conversion::{
     tool_args_fingerprint, values_to_agent_messages,
 };
 use super::engine_core::AgentEngine;
+use super::engine_tools::{is_long_running_tool_result, ExecutedToolCall, PreparedToolCall};
 use super::error::EngineError;
 use super::provider::*;
 use super::tool_runtime::*;
-use super::engine_tools::{is_long_running_tool_result, ExecutedToolCall, PreparedToolCall};
 use crate::doom_loop::DoomLoopDetector;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
 use assistant_protocol::v2::RunEventKind;
@@ -726,4 +726,3 @@ impl AgentEngine {
         }
     }
 }
-

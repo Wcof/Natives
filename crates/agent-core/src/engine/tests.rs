@@ -11,20 +11,20 @@ use std::sync::{Arc, Mutex};
 // Engine behaviour tests, split by domain. Each submodule starts with
 // `use super::*;` so it inherits the shared imports and fixtures below.
 
-#[path = "tests_run.rs"]
-mod run;
-#[path = "tests_tools.rs"]
-mod tools;
-#[path = "tests_hooks.rs"]
-mod hooks;
-#[path = "tests_provider.rs"]
-mod provider;
+#[path = "tests_api.rs"]
+mod api;
 #[path = "tests_compaction.rs"]
 mod compaction;
 #[path = "tests_conversion.rs"]
 mod conversion;
-#[path = "tests_api.rs"]
-mod api;
+#[path = "tests_hooks.rs"]
+mod hooks;
+#[path = "tests_provider.rs"]
+mod provider;
+#[path = "tests_run.rs"]
+mod run;
+#[path = "tests_tools.rs"]
+mod tools;
 
 struct FakeProvider {
     rounds: Mutex<Vec<Vec<EngineProviderEvent>>>,

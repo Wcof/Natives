@@ -36,18 +36,18 @@
 use super::HarnessError;
 use serde_json::Value;
 
-#[path = "control_profile.rs"]
-mod control_profile;
-#[path = "control_draft.rs"]
-mod control_draft;
-#[path = "control_resolve.rs"]
-mod control_resolve;
-#[path = "control_inspect.rs"]
-mod control_inspect;
 #[path = "control_binding.rs"]
 mod control_binding;
+#[path = "control_draft.rs"]
+mod control_draft;
+#[path = "control_inspect.rs"]
+mod control_inspect;
 #[path = "control_observability.rs"]
 mod control_observability;
+#[path = "control_profile.rs"]
+mod control_profile;
+#[path = "control_resolve.rs"]
+mod control_resolve;
 
 use control_binding::*;
 use control_draft::*;

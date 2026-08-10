@@ -781,9 +781,7 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
 }
 
 // Orphan / process-exit handling moved to `lifecycle_process` (W3); re-exported.
-pub use super::lifecycle_process::{
-    mark_process_exited, poll_and_reconcile_exits, resolve_orphan,
-};
+pub use super::lifecycle_process::{mark_process_exited, poll_and_reconcile_exits, resolve_orphan};
 
 pub fn get_local_config(conn: &Connection, id: &str) -> Result<LocalCreativeConfig> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;

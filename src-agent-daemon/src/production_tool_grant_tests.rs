@@ -1,6 +1,5 @@
 use super::*;
 
-
 /// Give each grant test its own temp store: `remember` persists non-once
 /// grants durably, and the `check` DB fallback must never see another
 /// test's grant (the tests share conversation/run keys).

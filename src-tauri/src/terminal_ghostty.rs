@@ -118,7 +118,9 @@ impl GhosttyManager {
             if cfg!(target_os = "macos") {
                 v.push("/Applications/Ghostty.app/Contents/MacOS/ghostty".to_string());
                 if let Some(ref h) = home {
-                    v.push(format!("{h}/Applications/Ghostty.app/Contents/MacOS/ghostty"));
+                    v.push(format!(
+                        "{h}/Applications/Ghostty.app/Contents/MacOS/ghostty"
+                    ));
                 }
             }
             if cfg!(target_os = "linux") {

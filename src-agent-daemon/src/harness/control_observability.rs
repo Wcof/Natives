@@ -1,9 +1,9 @@
 //! Audit, trace, and source-drift observability: what ran, what changed, and
 //! what on-disk Hook sources currently disagree with their published digests.
 
-use super::control_profile::discovered_hooks;
 use super::super::repository;
 use super::super::{opt_i64, opt_str, req_str, HarnessError};
+use super::control_profile::discovered_hooks;
 use serde_json::Value;
 
 pub(super) fn audit_list(params: &Value) -> Result<Value, HarnessError> {

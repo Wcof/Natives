@@ -381,7 +381,6 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
 /// Note: Daemon schema progress is tracked in `_daemon_schema_version`
 /// (see `DataStore::run_migrations`). Host continues to own `_schema_version`
 /// for `assistant_*` tables on the same file. Do not reintroduce a shared
-
 // W9: versioned SQL constants moved to migrations_early / migrations_mid /
 // migrations_late; `ALL` above remains the single ordered registry.
 mod migrations_early;
@@ -391,16 +390,15 @@ use migrations_early::{
     MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006,
     MIGRATION_007, MIGRATION_008, MIGRATION_009, MIGRATION_010,
 };
-use migrations_mid::{
-    MIGRATION_011, MIGRATION_012, MIGRATION_013, MIGRATION_014, MIGRATION_015, MIGRATION_016,
-    MIGRATION_017, MIGRATION_018, MIGRATION_019, MIGRATION_020,
-};
 use migrations_late::{
     MIGRATION_021, MIGRATION_022, MIGRATION_023, MIGRATION_024, MIGRATION_025, MIGRATION_026,
     MIGRATION_027, MIGRATION_028, MIGRATION_029, MIGRATION_030, MIGRATION_031, MIGRATION_032,
     MIGRATION_033, MIGRATION_034, MIGRATION_035, MIGRATION_036, MIGRATION_037,
 };
-
+use migrations_mid::{
+    MIGRATION_011, MIGRATION_012, MIGRATION_013, MIGRATION_014, MIGRATION_015, MIGRATION_016,
+    MIGRATION_017, MIGRATION_018, MIGRATION_019, MIGRATION_020,
+};
 
 #[cfg(test)]
 mod tests {

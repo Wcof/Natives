@@ -398,7 +398,10 @@ pub fn merge_credentials(mut incoming: Value, existing: Option<Value>) -> Value 
     Value::Object(incoming.clone())
 }
 
-pub fn preview(source: &str, existing: &std::collections::HashSet<String>) -> Result<ImportPreview> {
+pub fn preview(
+    source: &str,
+    existing: &std::collections::HashSet<String>,
+) -> Result<ImportPreview> {
     if source.len() > MAX_IMPORT_BYTES {
         return Err(Error::InvalidInput("import exceeds 10 MiB".into()));
     }

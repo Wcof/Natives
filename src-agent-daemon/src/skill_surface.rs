@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::skill_parse::parse_skill_markdown;
 use super::skill_trust::content_hash;
-use super::{MAX_LOADED_BODY_CHARS, SkillScope, SkillStore, SkillTrust};
+use super::{SkillScope, SkillStore, SkillTrust, MAX_LOADED_BODY_CHARS};
 
 /// Resolve the tool surface a skill may narrow the run to.
 ///

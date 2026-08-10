@@ -126,8 +126,7 @@ async fn parent_none_allowlist_exposes_full_surface() {
 /// tools, and no general write tool rides along.
 #[test]
 fn creative_surface_registers_only_draft_tools() {
-    let allowlist =
-        builtin_surface_allowlist(CREATIVE_DRAFT_AGENT_KIND).expect("built-in surface");
+    let allowlist = builtin_surface_allowlist(CREATIVE_DRAFT_AGENT_KIND).expect("built-in surface");
     let mut gateway = CapabilityGateway::new();
     register_tools_for_surface(&mut gateway, Some(&allowlist));
 

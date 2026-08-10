@@ -36,25 +36,21 @@ pub fn global_coordinator() -> Arc<SessionCoordinator> {
 }
 
 /// SQLite-backed input lease used by the engine at safe points.
-
 // W9 split: durable receivers -> prompt_queue_receiver, snapshot persistence ->
 // prompt_queue_snapshot, promptQueue.* RPC -> prompt_queue_crud. Public paths
 // are re-exported below so external `prompt_queue_store::*` keeps working.
 mod prompt_queue_crud;
 mod prompt_queue_receiver;
 mod prompt_queue_snapshot;
-pub(crate) use prompt_queue_receiver::{
-    DurableInputReceiver, DurableSafePointReceiver,
+pub(crate) use prompt_queue_crud::{enqueue, interject, list, remove, reorder, request, update};
+pub(crate) use prompt_queue_receiver::{DurableInputReceiver, DurableSafePointReceiver};
+pub(crate) use prompt_queue_snapshot::{
+    ensure_conversation_for_queue, row_to_item, store, value_to_queue_item,
 };
 pub(crate) use prompt_queue_snapshot::{
     hydrate_conversation, load_actor_snapshot, persist_actor_snapshot,
     recover_session_actors_on_startup,
 };
-pub(crate) use prompt_queue_crud::{request, list, enqueue, update, remove, reorder, interject};
-pub(crate) use prompt_queue_snapshot::{
-    ensure_conversation_for_queue, row_to_item, store, value_to_queue_item,
-};
-
 
 pub fn on_safe_point_checked(
     conversation_id: &str,

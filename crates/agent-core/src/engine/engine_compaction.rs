@@ -3,10 +3,14 @@
 //! compaction entry point. Every failure path degrades to mechanical
 //! compaction — compaction never fails a Run.
 
-use super::conversion::{agent_message_id, agent_messages_to_values, values_to_agent_messages, values_chars};
+use super::conversion::{
+    agent_message_id, agent_messages_to_values, values_chars, values_to_agent_messages,
+};
 use super::engine_core::AgentEngine;
 use super::error::EngineError;
-use super::provider::{EngineProvider, EngineProviderContext, EngineProviderEvent, ProviderTurnRequest};
+use super::provider::{
+    EngineProvider, EngineProviderContext, EngineProviderEvent, ProviderTurnRequest,
+};
 use crate::compaction::{
     apply_model_summary, choose_summary_split, compact_messages as compact_tool_history,
     render_transcript_for_summary, repair_dangling_tool_calls, CompactResult,

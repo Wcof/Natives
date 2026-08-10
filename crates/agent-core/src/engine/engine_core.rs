@@ -15,9 +15,7 @@
 
 use super::error::EngineError;
 use super::provider::*;
-use super::tool_runtime::{
-    EngineToolRuntime, NoopToolProgressSink, ToolProgressSink, ToolSchema,
-};
+use super::tool_runtime::{EngineToolRuntime, NoopToolProgressSink, ToolProgressSink, ToolSchema};
 
 use crate::context::ContextStats;
 use crate::event_seq::EventSequencer;

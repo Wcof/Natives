@@ -468,7 +468,7 @@ impl EventPersistence for EventLog {
 
 // Event payload decode / normalize helpers moved to `event_log_decode` (W9).
 use crate::event_log_decode::{
-    decode_event_v2, decode_payload, decode_payload_v2, normalize_stored_payload, event_type_name,
+    decode_event_v2, decode_payload, decode_payload_v2, event_type_name, normalize_stored_payload,
 };
 
 #[cfg(test)]

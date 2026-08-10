@@ -197,31 +197,3 @@ CREATE TABLE IF NOT EXISTS provider_route_health (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ";
-
-/// Migration 021: capability library (ADR-0016).
-///
-/// Authoritative storage for skills metadata, MCP connector configs, experts
-/// and expert teams. Secrets NEVER live in this database: `env_json` values may
-/// hold `secret:<id>` references resolved by the Host-side encrypted store,
-/// and header validation rejects plaintext Authorization values at the RPC
-/// boundary.
-///
-/// Also, the historical `DROP TABLE IF EXISTS mcp_server_config` was removed
-/// during the DATA-001 remediation (R-D3 forbids DROP TABLE in active
-/// migrations). `mcp_server_config` was created by migration 004 with zero
-/// readers or writers ever shipped, and that CREATE was removed from 004 as
-/// well — fresh databases never create the dead table, so no DROP is needed
-/// anywhere. Databases that applied the old migrations already had it dropped
-/// by the historical 021.
-///
-/// Merge hazard, recorded because the runner cannot detect it: 021 and 022 were
-/// written on two parallel branches, and the Harness branch (022) ran first on
-/// some development databases. `run_migrations` gates on `MAX(version)`, not on
-/// row membership, so any database that recorded 22 before 021 existed will skip
-/// 021 forever and never report an error — the `capability_*` tables simply are
-/// not there, and every `capability.*` RPC then fails on a missing table.
-/// Fresh databases and any database at version <= 20 are unaffected. Recovery on
-/// an affected database is manual: `DELETE FROM _daemon_schema_version WHERE
-/// version = 22;` and reopen (022 is `CREATE TABLE IF NOT EXISTS` throughout, so
-/// re-running it is safe; the two `ALTER TABLE` statements below are not, which
-/// is why 021 must never be re-run against a database that already applied it).

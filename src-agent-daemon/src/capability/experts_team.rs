@@ -1,8 +1,6 @@
 //! Expert team CRUD (W9 split from capability/experts.rs).
 
-use super::experts::{
-    expert_row_to_json, insert_expert, now_iso, EXPERT_COLS,
-};
+use super::experts::{expert_row_to_json, insert_expert, now_iso, EXPERT_COLS};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
@@ -260,16 +258,3 @@ pub fn team_delete(params_value: &Value) -> Result<Value, String> {
     }
     Ok(json!({ "deleted": id }))
 }
-
-// ---------------------------------------------------------------------------
-// Host legacy line retirement (ADR-0016): one-shot import of the Host-side
-// `subagents` table (commands/subagent.rs) into the capability library.
-// `subagent_runs` history is NOT migrated — it belongs to a provider-direct
-// execution path with different semantics and stays as a read-only archive.
-// ---------------------------------------------------------------------------
-
-/// Import Host `subagents` rows once. Idempotent: skipped when any
-/// `source='host_migration'` expert exists. Safe to retry on failure.
-///
-/// W1: the daemon never opens natives.db — the Host-owned `subagents` table is
-/// exported over the authenticated broker lease channel (`host.subagents.export`).

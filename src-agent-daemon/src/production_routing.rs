@@ -4,8 +4,8 @@
 //! `validate_route_binding` / `restart_subagent_with_binding` / `wake_assignment_waiter` drive
 //! credential-route updates and subagent restarts.
 
-use capability_gateway::CapabilityGateway;
 use crate::runtime::TaskRecord;
+use capability_gateway::CapabilityGateway;
 use serde_json::Value;
 
 /// Register gateway tools for a run. Parent (`allowlist=None`) gets full builtins.

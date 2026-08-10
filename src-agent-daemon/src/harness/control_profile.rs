@@ -82,7 +82,10 @@ pub(super) fn layer_refs(
     Ok((documents, refs))
 }
 
-pub(super) fn resolved_context(conn: &Connection, params: &Value) -> Result<ResolvedContext, HarnessError> {
+pub(super) fn resolved_context(
+    conn: &Connection,
+    params: &Value,
+) -> Result<ResolvedContext, HarnessError> {
     let project_id = opt_str(params, &["project_id", "projectId"]);
     let conversation_id = opt_str(params, &["conversation_id", "conversationId"]);
     let path = project_path(params);

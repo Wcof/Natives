@@ -74,8 +74,7 @@ impl RunManager {
         self.commit_status(
             run_id,
             RunStatusV2::Preparing,
-            crate::production::TransitionMetadata::empty()
-                .with_lifecycle_hint("preparing"),
+            crate::production::TransitionMetadata::empty().with_lifecycle_hint("preparing"),
         )
     }
 }

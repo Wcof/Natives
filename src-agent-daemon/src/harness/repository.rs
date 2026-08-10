@@ -30,14 +30,14 @@ mod repository_source;
 mod repository_version;
 
 pub use repository_profile::{
-    ProfileRow, archive_profile, get_profile, insert_profile, list_profiles,
+    archive_profile, get_profile, insert_profile, list_profiles, ProfileRow,
 };
 pub use repository_source::{
     acknowledge_source_drift, ensure_source_drift_candidate, publish_source_drift_manifest,
 };
 pub use repository_version::{
-    DraftRow, VersionRow, clear_draft, current_version, get_draft, get_or_create_draft,
-    get_version, list_versions, publish_draft_version, publish_version, save_draft,
+    clear_draft, current_version, get_draft, get_or_create_draft, get_version, list_versions,
+    publish_draft_version, publish_version, save_draft, DraftRow, VersionRow,
 };
 
 /// Identity of the seeded global template. Fixed so re-seeding is a no-op.

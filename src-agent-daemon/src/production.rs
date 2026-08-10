@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
-
 /// Force-kill terminal processes owned by the global ProcessSupervisor (task-03).
 struct GlobalProcessCancelHook;
 
@@ -40,7 +39,6 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
         Ok(())
     }
 }
-
 
 /// Production runtime facade owned by the Daemon.
 ///
@@ -104,7 +102,6 @@ pub struct ProductionRuntime {
     pub metrics_sink: MetricsSink,
 }
 
-
 #[cfg(test)]
 pub use crate::production_credentials::clear_credential_broker_for_tests;
 pub use crate::production_credentials::{
@@ -134,14 +131,13 @@ pub use self::production_builtins::{
     CREATIVE_DRAFT_PROMPT_SURFACE_ID, TASK_DIRECTIVE_PROFILE_ID,
 };
 pub use self::production_fixture::{FixtureMode, FixtureProvider};
+use self::production_reaper::lookup_model_context_window;
+#[cfg(not(test))]
+use self::production_reaper::spawn_subagent_reaper;
 pub use self::production_routing::{
     normalize_permission_scope, register_tools_for_surface, restart_subagent_with_binding,
     validate_route_binding, wake_assignment_waiter,
 };
-use self::production_reaper::lookup_model_context_window;
-#[cfg(not(test))]
-use self::production_reaper::spawn_subagent_reaper;
-
 
 /// Bundled inputs for a production engine turn (replaces the former 10
 /// positional parameters). `capability` carries the resolved ADR-0016
@@ -163,7 +159,6 @@ pub struct RunStartContext {
     pub effective_prompt: harness_core::CompiledPromptPlan,
     pub frozen_tool_schemas: Vec<ToolSchema>,
 }
-
 
 impl ProductionRuntime {
     pub fn new() -> Self {
@@ -837,7 +832,6 @@ impl ProductionRuntime {
     }
 }
 
-
 impl Default for ProductionRuntime {
     fn default() -> Self {
         Self::new()
@@ -869,7 +863,6 @@ fn resolve_active_snapshot_for_start(
     }
 }
 
-
 /// Request-side controls for one run.
 ///
 /// `run.start`'s `effort` is the only control with a producer today: the client
@@ -890,23 +883,23 @@ pub fn run_request_controls(effort: Option<&str>) -> RequestControls {
 }
 
 #[cfg(test)]
-#[path = "production_task_surface_tests.rs"]
-mod task_surface_tests;
-#[cfg(test)]
-#[path = "production_tool_grant_tests.rs"]
-mod tool_grant_tests;
-#[cfg(test)]
 #[path = "production_active_snapshot_resolution_tests.rs"]
 mod active_snapshot_resolution_tests;
-#[cfg(test)]
-#[path = "production_run_controls_tests.rs"]
-mod run_controls_tests;
 #[cfg(test)]
 #[path = "production_permission_bind_tests.rs"]
 mod permission_bind_tests;
 #[cfg(test)]
-#[path = "production_tool_allowlist_tests.rs"]
-mod tool_allowlist_tests;
+#[path = "production_run_controls_tests.rs"]
+mod run_controls_tests;
 #[cfg(test)]
 #[path = "production_subagent_persona_tests.rs"]
 mod subagent_persona_tests;
+#[cfg(test)]
+#[path = "production_task_surface_tests.rs"]
+mod task_surface_tests;
+#[cfg(test)]
+#[path = "production_tool_allowlist_tests.rs"]
+mod tool_allowlist_tests;
+#[cfg(test)]
+#[path = "production_tool_grant_tests.rs"]
+mod tool_grant_tests;
