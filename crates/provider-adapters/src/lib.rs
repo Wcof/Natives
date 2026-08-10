@@ -5,6 +5,7 @@
 //! its capabilities via `ProviderCapabilities`.
 
 pub mod capabilities;
+pub mod capabilities_history;
 pub mod http_client;
 pub mod http_stream;
 pub mod model_profile;
