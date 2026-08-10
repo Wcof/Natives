@@ -23,7 +23,7 @@ fn broadcast<R: tauri::Runtime>(app: &tauri::AppHandle<R>, action: &str, id: &st
     );
 }
 
-fn pid_is_alive(pid: Option<u32>) -> bool {
+pub(crate) fn pid_is_alive(pid: Option<u32>) -> bool {
     let Some(pid) = pid else {
         return false;
     };
@@ -80,15 +80,15 @@ pub async fn resolve_orphan<R: tauri::Runtime>(
     Ok(store::summary_from_local(&rec))
 }
 
-fn identity_looks_orphaned(ident: &ProcessIdentity) -> bool {
+pub(crate) fn identity_looks_orphaned(ident: &ProcessIdentity) -> bool {
     super::runtime::identity_matches_live_strict(ident)
 }
 
-fn identity_matches_live(ident: &ProcessIdentity) -> bool {
+pub(crate) fn identity_matches_live(ident: &ProcessIdentity) -> bool {
     super::runtime::identity_matches_live_strict(ident)
 }
 
-async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
+pub(crate) async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
     #[cfg(unix)]
     {
         if let Some(pgid) = ident.process_group_id {

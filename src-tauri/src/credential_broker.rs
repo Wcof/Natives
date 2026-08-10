@@ -535,8 +535,8 @@ pub fn broker_host_subagents(
             .map_err(|e| redact_broker_error(&format!("read subagents: {e}")))?;
         mapped
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| redact_broker_error(&format!("read subagents: {e}")))?;
-    };
+            .map_err(|e| redact_broker_error(&format!("read subagents: {e}")))
+    }?;
     let lease = lease_registry().issue(
         "subagents",
         "host-export",
