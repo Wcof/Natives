@@ -29,7 +29,7 @@ const HISTORY_COMPACT_CHARS: usize = 48_000;
 const TOOL_OUTPUT_MAX_CHARS: usize = 4_000;
 
 /// Messages kept verbatim at the tail when a model summary replaces the prefix.
-const SUMMARY_KEEP_TAIL_MESSAGES: usize = 6;
+pub(crate) const SUMMARY_KEEP_TAIL_MESSAGES: usize = 6;
 /// Below this many summarizable messages a provider round trip is not worth it.
 const SUMMARY_MIN_PREFIX_MESSAGES: usize = 4;
 /// Upper bound on the transcript handed to the summarizer (cost boundary).
@@ -42,7 +42,7 @@ const SUMMARY_TIMEOUT_MS: u64 = 60_000;
 const SUMMARY_MAX_ATTEMPTS: u32 = 8;
 /// After this many failures the engine stops paying for summarization and
 /// stays on mechanical compaction for the rest of the run.
-const SUMMARY_MAX_FAILURES: u32 = 2;
+pub(crate) const SUMMARY_MAX_FAILURES: u32 = 2;
 
 impl AgentEngine {
     /// Compact the typed Core transcript at the provider-neutral JSON boundary.
