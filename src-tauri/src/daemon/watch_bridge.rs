@@ -607,4 +607,81 @@ mod tests {
             "embedded must fail closed naming UDS, got: {message}"
         );
     }
+
+    /// `run_watch_stop` 是幂等的：对不存在的 run、对已结束的 run、重复调用
+    /// 均不应出错或产生副作用。这里直接验证其等效逻辑（notify_one 对
+    /// 缺失/已结束 handle 为 no-op），随后 `remove_handle` 快照 terminal cursor。
+    #[test]
+    fn stop_is_idempotent_for_missing_repeated_and_ended_runs() {
+        let state = Arc::new(Mutex::new(WatchBridgeState::default()));
+
+        // 1. stop 一个不存在的 run → 等效 no-op（notify_one 永不 panic）。
+        {
+            let guard = state.lock().unwrap();
+            assert!(guard.inner.get("ghost").is_none());
+        }
+
+        // 2. stop 一个存在的 run → notify 其 cancel（等效 run_watch_stop 体内）。
+        let cancel = register_handle(&state, "run-1");
+        cancel.notify_one(); // 等效 run_watch_stop 的 cancel 通知
+                             // 重复 stop（幂等）：notify_one 不累积，二次调用无副作用。
+        cancel.notify_one();
+
+        // 3. 任务结束后 remove_handle 快照 terminal cursor，再 stop 为 no-op。
+        update_handle(
+            &state,
+            "run-1",
+            &durable_frame("run-1", 9, "completed"),
+            true,
+        );
+        remove_handle(&state, "run-1", &cancel);
+        let snap = snapshot_state(&state.lock().unwrap(), "run-1");
+        assert_eq!(snap["active"], false);
+        assert_eq!(snap["lastDurableSequence"].as_u64(), Some(9));
+        assert_eq!(snap["terminal"], true);
+        // stop 已结束的 run（handle 已移除）→ 等效 no-op，cursor 快照不受影响。
+        assert!(!state.lock().unwrap().inner.contains_key("run-1"));
+        let snap_after = snapshot_state(&state.lock().unwrap(), "run-1");
+        assert_eq!(
+            snap_after["lastDurableSequence"].as_u64(),
+            Some(9),
+            "idempotent stop must not corrupt retained cursors"
+        );
+        assert_eq!(snap_after["terminal"], true);
+    }
+
+    /// 终端 durable 帧完成后，`remove_handle` 快照的 cursor 必须反映 terminal=true
+    /// 且推进到该帧的 durable_sequence（重连恢复的关键路径）。
+    #[test]
+    fn terminal_durable_completion_snapshot_is_retained_with_terminal_flag() {
+        let state = Arc::new(Mutex::new(WatchBridgeState::default()));
+        let cancel = register_handle(&state, "run-2");
+        // live delta 先到（仅推进 live cursor）。
+        update_handle(&state, "run-2", &live_text_delta("run-2", 55, "Hi"), false);
+        // durable 终端完成帧到（推进 durable cursor + 标记 terminal）。
+        update_handle(
+            &state,
+            "run-2",
+            &durable_frame("run-2", 12, "completed"),
+            true,
+        );
+        // 任务观测到 terminal 后 clean close → remove_handle 快照双 cursor。
+        remove_handle(&state, "run-2", &cancel);
+        let snap = snapshot_state(&state.lock().unwrap(), "run-2");
+        assert_eq!(snap["active"], false);
+        assert_eq!(
+            snap["lastDurableSequence"].as_u64(),
+            Some(12),
+            "terminal durable sequence must be retained for reconnect"
+        );
+        assert_eq!(
+            snap["lastLiveSequence"].as_u64(),
+            Some(55),
+            "live cursor retained alongside terminal durable"
+        );
+        assert_eq!(snap["terminal"], true);
+        // terminal 的 cursor 记录不应被用于「跳过持久历史」，但它必须存在
+        // 以便 Renderer 据此决定是否重连（terminal=true → 不重连）。
+        assert!(!state.lock().unwrap().inner.contains_key("run-2"));
+    }
 }
