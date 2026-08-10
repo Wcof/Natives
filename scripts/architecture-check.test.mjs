@@ -1,0 +1,175 @@
+/**
+ * W1 mutation fixtures for the architecture gate (fail-closed).
+ * Proves the OLD implementation would false-green on each case and the NEW
+ * implementation FAILs. Run: node --test scripts/architecture-check.test.mjs
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+// The gate module must be loadable WITHOUT the repo's node_modules for tests
+// that only need fs collectors; the a11y AST collector lazily resolves
+// typescript via createRequire (works in both worktree and main workspace).
+let arch;
+try {
+  arch = require('./architecture-check.mjs');
+} catch {
+  // fall back to absolute path (worktree has no node_modules; fs-only collectors
+  // must not depend on typescript at import time)
+  throw new Error('architecture-check.mjs must be importable without typescript at module scope');
+}
+
+function makeFixture(t) {
+  const dir = mkdtempSync(join(tmpdir(), `arch-w1-${t}-`));
+  return dir;
+}
+
+function cleanup(dir) {
+  rmSync(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// F1: handwritten test file > 1000 lines must be flagged (production AND tests)
+// ---------------------------------------------------------------------------
+test('F1: test dir file over 1000 lines is flagged by over_1000', () => {
+  const dir = makeFixture('f1');
+  try {
+    const p = join(dir, 'src-agent-daemon', 'tests', 'huge_test.rs');
+    mkdirSync(join(dir, 'src-agent-daemon', 'tests'), { recursive: true });
+    writeFileSync(p, Array.from({ length: 1001 }, (_, i) => `// line ${i}`).join('\n'));
+    const found = arch.collectOver1000(dir);
+    assert.ok(found.size >= 1, `over_1000 must flag ${p}`);
+    assert.ok([...found.keys()].some((k) => k.includes('huge_test.rs')), 'flagged file is the 1001-line test');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F2: caller-variable path into assistant.db (Host side) must be flagged
+// ---------------------------------------------------------------------------
+test('F2: host caller-variable path into assistant.db is flagged by cross_db_host', () => {
+  const dir = makeFixture('f2');
+  try {
+    const p = join(dir, 'src-tauri', 'src', 'host_db.rs');
+    mkdirSync(join(dir, 'src-tauri', 'src'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        'use rusqlite::Connection;',
+        'pub fn legacy(db_path: &str) {',
+        '  let db = if db_path.is_empty() { "assistant.db" } else { db_path };',
+        '  let conn = Connection::open(db).unwrap();',
+        '  let _ = conn;',
+        '}',
+      ].join('\n'),
+    );
+    // Without dataflow, the conservative rule: any `Connection::open(` whose
+    // argument is an identifier (variable) is a candidate — the manifest/ledger
+    // can review false positives, but a path literal must be a hard fail.
+    const found = arch.collectCrossDbHost(dir);
+    assert.ok(found.size >= 1, 'host Connection::open(variable) must be flagged (fail-closed)');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F3: daemon wrapper / env fallback into natives.db must be flagged
+// ---------------------------------------------------------------------------
+test('F3: daemon env-fallback path into natives.db is flagged by cross_db_daemon', () => {
+  const dir = makeFixture('f3');
+  try {
+    const p = join(dir, 'src-agent-daemon', 'src', 'env_fallback.rs');
+    mkdirSync(join(dir, 'src-agent-daemon', 'src'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        'fn open_fallback() -> rusqlite::Result<rusqlite::Connection> {',
+        '  let path = std::env::var("NATIVES_HOST_DB").unwrap_or_else(|_| "natives.db".to_string());',
+        '  let conn = rusqlite::Connection::open_with_flags(&path, Default::default())?;',
+        '  Ok(conn)',
+        '}',
+      ].join('\n'),
+    );
+    const found = arch.collectCrossDbDaemon(dir);
+    assert.ok(found.size >= 1, 'daemon env fallback to natives.db literal must be flagged');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F4: fatal entries inside the manifest still FAIL (no baseline silencing)
+// ---------------------------------------------------------------------------
+test('F4: over_1000 entry present in manifest still fails the gate', () => {
+  // Simulate the main() exit logic for a fail:true check with a known entry.
+  const known = { 'src/foo/bar.ts': 'was known' };
+  const found = new Map([['src/foo/bar.ts', 'still there']]);
+  const fail = arch.isFatalCheck('over_1000');
+  assert.equal(fail, true);
+  const newCount = [...found.keys()].filter((k) => !Object.prototype.hasOwnProperty.call(known, k)).length;
+  // F4 asserts the policy decision, not the old counting: fatal checks must not
+  // be silenced by the manifest at all. The gate's main() consults
+  // shouldFailCheck(check, found, known) which returns true for fail:true with
+  // ANY found entry.
+  assert.equal(arch.shouldFailCheck({ id: 'over_1000', fail: true }, found, known), true);
+  assert.equal(newCount, 0); // old counting alone would have passed -> false green
+});
+
+// ---------------------------------------------------------------------------
+// F5: multiline TSX non-semantic click must be flagged by a11y (AST-based)
+// ---------------------------------------------------------------------------
+test('F5: multiline TSX div onClick without role/keyboard is flagged', () => {
+  const dir = makeFixture('f5');
+  try {
+    const p = join(dir, 'src', 'components', 'widget.tsx');
+    mkdirSync(join(dir, 'src', 'components'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        'export function Widget() {',
+        '  return (',
+        '    <div',
+        '      className="clickable"',
+        '      onClick={() => doThing()}',
+        '    >',
+        '      click me',
+        '    </div>',
+        '  );',
+        '}',
+      ].join('\n'),
+    );
+    const found = arch.collectA11yClickable(dir);
+    assert.ok(found.size >= 1, 'multiline non-semantic click must be flagged');
+    const key = [...found.keys()][0];
+    assert.ok(key.includes('widget.tsx'), 'flagged element is in the fixture');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F6: empty scan scope is fatal, never an implicit pass
+// ---------------------------------------------------------------------------
+test('F6: gate with no scanned files must fail (empty scope)', () => {
+  const dir = makeFixture('f6');
+  try {
+    // scope exists but contains nothing scanable
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    const summary = arch.runChecks(dir);
+    assert.ok(Array.isArray(summary.rows));
+    assert.ok(summary.scannedFiles === 0 || summary.rows.length > 0);
+    // The gate must fail when total found across fatal checks is 0 but scope is
+    // empty: empty scope is indistinguishable from "everything clean", so
+    // main() must treat scannedFiles === 0 as a fatal.
+    assert.equal(arch.shouldFailEmptyScope(summary), true);
+  } finally {
+    cleanup(dir);
+  }
+});
