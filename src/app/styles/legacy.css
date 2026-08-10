@@ -35,7 +35,7 @@
   border-radius: 99px;
   background: var(--primary);
   border: none;
-  color: #FFFFFF;
+  color: var(--control-selected-fg);
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
@@ -58,8 +58,8 @@
   width: 22px;
   height: 22px;
   border-radius: 99px;
-  background: rgba(0, 0, 0, 0.12);
-  color: #FFFFFF;
+  background: var(--icon-chip-bg);
+  color: var(--control-selected-fg);
   flex-shrink: 0;
   transition: transform var(--transition);
 }

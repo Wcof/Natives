@@ -109,8 +109,26 @@ function extractKeys(content) {
 
 const zhContent = readFileSync(resolve(ROOT, 'src/i18n/zh.ts'), 'utf8');
 const enContent = readFileSync(resolve(ROOT, 'src/i18n/en.ts'), 'utf8');
-const zhKeys = extractKeys(zhContent);
-const enKeys = extractKeys(enContent);
+// W4: locale entries are thin composition roots (`export const en = { ...app, ...nav }`);
+// resolve the spread targets from the per-domain files in ./en/ and ./zh/ so the
+// key-sync check still sees the full object shape.
+function resolveComposedKeys(localeDir, content) {
+  const spreadRefs = [...content.matchAll(/\.\.\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+  if (spreadRefs.length === 0) return extractKeys(content);
+  const keys = new Set();
+  for (const ref of spreadRefs) {
+    const domainPath = resolve(ROOT, `src/i18n/${localeDir}/${ref}.ts`);
+    try {
+      const domainContent = readFileSync(domainPath, 'utf8');
+      for (const k of extractKeys(domainContent)) keys.add(k);
+    } catch {
+      console.error(`Cannot read i18n domain file: ${domainPath}`);
+    }
+  }
+  return keys;
+}
+const zhKeys = resolveComposedKeys('zh', zhContent);
+const enKeys = resolveComposedKeys('en', enContent);
 const missingInEn = [...zhKeys].filter((k) => !enKeys.has(k));
 const missingInZh = [...enKeys].filter((k) => !zhKeys.has(k));
 

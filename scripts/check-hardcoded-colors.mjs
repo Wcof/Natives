@@ -24,7 +24,12 @@ const ROOT = resolve(__dirname, '..');
 const SCAN_DIRS = ['src/components', 'src/app'];
 const SCAN_EXT = /\.(tsx?|css)$/;
 // Token definition file where raw color literals are the point.
-const EXEMPT = new Set(['src/app/globals.css']);
+// W4: globals.css was split into src/app/styles/* (tokens/base/shell/
+// terminal/controls/motion/legacy); tokens.css defines the raw literals.
+const EXEMPT = new Set([
+  'src/app/globals.css',
+  'src/app/styles/tokens.css',
+]);
 
 const HEX_RE = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g;
 const FUNC_RE = /\b(?:rgba?|hsla?)\(/g;

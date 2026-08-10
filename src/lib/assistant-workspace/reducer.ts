@@ -4,9 +4,7 @@
  * Sequence: ignore dup/out-of-order; gap → recovering.
  */
 import type {
-  ContentBlock,
   ConversationSnapshot,
-  InteractionRequest,
   Message,
   Run,
   RunEvent,
@@ -23,9 +21,6 @@ import { clearSelectorCachesForConversation } from './selectors';
 // Live-message slice (W4): streaming live-bubble projection + lifecycle rank
 // helpers moved to `reducer-live` to keep this file a thin composition root.
 import { applyEventToLive, runStatusRank, statusFromEventType } from './reducer-live';
-
-type ConflictFiles = Array<{ path: string; base?: string; ours?: string; theirs?: string }>;
-type AskOpts = Array<{ id: string; label: string; description?: string }>;
 
 const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 

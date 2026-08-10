@@ -404,8 +404,8 @@
 }
 
 .window-ctrl-btn.window-ctrl-close:hover {
-  background: color-mix(in srgb, var(--mac-red, #FF5F57) 18%, transparent);
-  color: var(--mac-red, #FF5F57);
+  background: color-mix(in srgb, var(--mac-red) 18%, transparent);
+  color: var(--mac-red);
 }
 
 .window-ctrl-btn:active {

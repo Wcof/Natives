@@ -175,8 +175,20 @@
   /* ── Modal overlay scrim (R-U1: token, no raw rgba in components) ── */
   --overlay: rgba(0, 0, 0, 0.5);
   --overlay-soft: rgba(0, 0, 0, 0.3);
+  --overlay-medium: rgba(0, 0, 0, 0.4);
   --overlay-strong: rgba(0, 0, 0, 0.6);
   --overlay-dense: rgba(0, 0, 0, 0.85);
+
+  /* ── Focus ring (input/control focus glow) ── */
+  --focus-ring: rgba(255, 107, 44, 0.15);
+  /* ── Thumb / small control shadow ── */
+  --shadow-thumb: 0 1px 2px rgba(0, 0, 0, 0.1);
+  /* ── Subtle card/panel shadow (provider list, add-provider options) ── */
+  --shadow-card-soft: 0 1px 3px rgba(0, 0, 0, 0.04);
+  /* ── Faint card shadow (workspace shell) ── */
+  --shadow-card-faint: 0 1px 2px rgba(0, 0, 0, 0.025);
+  /* ── Icon chip background (e.g. cta icon wrap) ── */
+  --icon-chip-bg: rgba(0, 0, 0, 0.12);
 
   /* ── File badge accents (FileCard language colors) ── */
   --lang-node: #3fb950;

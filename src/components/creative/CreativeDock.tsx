@@ -10,7 +10,6 @@
 import React, { useCallback } from 'react';
 import { useLocale, t } from '@/i18n';
 import { Minimize2, X } from 'lucide-react';
-import type { CreativeAppSummary, CreativeAppWindow } from '@/lib/tauri-adapter';
 // W4: shared tab type moved to lib so hooks never depend on component internals.
 export type { CreativeDockTab } from '@/lib/creative-dock-types';
 import type { CreativeDockTab } from '@/lib/creative-dock-types';

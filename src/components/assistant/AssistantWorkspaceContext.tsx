@@ -10,10 +10,8 @@ import React, {
 } from 'react';
 import {
   groupAssistantConversations,
-  type AssistantProjectCreationState,
   type AssistantProjectGroup,
 } from '@/lib/assistant-project-groups';
-import type { AssistantFileChange, AssistantRunEvent } from '@/lib/assistant-types';
 import { readActiveProject, writeActiveProject } from '@/lib/active-project';
 import { classifyError } from '@/lib/error-classifier';
 import { useToast } from '@/components/ui/Toast';
