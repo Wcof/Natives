@@ -308,6 +308,8 @@ pub fn creative_handoff_tool() -> Tool {
         cancellable: true,
         parallel_safe: false,
         conflict_key: None,
+        idempotency: None,
+        per_call_resource: None,
         handler: Arc::new(CreateCreativeDraftTool::new()),
     }
 }
@@ -346,7 +348,9 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(WriteDraftModuleTool::new()),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(WriteDraftModuleTool::new()),
         },
         Tool {
             name: "read_draft_module",
@@ -365,7 +369,9 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(ReadDraftModuleTool::new()),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(ReadDraftModuleTool::new()),
         },
         Tool {
             name: "rollback_draft_revision",
@@ -383,7 +389,9 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(RollbackDraftRevisionTool::new()),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(RollbackDraftRevisionTool::new()),
         },
         Tool {
             name: "lint_draft_module",
@@ -402,7 +410,9 @@ pub fn creative_draft_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(LintDraftModuleTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(LintDraftModuleTool),
         },
     ]
 }

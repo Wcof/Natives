@@ -58,7 +58,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: true,
             conflict_key: None,
-            handler: Arc::new(ReadFileTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(ReadFileTool),
         },
         Tool {
             name: "search_files",
@@ -72,7 +74,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: true,
             conflict_key: None,
-            handler: Arc::new(SearchFilesTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(SearchFilesTool),
         },
         Tool {
             name: "write_file",
@@ -86,7 +90,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(WriteFileTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(WriteFileTool),
         },
         Tool {
             name: "list_dir",
@@ -100,7 +106,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: true,
             conflict_key: None,
-            handler: Arc::new(ListDirTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(ListDirTool),
         },
         Tool {
             name: "grep",
@@ -114,7 +122,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: true,
             conflict_key: None,
-            handler: Arc::new(GrepTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(GrepTool),
         },
         Tool {
             name: "edit_file",
@@ -128,7 +138,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(EditFileTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(EditFileTool),
         },
         Tool {
             name: "run_terminal",
@@ -153,7 +165,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(RunTerminalTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(RunTerminalTool),
         },
         Tool {
             name: "web_fetch",
@@ -167,7 +181,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(WebFetchTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(WebFetchTool),
         },
         Tool {
             name: "todo_write",
@@ -181,7 +197,9 @@ pub fn builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(TodoWriteTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(TodoWriteTool),
         },
     ]
     .into_iter()
