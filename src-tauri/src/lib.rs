@@ -205,6 +205,9 @@ pub fn run() {
             // 注册主 pool 到全局，供 runtime 等无 State 上下文模块访问
             db::register_main_pool(pool.clone());
             // Embedded credential inject (when mode falls back to embedded for tests).
+            // 生产 UDS 模式不注册 host credential broker —— daemon 自带 broker；
+            // Embedded 仅存在于 test/diagnostic（架构目标 #6），随 cfg 隔离。
+            #[cfg(any(test, feature = "diagnostic"))]
             {
                 use std::sync::Once;
                 static BROKER: Once = std::sync::Once::new();
