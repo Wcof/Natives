@@ -7,6 +7,7 @@
 
 pub mod adapters;
 pub mod browser;
+pub mod compose;
 pub mod docker;
 pub mod downloads;
 pub mod driver;

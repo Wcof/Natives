@@ -4,6 +4,7 @@ use super::docker;
 use super::github::{self, GhRelease};
 use super::model::*;
 use super::paths::{self, MAX_ASSET_BYTES, MAX_TOTAL_BYTES};
+use super::compose;
 use super::probe::{self, ProbeOutcome};
 use super::state_machine;
 use super::store;
@@ -442,7 +443,7 @@ async fn install_compose(
     }
 
     // Re-analyze for hard blockers
-    let analysis = probe::analyze_compose_file(&compose_src)?;
+    let analysis = compose::analyze_compose_file(&compose_src)?;
     if analysis.build_only || !analysis.hard_blockers.is_empty() {
         return Err(Error::InvalidInput(format!(
             "compose blocked: {}",
@@ -451,7 +452,7 @@ async fn install_compose(
     }
 
     let dest = runtime_dir.join("docker-compose.yml");
-    probe::normalize_compose_to_localhost(&compose_src, &dest, service, host_port, container_port)?;
+    compose::normalize_compose_to_localhost(&compose_src, &dest, service, host_port, container_port)?;
 
     let project = paths::compose_project_name(app_id);
     emit_progress(
