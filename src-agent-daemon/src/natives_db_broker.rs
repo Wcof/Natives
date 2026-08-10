@@ -422,7 +422,10 @@ pub fn try_install_natives_db_broker() -> bool {
     if !endpoint.exists() {
         eprintln!(
             "[agent-daemon] UDS credential broker not reachable at {} (fail closed)",
-            endpoint.display()
+            endpoint
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("<broker-sock>")
         );
         return false;
     }
@@ -430,7 +433,10 @@ pub fn try_install_natives_db_broker() -> bool {
         Ok(()) => {
             eprintln!(
                 "[agent-daemon] UDS credential lease broker installed at {}",
-                endpoint.display()
+                endpoint
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("<broker-sock>")
             );
             true
         }

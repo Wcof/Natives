@@ -163,7 +163,14 @@ async fn main() {
     // Run snapshot path is restored on RunManager::new(); ensure process-wide manager is warm.
     let _ = natives_agent_daemon::global_run_manager().list_runs(None);
     println!("Protocol: {}", config.protocol_version);
-    println!("Socket: {}", config.socket_path.display());
+    println!(
+        "Socket: {}",
+        config
+            .socket_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("<runtime-sock>")
+    );
     // NEVER print bootstrap token — Supervisor/scripts pass via env or 0600 file only.
     println!(
         "Bootstrap: {}",

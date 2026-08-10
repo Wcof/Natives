@@ -140,7 +140,13 @@ impl RpcServer {
         let daemon_version = self.daemon_version.clone();
         let started_at = self.started_at;
 
-        println!("Listening on {}", self.socket_path);
+        println!(
+            "Listening on {}",
+            std::path::Path::new(&self.socket_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("<runtime-sock>")
+        );
 
         // B05 (TASK-008): replay undelivered permission decisions from the
         // outbox. A decision whose event/waiter delivery never completed after

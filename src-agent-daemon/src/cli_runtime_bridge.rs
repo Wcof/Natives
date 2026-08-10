@@ -703,7 +703,10 @@ pub async fn run_claude_cli_turn(
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if !line.trim().is_empty() {
-                    eprintln!("[cli_runtime_bridge] stderr: {line}");
+                    eprintln!(
+                        "[cli_runtime_bridge] stderr: {}",
+                        assistant_protocol::v2::redact_secrets(&line)
+                    );
                 }
             }
         });

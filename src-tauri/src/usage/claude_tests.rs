@@ -200,7 +200,9 @@ fn claude_live_scan_today_is_near_ccswitch_order_of_magnitude() {
         .map(|a| a.total_tokens.unwrap_or(0))
         .sum();
     eprintln!(
-            "claude live home={home:?} projects={projects:?} files={file_count} daily_rows={} activity_rows={} sessions={} daily_total={total} activity_total={eventish} start={start} now={now}",
+            "claude live home={:?} projects={:?} files={file_count} daily_rows={} activity_rows={} sessions={} daily_total={total} activity_total={eventish} start={start} now={now}",
+            home.as_deref().map(|p| crate::log_sanitizer::sanitize(&p.to_string_lossy())),
+            projects.as_deref().map(|p| crate::log_sanitizer::sanitize(&p.to_string_lossy())),
             result.daily.len(),
             result.activity.len(),
             result.sessions.len(),

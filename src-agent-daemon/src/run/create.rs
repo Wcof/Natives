@@ -52,7 +52,13 @@ impl RunManager {
                         Err(e) => {
                             // Missing path: keep diagnostic snapshot path, leave project_id
                             // unbound (orphaned). Side-effect tools must re-bind first.
-                            eprintln!("[run_manager] project identity not bound for '{pp}': {e}");
+                            eprintln!(
+                                "[run_manager] project identity not bound for '{}': {e}",
+                                std::path::Path::new(pp)
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("<project>")
+                            );
                             bound_canonical = Some(pp.to_string());
                         }
                     }
