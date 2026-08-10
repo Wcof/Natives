@@ -31,16 +31,22 @@ impl AgentEngine {
         point: crate::session_coordinator::SafePoint,
         messages: &mut Vec<crate::AgentMessage>,
     ) -> Result<(), EngineError> {
-        // Each SafePoint maps to the durable InputSafePoint the engine is
-        // actually at. The three tool-adjacent points share the durable
-        // bridge's single `AfterToolBatch` slot (the daemon's
-        // `DurableSafePointReceiver` has no finer tool-phase position), but
-        // their *engine* positions are distinct and real: `BeforeTool` fires
-        // before the batch executes, `AfterTool` after the batch and its
-        // transcript are committed, and `AfterPermissionResolved` lives on the
-        // daemon permission path (`tools/permission.rs`), never here. Keeping
-        // the match per-variant (rather than a shared `|` pattern) makes that
-        // mapping explicit instead of silently collapsing the points.
+        // Honest mapping (NE-P0-07): each SafePoint variant maps to the durable
+        // InputSafePoint slot the engine is actually at. The `InputSafePoint`
+        // enum has only three positions (BeforeProvider / AfterToolBatch /
+        // BeforeRunEnd) and the daemon's `DurableSafePointReceiver` exposes no
+        // finer tool-phase slot, so `BeforeTool` and `AfterTool` both drain at
+        // `AfterToolBatch`. This is a durable-receiver constraint, not a topology
+        // lie: their *engine* call sites are distinct and real — `BeforeTool`
+        // fires before the tool batch executes (`engine_tools.rs`), `AfterTool`
+        // after the batch and its transcript are committed (ditto), and
+        // `ProviderBatchBoundary` between the batch and the next provider turn.
+        //
+        // `AfterPermissionResolved` is NEVER dispatched through this method: it
+        // lives on the daemon permission path (`tools/permission.rs`,
+        // `on_safe_point_checked`), not in the engine loop. The arm is retained
+        // only for exhaustiveness — if it ever fires here that is a bug, and the
+        // map should be revisited rather than silently routing it.
         let input_point = match point {
             crate::session_coordinator::SafePoint::BeforeTool => {
                 crate::InputSafePoint::AfterToolBatch
