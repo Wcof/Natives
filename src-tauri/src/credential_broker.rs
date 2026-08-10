@@ -60,6 +60,12 @@ pub struct CredentialBrokerResponse {
 /// Synchronous broker entry for the Agent Daemon credential resolver inject.
 /// Issues a Run-bound short-TTL lease and returns memory-only Credential
 /// (never logs key).
+///
+/// W3 P0-07: only reachable under test/diagnostic (the embedded broker install
+/// in `daemon_authority`/`lib.rs` is cfg-gated and production runs UDS with the
+/// daemon-owned broker). Kept cfg(test|diagnostic) so the Host production build
+/// does not depend on the provider-adapters implementation crate.
+#[cfg(any(test, feature = "diagnostic"))]
 pub fn resolve_for_daemon(
     provider_id: &str,
     key_id: Option<&str>,

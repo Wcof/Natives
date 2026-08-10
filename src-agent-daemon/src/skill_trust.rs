@@ -14,18 +14,18 @@ use super::{SkillTrust, SkillTrustBasis};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TrustEntry {
-    level: SkillTrust,
+    pub(super) level: SkillTrust,
     /// SHA-256 of the content that was approved. Empty for `Blocked` entries,
     /// which are not content-scoped.
     #[serde(default)]
-    content_hash: String,
+    pub(super) content_hash: String,
     #[serde(default = "default_true")]
-    enabled: bool,
+    pub(super) enabled: bool,
     #[serde(default)]
-    granted_at: String,
+    pub(super) granted_at: String,
     /// Recorded for human inspection of the file; never used for resolution.
     #[serde(default)]
-    name: String,
+    pub(super) name: String,
 }
 
 fn default_true() -> bool {
@@ -35,10 +35,10 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(super) struct TrustLedger {
     #[serde(default)]
-    version: u32,
+    pub(super) version: u32,
     /// canonical skill path → decision
     #[serde(default)]
-    entries: BTreeMap<String, TrustEntry>,
+    pub(super) entries: BTreeMap<String, TrustEntry>,
 }
 
 fn skills_runtime_dir() -> PathBuf {

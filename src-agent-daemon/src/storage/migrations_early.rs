@@ -4,7 +4,7 @@
 //! source of truth; this file only holds the versioned SQL strings for its
 //! domain. Editing an applied migration still fails closed via checksum.
 
-const MIGRATION_001: &str = "
+pub(crate) const MIGRATION_001: &str = "
 CREATE TABLE IF NOT EXISTS conversation (
     id TEXT PRIMARY KEY,
     mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'agent', 'goal')),
@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_run_event_run_sequence ON run_event(run_id, seque
 ";
 
 /// Migration 002: Tool calls, permissions, and artifacts.
-const MIGRATION_002: &str = "
+pub(crate) const MIGRATION_002: &str = "
 CREATE TABLE IF NOT EXISTS tool_call (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS artifact (
 ";
 
 /// Migration 003: Context snapshots and provider configuration.
-const MIGRATION_003: &str = "
+pub(crate) const MIGRATION_003: &str = "
 CREATE TABLE IF NOT EXISTS context_snapshot (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS model_cache (
 ";
 
 /// Migration 004: Extensions and permissions.
-const MIGRATION_004: &str = "
+pub(crate) const MIGRATION_004: &str = "
 CREATE TABLE IF NOT EXISTS extension (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -230,7 +230,7 @@ CREATE TABLE IF NOT EXISTS hook_registration (
 ";
 
 /// Migration 005: Indexes and performance optimizations.
-const MIGRATION_005: &str = "
+pub(crate) const MIGRATION_005: &str = "
 CREATE INDEX IF NOT EXISTS idx_message_conversation ON message(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_run_conversation ON run(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tool_call_run ON tool_call(run_id);
@@ -245,19 +245,19 @@ CREATE INDEX IF NOT EXISTS idx_hook_registration_point ON hook_registration(hook
 ";
 
 /// Migration 006: Align persisted run status CHECK with Protocol v2.
-const MIGRATION_006: &str = "
+pub(crate) const MIGRATION_006: &str = "
 CREATE INDEX IF NOT EXISTS idx_run_conversation ON run(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_run_status ON run(status);
 ";
 
-const MIGRATION_007: &str = "SELECT 1;";
+pub(crate) const MIGRATION_007: &str = "SELECT 1;";
 
-const MIGRATION_008: &str = "
+pub(crate) const MIGRATION_008: &str = "
 -- conversation.mode may already allow goal via prior rebuilds; ensure index only.
 CREATE INDEX IF NOT EXISTS idx_conversation_updated ON conversation(updated_at);
 ";
 
-const MIGRATION_009: &str = "
+pub(crate) const MIGRATION_009: &str = "
 CREATE TABLE IF NOT EXISTS prompt_queue (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
@@ -347,7 +347,7 @@ CREATE TABLE IF NOT EXISTS _host_authority_migration (
 /// historical migration 011 table rebuild (which widened the CHECK via
 /// create-copy-drop-rename) is not needed — R-D3 forbids that rebuild, and
 /// future enum additions are validated at the business layer.
-const MIGRATION_010: &str = "
+pub(crate) const MIGRATION_010: &str = "
 ALTER TABLE conversation ADD COLUMN parent_conversation_id TEXT
     REFERENCES conversation(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_conversation_parent

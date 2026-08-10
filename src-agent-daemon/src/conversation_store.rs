@@ -3,8 +3,11 @@ use assistant_protocol::v2::methods::names;
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 
+#[path = "conversation_context.rs"]
 mod conversation_context;
+#[path = "conversation_fork.rs"]
 mod conversation_fork;
+#[path = "conversation_messages.rs"]
 mod conversation_messages;
 
 pub use conversation_context::{

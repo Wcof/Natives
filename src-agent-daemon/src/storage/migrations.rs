@@ -386,8 +386,11 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
 /// for `assistant_*` tables on the same file. Do not reintroduce a shared
 // W9: versioned SQL constants moved to migrations_early / migrations_mid /
 // migrations_late; `ALL` above remains the single ordered registry.
+#[path = "migrations_early.rs"]
 mod migrations_early;
+#[path = "migrations_late.rs"]
 mod migrations_late;
+#[path = "migrations_mid.rs"]
 mod migrations_mid;
 use migrations_early::{
     MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006,

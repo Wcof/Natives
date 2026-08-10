@@ -66,12 +66,20 @@ futures-util = "0.3"
 async-trait = "0.1"
 tokio-stream = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
-agent-core = { path = "../crates/agent-core" }
-provider-adapters = { path = "../crates/provider-adapters" }
-capability-gateway = { path = "../crates/capability-gateway" }
+# W3 P0-07: Host production must not depend on the full Daemon/engine/provider
+# implementation crates. agent-core, capability-gateway and provider-adapters
+# are test/diagnostic-only from the Host's perspective (the credential broker
+# resolver that touches provider types is cfg(test|diagnostic)); they moved to
+# [dev-dependencies]. Only the narrow UDS client surface stays in production:
+# assistant-protocol (wire types), contract-linter (module lint) and
+# natives-agent-daemon (DaemonClient/UdsAuthority/ExecutionAuthority).
 assistant-protocol = { path = "../crates/assistant-protocol" }
 contract-linter = { path = "../crates/contract-linter" }
 natives-agent-daemon = { path = "../src-agent-daemon" }
 
 [dev-dependencies]
 tempfile = "3"
+# W3 P0-07: engine/provider implementation crates are test-only for the Host.
+agent-core = { path = "../crates/agent-core" }
+capability-gateway = { path = "../crates/capability-gateway" }
+provider-adapters = { path = "../crates/provider-adapters" }

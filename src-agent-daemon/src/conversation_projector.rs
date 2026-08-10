@@ -516,7 +516,9 @@ fn load_events_for_run(conn: &rusqlite::Connection, run_id: &str) -> Result<Load
     Ok(LoadEvents::Events(events))
 }
 
+#[path = "conversation_projector_blocks.rs"]
 mod conversation_projector_blocks;
+#[path = "conversation_projector_commit.rs"]
 mod conversation_projector_commit;
 
 #[cfg(test)]

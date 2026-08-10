@@ -58,8 +58,11 @@ fn expert_row_to_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 // W9 split: agent profile loading -> experts_profile, expert team CRUD ->
 // experts_team, host subagent migration -> experts_migrate. Public paths are
 // re-exported below so external `capability::experts::*` keeps working.
+#[path = "experts_migrate.rs"]
 mod experts_migrate;
+#[path = "experts_profile.rs"]
 mod experts_profile;
+#[path = "experts_team.rs"]
 mod experts_team;
 pub(crate) use experts_migrate::{import_host_subagent_rows, migrate_host_subagents};
 pub(crate) use experts_profile::{load_agent_profile, load_expert_profile_from_db};

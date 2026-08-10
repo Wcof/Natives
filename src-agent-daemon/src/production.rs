@@ -119,22 +119,27 @@ pub use crate::runtime::TaskRecord;
 
 // Split implementation lives in same-directory modules by responsibility
 // (task-01 structure); public paths below are preserved via re-exports.
+#[path = "production_builtins.rs"]
 mod production_builtins;
+#[path = "production_execution.rs"]
 mod production_execution;
+#[path = "production_fixture.rs"]
 mod production_fixture;
+#[path = "production_reaper.rs"]
 mod production_reaper;
+#[path = "production_routing.rs"]
 mod production_routing;
 
-pub use self::production_builtins::{
+pub(crate) use self::production_builtins::{
     builtin_prompt_surface_default, builtin_surface_allowlist, builtin_surface_system_prompt,
     compile_effective_prompt, merge_agent_directive, CREATIVE_DRAFT_AGENT_KIND,
     CREATIVE_DRAFT_PROMPT_SURFACE_ID, TASK_DIRECTIVE_PROFILE_ID,
 };
-pub use self::production_fixture::{FixtureMode, FixtureProvider};
+pub(crate) use self::production_fixture::{FixtureMode, FixtureProvider};
 use self::production_reaper::lookup_model_context_window;
 #[cfg(not(test))]
 use self::production_reaper::spawn_subagent_reaper;
-pub use self::production_routing::{
+pub(crate) use self::production_routing::{
     normalize_permission_scope, register_tools_for_surface, restart_subagent_with_binding,
     validate_route_binding, wake_assignment_waiter,
 };

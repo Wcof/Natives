@@ -4,7 +4,7 @@
 //! source of truth; this file only holds the versioned SQL strings for its
 //! domain. Editing an applied migration still fails closed via checksum.
 
-const MIGRATION_021: &str = "
+pub(crate) const MIGRATION_021: &str = "
 CREATE TABLE IF NOT EXISTS capability_skill (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -126,7 +126,7 @@ ALTER TABLE run ADD COLUMN capability_snapshot_json TEXT;
 ///   already maintains the pointer inside one transaction.
 /// - `harness_audit` has no foreign keys at all: an audit trail that
 ///   disappears when the thing it audits is deleted is not an audit trail.
-const MIGRATION_022: &str = "
+pub(crate) const MIGRATION_022: &str = "
 CREATE TABLE IF NOT EXISTS harness_profile (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -212,7 +212,7 @@ CREATE INDEX IF NOT EXISTS idx_harness_audit_profile
     ON harness_audit(profile_id, created_at DESC);
 ";
 
-const MIGRATION_023: &str = "
+pub(crate) const MIGRATION_023: &str = "
 CREATE TABLE IF NOT EXISTS harness_source_manifest (
     source_id TEXT PRIMARY KEY,
     profile_id TEXT,
@@ -237,12 +237,12 @@ CREATE INDEX IF NOT EXISTS idx_harness_hook_trace_run
 ";
 
 /// Migration 024: bounded metadata for an automatically discovered source drift.
-const MIGRATION_024: &str = "
+pub(crate) const MIGRATION_024: &str = "
 ALTER TABLE harness_draft ADD COLUMN source_candidate_json TEXT;
 ";
 
 /// Migration 025: stable ProjectIdentity registration table.
-const MIGRATION_025: &str = "
+pub(crate) const MIGRATION_025: &str = "
 CREATE TABLE IF NOT EXISTS harness_project_identity (
     project_id TEXT PRIMARY KEY,
     canonical_path TEXT NOT NULL UNIQUE,
@@ -258,7 +258,7 @@ CREATE INDEX IF NOT EXISTS idx_harness_project_identity_path
 /// Configuration documents and Hook payloads never enter this table. Durable
 /// audit/run events remain authoritative; notices only tell clients which
 /// projection to refetch after a change.
-const MIGRATION_026: &str = "
+pub(crate) const MIGRATION_026: &str = "
 CREATE TABLE IF NOT EXISTS harness_notice (
     cursor INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK(kind IN (
@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS idx_harness_notice_created
 ///
 /// Kept separate from 026 so databases that observed the initial notice-table
 /// migration while this feature was under development still receive triggers.
-const MIGRATION_027: &str = "
+pub(crate) const MIGRATION_027: &str = "
 CREATE TRIGGER IF NOT EXISTS trg_harness_audit_notice
 AFTER INSERT ON harness_audit
 BEGIN
@@ -312,7 +312,7 @@ END;
 /// readable. The existing conversation/message/event tables remain the single
 /// authority; these columns make the typed runtime identity recoverable rather
 /// than keeping it only in memory.
-const MIGRATION_028: &str = "
+pub(crate) const MIGRATION_028: &str = "
 CREATE TABLE IF NOT EXISTS turn (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS resume_plan (
 CREATE INDEX IF NOT EXISTS idx_resume_plan_source ON resume_plan(source_run_id, created_at DESC);
 ";
 
-const MIGRATION_029: &str = "
+pub(crate) const MIGRATION_029: &str = "
 -- Subagent route-restart scope: the durable session must carry the original
 -- child scope (project identity, permission ceiling, profile, step budget,
 -- tool allowlist) so a route switch restores them exactly instead of guessing
@@ -404,7 +404,7 @@ ALTER TABLE subagent_session ADD COLUMN tool_allowlist_json TEXT;
 /// cursor can store a real side-effect watermark instead of the last event
 /// sequence. Existing rows keep a NULL sequence (legacy) and are never claimed
 /// safe; `continue_run` already fails closed without a ledger watermark.
-const MIGRATION_030: &str = "
+pub(crate) const MIGRATION_030: &str = "
 ALTER TABLE side_effect_record ADD COLUMN ledger_sequence INTEGER;
 CREATE INDEX IF NOT EXISTS idx_side_effect_ledger_sequence ON side_effect_record(run_id, ledger_sequence);
 ";
@@ -418,7 +418,7 @@ CREATE INDEX IF NOT EXISTS idx_side_effect_ledger_sequence ON side_effect_record
 /// - `never` for checkpoint-covered workspace files;
 /// - `confirm` for everything else (external outcome unknown without the
 ///   original handler).
-const MIGRATION_031: &str = "
+pub(crate) const MIGRATION_031: &str = "
 ALTER TABLE side_effect_record ADD COLUMN replay_contract TEXT;
 UPDATE side_effect_record
    SET replay_contract = CASE
@@ -434,7 +434,7 @@ UPDATE side_effect_record
 /// projected into the conversation tables; `projection_quarantine` records
 /// events/turns the projector explicitly isolated instead of silently
 /// skipping or overwriting.
-const MIGRATION_032: &str = "
+pub(crate) const MIGRATION_032: &str = "
 CREATE TABLE IF NOT EXISTS projection_watermark (
     projector TEXT NOT NULL,
     run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
@@ -467,7 +467,7 @@ CREATE TABLE IF NOT EXISTS projection_quarantine (
 /// appends the run event and wakes the waiter, and marks the row delivered. An
 /// undelivered row is replayed at daemon start, so a decision is never lost
 /// and the waiter is never woken ahead of its durable event.
-const MIGRATION_033: &str = "
+pub(crate) const MIGRATION_033: &str = "
 CREATE TABLE IF NOT EXISTS interaction_outbox (
     id TEXT PRIMARY KEY,
     interaction_id TEXT NOT NULL,
@@ -486,7 +486,7 @@ CREATE INDEX IF NOT EXISTS idx_interaction_outbox_delivered ON interaction_outbo
 /// on the DataStore connection mutex; this partial unique index backstops any
 /// cross-connection race while leaving legacy NULL-sequence rows (already
 /// `legacy_unverifiable`) exempt.
-const MIGRATION_034: &str = "
+pub(crate) const MIGRATION_034: &str = "
 CREATE UNIQUE INDEX IF NOT EXISTS idx_side_effect_run_sequence
     ON side_effect_record(run_id, ledger_sequence)
     WHERE ledger_sequence IS NOT NULL;
@@ -499,7 +499,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_side_effect_run_sequence
 /// facts over UDS and rebuild its approval inbox even after the daemon or the
 /// Host restarted. `proposal_id` is the stable Daemon-generated id (never
 /// agent-supplied); `status` tracks the fact lifecycle (pending/approved//// rejected/expired/failed) so a fact is never re-served after it is decided.
-const MIGRATION_035: &str = "
+pub(crate) const MIGRATION_035: &str = "
 CREATE TABLE IF NOT EXISTS creative_proposal_fact (
     proposal_id TEXT PRIMARY KEY,
     envelope_version INTEGER NOT NULL,
@@ -522,7 +522,7 @@ CREATE INDEX IF NOT EXISTS idx_proposal_fact_status ON creative_proposal_fact(st
 /// `reservation_released` flag makes slot release exactly-once (a terminal
 /// child or a restart marks it, never twice). `scope_snapshot_json` is the
 /// full spawn-time scope for tightening checks on route restarts.
-const MIGRATION_036: &str = "
+pub(crate) const MIGRATION_036: &str = "
 ALTER TABLE subagent_session ADD COLUMN tokens_used INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE subagent_session ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
 ALTER TABLE subagent_session ADD COLUMN max_tokens INTEGER;
@@ -547,7 +547,7 @@ CREATE INDEX IF NOT EXISTS idx_subagent_session_tree_usage
 /// idempotent ALTERs; the runner tolerates duplicate-column on re-entry and
 /// fails closed only when the postcondition (`run.parent_run_id`) is absent
 /// after apply.
-const MIGRATION_037: &str = "
+pub(crate) const MIGRATION_037: &str = "
 ALTER TABLE run ADD COLUMN parent_run_id TEXT;
 ALTER TABLE run ADD COLUMN agent_profile_id TEXT;
 ALTER TABLE run ADD COLUMN key_id TEXT;
@@ -576,7 +576,7 @@ ALTER TABLE resume_plan ADD COLUMN decision TEXT NOT NULL DEFAULT 'RequiresUserC
 /// assistant.db (W3 P0-2). The capability gateway previously opened the
 /// Host-owned natives.db directly; the draft metadata now lives in the daemon
 /// store so no daemon process path touches the Host database. Idempotent.
-const MIGRATION_038: &str = "
+pub(crate) const MIGRATION_038: &str = "
 CREATE TABLE IF NOT EXISTS creative_drafts (
     draft_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

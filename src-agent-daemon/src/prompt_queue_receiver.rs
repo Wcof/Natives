@@ -4,7 +4,7 @@
 //! these SQLite-backed bridges; durable queue/actor rows stay owned by this
 //! module tree (Daemon assistant.db authority).
 
-use super::prompt_queue_store::{global_harness, on_safe_point_checked, persist_actor_snapshot};
+use super::{global_harness, on_safe_point_checked, persist_actor_snapshot, store};
 use crate::conversation_store;
 use crate::storage::DataStore;
 use agent_core::{

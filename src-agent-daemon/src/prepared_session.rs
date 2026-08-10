@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Cache entry size guard — never let the cache grow without bound.
-const MAX_ENTRIES: usize = 32;
+pub(crate) const MAX_ENTRIES: usize = 32;
 
 /// Identity of a prepared session. Everything here is revisioned/static.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

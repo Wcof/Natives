@@ -8,7 +8,7 @@
 
 use super::repository_version::{current_version, get_draft, DraftRow};
 use super::{now, sql};
-use crate::harness::HarnessError;
+use crate::rpc::harness::HarnessError;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 

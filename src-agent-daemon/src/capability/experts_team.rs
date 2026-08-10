@@ -1,10 +1,17 @@
 //! Expert team CRUD (W9 split from capability/experts.rs).
+//! `super` here is the `experts` module; helpers are re-exported from it.
 
-use super::experts::{expert_row_to_json, insert_expert, now_iso, EXPERT_COLS};
+use super::{
+    ensure_expert_exists, expert_row_to_json, insert_expert, insert_members, now_iso,
+    parse_members, required_str, str_field, validate_team_settings,
+    validate_team_settings_with_defaults, EXPERT_COLS,
+};
+use crate::capability::store;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
-fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, String> {
+pub(crate) fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, String> {
     // 19.3-④: `strategy` is dead configuration (no runtime honours it) and is
     // no longer part of the contract — it is not advertised in the API. The
     // column stays in the DB untouched for historical rows.

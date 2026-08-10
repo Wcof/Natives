@@ -2,7 +2,6 @@
 //! `run/start.rs`). Kept as `impl RunManager` so callers stay unchanged.
 
 use super::manager::RunManager;
-use crate::Result;
 use assistant_protocol::v2::{AttachmentRef, RunStatusV2, RunV2};
 
 impl RunManager {
@@ -74,7 +73,7 @@ impl RunManager {
         self.commit_status(
             run_id,
             RunStatusV2::Preparing,
-            crate::production::TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+            agent_core::TransitionMetadata::empty().with_lifecycle_hint("preparing"),
         )
     }
 }

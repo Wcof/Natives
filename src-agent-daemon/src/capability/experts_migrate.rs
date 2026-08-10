@@ -1,14 +1,16 @@
 //! Host subagent migration (W9 split from capability/experts.rs).
+//! `super` here is the `experts` module; helper fns are re-exported from it.
 
-use super::experts::{ensure_expert_exists, insert_expert, now_iso};
-use crate::natives_db_broker::HostSubagentRow;
+use super::{ensure_expert_exists, insert_expert, now_iso};
+use crate::capability::store as capability_store;
+use assistant_protocol::v2::credential::HostSubagentRow;
 use rusqlite::params;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::Path;
 
 pub fn migrate_host_subagents() -> Result<u32, String> {
     {
-        let data = store()?;
+        let data = capability_store()?;
         let conn = data.conn()?;
         let already: bool = conn
             .query_row(
@@ -23,13 +25,13 @@ pub fn migrate_host_subagents() -> Result<u32, String> {
     }
     let resp =
         crate::natives_db_broker::NativesDbBroker::open_default()?.host_subagents("daemon-boot")?;
-    import_host_subagent_rows(resp.rows)
+import_host_subagent_rows(resp.rows)
 }
 
 /// Import one batch of legacy Host subagent rows into the capability library.
 /// Shared by the production broker lease path and the test fixture reader.
-fn import_host_subagent_rows(
-    rows: Vec<crate::natives_db_broker::HostSubagentRow>,
+pub(crate) fn import_host_subagent_rows(
+    rows: Vec<HostSubagentRow>,
 ) -> Result<u32, String> {
     let mut migrated = 0u32;
     for row in rows {

@@ -67,7 +67,7 @@ pub(crate) mod handlers {
 }
 
 pub(crate) use handlers::provider::resolve_provider_adapter;
-pub use handlers::run::MAX_WIRE_REPLAY_EVENTS;
+pub(crate) use handlers::run::MAX_WIRE_REPLAY_EVENTS;
 #[allow(unused_imports)]
 // A2-03 split contract: register_run_disabled_tools stays reachable as crate::rpc::register_run_disabled_tools
 pub(crate) use handlers::run::{register_run_disabled_tools, required_param, run_manager};

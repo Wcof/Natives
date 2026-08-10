@@ -3,8 +3,9 @@
 //! `agent_core::assemble_context` file reads; the cache impl + tests stay in
 //! prepared_session.rs.
 
-use super::{InstructionSource, PreparedAgentSessionCache, MAX_ENTRIES};
-use crate::Result;
+use crate::prepared_session::{
+    InstructionSource, PreparedAgentSessionCache, MAX_ENTRIES,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

@@ -72,28 +72,6 @@ impl PermissionGatedTools {
     }
 }
 
-#[async_trait::async_trait]
-impl EngineToolRuntime for PermissionGatedTools {
-    async fn mark_tool_call_uncertain(
-        &self,
-        call_id: &str,
-        name: &str,
-        turn_id: Option<&str>,
-        input: &Value,
-    ) -> Result<(), String> {
-        crate::side_effect_ledger::record_tool_effect_state(
-            &self.parent_run_id,
-            call_id,
-            name,
-            crate::side_effect_ledger::category_for_tool(name),
-            "uncertain",
-            false,
-            turn_id,
-            input,
-        )
-    }
-}
-
 /// A4 — ReadOnly Fast Path regression tests.
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 //! Agent profile loading (W9 split from capability/experts.rs).
 
-use crate::agent_core_shim::AgentProfile;
+use super::get;
+use agent_core::AgentProfile;
+use serde_json::{json, Value};
 use std::path::Path;
 
 pub fn load_agent_profile(id: &str, project_root: Option<&Path>) -> Option<AgentProfile> {

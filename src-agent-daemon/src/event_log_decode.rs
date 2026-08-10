@@ -4,8 +4,8 @@
 //! injected, unknown event types surface as the forward-compatibility
 //! `Unknown` variant so one undecodable row never fails a whole replay.
 
-use crate::Result;
-use assistant_protocol::v2::{RunEventKind, RunEventPayload, RunEventV2};
+use assistant_protocol::v1::run_event::RunEventPayload;
+use assistant_protocol::v2::{RunEventKind, RunEventV2};
 
 /// Ensure stored payload JSON includes the serde tag for RunEventPayload.
 pub fn normalize_stored_payload(event_type: &str, payload: &str) -> String {

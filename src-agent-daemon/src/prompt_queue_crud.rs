@@ -1,6 +1,10 @@
 //! promptQueue.* RPC handlers (W9 split from prompt_queue_store.rs).
+//! `super` here is the `prompt_queue_store` module.
 
-use super::prompt_queue_store::{global_harness, persist_actor_snapshot, store};
+use super::{
+    ensure_conversation_for_queue, global_harness, load_actor_snapshot, persist_actor_snapshot,
+    row_to_item, store, value_to_queue_item,
+};
 use crate::run_manager::global_run_manager;
 use agent_core::{CoordinatorAction, PromptSource, QueueItem, QueueItemStatus};
 use assistant_protocol::v2::methods::names;
@@ -22,7 +26,7 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
     }
 }
 
-fn list(params: Value) -> Result<Value, String> {
+pub(crate) fn list(params: Value) -> Result<Value, String> {
     let conversation_id = params
         .get("conversation_id")
         .or_else(|| params.get("conversationId"))
@@ -65,7 +69,7 @@ fn list(params: Value) -> Result<Value, String> {
     Ok(Value::Array(items))
 }
 
-fn enqueue(params: Value) -> Result<Value, String> {
+pub(crate) fn enqueue(params: Value) -> Result<Value, String> {
     let conversation_id = params
         .get("conversation_id")
         .or_else(|| params.get("conversationId"))
@@ -180,7 +184,7 @@ fn enqueue(params: Value) -> Result<Value, String> {
     }))
 }
 
-fn update(params: Value) -> Result<Value, String> {
+pub(crate) fn update(params: Value) -> Result<Value, String> {
     let id = params
         .get("id")
         .and_then(Value::as_str)
@@ -217,7 +221,7 @@ fn update(params: Value) -> Result<Value, String> {
     Ok(json!({ "id": id, "updated": true }))
 }
 
-fn remove(params: Value) -> Result<Value, String> {
+pub(crate) fn remove(params: Value) -> Result<Value, String> {
     let id = params
         .get("id")
         .and_then(Value::as_str)
@@ -246,7 +250,7 @@ fn remove(params: Value) -> Result<Value, String> {
     Ok(json!({ "id": id, "removed": true }))
 }
 
-fn reorder(params: Value) -> Result<Value, String> {
+pub(crate) fn reorder(params: Value) -> Result<Value, String> {
     let conversation_id = params
         .get("conversation_id")
         .or_else(|| params.get("conversationId"))
@@ -281,7 +285,7 @@ fn reorder(params: Value) -> Result<Value, String> {
     Ok(json!({ "conversation_id": conversation_id, "reordered": true }))
 }
 
-fn interject(params: Value) -> Result<Value, String> {
+pub(crate) fn interject(params: Value) -> Result<Value, String> {
     let conversation_id = params
         .get("conversation_id")
         .or_else(|| params.get("conversationId"))

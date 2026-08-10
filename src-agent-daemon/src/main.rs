@@ -187,9 +187,9 @@ async fn main() {
         "Credential broker: {}",
         if broker_ok {
             // W1: do not print the natives.db absolute path (home-path leak).
-            "UDS lease broker installed (host decrypts natives.db)".into()
+            "UDS lease broker installed (host decrypts natives.db)"
         } else {
-            "env-only (NATIVES_TEST_*)".into()
+            "env-only (NATIVES_TEST_*)"
         }
     );
 

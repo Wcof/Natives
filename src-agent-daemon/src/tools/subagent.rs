@@ -599,7 +599,7 @@ impl PermissionGatedTools {
     }
 
     /// Single-task path: resolve one binding (uses batch assignment with one task).
-    async fn resolve_task_binding(
+    pub(crate) async fn resolve_task_binding(
         &self,
         _input: &Value,
     ) -> Result<crate::subagent_store::RouteBinding, String> {

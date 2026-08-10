@@ -6,7 +6,7 @@
 //! using `harness::repository::*` via the parent module's re-exports.
 
 use super::{now, sql, DEFAULT_GLOBAL_PROFILE_ID};
-use crate::harness::HarnessError;
+use crate::rpc::harness::HarnessError;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 

@@ -57,8 +57,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[path = "skill_parse.rs"]
 mod skill_parse;
+#[path = "skill_surface.rs"]
 mod skill_surface;
+#[path = "skill_trust.rs"]
 mod skill_trust;
 
 pub use skill_parse::{parse_skill_markdown, ParsedSkill};

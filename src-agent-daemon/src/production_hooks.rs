@@ -464,8 +464,11 @@ fn push_handler_definition(
 
 // Split implementation lives in same-directory modules by responsibility
 // (task-01 structure); public paths below are preserved via re-exports.
+#[path = "production_hooks_frozen.rs"]
 mod production_hooks_frozen;
+#[path = "production_hooks_native.rs"]
 mod production_hooks_native;
+#[path = "production_hooks_trace.rs"]
 mod production_hooks_trace;
 
 pub use self::production_hooks_frozen::{

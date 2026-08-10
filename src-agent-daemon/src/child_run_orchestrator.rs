@@ -123,8 +123,8 @@ pub async fn spawn_child_run(
     start.key_id = start.key_id.or(created.key_id.clone());
     start.permission_profile = start
         .permission_profile
-        .or(created.permission_profile.clone());
-    start.max_steps = start.max_steps.or(created.max_steps);
+        .or(Some(created.permission_profile.clone()));
+    start.max_steps = start.max_steps.or(Some(created.max_steps));
     start.project_path = start.project_path.or(created.project_path.clone());
     start.runtime_id = start.runtime_id.or(created.runtime_id.clone());
     start_child_run(start).await?;

@@ -9,7 +9,7 @@ use std::time::Duration;
 /// Safe to call without a Tokio runtime (unit tests / sync constructors): no-ops until a
 /// runtime exists; production daemon always constructs under tokio::main.
 #[cfg(not(test))]
-fn spawn_subagent_reaper() {
+pub(crate) fn spawn_subagent_reaper() {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -77,7 +77,7 @@ async fn reaper_tick() -> Result<(), String> {
 }
 
 /// Look up model context_window from daemon model_cache (best-effort).
-fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64> {
+pub(crate) fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64> {
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
