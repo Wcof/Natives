@@ -73,6 +73,7 @@ export const assistant = {
     generating: 'Generating...',
     error: 'Error',
     retry: 'Retry',
+    fork: 'Fork from here',
     retryOnlyFailed: 'Only failed/interrupted runs',
     commandNewConversation: 'New conversation',
     stopRun: 'Stop current run',

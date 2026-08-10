@@ -18,6 +18,8 @@ export interface WorkbenchTimelinePaneProps {
   onRollbackChanges: ((changes: Array<{ path: string; runId?: string }>) => Promise<boolean>) | undefined;
   loadingMessages: boolean;
   onRetry: () => void;
+  /** W8: fork the current conversation at the selected persisted user message. */
+  onForkMessage: (messageId: string) => void;
   hasMoreOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
@@ -50,6 +52,7 @@ export function WorkbenchTimelinePane({
   onRollbackChanges,
   loadingMessages,
   onRetry,
+  onForkMessage,
   hasMoreOlder,
   loadingOlder,
   onLoadOlder,
@@ -181,6 +184,7 @@ export function WorkbenchTimelinePane({
           loading={loadingMessages}
           locale={locale}
           onRetry={onRetry}
+          onFork={onForkMessage}
           hasMoreOlder={hasMoreOlder}
           loadingOlder={loadingOlder}
           onLoadOlder={onLoadOlder}

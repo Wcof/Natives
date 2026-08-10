@@ -73,6 +73,7 @@ export const assistant = {
     generating: '生成中...',
     error: '错误',
     retry: '重试',
+    fork: '从此处派生',
     retryOnlyFailed: '仅失败/中断可重试',
     commandNewConversation: '新会话',
     stopRun: '停止当前 Run',
