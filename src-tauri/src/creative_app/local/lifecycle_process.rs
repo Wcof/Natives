@@ -124,11 +124,14 @@ async fn force_kill_identity(ident: &ProcessIdentity) -> Result<()> {
     #[cfg(windows)]
     {
         if let Some(pid) = ident.pid {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            let _ = tokio::task::spawn_blocking(move || {
+                std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+            })
+            .await;
         }
     }
     Ok(())

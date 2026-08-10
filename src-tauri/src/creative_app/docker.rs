@@ -156,7 +156,6 @@ pub async fn compose_up_override(
     env_pairs: &[(String, String)],
     override_dir: &Path,
 ) -> Result<()> {
-    std::fs::create_dir_all(override_dir).map_err(Error::Io)?;
     let override_path = override_dir.join(format!("{project}-override.yml"));
     let cmd_yaml = command
         .iter()
@@ -164,7 +163,16 @@ pub async fn compose_up_override(
         .collect::<Vec<_>>()
         .join("\n");
     let yaml = format!("services:\n  {service}:\n    command:\n{cmd_yaml}\n");
-    std::fs::write(&override_path, yaml).map_err(Error::Io)?;
+    // Override-file write is small std::fs IO; keep it off the async runtime.
+    let override_dir_owned = override_dir.to_path_buf();
+    let override_path_owned = override_path.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        std::fs::create_dir_all(&override_dir_owned).map_err(Error::Io)?;
+        std::fs::write(&override_path_owned, yaml).map_err(Error::Io)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
 
     let file = compose_file.to_string_lossy();
     let ov = override_path.to_string_lossy();

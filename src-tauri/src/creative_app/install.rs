@@ -285,7 +285,11 @@ pub async fn install_github(
 
     let release_dir = paths::release_dir(&app_id);
     let runtime_dir = paths::runtime_dir(&app_id);
-    std::fs::create_dir_all(&runtime_dir).map_err(Error::Io)?;
+    let runtime_dir_owned = runtime_dir.clone();
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(&runtime_dir_owned))
+        .await
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .map_err(Error::Io)?;
 
     let download_result = download_and_probe(
         &repo.owner,
@@ -801,7 +805,11 @@ pub async fn delete_app(
     // Directory
     let dir = paths::app_dir(id);
     if dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&dir) {
+        let dir_owned = dir.clone();
+        let rm = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&dir_owned))
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        if let Err(e) = rm {
             let ts = now();
             store::set_state(
                 conn,
