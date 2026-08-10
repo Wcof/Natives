@@ -17,6 +17,12 @@ pub mod plan;
 pub mod policy;
 pub mod progress;
 pub mod subagent;
+// W9 split: subagent task execution / watcher / terminal / requeue live in
+// sibling modules under `tools/`; subagent.rs re-exports the public paths.
+mod subagent_execute;
+mod subagent_requeue;
+mod subagent_terminal;
+mod subagent_watcher;
 
 // Cross-module helpers referenced by the facade and its siblings.
 pub use artifact::attach_tool_output_artifact;
