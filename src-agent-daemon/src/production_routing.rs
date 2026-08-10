@@ -193,9 +193,11 @@ pub async fn restart_subagent_with_binding(
             "subagent session has no persisted step budget; route restart requires exact scope"
                 .to_string()
         })?;
-    let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
-        capability_selection: None,
-        disabled_tools: None,
+    // W3 P1-2: route restart goes through the unique ChildRunOrchestrator
+    // (create → surface → start) instead of building a second spawn path here.
+    // The orchestrator owns the spawn contract; this keeps create/restart/
+    // resume/recover from drifting apart on future contract evolution.
+    let spec = crate::child_run_orchestrator::ChildRunSpec {
         conversation_id: sess.child_conversation_id.clone(),
         provider_id: binding.provider_id.clone(),
         model_id: binding.model_id.clone(),
@@ -203,23 +205,23 @@ pub async fn restart_subagent_with_binding(
         agent_profile_id: sess.agent_profile_id.clone(),
         permission_profile: Some(permission_profile.clone()),
         content: Some(prompt.clone()),
-        attachments: None,
         max_steps: Some(max_steps),
         parent_run_id: sess.parent_run_id.clone(),
         project_path: Some(project_path.clone()),
-        idempotency_key: None,
-        effort: None,
         runtime_id: Some("native".into()),
-    })?;
+    };
+    let created = crate::child_run_orchestrator::create_child_run(spec).await?;
     // W3 P0-1: always persist the child allowlist, including an EMPTY list
     // (explicit zero permission). The old `if !is_empty()` guard skipped empty
     // lists, so a restored session fell back to the unrestricted builtin
     // surface — a permission escalation on route restart.
-    crate::global_run_manager()
-        .runtime
-        .set_run_tool_allowlist(&created.id, sess.tool_allowlist.clone())
-        .await;
-    let run = crate::run_manager::RunManager::start_detached_global(
+    crate::child_run_orchestrator::apply_child_surface(
+        &created.id,
+        sess.tool_allowlist.clone(),
+        None,
+    )
+    .await;
+    crate::child_run_orchestrator::start_child_run(
         assistant_protocol::v2::StartRunRequest {
             agent_profile_id: sess.agent_profile_id.clone(),
             capability_selection: None,
@@ -238,7 +240,10 @@ pub async fn restart_subagent_with_binding(
             effort: None,
             runtime_id: Some("native".into()),
         },
-    )?;
+    )
+    .await?;
+    let run = rm.get_run(&created.id)
+        .ok_or_else(|| "route restart run vanished after orchestrator start".to_string())?;
 
     // Index task_output so reaper / kill see the new run.
     crate::global_run_manager()
