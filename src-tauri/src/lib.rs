@@ -209,10 +209,13 @@ pub fn run() {
             // client can reach it. Production UDS mode always starts it;
             // Embedded only exists under test/diagnostic (architecture #6).
             {
-                let broker_path = crate::credential_broker::broker_socket_path()
-                    .map_err(|e| format!("broker socket path: {e}"))?;
-                crate::credential_broker::spawn_broker_uds_listener(&broker_path)
-                    .map_err(|e| format!("broker listener: {e}"))?;
+                let broker_path =
+                    crate::credential_broker::credential_broker_uds::broker_socket_path()
+                        .map_err(|e| format!("broker socket path: {e}"))?;
+                crate::credential_broker::credential_broker_uds::spawn_broker_uds_listener(
+                    &broker_path,
+                )
+                .map_err(|e| format!("broker listener: {e}"))?;
             }
             // Embedded credential inject (when mode falls back to embedded for tests).
             // Embedded 仅存在于 test/diagnostic（架构目标 #6），随 cfg 隔离。
