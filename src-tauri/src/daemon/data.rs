@@ -144,91 +144,53 @@ impl LegacyMigrationService {
     /// Migrate provider keys from old legacy tables (user_providers / provider_api_keys).
     /// Only runs if the legacy tables exist. Idempotent — INSERT OR IGNORE.
     fn migrate_legacy_provider_keys(&self) -> Result<()> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let is_memory = self.db_path == ":memory:";
-        let mut attached = false;
-
-        if !is_memory {
+        // W3 P1-02: the legacy provider mirror migration runs entirely on the
+        // Host-owned natives.db (source user_providers/provider_api_keys and
+        // target assistant_provider_configs/keys/model_cache both live there).
+        // This removes the cross-db ATTACH of natives.db into the assistant.db
+        // connection; the LegacyMigrationService's assistant.db handle is only
+        // used for the assistant_* session conversion below.
+        let natives_path = {
             let path = std::path::Path::new(&self.db_path);
-            if let Some(parent) = path.parent() {
-                let natives_db_path = parent.join("natives.db");
-                if natives_db_path.exists() {
-                    let attach_sql = format!(
-                        "ATTACH DATABASE '{}' AS natives_db",
-                        natives_db_path.to_string_lossy().replace('\'', "''")
-                    );
-                    conn.execute(&attach_sql, []).map_err(|e| {
-                        crate::Error::Internal(format!("Failed to attach natives.db: {e}"))
-                    })?;
-                    attached = true;
-                }
+            if self.db_path == ":memory:" {
+                None
+            } else {
+                path.parent().map(|parent| parent.join("natives.db"))
             }
+        };
+        let Some(natives_path) = natives_path else {
+            return Ok(());
+        };
+        if !natives_path.exists() {
+            return Ok(());
         }
+        let mut natives_conn = rusqlite::Connection::open(&natives_path).map_err(|e| {
+            crate::Error::Internal(format!("open natives.db for provider migration: {e}"))
+        })?;
 
-        // Check if legacy tables exist
-        let has_legacy_providers: bool = if attached {
-            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='user_providers'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false)
-        } else {
-            conn.prepare(
+        let has_legacy_providers: bool = natives_conn
+            .prepare(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='user_providers'",
             )
             .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false)
-        };
-
-        let has_legacy_keys: bool = if attached {
-            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='provider_api_keys'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false)
-        } else {
-            conn.prepare(
+            .unwrap_or(false);
+        let has_legacy_keys: bool = natives_conn
+            .prepare(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_api_keys'",
             )
             .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false)
-        };
-
+            .unwrap_or(false);
         if !has_legacy_providers && !has_legacy_keys {
-            if attached {
-                conn.execute("DETACH DATABASE natives_db", []).ok();
-            }
             return Ok(());
         }
 
-        let tx = conn.transaction().map_err(|e| {
-            crate::Error::Internal(format!("Legacy migration transaction failed: {e}"))
-        })?;
+        let tx = natives_conn
+            .transaction()
+            .map_err(|e| crate::Error::Internal(format!("Legacy migration transaction failed: {e}")))?;
 
-        // Migrate providers from user_providers
+        // Migrate providers from user_providers (same DB: no ATTACH needed).
         if has_legacy_providers {
-            let provider_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_provider_configs
-                 (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
-                 SELECT
-                     up.id,
-                     CASE WHEN up.preset_name = 'openai' THEN 'openai'
-                          WHEN up.preset_name = 'anthropic' THEN 'anthropic'
-                          WHEN up.preset_name = 'gemini' THEN 'gemini'
-                          WHEN up.preset_name = 'deepseek' THEN 'deepseek'
-                          WHEN up.preset_name = 'ollama' THEN 'ollama'
-                          ELSE 'openai_compatible' END,
-                     up.name,
-                     up.base_url,
-                     up.website_url,
-                     up.default_model,
-                     'unknown',
-                     up.created_at,
-                     up.updated_at
-                 FROM natives_db.user_providers up
-                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)"
-            } else {
-                "INSERT OR IGNORE INTO assistant_provider_configs
+            let provider_sql = "INSERT OR IGNORE INTO assistant_provider_configs
                  (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
                  SELECT
                      up.id,
@@ -246,35 +208,15 @@ impl LegacyMigrationService {
                      up.created_at,
                      up.updated_at
                  FROM user_providers up
-                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)"
-            };
+                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)";
             tx.execute_batch(provider_sql).map_err(|e| {
                 crate::Error::Internal(format!("Legacy provider migration failed: {e}"))
             })?;
         }
 
-        // Migrate keys from provider_api_keys
+        // Migrate keys from provider_api_keys (same DB).
         if has_legacy_keys {
-            let keys_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_provider_keys
-                 (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
-                 SELECT
-                     pak.id,
-                     pak.provider_id,
-                     pak.api_key_encrypted,
-                     CASE WHEN LENGTH(pak.api_key_encrypted) > 8
-                          THEN SUBSTR(pak.api_key_encrypted, 1, 4) || '...' || SUBSTR(pak.api_key_encrypted, -4)
-                          ELSE '***' END,
-                     pak.label,
-                     pak.is_active,
-                     pak.is_primary,
-                     pak.test_status,
-                     pak.created_at,
-                     pak.updated_at
-                 FROM natives_db.provider_api_keys pak
-                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)"
-            } else {
-                "INSERT OR IGNORE INTO assistant_provider_keys
+            let keys_sql = "INSERT OR IGNORE INTO assistant_provider_keys
                  (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
                  SELECT
                      pak.id,
@@ -290,31 +232,14 @@ impl LegacyMigrationService {
                      pak.created_at,
                      pak.updated_at
                  FROM provider_api_keys pak
-                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)"
-            };
+                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)";
             tx.execute_batch(keys_sql)
                 .map_err(|e| crate::Error::Internal(format!("Legacy key migration failed: {e}")))?;
         }
 
-        // Auto-seed assistant_model_cache with default models from user_providers
+        // Auto-seed assistant_model_cache with default models from user_providers.
         if has_legacy_providers {
-            let model_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_model_cache
-                 (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
-                 SELECT
-                     up.id || ':' || up.default_model,
-                     up.id,
-                     up.default_model,
-                     up.default_model,
-                     '{}',
-                     0,
-                     0,
-                     'api_discovery',
-                     up.created_at
-                 FROM natives_db.user_providers up
-                 WHERE up.default_model IS NOT NULL AND up.default_model != ''"
-            } else {
-                "INSERT OR IGNORE INTO assistant_model_cache
+            let model_sql = "INSERT OR IGNORE INTO assistant_model_cache
                  (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
                  SELECT
                      up.id || ':' || up.default_model,
@@ -327,8 +252,7 @@ impl LegacyMigrationService {
                      'api_discovery',
                      up.created_at
                  FROM user_providers up
-                 WHERE up.default_model IS NOT NULL AND up.default_model != ''"
-            };
+                 WHERE up.default_model IS NOT NULL AND up.default_model != ''";
             tx.execute_batch(model_sql).map_err(|e| {
                 crate::Error::Internal(format!("Default model cache seeding failed: {e}"))
             })?;
@@ -336,10 +260,6 @@ impl LegacyMigrationService {
 
         tx.commit()
             .map_err(|e| crate::Error::Internal(format!("Legacy migration commit failed: {e}")))?;
-
-        if attached {
-            let _ = conn.execute("DETACH DATABASE natives_db", []);
-        }
 
         Ok(())
     }
