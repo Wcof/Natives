@@ -283,9 +283,9 @@ impl LegacyMigrationService {
             } else {
                 path.parent()
                     .map(|parent| parent.join("natives.db"))
-                    .filter(|p| p.exists())
-                    .map(|p| {
-                        rusqlite::Connection::open(&p).map_err(|e| {
+                    .filter(|natives_path| natives_path.exists())
+                    .map(|natives_path| {
+                        rusqlite::Connection::open(&natives_path).map_err(|e| {
                             crate::Error::Internal(format!(
                                 "open natives.db for legacy messages: {e}"
                             ))

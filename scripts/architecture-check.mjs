@@ -321,11 +321,14 @@ function collectCrossDbHost(root = ROOT) {
       map.set(`${relToRoot(p)}:${h.line}`, h.text);
     }
     // Variable-path opens (caller-provided db path) referencing the assistant.db
-    // literal in the same file are flagged as candidates (fail-closed).
+    // literal in the same file are flagged as candidates (fail-closed). Opens
+    // whose argument names reference natives.db (the Host's own store) are
+    // excluded — they are the Host-authority store, not the Daemon's.
     const src = readFileSync(p, 'utf8');
     if (/assistant\.db/.test(src) && !/NATIVES_ASSISTANT_DB_PATH/.test(src)) {
       const opens = nonCommentLines(p, /(Connection::open|open_with_flags)\(/);
       for (const h of opens) {
+        if (/\b(natives_path|natives_conn|natives_db_path)\b/.test(h.text)) continue;
         const key = `${relToRoot(p)}:${h.line}`;
         if (!map.has(key)) map.set(key, `variable-path open near assistant.db literal — ${h.text}`);
       }
