@@ -1,0 +1,414 @@
+/* ═══════════════════════════════════════════
+   Layout Shell — 纯色 Surface，无 backdrop-filter
+   ═══════════════════════════════════════════ */
+
+.shell {
+  display: grid;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: 1fr var(--terminal-height);
+  transition: grid-template-columns var(--transition),
+              grid-template-rows var(--transition);
+  background: var(--background);
+}
+
+.shell.sidebar-collapsed {
+  grid-template-columns: 0 1fr;
+}
+
+.shell.terminal-collapsed {
+  grid-template-rows: 1fr 0;
+}
+
+.shell.terminal-maximized {
+  grid-template-rows: 0 1fr;
+}
+
+.shell.right-panel-open {
+  grid-template-columns: var(--sidebar-width) 1fr var(--panel-width);
+}
+
+/* ── Sidebar ── */
+
+.sidebar {
+  grid-row: 1 / 3;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  min-width: var(--sidebar-min);
+  max-width: var(--sidebar-max);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: width var(--transition);
+}
+
+.sidebar.collapsed {
+  width: 0 !important;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+}
+
+.sidebar-brand {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.sidebar-section-title {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-disabled);
+  padding: 8px 16px 4px;
+  margin-bottom: 4px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 0 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+  font-size: 13px;
+  color: var(--text-secondary);
+  position: relative;
+  user-select: none;
+}
+
+.sidebar-item:active {
+  transform: scale(0.98);
+}
+
+.sidebar-item.active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--primary);
+}
+
+.sidebar-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-item.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.sidebar-item.active:hover {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Sidebar drag handle ── */
+
+.sidebar-drag-handle {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: var(--z-dragbar);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.sidebar-drag-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.sidebar-drag-handle:hover,
+.sidebar-drag-handle.active {
+  opacity: 1;
+}
+
+.sidebar-drag-handle:hover::after,
+.sidebar-drag-handle.active::after {
+  opacity: 0.6;
+}
+
+/* Kill width transition while the user is dragging the left rail */
+[data-sidebar][data-resizing='true'],
+[data-sidebar].is-resizing {
+  transition: none !important;
+  will-change: width;
+}
+
+/* ── Content Area ── */
+
+.content-area {
+  grid-column: 2;
+  grid-row: 1;
+  overflow: hidden;
+  background: var(--background);
+  position: relative;
+}
+
+.right-panel-open .content-area {
+  grid-column: 2;
+}
+
+.content-area iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* ── Right Panel ── */
+
+.right-panel-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.right-panel-content {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 12px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* Nested preview / notification bodies must shrink with the panel */
+.right-panel-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Left-edge drag handle (mirror .sidebar-drag-handle) */
+.right-panel-drag-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: var(--z-dragbar);
+  opacity: 0;
+  transition: opacity var(--transition);
+  /* Hit target wider than visible bar */
+  touch-action: none;
+}
+
+.right-panel-drag-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.right-panel-drag-handle:hover,
+.right-panel-drag-handle.active,
+.right-panel.is-resizing .right-panel-drag-handle {
+  opacity: 1;
+}
+
+.right-panel-drag-handle:hover::after,
+.right-panel-drag-handle.active::after,
+.right-panel.is-resizing .right-panel-drag-handle::after {
+  opacity: 0.6;
+}
+
+/* Density: elastic collapse of chrome padding when panel is narrow */
+.right-panel[data-density='compact'] .right-panel-header {
+  padding: 8px 10px;
+  gap: 2px;
+}
+
+.right-panel[data-density='compact'] .right-panel-content {
+  padding: 8px 8px 12px;
+}
+
+.right-panel[data-density='wide'] .right-panel-content {
+  padding: 14px 16px 18px;
+}
+
+/* While dragging: kill width transition so resize tracks the pointer */
+.right-panel.is-resizing {
+  transition: none !important;
+  will-change: width;
+}
+
+/* ── Header topbar responsive shrinking ── */
+.tb-hide { display: none !important; }
+.tb-sm .segmented-control { display: none !important; }
+.tb-xs .switch { display: none !important; }
+.tb-xxs .segmented-control,
+.tb-xxs .btn-ghost { display: none !important; }
+.tb-min .btn-ghost { display: none !important; }
+
+/* ── Titlebar row + native/fallback window chrome ── */
+/* Geometry contract (keep in sync with tauri.macos.conf.json trafficLightPosition)
+ *
+ * Shell outer pad (p-3)           = 12
+ * doppelrand border               = 1
+ * titlebar-row height             = 52
+ * collapse button                 = 28×28, flex-centered → center at 12+1+26 = 39
+ * traffic lights (~14px): y is top inset of cluster (wry only moves origin.x;
+ *   taller titlebar via y pushes cluster down). Center match → y ≈ 39 − 7 = 32
+ *   Use y: 30 (optical tweak for native button metrics).
+ * x = outer(12) + row pad(8) = 20
+ */
+.titlebar-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  height: 52px;
+  min-height: 52px;
+  padding: 0 10px 0 8px;
+  box-sizing: border-box;
+  gap: 4px;
+}
+
+.titlebar-row[data-native-traffic='true'] {
+  padding-left: 8px;
+}
+
+.titlebar-row[data-collapsed='true'] {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  height: 52px;
+  min-height: 52px;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.titlebar-row[data-collapsed='true'][data-native-traffic='true'] {
+  padding-top: 0;
+  padding-left: 8px;
+}
+
+/* Reserve space for system traffic lights (Overlay title bar). */
+.native-traffic-spacer {
+  width: 68px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.titlebar-row[data-collapsed='true'] .native-traffic-spacer {
+  width: 68px;
+  height: 28px;
+  margin-top: 0;
+}
+
+/* Flexible middle drag strip between lights/controls and collapse button */
+.titlebar-drag-fill {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 8px;
+  min-height: 100%;
+}
+
+/* Collapse / expand — never a drag region; always above siblings */
+.titlebar-collapse-btn {
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  pointer-events: auto !important;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* Windows/Linux frameless fallback controls */
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  position: relative;
+  z-index: 60;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-ctrl-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: default;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: background-color 100ms ease, color 100ms ease;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-ctrl-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.window-ctrl-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  outline-offset: 2px;
+}
+
+.window-ctrl-btn.window-ctrl-close:hover {
+  background: color-mix(in srgb, var(--mac-red, #FF5F57) 18%, transparent);
+  color: var(--mac-red, #FF5F57);
+}
+
+.window-ctrl-btn:active {
+  transform: scale(0.96);
+}
+.tb-min #btn-terminal { display: inline-flex !important; }

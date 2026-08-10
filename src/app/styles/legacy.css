@@ -1,0 +1,224 @@
+/* ═══════════════════════════════════════════
+   Doppelrand 兼容层 — 退化为纯色无边框
+   ═══════════════════════════════════════════ */
+
+.doppelrand-outer {
+  position: relative;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  box-shadow: none;
+  transition: none;
+  overflow: hidden;
+}
+
+.doppelrand-outer:hover {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.doppelrand-inner {
+  position: relative;
+  background: var(--background);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+/* ── CTA pill 兼容 ── */
+.cta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 8px 16px;
+  border-radius: 99px;
+  background: var(--primary);
+  border: none;
+  color: #FFFFFF;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.cta-pill:hover {
+  background: var(--primary-hover);
+}
+
+.cta-pill:active {
+  transform: scale(0.97);
+}
+
+.cta-pill .cta-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.12);
+  color: #FFFFFF;
+  flex-shrink: 0;
+  transition: transform var(--transition);
+}
+
+.cta-pill:hover .cta-icon-wrap {
+  transform: translateX(2px);
+}
+
+/* ── Hairline utilities ── */
+.hairline-bottom {
+  border-bottom: 1px solid var(--border);
+}
+.hairline-top {
+  border-top: 1px solid var(--border);
+}
+
+/* ── Noise overlay 已废弃（V1.0 不使用 grain） ── */
+.grain-overlay,
+.grain-subtle {
+  display: none !important;
+}
+
+/* ── Liquid blob 已废弃 ── */
+.liquid-blob-wrapper,
+.liquid-blob,
+.liquid-blob-1,
+.liquid-blob-2,
+.liquid-blob-3 {
+  display: none !important;
+}
+
+/* ── radial-mesh 已废弃 ── */
+.radial-mesh {
+  display: none !important;
+}
+
+/* ── Vibe canvas / sidebar / toolbar 兼容层 ── */
+/* 旧类名引用退化为纯色，无 backdrop-filter */
+.vibe-canvas,
+.vibe-sidebar,
+.vibe-toolbar,
+.vibe-content-panel,
+.vibe-right-panel,
+.vibe-floating,
+.glass-overlay,
+.liquid-glass-container {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.vibe-canvas {
+  background: var(--background);
+  border: none;
+}
+
+.vibe-sidebar {
+  background: var(--sidebar);
+}
+
+.vibe-toolbar {
+  height: 40px;
+  background: var(--surface);
+}
+
+.vibe-content-panel {
+  background: var(--surface);
+}
+
+.vibe-right-panel {
+  background: var(--sidebar);
+}
+
+/* Right panel — V1.0 */
+.right-panel {
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: 320px;
+  min-width: 0;
+  flex-shrink: 0;
+  transition: width var(--transition);
+  /* Allow children to elastically shrink instead of forcing panel wider */
+  contain: layout;
+}
+
+.right-panel.collapsed,
+.vibe-right-panel.collapsed,
+.right-panel-mini.collapsed {
+  width: 0 !important;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: none !important;
+}
+
+.vibe-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.vibe-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.vibe-btn.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+/* ── Neon glow 已废弃 ── */
+.neon-border-glow {
+  box-shadow: none;
+}
+
+/* ── Main card 兼容（frameless drag） ── */
+.main-card {
+  position: relative;
+  -webkit-app-region: drag;
+}
+
+.main-card button,
+.main-card input,
+.main-card select,
+.main-card textarea,
+.main-card [role="button"],
+.no-drag {
+  -webkit-app-region: no-drag !important;
+}
+
+.main-card::after {
+  display: none;
+}
+
+/* Fix primary buttons contrast in dark theme (white text on white/light primary background) */
+[data-theme="dark"] .btn-primary,
+[data-theme="dark"] .btn-primary-v1 {
+  color: var(--primary-dark) !important;
+}
+[data-theme="dark"] .btn-primary:hover,
+[data-theme="dark"] .btn-primary-v1:hover {
+  color: var(--primary-dark) !important;
+}
