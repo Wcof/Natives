@@ -19,6 +19,7 @@ pub const ALL_METHODS: &[&str] = &[
     "conversation.getMessagesPage",
     "conversation.appendMessage",
     "conversation.rename",
+    "conversation.searchMessages",
     "conversation.update_model",
     "conversation.update_permission",
     "conversation.archive",
@@ -204,6 +205,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "conversation.getMessagesPage",
     "conversation.appendMessage",
     "conversation.rename",
+    "conversation.searchMessages",
     "conversation.update_model",
     "conversation.update_permission",
     "conversation.archive",
@@ -399,6 +401,7 @@ pub mod names {
     pub const CONVERSATION_GET_MESSAGES: &str = "conversation.getMessages";
     pub const CONVERSATION_APPEND_MESSAGE: &str = "conversation.appendMessage";
     pub const CONVERSATION_RENAME: &str = "conversation.rename";
+    pub const CONVERSATION_SEARCH_MESSAGES: &str = "conversation.searchMessages";
     pub const CONVERSATION_UPDATE_MODEL: &str = "conversation.update_model";
     pub const CONVERSATION_UPDATE_PERMISSION: &str = "conversation.update_permission";
     pub const CONVERSATION_ARCHIVE: &str = "conversation.archive";
