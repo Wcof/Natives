@@ -24,6 +24,13 @@ pub mod tool_runtime;
 
 pub mod engine_core;
 pub use engine_core::*;
+// W9: impl AgentEngine 按行为域拆分（events/safe_point/tools/compaction/input）。
+mod engine_events;
+mod engine_safe_point;
+mod engine_tools;
+mod engine_compaction;
+mod engine_input;
+mod engine_run;
 
 pub use conversion::{
     agent_messages_from_json, agent_messages_to_engine_messages, engine_messages_to_agent_messages,
