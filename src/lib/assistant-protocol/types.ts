@@ -99,6 +99,8 @@ export interface Conversation {
   archivedAt?: string | null;
   pinned?: boolean;
   parentConversationId?: string | null;
+  /** W8: low-frequency activity projection — most recent run status. */
+  lastRunStatus?: string | null;
 }
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';

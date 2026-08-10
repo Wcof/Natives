@@ -435,7 +435,6 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       projectMetas,
       unassignedLabel,
     );
-
     publishNavigation((prev) => ({
       ...prev,
       groups,

@@ -230,18 +230,39 @@ fn list_page(params: Value) -> Result<Value, String> {
     let conn = store.conn()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
-                created_at, updated_at, archived_at, parent_conversation_id
-         FROM conversation
-         WHERE parent_conversation_id IS NULL
-           AND (?1 IS NULL OR updated_at < ?1 OR (updated_at = ?1 AND id < ?2))
-         ORDER BY updated_at DESC, id DESC LIMIT ?3",
+            "SELECT c.id, c.mode, c.project_id, c.title, c.provider_id, c.model_id,
+                    c.permission_profile_id, c.created_at, c.updated_at, c.archived_at,
+                    c.parent_conversation_id,
+                    (SELECT r.status FROM run r
+                      WHERE r.conversation_id = c.id
+                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS last_run_status
+             FROM conversation c
+             WHERE c.parent_conversation_id IS NULL
+               AND (?1 IS NULL OR c.updated_at < ?1 OR (c.updated_at = ?1 AND c.id < ?2))
+             ORDER BY c.updated_at DESC, c.id DESC LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
             params![cursor_updated, cursor_id, limit + 1],
-            row_to_conversation,
+            |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "mode": row.get::<_, String>(1)?,
+                    "project_id": row.get::<_, Option<String>>(2)?,
+                    "title": row.get::<_, String>(3)?,
+                    "provider_id": row.get::<_, String>(4)?,
+                    "model_id": row.get::<_, String>(5)?,
+                    "permission_profile_id": row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "ask".into()),
+                    "created_at": row.get::<_, String>(7)?,
+                    "updated_at": row.get::<_, String>(8)?,
+                    "archived_at": row.get::<_, Option<String>>(9)?,
+                    "parent_conversation_id": row.get::<_, Option<String>>(10)?,
+                    // W8: low-frequency activity projection — the most recent
+                    // run status per conversation (never the live stream).
+                    "last_run_status": row.get::<_, Option<String>>(11)?,
+                }))
+            },
         )
         .map_err(|e| e.to_string())?;
     let mut conversations: Vec<Value> = rows.filter_map(Result::ok).collect();

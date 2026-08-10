@@ -70,6 +70,9 @@ export function mapWireConversation(raw: Record<string, unknown>): Conversation 
     archivedAt: optStr(raw.archived_at ?? raw.archivedAt),
     pinned: Boolean(raw.pinned),
     parentConversationId: optStr(raw.parent_conversation_id ?? raw.parentConversationId),
+    // W8: low-frequency activity projection — most recent run status per
+    // conversation from the daemon listPage (never the live stream).
+    lastRunStatus: optStr(raw.last_run_status ?? raw.lastRunStatus),
   };
 }
 
