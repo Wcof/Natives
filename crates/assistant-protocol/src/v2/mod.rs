@@ -11,6 +11,7 @@
 pub mod capabilities;
 pub mod creative;
 pub mod credential;
+pub mod daemon;
 pub mod envelope;
 pub mod harness;
 pub mod methods;
@@ -20,6 +21,7 @@ pub mod run_event;
 pub use capabilities::*;
 pub use creative::*;
 pub use credential::*;
+pub use daemon::*;
 pub use envelope::*;
 pub use harness::*;
 pub use methods::*;
