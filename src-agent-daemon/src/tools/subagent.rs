@@ -24,6 +24,89 @@ use super::gated::PermissionGatedTools;
 pub(crate) use super::subagent_requeue::fail_parent_and_cancel_siblings;
 pub use super::subagent_requeue::redact_task_input_system_prompt;
 
+// ── NE-P0-05 §19.5: Run-level frozen Hook Dispatcher for the subagent lifecycle ──
+//
+// `SubagentStart` and `SubagentStop` are subagent lifecycle hooks. They must
+// dispatch through the Run's *frozen* Hook Dispatcher — the same read-only plan
+// the permission gate and the notification hook already use — rather than
+// re-scanning `hooks.json` on every spawn or terminal settlement. A mid-Run
+// `hooks.json` edit only reaches the *next* Run.
+//
+// These helpers are the seam `subagent_execute` (SubagentStart) and
+// `subagent_requeue` (SubagentStop) should call instead of
+// `build_production_hooks_for_project`. They resolve the Run's frozen
+// dispatcher once and delegate, so every lifecycle event emits
+// HookInvocationStarted / Completed telemetry through the same
+// [`EventSequencer`] the engine uses — a single durable source.
+
+/// Resolve the Run's frozen Hook Dispatcher for the subagent lifecycle, shared
+/// with the permission gate and the notification hook. Re-scanning
+/// `hooks.json` happens at most once per Run (the lazy compile fallback), and
+/// never on a lifecycle event once the Run is frozen.
+#[allow(dead_code)] // seam for subagent_execute / subagent_requeue (outside ownership this round)
+pub(crate) fn frozen_subagent_dispatcher(
+    parent_run_id: &str,
+    events: agent_core::EventSequencer,
+    project: Option<&std::path::Path>,
+) -> crate::production_hooks::FrozenHookDispatcher {
+    crate::production_hooks::resolve_frozen_dispatcher_for_subagent(parent_run_id, events, project)
+}
+
+/// Dispatch `SubagentStart` through the Run's frozen Hook Dispatcher.
+///
+/// `project_path` is the project root (used only for the lazy compile fallback
+/// when the Run has not been frozen yet). Returns the hook responses so the
+/// caller can aggregate them (`FrozenHookDispatcher::aggregate_allow`).
+#[allow(dead_code)] // seam for subagent_execute (outside ownership this round)
+pub(crate) async fn fire_subagent_start_frozen(
+    parent_run_id: &str,
+    events: agent_core::EventSequencer,
+    project_path: &Option<String>,
+    input: &Value,
+) -> Vec<agent_core::HookResponse> {
+    let dispatcher = frozen_subagent_dispatcher(
+        parent_run_id,
+        events,
+        project_path.as_deref().map(std::path::Path::new),
+    );
+    dispatcher
+        .dispatch(agent_core::HookRequest {
+            event: agent_core::HookEvent::SubagentStart,
+            run_id: parent_run_id.to_string(),
+            tool_name: Some("task".into()),
+            input: input.clone(),
+        })
+        .await
+}
+
+/// Dispatch `SubagentStop` through the Run's frozen Hook Dispatcher.
+///
+/// `project_path` is the project root (used only for the lazy compile fallback
+/// when the Run has not been frozen yet). The responses are returned for
+/// telemetry; a `SubagentStop` is an observation event and the caller does not
+/// gate on the verdict.
+#[allow(dead_code)] // seam for subagent_requeue (outside ownership this round)
+pub(crate) async fn fire_subagent_stop_frozen(
+    parent_run_id: &str,
+    events: agent_core::EventSequencer,
+    project_path: &Option<String>,
+    input: &Value,
+) {
+    let dispatcher = frozen_subagent_dispatcher(
+        parent_run_id,
+        events,
+        project_path.as_deref().map(std::path::Path::new),
+    );
+    let _ = dispatcher
+        .dispatch(agent_core::HookRequest {
+            event: agent_core::HookEvent::SubagentStop,
+            run_id: parent_run_id.to_string(),
+            tool_name: Some("task".into()),
+            input: input.clone(),
+        })
+        .await;
+}
+
 /// Step budget for a subagent turn loop when neither the caller nor the
 /// selected agent profile asks for one.
 pub const DEFAULT_CHILD_MAX_STEPS: u32 = 15;

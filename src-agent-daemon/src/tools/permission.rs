@@ -595,4 +595,57 @@ mod tests {
             HookPermissionGate::Prompt
         );
     }
+
+    /// NE-P0-05 §19.5: the permission gate dispatches through the Run's *frozen*
+    /// Hook Dispatcher — the same shared read-only plan the notification hook
+    /// and the subagent lifecycle use — not a freshly-compiled registry on every
+    /// tool call. Two resolves for the same run return the same dispatcher and
+    /// a mid-Run `hooks.json` edit cannot replace it. This is the guarantee the
+    /// permission gate (`await_tool_permission`) relies on, checked here from
+    /// the same seam the gate calls.
+    #[tokio::test]
+    async fn permission_gate_uses_frozen_dispatcher_shared_and_stable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap();
+        const PROBE_URL: &str = "http://127.0.0.1:1/hook";
+        std::fs::write(
+            root.join(".natives").join("hooks.json"),
+            format!(r#"{{"hooks":{{"PermissionRequest":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}}}"#),
+        )
+        .expect("write hooks.json");
+        let run_id = format!("perm-frozen-{}", uuid::Uuid::new_v4());
+        let events = agent_core::EventSequencer::memory_only();
+        let project = Some(root.as_path());
+
+        let first =
+            crate::production_hooks::resolve_frozen_dispatcher(&run_id, events.clone(), project);
+        let plan_hash = first.plan_hash().to_string();
+
+        // Second resolve for the same run must return the same frozen dispatcher.
+        let second =
+            crate::production_hooks::resolve_frozen_dispatcher(&run_id, events.clone(), project);
+        assert_eq!(
+            second.plan_hash(),
+            plan_hash,
+            "two resolves for the same run must agree on the plan hash"
+        );
+
+        // Mid-run edit: the frozen plan must not change.
+        std::fs::write(
+            root.join(".natives").join("hooks.json"),
+            format!(
+                r#"{{"hooks":{{"PermissionRequest":[{{"hooks":[
+                    {{"type":"http","url":"{PROBE_URL}"}},
+                    {{"type":"http","url":"{PROBE_URL}"}}
+                ]}}]}}}}"#
+            ),
+        )
+        .expect("overwrite hooks.json");
+        let third = crate::production_hooks::resolve_frozen_dispatcher(&run_id, events, project);
+        assert_eq!(
+            third.plan_hash(),
+            plan_hash,
+            "a mid-Run hooks.json edit must not change the permission gate's frozen plan hash"
+        );
+    }
 }

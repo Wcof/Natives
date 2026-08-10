@@ -472,7 +472,8 @@ mod production_hooks_native;
 mod production_hooks_trace;
 
 pub use self::production_hooks_frozen::{
-    freeze_run_hooks, frozen_dispatcher_for_run, resolve_frozen_dispatcher, FrozenHookDispatcher,
+    freeze_run_hooks, frozen_dispatcher_for_run, resolve_frozen_dispatcher,
+    resolve_frozen_dispatcher_for_subagent, FrozenHookDispatcher,
 };
 #[cfg(test)]
 use self::production_hooks_native::{prompt_decision, substitute_hook_input};
