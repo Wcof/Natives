@@ -20,22 +20,22 @@ import {
 import { conversationsWithoutTemp, isTempConversationId } from '@/lib/assistant-temp-conversation';
 import { t } from '@/i18n';
 import type { Locale } from '@/i18n';
-import type { Conversation, RunEvent } from '@/lib/assistant-protocol';
+import type { Conversation, RunEvent, Artifact, ContextUsage } from '@/lib/assistant-protocol';
 import type { ProviderReadiness } from '@/lib/provider-model-selection';
 import type { AssistantNavigationSnapshot, AssistantRuntimeSnapshot } from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchPublishersOptions {
   locale: Locale;
   rootConversationId: string | null;
-  activeId: string;
+  activeId: string | null;
   activeProjectPath: string | null;
   rootConversation: Conversation | null;
   activeConversation: Conversation | null;
   activeRun: { id: string; status: string; startedAt?: string | null; finishedAt?: string | null } | null;
   events: RunEvent[];
   fileChanges: Array<{ path: string; changeType: string }>;
-  artifacts: Array<{ id: string; path: string; label: string; size: number; kind: string }>;
-  contextUsage: { usedTokens: number; remaining: number } | null;
+  artifacts: Artifact[];
+  contextUsage: ContextUsage | null;
   registeredProjects: Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string; exists?: boolean }>;
   pinnedConversationIds: Set<string>;
   loadingConversations: boolean;

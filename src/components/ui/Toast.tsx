@@ -6,7 +6,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-toke
 // W4: context contract lives in lib so hooks never depend on this component.
 export type { ToastType, ToastContextValue } from '@/lib/toast-context';
 export { useToast } from '@/lib/toast-context';
-import { ToastContext, type ToastItem } from '@/lib/toast-context';
+import { ToastContext, type ToastItem, type ToastType } from '@/lib/toast-context';
 
 let nextId = 0;
 
@@ -82,8 +82,4 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       </div>
     </ToastContext.Provider>
   );
-}
-
-export function useToast(): ToastContextValue {
-  return useContext(ToastContext);
 }

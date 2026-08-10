@@ -32,7 +32,11 @@ export type {
   AssistantRuntimeSnapshot,
   AssistantWorkspaceActions,
 } from '@/lib/assistant-ui-types';
-import type { AssistantNavigationSnapshot } from '@/lib/assistant-ui-types';
+import type {
+  AssistantNavigationSnapshot,
+  AssistantRuntimeSnapshot,
+  AssistantWorkspaceActions,
+} from '@/lib/assistant-ui-types';
 
 type PublishNavigation = (
   snapshot:
