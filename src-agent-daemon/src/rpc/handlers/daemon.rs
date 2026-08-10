@@ -15,7 +15,7 @@ pub(crate) async fn dispatch_daemon(
 ) {
     use crate::rpc::{run_manager, send_error, send_rpc_failure, send_success};
     use assistant_protocol::error::{DaemonError, ErrorCategory};
-    use assistant_protocol::v1::daemon::{DaemonHealth, DaemonStatus};
+    use assistant_protocol::v2::daemon::{DaemonStatusV2, ReadinessItem};
     use assistant_protocol::v2::methods::names;
     match request.method.as_str() {
         names::DAEMON_GET_STATUS => {
@@ -24,16 +24,31 @@ pub(crate) async fn dispatch_daemon(
                 .iter()
                 .filter(|r| r.status.is_active())
                 .count() as u32;
-            let status = DaemonStatus {
-                version: daemon_version.to_string(),
+            // W3 P0-03: status uses the frozen v2 DaemonStatusV2 contract —
+            // decomposed readiness (health / storage / broker), NO db path,
+            // NO home-absolute path leak. The Host readiness probe resolves
+            // exactly these fields.
+            let storage_ready = match crate::storage::open_daemon_store() {
+                Ok(_) => ReadinessItem::Ready,
+                Err(e) => ReadinessItem::Unavailable(e),
+            };
+            let broker_ready = match crate::natives_db_broker::default_broker_socket_path() {
+                Ok(p) if p.exists() => ReadinessItem::Ready,
+                _ => ReadinessItem::Unavailable("broker socket not present".into()),
+            };
+            let health = if storage_ready.is_ready() {
+                ReadinessItem::Ready
+            } else {
+                ReadinessItem::Degraded("storage unavailable".into())
+            };
+            let status = DaemonStatusV2 {
+                instance_id: format!("{}-{}", std::process::id(), started_at.elapsed().as_millis()),
                 protocol_version: protocol_version.to_string(),
-                uptime_secs: started_at.elapsed().as_secs(),
-                pid: std::process::id() as u64,
+                health,
                 active_runs,
-                active_extensions: 0,
-                provider_count: 6,
-                memory_usage_mb: 0,
-                health: DaemonHealth::Healthy,
+                storage_ready,
+                credential_broker_ready: broker_ready,
+                degraded: vec![],
             };
             let value = serde_json::to_value(&status).unwrap_or_default();
             // W1: never expose a home/absolute natives.db path in status —
