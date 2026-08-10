@@ -17,8 +17,9 @@ use crate::compaction::{
     SUMMARY_SYSTEM_PROMPT,
 };
 use crate::hooks::{HookEvent, HookRegistry, HookRequest};
-use crate::ContextStats;
+use crate::context::ContextStats;
 use assistant_protocol::v2::RunEventKind;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Mutex;
