@@ -92,8 +92,14 @@ fn matrix_v1_only_upgrades_preserving_data() {
 
     // Reopen through the daemon store: full migration must run on the legacy DB.
     let store = DataStore::new(&db, &art).expect("migrate legacy v1 DB");
-    assert!(store.has_table("_daemon_migrations"), "ledger table must exist");
-    assert!(store.has_table("turn"), "v28 table must exist after migration");
+    assert!(
+        store.has_table("_daemon_migrations"),
+        "ledger table must exist"
+    );
+    assert!(
+        store.has_table("turn"),
+        "v28 table must exist after migration"
+    );
     assert!(store.has_table("subagent_session"), "v10 table must exist");
 
     // User data preserved: run + conversation rows still present.
@@ -123,7 +129,10 @@ fn matrix_reopen_idempotent() {
     let ledger: i64 = conn
         .query_row("SELECT COUNT(*) FROM _daemon_migrations", [], |r| r.get(0))
         .unwrap();
-    assert!(ledger >= 22, "full migration set applied once, got {ledger}");
+    assert!(
+        ledger >= 22,
+        "full migration set applied once, got {ledger}"
+    );
 
     let all: i64 = conn
         .query_row("SELECT COUNT(*) FROM run", [], |r| r.get(0))
@@ -156,7 +165,11 @@ fn matrix_wal_active() {
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(mode.to_ascii_lowercase(), "wal", "daemon store must use WAL");
+    assert_eq!(
+        mode.to_ascii_lowercase(),
+        "wal",
+        "daemon store must use WAL"
+    );
 }
 
 /// 5. Crash simulation: v13 ledger row removed → reopen re-attaches via
@@ -195,9 +208,11 @@ fn matrix_crash_ledger_missing_reattaches() {
     assert_eq!(v13, 1, "crash-missing ledger row re-attached");
     // User data not duplicated or lost.
     let convs: i64 = conn
-        .query_row("SELECT COUNT(*) FROM conversation WHERE id='crash-conv'", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM conversation WHERE id='crash-conv'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(convs, 1, "user row preserved by re-migration");
 }
