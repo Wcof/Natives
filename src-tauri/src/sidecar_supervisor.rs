@@ -445,8 +445,14 @@ impl SidecarSupervisor {
                 if status.get("storage_ready").and_then(|v| v.as_str()) != Some("ready") {
                     return Err(format!("daemon.getStatus storage not ready: {status}"));
                 }
-                if status.get("credential_broker_ready").and_then(|v| v.as_str()) != Some("ready") {
-                    return Err(format!("daemon.getStatus credential broker not ready: {status}"));
+                if status
+                    .get("credential_broker_ready")
+                    .and_then(|v| v.as_str())
+                    != Some("ready")
+                {
+                    return Err(format!(
+                        "daemon.getStatus credential broker not ready: {status}"
+                    ));
                 }
                 let health = status
                     .get("health")
