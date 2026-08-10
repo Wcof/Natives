@@ -88,16 +88,18 @@ pub async fn apply_child_surface(
 /// is taken back so nothing consumes a half-applied persona.
 pub async fn start_child_run(req: StartRunRequest) -> Result<(), String> {
     let run_id = req.run_id.clone().unwrap_or_default();
-    let start = RunManager::start_detached_global(req).map_err(|e| {
-        if !run_id.is_empty() {
-            let _ = crate::global_run_manager()
-                .runtime
-                .take_run_agent_directive(&run_id)
-                .await;
+    match RunManager::start_detached_global(req) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            if !run_id.is_empty() {
+                let _ = crate::global_run_manager()
+                    .runtime
+                    .take_run_agent_directive(&run_id)
+                    .await;
+            }
+            Err(format!("start child run failed: {e}"))
         }
-        format!("start child run failed: {e}")
-    });
-    start
+    }
 }
 
 /// Reserve → create → surface → start a child run in one call. For callers
