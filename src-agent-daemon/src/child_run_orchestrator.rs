@@ -130,3 +130,41 @@ pub async fn spawn_child_run(
     start_child_run(start).await?;
     Ok(created)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spec_into_create_request_maps_every_field() {
+        let spec = ChildRunSpec {
+            conversation_id: "conv-1".into(),
+            provider_id: "anthropic".into(),
+            model_id: "claude-3-7".into(),
+            key_id: Some("k-1".into()),
+            agent_profile_id: Some("p-1".into()),
+            permission_profile: Some("child-scope".into()),
+            content: Some("run this".into()),
+            max_steps: Some(12),
+            parent_run_id: Some("parent-1".into()),
+            project_path: Some("/tmp/p".into()),
+            runtime_id: Some("native".into()),
+        };
+        let req = spec.into_create_request();
+        assert_eq!(req.conversation_id, "conv-1");
+        assert_eq!(req.provider_id, "anthropic");
+        assert_eq!(req.model_id, "claude-3-7");
+        assert_eq!(req.key_id.as_deref(), Some("k-1"));
+        assert_eq!(req.agent_profile_id.as_deref(), Some("p-1"));
+        assert_eq!(req.permission_profile.as_deref(), Some("child-scope"));
+        assert_eq!(req.content.as_deref(), Some("run this"));
+        assert_eq!(req.max_steps, Some(12));
+        assert_eq!(req.parent_run_id.as_deref(), Some("parent-1"));
+        assert_eq!(req.project_path.as_deref(), Some("/tmp/p"));
+        assert_eq!(req.runtime_id.as_deref(), Some("native"));
+        // W2: creation must not attach attachments or an idempotency key the
+        // caller never provided — the orchestrator owns the spawn contract.
+        assert!(req.attachments.is_none());
+        assert!(req.idempotency_key.is_none());
+    }
+}
