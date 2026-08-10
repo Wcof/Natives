@@ -8,9 +8,11 @@
 //! UDS failure must not silently become Embedded (see SidecarSupervisor).
 
 use natives_agent_daemon::{
-    resolve_run_authority_mode, AuthorityError, EmbeddedAuthority, ExecutionAuthority,
+    resolve_run_authority_mode, AuthorityError, ExecutionAuthority,
     RunAuthorityMode, UdsAuthority,
 };
+#[cfg(any(test, feature = "diagnostic"))]
+use natives_agent_daemon::EmbeddedAuthority;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
@@ -20,6 +22,11 @@ fn authority_slot() -> &'static RwLock<Option<Arc<dyn ExecutionAuthority>>> {
     AUTHORITY.get_or_init(|| RwLock::new(None))
 }
 
+/// Install the in-process credential broker for **Embedded** mode (tests/dev).
+///
+/// 仅在 `cfg(test)` 或 `diagnostic` feature 下编译。
+/// 生产 UDS 模式不注册 host credential broker —— daemon 有自己的 broker。
+#[cfg(any(test, feature = "diagnostic"))]
 fn ensure_embedded_broker() {
     static BROKER_INSTALLED: std::sync::Once = std::sync::Once::new();
     BROKER_INSTALLED.call_once(|| {
@@ -29,6 +36,28 @@ fn ensure_embedded_broker() {
             },
         ));
     });
+}
+
+/// 生产 stub：UDS 模式不注册 host credential broker。
+#[cfg(not(any(test, feature = "diagnostic")))]
+fn ensure_embedded_broker() {}
+
+/// 构造 Embedded authority（仅 test/diagnostic）。
+///
+/// `EmbeddedAuthority::with_broker_install` 只能存在于 test/diagnostic 路径，
+/// 因为它拉入完整的 in-process daemon 实现（架构目标 #5）。
+#[cfg(any(test, feature = "diagnostic"))]
+fn build_embedded_authority() -> Result<Arc<dyn ExecutionAuthority>, String> {
+    ensure_embedded_broker();
+    Ok(Arc::new(EmbeddedAuthority::with_broker_install(Arc::new(
+        ensure_embedded_broker,
+    ))) as Arc<dyn ExecutionAuthority>)
+}
+
+/// 生产 stub：Embedded authority 不可用 —— 生产必须走 UDS。
+#[cfg(not(any(test, feature = "diagnostic")))]
+fn build_embedded_authority() -> Result<Arc<dyn ExecutionAuthority>, String> {
+    Err("Embedded authority is not available in production (UDS only)".into())
 }
 
 fn map_err(e: AuthorityError) -> String {
@@ -61,12 +90,7 @@ pub async fn current_authority() -> Result<Arc<dyn ExecutionAuthority>, String> 
         }
     }
     let built = match resolve_run_authority_mode() {
-        RunAuthorityMode::Embedded => {
-            ensure_embedded_broker();
-            Arc::new(EmbeddedAuthority::with_broker_install(Arc::new(
-                ensure_embedded_broker,
-            ))) as Arc<dyn ExecutionAuthority>
-        }
+        RunAuthorityMode::Embedded => build_embedded_authority()?,
         RunAuthorityMode::Uds {
             socket,
             bootstrap_token,

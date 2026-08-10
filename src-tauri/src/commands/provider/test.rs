@@ -80,29 +80,19 @@ async fn daemon_rate_limit_call(
     route: &ProviderRateLimitRoute,
     retry_after_ms: Option<u64>,
 ) -> std::result::Result<(), String> {
-    let socket = std::env::var("NATIVES_DAEMON_SOCKET")
-        .map_err(|_| "Native daemon is unavailable; provider test was not sent".to_string())?;
-    let bootstrap = std::env::var("NATIVES_DAEMON_BOOTSTRAP")
-        .map_err(|_| "Native daemon is unavailable; provider test was not sent".to_string())?;
-    let mut client = natives_agent_daemon::DaemonClient::connect(
-        socket,
-        &bootstrap,
-        natives_agent_daemon::client_protocol_version(),
+    // 走 daemon_authority 门面的 request()，避免直连 DaemonClient（架构目标 #5）。
+    // 门面内部处理 UDS 连接、重连恢复、embedded fallback 隔离。
+    crate::daemon_authority::request(
+        method,
+        serde_json::json!({
+            "provider_id": route.provider_id,
+            "key_id": route.key_id,
+            "retry_after_ms": retry_after_ms,
+        }),
     )
     .await
-    .map_err(|error| format!("Native daemon rate limiter is unavailable: {error}"))?;
-    client
-        .call(
-            method,
-            serde_json::json!({
-                "provider_id": route.provider_id,
-                "key_id": route.key_id,
-                "retry_after_ms": retry_after_ms,
-            }),
-        )
-        .await
-        .map_err(|error| format!("Native daemon rate limiter rejected provider test: {error}"))?;
-    Ok(())
+    .map(|_| ())
+    .map_err(|error| format!("Native daemon rate limiter rejected provider test: {error}"))
 }
 
 async fn acquire_provider_test_slot(route: Option<&ProviderRateLimitRoute>) -> Result<()> {
@@ -114,12 +104,51 @@ async fn acquire_provider_test_slot(route: Option<&ProviderRateLimitRoute>) -> R
     Ok(())
 }
 
+/// 解析 Retry-After / x-ratelimit-reset 头为毫秒延迟。
+///
+/// 本地 helper，避免 Host 生产代码依赖 `provider_adapters::http_stream`。
+/// 1. `Retry-After`：整数秒 → ms；或 RFC 2822 日期 → 与 now 的差。
+/// 2. `x-ratelimit-reset`：epoch（秒或毫秒）→ 与 now 的差。
+fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    use chrono::{DateTime, Utc};
+
+    if let Some(value) = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Ok(seconds) = value.trim().parse::<u64>() {
+            return Some(seconds.saturating_mul(1_000));
+        }
+        if let Ok(at) = DateTime::parse_from_rfc2822(value) {
+            return at
+                .with_timezone(&Utc)
+                .signed_duration_since(Utc::now())
+                .num_milliseconds()
+                .try_into()
+                .ok();
+        }
+    }
+    headers
+        .get("x-ratelimit-reset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<i128>().ok())
+        .and_then(|epoch| {
+            let now_ms = i128::from(Utc::now().timestamp_millis());
+            let reset_ms = if epoch > 10_000_000_000 {
+                epoch
+            } else {
+                epoch.saturating_mul(1_000)
+            };
+            reset_ms.saturating_sub(now_ms).try_into().ok()
+        })
+}
+
 async fn record_provider_test_rate_limit(
     route: Option<&ProviderRateLimitRoute>,
     headers: &reqwest::header::HeaderMap,
 ) {
     if let Some(route) = route {
-        let retry_after_ms = provider_adapters::http_stream::retry_after_ms(headers);
+        let retry_after_ms = retry_after_ms(headers);
         let _ = daemon_rate_limit_call("engine.rateLimit.cooldown", route, retry_after_ms).await;
     }
 }

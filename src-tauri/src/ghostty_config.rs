@@ -6,7 +6,8 @@
 //! Feature gate: 本模块无额外依赖，始终可用。
 
 use crate::Result;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 // ── 主题 → Ghostty 调色板映射 ──
 
@@ -98,6 +99,59 @@ pub fn generate_config(theme_id: &str) -> String {
 
 // ── 写入磁盘 ──
 
+/// 原子写字节（R-D5：temp sibling → fsync → rename）。
+///
+/// 本地 helper，避免 Host 生产代码依赖 `agent_core::fs_util`。
+/// 在目标文件同目录创建唯一临时文件，写入 + fsync 后原子 rename 覆盖，
+/// 并 best-effort fsync 父目录以保证 rename 持久化。
+fn atomic_write_bytes(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "atomic write: path has no parent directory",
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "atomic write: path has no file name",
+        )
+    })?;
+
+    // 唯一 temp sibling：`.<file_name>.<pid>.<nanos>.tmp`（同目录 → 同文件系统 → rename 原子）。
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(file_name);
+    tmp_name.push(format!(".{}.{}.tmp", std::process::id(), nonce));
+    let tmp = dir.join(tmp_name);
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    // Best-effort：fsync 父目录以持久化 rename 的目录项。
+    if let Ok(dir_handle) = std::fs::File::open(dir) {
+        let _ = dir_handle.sync_all();
+    }
+
+    Ok(())
+}
+
 /// 将主题配置写入 ~/.natives/ghostty/config-<theme_id>.conf
 /// 返回写入的配置文件路径
 pub fn write_config(theme_id: &str) -> Result<PathBuf> {
@@ -115,7 +169,7 @@ fn write_config_in(home: PathBuf, theme_id: &str) -> Result<PathBuf> {
 
     let config_path = config_dir.join(format!("config-{theme_id}.conf"));
     let content = generate_config(theme_id);
-    agent_core::fs_util::atomic_write_bytes(&config_path, content.as_bytes())
+    atomic_write_bytes(&config_path, content.as_bytes())
         .map_err(|e| crate::Error::Internal(format!("failed to write ghostty config: {e}")))?;
 
     Ok(config_path)
