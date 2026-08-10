@@ -64,7 +64,10 @@ pub fn ensure_host_owned_tables(conn: &Connection) -> Result<()> {
 }
 
 /// Initialize the SQLite database with WAL mode, foreign keys, and all tables.
-/// Kept for standalone DB initialization (e.g., tests, CLI tools).
+/// Kept for standalone DB initialization in tests only (production always goes
+/// through `init_db_pool` + the registered main pool). cfg(test) keeps the
+/// cross-db gate from mistaking this test helper for a Host production open.
+#[cfg(test)]
 #[allow(dead_code)]
 pub fn init_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
