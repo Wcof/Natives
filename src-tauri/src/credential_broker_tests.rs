@@ -1,5 +1,3 @@
-#[cfg(test)]
-mod tests {
     use super::*;
 
     #[test]
@@ -204,4 +202,3 @@ mod tests {
         assert!(!reply.ok);
         assert!(reply.error.unwrap_or_default().contains("unknown"));
     }
-}
