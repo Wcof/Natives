@@ -55,6 +55,7 @@ export default function ShortcutHelp() {
 
   return (
     <div
+      role="presentation"
       style={{
         position: 'fixed', inset: 0, zIndex: 10002,
         background: 'var(--overlay)',

@@ -337,7 +337,17 @@ export default function TerminalPanel({
               <div
                 key={session.id}
                 className={`terminal-tab ${session.id === activeSessionId ? 'active' : ''}${isAgentBusy && session.id === activeSessionId ? ' anim-tabpulse' : ''}`}
+                role="tab"
+                aria-selected={session.id === activeSessionId}
+                tabIndex={0}
                 onClick={() => { switchSession(session.id); void refreshCwd(session.id); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    switchSession(session.id);
+                    void refreshCwd(session.id);
+                  }
+                }}
               >
                 <span>{session.label}</span>
                 {sessions.length > 1 && (

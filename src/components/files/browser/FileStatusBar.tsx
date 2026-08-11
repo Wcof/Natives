@@ -71,7 +71,15 @@ export default function FileStatusBar({
         </span>
       )}
       <span
+        role="button"
+        tabIndex={0}
         onClick={onOpenDiskUsage}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpenDiskUsage();
+          }
+        }}
         style={{
           cursor: 'pointer',
           color: 'var(--primary)',

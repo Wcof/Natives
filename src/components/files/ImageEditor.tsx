@@ -480,12 +480,13 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
       </div>
       {/* Text input dialog — replaces window.prompt() */}
       {showTextInput && (
-        <div style={{
+        <div role="presentation" style={{
           position: 'fixed', inset: 0, zIndex: 100,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'var(--overlay-soft)',
         }} onClick={() => setShowTextInput(false)}>
           <div
+            role="presentation"
             style={{
               background: 'var(--surface)', borderRadius: 12,
               border: '1px solid var(--border)', padding: 20,

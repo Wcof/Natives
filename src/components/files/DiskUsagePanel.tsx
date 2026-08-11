@@ -114,6 +114,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
 
   return createPortal(
     <div
+      role="presentation"
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -124,6 +125,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
     >
       <div
         className="anim-dropIn"
+        role="presentation"
         style={{
           width: 540, maxWidth: '92vw',
           background: 'var(--surface)',
@@ -189,7 +191,15 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
             {currentPath !== '/' && (
               <div
                 className="disk-up"
+                role="button"
+                tabIndex={0}
                 onClick={handleUp}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleUp();
+                  }
+                }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 8px', borderRadius: BORDER_RADIUS.md, cursor: 'pointer',
@@ -209,7 +219,15 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                   key={item.path}
                   // Single click = drill into the next level *inside* the panel.
                   // Double click / dedicated button = open in the file browser.
+                  role="button"
+                  tabIndex={0}
                   onClick={() => { if (item.isDir) handleDirClick(item.path); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      if (item.isDir) handleDirClick(item.path);
+                    }
+                  }}
                   onDoubleClick={() => { if (item.isDir) onNavigate(item.path); }}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 10,

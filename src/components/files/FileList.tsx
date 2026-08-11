@@ -134,7 +134,15 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
         {(['name', 'mtime', 'size'] as const).map((key) => (
           <div
             key={key}
+            role="button"
+            tabIndex={0}
             onClick={() => onSort(key)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSort(key);
+              }
+            }}
             style={{
               cursor: 'pointer',
               userSelect: 'none',
