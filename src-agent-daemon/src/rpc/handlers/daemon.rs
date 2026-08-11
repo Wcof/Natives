@@ -42,7 +42,11 @@ pub(crate) async fn dispatch_daemon(
                 ReadinessItem::Degraded("storage unavailable".into())
             };
             let status = DaemonStatusV2 {
-                instance_id: format!("{}-{}", std::process::id(), started_at.elapsed().as_millis()),
+                instance_id: format!(
+                    "{}-{}",
+                    std::process::id(),
+                    started_at.elapsed().as_millis()
+                ),
                 protocol_version: protocol_version.to_string(),
                 health,
                 active_runs,

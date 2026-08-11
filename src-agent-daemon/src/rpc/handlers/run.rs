@@ -5,8 +5,8 @@
 //! terminal commit + workspace rewind to `run_finish`.
 
 // {A2-03} MAX_WIRE_REPLAY_EVENTS / cap_wire_replay (moved verbatim from rpc.rs)
-pub use super::run_wire::MAX_WIRE_REPLAY_EVENTS;
 pub(crate) use super::run_wire::cap_wire_replay;
+pub use super::run_wire::MAX_WIRE_REPLAY_EVENTS;
 
 // {A2-03} run_manager (moved verbatim from rpc.rs)
 /// Process-wide run manager (Phase 1 authority).

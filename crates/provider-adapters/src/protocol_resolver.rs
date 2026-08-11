@@ -199,7 +199,13 @@ mod tests {
 
     #[test]
     fn url_hint_picks_responses() {
-        let c = ctx("openai", Some("https://responses.example/v1"), None, "gpt-4o", None);
+        let c = ctx(
+            "openai",
+            Some("https://responses.example/v1"),
+            None,
+            "gpt-4o",
+            None,
+        );
         assert_eq!(candidate_protocols(&c)[0], Protocol::OpenAiResponses);
     }
 

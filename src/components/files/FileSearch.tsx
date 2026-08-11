@@ -145,6 +145,7 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
 
   return (
     <div
+      role="presentation"
       style={{
         position: 'fixed', inset: 0, zIndex: 999,
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
@@ -258,7 +259,15 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
             results.slice(0, 80).map((r, idx) => (
               <div
                 key={`${r.path}-${r.line}-${idx}`}
+                role="button"
+                tabIndex={0}
                 onClick={() => { void openResult(r.path); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    void openResult(r.path);
+                  }
+                }}
                 style={{
                   padding: '8px 12px',
                   cursor: 'pointer',

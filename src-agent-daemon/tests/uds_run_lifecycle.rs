@@ -124,7 +124,9 @@ async fn uds_create_start_replay_cancel_lifecycle() {
     // decomposed into protocol_version + storage/broker readiness + health;
     // a healthy sidecar must never be judged by a legacy db-path field.
     assert_eq!(
-        daemon_status.get("protocol_version").and_then(|v| v.as_str()),
+        daemon_status
+            .get("protocol_version")
+            .and_then(|v| v.as_str()),
         Some(natives_agent_daemon::client_protocol_version())
     );
     assert_eq!(

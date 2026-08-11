@@ -128,7 +128,15 @@ export default function AgentDashboard() {
           filtered.map((ch, i) => (
             <div
               key={`${ch.path}-${ch.timestamp}-${i}`}
+              role="button"
+              tabIndex={0}
               onClick={() => handleNavigate(ch.path)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleNavigate(ch.path);
+                }
+              }}
               style={{
                 padding: '5px 8px', marginBottom: 3, borderRadius: BORDER_RADIUS.sm, cursor: 'pointer',
                 fontSize: FONT_SIZE.sm, transition: 'opacity 0.3s',

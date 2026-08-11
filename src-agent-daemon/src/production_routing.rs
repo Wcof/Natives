@@ -121,7 +121,10 @@ mod resolve_effective_tools_tests {
         let out = resolve_effective_tools(None, Some(&denied)).unwrap();
         assert!(!out.contains(&"bash".to_string()));
         assert!(!out.contains(&"write_file".to_string()));
-        assert!(out.contains(&"read_file".to_string()), "builtins retained except denied");
+        assert!(
+            out.contains(&"read_file".to_string()),
+            "builtins retained except denied"
+        );
     }
 
     #[test]

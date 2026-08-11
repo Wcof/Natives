@@ -354,6 +354,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
                       {dropdownOpen && models.length > 0 && discoveryCurrent && (
                         <>
                           <div
+                            role="presentation"
                             style={{ position: 'fixed', inset: 0, zIndex: 998 }}
                             onClick={() => setDropdownOpen(false)}
                           />

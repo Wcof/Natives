@@ -69,9 +69,7 @@ pub(crate) use experts_migrate::migrate_host_subagents_from;
 pub(crate) use experts_migrate::{import_host_subagent_rows, migrate_host_subagents};
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use experts_profile::{load_agent_profile, load_expert_profile_from_db};
-pub(crate) use experts_team::{
-    team_create, team_delete, team_get, team_list, team_update,
-};
+pub(crate) use experts_team::{team_create, team_delete, team_get, team_list, team_update};
 
 pub fn list(params_value: &Value) -> Result<Value, String> {
     let enabled_only = params_value

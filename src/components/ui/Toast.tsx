@@ -55,6 +55,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map(t => (
           <div
             key={t.id}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                removeToast(t.id);
+              }
+            }}
             style={{
               padding: `${SPACING.sm}px ${SPACING.lg}px`, borderRadius: BORDER_RADIUS.sm, fontSize: FONT_SIZE.sm, fontWeight: 500,
               color: 'var(--text)',

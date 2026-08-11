@@ -629,7 +629,11 @@ async fn expert_team_roster_spawns_real_child_run_and_rejects_outsiders() {
             &CancellationToken::new(),
         )
         .await;
-    assert!(!member.is_error, "roster member task error: {:?}", member.output);
+    assert!(
+        !member.is_error,
+        "roster member task error: {:?}",
+        member.output
+    );
     let child_run_id = member
         .output
         .get("task_id")
@@ -660,7 +664,10 @@ async fn expert_team_roster_spawns_real_child_run_and_rejects_outsiders() {
         .get("run_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    assert!(!run_id.is_empty(), "child run row must exist (run_id present)");
+    assert!(
+        !run_id.is_empty(),
+        "child run row must exist (run_id present)"
+    );
     // Kill the queued child so the test leaves no live run behind.
     let kill = tools
         .execute_tool(

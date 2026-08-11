@@ -5,7 +5,6 @@ import { HardDrive, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useLocale, t } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
 import { diskApi } from '@/lib/files-api';
-import { SPACING } from '@/lib/design-tokens';
 import { EmptyState } from '@/components/ui/EmptyState';
 
 /** Real root-volume storage info (camelCase wire from commands/disk.rs). */

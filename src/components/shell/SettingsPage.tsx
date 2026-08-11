@@ -113,7 +113,7 @@ function InlineLoadError({
 export default function SettingsPage({
   activeSection = 'personal',
   locale: externalLocale,
-  onNavigate,
+  onNavigate: _onNavigate,
 }: {
   activeSection?: SettingsSection;
   locale?: Locale;

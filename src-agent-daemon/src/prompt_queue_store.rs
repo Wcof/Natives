@@ -102,7 +102,10 @@ pub(crate) fn store() -> Result<DataStore, String> {
     crate::storage::open_daemon_store()
 }
 
-pub(crate) fn ensure_conversation_for_queue(conversation_id: &str, params: &Value) -> Result<(), String> {
+pub(crate) fn ensure_conversation_for_queue(
+    conversation_id: &str,
+    params: &Value,
+) -> Result<(), String> {
     let provider = params
         .get("provider_id")
         .and_then(Value::as_str)

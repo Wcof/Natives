@@ -67,15 +67,16 @@ export default function FindReplaceBar({
         setFocused('find');
         inputRef.current?.focus();
         inputRef.current?.select();
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
+        // Cmd/Ctrl+Shift+G 上一个匹配（浏览器习惯）
+        e.preventDefault();
+        e.stopPropagation();
+        onNavigate('prev');
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'g') {
         // Cmd/Ctrl+G 下一个匹配（浏览器习惯）
         e.preventDefault();
         e.stopPropagation();
         onNavigate('next');
-      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
-        e.preventDefault();
-        e.stopPropagation();
-        onNavigate('prev');
       } else if (e.key === 'Enter' && !e.shiftKey && focused === 'replace' && onReplaceOne) {
         e.preventDefault();
         onReplaceOne();

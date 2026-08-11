@@ -250,18 +250,18 @@ impl RealProvider {
         // 开关关闭时只用供应商显式协议（既有行为不变）。
         let explicit_protocol = provider_adapters::parse_protocol(&protocol)
             .unwrap_or(provider_adapters::Protocol::OpenAiChatCompletions);
-        let mut candidates: Vec<provider_adapters::Protocol> =
-            if crate::routing::routing_enabled() {
-                provider_adapters::candidate_protocols(&provider_adapters::ProtocolContext {
-                    provider_type: &protocol,
-                    base_url: base_url.as_deref(),
-                    explicit: Some(&protocol),
-                    model,
-                    previous_success: None,
-                })
-            } else {
-                vec![explicit_protocol]
-            };
+        let mut candidates: Vec<provider_adapters::Protocol> = if crate::routing::routing_enabled()
+        {
+            provider_adapters::candidate_protocols(&provider_adapters::ProtocolContext {
+                provider_type: &protocol,
+                base_url: base_url.as_deref(),
+                explicit: Some(&protocol),
+                model,
+                previous_success: None,
+            })
+        } else {
+            vec![explicit_protocol]
+        };
         if !candidates.contains(&explicit_protocol) {
             candidates.insert(0, explicit_protocol);
         }
@@ -323,11 +323,9 @@ impl RealProvider {
                     // 无 governor fallback 记录接口（只有 rate-limit 通道），
                     // 回退事件交给上层事件流/日志呈现。
                     if let Some(governor) = crate::global_governor() {
-                        governor.record_rate_limit(
-                            &self.provider_id,
-                            &route_key_id,
-                            None,
-                        ).await;
+                        governor
+                            .record_rate_limit(&self.provider_id, &route_key_id, None)
+                            .await;
                     }
                     continue;
                 }

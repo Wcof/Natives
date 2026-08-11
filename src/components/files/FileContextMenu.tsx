@@ -230,7 +230,15 @@ export default function FileContextMenu({
           <div
             key={`${item.label}-${idx}`}
             className={`context-menu-item ${item.danger ? 'danger' : ''}`}
+            role="menuitem"
+            tabIndex={0}
             onClick={item.action}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                item.action();
+              }
+            }}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}
           >
             <span>{item.label}</span>

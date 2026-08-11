@@ -72,10 +72,8 @@ fn apply_fixture_env(scratch: &std::path::Path) {
     let _ = scratch; // env root is shared; sockets stay per-test unique
     static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     let root = ROOT.get_or_init(|| {
-        let root = std::env::temp_dir().join(format!(
-            "natives-swv2-shared-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("natives-swv2-shared-{}", uuid::Uuid::new_v4()));
         let runtime = root.join("runtime");
         std::fs::create_dir_all(&runtime).expect("create shared temp runtime dir");
         root

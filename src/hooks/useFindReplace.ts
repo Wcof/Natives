@@ -68,7 +68,7 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
       });
       const ranges = matches.map((match) => {
         // 定位起始匹配落在哪个文本节点
-        let seg = segments.find((s) => match.start < s.start + s.node.data.length) ?? segments.at(-1);
+        const seg = segments.find((s) => match.start < s.start + s.node.data.length) ?? segments.at(-1);
         const nodeStart = seg?.start ?? 0;
         const nodeOffset = match.start - nodeStart;
         const range = document.createRange();
@@ -84,10 +84,17 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
     [containerRef, matchCase, clearHighlight],
   );
 
-  const scrollToRange = useCallback((range: Range) => {
-    clearHighlight();
+  // 普通函数（非 useCallback）：内部使用 DOM API（Selection/Range），React
+  // Compiler 无法保留其 memoization；此函数只在事件回调中调用，无 memo 收益。
+  const scrollToRange = (range: Range) => {
+    // 内联清理（与 clearHighlight 同逻辑）：只选择/滚动，不改写 DOM。
+    if (currentRangeRef.current) {
+      try {
+        currentRangeRef.current.detach();
+      } catch { /* no-op */ }
+      currentRangeRef.current = null;
+    }
     try {
-      // 只选择/滚动，不改写 DOM（问题12：TreeWalker+Range 定位，selection 高亮）。
       const selection = window.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
@@ -97,17 +104,14 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
       // 跨节点/只读区 fallback：仅滚动不选中
       try { range.startContainer.parentElement?.scrollIntoView({ block: 'center' }); } catch { /* no-op */ }
     }
-  }, [clearHighlight]);
+  };
 
-  const navigate = useCallback(
-    (direction: 'prev' | 'next') => {
-      const next = navigateMatch(index, count, direction);
-      setIndex(next);
-      const target = rangesRef.current[next];
-      if (target) scrollToRange(target.range);
-    },
-    [index, count, scrollToRange],
-  );
+  const navigate = (direction: 'prev' | 'next') => {
+    const next = navigateMatch(index, count, direction);
+    setIndex(next);
+    const target = rangesRef.current[next];
+    if (target) scrollToRange(target.range);
+  };
 
   const openFind = useCallback(() => {
     setOpen(true);

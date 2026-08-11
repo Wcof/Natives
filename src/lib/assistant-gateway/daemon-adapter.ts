@@ -374,7 +374,6 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       firstStart = false;
 
       const source = this.createFrameSource(bridge, runId, signal);
-      let sawFrame = false;
       // Progress = at least one event-bearing frame since the last (re)start.
       // Heartbeats / resync frames alone are NOT progress: a stream that only
       // ever delivers `resync_required` and never an event must exhaust the
@@ -384,7 +383,6 @@ export class DaemonAssistantAdapter implements AssistantGateway {
         for (;;) {
           const frame = await source.next();
           if (frame === 'closed') break;
-          sawFrame = true;
           const out = this.consumeWatchFrame(frame, runId, {
             durableSeq,
             liveSeq,

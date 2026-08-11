@@ -140,10 +140,9 @@ impl RunManager {
                     .profile
                     .as_ref()
                     .and_then(|profile| profile.disallowed_tools.as_ref());
-                if let Some(effective) = crate::production::resolve_effective_tools(
-                    None,
-                    disallowed.map(Vec::as_slice),
-                ) {
+                if let Some(effective) =
+                    crate::production::resolve_effective_tools(None, disallowed.map(Vec::as_slice))
+                {
                     allowlist = Some(effective);
                 }
             }

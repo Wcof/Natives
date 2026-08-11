@@ -42,7 +42,9 @@ pub fn persist_actor_snapshot(conversation_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn load_actor_snapshot(conversation_id: &str) -> Result<Option<SessionActorSnapshot>, String> {
+pub(crate) fn load_actor_snapshot(
+    conversation_id: &str,
+) -> Result<Option<SessionActorSnapshot>, String> {
     let store = store()?;
     let conn = store.conn()?;
     conn.query_row(

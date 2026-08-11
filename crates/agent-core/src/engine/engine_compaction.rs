@@ -16,8 +16,8 @@ use crate::compaction::{
     render_transcript_for_summary, repair_dangling_tool_calls, CompactResult,
     SUMMARY_SYSTEM_PROMPT,
 };
-use crate::hooks::{HookEvent, HookRegistry, HookRequest};
 use crate::context::ContextStats;
+use crate::hooks::{HookEvent, HookRegistry, HookRequest};
 use assistant_protocol::v2::RunEventKind;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
