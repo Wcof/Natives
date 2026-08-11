@@ -1,6 +1,6 @@
 # Natives 文档索引
 
-> **最后整理**: 2026-08-09  
+> **最后整理**: 2026-08-10
 > **原则**: 约束进 `standards/`；决策进 `adr/`；现状与领域设计进 `architecture/`。冲突时 **standards > ADR（产品冻结类）> architecture 现状描述 > 历史讨论**。
 
 ---
@@ -60,6 +60,16 @@ docs/
 │   └── natives-agent-t12-release-gate-report.md
 ├── superpowers/              ← harness 控制面设计稿
 │   └── specs/2026-07-26-native-harness-control-plane-design.md
+├── harness/                  ← Agent Harness 对标与研究记录
+│   ├── cindy-goose-harness-research-2026-07-29.md
+│   ├── agent-engineering-comparative-research-2026-08-10.md
+│   └── projects/             ← 八仓逐项目源码深度复核
+│       ├── atomcode-agent-engineering-review-2026-08-10.md
+│       ├── claude-code-agent-engineering-review-2026-08-10.md
+│       ├── deepchat-agent-engineering-review-2026-08-10.md
+│       ├── goose-agent-engineering-review-2026-08-10.md
+│       ├── grok-build-agent-engineering-review-2026-08-10.md
+│       └── kimi-code-agent-engineering-review-2026-08-10.md
 └── img/                      说明性截图
 ```
 
@@ -80,6 +90,7 @@ docs/
 | 性能改动 | `standards/technical/04-performance.md` + `application-performance-remediation.md` |
 | Provider 路由 / 账号池 | `provider-routing-sub2api.md` |
 | Agent 引擎能力与整改 | `NATIVE_ENGINE_FULL_REMEDIATION.md` + `NATIVE-DAEMON-CAPABILITY-MAP.md` |
+| Agent Harness 对标研究 | `harness/agent-engineering-comparative-research-2026-08-10.md` + `harness/projects/` 单仓复核 + `pm-context/collect/agent-engineering-benchmark-2026-08-10.md` |
 | 助理 / 引擎 / Harness / Subagent 生产化 | `NATIVE_ENGINE_FULL_REMEDIATION.md` 第 19 节 |
 | 全仓模块化 / 超大文件 / 数据权威 / 合并 deploy | `MODULAR_ARCHITECTURE_REMEDIATION.md` |
 | macOS 菜单栏常驻 / 个人概览浮窗 | `macos-menubar-personal-overview.md` |

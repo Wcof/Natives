@@ -223,8 +223,10 @@ rtk npm run perf:check
 ### 11.1 单 Worktree、共享 Subagent
 
 - 本任务只允许一个源码 Worktree；最多三个 Subagent 在同一共享文件系统中按互斥 ownership 并行，禁止每个 Subagent 再创建 Worktree。
-- 当前主工作区加两个已登记 Goal Worktree 已达到低磁盘临时上限；在其中一个完成、提交、合并并安全移除前，不得创建模块化整改 Worktree。
-- 等待槽位期间只允许只读审计或不冲突的文档工作，不得借机在主工作区并发修改其他 Goal ownership 文件。
+- 当前优先复用 `/Users/ldh/Downloads/project/AiNative/natives-modular-architecture-20260809-234252`；
+  使用前验证其 branch、HEAD、status 和进程。只有路径不存在或不可安全复用时，才由主 Agent 创建一个替代源码 Worktree。
+- 主工作区中的后续研究文档是用户现有改动，不得 stash、reset、提交、删除或覆盖；最终 deploy 仍不 clean
+  时标记 `BLOCKED_BY_DIRTY_DEPLOY`，不得为了 fast-forward 擅自处理用户文件。
 - 所有 Subagent 复用第 2 节的唯一 Cargo target；不得建立任务 target、node_modules、`.next`、coverage、dist、out、release、APP 或 DMG。
 
 ### 11.2 分支吸收与唯一构建
@@ -243,3 +245,18 @@ rtk npm run perf:check
 - 超过 60 秒仍无可解释进展的命令先读取输出、确认是否等待锁/磁盘/进程，再由集成负责人终止；同一失败命令最多重跑一次。
 - 可自动清理的范围仅为本 Goal 自己产生且 `git check-ignore` 可证明的精确 `.next`、coverage、dist、out、任务 target、带任务唯一前缀的临时目录，以及已合并/已提交/status clean 的精确 Worktree。
 - 清理前必须解析并打印绝对路径与大小，确认无进程占用。禁止清理主共享 target、node_modules、Cargo/npm cache、数据库、日志证据、源码、用户文件或未提交内容。
+
+### 11.4 唯一 candidate、构建复用与完成语义
+
+- 三个 Subagent 不运行 typecheck、全量 npm test、Cargo workspace、Native Engine、perf、Next 或 Tauri build；
+  主 Agent独占唯一构建租约，并为 candidate HEAD 记录开始/结束时间、退出码和脱敏日志。
+- `<15 GiB` 只允许源码与静态检查；`15–20 GiB` 只允许经批准的 exact test；`>=20 GiB` 才允许主
+  Agent 串行执行重型门禁。Tauri/Release 前还必须保证预计构建后保留至少 5 GiB 安全余量。
+- `perf:check` 成功生成同一 candidate 的 `out/` 后，可使用独立 Tauri override 将
+  `beforeBuildCommand=null` 来复用该输出；默认 Tauri 配置不得改成无条件复用。两条命令之间任何源码、
+  config 或 lockfile 变化都会使复用失效并要求重跑 perf。
+- 任一 mandatory gate 的 `FAIL`、`BLOCKED_BY_DISK`、`BLOCKED_BY_DIRTY_DEPLOY`、`NOT_RUN` 或 `SKIPPED`
+  都不等于通过。空间不足只能保持 Goal active；同一阻断连续三次审计仍无法推进时才标记 blocked，
+  不得标记 complete，不得更新 deploy。
+- 最终证据写入 ignored 的 `.runtime-evidence/gate/modular-remediation-<candidate>/` 并生成 checksum；
+  文档提交不得改变已测试源码，否则重跑受影响门禁。

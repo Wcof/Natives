@@ -1,7 +1,8 @@
 # macOS 菜单栏常驻与个人概览浮窗
 
-> 状态：实施方案已冻结，尚未开发。  
-> 基线：`d25aa644d2f6a71d1d50752627fc9f8032ce7438`（2026-08-09）。  
+> 状态：已有实现，但 `5627e3e4` 二次审计未通过；修复计划见第 9 节。
+> 初始基线：`d25aa644d2f6a71d1d50752627fc9f8032ce7438`（2026-08-09）。
+> 当前复核基线：`5627e3e43cf7b5113bc8e17f8c813ed43a1a78a4`（2026-08-10）。
 > 产品面：Hub 系统外壳；不是 Workshop、Embed、web-module 或 Capability 执行轨。  
 > 并行构建与低磁盘规则：[`../development/natives-agent-build-cache-and-disk-policy.md`](../development/natives-agent-build-cache-and-disk-policy.md) 第 10 节。
 
@@ -136,6 +137,9 @@ Tray/Popup 命令应归 `commands/menubar.rs`。命令必须验证调用窗口 l
 
 ## 8. Goal 启动提示词
 
+> 本节是首次实现时的历史提示词；二次审计后的集成修复以
+> [`MODULAR_ARCHITECTURE_REMEDIATION.md`](MODULAR_ARCHITECTURE_REMEDIATION.md) 第 11–12 节为准。
+
 ```text
 请创建并持续执行一个 Goal：为 Natives 增加生产级 macOS 菜单栏常驻与个人概览浮窗。
 
@@ -151,3 +155,39 @@ Tray/Popup 命令应归 `commands/menubar.rs`。命令必须验证调用窗口 l
 
 严格完成本文第 7 节全部验收。两个方案开发完成后，由集成负责人合并到同一 HEAD，只在主工作区串行执行共享策略第 10.5 节全门禁及一次 Tauri/Release smoke。真机生命周期、数据一致性、权限或性能证据未完成时 Goal 不得 complete。最终报告列出状态机、指标来源、capability 权限、macOS 矩阵、定向测试、磁盘前后数据、最终统一门禁、剩余 blocker 与回滚点。
 ```
+
+## 9. 二次审计与修复计划（2026-08-10）
+
+### 9.1 当前实现不能通过的原因
+
+| ID | 审计发现 | 用户影响 | 修复要求 |
+|---|---|---|---|
+| MB-R1 | `RootClient` 静态导入并先挂载主窗口 providers，随后才判断 Menubar surface | 浮窗不轻量，可能触发主 Shell/Assistant 副作用 | 在 provider/static main bundle 前 early split；用 bundle test 证明 |
+| MB-R2 | Menubar 首次 mount 没有完成个人概览所需项目列表加载 | 活跃项目/已登记项目等首屏为空或不一致 | 复用 Settings 的 cached usage/project 数据入口，首次显示即读取一次 |
+| MB-R3 | hidden 状态 interval 仍触发 React state update | 关闭浮窗后仍持续耗电、唤醒 Renderer | visibility-gate/cancel interval 与 animation；再次显示时单次 reconcile |
+| MB-R4 | 全量 Rust/Tauri/Release 与真机生命周期未执行 | close/hide/quit、second instance、Reopen 未获生产证据 | 在同一 candidate 上完成真机矩阵和唯一 Release 构建 |
+| MB-R5 | 根卷、usage authority、错误三态仍依赖未通过的 Host/Daemon 整改 | 指标可能不真实或 Sidecar 不可用 | 先完成 DB authority/Broker/readiness，再做同一快照一致性验收 |
+
+### 9.2 最小整改路径
+
+1. 保留现有 Tauri 2 Tray、Window label、route、usage helper 和个人概览数据结构；不创建第二套 widget、
+   store 或轮询器。
+2. Renderer 把 `surface=menubar` 识别移到最早入口，以 lazy/dynamic main surface 边界阻止 Menubar
+   引入 Shell、AssistantWorkspace、Workshop、更新检查和主窗口 Provider。
+3. Popup hidden→visible 时只做一次 `usage.getCached` 与 project list reconcile；手动刷新才调用 sync。
+   hidden 时停止非必要 interval、图表 animation 和 state update，但不停止 Host/Daemon/Jobs/活跃 Run。
+4. Native lifecycle 复用唯一 owner：Close/focus loss/Escape 只 hide；`Cmd+Q`/显式 Quit 才做幂等清理；
+   second instance 和 Dock Reopen 恢复主窗；多屏定位 clamp 到当前 screen work area。
+5. 用同一 cached snapshot 同时渲染 Settings 与 Menubar，逐项比较第 5 节指标；missing/partial/stale/error
+   均显示真实状态，禁止假零。
+6. 该整改并入模块化 Goal 的 Subagent B/C，不再单独创建 Menubar Worktree 或构建缓存。
+
+### 9.3 验收证据
+
+- 单元/interaction：early split 不挂载主 providers；首次显示加载 project+usage；hidden 不增加 timer-driven
+  render；Escape/Close 只 hide；错误/空/partial/stale 四态和键盘焦点可达。
+- Host contract：唯一 Tray/Popup、幂等 quit、second instance、Reopen、失焦、窗口 label/capability 检查。
+- 真机矩阵：主窗关闭后活跃 Run/Daemon/终端继续；显式退出全部回收；多屏/负坐标/缩放/刘海屏不越界。
+- 数据：同一时刻 Settings 与 Menubar 的 30d 汇总、项目数、覆盖和更新时间一致。
+- 性能：hidden CPU/唤醒、Menubar bundle、冷启动/热 IPC/总 RSS 有修改前后数据；全部产品路由 gate 通过。
+- 构建：只使用模块化 Goal 的唯一 candidate、共享 target 和一次 Tauri/Release；任一项未执行则不能完成。

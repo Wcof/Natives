@@ -654,3 +654,49 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 
 两个方案都开发完成后，由集成负责人合并到同一 HEAD，并只在主工作区串行运行第 10.5 节完整门禁和一次 Tauri/Release smoke。最终报告列出变更、关闭的 P0/P1、定向测试、未在任务分支重复运行的全量门禁、磁盘前后数据、真实 App 证据、剩余 blocker 与回滚点。
 ```
+
+### 19.7 `5627e3e4` 二次审计与功能合流（2026-08-10）
+
+第 19.6 节是首次开发的历史提示词；其分支已进入 `deploy`，但独立审计确认不能判定生产完成。
+本节与
+[`MODULAR_ARCHITECTURE_REMEDIATION.md`](MODULAR_ARCHITECTURE_REMEDIATION.md) 第 11–12 节共同取代
+第 19.6 节作为当前执行入口，完整证据和任务编排以模块化文档为准。
+
+当前新增的发布阻断：
+
+1. `ChildRunOrchestrator` 有确定性 Rust 控制流/返回类型错误，若干职责拆分后的 module path 和 migration
+   可见性不成立；“文件均小于 1000 行”不能替代编译证据。
+2. Host readiness 仍依赖 Daemon 已删除的 DB path 字段，Sidecar 启动链不闭合。
+3. Daemon 使用的 Credential Broker socket 没有 Host listener/lifecycle/authentication；Provider lease 不可用。
+4. Host legacy migration/data 仍触达 `assistant.db`，Daemon capability/fallback 仍触达 `natives.db`；
+   production Host 仍有完整 Daemon/engine/provider normal dependencies。
+5. Child allowlist 的空集合在持久化/恢复后可变成全部 builtin，restart 路径绕过唯一 orchestrator。
+6. architecture/i18n/a11y/perf gate 假绿且 29 个删除测试未完整替代；mandatory Rust/Native/perf/Release
+   门禁未运行。因此 blocked_by_disk 只能是 Blocked，不能列为完成。
+
+功能修复必须顺带完成任务 `019fa272-5557-7130-bf60-541f33b21cca` 中与执行引擎同 seam 的内容：
+
+- Daemon 单事务“从持久化 user message Fork”，复制完整选中 turn，不复制授权/Run/临时状态。
+- EventSequencer/RunManager 权威下的低频 conversation activity projection 与分级 stall recovery；
+  不以无文本 token 判死，不透明重试未知副作用。
+- bounded 当前会话消息搜索和 cursor/resync；EventSequencer 仍是唯一 authoritative sequence。
+- 只读 metadata diagnostics + Host 双重脱敏 zip；默认不导出 prompt、message、tool I/O、文件、凭证和 DB。
+- Run/Prompt/Tool/Permission/Hook/Provider snapshot、persist-first tool outcome、compaction CAS/tool pair、
+  Child/resource lease、预算、security hook fail-closed、Artifact bound 的逐项 census；现有 PASS 不重写，
+  只为真实 FAIL 做最小根因修复。
+
+Harness/Subagent 额外验收：
+
+- 所有 create/restart/resume/recover 都走唯一 `ChildRunOrchestrator`；权限始终为
+  `parent ∩ task ∩ profile ∩ host`，`empty = zero`，恢复后不扩大。
+- Persona/dynamic directive、Tool/Permission/Hook/Provider plan 在 admission 冻结 digest；重启使用同一 snapshot。
+- Security/approval hook fail-closed；普通 telemetry hook 才允许显式降级。写入/外部 tool 结果不确定时进入
+  `uncertain/recovery-blocked`，不得透明重放。
+- Harness UI 只把真实 persisted trace 显示为 executed；configured/no_evidence 保持诚实。
+- 真实 Sidecar 通过 Host Broker 获取短 TTL credential lease，并完成 plain/tool/permission/subagent/cancel/
+  restart/reconnect 验收。
+
+本轮由模块化 Goal 的 Subagent A（Daemon/Engine）和 B（Host/Platform）并行完成，主 Agent独占 protocol、
+manifests、`src-tauri/src/lib.rs` 与最终门禁。不得另建执行引擎 Worktree、第二事件系统、第二 Prompt
+Generator 或竞争项目运行时。全部 mandatory gate 在唯一 candidate PASS 前，本节状态保持
+`production_blocked`。
