@@ -112,3 +112,46 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod retired_rpc_tests {
+    //! 问题9（唯一 Harness）专项验收：退役的写入口必须 fail-closed，
+    //! 不能仅靠 UI 隐藏而留下可绕过的旧生产逻辑。
+    use super::request;
+    use serde_json::json;
+
+    #[test]
+    fn profile_create_is_retired() {
+        let result = request("harness.profile.create", json!({ "name": "x" }));
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("retired") && message.contains("single global Harness"),
+            "profile.create must fail closed as retired: {message}"
+        );
+    }
+
+    #[test]
+    fn profile_archive_is_retired() {
+        let result = request("harness.profile.archive", json!({ "id": "hp-1" }));
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.contains("retired") && message.contains("single global Harness"),
+            "profile.archive must fail closed as retired: {message}"
+        );
+    }
+
+    #[test]
+    fn project_or_session_binding_set_is_retired() {
+        for scope_type in ["project", "session"] {
+            let result = request(
+                "harness.binding.set",
+                json!({ "scope_type": scope_type, "scope_id": "x", "profile_id": "harness.global.default" }),
+            );
+            let message = result.unwrap_err().to_string();
+            assert!(
+                message.contains("retired") && message.contains("single global Harness"),
+                "binding.set for {scope_type} must fail closed as retired: {message}"
+            );
+        }
+    }
+}
