@@ -4,7 +4,6 @@
 
 use crate::{Error, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

@@ -5,20 +5,18 @@
 //! engine_tools / engine_compaction.
 
 use super::conversion::{
-    agent_messages_to_values, apply_prompt_hook_responses, core_stop_reason,
-    engine_messages_to_agent_messages, provider_backoff_ms, stop_reason_label,
-    tool_args_fingerprint, values_to_agent_messages,
+    apply_prompt_hook_responses, engine_messages_to_agent_messages, provider_backoff_ms,
+    stop_reason_label,
 };
 use super::engine_core::AgentEngine;
-use super::engine_tools::{is_long_running_tool_result, ExecutedToolCall, PreparedToolCall};
 use super::error::EngineError;
 use super::provider::*;
 use super::tool_runtime::*;
 use crate::doom_loop::DoomLoopDetector;
-use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
+use crate::hooks::{HookEvent, HookRegistry, HookRequest};
 use assistant_protocol::v2::RunEventKind;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::BTreeMap;
 
 impl AgentEngine {

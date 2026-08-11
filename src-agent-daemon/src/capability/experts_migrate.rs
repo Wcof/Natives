@@ -1,11 +1,14 @@
 //! Host subagent migration (W9 split from capability/experts.rs).
 //! `super` here is the `experts` module; helper fns are re-exported from it.
 
+#[cfg_attr(not(test), allow(unused_imports))]
 use super::{ensure_expert_exists, insert_expert, now_iso};
 use crate::capability::store as capability_store;
 use assistant_protocol::v2::credential::HostSubagentRow;
+#[cfg_attr(not(test), allow(unused_imports))]
 use rusqlite::params;
 use serde_json::{json, Value};
+#[cfg_attr(not(test), allow(unused_imports))]
 use std::path::Path;
 
 pub fn migrate_host_subagents() -> Result<u32, String> {

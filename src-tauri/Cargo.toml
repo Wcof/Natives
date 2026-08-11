@@ -9,6 +9,10 @@ edition = "2021"
 default = ["ghostty-vt"]
 ghostty-vt = []
 db-tests = []
+# Embedded-broker / diagnostic-only paths (credential_broker.rs, daemon_authority.rs,
+# lib.rs). Not part of production builds; declared so `cfg(feature="diagnostic")`
+# is a recognized condition under `-D warnings` (unexpected_cfgs).
+diagnostic = []
 
 [lib]
 name = "natives_lib"

@@ -2,7 +2,6 @@
 
 use agent_core::{EngineImage, EngineMessage, EngineProvider, EngineProviderEvent, EngineToolCall};
 use futures_util::StreamExt;
-use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

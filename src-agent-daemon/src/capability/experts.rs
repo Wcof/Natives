@@ -6,10 +6,9 @@
 //! (precedent: subagent_store).
 
 use super::store;
-use agent_core::profile::{parse_agent_profile_markdown, AgentProfile};
+use agent_core::profile::parse_agent_profile_markdown;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
-use std::path::Path;
 use uuid::Uuid;
 
 fn now_iso() -> String {
@@ -66,10 +65,12 @@ mod experts_profile;
 mod experts_team;
 #[cfg(test)]
 pub(crate) use experts_migrate::migrate_host_subagents_from;
+#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use experts_migrate::{import_host_subagent_rows, migrate_host_subagents};
+#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use experts_profile::{load_agent_profile, load_expert_profile_from_db};
 pub(crate) use experts_team::{
-    team_create, team_delete, team_get, team_list, team_to_json, team_update,
+    team_create, team_delete, team_get, team_list, team_update,
 };
 
 pub fn list(params_value: &Value) -> Result<Value, String> {

@@ -186,23 +186,18 @@ CREATE INDEX IF NOT EXISTS idx_model_cache_provider ON assistant_model_cache(pro
 /// Schema only: adds columns, indexes. Data migration from legacy tables
 /// is handled by `migrate_legacy_provider_keys()` after the mirror schema is
 /// in place on natives.db.
+///
+/// The v7 column additions (`website_url`, `is_primary`, `test_status`, …) are
+/// applied idempotently in Rust via `ensure_columns` before this batch runs —
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, and `ensure_provider_mirror_schema`
+/// runs on every natives.db init, so an unconditional ALTER would fail with
+/// "duplicate column name" on an already-migrated database.
 const MIGRATION_007: &str = "
--- 1. Add website_url to configs if missing
-ALTER TABLE assistant_provider_configs ADD COLUMN website_url TEXT NOT NULL DEFAULT '';
-
--- 2. Add new columns to keys table
-ALTER TABLE assistant_provider_keys ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE assistant_provider_keys ADD COLUMN test_status TEXT NOT NULL DEFAULT 'untested'
-    CHECK(test_status IN ('untested','valid','invalid','rate_limited','unavailable'));
-ALTER TABLE assistant_provider_keys ADD COLUMN last_error_code TEXT;
-ALTER TABLE assistant_provider_keys ADD COLUMN last_error_message TEXT;
-ALTER TABLE assistant_provider_keys ADD COLUMN updated_at TEXT;
-
--- 3. Partial unique index: at most one primary key per provider
+-- 1. Partial unique index: at most one primary key per provider
 CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_unique_primary
     ON assistant_provider_keys(provider_id) WHERE is_primary = 1;
 
--- 4. Convert old last_test_ok to test_status
+-- 2. Convert old last_test_ok to test_status
 UPDATE assistant_provider_keys
 SET test_status = CASE
     WHEN last_test_ok = 1 THEN 'valid'
@@ -211,7 +206,7 @@ SET test_status = CASE
     END
 WHERE test_status = 'untested' AND last_test_ok IS NOT NULL;
 
--- 5. Set primary key: for each provider, pick earliest active key, or earliest key
+-- 3. Set primary key: for each provider, pick earliest active key, or earliest key
 UPDATE assistant_provider_keys
 SET is_primary = 1
 WHERE id IN (
@@ -252,10 +247,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_model_cache_provider_model
     ON assistant_model_cache(provider_id, model_id);
 ";
 
+/// 条件补列（幂等）：SQLite 的 `ALTER TABLE ADD COLUMN` 没有 IF NOT EXISTS，
+/// 而 `ensure_provider_mirror_schema` 每次 natives.db init 都会运行——若列已
+/// 存在（上次启动已加列，或 crud.rs 的 CREATE TABLE IF NOT EXISTS 已含该列），
+/// 无条件 ALTER 会报 "duplicate column name"。复用 jobs::store 的 PRAGMA
+/// table_info 探测模式，缺失才补。
+fn ensure_columns(
+    conn: &rusqlite::Connection,
+    table: &str,
+    adds: &[(&str, &str)],
+) -> crate::Result<()> {
+    let cols = crate::jobs::store::table_columns(conn, table)?;
+    for (name, ddl) in adds {
+        if !cols.iter().any(|c| c == name) {
+            conn.execute(
+                &format!("ALTER TABLE \"{table}\" ADD COLUMN \"{name}\" {ddl}"),
+                [],
+            )
+            .map_err(crate::Error::Database)?;
+        }
+    }
+    Ok(())
+}
+
 /// v14: Soft-delete support for assistant_projects (logical delete, keep sessions).
-const MIGRATION_014: &str = "
-ALTER TABLE assistant_projects ADD COLUMN deleted_at TEXT;
-";
+/// Column applied idempotently in Rust via `ensure_columns` (no ALTER constant —
+/// SQLite lacks ADD COLUMN IF NOT EXISTS and this schema runs on every init).
 
 /// Ensure the Host-owned provider mirror schema on any connection. The mirror
 /// tables are Host authority and live in the Host's own natives.db (via
@@ -266,14 +283,35 @@ pub fn ensure_provider_mirror_schema(conn: &rusqlite::Connection) -> crate::Resu
         .map_err(crate::Error::Database)?;
     conn.execute_batch(MIGRATION_005)
         .map_err(crate::Error::Database)?;
+    // v7 列（website_url / is_primary / test_status / last_error_* / updated_at）
+    // 必须先条件补列，再执行依赖这些列的索引与 UPDATE 批。
+    ensure_columns(
+        conn,
+        "assistant_provider_configs",
+        &[("website_url", "TEXT NOT NULL DEFAULT ''")],
+    )?;
+    ensure_columns(
+        conn,
+        "assistant_provider_keys",
+        &[
+            ("is_primary", "INTEGER NOT NULL DEFAULT 0"),
+            (
+                "test_status",
+                "TEXT NOT NULL DEFAULT 'untested' CHECK(test_status IN ('untested','valid','invalid','rate_limited','unavailable'))",
+            ),
+            ("last_error_code", "TEXT"),
+            ("last_error_message", "TEXT"),
+            ("updated_at", "TEXT"),
+        ],
+    )?;
     conn.execute_batch(MIGRATION_007)
         .map_err(crate::Error::Database)?;
     conn.execute_batch(MIGRATION_008)
         .map_err(crate::Error::Database)?;
     conn.execute_batch(MIGRATION_012)
         .map_err(crate::Error::Database)?;
-    conn.execute_batch(MIGRATION_014)
-        .map_err(crate::Error::Database)?;
+    // v14：assistant_projects 软删列（条件补列，幂等）。
+    ensure_columns(conn, "assistant_projects", &[("deleted_at", "TEXT")])?;
     Ok(())
 }
 

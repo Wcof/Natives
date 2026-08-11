@@ -6,7 +6,7 @@ use super::{
     row_to_item, store, value_to_queue_item,
 };
 use crate::run_manager::global_run_manager;
-use agent_core::{CoordinatorAction, PromptSource, QueueItem, QueueItemStatus};
+use agent_core::{CoordinatorAction, PromptSource, QueueItem};
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{CancelRunRequest, StartRunRequest};
 use rusqlite::{params, OptionalExtension};

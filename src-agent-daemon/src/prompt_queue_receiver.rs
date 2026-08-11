@@ -6,12 +6,11 @@
 
 use super::{global_harness, on_safe_point_checked, persist_actor_snapshot, store};
 use crate::conversation_store;
-use crate::storage::DataStore;
 use agent_core::{
     CoordinatorAction, DrainMode, EngineInputReceiver, EngineSafePointReceiver, InputSafePoint,
     PendingInput, PendingInputKind, SafePoint,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use uuid::Uuid;
 
 pub struct DurableInputReceiver {

@@ -8,6 +8,7 @@
 
 use crate::storage::DataStore;
 use agent_core::EventPersistence;
+#[cfg_attr(not(test), allow(unused_imports))]
 use assistant_protocol::v1::run_event::{RunEvent, RunEventPayload};
 use assistant_protocol::v2::{RunEventKind, RunEventV2};
 use rusqlite::params;
@@ -468,7 +469,7 @@ impl EventPersistence for EventLog {
 
 // Event payload decode / normalize helpers moved to `event_log_decode` (W9).
 use crate::event_log_decode::{
-    decode_event_v2, decode_payload, decode_payload_v2, event_type_name, normalize_stored_payload,
+    decode_event_v2, decode_payload, event_type_name, normalize_stored_payload,
 };
 
 #[cfg(test)]

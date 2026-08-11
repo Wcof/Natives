@@ -19,10 +19,8 @@ use tokio::sync::oneshot;
 use super::gated::PermissionGatedTools;
 
 // Helpers relocated to `subagent_requeue`; re-exported here so the external
-// paths `crate::tools::subagent::redact_task_input_system_prompt` and
-// `crate::tools::subagent::fail_parent_and_cancel_siblings` keep working.
+// paths `crate::tools::subagent::redact_task_input_system_prompt` keep working.
 pub(crate) use super::subagent_requeue::directive_for_requeue;
-pub(crate) use super::subagent_requeue::fail_parent_and_cancel_siblings;
 pub use super::subagent_requeue::redact_task_input_system_prompt;
 
 // ── NE-P0-05 §19.5: Run-level frozen Hook Dispatcher for the subagent lifecycle ──

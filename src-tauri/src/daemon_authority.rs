@@ -37,8 +37,10 @@ fn ensure_embedded_broker() {
     });
 }
 
-/// 生产 stub：UDS 模式不注册 host credential broker。
+/// 生产 stub：UDS 模式不注册 host credential broker。生产构建下该函数是
+/// 显式占位（保持 cfg 对称），无调用点，故允许 dead_code。
 #[cfg(not(any(test, feature = "diagnostic")))]
+#[allow(dead_code)]
 fn ensure_embedded_broker() {}
 
 /// 构造 Embedded authority（仅 test/diagnostic）。

@@ -9,7 +9,6 @@ use super::store;
 use crate::creative_app::model::*;
 use crate::{Error, Result};
 use rusqlite::Connection;
-use tauri::AppHandle;
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()

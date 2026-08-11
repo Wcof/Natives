@@ -4,7 +4,7 @@
 //! auto-take over orphan PIDs without identity verification.
 
 use super::logs::{append_with_secrets, LocalLogStore, LogLine, LogRegistry, LogStream};
-use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, ProcessIdentity};
+use crate::creative_app::model::{LaunchPlan, LaunchProgram, ProcessIdentity};
 use crate::creative_app::port_lease::{PortLease, PortLeaseRegistryHandle};
 use crate::{Error, Result};
 use std::collections::HashMap;

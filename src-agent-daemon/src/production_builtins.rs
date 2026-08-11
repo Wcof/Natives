@@ -6,7 +6,11 @@
 
 use agent_core::assemble_context;
 
-/// Profile id reported for a run whose only persona is the parent-authored directive.
+/// Profile id reported for a run whose only persona is the parent-authored
+/// directive. Consumed by the subagent-persona tests; the production wiring
+/// path is `production.rs` (which re-exports `compile_effective_prompt` and
+/// `builtin_prompt_surface_default`). Kept `pub` as the documented contract.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const TASK_DIRECTIVE_PROFILE_ID: &str = "task-directive";
 
 /// Layer a parent-authored system prompt onto the child's agent profile.
@@ -19,6 +23,9 @@ pub const TASK_DIRECTIVE_PROFILE_ID: &str = "task-directive";
 ///
 /// Only `system_prompt` is touched. Tool surface, permission profile and token
 /// budget are resolved before this point and are never derived from a directive.
+/// Kept `pub` as the documented persona contract; directly exercised by the
+/// subagent-persona tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn merge_agent_directive(
     profile: Option<agent_core::AgentProfile>,
     directive: Option<&str>,

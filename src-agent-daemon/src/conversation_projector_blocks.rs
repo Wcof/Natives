@@ -2,7 +2,6 @@
 //! (and tests): assistant/tool-result JSON block serialization and stop-reason
 //! parsing. No I/O; no transaction state.
 
-use super::*;
 use agent_core::{ContentBlock, ToolResultBlock, ToolResultMessage};
 use serde_json::Value;
 

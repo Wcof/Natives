@@ -5,8 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::model::{
-    CreativeAppActions, CreativeAppRuntime, CreativeAppSource, CreativeAppState,
-    CreativeAppSummary, LaunchPort,
+    CreativeAppActions, CreativeAppRuntime, CreativeAppState, CreativeAppSummary, LaunchPort,
 };
 
 /// DB row for external creative apps.

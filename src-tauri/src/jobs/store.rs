@@ -156,7 +156,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
+pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .map_err(Error::Database)?;

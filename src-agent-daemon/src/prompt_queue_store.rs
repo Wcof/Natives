@@ -8,18 +8,21 @@
 //! actor; SQLite is the durable source of truth across restarts.
 
 use crate::conversation_store;
-use crate::run_manager::global_run_manager;
 use crate::storage::DataStore;
+#[cfg_attr(not(test), allow(unused_imports))]
 use agent_core::{
     CoordinatorAction, DrainMode, EngineInputReceiver, EngineSafePointReceiver, HarnessAction,
     InputSafePoint, PendingInput, PendingInputKind, PromptSource, QueueItem, QueueItemStatus,
     SafePoint, SessionActorSnapshot, SessionCoordinator,
 };
+#[cfg_attr(not(test), allow(unused_imports))]
 use assistant_protocol::v2::methods::names;
+#[cfg_attr(not(test), allow(unused_imports))]
 use assistant_protocol::v2::{CancelRunRequest, StartRunRequest};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
+#[cfg_attr(not(test), allow(unused_imports))]
 use uuid::Uuid;
 
 static GLOBAL_HARNESS: OnceLock<Arc<SessionCoordinator>> = OnceLock::new();
@@ -45,10 +48,12 @@ mod prompt_queue_crud;
 mod prompt_queue_receiver;
 #[path = "prompt_queue_snapshot.rs"]
 mod prompt_queue_snapshot;
+#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use prompt_queue_crud::{
     enqueue, interject, list, remove, reorder, request, send_now, update,
 };
 pub(crate) use prompt_queue_receiver::{DurableInputReceiver, DurableSafePointReceiver};
+#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use prompt_queue_snapshot::{
     hydrate_conversation, load_actor_snapshot, persist_actor_snapshot,
     recover_session_actors_on_startup,

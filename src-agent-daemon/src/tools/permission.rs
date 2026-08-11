@@ -608,6 +608,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().canonicalize().unwrap();
         const PROBE_URL: &str = "http://127.0.0.1:1/hook";
+        std::fs::create_dir_all(root.join(".natives")).expect("create .natives dir");
         std::fs::write(
             root.join(".natives").join("hooks.json"),
             format!(r#"{{"hooks":{{"PermissionRequest":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}}}"#),

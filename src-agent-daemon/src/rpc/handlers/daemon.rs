@@ -10,7 +10,7 @@ pub(crate) async fn dispatch_daemon(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     request: &assistant_protocol::v1::daemon::RpcRequest,
     protocol_version: &assistant_protocol::version::ProtocolVersion,
-    daemon_version: &str,
+    _daemon_version: &str,
     started_at: &std::time::Instant,
 ) {
     use crate::rpc::{run_manager, send_error, send_rpc_failure, send_success};

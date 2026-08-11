@@ -258,6 +258,7 @@ mod readonly_fast_path_tests {
         // opened, so it is a fast hermetic probe — the definition is created
         // but the handler is inert. We never dispatch here, only resolve.
         const PROBE_URL: &str = "http://127.0.0.1:1/hook";
+        std::fs::create_dir_all(root.join(".natives")).expect("create .natives dir");
         std::fs::write(
             root.join(".natives").join("hooks.json"),
             format!(r#"{{"hooks":{{"Notification":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}}}"#),

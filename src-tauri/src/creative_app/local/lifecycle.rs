@@ -1,6 +1,5 @@
 //! Start / stop / restart / open-target for local creative apps.
 
-use super::logs::LogStream;
 use super::path::canonical_project_root;
 use super::runtime::{self, LocalRuntimeManager};
 use super::store;
@@ -782,8 +781,8 @@ pub fn reconcile_local_apps(conn: &Connection, app: Option<&AppHandle>) -> Resul
 
 // Orphan / process-exit handling moved to `lifecycle_process` (W3); re-exported.
 pub(crate) use super::lifecycle_process::{
-    force_kill_identity, identity_looks_orphaned, identity_matches_live, mark_process_exited,
-    pid_is_alive, poll_and_reconcile_exits,
+    force_kill_identity, identity_looks_orphaned, identity_matches_live, pid_is_alive,
+    poll_and_reconcile_exits,
 };
 // `resolve_orphan` is `pub` upstream and re-exported as pub for mod.rs.
 pub use super::lifecycle_process::resolve_orphan;

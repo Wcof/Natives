@@ -5,11 +5,10 @@
 //! so the registry stays the single source of ordering.
 
 use super::{
-    backfill_creative_identity, repair_creative_active_invariants, repair_creative_identity_ghosts,
-    upgrade_startup_plans_v1,
+    repair_creative_active_invariants, repair_creative_identity_ghosts, upgrade_startup_plans_v1,
 };
 use crate::Error;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 pub(super) fn migrate_v2(conn: &Connection) -> Result<(), Error> {
     // v2: reserved migration slot — no schema changes needed yet.

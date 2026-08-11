@@ -42,6 +42,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // Shared harness (mirrors stream_watch.rs / uds_run_lifecycle.rs)
 // ---------------------------------------------------------------------------
 
+/// Serializes the env-mutating fixture tests. `apply_fixture_env` sets
+/// process-global `NATIVES_*` vars via `std::env::set_var`, so parallel tests
+/// would overwrite each other's scratch paths mid-run. The lib-internal
+/// `DataStore::env_test_lock` is `#[cfg(test)]` and not visible from this
+/// integration-test binary, hence a file-local serial lock.
+static ENV_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn temp_socket(tag: &str) -> PathBuf {
     // Keep path short — macOS unix socket path limit is ~104 bytes.
     PathBuf::from(format!(
@@ -54,14 +61,30 @@ fn scratch_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("natives-swv2-{tag}-{}", uuid::Uuid::new_v4()))
 }
 
-/// Point every daemon side effect at a unique temp dir: authority DB,
-/// assistant DB, event-log runtime dir, plus the fixture provider.
+/// Point every daemon side effect at a throwaway directory **before** the
+/// first RPC. Load-bearing: integration tests compile the lib without
+/// `cfg(test)`, so `global_run_manager()` takes its `OnceLock` branch and
+/// caches the DataStore built from the env of the *first* call. All fixture
+/// tests here must therefore share one process-global temp DB/runtime dir —
+/// if each test pointed at its own scratch, later tests would run against the
+/// first test's cached store and their live text_deltas would never arrive.
 fn apply_fixture_env(scratch: &std::path::Path) {
+    let _ = scratch; // env root is shared; sockets stay per-test unique
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        let root = std::env::temp_dir().join(format!(
+            "natives-swv2-shared-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let runtime = root.join("runtime");
+        std::fs::create_dir_all(&runtime).expect("create shared temp runtime dir");
+        root
+    });
     std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
     std::env::set_var("NATIVES_ALLOW_FIXTURE_FALLBACK", "1");
-    std::env::set_var("NATIVES_DB_PATH", scratch.join("natives.db"));
-    std::env::set_var("NATIVES_ASSISTANT_DB_PATH", scratch.join("assistant.db"));
-    std::env::set_var("NATIVES_RUNTIME_DIR", scratch);
+    std::env::set_var("NATIVES_DB_PATH", root.join("natives.db"));
+    std::env::set_var("NATIVES_ASSISTANT_DB_PATH", root.join("assistant.db"));
+    std::env::set_var("NATIVES_RUNTIME_DIR", root.join("runtime"));
 }
 
 async fn start_server(socket: &std::path::Path, bootstrap: &str) {
@@ -253,6 +276,7 @@ fn is_terminal_event_type(ty: &str) -> bool {
 /// UDS socket → test client.
 #[tokio::test]
 async fn shared_live_bus_reaches_run_watch() {
+    let _env_serial = ENV_SERIAL.lock().await;
     let scratch = scratch_dir("live");
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     apply_fixture_env(&scratch);
@@ -327,6 +351,7 @@ async fn shared_live_bus_reaches_run_watch() {
 /// fixture's live `text_delta`.
 #[tokio::test]
 async fn uds_watch_reads_ack_then_text_delta() {
+    let _env_serial = ENV_SERIAL.lock().await;
     let scratch = scratch_dir("uds");
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     apply_fixture_env(&scratch);
@@ -551,6 +576,7 @@ async fn durable_lane_rejects_live_only_events() {
 /// (`live_sequence == 1`) with no gap.
 #[tokio::test]
 async fn run_watch_has_no_replay_subscribe_gap() {
+    let _env_serial = ENV_SERIAL.lock().await;
     let scratch = scratch_dir("nogap");
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     apply_fixture_env(&scratch);
@@ -633,6 +659,7 @@ async fn run_watch_has_no_replay_subscribe_gap() {
 /// stream survives, delivering heartbeats instead of a false timeout.
 #[tokio::test]
 async fn run_watch_heartbeat_survives_45s_idle() {
+    let _env_serial = ENV_SERIAL.lock().await;
     let scratch = scratch_dir("hb");
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     apply_fixture_env(&scratch);
@@ -700,6 +727,7 @@ async fn run_watch_heartbeat_survives_45s_idle() {
 /// buffer. It must NEVER fabricate a durable-lane text_delta.
 #[tokio::test]
 async fn late_watch_replays_bounded_live_prefix_or_reports_gap() {
+    let _env_serial = ENV_SERIAL.lock().await;
     let scratch = scratch_dir("late");
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     apply_fixture_env(&scratch);
@@ -791,6 +819,7 @@ async fn late_watch_replays_bounded_live_prefix_or_reports_gap() {
 /// buffered_len == 0 for that run.
 #[tokio::test]
 async fn terminal_clears_live_run_state() {
+    let _env_serial = ENV_SERIAL.lock().await;
     let scratch = scratch_dir("term");
     std::fs::create_dir_all(&scratch).expect("scratch dir");
     apply_fixture_env(&scratch);

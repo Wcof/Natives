@@ -21,8 +21,7 @@ use crate::error::{Error, Result};
 /// BSD (libc) when available. Errors are redacted; no token/secret ever logs.
 /// The daemon never falls back to reading natives.db when the broker is absent.
 pub fn spawn_broker_uds_listener(socket_path: &std::path::Path) -> Result<()> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::os::unix::net::UnixListener;
 
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)
@@ -60,7 +59,6 @@ fn handle_broker_connection(
     stream: std::os::unix::net::UnixStream,
 ) -> std::result::Result<(), String> {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
 
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));

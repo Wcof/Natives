@@ -48,6 +48,18 @@ fn ensure_provider_mirror_schema_creates_host_owned_tables_only() {
     }
 }
 
+/// 回归：`ensure_provider_mirror_schema` 每次 natives.db init 都会执行，
+/// 必须幂等。此前 MIGRATION_007 无条件 `ALTER TABLE ... ADD COLUMN website_url`，
+/// 列已存在时（上次启动已加列，或 crud.rs 的 CREATE TABLE IF NOT EXISTS 已含该列）
+/// 第二次启动即报 duplicate column name: website_url。
+#[test]
+fn ensure_provider_mirror_schema_is_idempotent_on_second_run() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_provider_mirror_schema(&conn).expect("first apply succeeds");
+    // 第二次执行模拟下一次启动：不得因重复补列失败。
+    ensure_provider_mirror_schema(&conn).expect("second apply must be idempotent");
+}
+
 /// R-D3 regression: no active migration constant may DROP or rename-rebuild
 /// a table. What remains is CREATE TABLE IF NOT EXISTS / ALTER / dedup only.
 #[test]
@@ -58,7 +70,6 @@ fn no_active_migration_drops_tables() {
         ("007", MIGRATION_007),
         ("008", MIGRATION_008),
         ("012", MIGRATION_012),
-        ("014", MIGRATION_014),
     ];
     for (name, sql) in active {
         let upper = sql.to_ascii_uppercase();

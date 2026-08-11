@@ -1,4 +1,5 @@
 use super::*;
+use crate::creative_app::local::lifecycle_process::mark_process_exited;
 
 fn mem() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().unwrap();

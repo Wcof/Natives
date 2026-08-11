@@ -1,6 +1,7 @@
 //! Expert team CRUD (W9 split from capability/experts.rs).
 //! `super` here is the `experts` module; helpers are re-exported from it.
 
+#[cfg_attr(not(test), allow(unused_imports))]
 use super::{
     ensure_expert_exists, expert_row_to_json, insert_expert, insert_members, now_iso,
     parse_members, required_str, str_field, validate_team_settings,

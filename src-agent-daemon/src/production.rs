@@ -130,6 +130,7 @@ mod production_reaper;
 #[path = "production_routing.rs"]
 mod production_routing;
 
+#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use self::production_builtins::{
     builtin_prompt_surface_default, builtin_surface_allowlist, builtin_surface_system_prompt,
     compile_effective_prompt, merge_agent_directive, CREATIVE_DRAFT_AGENT_KIND,

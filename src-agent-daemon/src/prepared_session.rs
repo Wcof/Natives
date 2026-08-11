@@ -56,7 +56,7 @@
 
 use agent_core::ToolSchema;
 use harness_core::CompiledPromptPlan;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 

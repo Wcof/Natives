@@ -16,9 +16,7 @@ use capability_gateway::TrustedPath;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -32,8 +30,6 @@ pub const MAX_CAPTURE_FILE_CONTENT_BYTES: u64 = 256 * 1024;
 pub const MAX_CAPTURE_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum number of files one run's checkpoint records.
 pub const MAX_CAPTURE_FILE_COUNT: usize = 512;
-/// Streaming-hash chunk size (memory stays bounded for arbitrarily large files).
-const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSnapshot {

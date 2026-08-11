@@ -1,7 +1,7 @@
 //! SessionCoordinator snapshot persistence (W9 split from prompt_queue_store.rs).
 
 use super::{global_harness, row_to_item, store, value_to_queue_item};
-use agent_core::{QueueItem, SessionActorSnapshot};
+use agent_core::SessionActorSnapshot;
 use rusqlite::{params, OptionalExtension};
 
 pub fn persist_actor_snapshot(conversation_id: &str) -> Result<(), String> {
