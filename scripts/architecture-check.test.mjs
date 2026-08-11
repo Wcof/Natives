@@ -8,19 +8,17 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
 
 // The gate module must be loadable WITHOUT the repo's node_modules for tests
 // that only need fs collectors; the a11y AST collector lazily resolves
-// typescript via createRequire (works in both worktree and main workspace).
+// typescript via createRequire inside the gate module (works in both worktree
+// and main workspace). Dynamic import (not require()) so this test file itself
+// runs under Node 20 (project engines >=20.11 <21): require() of ESM only
+// works on Node >=22.12.
 let arch;
 try {
-  arch = require('./architecture-check.mjs');
+  arch = await import('./architecture-check.mjs');
 } catch {
-  // fall back to absolute path (worktree has no node_modules; fs-only collectors
-  // must not depend on typescript at import time)
   throw new Error('architecture-check.mjs must be importable without typescript at module scope');
 }
 
