@@ -426,7 +426,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                       {badgeForStatus(conversation.lastRunStatus) ? (
                         <span
                           role="status"
-                          aria-label={badgeForStatus(conversation.lastRunStatus)}
+                          aria-label={badgeForStatus(conversation.lastRunStatus) ?? undefined}
                           className="ml-auto shrink-0 rounded-full px-1.5 text-[0.5625rem] leading-4 font-medium"
                           style={{ background: 'var(--surface)', color: 'var(--text-secondary)' }}
                         >

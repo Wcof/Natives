@@ -5,6 +5,15 @@
 //! (allowlist, plan mode, project identity, subagent budget, schema validation,
 //! permission gate, checkpoint/ledger/lease, Gateway handler). Split out of
 //! `gated.rs` (ARCH-002).
+//!
+//! W10: Rust forbids splitting one `impl Trait` block across files (E0119), so
+//! the whole `EngineToolRuntime` impl stays here. The extractable leaf logic
+//! lives in inherent `impl PermissionGatedTools` helpers in the nested
+//! submodules, keeping each file under 1000 lines: `schemas` owns the
+//! model-visible schema/capability listing, `dispatch` owns the read-only fast
+//! path and the uncertain side-effect ledger hook.
+mod dispatch;
+mod schemas;
 
 use super::*;
 
@@ -615,34 +624,14 @@ impl EngineToolRuntime for PermissionGatedTools {
         // observable/replayable. Mutating/process/network/MCP tools keep the
         // full strict path below.
         if matches!(side_effect, SideEffect::ReadOnly) {
-            let started = Instant::now();
-            let result = match self
-                .gateway
-                .execute(name, input.clone(), &tool_context)
-                .await
-            {
-                Ok(out) => {
-                    let mut output = out.result;
-                    attach_tool_output_artifact(
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        &mut output,
-                    );
-                    let is_error = output.get("error_code").and_then(Value::as_str).is_some()
-                        || output.get("error").is_some();
-                    ToolExecutionResult {
-                        output,
-                        is_error,
-                        duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
-                    }
-                }
-                Err(error) => ToolExecutionResult {
-                    output: serde_json::json!({ "error": error, "code": "readonly_tool_failed" }),
-                    is_error: true,
-                    duration_ms: started.elapsed().as_millis() as u64,
-                },
-            };
-            return result;
+            return self
+                .execute_readonly_fast_path(
+                    name,
+                    input.clone(),
+                    &tool_context,
+                    &stream_tool_call_id,
+                )
+                .await;
         }
 
         // Phase 3: Gateway path preflight MUST precede any checkpoint I/O (N01).
@@ -962,81 +951,15 @@ impl EngineToolRuntime for PermissionGatedTools {
         turn_id: Option<&str>,
         input: &Value,
     ) -> Result<(), String> {
-        crate::side_effect_ledger::record_tool_effect_state(
-            &self.parent_run_id,
-            call_id,
-            name,
-            crate::side_effect_ledger::category_for_tool(name),
-            "uncertain",
-            false,
-            turn_id,
-            input,
-        )
+        self.mark_tool_call_uncertain_impl(call_id, name, turn_id, input)
+            .await
     }
 
     async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
-        self.ensure_plan_latch();
-        let planning = plan_mode::is_active(&self.parent_run_id);
-        model_visible_tool_schemas(
-            &self.gateway,
-            self.tool_allowlist.as_deref(),
-            &self.mcp_tool_schemas,
-            self.selected_mcp_servers.as_ref(),
-            planning,
-        )
+        self.list_tool_schemas_impl()
     }
 
     async fn list_tool_capabilities(&self) -> Vec<agent_core::ToolCapability> {
-        self.ensure_plan_latch();
-        let gateway_capabilities = self.gateway.list_capabilities();
-        model_visible_tool_schemas(
-            &self.gateway,
-            self.tool_allowlist.as_deref(),
-            &self.mcp_tool_schemas,
-            self.selected_mcp_servers.as_ref(),
-            plan_mode::is_active(&self.parent_run_id),
-        )
-        .into_iter()
-        .map(|schema| {
-            let gateway_capability = gateway_capabilities
-                .iter()
-                .find(|capability| capability.name == schema.name);
-            let mode = match gateway_capability.map(|capability| capability.execution_mode) {
-                Some(capability_gateway::ExecutionMode::ParallelSafe) => {
-                    agent_core::ToolExecutionMode::ParallelSafe
-                }
-                Some(capability_gateway::ExecutionMode::Exclusive) => {
-                    agent_core::ToolExecutionMode::Exclusive
-                }
-                Some(capability_gateway::ExecutionMode::Sequential) | None => {
-                    agent_core::ToolExecutionMode::Sequential
-                }
-            };
-            let side_effect = match gateway_capability.map(|capability| capability.side_effect) {
-                Some(capability_gateway::SideEffect::ReadOnly) => {
-                    agent_core::ToolSideEffect::ReadOnly
-                }
-                Some(capability_gateway::SideEffect::Write) => agent_core::ToolSideEffect::Write,
-                Some(capability_gateway::SideEffect::Destructive) => {
-                    agent_core::ToolSideEffect::Destructive
-                }
-                Some(capability_gateway::SideEffect::Network) => {
-                    agent_core::ToolSideEffect::Network
-                }
-                Some(capability_gateway::SideEffect::Process) => {
-                    agent_core::ToolSideEffect::Process
-                }
-                None => agent_core::ToolSideEffect::Destructive,
-            };
-            agent_core::ToolCapability {
-                name: schema.name,
-                schema: schema.input_schema,
-                execution_mode: mode,
-                side_effect,
-                conflict_key: gateway_capability
-                    .and_then(|capability| capability.conflict_key.clone()),
-            }
-        })
-        .collect()
+        self.list_tool_capabilities_impl()
     }
 }

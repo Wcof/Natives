@@ -579,6 +579,7 @@ export type AssistantMethod =
   | 'conversation.getMessagesPage'
   | 'conversation.appendMessage'
   | 'conversation.rename'
+  | 'conversation.searchMessages'
   | 'conversation.update_model'
   | 'conversation.update_permission'
   | 'conversation.archive'
