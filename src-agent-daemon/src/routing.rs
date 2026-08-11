@@ -568,6 +568,15 @@ pub(crate) fn rectifier_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// 问题8：自动协议路由开关。Host 的 `provider_routing_settings.enabled` 经
+/// broker 租约读取；不可达/未配置时关闭（沿用供应商显式协议，保证既有配置可运行）。
+pub(crate) fn routing_enabled() -> bool {
+    let Ok(plan) = NativesDbBroker::open_default().and_then(|b| b.routing_plan("engine")) else {
+        return false;
+    };
+    plan.enabled
+}
+
 const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 

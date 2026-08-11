@@ -84,6 +84,7 @@ fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
 #[cfg(test)]
 mod history_message_tests {
     use super::*;
+    use crate::HistoryToolCall;
 
     #[test]
     fn preserves_assistant_tool_calls_and_tool_results() {

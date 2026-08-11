@@ -330,6 +330,8 @@ export function useSidebar({
     setFavoritesExpanded,
     visibleFavorites,
     hiddenFavoriteCount,
+    fileManagerExpanded,
+    setFileManagerExpanded,
     assistantExpanded,
     setAssistantExpanded,
     activeNavigationId,

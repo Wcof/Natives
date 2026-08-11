@@ -99,9 +99,11 @@ export default function StorageOverview() {
       {!loading && error && (
         <EmptyState
           title={t(locale, 'settings.overviewStorageUnavailable')}
-          hint={error}
-          actionLabel={t(locale, 'common.retry')}
-          onAction={() => void load()}
+          description={error}
+          action={{
+            label: t(locale, 'common.retry'),
+            onClick: () => void load(),
+          }}
         />
       )}
 

@@ -188,7 +188,6 @@ impl RealProvider {
         let key_id = credential.key_id.clone();
         let route_key_id = key_id.as_deref().unwrap_or("default").to_string();
         let base_url = credential.base_url.clone();
-        let adapter = resolve_adapter(&protocol);
 
         if let Some(governor) = crate::global_governor() {
             governor
@@ -245,35 +244,118 @@ impl RealProvider {
             crate::routing::rectifier_enabled(),
         );
 
-        let stream = match adapter.stream(request, credential).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                if matches!(
-                    e.category,
-                    provider_adapters::capabilities::ProviderErrorCategory::RateLimit
-                ) {
-                    if let Some(governor) = crate::global_governor() {
-                        governor
-                            .record_rate_limit(&self.provider_id, &route_key_id, e.retry_after_ms)
-                            .await;
-                    }
+        // 问题8：自动协议路由。开关开启时按 resolver 决策生成候选协议顺序，
+        // 只在首个 delta 前对 404/405/协议形状不兼容回退下一候选；
+        // 401/403/429/配额/权限/网络故障不换协议，首增量后绝不重放。
+        // 开关关闭时只用供应商显式协议（既有行为不变）。
+        let explicit_protocol = provider_adapters::parse_protocol(&protocol)
+            .unwrap_or(provider_adapters::Protocol::OpenAiChatCompletions);
+        let mut candidates: Vec<provider_adapters::Protocol> =
+            if crate::routing::routing_enabled() {
+                provider_adapters::candidate_protocols(&provider_adapters::ProtocolContext {
+                    provider_type: &protocol,
+                    base_url: base_url.as_deref(),
+                    explicit: Some(&protocol),
+                    model,
+                    previous_success: None,
+                })
+            } else {
+                vec![explicit_protocol]
+            };
+        if !candidates.contains(&explicit_protocol) {
+            candidates.insert(0, explicit_protocol);
+        }
+
+        let mut fallback_error: Option<ProviderError> = None;
+        let mut established: Option<
+            std::pin::Pin<Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>>,
+        > = None;
+        for candidate in candidates {
+            // 第一候选沿用显式协议/供应商字符串匹配（兼容 DeepSeek 等特殊供应商）；
+            // 回退候选按协议显式构造。
+            let adapter: Box<dyn ProviderAdapter> = if candidate == explicit_protocol {
+                resolve_adapter(&protocol)
+            } else {
+                adapter_for_protocol(candidate)
+            };
+            match adapter.stream(request.clone(), credential.clone()).await {
+                Ok(stream) => {
+                    established = Some(stream);
+                    break;
                 }
-                return Err(EngineError::Provider {
-                    message: provider_error_message(
-                        &e,
-                        &self.provider_id,
-                        &protocol,
-                        model,
-                        key_id.as_deref(),
-                        base_url.as_deref(),
-                    ),
-                    code: e.code,
-                    retryable: e.retryable,
-                    category: format!("{:?}", e.category),
-                    retry_after_ms: e.retry_after_ms,
-                });
+                Err(e) => {
+                    let retryable = provider_adapters::should_retry_next_candidate(
+                        &format!("{:?}", e.category),
+                        &e.code,
+                    );
+                    if !retryable {
+                        if matches!(
+                            e.category,
+                            provider_adapters::capabilities::ProviderErrorCategory::RateLimit
+                        ) {
+                            if let Some(governor) = crate::global_governor() {
+                                governor
+                                    .record_rate_limit(
+                                        &self.provider_id,
+                                        &route_key_id,
+                                        e.retry_after_ms,
+                                    )
+                                    .await;
+                            }
+                        }
+                        return Err(EngineError::Provider {
+                            message: provider_error_message(
+                                &e,
+                                &self.provider_id,
+                                &protocol,
+                                model,
+                                key_id.as_deref(),
+                                base_url.as_deref(),
+                            ),
+                            code: e.code,
+                            retryable: e.retryable,
+                            category: format!("{:?}", e.category),
+                            retry_after_ms: e.retry_after_ms,
+                        });
+                    }
+                    fallback_error = Some(e);
+                    // 仅对可回退错误（404/405/形状不兼容）尝试下一候选。
+                    // 无 governor fallback 记录接口（只有 rate-limit 通道），
+                    // 回退事件交给上层事件流/日志呈现。
+                    if let Some(governor) = crate::global_governor() {
+                        governor.record_rate_limit(
+                            &self.provider_id,
+                            &route_key_id,
+                            None,
+                        ).await;
+                    }
+                    continue;
+                }
             }
-        };
+        }
+        let stream = established.ok_or_else(|| {
+            let e = fallback_error.unwrap_or_else(|| ProviderError {
+                code: "no_protocol_candidate".into(),
+                message: "no protocol candidate succeeded".into(),
+                category: provider_adapters::capabilities::ProviderErrorCategory::BadRequest,
+                retryable: false,
+                retry_after_ms: None,
+            });
+            EngineError::Provider {
+                message: provider_error_message(
+                    &e,
+                    &self.provider_id,
+                    &protocol,
+                    model,
+                    key_id.as_deref(),
+                    base_url.as_deref(),
+                ),
+                code: e.code,
+                retryable: e.retryable,
+                category: format!("{:?}", e.category),
+                retry_after_ms: e.retry_after_ms,
+            }
+        })?;
         let provider_id = self.provider_id.clone();
         let route_key_id = route_key_id.clone();
         let governor = crate::global_governor();
@@ -570,6 +652,29 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
         )
     } else {
         Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+    }
+}
+
+/// 问题8：按候选协议显式构造适配器（路由开关开启时的回退候选）。
+fn adapter_for_protocol(protocol: provider_adapters::Protocol) -> Box<dyn ProviderAdapter> {
+    use provider_adapters::Protocol;
+    match protocol {
+        Protocol::AnthropicMessages => {
+            Box::new(provider_adapters::providers::anthropic::AnthropicAdapter::new())
+        }
+        Protocol::GeminiGenerateContent => {
+            Box::new(provider_adapters::providers::gemini::GeminiAdapter::new())
+        }
+        Protocol::OllamaChat => {
+            Box::new(provider_adapters::providers::ollama::OllamaAdapter::new())
+        }
+        Protocol::OpenAiResponses => Box::new(
+            provider_adapters::providers::openai::OpenAiAdapter::new()
+                .with_api_mode(provider_adapters::providers::openai::OpenAiApiMode::Responses),
+        ),
+        Protocol::OpenAiChatCompletions | Protocol::OpenAiCompatible => {
+            Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+        }
     }
 }
 
