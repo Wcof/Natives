@@ -1,3 +1,0 @@
-cmd: cargo fmt --check
-exit=0
-RESULT=PASS (fmt clean)
