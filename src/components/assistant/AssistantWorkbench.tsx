@@ -33,6 +33,7 @@ import { useAssistantWorkbenchActions } from '@/hooks/useAssistantWorkbenchActio
 import { useAssistantWorkbenchBoot } from '@/hooks/useAssistantWorkbenchBoot';
 import { useAssistantWorkbenchPublishers } from '@/hooks/useAssistantWorkbenchPublishers';
 import { useAssistantWorkbenchHydration } from '@/hooks/useAssistantWorkbenchHydration';
+import { useDiagnosticsExport } from '@/hooks/useDiagnosticsExport';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
 import CommandPalette from './CommandPalette';
@@ -174,6 +175,20 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     ensureRunSubscription,
     locale,
   });
+
+  // UX-12（W8）：会话头部「导出诊断」——只读 Host diagnostics + Run 元数据 +
+  // 有限脱敏日志，经 lib/diagnostics-export 保存到本地（不上传）。
+  const { exporting: exportingDiagnostics, handleExport: handleExportDiagnostics } =
+    useDiagnosticsExport({
+      locale,
+      run: rootRun ?? activeRun,
+      projectPath: activeProjectPath,
+      connection: {
+        connection: state.connection,
+        reconnectAttempts: state.reconnectAttempts,
+      },
+      protocolVersion: state.capabilities?.protocolVersion ?? null,
+    });
 
   // W8: fork the current conversation at the selected persisted user message
   // (daemon conversation.fork supports through_message_id selected-turn copy).
@@ -439,6 +454,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <WorkbenchHeader
             locale={locale}
+            projectPath={activeProjectPath}
+            onExportDiagnostics={handleExportDiagnostics}
+            exportingDiagnostics={exportingDiagnostics}
             onOpenPalette={() => setPaletteOpen(true)}
             showRight={showRight}
             onToggleRightPanel={() => {

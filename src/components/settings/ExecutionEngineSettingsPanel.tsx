@@ -22,6 +22,7 @@ import { useToast } from '@/components/ui/Toast';
 import { executionEngine } from '@/lib/tauri/execution-engine';
 import type { ExecutionEngineSnapshot, RuntimeDescriptor } from '@/lib/tauri/types';
 import { classifyError } from '@/lib/error-classifier';
+import { saveDiagnosticsExport } from '@/lib/diagnostics-export';
 import {
   clearPreferredRuntimeId,
   loadPreferredRuntimeId,
@@ -68,6 +69,8 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
   const [maxStepsDraft, setMaxStepsDraft] = useState<number>(50);
   const [disabledToolDraft, setDisabledToolDraft] = useState<string>('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -157,6 +160,50 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
     },
     [snapshot, locale, toast, refresh],
   );
+
+  // UX-12（W8）：导出诊断 —— 只读 Host diagnostics + 有限脱敏日志，
+  // 白名单脱敏后经系统保存对话框写入本地文件（不上传）。
+  const handleExportDiagnostics = useCallback(async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      let engineDiagnostics: Record<string, unknown> | null = null;
+      if (executionEngine.getDiagnostics) {
+        try {
+          engineDiagnostics = (await executionEngine.getDiagnostics()) as Record<string, unknown>;
+        } catch {
+          engineDiagnostics = snapshot ? snapshot.diagnosticsSummary : null;
+        }
+      }
+      let appVersion: string | null = null;
+      if (window.nativesAPI?.app?.version) {
+        try {
+          appVersion = await window.nativesAPI.app.version();
+        } catch {
+          appVersion = null;
+        }
+      }
+      const result = await saveDiagnosticsExport({
+        locale,
+        appVersion,
+        engineDiagnostics,
+        run: null, // Settings surface 无 Run 上下文；Run 元数据由 workbench 头部入口提供
+      });
+      if (result.ok === true && 'cancelled' in result) return;
+      if (result.ok) {
+        toast(t(locale, 'settings.executionEngine.exportDiagnosticsSuccess'), 'success');
+        return;
+      }
+      setExportError(result.error);
+      toast(t(locale, 'settings.executionEngine.exportDiagnosticsError'), 'error');
+    } catch (err) {
+      const classified = classifyError(err, { locale });
+      setExportError(classified.userMessage);
+      toast(classified.userMessage, 'error');
+    } finally {
+      setExporting(false);
+    }
+  }, [snapshot, locale, toast]);
 
   const addDisabledTool = useCallback(() => {
     if (!snapshot) return;
@@ -474,6 +521,26 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
         >
           {JSON.stringify(snapshot.diagnosticsSummary, null, 2)}
         </pre>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0 0' }}>
+          {t(locale, 'settings.executionEngine.exportDiagnosticsHint')}
+        </p>
+        {exportError ? (
+          <p role="alert" style={{ fontSize: 12, color: 'var(--danger)', margin: '6px 0 0' }}>
+            {exportError}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ marginTop: 8, fontSize: 12 }}
+          onClick={() => void handleExportDiagnostics()}
+          disabled={exporting}
+          aria-busy={exporting}
+        >
+          {exporting
+            ? t(locale, 'settings.executionEngine.exportDiagnosticsExporting')
+            : t(locale, 'settings.executionEngine.exportDiagnostics')}
+        </button>
       </Card>
 
       <div style={{ marginTop: 12 }}>
