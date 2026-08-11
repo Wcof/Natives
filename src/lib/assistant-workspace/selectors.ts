@@ -177,10 +177,13 @@ export function selectPendingInteractions(
   state: AssistantWorkspaceState,
   conversationId?: string | null,
 ): InteractionRequest[] {
+  // 问题3：pending interaction 必须显式绑定到会话才投影到该会话。
+  // 无会话上下文（新项目临时会话）时返回空——旧消息/旧工具授权/旧 run
+  // 的 interaction 绝不串入任意会话。全局徽章用 selectAllPendingInteractions。
+  if (!conversationId) return EMPTY;
   // Cache by filter key so Workbench permission lookups stay referentially stable
   // across composer / stream ticks that do not touch interactions.
-  const cacheKey = conversationId ?? '__all__';
-  const prev = pendingInteractionsCache.get(cacheKey);
+  const prev = pendingInteractionsCache.get(conversationId);
   if (
     prev &&
     prev.order === state.interactionOrder &&
@@ -192,11 +195,10 @@ export function selectPendingInteractions(
     .map((id) => state.interactions[id])
     .filter((i): i is InteractionRequest => {
       if (!i) return false;
-      if (!conversationId) return true;
-      return !i.conversationId || i.conversationId === conversationId;
+      return i.conversationId === conversationId;
     });
   const stable = result.length === 0 ? (EMPTY as InteractionRequest[]) : result;
-  cacheSet(pendingInteractionsCache, cacheKey, {
+  cacheSet(pendingInteractionsCache, conversationId, {
     order: state.interactionOrder,
     interactions: state.interactions,
     result: stable,
@@ -204,11 +206,16 @@ export function selectPendingInteractions(
   return stable;
 }
 
-/** Global “waiting for me” across all conversations (badges / notifications). */
+/**
+ * Global "waiting for me" across all conversations (badges / notifications).
+ * 独立实现：包含未绑定会话的 interaction，供徽章计数；不经过会话投影过滤。
+ */
 export function selectAllPendingInteractions(
   state: AssistantWorkspaceState,
 ): InteractionRequest[] {
-  return selectPendingInteractions(state, null);
+  return state.interactionOrder
+    .map((id) => state.interactions[id])
+    .filter((i): i is InteractionRequest => Boolean(i));
 }
 
 export function selectPromptQueue(

@@ -7,6 +7,7 @@ import {
 } from './index';
 import type { RunEvent } from '@/lib/assistant-protocol';
 import {
+  selectAllPendingInteractions,
   selectConversationMessages,
   selectPendingInteractions,
   selectPromptQueue,
@@ -228,7 +229,9 @@ test('permission queue binds to run and survives conversation switch', () => {
   // switch away — permission still queued
   state = workspaceReducer(state, { type: 'conversations/setActive', id: 'c2' });
   assert.equal(selectPendingInteractions(state, 'c1').length, 1);
-  assert.equal(selectPendingInteractions(state).length, 1);
+  // 问题3：无会话上下文不投影到任意会话；全局徽章仍统计全部。
+  assert.equal(selectPendingInteractions(state).length, 0);
+  assert.equal(selectAllPendingInteractions(state).length, 1);
   assert.ok(state.runs.r1);
 });
 
