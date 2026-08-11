@@ -70,6 +70,34 @@ test('conversations whose registered project directory is gone move to unassigne
   assert.deepEqual(groups[0]!.conversations.map((conversation) => conversation.id), ['lost']);
 });
 
+test('soft-deleted (hidden) project never reappears from daemon project_id', () => {
+  // Product decision 1: project_remove only hides the project; daemon sessions
+  // keep their project_id. The grouping must not re-invent the project node
+  // (extras) nor list those sessions — they stay hidden until re-added.
+  const groups = groupAssistantConversations(
+    [
+      { id: 'hidden-session', projectId: '/work/hidden', updatedAt: '2026-07-12T12:00:00Z', title: 'Hidden' },
+      { id: 'visible-session', projectId: '/work/visible', updatedAt: '2026-07-12T11:00:00Z', title: 'Visible' },
+    ],
+    [{ path: '/work/visible', exists: true }],
+    'Unassigned',
+    ['/work/hidden'],
+  );
+  assert.equal(groups.length, 1, 'hidden project must not create a group');
+  assert.equal(groups[0]!.path, '/work/visible');
+  assert.deepEqual(groups[0]!.conversations.map((conversation) => conversation.id), ['visible-session']);
+});
+
+test('hidden project sessions never fall into unassigned', () => {
+  const groups = groupAssistantConversations(
+    [{ id: 'hidden-session', projectId: '/work/hidden', updatedAt: '2026-07-12T12:00:00Z', title: 'Hidden' }],
+    [],
+    'Unassigned',
+    ['/work/hidden'],
+  );
+  assert.equal(groups.length, 0, 'hidden session must be filtered out entirely');
+});
+
 test('engine unavailable still blocks creation', () => {
   assert.equal(projectCreationState({ engine: 'unavailable', providerReadiness: 'ready' }), 'engine_unavailable');
 });

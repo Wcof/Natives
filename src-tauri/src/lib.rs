@@ -812,6 +812,7 @@ pub fn run() {
             commands::provider::provider_discover_models_saved,
             // Project （统一项目目录 API）
             commands::project::project_list,
+            commands::project::project_list_hidden,
             commands::project::project_register,
             commands::project::project_rename,
             commands::project::project_remove,

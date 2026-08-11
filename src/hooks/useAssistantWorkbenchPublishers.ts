@@ -37,6 +37,8 @@ export interface UseAssistantWorkbenchPublishersOptions {
   artifacts: Artifact[];
   contextUsage: ContextUsage | null;
   registeredProjects: Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string; exists?: boolean }>;
+  /** Soft-deleted (hidden) project paths — product decision 1. */
+  hiddenProjectPaths: string[];
   pinnedConversationIds: Set<string>;
   loadingConversations: boolean;
   providerReadiness: ProviderReadiness;
@@ -61,6 +63,7 @@ export function useAssistantWorkbenchPublishers({
   artifacts,
   contextUsage,
   registeredProjects,
+  hiddenProjectPaths,
   pinnedConversationIds,
   loadingConversations,
   providerReadiness,
@@ -88,6 +91,7 @@ export function useAssistantWorkbenchPublishers({
       })),
       registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label, exists: p.exists })),
       t(locale, 'assistant.unassignedProjects'),
+      hiddenProjectPaths,
     );
     // Merge with projects already seeded by AssistantWorkspaceProvider so a
     // late/empty workbench project.list cannot blank the sidebar on first paint.
@@ -109,6 +113,7 @@ export function useAssistantWorkbenchPublishers({
             })),
             seedPaths,
             t(locale, 'assistant.unassignedProjects'),
+            hiddenProjectPaths,
           );
         }
       }

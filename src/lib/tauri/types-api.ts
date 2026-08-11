@@ -543,6 +543,8 @@ export interface NativesAPI {
   /** Project directory management */
   project: {
     list(): Promise<ProjectSummary[]>;
+    /** Soft-deleted (hidden) project paths — product decision 1. */
+    listHidden(): Promise<string[]>;
     register(path: string): Promise<ProjectSummary>;
     rename(id: string, label: string): Promise<void>;
     remove(id: string): Promise<void>;

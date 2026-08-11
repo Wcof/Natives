@@ -350,7 +350,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     // `null` = request failed (≠ honest empty list). An engine outage must keep
     // the previous groups + surface loadError instead of wiping the sidebar.
     let firstError: unknown = null;
-    const [activeProjectPath, registeredProjects, conversations, pinnedIds] = await Promise.all([
+    const [activeProjectPath, registeredProjects, conversations, pinnedIds, hiddenProjectPaths] = await Promise.all([
       readActiveProject(api).catch(() => null as string | null),
       api.project.list().then((p) => p ?? []).catch((e) => {
         console.error('Failed to list projects:', e);
@@ -403,6 +403,9 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         }
       })(),
       readPinnedConversationIds(),
+      // 问题1：软删项目路径（product decision 1）——侧栏不得从 daemon 会话
+      // project_id 反向重建被隐藏的项目。
+      api.project.listHidden().then((paths) => paths ?? []).catch(() => [] as string[]),
     ]);
 
     if (registeredProjects === null || conversations === null) {
@@ -434,6 +437,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         .map((c) => (pinnedIds.has(c.id) ? { ...c, pinned: true } : c)),
       projectMetas,
       unassignedLabel,
+      hiddenProjectPaths,
     );
     publishNavigation((prev) => ({
       ...prev,

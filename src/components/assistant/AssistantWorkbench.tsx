@@ -75,6 +75,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [registeredProjects, setRegisteredProjects] = useState<Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string; exists?: boolean }>>([]);
+  const [hiddenProjectPaths, setHiddenProjectPaths] = useState<string[]>([]);
   const [pinnedConversationIds, setPinnedConversationIds] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState(!state.view.rightCollapsed);
   const [loadingConversations, setLoadingConversations] = useState(true);
@@ -272,6 +273,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     setProviderReadiness,
     setActiveProjectPath,
     setRegisteredProjects,
+    setHiddenProjectPaths,
     setPinnedConversationIds,
     setLoadingConversations,
     abortAllSubscriptions,
@@ -307,6 +309,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     artifacts,
     contextUsage,
     registeredProjects,
+    hiddenProjectPaths,
     pinnedConversationIds,
     loadingConversations,
     providerReadiness,

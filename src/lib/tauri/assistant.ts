@@ -127,6 +127,7 @@ export const assistantV2: NativesAPI['assistantV2'] = {
   // Project directory management
 export const project: NativesAPI['project'] = {
     list: (): Promise<ProjectSummary[]> => cmd<ProjectSummary[]>('project_list'),
+    listHidden: (): Promise<string[]> => cmd<string[]>('project_list_hidden'),
     register: (path: string): Promise<ProjectSummary> => cmd<ProjectSummary>('project_register', { path }),
     rename: (id: string, label: string): Promise<void> => cmd<void>('project_rename', { id, label }),
     remove: (id: string): Promise<void> => cmd<void>('project_remove', { id }),

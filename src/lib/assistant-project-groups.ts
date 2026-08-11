@@ -82,15 +82,22 @@ export interface RegisteredProjectMeta {
  * Conversation order within a project:
  * 1. Pinned conversations first (stable by updatedAt among pins).
  * 2. Remaining by updatedAt DESC.
+ *
+ * Product decision 1: `hiddenProjectPaths` are soft-deleted projects. Their
+ * daemon sessions still carry `project_id`, but the sidebar must NOT re-invent
+ * the project node (extras) nor list those sessions — the project is hidden
+ * until the user re-adds the path via `project.register`.
  */
 export function groupAssistantConversations(
   conversations: AssistantProjectConversation[],
   registeredProjects: Array<string | RegisteredProjectMeta> = [],
   unassignedLabel = 'Unassigned',
+  hiddenProjectPaths: Iterable<string> = [],
 ): AssistantProjectGroup[] {
   const registered: RegisteredProjectMeta[] = registeredProjects.map((item) =>
     typeof item === 'string' ? { path: item } : item,
   );
+  const hiddenPaths = new Set(Array.from(hiddenProjectPaths, (p) => p.trim()).filter(Boolean));
 
   const byProject = new Map<string, AssistantProjectConversation[]>();
   const unassigned: AssistantProjectConversation[] = [];
@@ -99,7 +106,7 @@ export function groupAssistantConversations(
 
   for (const proj of registered) {
     const path = proj.path.trim();
-    if (!path) continue;
+    if (!path || hiddenPaths.has(path)) continue;
     metaByPath.set(path, proj);
     if (proj.exists === false) {
       missingProjectPaths.add(path);
@@ -111,6 +118,9 @@ export function groupAssistantConversations(
   for (const conversation of conversations) {
     if (conversation.parentConversationId?.trim()) continue;
     const path = conversation.projectId?.trim() ?? '';
+    // Soft-deleted project: hide the session entirely, never move it to
+    // unassigned or re-invent the project from its project_id.
+    if (hiddenPaths.has(path)) continue;
     if (!path || missingProjectPaths.has(path)) {
       unassigned.push(conversation);
       continue;

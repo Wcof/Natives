@@ -32,6 +32,8 @@ export interface UseAssistantWorkbenchBootOptions {
   setRegisteredProjects: (
     projects: Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string; exists?: boolean }>,
   ) => void;
+  /** Soft-deleted (hidden) project paths — product decision 1. */
+  setHiddenProjectPaths: (paths: string[]) => void;
   setPinnedConversationIds: (ids: Set<string>) => void;
   setLoadingConversations: (loading: boolean) => void;
   abortAllSubscriptions: () => void;
@@ -43,6 +45,7 @@ export function useAssistantWorkbenchBoot({
   setProviderReadiness,
   setActiveProjectPath,
   setRegisteredProjects,
+  setHiddenProjectPaths,
   setPinnedConversationIds,
   setLoadingConversations,
   abortAllSubscriptions,
@@ -69,6 +72,14 @@ export function useAssistantWorkbenchBoot({
         try {
           const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
           if (!cancelled) setRegisteredProjects(projects);
+        } catch {
+          /* */
+        }
+        try {
+          // Soft-deleted projects stay hidden in the sidebar (product decision 1);
+          // re-adding the path restores the sessions via project.register.
+          const hidden = (await window.nativesAPI?.project?.listHidden?.()) ?? [];
+          if (!cancelled) setHiddenProjectPaths(hidden);
         } catch {
           /* */
         }

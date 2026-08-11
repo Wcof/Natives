@@ -180,3 +180,24 @@ pub fn project_remove(id: String) -> Result<()> {
     ).map_err(|e| format!("Failed to remove project: {e}"))?;
     Ok(())
 }
+
+/// List soft-deleted (hidden) project paths.
+///
+/// Product decision 1: removing a project only hides it from the assistant
+/// sidebar; daemon sessions keep their project_id. The Renderer uses this set
+/// so the sidebar "extras" grouping never re-invents a hidden project node
+/// from a daemon conversation's project_id. Re-adding the path (project_register)
+/// restores the record and the sessions reappear.
+#[tauri::command]
+pub fn project_list_hidden() -> Result<Vec<String>> {
+    let conn = db::get_main_conn().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT p.path FROM assistant_projects p WHERE p.deleted_at IS NOT NULL ORDER BY p.deleted_at DESC")
+        .map_err(|e| format!("Failed to prepare hidden project list query: {e}"))?;
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to query hidden projects: {e}"))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to collect hidden projects: {e}"))?;
+    Ok(paths)
+}
