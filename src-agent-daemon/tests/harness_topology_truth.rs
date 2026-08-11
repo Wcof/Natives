@@ -50,6 +50,18 @@ const DISPATCH_SOURCES: &[(&str, &str)] = &[
         "agent-core::engine",
     ),
     (
+        "../crates/agent-core/src/engine/engine_run.rs",
+        "agent-core::engine",
+    ),
+    (
+        "../crates/agent-core/src/engine/engine_tools.rs",
+        "agent-core::engine",
+    ),
+    (
+        "../crates/agent-core/src/engine/engine_compaction.rs",
+        "agent-core::engine",
+    ),
+    (
         "../crates/agent-core/src/hook_handlers.rs",
         "agent-core::engine",
     ),
@@ -63,6 +75,10 @@ const DISPATCH_SOURCES: &[(&str, &str)] = &[
     ),
     (
         "src/tools/gated.rs",
+        "natives-agent-daemon::production_tools",
+    ),
+    (
+        "src/tools/gated/gated_execute.rs",
         "natives-agent-daemon::production_tools",
     ),
 ];
