@@ -64,3 +64,38 @@ Codex session 支持 `access_token/accessToken`、嵌套 `tokens.*`、`refresh_t
 - Engine 可通过 Sub2API OpenAI OAuth 账号完成流式工具调用。
 - 池内切换、全局切换、熔断及“首 delta 后不重放”均有测试。
 - 本地 API Bearer 鉴权、三种入站协议、路由开关和全局代理独立性均有集成测试。
+
+---
+
+## 决策冻结：供应商自动协议路由（2026-08-11）
+
+> 依据 13 项整改方案问题 8（`natives-13-issues-remediation-plan-2026-08-11.md` §3.8）。本小节**取代**上文中与旧“路由模式”相关的实施语义；旧功能退役清单见下。
+
+### 1. “路由”开关的新语义
+
+- “路由”只表示：**是否为当前上游自动选择 Chat Completions / Responses / Anthropic Messages 协议**。
+- 开关**关闭**：沿用供应商现有显式协议，保证既有配置可运行。
+- 开关**开启**：由 Daemon/provider-adapters 内的唯一 `ProtocolResolver` 生成候选协议顺序并自动选择。
+- Renderer 只配置开关并显示真实决策结果，不做协议转换。
+
+### 2. 旧“路由模式”退役清单（不再保留 UI / 公开类型 / 执行入口）
+
+- failover 路由绑定（provider+credential+model 的绑定顺序与全局故障转移）
+- loopback 本地服务（`127.0.0.1:15721` 本地 Bearer 服务与三种入站协议）
+- request rectifier（thinking 签名清理、budget 规范、媒体降级）
+- global outbound proxy（HTTP/HTTPS/SOCKS5 全局代理）
+- 手工 route binding 管理（增删改排序）
+
+> 旧 DB 表/列保留 inert（不 `DROP`）；Sub2API 账号池若继续使用，迁入供应商账户管理。
+
+### 3. 协议回退边界（不可放宽）
+
+- 只在**首个有效 text/reasoning/tool delta 之前**，对 `404/405` 或协议形状不兼容，才允许尝试下一候选协议。
+- `401/403/429`、配额、权限、网络故障**一律不换协议**。
+- **首增量之后绝不重放**（不重新发送已产生增量的事件）。
+- 成功协议缓存**不含密钥**；provider / baseURL / model / config 任一变化即失效。
+
+### 4. 一致性要求
+
+- Provider“测试连接”与真实 run 必须调用**同一个** `ProtocolResolver`。
+- 内部继续使用 canonical `ProviderRequest / ProviderEvent`；Renderer 不做转换。
