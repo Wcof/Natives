@@ -339,36 +339,13 @@ function collectCrossDbHost(root = ROOT) {
 
 function collectEmbeddedProd(root = ROOT) {
   const map = new Map();
-  // R-T1: the constraint "production must not silently fall back to the
-  // embedded daemon" applies to the HOST (src-tauri). The Daemon itself
-  // legitimately DEFINES `EmbeddedAuthority` as its in-process execution
-  // capability for tests/diagnostic mode (architecture #5) — flagging the
-  // definition would be a false positive. Scan the Host only.
-  const hostRoot = join(root, 'src-tauri/src');
-  if (!existsSync(hostRoot)) return map;
-  for (const p of walk(hostRoot)) {
-    if (!p.endsWith('.rs')) continue;
-    if (isTestFile(p)) continue;
-    const lines = readFileSync(p, 'utf8').split('\n');
-    let cfgDisabled = false;
-    for (let i = 0; i < lines.length; i++) {
-      const t = lines[i].trim();
-      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('#!')) continue;
-      // Track #[cfg(...)] blocks that gate code OUT of production builds
-      // (test / diagnostic feature): those references never ship in prod.
-      if (t.startsWith('#[cfg(') && /cfg\((any\()?test|feature\s*=\s*"diagnostic"/.test(t)) {
-        cfgDisabled = true;
-        continue;
-      }
-      if (cfgDisabled) {
-        if (t.startsWith('#')) continue; // nested attr
-        // A non-attr line inside the gated block; keep skipping until the
-        // block ends at the closing brace of the gated item.
-        if (t.includes('}')) cfgDisabled = false;
-        continue;
-      }
-      if (t.includes('EmbeddedAuthority')) {
-        map.set(`${relToRoot(p)}:${i + 1}`, t.slice(0, 110));
+  for (const r of [join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src')]) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
+      if (!p.endsWith('.rs')) continue;
+      if (isTestFile(p)) continue;
+      for (const h of nonCommentLines(p, /EmbeddedAuthority/)) {
+        map.set(`${relToRoot(p)}:${h.line}`, h.text);
       }
     }
   }
