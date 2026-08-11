@@ -15,6 +15,8 @@ import { rewriteLocalImages, type LocalImageRewrite } from '@/lib/markdown-local
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { type PreviewSource, type PreviewSubMode } from '@/lib/preview/contracts';
 import MonacoDiffView from '@/components/assistant/diff/MonacoDiffView';
+import FindReplaceBar from './FindReplaceBar';
+import { useFindReplace } from '@/hooks/useFindReplace';
 import ImageLightbox from './ImageLightbox';
 import PreviewSurface from '@/components/preview/PreviewSurface';
 import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
@@ -52,15 +54,34 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Escape to close
+  // 问题12：面板聚焦时 Cmd/Ctrl+F 打开查找；Escape 先关 find bar 再关预览。
+  const findReplace = useFindReplace(containerRef);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      const target = e.target as HTMLElement | null;
+      // Monaco/Milkdown 编辑区拥有自己的 Cmd/Ctrl+F（Monaco 内建查找替换、
+      // Milkdown ProseMirror 查找），不抢它们的快捷键。
+      if (target?.closest?.('.monaco-editor, .milkdown-host')) return;
+      if (e.key === 'Escape') {
+        if (findReplace.open) {
+          findReplace.close();
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        onClose();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        // 只读 Preview 统一查找入口；不抢全局快捷键（事件仅来自本面板容器）。
+        e.preventDefault();
+        e.stopPropagation();
+        findReplace.openFind();
+      }
     };
     const el = containerRef.current;
-    el?.addEventListener('keydown', handleKeyDown);
-    return () => el?.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+    el?.addEventListener('keydown', handleKeyDown, true);
+    return () => el?.removeEventListener('keydown', handleKeyDown, true);
+  }, [onClose, findReplace]);
 
   // Load git diff when git sub-mode is active
   useEffect(() => {
@@ -138,6 +159,19 @@ export default function FilePreview({ entry, subMode, onClose, editMode = false 
       minHeight: 0,
       background: 'transparent',
     }}>
+      {findReplace.open && (
+        <FindReplaceBar
+          locale={locale}
+          query={findReplace.query}
+          onQueryChange={findReplace.setQuery}
+          matchCase={findReplace.matchCase}
+          onToggleMatchCase={() => findReplace.setMatchCase((v) => !v)}
+          index={findReplace.index}
+          count={findReplace.count}
+          onNavigate={findReplace.navigate}
+          onClose={findReplace.close}
+        />
+      )}
       {/* Content */}
       <div style={{
         flex: 1,

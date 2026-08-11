@@ -5,8 +5,8 @@ import { FileText, Bell, Info, GitBranch } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import {
   clampResizableRightPanelWidth,
+  rightPanelViewportMax,
   RESIZABLE_RIGHT_PANEL_DEFAULT_WIDTH,
-  RESIZABLE_RIGHT_PANEL_MAX_WIDTH,
   RESIZABLE_RIGHT_PANEL_MIN_WIDTH,
 } from '@/components/ui/ResizableRightPanel';
 
@@ -17,8 +17,6 @@ export type PreviewSubMode = 'preview' | 'info' | 'git';
 export const RIGHT_PANEL_DEFAULT_WIDTH = RESIZABLE_RIGHT_PANEL_DEFAULT_WIDTH;
 /** Narrowest usable width (header icons + close still fit). */
 export const RIGHT_PANEL_MIN_WIDTH = RESIZABLE_RIGHT_PANEL_MIN_WIDTH;
-/** Hard cap; further limited by viewport so main content keeps a floor. */
-export const RIGHT_PANEL_MAX_WIDTH = RESIZABLE_RIGHT_PANEL_MAX_WIDTH;
 
 export function clampRightPanelWidth(
   width: number,
@@ -142,7 +140,7 @@ export default function RightPanel({
           aria-orientation="vertical"
           aria-valuenow={displayWidth}
           aria-valuemin={RIGHT_PANEL_MIN_WIDTH}
-          aria-valuemax={RIGHT_PANEL_MAX_WIDTH}
+          aria-valuemax={rightPanelViewportMax()}
           aria-label={t(locale, 'rightPanel.resize')}
           title={t(locale, 'rightPanel.resizeHint')}
         />

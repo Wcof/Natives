@@ -7,11 +7,13 @@ import { X } from 'lucide-react';
 export const RESIZABLE_RIGHT_PANEL_DEFAULT_WIDTH = 320;
 /** Narrowest usable width. */
 export const RESIZABLE_RIGHT_PANEL_MIN_WIDTH = 260;
-/** Hard cap; further limited by viewport so main content keeps a floor. */
-export const RESIZABLE_RIGHT_PANEL_MAX_WIDTH = 640;
 /** Keep at least this much horizontal room for the main workspace. */
 const MAIN_CONTENT_FLOOR = 420;
 
+/**
+ * 问题12：右栏无任意产品上限（不再 clamp 到 640）。只受「当前视口可用宽」
+ * 物理边界约束，防止拖出屏幕；窗口缩小后仅在超出物理边界时收敛。
+ */
 export function clampResizableRightPanelWidth(
   width: number,
   viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280,
@@ -20,8 +22,14 @@ export function clampResizableRightPanelWidth(
     RESIZABLE_RIGHT_PANEL_MIN_WIDTH,
     viewportWidth - MAIN_CONTENT_FLOOR,
   );
-  const max = Math.min(RESIZABLE_RIGHT_PANEL_MAX_WIDTH, maxByViewport);
-  return Math.max(RESIZABLE_RIGHT_PANEL_MIN_WIDTH, Math.min(max, Math.round(width)));
+  return Math.max(RESIZABLE_RIGHT_PANEL_MIN_WIDTH, Math.min(maxByViewport, Math.round(width)));
+}
+
+/** 当前视口允许的最大右栏宽度（供 aria-valuemax 动态使用）。 */
+export function rightPanelViewportMax(
+  viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280,
+): number {
+  return Math.max(RESIZABLE_RIGHT_PANEL_MIN_WIDTH, viewportWidth - MAIN_CONTENT_FLOOR);
 }
 
 export interface ResizableRightPanelTab {
@@ -156,7 +164,7 @@ export default function ResizableRightPanel({
         aria-orientation="vertical"
         aria-valuenow={width}
         aria-valuemin={RESIZABLE_RIGHT_PANEL_MIN_WIDTH}
-        aria-valuemax={RESIZABLE_RIGHT_PANEL_MAX_WIDTH}
+        aria-valuemax={rightPanelViewportMax()}
         aria-label={resizeLabel}
         title={resizeHint}
       />
