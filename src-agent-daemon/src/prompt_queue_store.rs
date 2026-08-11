@@ -39,14 +39,16 @@ pub fn global_coordinator() -> Arc<SessionCoordinator> {
 // W9 split: durable receivers -> prompt_queue_receiver, snapshot persistence ->
 // prompt_queue_snapshot, promptQueue.* RPC -> prompt_queue_crud. Public paths
 // are re-exported below so external `prompt_queue_store::*` keeps working.
+#[path = "prompt_queue_crud.rs"]
 mod prompt_queue_crud;
+#[path = "prompt_queue_receiver.rs"]
 mod prompt_queue_receiver;
+#[path = "prompt_queue_snapshot.rs"]
 mod prompt_queue_snapshot;
-pub(crate) use prompt_queue_crud::{enqueue, interject, list, remove, reorder, request, update};
-pub(crate) use prompt_queue_receiver::{DurableInputReceiver, DurableSafePointReceiver};
-pub(crate) use prompt_queue_snapshot::{
-    ensure_conversation_for_queue, row_to_item, store, value_to_queue_item,
+pub(crate) use prompt_queue_crud::{
+    enqueue, interject, list, remove, reorder, request, send_now, update,
 };
+pub(crate) use prompt_queue_receiver::{DurableInputReceiver, DurableSafePointReceiver};
 pub(crate) use prompt_queue_snapshot::{
     hydrate_conversation, load_actor_snapshot, persist_actor_snapshot,
     recover_session_actors_on_startup,
@@ -83,6 +85,102 @@ pub fn on_safe_point(conversation_id: &str, point: SafePoint) -> HarnessAction {
 pub fn restore_interjection_checked(conversation_id: &str, content: String) -> Result<(), String> {
     global_harness().restore_interjection(conversation_id, content);
     persist_actor_snapshot(conversation_id)
+}
+
+// W9 split note: the following helpers were split out with the receiver /
+// snapshot / crud domains but are referenced by those sibling modules via
+// `super::`. They live here (the aggregate module) so all split modules can
+// reach them without a crate-private cycle.
+
+pub(crate) fn store() -> Result<DataStore, String> {
+    // W2: single Daemon DataStore open path (assistant.db authority + test hook).
+    crate::storage::open_daemon_store()
+}
+
+pub(crate) fn ensure_conversation_for_queue(conversation_id: &str, params: &Value) -> Result<(), String> {
+    let provider = params
+        .get("provider_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let model = params
+        .get("model_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let project = params.get("project_id").and_then(Value::as_str);
+    conversation_store::ensure_conversation_stub(conversation_id, provider, model, None, project)
+}
+
+pub(crate) fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let attachments: Option<String> = row.get(4)?;
+    // status column may be missing on pre-migration-012 DBs mid-upgrade.
+    let status: String = row.get::<_, String>(9).unwrap_or_else(|_| "queued".into());
+    Ok(json!({
+        "id": row.get::<_, String>(0)?,
+        "conversation_id": row.get::<_, String>(1)?,
+        "content": row.get::<_, String>(2)?,
+        "source": row.get::<_, String>(3)?,
+        "attachments": attachments.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()),
+        "order": row.get::<_, i64>(5)?,
+        "position": row.get::<_, i64>(5)?,
+        "client_temp_id": row.get::<_, Option<String>>(6)?,
+        "created_at": row.get::<_, String>(7)?,
+        "updated_at": row.get::<_, String>(8)?,
+        "status": status,
+    }))
+}
+
+pub(crate) fn value_to_queue_item(item: &Value) -> Result<QueueItem, String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "prompt queue row missing id".to_string())?
+        .to_string();
+    let conversation_id = item
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("prompt queue row {id} missing conversation_id"))?
+        .to_string();
+    let content = item
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("prompt queue row {id} missing content"))?
+        .to_string();
+    let source = item
+        .get("source")
+        .and_then(Value::as_str)
+        .map(PromptSource::parse)
+        .ok_or_else(|| format!("prompt queue row {id} missing source"))?;
+    let position = item
+        .get("position")
+        .or_else(|| item.get("order"))
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("prompt queue row {id} missing position"))?;
+    let client_temp_id = item
+        .get("client_temp_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let created_at = item
+        .get("created_at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("prompt queue row {id} missing created_at"))?
+        .to_string();
+    let status = item
+        .get("status")
+        .and_then(Value::as_str)
+        .map(QueueItemStatus::parse)
+        .ok_or_else(|| format!("prompt queue row {id} missing status"))?;
+    Ok(QueueItem {
+        id,
+        conversation_id,
+        content,
+        source,
+        position,
+        client_temp_id,
+        created_at,
+        status,
+    })
 }
 
 /// Called when a run reaches a real terminal state.

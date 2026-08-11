@@ -464,12 +464,16 @@ fn push_handler_definition(
 
 // Split implementation lives in same-directory modules by responsibility
 // (task-01 structure); public paths below are preserved via re-exports.
+#[path = "production_hooks_frozen.rs"]
 mod production_hooks_frozen;
+#[path = "production_hooks_native.rs"]
 mod production_hooks_native;
+#[path = "production_hooks_trace.rs"]
 mod production_hooks_trace;
 
 pub use self::production_hooks_frozen::{
-    freeze_run_hooks, frozen_dispatcher_for_run, resolve_frozen_dispatcher, FrozenHookDispatcher,
+    freeze_run_hooks, frozen_dispatcher_for_run, resolve_frozen_dispatcher,
+    resolve_frozen_dispatcher_for_subagent, FrozenHookDispatcher,
 };
 #[cfg(test)]
 use self::production_hooks_native::{prompt_decision, substitute_hook_input};
@@ -481,10 +485,14 @@ use self::production_hooks_trace::parse_error_category;
 pub use self::production_hooks_trace::{trace_from_completed_event, trace_from_started_event};
 
 #[cfg(test)]
+#[path = "production_hooks_discovery_tests.rs"]
 mod production_hooks_discovery_tests;
 #[cfg(test)]
+#[path = "production_hooks_frozen_tests.rs"]
 mod production_hooks_frozen_tests;
 #[cfg(test)]
+#[path = "production_hooks_native_tests.rs"]
 mod production_hooks_native_tests;
 #[cfg(test)]
+#[path = "production_hooks_trace_tests.rs"]
 mod production_hooks_trace_tests;

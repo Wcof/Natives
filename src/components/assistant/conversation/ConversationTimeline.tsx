@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Check, Copy, FileDiff, RefreshCw, Undo2 } from 'lucide-react';
+import { ArrowDown, Check, Copy, FileDiff, GitFork, RefreshCw, Undo2 } from 'lucide-react';
 import { t } from '@/i18n';
 import { formatRunElapsed, messagePlainText } from '@/lib/assistant-message-view';
 import type { RunEvent } from '@/lib/assistant-protocol';
@@ -47,6 +47,8 @@ interface ConversationTimelineProps {
   hasMoreOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void | Promise<void>;
+  /** W8: fork the conversation at the selected persisted user message. */
+  onFork?: (messageId: string) => void;
 }
 
 const NEAR_BOTTOM_PX = 80;
@@ -178,6 +180,7 @@ const MessageRow = memo(function MessageRow({
   onRetry,
   copiedId,
   onCopy,
+  onFork,
   runEvents,
 }: {
   message: Message;
@@ -189,6 +192,8 @@ const MessageRow = memo(function MessageRow({
   onRetry?: () => void;
   copiedId: string | null;
   onCopy: (id: string, text: string) => void;
+  /** W8: fork this conversation at the selected user message. */
+  onFork?: (messageId: string) => void;
   runEvents: RunEvent[];
 }) {
   const user = message.role === 'user';
@@ -340,6 +345,16 @@ const MessageRow = memo(function MessageRow({
             <RefreshCw size={12} />
           </button>
         )}
+        {onFork && message.role === 'user' && (
+          <button
+            type="button"
+            onClick={() => onFork(message.id)}
+            title={t(locale, 'common.fork')}
+            className="rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          >
+            <GitFork size={12} />
+          </button>
+        )}
       </div>
     </article>
   );
@@ -358,6 +373,7 @@ const MessageRow = memo(function MessageRow({
     prev.onRetry === next.onRetry &&
     prev.copiedId === next.copiedId &&
     prev.onCopy === next.onCopy &&
+    prev.onFork === next.onFork &&
     prev.runEvents === next.runEvents
   );
 });
@@ -374,6 +390,7 @@ export default function ConversationTimeline({
   hasMoreOlder = false,
   loadingOlder = false,
   onLoadOlder,
+  onFork,
 }: ConversationTimelineProps) {
   const zh = locale.startsWith('zh');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -532,6 +549,7 @@ export default function ConversationTimeline({
             onRetry={onRetry}
             copiedId={copiedId}
             onCopy={onCopy}
+            onFork={onFork}
             runEvents={
               message.runId ? eventsByRun[message.runId] ?? EMPTY_RUN_EVENTS : EMPTY_RUN_EVENTS
             }

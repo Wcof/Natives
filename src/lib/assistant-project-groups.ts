@@ -7,6 +7,8 @@ export interface AssistantProjectConversation {
   parentConversationId?: string | null;
   /** Whether this conversation is pinned within its project (UI preference). */
   pinned?: boolean;
+  /** W8: low-frequency activity projection — most recent run status. */
+  lastRunStatus?: string | null;
 }
 
 export interface AssistantProjectGroup {

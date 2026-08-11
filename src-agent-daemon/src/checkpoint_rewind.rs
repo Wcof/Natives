@@ -1,11 +1,11 @@
 //! Checkpoint rewind helpers (W9 split from checkpoint.rs): preview building,
 //! atomic workspace restore with rollback, and snapshot file parsing.
 
-use super::checkpoint::{
+use super::checkpoint_stream::stream_read_capped;
+use super::{
     CheckpointRecord, FileSnapshot, RewindConflict, RewindFilePreview, RewindPreview,
     MAX_CAPTURE_FILE_CONTENT_BYTES,
 };
-use super::checkpoint_stream::stream_read_capped;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

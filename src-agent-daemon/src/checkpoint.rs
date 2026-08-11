@@ -92,7 +92,9 @@ pub struct RewindConflict {
     pub reason: String,
 }
 
-#[derive(Debug, Default)]
+// W3 fix: `Default` is implemented manually below (it needs `Self::new()`,
+// not the derive's `Default`-bound field requirement); `Debug` is dropped
+// because `DataStore`/`StorageActor` do not implement it.
 /// Process-local checkpoint manager with optional SQLite persistence.
 pub struct CheckpointManager {
     live: std::sync::Mutex<HashMap<String, LiveCheckpoint>>,
@@ -105,10 +107,12 @@ pub struct CheckpointManager {
 
 // W9: LiveCheckpoint / StreamedRead / stream_read_capped moved to
 // `checkpoint_stream` (bounded streaming reads + in-memory per-run state).
+#[path = "checkpoint_stream.rs"]
 mod checkpoint_stream;
 pub(crate) use checkpoint_stream::stream_read_capped;
 use checkpoint_stream::{LiveCheckpoint, StreamedRead};
 // W9: rewind preview / restore / sensitivity moved to `checkpoint_rewind`.
+#[path = "checkpoint_rewind.rs"]
 mod checkpoint_rewind;
 use checkpoint_rewind::{
     apply_rewind_files, build_rewind_preview, is_sensitive_checkpoint_path, parse_files_json,

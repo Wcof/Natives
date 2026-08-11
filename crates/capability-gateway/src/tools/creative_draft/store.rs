@@ -109,13 +109,13 @@ impl DraftPaths {
         }
     }
 
-    /// Production resolution. `NATIVES_DB_PATH` is set by the host before it
-    /// spawns the daemon, so deriving the data directory from its parent keeps
-    /// draft metadata and draft content in the same place even for relocated or
-    /// portable installs.
+    /// Production resolution. `NATIVES_ASSISTANT_DB_PATH` is the Daemon's own
+    /// authoritative store (set by the host before it spawns the daemon), so
+    /// creative draft metadata stays under daemon authority and no daemon path
+    /// opens the Host-owned natives.db (W3 P0-2).
     pub fn from_env() -> Self {
-        let db_path =
-            env_path("NATIVES_DB_PATH").unwrap_or_else(|| default_natives_dir().join("natives.db"));
+        let db_path = env_path("NATIVES_ASSISTANT_DB_PATH")
+            .unwrap_or_else(|| default_natives_dir().join("assistant.db"));
         let data_dir = env_path("NATIVES_DATA_DIR")
             .or_else(|| db_path.parent().map(Path::to_path_buf))
             .unwrap_or_else(default_natives_dir);

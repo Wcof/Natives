@@ -50,6 +50,18 @@ const DISPATCH_SOURCES: &[(&str, &str)] = &[
         "agent-core::engine",
     ),
     (
+        "../crates/agent-core/src/engine/engine_run.rs",
+        "agent-core::engine",
+    ),
+    (
+        "../crates/agent-core/src/engine/engine_tools.rs",
+        "agent-core::engine",
+    ),
+    (
+        "../crates/agent-core/src/engine/engine_compaction.rs",
+        "agent-core::engine",
+    ),
+    (
         "../crates/agent-core/src/hook_handlers.rs",
         "agent-core::engine",
     ),
@@ -65,11 +77,20 @@ const DISPATCH_SOURCES: &[(&str, &str)] = &[
         "src/tools/gated.rs",
         "natives-agent-daemon::production_tools",
     ),
+    (
+        "src/tools/gated/gated_execute.rs",
+        "natives-agent-daemon::production_tools",
+    ),
 ];
 
-/// Sources that may legitimately dispatch a Safe Point: the engine loop
-/// (`apply_safe_point` calls) and the daemon permission path
-/// (`on_safe_point_checked` after a permission is resolved).
+/// Sources that may legitimately dispatch a Safe Point: the engine tool
+/// loop (`apply_safe_point` calls in `engine_tools.rs`) and the daemon
+/// permission path (`on_safe_point_checked` after a permission is resolved).
+///
+/// `engine_core.rs` is deliberately NOT a source: it declares `apply_safe_point`
+/// but the real call sites live in `engine_tools.rs` (BeforeTool / AfterTool /
+/// ProviderBatchBoundary). Listing the declaration file would let a deleted
+/// call site hide behind the signature.
 ///
 /// `prompt_queue_store.rs` is deliberately NOT a source: its
 /// `DurableSafePointReceiver` only *translates* the engine's `InputSafePoint`
@@ -77,7 +98,7 @@ const DISPATCH_SOURCES: &[(&str, &str)] = &[
 /// an engine call, not an independent dispatch — counting it would let a
 /// deleted engine call site hide behind the bridge.
 const SAFE_POINT_DISPATCH_SOURCES: &[&str] = &[
-    "../crates/agent-core/src/engine/engine_core.rs",
+    "../crates/agent-core/src/engine/engine_tools.rs",
     "src/tools/permission.rs",
 ];
 
@@ -448,5 +469,74 @@ fn the_safe_point_scan_detects_real_calls_and_ignores_match_arms() {
     assert!(
         !safe_point_dispatch_in(&match_source, "AfterTool"),
         "a match arm naming the variant is not a dispatch"
+    );
+}
+
+/// NE-P0-07 regression guard: `engine_core.rs` declares `apply_safe_point`
+/// but the real call sites live in `engine_tools.rs`. Listing the declaration
+/// file as a safe-point dispatch source would let a deleted call site hide
+/// behind the signature, so this test makes that regression red.
+#[test]
+fn engine_core_rs_is_not_a_safe_point_dispatch_source() {
+    // The declaration file must NOT appear in the source list.
+    for path in SAFE_POINT_DISPATCH_SOURCES {
+        assert!(
+            !path.ends_with("engine_core.rs"),
+            "engine_core.rs must not be a SAFE_POINT_DISPATCH_SOURCES entry:              it declares apply_safe_point but the real call sites are in              engine_tools.rs. Listing the declaration lets a deleted call              hide behind the signature."
+        );
+    }
+    // engine_tools.rs must appear, because BeforeTool / AfterTool /
+    // ProviderBatchBoundary are dispatched there.
+    let has_tools = SAFE_POINT_DISPATCH_SOURCES
+        .iter()
+        .any(|path| path.ends_with("engine_tools.rs"));
+    assert!(
+        has_tools,
+        "engine_tools.rs must be a SAFE_POINT_DISPATCH_SOURCES entry:          BeforeTool / AfterTool / ProviderBatchBoundary are dispatched there."
+    );
+}
+
+/// NE-P0-07: a missing source must fail, never skip. The topology must be
+/// verified against the real sources; if one is absent the test says so loudly
+/// instead of silently passing on the remaining sources. This duplicates the
+/// guard `require_sources` gives the other tests, but it makes the missing-
+/// source contract explicit for the safe-point scan specifically.
+#[test]
+fn a_missing_safe_point_dispatch_source_fails_not_skips() {
+    let missing = SAFE_POINT_DISPATCH_SOURCES
+        .iter()
+        .filter(|path| !Path::new(path).exists())
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "safe-point dispatch sources are missing: {missing:?}.          A missing source must fail, never skip — otherwise an advertised          SafePoint could quietly go stale."
+    );
+}
+
+/// NE-P0-07: the production sources must not contain a string literal that
+/// spells a SafePoint variant — `clean_source` strips string literals, so
+/// prose like `"SafePoint::BeforeTool"` in a debug message cannot impersonate a
+/// real dispatch. This cross-checks the stripping against the actual production
+/// files (not a fixture), so a regression in `strip_string_literals` that let
+/// prose leak through would turn this red.
+#[test]
+fn production_sources_strip_string_literals_so_prose_cannot_impersonate_dispatch() {
+    require_sources();
+
+    let prose = r#"let note = "SafePoint::BeforeTool";
+        let note2 = "SafePoint::AfterTool";
+        // SafePoint::ProviderBatchBoundary"#;
+    let cleaned = clean_source(prose);
+    assert!(
+        !safe_point_dispatch_in(&cleaned, "BeforeTool"),
+        "a string literal spelling SafePoint::BeforeTool must not count as a dispatch"
+    );
+    assert!(
+        !safe_point_dispatch_in(&cleaned, "AfterTool"),
+        "a string literal spelling SafePoint::AfterTool must not count as a dispatch"
+    );
+    assert!(
+        !names_variant(&cleaned, "SafePoint::ProviderBatchBoundary"),
+        "a comment spelling SafePoint::ProviderBatchBoundary must not count as a token"
     );
 }

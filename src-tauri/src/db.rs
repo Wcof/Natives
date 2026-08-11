@@ -63,22 +63,6 @@ pub fn ensure_host_owned_tables(conn: &Connection) -> Result<()> {
     crate::daemon::data::ensure_provider_mirror_schema(conn)
 }
 
-/// Initialize the SQLite database with WAL mode, foreign keys, and all tables.
-/// Kept for standalone DB initialization (e.g., tests, CLI tools).
-#[allow(dead_code)]
-pub fn init_db(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
-    conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;",
-    )?;
-    create_tables(&conn)?;
-    apply_migrations(&conn)?;
-    ensure_host_owned_tables(&conn)?;
-    Ok(conn)
-}
-
 /// Initialize a connection pool (size 4, idle timeout 30s).
 /// Each connection gets WAL mode, foreign keys, and busy_timeout set.
 pub fn init_db_pool(path: &Path) -> Result<DbPool> {

@@ -270,9 +270,15 @@ impl RunManager {
                         &harness_plan.builtin_prompt_replacements,
                         capability_snapshot.extra_system_prompt.as_deref(),
                     );
+                    // §19.5: the Prepared Session's prompt digest MUST equal the
+                    // Snapshot's `effective_prompt_hash` and the Provider Prompt
+                    // hash — all three are the same SHA-256 of the captured raw
+                    // text (`compiled.effective_prompt_hash`). Storing the raw text
+                    // here broke the integrity equation and leaked prompt bytes
+                    // into the cache payload.
                     let session = crate::prepared_session::PreparedAgentSession {
                         effective_prompt: compiled.clone(),
-                        prompt_digest: compiled.effective_full_text.clone(),
+                        prompt_digest: compiled.effective_prompt_hash.clone(),
                         frozen_tool_schemas: frozen_tool_schemas.clone(),
                         skill_catalog_metadata: Vec::new(),
                     };

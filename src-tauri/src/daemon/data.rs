@@ -144,91 +144,51 @@ impl LegacyMigrationService {
     /// Migrate provider keys from old legacy tables (user_providers / provider_api_keys).
     /// Only runs if the legacy tables exist. Idempotent — INSERT OR IGNORE.
     fn migrate_legacy_provider_keys(&self) -> Result<()> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let is_memory = self.db_path == ":memory:";
-        let mut attached = false;
-
-        if !is_memory {
+        // W3 P1-02: the legacy provider mirror migration runs entirely on the
+        // Host-owned natives.db (source user_providers/provider_api_keys and
+        // target assistant_provider_configs/keys/model_cache both live there).
+        // This removes the cross-db ATTACH of natives.db into the assistant.db
+        // connection; the LegacyMigrationService's assistant.db handle is only
+        // used for the assistant_* session conversion below.
+        let natives_path = {
             let path = std::path::Path::new(&self.db_path);
-            if let Some(parent) = path.parent() {
-                let natives_db_path = parent.join("natives.db");
-                if natives_db_path.exists() {
-                    let attach_sql = format!(
-                        "ATTACH DATABASE '{}' AS natives_db",
-                        natives_db_path.to_string_lossy().replace('\'', "''")
-                    );
-                    conn.execute(&attach_sql, []).map_err(|e| {
-                        crate::Error::Internal(format!("Failed to attach natives.db: {e}"))
-                    })?;
-                    attached = true;
-                }
+            if self.db_path == ":memory:" {
+                None
+            } else {
+                path.parent().map(|parent| parent.join("natives.db"))
             }
-        }
-
-        // Check if legacy tables exist
-        let has_legacy_providers: bool = if attached {
-            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='user_providers'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false)
-        } else {
-            conn.prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='user_providers'",
-            )
-            .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false)
         };
+        let Some(natives_path) = natives_path else {
+            return Ok(());
+        };
+        if !natives_path.exists() {
+            return Ok(());
+        }
+        let mut natives_conn = rusqlite::Connection::open(&natives_path).map_err(|e| {
+            crate::Error::Internal(format!("open natives.db for provider migration: {e}"))
+        })?;
 
-        let has_legacy_keys: bool = if attached {
-            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='provider_api_keys'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false)
-        } else {
-            conn.prepare(
+        let has_legacy_providers: bool = natives_conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='user_providers'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        let has_legacy_keys: bool = natives_conn
+            .prepare(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_api_keys'",
             )
             .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false)
-        };
-
+            .unwrap_or(false);
         if !has_legacy_providers && !has_legacy_keys {
-            if attached {
-                conn.execute("DETACH DATABASE natives_db", []).ok();
-            }
             return Ok(());
         }
 
-        let tx = conn.transaction().map_err(|e| {
+        let tx = natives_conn.transaction().map_err(|e| {
             crate::Error::Internal(format!("Legacy migration transaction failed: {e}"))
         })?;
 
-        // Migrate providers from user_providers
+        // Migrate providers from user_providers (same DB: no ATTACH needed).
         if has_legacy_providers {
-            let provider_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_provider_configs
-                 (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
-                 SELECT
-                     up.id,
-                     CASE WHEN up.preset_name = 'openai' THEN 'openai'
-                          WHEN up.preset_name = 'anthropic' THEN 'anthropic'
-                          WHEN up.preset_name = 'gemini' THEN 'gemini'
-                          WHEN up.preset_name = 'deepseek' THEN 'deepseek'
-                          WHEN up.preset_name = 'ollama' THEN 'ollama'
-                          ELSE 'openai_compatible' END,
-                     up.name,
-                     up.base_url,
-                     up.website_url,
-                     up.default_model,
-                     'unknown',
-                     up.created_at,
-                     up.updated_at
-                 FROM natives_db.user_providers up
-                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)"
-            } else {
-                "INSERT OR IGNORE INTO assistant_provider_configs
+            let provider_sql = "INSERT OR IGNORE INTO assistant_provider_configs
                  (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
                  SELECT
                      up.id,
@@ -246,35 +206,15 @@ impl LegacyMigrationService {
                      up.created_at,
                      up.updated_at
                  FROM user_providers up
-                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)"
-            };
+                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)";
             tx.execute_batch(provider_sql).map_err(|e| {
                 crate::Error::Internal(format!("Legacy provider migration failed: {e}"))
             })?;
         }
 
-        // Migrate keys from provider_api_keys
+        // Migrate keys from provider_api_keys (same DB).
         if has_legacy_keys {
-            let keys_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_provider_keys
-                 (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
-                 SELECT
-                     pak.id,
-                     pak.provider_id,
-                     pak.api_key_encrypted,
-                     CASE WHEN LENGTH(pak.api_key_encrypted) > 8
-                          THEN SUBSTR(pak.api_key_encrypted, 1, 4) || '...' || SUBSTR(pak.api_key_encrypted, -4)
-                          ELSE '***' END,
-                     pak.label,
-                     pak.is_active,
-                     pak.is_primary,
-                     pak.test_status,
-                     pak.created_at,
-                     pak.updated_at
-                 FROM natives_db.provider_api_keys pak
-                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)"
-            } else {
-                "INSERT OR IGNORE INTO assistant_provider_keys
+            let keys_sql = "INSERT OR IGNORE INTO assistant_provider_keys
                  (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
                  SELECT
                      pak.id,
@@ -290,31 +230,14 @@ impl LegacyMigrationService {
                      pak.created_at,
                      pak.updated_at
                  FROM provider_api_keys pak
-                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)"
-            };
+                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)";
             tx.execute_batch(keys_sql)
                 .map_err(|e| crate::Error::Internal(format!("Legacy key migration failed: {e}")))?;
         }
 
-        // Auto-seed assistant_model_cache with default models from user_providers
+        // Auto-seed assistant_model_cache with default models from user_providers.
         if has_legacy_providers {
-            let model_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_model_cache
-                 (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
-                 SELECT
-                     up.id || ':' || up.default_model,
-                     up.id,
-                     up.default_model,
-                     up.default_model,
-                     '{}',
-                     0,
-                     0,
-                     'api_discovery',
-                     up.created_at
-                 FROM natives_db.user_providers up
-                 WHERE up.default_model IS NOT NULL AND up.default_model != ''"
-            } else {
-                "INSERT OR IGNORE INTO assistant_model_cache
+            let model_sql = "INSERT OR IGNORE INTO assistant_model_cache
                  (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
                  SELECT
                      up.id || ':' || up.default_model,
@@ -327,8 +250,7 @@ impl LegacyMigrationService {
                      'api_discovery',
                      up.created_at
                  FROM user_providers up
-                 WHERE up.default_model IS NOT NULL AND up.default_model != ''"
-            };
+                 WHERE up.default_model IS NOT NULL AND up.default_model != ''";
             tx.execute_batch(model_sql).map_err(|e| {
                 crate::Error::Internal(format!("Default model cache seeding failed: {e}"))
             })?;
@@ -336,10 +258,6 @@ impl LegacyMigrationService {
 
         tx.commit()
             .map_err(|e| crate::Error::Internal(format!("Legacy migration commit failed: {e}")))?;
-
-        if attached {
-            let _ = conn.execute("DETACH DATABASE natives_db", []);
-        }
 
         Ok(())
     }
@@ -355,33 +273,36 @@ impl LegacyMigrationService {
             .lock()
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
-        let is_memory = self.db_path == ":memory:";
-        let mut attached = false;
-
-        if !is_memory {
+        // W3 P1-02: read legacy assistant_* rows from the Host-owned natives.db
+        // through an independent connection instead of ATTACHing it into the
+        // assistant.db handle (no cross-db transaction, no shared schema lock).
+        let natives_conn = {
             let path = std::path::Path::new(&self.db_path);
-            if let Some(parent) = path.parent() {
-                let natives_db_path = parent.join("natives.db");
-                if natives_db_path.exists() {
-                    let attach_sql = format!(
-                        "ATTACH DATABASE '{}' AS natives_db",
-                        natives_db_path.to_string_lossy().replace('\'', "''")
-                    );
-                    conn.execute(&attach_sql, []).map_err(|e| {
-                        crate::Error::Internal(format!(
-                            "Failed to attach natives.db for messages: {e}"
-                        ))
-                    })?;
-                    attached = true;
-                }
+            if self.db_path == ":memory:" {
+                None
+            } else {
+                path.parent()
+                    .map(|parent| parent.join("natives.db"))
+                    .filter(|natives_path| natives_path.exists())
+                    .map(|natives_path| {
+                        rusqlite::Connection::open(&natives_path).map_err(|e| {
+                            crate::Error::Internal(format!(
+                                "open natives.db for legacy messages: {e}"
+                            ))
+                        })
+                    })
+                    .transpose()?
             }
-        }
+        };
+        let natives_conn = natives_conn.as_ref();
 
         // Check if legacy assistant_sessions exists in the right DB
-        let has_sessions: bool = if attached {
-            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='assistant_sessions'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false)
+        let has_sessions: bool = if let Some(nc) = natives_conn {
+            nc.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_sessions'",
+            )
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false)
         } else {
             conn.prepare(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_sessions'",
@@ -417,37 +338,85 @@ impl LegacyMigrationService {
                 ))
             })?;
 
-            let insert_convs_sql = if attached {
-                "INSERT OR IGNORE INTO assistant_conversations
-                    (id, project_id, title, provider_id, model_id, created_at, updated_at)
-                 SELECT
-                     id, project_id,
-                     COALESCE(title, ''),
-                     COALESCE(provider_id, 'unknown'),
-                     COALESCE(model_id, 'unknown'),
-                     created_at, updated_at
-                 FROM natives_db.assistant_sessions"
+            let insert_convs_sql = if let Some(nc) = natives_conn {
+                // Read legacy sessions from the independent natives.db handle,
+                // then insert into assistant.db (no cross-db ATTACH).
+                let mut stmt = nc
+                    .prepare(
+                        "SELECT id, project_id, title, provider_id, model_id, created_at, updated_at
+                         FROM assistant_sessions",
+                    )
+                    .map_err(|e| {
+                        crate::Error::Internal(format!("legacy sessions select: {e}"))
+                    })?;
+                let rows: Vec<(
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    String,
+                    String,
+                )> = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, String>(6)?,
+                        ))
+                    })
+                    .map_err(|e| crate::Error::Internal(format!("legacy sessions rows: {e}")))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                for (id, project_id, title, provider_id, model_id, created_at, updated_at) in rows {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO assistant_conversations
+                            (id, project_id, title, provider_id, model_id, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            id,
+                            project_id,
+                            title.unwrap_or_default(),
+                            provider_id.unwrap_or_else(|| "unknown".into()),
+                            model_id.unwrap_or_else(|| "unknown".into()),
+                            created_at,
+                            updated_at
+                        ],
+                    )
+                    .map_err(|e| crate::Error::Internal(format!("legacy sessions insert: {e}")))?;
+                }
+                None
             } else {
-                "INSERT OR IGNORE INTO assistant_conversations
-                    (id, project_id, title, provider_id, model_id, created_at, updated_at)
-                 SELECT
-                     id, project_id,
-                     COALESCE(title, ''),
-                     COALESCE(provider_id, 'unknown'),
-                     COALESCE(model_id, 'unknown'),
-                     created_at, updated_at
-                 FROM assistant_sessions"
+                Some(
+                    "INSERT OR IGNORE INTO assistant_conversations
+                        (id, project_id, title, provider_id, model_id, created_at, updated_at)
+                     SELECT
+                         id, project_id,
+                         COALESCE(title, ''),
+                         COALESCE(provider_id, 'unknown'),
+                         COALESCE(model_id, 'unknown'),
+                         created_at, updated_at
+                     FROM assistant_sessions",
+                )
             };
-            conn.execute_batch(insert_convs_sql).map_err(|e| {
-                crate::Error::Internal(format!("Legacy sessions migration failed: {e}"))
-            })?;
+            if let Some(sql) = insert_convs_sql {
+                conn.execute_batch(sql).map_err(|e| {
+                    crate::Error::Internal(format!("Legacy sessions migration failed: {e}"))
+                })?;
+            }
         }
 
         // Check if assistant_messages has session_id column (old structure) in the right DB
-        let has_legacy_messages_table: bool = if attached {
-            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='assistant_messages'")
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false)
+        let has_legacy_messages_table: bool = if let Some(nc) = natives_conn {
+            nc.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_messages'",
+            )
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false)
         } else {
             conn.prepare(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_messages'",
@@ -457,12 +426,12 @@ impl LegacyMigrationService {
         };
 
         let has_session_id: bool = if has_legacy_messages_table {
-            let pragma_sql = if attached {
-                "PRAGMA natives_db.table_info(assistant_messages)"
+            let pragma_sql = if let Some(nc) = natives_conn {
+                nc.prepare("PRAGMA table_info(assistant_messages)")
             } else {
-                "PRAGMA table_info(assistant_messages)"
+                conn.prepare("PRAGMA table_info(assistant_messages)")
             };
-            conn.prepare(pragma_sql)
+            pragma_sql
                 .and_then(|mut stmt| {
                     let cols: Vec<String> = stmt
                         .query_map([], |row| row.get::<_, String>(1))
@@ -477,9 +446,6 @@ impl LegacyMigrationService {
         };
 
         if !has_session_id {
-            if attached {
-                let _ = conn.execute("DETACH DATABASE natives_db", []);
-            }
             return Ok(());
         }
 
@@ -496,47 +462,78 @@ impl LegacyMigrationService {
             .and_then(|mut stmt| stmt.exists([]))
             .unwrap_or(false);
 
-        if attached {
-            if legacy_exists {
-                // Preserved copy already present (idempotent re-entry): backfill
-                // only when it is empty so we never duplicate rows.
+        if let Some(nc) = natives_conn {
+            // Legacy rows live in the independent natives.db handle. Backfill a
+            // preserved copy into assistant.db only when empty (idempotent).
+            let mut stmt = nc
+                .prepare(
+                    "SELECT id, session_id, parent_message_id, role, content, status, created_at
+                     FROM assistant_messages",
+                )
+                .map_err(|e| crate::Error::Internal(format!("legacy messages select: {e}")))?;
+            let rows: Vec<(
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+            )> = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                })
+                .map_err(|e| crate::Error::Internal(format!("legacy messages rows: {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS legacy_assistant_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    parent_message_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    status TEXT,
+                    created_at TEXT
+                );",
+            )
+            .map_err(|e| {
+                crate::Error::Internal(format!("legacy_assistant_messages create: {e}"))
+            })?;
+            for (id, session_id, parent_message_id, role, content, status, created_at) in rows {
                 let copied: i64 = conn
                     .query_row(
-                        "SELECT COUNT(*) FROM legacy_assistant_messages",
-                        [],
+                        "SELECT COUNT(*) FROM legacy_assistant_messages WHERE id = ?1",
+                        [&id],
                         |row| row.get(0),
                     )
                     .unwrap_or(0);
                 if copied == 0 {
-                    conn.execute_batch(
-                        "INSERT INTO legacy_assistant_messages
-                         SELECT id, session_id, parent_message_id, role, content, status, created_at
-                         FROM natives_db.assistant_messages;",
+                    conn.execute(
+                        "INSERT OR IGNORE INTO legacy_assistant_messages
+                            (id, session_id, parent_message_id, role, content, status, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            id,
+                            session_id,
+                            parent_message_id,
+                            role,
+                            content,
+                            status,
+                            created_at
+                        ],
                     )
-                    .map_err(|e| {
-                        crate::Error::Internal(format!(
-                            "Failed to backfill legacy assistant_messages: {e}"
-                        ))
-                    })?;
+                    .map_err(|e| crate::Error::Internal(format!("legacy messages insert: {e}")))?;
                 }
-            } else {
-                conn.execute_batch(
-                    "CREATE TABLE legacy_assistant_messages (
-                        id TEXT PRIMARY KEY,
-                        session_id TEXT,
-                        parent_message_id TEXT,
-                        role TEXT,
-                        content TEXT,
-                        status TEXT,
-                        created_at TEXT
-                    );
-                    INSERT INTO legacy_assistant_messages
-                    SELECT id, session_id, parent_message_id, role, content, status, created_at
-                    FROM natives_db.assistant_messages;",
-                )
-                .map_err(|e| {
-                    crate::Error::Internal(format!("Failed to copy legacy assistant_messages: {e}"))
-                })?;
             }
         } else if legacy_exists {
             // The local session-based table still occupies `assistant_messages`
@@ -634,10 +631,6 @@ impl LegacyMigrationService {
              JOIN assistant_messages am ON am.id = m.id
              WHERE m.content IS NOT NULL AND m.content != '';",
         );
-
-        if attached {
-            let _ = conn.execute("DETACH DATABASE natives_db", []);
-        }
 
         Ok(())
     }

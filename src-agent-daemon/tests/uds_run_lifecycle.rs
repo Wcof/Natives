@@ -69,6 +69,16 @@ async fn uds_create_start_replay_cancel_lifecycle() {
     std::env::set_var("NATIVES_ALLOW_FIXTURE_FALLBACK", "1");
     // Multi-session bootstrap (production default) so reconnect works.
     std::env::remove_var("NATIVES_BOOTSTRAP_SINGLE_USE");
+    // Isolate from any real ~/.natives DB: the in-process RpcServer opens the
+    // daemon store through open_daemon_store, which honors NATIVES_DB_PATH /
+    // NATIVES_ASSISTANT_DB_PATH. Without isolation a developer's real
+    // assistant.db (with an older migration-11 checksum) would fail-closed on
+    // startup and storage_ready would report Unavailable.
+    let iso_root = std::env::temp_dir().join(format!("natives-uds-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&iso_root);
+    std::env::set_var("NATIVES_DB_PATH", iso_root.join("natives.db"));
+    std::env::set_var("NATIVES_ASSISTANT_DB_PATH", iso_root.join("assistant.db"));
+    std::env::set_var("NATIVES_RUNTIME_DIR", &iso_root);
 
     let sock = temp_socket();
     let _ = std::fs::remove_file(&sock);
@@ -110,16 +120,21 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         .call("daemon.getStatus", json!({}))
         .await
         .expect("daemon.getStatus");
+    // W3 P0-03: DaemonStatusV2 deliberately carries NO db path. Readiness is
+    // decomposed into protocol_version + storage/broker readiness + health;
+    // a healthy sidecar must never be judged by a legacy db-path field.
     assert_eq!(
-        daemon_status
-            .get("natives_db_path")
-            .and_then(|v| v.as_str()),
-        Some(
-            natives_agent_daemon::default_natives_db_path()
-                .to_string_lossy()
-                .as_ref()
-        )
+        daemon_status.get("protocol_version").and_then(|v| v.as_str()),
+        Some(natives_agent_daemon::client_protocol_version())
     );
+    assert_eq!(
+        daemon_status.get("storage_ready").and_then(|v| v.as_str()),
+        Some("ready")
+    );
+    assert!(matches!(
+        daemon_status.get("health").and_then(|v| v.as_str()),
+        Some("ready") | Some("degraded")
+    ));
 
     // create
     let created = client

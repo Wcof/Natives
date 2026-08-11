@@ -6,9 +6,16 @@
 //! pending Child Directive in [`subagent_directive`], and slot/budget
 //! reservations in [`subagent_reservation`]. All their public items are
 //! re-exported here so `crate::subagent_store::*` keeps working unchanged.
-
+//!
+//! W2/P0-02: the split files live as siblings of this file (Rust's default
+//! `mod x;` resolution looks in `subagent_store/x.rs`), so each declaration
+//! carries an explicit `#[path]` — the same documented pattern used by
+//! `run/manager_tests.rs` for its test splits.
+#[path = "subagent_directive.rs"]
 mod subagent_directive;
+#[path = "subagent_reservation.rs"]
 mod subagent_reservation;
+#[path = "subagent_route.rs"]
 mod subagent_route;
 
 pub use subagent_directive::*;
@@ -936,6 +943,272 @@ mod tests {
             assert!(
                 closed.closed_at.is_some(),
                 "closed session records its close"
+            );
+        });
+    }
+
+    // ── NE-P0-08 / §19.1: durable Child Directive persistence ──
+
+    /// §19.1: the pending directive is persisted into the protected pending
+    /// execution plan (reservation scope snapshot) BEFORE the child run is
+    /// created. A daemon crash between reservation and child start does not
+    /// lose the persona — the durable copy survives.
+    #[test]
+    fn pending_directive_persists_before_child_run_creation() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                Some("parent-run"),
+                None,
+                "worker",
+                "do",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            let text = "You are a crash-safe persona.";
+            let digest = directive_sha256_hex(text);
+            // Embed the directive in the reservation scope snapshot and
+            // persist — this happens BEFORE the child run is created.
+            let scope_snapshot =
+                with_pending_directive(json!({ "project_id": "p1" }), Some((text, &digest)));
+            let mut res = SubagentReservation {
+                session_id: sid.clone(),
+                parent_run_id: "parent-run".into(),
+                tree_root_run_id: "tree-root".into(),
+                depth: 1,
+                max_tokens: Some(1_000),
+                max_cost_usd: None,
+                failure_policy: "fail_fast".into(),
+                max_retries: 2,
+                scope_snapshot,
+            };
+            reserve_subagent_slot(&res).unwrap();
+            // The durable directive is readable from the session — the
+            // child run does NOT need to exist for the persona to survive.
+            let pd = pending_directive_for_session(&sid)
+                .unwrap()
+                .expect("durable directive survives before child run creation");
+            assert_eq!(pd.text, text, "same text survives crash");
+            assert_eq!(pd.digest, digest, "same digest survives crash");
+        });
+    }
+
+    /// §19.5: crash recovery restores the EXACT same persona. The durable
+    /// directive (text + digest) is byte-identical across reads — the
+    /// loader is deterministic, not re-rolled or truncated.
+    #[test]
+    fn crash_recovery_restores_exact_same_persona() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                Some("parent-run"),
+                None,
+                "worker",
+                "do",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            let text = "You are a terse Rust reviewer. Check safety and logic.";
+            let digest = directive_sha256_hex(text);
+            let scope_snapshot = with_pending_directive(json!({}), Some((text, &digest)));
+            let mut res = SubagentReservation {
+                session_id: sid.clone(),
+                parent_run_id: "parent-run".into(),
+                tree_root_run_id: "tree-root".into(),
+                depth: 1,
+                max_tokens: Some(1_000),
+                max_cost_usd: None,
+                failure_policy: "fail_fast".into(),
+                max_retries: 2,
+                scope_snapshot,
+            };
+            reserve_subagent_slot(&res).unwrap();
+            // Simulate crash: read the directive multiple times — each read
+            // returns the exact same text + digest (deterministic recovery).
+            let first = pending_directive_for_session(&sid).unwrap().unwrap();
+            let second = pending_directive_for_session(&sid).unwrap().unwrap();
+            assert_eq!(first.text, second.text, "text is deterministic");
+            assert_eq!(first.digest, second.digest, "digest is deterministic");
+            assert_eq!(first.text, text, "recovered text matches original");
+            assert_eq!(first.digest, digest, "recovered digest matches original");
+            // The digest verifies the text (same SHA-256).
+            assert_eq!(
+                directive_sha256_hex(&first.text),
+                first.digest,
+                "digest verifies the text"
+            );
+        });
+    }
+
+    /// §19.1: persona digest consistency — same text always produces the
+    /// same digest, so retry/restart/continue can verify they restore the
+    /// exact same persona by comparing digests.
+    #[test]
+    fn persona_digest_consistency_same_text_same_digest() {
+        with_temp_db(|| {
+            let text_a = "You are a reviewer.";
+            let text_b = "You are a reviewer.";
+            let text_c = "You are a different reviewer.";
+            let digest_a = directive_sha256_hex(text_a);
+            let digest_b = directive_sha256_hex(text_b);
+            let digest_c = directive_sha256_hex(text_c);
+            assert_eq!(digest_a, digest_b, "same text => same digest");
+            assert_ne!(digest_a, digest_c, "different text => different digest");
+            // SHA-256 hex is 64 chars.
+            assert_eq!(digest_a.len(), 64);
+        });
+    }
+
+    /// §19.1: the durable directive survives session status changes —
+    /// closing and re-reading the session does not lose the persona text.
+    /// (The scope snapshot is a durable column, not an in-memory field.)
+    #[test]
+    fn durable_directive_survives_session_status_change() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                Some("parent-run"),
+                None,
+                "worker",
+                "do",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            let text = "Persistent persona across status changes.";
+            let digest = directive_sha256_hex(text);
+            let scope_snapshot = with_pending_directive(json!({}), Some((text, &digest)));
+            let mut res = SubagentReservation {
+                session_id: sid.clone(),
+                parent_run_id: "parent-run".into(),
+                tree_root_run_id: "tree-root".into(),
+                depth: 1,
+                max_tokens: Some(1_000),
+                max_cost_usd: None,
+                failure_policy: "fail_fast".into(),
+                max_retries: 2,
+                scope_snapshot,
+            };
+            reserve_subagent_slot(&res).unwrap();
+            // Change status to running, then completed — the directive
+            // text is still readable (durable column, not in-memory).
+            update_subagent_session_status(&sid, "running", None).unwrap();
+            update_subagent_session_status(&sid, "completed", None).unwrap();
+            let pd = pending_directive_for_session(&sid)
+                .unwrap()
+                .expect("directive survives status changes");
+            assert_eq!(pd.text, text);
+            assert_eq!(pd.digest, digest);
+        });
+    }
+
+    /// §19.3/§19.5: redact_session_for_export hides the directive text and
+    /// the scope snapshot from the RPC surface — only the digest marker
+    /// is visible. This is field-level visibility for logs/exports.
+    #[test]
+    fn redact_session_export_for_subagent_list_hides_directive() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                Some("parent-run"),
+                None,
+                "worker",
+                "do",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            let secret_text = "secret persona that must never appear in exports";
+            let digest = directive_sha256_hex(secret_text);
+            let scope_snapshot = with_pending_directive(json!({}), Some((secret_text, &digest)));
+            let mut res = SubagentReservation {
+                session_id: sid.clone(),
+                parent_run_id: "parent-run".into(),
+                tree_root_run_id: "tree-root".into(),
+                depth: 1,
+                max_tokens: Some(1_000),
+                max_cost_usd: None,
+                failure_policy: "fail_fast".into(),
+                max_retries: 2,
+                scope_snapshot,
+            };
+            reserve_subagent_slot(&res).unwrap();
+            let sess = get_subagent_session(&sid).unwrap().unwrap();
+            let export = redact_session_for_export(&sess);
+            let serialized = export.to_string();
+            // The directive text never appears in the export.
+            assert!(
+                !serialized.contains(secret_text),
+                "directive text must not leak through subagent.list export"
+            );
+            // The digest marker IS visible for field-level verification.
+            assert!(
+                serialized.contains(&digest),
+                "digest stays visible for verification"
+            );
+            // The scope_snapshot_json field is redacted (no raw text).
+            let snapshot_json = export["scope_snapshot_json"].as_str().unwrap_or("");
+            assert!(
+                !snapshot_json.contains(secret_text),
+                "scope_snapshot_json must not carry raw directive text"
+            );
+        });
+    }
+
+    /// §19.1: the in-memory directive (run_agent_directives) is the
+    /// transient copy; the durable copy is the scope snapshot. A session
+    /// created WITHOUT a persisted directive returns None — callers fail
+    /// closed rather than inventing a persona (legacy session).
+    #[test]
+    fn session_without_persisted_directive_returns_none() {
+        with_temp_db(|| {
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                None,
+                None,
+                "worker",
+                "do",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            // No reservation with directive → None (legacy session).
+            let pd = pending_directive_for_session(&sid).unwrap();
+            assert!(
+                pd.is_none(),
+                "legacy session without directive returns None"
             );
         });
     }

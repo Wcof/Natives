@@ -72,28 +72,6 @@ impl PermissionGatedTools {
     }
 }
 
-#[async_trait::async_trait]
-impl EngineToolRuntime for PermissionGatedTools {
-    async fn mark_tool_call_uncertain(
-        &self,
-        call_id: &str,
-        name: &str,
-        turn_id: Option<&str>,
-        input: &Value,
-    ) -> Result<(), String> {
-        crate::side_effect_ledger::record_tool_effect_state(
-            &self.parent_run_id,
-            call_id,
-            name,
-            crate::side_effect_ledger::category_for_tool(name),
-            "uncertain",
-            false,
-            turn_id,
-            input,
-        )
-    }
-}
-
 /// A4 — ReadOnly Fast Path regression tests.
 
 #[cfg(test)]
@@ -263,5 +241,81 @@ mod readonly_fast_path_tests {
     #[test]
     fn readonly_tool_does_not_checkpoint() {
         readonly_coding_loop_does_not_create_ledger_or_checkpoint();
+    }
+
+    /// NE-P0-05 §19.5: the gated tool runtime shares the Run's frozen Hook
+    /// Dispatcher with the permission gate and the notification hook. Two
+    /// resolves for the same run return the same dispatcher (idempotent freeze),
+    /// and the plan hash is stable — a mid-Run `hooks.json` edit cannot replace
+    /// it. This is the consistency guarantee the notification and permission
+    /// tool paths rely on.
+    #[tokio::test]
+    async fn frozen_dispatcher_is_shared_and_stable_across_tool_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap();
+        // Seed a hooks.json so the lazy compile fallback has a real plan.
+        // The loopback URL is rejected by URL validation before any socket is
+        // opened, so it is a fast hermetic probe — the definition is created
+        // but the handler is inert. We never dispatch here, only resolve.
+        const PROBE_URL: &str = "http://127.0.0.1:1/hook";
+        std::fs::write(
+            root.join(".natives").join("hooks.json"),
+            format!(r#"{{"hooks":{{"Notification":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}}}"#),
+        )
+        .expect("write hooks.json");
+        let run_id = format!("ne-p0-05-stable-{}", uuid::Uuid::new_v4());
+        let tools = tools_for(&run_id, "full_access", &root);
+        let project_root = Some(root.as_path());
+        let first = crate::production_hooks::resolve_frozen_dispatcher(
+            &run_id,
+            tools.events.clone(),
+            project_root,
+        );
+        let plan_hash = first.plan_hash().to_string();
+        // Second resolve for the same run must return the same frozen dispatcher.
+        let second = crate::production_hooks::resolve_frozen_dispatcher(
+            &run_id,
+            tools.events.clone(),
+            project_root,
+        );
+        assert_eq!(
+            second.plan_hash(),
+            plan_hash,
+            "two resolves for the same run must agree on the plan hash"
+        );
+        // Mid-run edit: add a second hook group. The frozen plan must not change.
+        std::fs::write(
+            root.join(".natives").join("hooks.json"),
+            format!(
+                r#"{{"hooks":{{"Notification":[{{"hooks":[
+                    {{"type":"http","url":"{PROBE_URL}"}},
+                    {{"type":"http","url":"{PROBE_URL}"}}
+                ]}}]}}}}"#
+            ),
+        )
+        .expect("overwrite hooks.json");
+        let third = crate::production_hooks::resolve_frozen_dispatcher(
+            &run_id,
+            tools.events.clone(),
+            project_root,
+        );
+        assert_eq!(
+            third.plan_hash(),
+            plan_hash,
+            "a mid-Run hooks.json edit must not change the frozen plan hash"
+        );
+        // A *new* run started after the edit gets a different plan hash.
+        let new_run_id = format!("ne-p0-05-new-{}", uuid::Uuid::new_v4());
+        let new_tools = tools_for(&new_run_id, "full_access", &root);
+        let new_plan = crate::production_hooks::resolve_frozen_dispatcher(
+            &new_run_id,
+            new_tools.events.clone(),
+            project_root,
+        );
+        assert_ne!(
+            new_plan.plan_hash(),
+            plan_hash,
+            "a new run after the edit must get a different plan hash"
+        );
     }
 }

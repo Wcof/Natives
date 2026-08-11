@@ -154,6 +154,7 @@ pub(crate) async fn dispatch_conversation(
         | names::CONVERSATION_FORK
         | names::CONVERSATION_GET_MESSAGES
         | names::CONVERSATION_GET_MESSAGES_PAGE
+        | names::CONVERSATION_SEARCH_MESSAGES
         | names::CONVERSATION_APPEND_MESSAGE
         | names::CONVERSATION_RENAME
         | names::CONVERSATION_UPDATE_MODEL

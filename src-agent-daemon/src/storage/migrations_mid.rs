@@ -4,7 +4,7 @@
 //! source of truth; this file only holds the versioned SQL strings for its
 //! domain. Editing an applied migration still fails closed via checksum.
 
-const MIGRATION_011: &str = "
+pub(crate) const MIGRATION_011: &str = "
 ALTER TABLE subagent_route_policy
     ADD COLUMN last_parent_heartbeat_at TEXT;
 ";
@@ -16,7 +16,7 @@ ALTER TABLE subagent_route_policy
 ///   pending interaction, drain policy, version).
 /// - `prompt_queue.status` makes queue item lifecycle durable so recovery
 ///   never re-executes a sent/running item as a silent duplicate.
-const MIGRATION_012: &str = "
+pub(crate) const MIGRATION_012: &str = "
 CREATE TABLE IF NOT EXISTS session_actor (
     conversation_id TEXT PRIMARY KEY
         REFERENCES conversation(id) ON DELETE CASCADE,
@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_session_actor_updated
 /// Every status transition increments `revision`. `RunManager::commit_transition`
 /// updates with `WHERE id=? AND revision=?` so late outcomes cannot overwrite
 /// Cancelling/Cancelled/other terminals.
-const MIGRATION_013: &str = "
+pub(crate) const MIGRATION_013: &str = "
 ALTER TABLE run ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
 ";
 
@@ -53,7 +53,7 @@ ALTER TABLE run ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
 /// - `event_id` stable UUID/ULID idempotency key
 /// - `run_event.id` remains `global_sequence` (AUTOINCREMENT)
 /// - existing `sequence` column is the per-run sequence (`run_sequence` on wire)
-const MIGRATION_014: &str = "
+pub(crate) const MIGRATION_014: &str = "
 ALTER TABLE run_event ADD COLUMN event_id TEXT;
 UPDATE run_event
    SET event_id = 'legacy:' || run_id || ':' || sequence
@@ -65,7 +65,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_event_event_id ON run_event(event_id);
 ///
 /// Paths are attributes. Runs/conversations gain `project_id` UUID column;
 /// `project_path` remains a diagnostic snapshot.
-const MIGRATION_015: &str = "
+pub(crate) const MIGRATION_015: &str = "
 CREATE TABLE IF NOT EXISTS project_identity (
     project_id TEXT PRIMARY KEY,
     canonical_path TEXT NOT NULL,
@@ -88,7 +88,7 @@ ALTER TABLE conversation ADD COLUMN project_identity_id TEXT;
 ///
 /// Minimal durable records of tool side-effects. Not a universal transaction
 /// framework — only tracks what restore/preview can honestly claim.
-const MIGRATION_018: &str = "
+pub(crate) const MIGRATION_018: &str = "
 CREATE TABLE IF NOT EXISTS side_effect_record (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
@@ -112,7 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_side_effect_run ON side_effect_record(run_id, cre
 /// Legacy coarse `tool_grant` rows keep policy_version=0 and are ignored for
 /// reuse. New grants bind project identity, permission class, path/argument
 /// constraints, session/run scope, expiry, and policy version.
-const MIGRATION_016: &str = "
+pub(crate) const MIGRATION_016: &str = "
 -- Mark existing coarse grants as legacy so they cannot auto-authorize.
 UPDATE tool_grant SET scope = COALESCE(scope, '') WHERE 1=1;
 
@@ -153,7 +153,7 @@ UPDATE tool_grant SET expires_at = datetime('now')
 /// Runtime reservations are still in-memory; this table records per-run budget
 /// counters for restart Interrupted recovery and audit. Active children follow
 /// parent Interrupted semantics (task-04/02) — no Future resume.
-const MIGRATION_017: &str = "
+pub(crate) const MIGRATION_017: &str = "
 CREATE TABLE IF NOT EXISTS subagent_budget_ledger (
     run_id TEXT PRIMARY KEY,
     parent_run_id TEXT,
@@ -175,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_subagent_budget_tree
 ";
 
 /// Migration 019: stable pagination indexes for GUI snapshots.
-const MIGRATION_019: &str = "
+pub(crate) const MIGRATION_019: &str = "
 CREATE INDEX IF NOT EXISTS idx_conversation_updated_id
     ON conversation(updated_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_message_conversation_created_id
@@ -185,7 +185,7 @@ CREATE INDEX IF NOT EXISTS idx_message_block_message_sort
 ";
 
 /// Migration 020: durable provider-route circuit state. No credentials live here.
-const MIGRATION_020: &str = "
+pub(crate) const MIGRATION_020: &str = "
 CREATE TABLE IF NOT EXISTS provider_route_health (
     route_key TEXT PRIMARY KEY,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,

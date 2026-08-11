@@ -204,8 +204,20 @@ pub fn run() {
             }
             // 注册主 pool 到全局，供 runtime 等无 State 上下文模块访问
             db::register_main_pool(pool.clone());
+            // Host Credential Broker (W3 P0-04): bind the private mode-0600
+            // UDS listener BEFORE spawning the daemon so the sidecar's lease
+            // client can reach it. Production UDS mode always starts it;
+            // Embedded only exists under test/diagnostic (architecture #6).
+            {
+                let broker_path =
+                    crate::credential_broker::credential_broker_uds::broker_socket_path()
+                        .map_err(|e| format!("broker socket path: {e}"))?;
+                crate::credential_broker::credential_broker_uds::spawn_broker_uds_listener(
+                    &broker_path,
+                )
+                .map_err(|e| format!("broker listener: {e}"))?;
+            }
             // Embedded credential inject (when mode falls back to embedded for tests).
-            // 生产 UDS 模式不注册 host credential broker —— daemon 自带 broker；
             // Embedded 仅存在于 test/diagnostic（架构目标 #6），随 cfg 隔离。
             #[cfg(any(test, feature = "diagnostic"))]
             {

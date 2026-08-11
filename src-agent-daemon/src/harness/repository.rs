@@ -25,8 +25,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::PathBuf;
 
+#[path = "repository_profile.rs"]
 mod repository_profile;
+#[path = "repository_source.rs"]
 mod repository_source;
+#[path = "repository_version.rs"]
 mod repository_version;
 
 pub use repository_profile::{

@@ -9,7 +9,7 @@
 
 use super::*;
 
-struct UnsupportedNativeHook;
+pub(crate) struct UnsupportedNativeHook;
 
 #[async_trait::async_trait]
 impl HookHandler for UnsupportedNativeHook {
@@ -22,10 +22,10 @@ impl HookHandler for UnsupportedNativeHook {
     }
 }
 
-struct NativeMcpHook {
-    server_id: String,
-    tool_name: String,
-    input_template: Option<String>,
+pub(crate) struct NativeMcpHook {
+    pub(crate) server_id: String,
+    pub(crate) tool_name: String,
+    pub(crate) input_template: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -97,7 +97,7 @@ impl HookHandler for NativeMcpHook {
     }
 }
 
-fn substitute_hook_input(value: &mut Value, input: &Value) {
+pub(crate) fn substitute_hook_input(value: &mut Value, input: &Value) {
     match value {
         Value::String(text) if text == "${input}" => *value = input.clone(),
         Value::Array(items) => {
@@ -114,10 +114,10 @@ fn substitute_hook_input(value: &mut Value, input: &Value) {
     }
 }
 
-struct NativePromptHook {
-    template: String,
-    model_override: Option<String>,
-    timeout_ms: u64,
+pub(crate) struct NativePromptHook {
+    pub(crate) template: String,
+    pub(crate) model_override: Option<String>,
+    pub(crate) timeout_ms: u64,
 }
 
 #[async_trait::async_trait]
@@ -195,7 +195,7 @@ impl HookHandler for NativePromptHook {
     }
 }
 
-fn prompt_decision(text: &str) -> HookOutcome {
+pub(crate) fn prompt_decision(text: &str) -> HookOutcome {
     let parsed = serde_json::from_str::<Value>(text.trim()).ok();
     let decision = parsed
         .as_ref()
@@ -223,12 +223,12 @@ fn prompt_decision(text: &str) -> HookOutcome {
     }
 }
 
-struct NativeAgentHook {
-    prompt: String,
-    model_override: Option<String>,
-    max_steps: u32,
-    readonly_tools: Vec<String>,
-    timeout_ms: u64,
+pub(crate) struct NativeAgentHook {
+    pub(crate) prompt: String,
+    pub(crate) model_override: Option<String>,
+    pub(crate) max_steps: u32,
+    pub(crate) readonly_tools: Vec<String>,
+    pub(crate) timeout_ms: u64,
 }
 
 #[async_trait::async_trait]

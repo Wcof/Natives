@@ -400,7 +400,6 @@ impl SidecarSupervisor {
 
     fn readiness_probe(&self, bootstrap: &str) -> Result<(), String> {
         let socket = self.config.socket_path.clone();
-        let expected_db_path = self.config.natives_db_path.to_string_lossy().to_string();
         let bootstrap = bootstrap.to_string();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -438,13 +437,29 @@ impl SidecarSupervisor {
                 {
                     return Err(format!("daemon.getStatus protocol mismatch: {status}"));
                 }
-                if status.get("natives_db_path").and_then(|v| v.as_str())
-                    != Some(expected_db_path.as_str())
+                // W3 P0-03: DaemonStatusV2 deliberately carries NO db path.
+                // Readiness is decomposed (instance/protocol/health/storage/
+                // broker); a missing legacy field must never kill a healthy
+                // sidecar, and the host must not demand a field the daemon no
+                // longer reports.
+                if status.get("storage_ready").and_then(|v| v.as_str()) != Some("ready") {
+                    return Err(format!("daemon.getStatus storage not ready: {status}"));
+                }
+                if status
+                    .get("credential_broker_ready")
+                    .and_then(|v| v.as_str())
+                    != Some("ready")
                 {
                     return Err(format!(
-                        "daemon.getStatus NATIVES_DB_PATH mismatch: expected={} status={status}",
-                        expected_db_path
+                        "daemon.getStatus credential broker not ready: {status}"
                     ));
+                }
+                let health = status
+                    .get("health")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unavailable");
+                if health != "ready" && health != "degraded" {
+                    return Err(format!("daemon.getStatus health not ready: {status}"));
                 }
                 Ok(())
             })

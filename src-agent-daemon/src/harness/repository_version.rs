@@ -9,7 +9,7 @@
 use super::repository_profile::get_profile;
 use super::repository_source::publish_source_drift_manifest;
 use super::{now, sql};
-use crate::harness::HarnessError;
+use crate::rpc::harness::HarnessError;
 use harness_core::blueprint::HarnessBlueprint;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;

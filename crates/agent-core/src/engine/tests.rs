@@ -4,9 +4,20 @@ use super::super::conversion::{
 };
 use super::super::*;
 use super::*;
+use crate::compaction::SUMMARY_SYSTEM_PROMPT;
+use crate::context::ContextStats;
+use crate::event_seq::EventSequencer;
+use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
+use crate::live_event::LiveEventBus;
 use crate::EventPersistence;
+use assistant_protocol::v2::RunEventKind;
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
+
+// Compaction budget constants used by the compaction submodule's assertions.
+use super::super::engine_compaction::{SUMMARY_KEEP_TAIL_MESSAGES, SUMMARY_MAX_FAILURES};
 
 // Engine behaviour tests, split by domain. Each submodule starts with
 // `use super::*;` so it inherits the shared imports and fixtures below.

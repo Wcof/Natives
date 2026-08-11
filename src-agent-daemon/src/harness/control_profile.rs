@@ -32,8 +32,8 @@ pub(super) fn discovered_hooks(params: &Value) -> Vec<HookDefinition> {
 }
 
 pub(super) struct ResolvedContext {
-    resolution: Resolution,
-    layers: Vec<LayerRef>,
+    pub(super) resolution: Resolution,
+    pub(super) layers: Vec<LayerRef>,
 }
 
 pub(super) fn validate_project_scope(

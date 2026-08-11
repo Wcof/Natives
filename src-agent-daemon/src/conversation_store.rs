@@ -3,8 +3,11 @@ use assistant_protocol::v2::methods::names;
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 
+#[path = "conversation_context.rs"]
 mod conversation_context;
+#[path = "conversation_fork.rs"]
 mod conversation_fork;
+#[path = "conversation_messages.rs"]
 mod conversation_messages;
 
 pub use conversation_context::{
@@ -227,18 +230,39 @@ fn list_page(params: Value) -> Result<Value, String> {
     let conn = store.conn()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
-                created_at, updated_at, archived_at, parent_conversation_id
-         FROM conversation
-         WHERE parent_conversation_id IS NULL
-           AND (?1 IS NULL OR updated_at < ?1 OR (updated_at = ?1 AND id < ?2))
-         ORDER BY updated_at DESC, id DESC LIMIT ?3",
+            "SELECT c.id, c.mode, c.project_id, c.title, c.provider_id, c.model_id,
+                    c.permission_profile_id, c.created_at, c.updated_at, c.archived_at,
+                    c.parent_conversation_id,
+                    (SELECT r.status FROM run r
+                      WHERE r.conversation_id = c.id
+                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS last_run_status
+             FROM conversation c
+             WHERE c.parent_conversation_id IS NULL
+               AND (?1 IS NULL OR c.updated_at < ?1 OR (c.updated_at = ?1 AND c.id < ?2))
+             ORDER BY c.updated_at DESC, c.id DESC LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
             params![cursor_updated, cursor_id, limit + 1],
-            row_to_conversation,
+            |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "mode": row.get::<_, String>(1)?,
+                    "project_id": row.get::<_, Option<String>>(2)?,
+                    "title": row.get::<_, String>(3)?,
+                    "provider_id": row.get::<_, String>(4)?,
+                    "model_id": row.get::<_, String>(5)?,
+                    "permission_profile_id": row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "ask".into()),
+                    "created_at": row.get::<_, String>(7)?,
+                    "updated_at": row.get::<_, String>(8)?,
+                    "archived_at": row.get::<_, Option<String>>(9)?,
+                    "parent_conversation_id": row.get::<_, Option<String>>(10)?,
+                    // W8: low-frequency activity projection — the most recent
+                    // run status per conversation (never the live stream).
+                    "last_run_status": row.get::<_, Option<String>>(11)?,
+                }))
+            },
         )
         .map_err(|e| e.to_string())?;
     let mut conversations: Vec<Value> = rows.filter_map(Result::ok).collect();
@@ -282,6 +306,86 @@ pub fn permission_profile(conversation_id: &str) -> Result<String, String> {
     .optional()
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "conversation not found".into())
+}
+
+/// W8: bounded full-conversation message search (never the Sidebar title).
+///
+/// Searches the typed transcript (`message` text blocks) of one conversation
+/// with `LIKE ?` on the escaped query, ordered by `(created_at, id)` so the
+/// result is stable for cursor paging. Returns at most `limit` rows with a
+/// text snippet; the caller uses `message_id` to locate/scroll/focus.
+///
+/// Params: `conversation_id`, `q`, `limit` (default 20, clamp 1..=100),
+/// `cursor` (optional `last_message_id` for the next page).
+pub fn search_messages(params: Value) -> Result<Value, String> {
+    let conversation_id = required_str(&params, "conversation_id")?;
+    let q = params
+        .get("q")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "q is required".to_string())?;
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(20)
+        .clamp(1, 100);
+    let cursor = params
+        .get("cursor")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty());
+
+    let store = store()?;
+    let conn = store.conn()?;
+    // Escape LIKE wildcards so user input is matched literally.
+    let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id, m.role, m.created_at,
+                    COALESCE((SELECT block_json FROM message_block mb
+                              WHERE mb.message_id = m.id AND mb.block_type = 'text'
+                              ORDER BY mb.sort_order ASC, mb.id ASC LIMIT 1), '')
+             FROM message m
+             WHERE m.conversation_id = ?1
+               AND EXISTS (
+                 SELECT 1 FROM message_block mb
+                 WHERE mb.message_id = m.id
+                   AND mb.block_type = 'text'
+                   AND mb.block_json LIKE ?2 ESCAPE '\\'
+               )
+               AND (?3 IS NULL OR (m.created_at, m.id) > (
+                   SELECT created_at, id FROM message
+                   WHERE id = ?3
+                 ))
+             ORDER BY m.created_at ASC, m.id ASC
+             LIMIT ?4",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![conversation_id, pattern, cursor, limit + 1], |row| {
+            Ok(serde_json::json!({
+                "message_id": row.get::<_, String>(0)?,
+                "role": row.get::<_, String>(1)?,
+                "created_at": row.get::<_, String>(2)?,
+                "snippet": row.get::<_, String>(3)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut results: Vec<Value> = rows.filter_map(Result::ok).collect();
+    let has_more = results.len() > limit as usize;
+    results.truncate(limit as usize);
+    Ok(serde_json::json!({
+        "results": results,
+        "hasMore": has_more,
+        "nextCursor": has_more
+            .then(|| results.last())
+            .flatten()
+            .and_then(|r| r.get("message_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }))
 }
 
 /// Ensure a conversation row exists in the daemon DB for FK integrity.

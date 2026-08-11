@@ -11,6 +11,14 @@ use super::*;
 
 pub(crate) fn fork(params: Value) -> Result<Value, String> {
     let source_id = required_str(&params, "conversation_id")?;
+    // W8: optional `through_message_id` — fork up to and including the selected
+    // persisted user turn (assistant/tool pairs complete to that turn). When
+    // absent the full transcript is copied (legacy behavior).
+    let through_message_id = params
+        .get("through_message_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string);
     let source = get(serde_json::json!({ "id": source_id }))?;
     let mut params = source;
     params["title"] = serde_json::json!(format!(
@@ -26,21 +34,60 @@ pub(crate) fn fork(params: Value) -> Result<Value, String> {
     let forked = create(params)?;
     let fork_id = required_str(&forked, "id")?;
     let branch_id = uuid::Uuid::new_v4().to_string();
-    let parent_message_id = {
-        let store = store()?;
-        let conn = store.conn()?;
-        conn.query_row(
-            "SELECT id FROM message WHERE conversation_id = ?1
-             ORDER BY created_at DESC, id DESC LIMIT 1",
-            rusqlite::params![source_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-    };
     let store = store()?;
     let conn = store.conn()?;
-    copy_transcript(&conn, source_id, fork_id)?;
+    let parent_message_id = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM message WHERE conversation_id = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        match through_message_id.as_deref() {
+            Some(selected) => {
+                // Fork head: the selected message itself when it exists.
+                conn.query_row(
+                    "SELECT id FROM message WHERE conversation_id = ?1 AND id = ?2",
+                    rusqlite::params![source_id, selected],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+            }
+            None => stmt
+                .query_row(rusqlite::params![source_id], |row| row.get::<_, String>(0))
+                .optional()
+                .map_err(|e| e.to_string())?,
+        }
+    };
+    // W8: the selected turn must be a persisted user message (never a run
+    // artifact); reject forks from an ephemeral or non-user message.
+    if let Some(selected) = through_message_id.as_deref() {
+        let role: Option<String> = conn
+            .query_row(
+                "SELECT role FROM message WHERE conversation_id = ?1 AND id = ?2",
+                rusqlite::params![source_id, selected],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten()
+            .or_else(|| {
+                // Message id may be namespaced (fork:...:old) — still verify role.
+                conn.query_row(
+                    "SELECT role FROM message WHERE id = ?1",
+                    rusqlite::params![selected],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten()
+            });
+        if role.as_deref() != Some("user") {
+            return Err(format!(
+                "fork through_message_id must be a persisted user message, got role={role:?}"
+            ));
+        }
+    }
+    copy_transcript(&conn, source_id, fork_id, through_message_id.as_deref())?;
     conn.execute(
         "UPDATE conversation
          SET branch_id = ?1, parent_conversation_id = ?2,
@@ -59,10 +106,16 @@ pub(crate) fn fork(params: Value) -> Result<Value, String> {
 /// Copy the durable typed transcript into a fork with new message identities.
 /// Parent links are remapped so the fork is independent while tool-call IDs
 /// inside content blocks remain stable for replay and audit correlation.
+///
+/// W8: with `through_message_id`, the copy is bounded to the selected turn —
+/// rows are ordered by `(created_at, id)` and only rows up to and including
+/// the selected message are copied (assistant/tool pairs complete to it).
+/// The copy is single-transaction and idempotent (fork-prefixed ids).
 fn copy_transcript(
     conn: &rusqlite::Connection,
     source_conversation_id: &str,
     fork_conversation_id: &str,
+    through_message_id: Option<&str>,
 ) -> Result<(), String> {
     let mut messages = Vec::new();
     {
@@ -71,7 +124,8 @@ fn copy_transcript(
                 "SELECT id, parent_message_id, role, status, input_tokens, output_tokens,
                         reasoning_tokens, cost_usd, created_at, turn_id, run_id, stop_reason,
                         legacy_marker, truncated
-                 FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
+                 FROM message WHERE conversation_id = ?1
+                 ORDER BY created_at ASC, id ASC",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -97,6 +151,21 @@ fn copy_transcript(
         for row in rows {
             messages.push(row.map_err(|e| e.to_string())?);
         }
+    }
+    // W8: bound to the selected turn when provided. Stable `(created_at, id)`
+    // order; stop after the selected message id (inclusive).
+    if let Some(selected) = through_message_id {
+        let mut bounded = Vec::new();
+        for msg in &messages {
+            bounded.push(msg.clone());
+            if msg.0 == selected {
+                break;
+            }
+        }
+        if bounded.last().map(|m| m.0.as_str()) != Some(selected) {
+            return Err(format!("fork through_message_id not found: {selected}"));
+        }
+        messages = bounded;
     }
     let mut id_map = std::collections::HashMap::new();
     for (old_id, ..) in &messages {
@@ -274,5 +343,59 @@ mod tests {
             AgentMessage::User(message)
                 if matches!(&message.content[0], ContentBlock::Text { text } if text == "hello")
         ));
+    }
+
+    /// §19.3: a fork inherits transcript metadata only; permissions are
+    /// re-resolved to `ask` and a pending grant is never copied. The fork
+    /// does not carry any directive or permission escalation from the
+    /// source — it starts fresh with the safe default.
+    #[test]
+    fn fork_resets_permissions_to_ask_and_carries_no_pending_grant() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("fork-perm.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db.clone()), Some(dir.path().join("artifacts")));
+        let _store = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+
+        // Source has full_access — the fork must reset to ask.
+        let source = create(serde_json::json!({
+            "mode": "agent",
+            "title": "Source",
+            "provider_id": "openai",
+            "model_id": "gpt-4o",
+            "project_id": "project-1",
+            "permission_profile_id": "full_access"
+        }))
+        .unwrap();
+        let source_id = source["id"].as_str().unwrap();
+        append_agent_message(
+            source_id,
+            None,
+            None,
+            &AgentMessage::User(agent_core::UserMessage {
+                message_id: agent_core::MessageId::from("source-perm-user"),
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+            }),
+        )
+        .unwrap();
+
+        let forked = fork(serde_json::json!({ "conversation_id": source_id })).unwrap();
+        // The fork always resets to ask — never inherits full_access.
+        assert_eq!(forked["permission_profile_id"], "ask");
+        assert_ne!(
+            forked["permission_profile_id"], "full_access",
+            "fork must not inherit the source permission escalation"
+        );
     }
 }

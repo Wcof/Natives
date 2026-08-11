@@ -1,7 +1,6 @@
 //! Release asset probe — natives.app.json manifest candidates (compose
 //! analysis moved to `super::compose`).
 
-use super::compose::analyze_compose_file;
 use super::github::{is_compose_asset_name, is_manifest_asset_name, GhAsset, GhRelease};
 use super::model::{CreativeAppRuntime, EnvRequirement, InstallCandidate};
 use crate::{Error, Result};

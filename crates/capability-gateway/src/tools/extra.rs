@@ -498,7 +498,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(ApplyPatchTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(ApplyPatchTool),
         },
         Tool {
             name: "memory_search",
@@ -515,7 +517,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(MemoryTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(MemoryTool),
         },
         Tool {
             name: "memory_get",
@@ -530,7 +534,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(MemoryTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(MemoryTool),
         },
         Tool {
             name: "task",
@@ -561,7 +567,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(TaskTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(TaskTool),
         },
         Tool {
             name: "task_output",
@@ -575,7 +583,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(TaskOutputTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(TaskOutputTool),
         },
         Tool {
             name: "kill_task",
@@ -589,7 +599,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(KillTaskTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(KillTaskTool),
         },
         Tool {
             name: "skill",
@@ -609,7 +621,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(SkillTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(SkillTool),
         },
         Tool {
             name: "mcp_call",
@@ -623,7 +637,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(McpCallTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(McpCallTool),
         },
         Tool {
             name: "notification",
@@ -637,7 +653,9 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(NotificationTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(NotificationTool),
         },
     ]
 }

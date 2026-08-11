@@ -2,7 +2,7 @@
 //! persona redaction helpers (split from `subagent.rs` by responsibility,
 //! ARCH-002).
 
-use agent_core::{HookEvent, HookRequest, SubAgentManager, SubAgentStatus};
+use agent_core::{EventSequencer, SubAgentManager, SubAgentStatus};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -147,25 +147,28 @@ pub(crate) async fn fail_parent_and_cancel_siblings(
 
 /// SubagentStop hook fired for every terminal outcome (matches prior behavior).
 pub(crate) async fn fire_subagent_stop(
+    events: EventSequencer,
     project_path: &Option<String>,
     parent_run_id: &str,
     child_run_id: &str,
     status: &str,
     output: &str,
 ) {
-    let _ = crate::production_hooks::build_production_hooks_for_project(
-        project_path.as_deref().map(std::path::Path::new),
-    )
-    .dispatch(HookRequest {
-        event: HookEvent::SubagentStop,
-        run_id: parent_run_id.to_string(),
-        tool_name: Some("task".into()),
-        input: serde_json::json!({
+    // NE-P0-05 §19.5: SubagentStop dispatches through the Run's frozen Hook
+    // Dispatcher — the same read-only plan SubagentStart / permission /
+    // notification share — so a mid-Run hooks.json edit only reaches the
+    // next Run. HookInvocation telemetry flows through the same
+    // EventSequencer the engine uses (single durable source).
+    super::subagent::fire_subagent_stop_frozen(
+        parent_run_id,
+        events,
+        project_path,
+        &serde_json::json!({
             "sub_run_id": child_run_id,
             "status": status,
             "output": output,
         }),
-    })
+    )
     .await;
 }
 
@@ -184,7 +187,7 @@ pub(crate) fn use_fixture_flag(input: &Value) -> bool {
 /// text (crash-safe: same text + same digest). A digest mismatch is treated as
 /// corruption — the in-memory argument is used instead, never a silently
 /// re-rolled durable persona. Legacy sessions fall back to the in-memory arg.
-fn directive_for_requeue(
+pub(crate) fn directive_for_requeue(
     durable: Option<crate::subagent_store::PendingDirective>,
     in_memory: Option<&str>,
 ) -> Option<(String, String)> {

@@ -149,7 +149,9 @@ pub fn plan_mode_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(EnterPlanModeTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(EnterPlanModeTool),
         },
         Tool {
             name: plan_mode::EXIT_PLAN_MODE_TOOL,
@@ -172,7 +174,9 @@ pub fn plan_mode_tools() -> Vec<Tool> {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
-            handler: Arc::new(ExitPlanModeTool),
+            idempotency: None,
+        per_call_resource: None,
+        handler: Arc::new(ExitPlanModeTool),
         },
     ]
 }

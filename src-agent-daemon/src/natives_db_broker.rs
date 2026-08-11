@@ -18,8 +18,9 @@ use assistant_protocol::v2::credential::{
     CredentialBrokerRequest, CredentialBrokerResponse, CredentialLeaseEnvelope,
     CredentialLeaseReply, CredentialLeaseRevokeRequest, CredentialPoolLeaseRequest,
     CredentialPoolLeaseResponse, CredentialSecretLeaseRequest, CredentialSecretLeaseResponse,
-    CredentialSettingLeaseRequest, CredentialSettingLeaseResponse, LoopbackSettingsLeaseRequest,
-    LoopbackSettingsLeaseResponse,
+    CredentialSettingLeaseRequest, CredentialSettingLeaseResponse, HostSubagentRow,
+    HostSubagentsLeaseRequest, HostSubagentsLeaseResponse, LoopbackSettingsLeaseRequest,
+    LoopbackSettingsLeaseResponse, RoutingPlanLeaseRequest, RoutingPlanLeaseResponse,
 };
 use assistant_protocol::v2::methods::names;
 use provider_adapters::capabilities::Credential;

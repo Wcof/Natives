@@ -660,20 +660,18 @@ fn emit_progress<R: tauri::Runtime>(
 }
 
 // Command building / executable resolution / process identity utilities moved
-// to `runtime_utils` (W3); re-exported below for backwards compatibility.
-use super::runtime_utils::{
+// to `runtime_utils` (W3); the compatibility shims below re-export the items
+// that callers still reach via `runtime::`. The `pub use` list is the single
+// re-export; the forwarding fns below exist for items with cfg/type wrappers.
+pub use super::runtime_utils::{
     build_command, compose_project_name, http_reachable, identity_matches_live_strict,
-    is_safe_inherited_env, normalize_loopback, pick_free_port, plan_is_static, port_in_use,
-    port_listening, process_group_exists, process_start_time_unix, resolve_executable_path,
-    resolve_preview_urls, static_open_url, wait_port_released, PreviewUrlCandidate,
+    is_safe_inherited_env, normalize_loopback, plan_is_static, port_in_use,
+    process_start_time_unix, resolve_executable_path, resolve_preview_urls, static_open_url,
+    PreviewUrlCandidate,
 };
 
 pub fn pick_free_port() -> u16 {
     super::runtime_utils::pick_free_port()
-}
-
-pub fn port_in_use(port: u16) -> bool {
-    super::runtime_utils::port_in_use(port)
 }
 
 pub fn port_listening(port: u16) -> bool {
@@ -692,10 +690,6 @@ pub fn process_group_exists(_pgid: i32) -> bool {
 
 pub fn wait_port_released(port: u16, timeout: Duration) -> bool {
     super::runtime_utils::wait_port_released(port, timeout)
-}
-
-async fn http_reachable(url: &str) -> bool {
-    super::runtime_utils::http_reachable(url).await
 }
 
 async fn terminate_tree(child: &mut Child, pgid: Option<i32>) {
@@ -772,11 +766,7 @@ async fn terminate_tree_with_grace(child: &mut Child, pgid: Option<i32>, grace: 
 /// path (`/local-projects/{runtimeId}/{creativeId}/…`), so a stopped (or
 /// superseded) run's URL is no longer servable and the HTTP route can validate
 /// the active runtime before serving any file.
-// URL / preview utilities moved to `runtime_utils` (W3); re-exported below.
-pub use super::runtime_utils::{
-    compose_project_name, normalize_loopback, plan_is_static, resolve_preview_urls,
-    static_open_url, PreviewUrlCandidate,
-};
+// URL / preview utilities are re-exported above via the single `pub use`.
 
 #[cfg(test)]
 #[path = "runtime_tests.rs"]

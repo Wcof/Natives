@@ -45,6 +45,8 @@ mod p0_tests {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
+            idempotency: None,
+            per_call_resource: None,
             handler,
         }).unwrap();
         gateway
@@ -99,6 +101,8 @@ mod p0_tests {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
+            idempotency: None,
+            per_call_resource: None,
             handler: handler.clone(),
         }).unwrap();
         let error = gateway
@@ -433,6 +437,8 @@ mod path_scope_preflight_tests {
             cancellable: false,
             parallel_safe: false,
             conflict_key: None,
+            idempotency: None,
+            per_call_resource: None,
             handler: Arc::new(NoopHandler),
         }).unwrap();
         let ctx = context_for(root.path());
@@ -538,6 +544,8 @@ mod registry_validation_tests {
             cancellable: true,
             parallel_safe: false,
             conflict_key: None,
+            idempotency: None,
+            per_call_resource: None,
             handler: Arc::new(TestHandler),
         }
     }

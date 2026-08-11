@@ -96,7 +96,15 @@ pub(crate) async fn child_completed_terminal(
             },
         },
     );
-    fire_subagent_stop(project_path, parent_run_id, child_run_id, "completed", text).await;
+    fire_subagent_stop(
+        events.clone(),
+        project_path,
+        parent_run_id,
+        child_run_id,
+        "completed",
+        text,
+    )
+    .await;
 }
 
 /// Handle a child that failed (or was cancelled / interrupted / timed out /
@@ -291,5 +299,13 @@ async fn finalize_child_failure(
             output: Some(task_output),
         },
     );
-    fire_subagent_stop(project_path, parent_run_id, child_run_id, "failed", message).await;
+    fire_subagent_stop(
+        events.clone(),
+        project_path,
+        parent_run_id,
+        child_run_id,
+        "failed",
+        message,
+    )
+    .await;
 }

@@ -58,6 +58,9 @@ pub const ALL: &[(i64, &str)] = &[
     // logic into a real, versioned migration so no column repair runs without
     // ledger state (P0-023/P0-024): partial-core DBs can no longer skip it.
     (37, MIGRATION_037),
+    // 38 moves creative draft metadata under the Daemon-authoritative
+    // assistant.db (W3 P0-2); the capability gateway no longer opens natives.db.
+    (38, MIGRATION_038),
 ];
 
 /// FNV-1a 64-bit checksum (self-implemented; no new crate). Used to detect
@@ -383,8 +386,11 @@ pub fn run_pending(conn: &Connection) -> Result<(), String> {
 /// for `assistant_*` tables on the same file. Do not reintroduce a shared
 // W9: versioned SQL constants moved to migrations_early / migrations_mid /
 // migrations_late; `ALL` above remains the single ordered registry.
+#[path = "migrations_early.rs"]
 mod migrations_early;
+#[path = "migrations_late.rs"]
 mod migrations_late;
+#[path = "migrations_mid.rs"]
 mod migrations_mid;
 use migrations_early::{
     MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_006,
@@ -393,7 +399,7 @@ use migrations_early::{
 use migrations_late::{
     MIGRATION_021, MIGRATION_022, MIGRATION_023, MIGRATION_024, MIGRATION_025, MIGRATION_026,
     MIGRATION_027, MIGRATION_028, MIGRATION_029, MIGRATION_030, MIGRATION_031, MIGRATION_032,
-    MIGRATION_033, MIGRATION_034, MIGRATION_035, MIGRATION_036, MIGRATION_037,
+    MIGRATION_033, MIGRATION_034, MIGRATION_035, MIGRATION_036, MIGRATION_037, MIGRATION_038,
 };
 use migrations_mid::{
     MIGRATION_011, MIGRATION_012, MIGRATION_013, MIGRATION_014, MIGRATION_015, MIGRATION_016,

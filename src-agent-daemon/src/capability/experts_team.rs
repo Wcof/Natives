@@ -1,10 +1,17 @@
 //! Expert team CRUD (W9 split from capability/experts.rs).
+//! `super` here is the `experts` module; helpers are re-exported from it.
 
-use super::experts::{expert_row_to_json, insert_expert, now_iso, EXPERT_COLS};
+use super::{
+    ensure_expert_exists, expert_row_to_json, insert_expert, insert_members, now_iso,
+    parse_members, required_str, str_field, validate_team_settings,
+    validate_team_settings_with_defaults, EXPERT_COLS,
+};
+use crate::capability::store;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
-fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, String> {
+pub(crate) fn team_to_json(conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>, String> {
     // 19.3-④: `strategy` is dead configuration (no runtime honours it) and is
     // no longer part of the contract — it is not advertised in the API. The
     // column stays in the DB untouched for historical rows.
@@ -257,4 +264,177 @@ pub fn team_delete(params_value: &Value) -> Result<Value, String> {
         return Err(format!("team not found: {id}"));
     }
     Ok(json!({ "deleted": id }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // insert_expert and now_iso are private in the parent experts module;
+    // super::* brings them in through the `use super::{...}` above.
+
+    fn with_temp_db<F: FnOnce()>(f: F) {
+        let _guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(format!("team-{}.db", uuid::Uuid::new_v4()));
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let _warm = crate::storage::DataStore::new(&db, &art).expect("team temp db migrate");
+        f();
+        crate::storage::set_test_db_override(None, None);
+    }
+
+    fn make_experts() {
+        insert_expert(
+            &serde_json::json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead."}),
+            "manual",
+        )
+        .unwrap();
+        insert_expert(
+            &serde_json::json!({"id": "member", "name": "Member", "systemPrompt": "Member."}),
+            "manual",
+        )
+        .unwrap();
+    }
+
+    /// §19.3: the team JSON never advertises `strategy` or `taskTemplate` —
+    /// both are retired from the API contract (columns kept for history).
+    #[test]
+    fn team_json_hides_strategy_and_task_template() {
+        with_temp_db(|| {
+            make_experts();
+            let created = team_create(&serde_json::json!({
+                "id": "team-hidden",
+                "name": "Hidden",
+                "strategy": "sequential",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 2,
+                "coordinatorExpertId": "lead",
+                "members": [
+                    {"expertId": "member", "roleHint": "builds", "taskTemplate": "Do the thing."},
+                ],
+            }))
+            .unwrap();
+            let team = &created["team"];
+            assert!(team.get("strategy").is_none(), "strategy retired from API");
+            assert!(
+                team["members"][0].get("taskTemplate").is_none(),
+                "taskTemplate retired from API"
+            );
+            // The real contract fields are present.
+            assert_eq!(team["failurePolicy"], "isolate");
+            assert_eq!(team["maxConcurrent"], 2);
+        });
+    }
+
+    /// §19.3: `failurePolicy` and `maxConcurrent` are the real runtime contract
+    /// fields — they survive round-trip through create → update → get.
+    #[test]
+    fn team_contract_round_trips_failure_policy_and_max_concurrent() {
+        with_temp_db(|| {
+            make_experts();
+            let created = team_create(&serde_json::json!({
+                "id": "team-rt",
+                "name": "Round",
+                "failurePolicy": "require_all",
+                "maxConcurrent": 5,
+                "coordinatorExpertId": "lead",
+                "members": [{"expertId": "member"}],
+            }))
+            .unwrap();
+            assert_eq!(created["team"]["failurePolicy"], "require_all");
+            assert_eq!(created["team"]["maxConcurrent"], 5);
+
+            let updated = team_update(&serde_json::json!({
+                "id": "team-rt",
+                "failurePolicy": "fail_fast",
+                "maxConcurrent": 3,
+            }))
+            .unwrap();
+            assert_eq!(updated["team"]["failurePolicy"], "fail_fast");
+            assert_eq!(updated["team"]["maxConcurrent"], 3);
+
+            let fetched = team_get(&serde_json::json!({"id": "team-rt"})).unwrap();
+            assert_eq!(fetched["team"]["failurePolicy"], "fail_fast");
+            assert_eq!(fetched["team"]["maxConcurrent"], 3);
+        });
+    }
+
+    /// §19.3: team_create rejects an unknown failurePolicy (fail-closed).
+    #[test]
+    fn team_create_rejects_unknown_failure_policy() {
+        with_temp_db(|| {
+            make_experts();
+            let result = team_create(&serde_json::json!({
+                "id": "bad-team",
+                "name": "Bad",
+                "failurePolicy": "explode",
+                "maxConcurrent": 2,
+                "members": [{"expertId": "member"}],
+            }));
+            assert!(result.is_err());
+        });
+    }
+
+    /// §19.3: team_create rejects maxConcurrent outside 1..=8 (fail-closed).
+    #[test]
+    fn team_create_rejects_max_concurrent_out_of_range() {
+        with_temp_db(|| {
+            make_experts();
+            let too_many = team_create(&serde_json::json!({
+                "id": "bad-conc",
+                "name": "Bad",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 99,
+                "members": [{"expertId": "member"}],
+            }));
+            assert!(too_many.is_err(), "maxConcurrent > 8 must fail");
+
+            let zero = team_create(&serde_json::json!({
+                "id": "bad-zero",
+                "name": "Bad",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 0,
+                "members": [{"expertId": "member"}],
+            }));
+            assert!(zero.is_err(), "maxConcurrent 0 must fail");
+        });
+    }
+
+    /// §19.3: team_create requires at least one member (fail-closed).
+    #[test]
+    fn team_create_requires_members() {
+        with_temp_db(|| {
+            make_experts();
+            let no_members = team_create(&serde_json::json!({
+                "id": "empty-team",
+                "name": "Empty",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 1,
+                "coordinatorExpertId": "lead",
+                "members": [],
+            }));
+            assert!(no_members.is_err(), "team with no members must fail");
+        });
+    }
+
+    /// §19.3: team_delete removes the team and its members.
+    #[test]
+    fn team_delete_removes_team() {
+        with_temp_db(|| {
+            make_experts();
+            team_create(&serde_json::json!({
+                "id": "del-team",
+                "name": "Delete",
+                "failurePolicy": "isolate",
+                "maxConcurrent": 1,
+                "coordinatorExpertId": "lead",
+                "members": [{"expertId": "member"}],
+            }))
+            .unwrap();
+            let deleted = team_delete(&serde_json::json!({"id": "del-team"})).unwrap();
+            assert_eq!(deleted["deleted"], "del-team");
+            // Fetching the deleted team fails.
+            assert!(team_get(&serde_json::json!({"id": "del-team"})).is_err());
+        });
+    }
 }

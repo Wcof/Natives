@@ -27,7 +27,33 @@ pub struct Tool {
     pub parallel_safe: bool,
     /// Tools that must not run concurrently with each other share a key.
     pub conflict_key: Option<String>,
+    /// Idempotency contract (W5): whether a retry after an uncertain outcome is
+    /// safe. `None` means the tool declares nothing — the engine MUST NOT retry
+    /// unknown outcomes automatically (side-effect ledger rule).
+    pub idempotency: Option<Idempotency>,
+    /// Per-call resource ceiling (W5): bytes of output a single call may write.
+    /// The gateway truncates above this bound and marks `ToolOutput.truncated`.
+    pub per_call_resource: Option<PerCallResource>,
     pub handler: Arc<dyn ToolHandler + Send + Sync>,
+}
+
+/// Idempotency contract (W5). Unknown outcomes are never auto-retried unless
+/// the tool declares `Idempotent` (or `RetrySafeOnFailure` for failures only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Idempotency {
+    /// Re-running with the same input is safe (result identical).
+    Idempotent,
+    /// Re-running after a *failed* attempt is safe; unknown outcomes are not.
+    RetrySafeOnFailure,
+}
+
+/// Per-call resource budget (W5): output byte cap plus an optional explicit
+/// concurrency weight used by the resource scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerCallResource {
+    pub max_output_bytes: u64,
+    #[serde(default)]
+    pub concurrency_weight: u8,
 }
 
 /// Tool side effect classification.

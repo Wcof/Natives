@@ -175,6 +175,28 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     locale,
   });
 
+  // W8: fork the current conversation at the selected persisted user message
+  // (daemon conversation.fork supports through_message_id selected-turn copy).
+  const handleForkMessage = useCallback(
+    (messageId: string) => {
+      const conversationId = stateRef.current.activeConversationId ?? navigation.selectedId;
+      if (!conversationId) return;
+      void gateway
+        .request('conversation.fork', {
+          conversation_id: conversationId,
+          through_message_id: messageId,
+        })
+        .then((resp) => {
+          const forkId = (resp as { id?: string } | null)?.id;
+          // Open the new branch so the fork is immediately visible and active.
+          if (forkId) return openConversation(gateway, dispatch, forkId);
+          return undefined;
+        })
+        .catch(() => undefined);
+    },
+    [gateway, navigation.selectedId, dispatch],
+  );
+
   // --- Activity subagents derivation (C2/C4) ---
   const activitySubagents = useMemo<ActivitySubagentView[]>(() => {
     if (subagentSessions.length > 0) {
@@ -437,6 +459,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             onRollbackChanges={handleRollbackChanges}
             loadingMessages={loadingMessages}
             onRetry={() => void handleRetry()}
+            onForkMessage={handleForkMessage}
             hasMoreOlder={Boolean(messagePageInfo?.hasMore)}
             loadingOlder={loadingOlderMessages}
             onLoadOlder={() => void loadOlderMessages()}

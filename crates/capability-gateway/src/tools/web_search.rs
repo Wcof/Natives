@@ -447,6 +447,8 @@ pub fn web_search_tool() -> Tool {
         cancellable: true,
         parallel_safe: false,
         conflict_key: None,
+        idempotency: None,
+        per_call_resource: None,
         handler: Arc::new(WebSearchTool),
     }
 }

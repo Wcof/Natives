@@ -1,14 +1,16 @@
 //! Host subagent migration (W9 split from capability/experts.rs).
+//! `super` here is the `experts` module; helper fns are re-exported from it.
 
-use super::experts::{ensure_expert_exists, insert_expert, now_iso};
-use crate::natives_db_broker::HostSubagentRow;
+use super::{ensure_expert_exists, insert_expert, now_iso};
+use crate::capability::store as capability_store;
+use assistant_protocol::v2::credential::HostSubagentRow;
 use rusqlite::params;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::Path;
 
 pub fn migrate_host_subagents() -> Result<u32, String> {
     {
-        let data = store()?;
+        let data = capability_store()?;
         let conn = data.conn()?;
         let already: bool = conn
             .query_row(
@@ -28,9 +30,7 @@ pub fn migrate_host_subagents() -> Result<u32, String> {
 
 /// Import one batch of legacy Host subagent rows into the capability library.
 /// Shared by the production broker lease path and the test fixture reader.
-fn import_host_subagent_rows(
-    rows: Vec<crate::natives_db_broker::HostSubagentRow>,
-) -> Result<u32, String> {
+pub(crate) fn import_host_subagent_rows(rows: Vec<HostSubagentRow>) -> Result<u32, String> {
     let mut migrated = 0u32;
     for row in rows {
         let id = row.id;
@@ -145,7 +145,7 @@ pub fn migrate_host_subagents_from(natives_db: &Path) -> Result<u32, String> {
         rows.into_iter()
             .map(
                 |(id, name, role, instructions, tools, provider_id, key_id, model_id, enabled)| {
-                    crate::natives_db_broker::HostSubagentRow {
+                    HostSubagentRow {
                         id,
                         name,
                         role: Some(role),
@@ -165,3 +165,120 @@ pub fn migrate_host_subagents_from(natives_db: &Path) -> Result<u32, String> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::experts::get; // get is pub in the parent module.
+
+    fn with_temp_db<F: FnOnce()>(f: F) {
+        let _guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir
+            .path()
+            .join(format!("migrate-{}.db", uuid::Uuid::new_v4()));
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let _warm = crate::storage::DataStore::new(&db, &art).expect("migrate temp db migrate");
+        f();
+        crate::storage::set_test_db_override(None, None);
+    }
+
+    /// §19.3: host subagent migration imports legacy rows into the capability
+    /// library as DB Experts — so the authoritative loader can find them.
+    /// The migrated expert is enabled and loadable.
+    #[test]
+    fn import_host_subagent_rows_creates_enabled_expert() {
+        with_temp_db(|| {
+            let rows = vec![HostSubagentRow {
+                id: "legacy-subagent".into(),
+                name: "Legacy".into(),
+                role: Some("reviewer".into()),
+                instructions: Some("You are a legacy reviewer.".into()),
+                tools: Some("read_file,grep".into()),
+                provider_id: Some("openai".into()),
+                provider_key_id: Some("key-1".into()),
+                model_id: Some("gpt-4o".into()),
+                enabled: 1,
+            }];
+            let count = import_host_subagent_rows(rows).unwrap();
+            assert_eq!(count, 1);
+            let expert = get(&serde_json::json!({"id": "legacy-subagent"})).unwrap();
+            let expert = &expert["expert"];
+            assert_eq!(expert["name"], "Legacy");
+            assert_eq!(expert["enabled"], true);
+            assert_eq!(expert["source"], "host_migration");
+            // The system prompt comes from instructions (not role).
+            assert_eq!(expert["systemPrompt"], "You are a legacy reviewer.");
+            // Tools are parsed from the comma-separated string.
+            assert_eq!(expert["tools"][0], "read_file");
+            assert_eq!(expert["tools"][1], "grep");
+        });
+    }
+
+    /// §19.3: migration strips 'auto' key routing — capability experts store
+    /// IDs only, never 'auto' (precedent: subagent_store).
+    #[test]
+    fn import_host_subagent_rows_strips_auto_key() {
+        with_temp_db(|| {
+            let rows = vec![HostSubagentRow {
+                id: "auto-key-sub".into(),
+                name: "Auto".into(),
+                role: Some("worker".into()),
+                instructions: None,
+                tools: None,
+                provider_id: None,
+                provider_key_id: Some("auto".into()),
+                model_id: None,
+                enabled: 1,
+            }];
+            import_host_subagent_rows(rows).unwrap();
+            let expert = get(&serde_json::json!({"id": "auto-key-sub"})).unwrap();
+            let expert = &expert["expert"];
+            // 'auto' key_id is stripped → None.
+            assert!(
+                expert["keyId"].is_null(),
+                "auto key routing must be stripped"
+            );
+        });
+    }
+
+    /// §19.3: migration falls back to role when instructions are absent,
+    /// and to a generated prompt when both are absent.
+    #[test]
+    fn import_host_subagent_rows_falls_back_to_role_then_generated() {
+        with_temp_db(|| {
+            // Instructions absent → role is the system prompt.
+            let rows = vec![HostSubagentRow {
+                id: "role-fallback".into(),
+                name: "RoleFallback".into(),
+                role: Some("the role".into()),
+                instructions: None,
+                tools: None,
+                provider_id: None,
+                provider_key_id: None,
+                model_id: None,
+                enabled: 1,
+            }];
+            import_host_subagent_rows(rows).unwrap();
+            let expert = get(&serde_json::json!({"id": "role-fallback"})).unwrap();
+            assert_eq!(expert["expert"]["systemPrompt"], "the role");
+
+            // Both absent → generated "You are {name}."
+            let rows2 = vec![HostSubagentRow {
+                id: "generated".into(),
+                name: "Generated".into(),
+                role: None,
+                instructions: None,
+                tools: None,
+                provider_id: None,
+                provider_key_id: None,
+                model_id: None,
+                enabled: 1,
+            }];
+            import_host_subagent_rows(rows2).unwrap();
+            let expert2 = get(&serde_json::json!({"id": "generated"})).unwrap();
+            assert_eq!(expert2["expert"]["systemPrompt"], "You are Generated.");
+        });
+    }
+}

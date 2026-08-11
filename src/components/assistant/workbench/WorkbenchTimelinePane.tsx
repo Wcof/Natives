@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback, useState } from 'react';
 import { useAssistantDispatch, useAssistantGateway, useAssistantStore } from '@/lib/assistant-workspace';
 import type { ContextUsage, FileChange, PlanApprovalInteraction, Run, RunEvent } from '@/lib/assistant-protocol';
 import type { Locale } from '@/i18n';
@@ -17,6 +18,8 @@ export interface WorkbenchTimelinePaneProps {
   onRollbackChanges: ((changes: Array<{ path: string; runId?: string }>) => Promise<boolean>) | undefined;
   loadingMessages: boolean;
   onRetry: () => void;
+  /** W8: fork the current conversation at the selected persisted user message. */
+  onForkMessage: (messageId: string) => void;
   hasMoreOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
@@ -49,6 +52,7 @@ export function WorkbenchTimelinePane({
   onRollbackChanges,
   loadingMessages,
   onRetry,
+  onForkMessage,
   hasMoreOlder,
   loadingOlder,
   onLoadOlder,
@@ -66,9 +70,110 @@ export function WorkbenchTimelinePane({
   const state = useAssistantStore();
   const dispatch = useAssistantDispatch();
   const gateway = useAssistantGateway();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Array<{ message_id: string; role: string; snippet: string }>>([]);
+  const [searchIndex, setSearchIndex] = useState(0);
+
+  // W8: bounded full-conversation search via conversation.searchMessages.
+  const runSearch = useCallback(
+    async (q: string) => {
+      if (!q.trim()) {
+        setSearchResults([]);
+        setSearchIndex(0);
+        return;
+      }
+      const conversationId = state.activeRunByConversation
+        ? Object.entries(state.activeRunByConversation).find(([, runId]) => runId) ?? null
+        : null;
+      // Use the timeline's active conversation when available via navigation
+      // fallback; the daemon query is conversation-scoped and bounded.
+      const resp = await gateway.request('conversation.searchMessages', {
+        conversation_id: conversationId?.[0] ?? '',
+        q,
+        limit: 50,
+      }).catch(() => ({ results: [] as Array<{ message_id: string; role: string; snippet: string }> }));
+      const results = Array.isArray((resp as { results?: unknown[] })?.results)
+        ? ((resp as { results: unknown[] }).results as Array<{ message_id: string; role: string; snippet: string }>)
+        : [];
+      setSearchResults(results);
+      setSearchIndex(0);
+      if (results.length > 0) {
+        document.getElementById(`msg-${results[0]!.message_id}`)?.scrollIntoView({ block: 'center' });
+      }
+    },
+    [gateway, state.activeRunByConversation],
+  );
+
+  const goNext = useCallback(() => {
+    if (searchResults.length === 0) return;
+    const next = (searchIndex + 1) % searchResults.length;
+    setSearchIndex(next);
+    document.getElementById(`msg-${searchResults[next]!.message_id}`)?.scrollIntoView({ block: 'center' });
+  }, [searchIndex, searchResults]);
+
+  const goPrev = useCallback(() => {
+    if (searchResults.length === 0) return;
+    const prev = (searchIndex - 1 + searchResults.length) % searchResults.length;
+    setSearchIndex(prev);
+    document.getElementById(`msg-${searchResults[prev]!.message_id}`)?.scrollIntoView({ block: 'center' });
+  }, [searchIndex, searchResults]);
 
   return (
     <>
+      <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-1">
+        <button
+          type="button"
+          onClick={() => {
+            setSearchOpen(!searchOpen);
+            if (!searchOpen) setSearchQuery('');
+          }}
+          aria-expanded={searchOpen}
+          className="rounded px-2 py-1 text-[11px] text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+        >
+          {t(locale, 'assistant.searchMessages')}
+        </button>
+        {searchOpen ? (
+          <input
+            autoFocus
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void runSearch(searchQuery);
+              if (e.key === 'Escape') setSearchOpen(false);
+            }}
+            placeholder={t(locale, 'assistant.searchPlaceholder')}
+            aria-label={t(locale, 'assistant.searchMessages')}
+            className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
+          />
+        ) : null}
+        {searchResults.length > 0 ? (
+          <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-secondary)]">
+            {searchIndex + 1}/{searchResults.length}
+          </span>
+        ) : null}
+        {searchResults.length > 0 ? (
+          <button
+            type="button"
+            onClick={goPrev}
+            aria-label={t(locale, 'assistant.searchPrev')}
+            className="shrink-0 rounded p-1 text-[var(--text-disabled)] hover:text-[var(--text-secondary)]"
+          >
+            ↑
+          </button>
+        ) : null}
+        {searchResults.length > 0 ? (
+          <button
+            type="button"
+            onClick={goNext}
+            aria-label={t(locale, 'assistant.searchNext')}
+            className="shrink-0 rounded p-1 text-[var(--text-disabled)] hover:text-[var(--text-secondary)]"
+          >
+            ↓
+          </button>
+        ) : null}
+      </div>
       <div className="min-h-0 flex-1">
         <ConversationTimeline
           messages={timelineMessages}
@@ -79,6 +184,7 @@ export function WorkbenchTimelinePane({
           loading={loadingMessages}
           locale={locale}
           onRetry={onRetry}
+          onFork={onForkMessage}
           hasMoreOlder={hasMoreOlder}
           loadingOlder={loadingOlder}
           onLoadOlder={onLoadOlder}

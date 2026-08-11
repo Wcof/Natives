@@ -54,6 +54,26 @@ function computeMenuPos(trigger: HTMLElement): { top: number; left: number; flip
   };
 }
 
+/** W8: map a low-frequency last-run-status projection to a tiny badge label. */
+function badgeForStatus(status: string | null | undefined): string | null {
+  switch (status) {
+    case 'running':
+    case 'preparing':
+    case 'queued':
+      return '…';
+    case 'waiting_permission':
+    case 'waiting_user':
+      return '?';
+    case 'failed':
+      return '!';
+    case 'completed':
+    case 'interrupted':
+      return '✓';
+    default:
+      return null;
+  }
+}
+
 export default function AssistantSidebarSection({ locale, activeNavigationId, onNavigateAssistant }: AssistantSidebarSectionProps) {
   // Split hooks: do NOT subscribe to runtime. Stream ticks (events/usage/status)
   // must not re-render the project/conversation tree while a run is active.
@@ -400,6 +420,19 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                     >
                       <MessageSquare size={11} className="shrink-0" />
                       <span className="truncate">{conversation.title}</span>
+                      {/* W8: low-frequency activity badge — last run status
+                          projection from the daemon listPage; never the live
+                          stream, so token/text deltas do not re-render rows. */}
+                      {badgeForStatus(conversation.lastRunStatus) ? (
+                        <span
+                          role="status"
+                          aria-label={badgeForStatus(conversation.lastRunStatus)}
+                          className="ml-auto shrink-0 rounded-full px-1.5 text-[0.5625rem] leading-4 font-medium"
+                          style={{ background: 'var(--surface)', color: 'var(--text-secondary)' }}
+                        >
+                          {badgeForStatus(conversation.lastRunStatus)}
+                        </span>
+                      ) : null}
                       {conversation.pinned ? <Pin size={10} className="ml-auto shrink-0 opacity-70" aria-hidden /> : null}
                     </button>
                     {/* Trigger only; panel is portaled to body so overflow/z-index parents cannot clip it. */}

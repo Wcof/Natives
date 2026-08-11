@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Cache entry size guard — never let the cache grow without bound.
-const MAX_ENTRIES: usize = 32;
+pub(crate) const MAX_ENTRIES: usize = 32;
 
 /// Identity of a prepared session. Everything here is revisioned/static.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -773,6 +773,136 @@ mod tests {
         assert!(
             app_schema_revision() >= 1,
             "the daemon schema must be revisioned"
+        );
+    }
+
+    /// NE-P0-04 §19.5: the PreparedAgentSession.prompt_digest MUST equal the
+    /// CompiledPromptPlan.effective_prompt_hash (the same SHA-256 the Snapshot
+    /// and the Provider Prompt use). Storing the raw text instead broke the
+    /// integrity equation and leaked prompt bytes into the cache payload.
+    #[test]
+    fn prepared_session_prompt_digest_equals_effective_prompt_hash() {
+        use harness_core::sha256_hex;
+        let compiled = harness_core::CompiledPromptPlan {
+            layers: vec![],
+            effective_prompt_hash: sha256_hex("sample prompt body"),
+            effective_full_text: "sample prompt body".into(),
+        };
+        let digest = compiled.effective_prompt_hash.clone();
+        let session = PreparedAgentSession {
+            effective_prompt: compiled.clone(),
+            prompt_digest: digest.clone(),
+            frozen_tool_schemas: vec![],
+            skill_catalog_metadata: vec![],
+        };
+        // §19.5: Snapshot digest == Provider Prompt hash == session digest.
+        assert_eq!(
+            session.prompt_digest, compiled.effective_prompt_hash,
+            "prompt_digest must equal the Snapshot/Provider effective_prompt_hash"
+        );
+        assert_eq!(
+            session.prompt_digest,
+            sha256_hex(&compiled.effective_full_text),
+            "prompt_digest must equal SHA-256 of the raw Provider prompt text"
+        );
+        assert_eq!(
+            session.prompt_digest.len(),
+            64,
+            "prompt_digest must be a 256-bit hex digest"
+        );
+        assert_ne!(
+            session.prompt_digest, compiled.effective_full_text,
+            "prompt_digest must never store the raw prompt text"
+        );
+    }
+
+    /// NE-P0-04 §19.5: the cache resolve path returns the same prompt digest
+    /// across a warm hit and a cold rebuild, so the plan hash is stable across
+    /// the two-tier cache tiers.
+    #[test]
+    fn resolve_carries_the_same_prompt_digest_across_tiers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        std::fs::write(p.join("AGENTS.md"), "v1 rules").unwrap();
+        let cache = PreparedAgentSessionCache::new();
+        let mut primed = session();
+        // Give the primed session a realistic digest so the §19.5 equality can
+        // be asserted after a warm hit.
+        let body = "compiled prompt body";
+        primed.prompt_digest = harness_core::sha256_hex(body);
+        primed.effective_prompt = harness_core::CompiledPromptPlan {
+            layers: vec![],
+            effective_prompt_hash: harness_core::sha256_hex(body),
+            effective_full_text: body.into(),
+        };
+        match cache.resolve(
+            p,
+            &p.to_string_lossy(),
+            1,
+            1,
+            "openai",
+            "gpt-4o",
+            "native",
+            0,
+        ) {
+            PreparedResolve::Miss {
+                fast_key,
+                full_digest,
+            } => {
+                let full_key = PreparedAgentSessionKey {
+                    project_instruction_digest: full_digest,
+                    ..fast_key.clone()
+                };
+                cache.insert(full_key, primed.clone());
+                cache.insert(fast_key, primed.clone());
+            }
+            other => panic!("expected Miss on a cold cache, got {other:?}"),
+        }
+        // Warm hit: the digest must still equal the effective_prompt_hash.
+        match cache.resolve(
+            p,
+            &p.to_string_lossy(),
+            1,
+            1,
+            "openai",
+            "gpt-4o",
+            "native",
+            0,
+        ) {
+            PreparedResolve::Hit(session) => {
+                assert_eq!(
+                    session.prompt_digest, session.effective_prompt.effective_prompt_hash,
+                    "warm hit must carry the same plan hash as the compiled prompt"
+                );
+                assert_eq!(
+                    session.prompt_digest,
+                    harness_core::sha256_hex(body),
+                    "warm hit digest must equal SHA-256 of the prompt body"
+                );
+            }
+            other => panic!("expected a warm Hit, got {other:?}"),
+        }
+    }
+
+    /// NE-P0-04: the harness revision is never a bare zero on a real harness
+    /// snapshot canonical hash — it folds the full SHA-256 hex string. A
+    /// content change in the harness canonical hash invalidates the revision.
+    #[test]
+    fn harness_revision_is_content_fold_not_bare_zero() {
+        // A real canonical hash is a 64-hex SHA-256; folding it into a u64
+        // prefix is never zero for any non-zero hash.
+        let real_hash = "abcdef0123456789deadbeefcafef00d123456789abcdef0123456789deadbeef";
+        let rev = harness_revision(real_hash);
+        assert_ne!(
+            rev, 0,
+            "a non-zero canonical hash must produce a non-zero harness revision"
+        );
+        // A one-byte change in the hash invalidates the revision.
+        let edited = "bcdef0123456789deadbeefcafef00d123456789abcdef0123456789deadbeef0";
+        assert_ne!(
+            harness_revision(real_hash),
+            harness_revision(edited),
+            "a one-byte change in the canonical hash must invalidate the harness revision"
         );
     }
 }

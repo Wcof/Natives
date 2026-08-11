@@ -5,7 +5,8 @@
 //! terminal commit + workspace rewind to `run_finish`.
 
 // {A2-03} MAX_WIRE_REPLAY_EVENTS / cap_wire_replay (moved verbatim from rpc.rs)
-pub use super::run_wire::{cap_wire_replay, MAX_WIRE_REPLAY_EVENTS};
+pub use super::run_wire::MAX_WIRE_REPLAY_EVENTS;
+pub(crate) use super::run_wire::cap_wire_replay;
 
 // {A2-03} run_manager (moved verbatim from rpc.rs)
 /// Process-wide run manager (Phase 1 authority).
@@ -50,10 +51,10 @@ pub(crate) fn required_param<'a>(
 }
 
 // {A2-03} handle_run_list_children / handle_run_get_activity (moved to run_query)
-pub use super::run_query::{handle_run_get_activity, handle_run_list_children};
+pub(crate) use super::run_query::{handle_run_get_activity, handle_run_list_children};
 
 // {A2-03} handle_run_finish / handle_rewind_rpc (moved to run_finish)
-pub use super::run_finish::{handle_rewind_rpc, handle_run_finish};
+pub(crate) use super::run_finish::{handle_rewind_rpc, handle_run_finish};
 
 #[cfg(test)]
 mod tests {
