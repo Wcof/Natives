@@ -1,0 +1,551 @@
+//! Subagent session registry CRUD: the `SubagentSession` row model, hidden-child
+//! creation, status/binding/activity updates, session queries, and failover
+//! error classification.
+//!
+//! Split out of `subagent_store` to keep each file under 1000 lines (W10).
+//! Shared helpers (`store`) and the route/directive/reservation re-exports come
+//! from the parent via `super::*`.
+
+use super::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentSession {
+    pub id: String,
+    pub parent_conversation_id: String,
+    pub child_conversation_id: String,
+    pub parent_run_id: Option<String>,
+    pub task_call_id: Option<String>,
+    pub name: String,
+    pub task: String,
+    pub status: String,
+    pub provider_id: String,
+    pub key_id: String,
+    pub model_id: String,
+    pub attempted_bindings: Vec<RouteBinding>,
+    pub last_activity_at: String,
+    pub closed_at: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Child scope persisted at spawn (migration 029) so a route restart can
+    /// restore it exactly instead of guessing. `None` marks sessions created
+    /// before the columns existed; a route restart on those must fail closed.
+    #[serde(default)]
+    pub project_path: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_identity_version: Option<i64>,
+    #[serde(default)]
+    pub permission_profile: Option<String>,
+    #[serde(default)]
+    pub agent_profile_id: Option<String>,
+    #[serde(default)]
+    pub max_steps: Option<i64>,
+    #[serde(default)]
+    pub tool_allowlist: Vec<String>,
+    // T05 budget / reservation ledger (migration 036). `None`/zero marks
+    // sessions created before the columns existed; those fail closed.
+    #[serde(default)]
+    pub tokens_used: u64,
+    #[serde(default)]
+    pub cost_usd: f64,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
+    #[serde(default)]
+    pub max_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub failure_policy: String,
+    #[serde(default)]
+    pub max_retries: u32,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub reservation_released: bool,
+    #[serde(default)]
+    pub reserved_at: Option<String>,
+    #[serde(default)]
+    pub released_at: Option<String>,
+    #[serde(default)]
+    pub tree_root_run_id: Option<String>,
+    #[serde(default)]
+    pub depth: u32,
+    #[serde(default)]
+    pub scope_snapshot_json: String,
+}
+
+fn derive_subagent_name(name: &str, task: &str) -> String {
+    let explicit = name.trim();
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+    task.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(48)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Create a hidden child conversation under parent + subagent_session row.
+/// Returns (session_id, child_conversation_id).
+#[allow(clippy::too_many_arguments)] // pre-existing: parameter list is fixed
+pub fn create_hidden_child_session(
+    parent_conversation_id: &str,
+    parent_run_id: Option<&str>,
+    task_call_id: Option<&str>,
+    name: &str,
+    task: &str,
+    binding: &RouteBinding,
+    permission_profile: Option<&str>,
+    project_id: Option<&str>,
+) -> Result<(String, String), String> {
+    let parent = parent_conversation_id.trim();
+    if parent.is_empty() {
+        return Err("parent_conversation_id required".into());
+    }
+    if binding.key_id.eq_ignore_ascii_case("auto") {
+        return Err("key_id must not be 'auto'".into());
+    }
+    let child_id = Uuid::new_v4().to_string();
+    let session_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let permission = permission_profile
+        .filter(|p| matches!(*p, "readonly" | "ask" | "full_access"))
+        .unwrap_or("ask");
+    let session_name = derive_subagent_name(name, task);
+    let title = if session_name.is_empty() {
+        "Subagent".to_string()
+    } else {
+        session_name.clone()
+    };
+    let attempted_json = serde_json::to_string(&vec![binding.clone()])
+        .map_err(|e| format!("attempted serialize: {e}"))?;
+
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+
+    // Ensure parent exists (FK).
+    let parent_exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversation WHERE id = ?1)",
+            params![parent],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !parent_exists {
+        return Err(format!("parent conversation not found: {parent}"));
+    }
+
+    tx.execute(
+        "INSERT INTO conversation (
+            id, mode, project_id, title, provider_id, model_id,
+            permission_profile_id, created_at, updated_at, parent_conversation_id
+         ) VALUES (?1, 'agent', ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)",
+        params![
+            child_id,
+            project_id,
+            title,
+            binding.provider_id,
+            binding.model_id,
+            permission,
+            now,
+            parent,
+        ],
+    )
+    .map_err(|e| format!("insert child conversation failed: {e}"))?;
+
+    tx.execute(
+        "INSERT INTO subagent_session (
+            id, parent_conversation_id, child_conversation_id, parent_run_id, task_call_id,
+            name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
+            last_activity_at, created_at, updated_at,
+            project_id, permission_profile
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9, ?10, ?11, ?12, ?12, ?12,
+                   ?13, ?14)",
+        params![
+            session_id,
+            parent,
+            child_id,
+            parent_run_id,
+            task_call_id,
+            session_name,
+            task,
+            binding.provider_id,
+            binding.key_id,
+            binding.model_id,
+            attempted_json,
+            now,
+            project_id,
+            permission_profile,
+        ],
+    )
+    .map_err(|e| format!("insert subagent_session failed: {e}"))?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    // Initial task as user message on the child conversation.
+    if !task.trim().is_empty() {
+        let _ = crate::conversation_store::append_message_public(json!({
+            "conversation_id": child_id,
+            "role": "user",
+            "content": task,
+        }));
+    }
+
+    Ok((session_id, child_id))
+}
+
+pub fn insert_subagent_session(session: &SubagentSession) -> Result<(), String> {
+    let attempted_json = serde_json::to_string(&session.attempted_bindings)
+        .map_err(|e| format!("attempted serialize: {e}"))?;
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.execute(
+        "INSERT INTO subagent_session (
+            id, parent_conversation_id, child_conversation_id, parent_run_id, task_call_id,
+            name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
+            last_activity_at, closed_at, error, created_at, updated_at,
+            project_path, project_id, project_identity_version, permission_profile,
+            agent_profile_id, max_steps, tool_allowlist_json,
+            tokens_used, cost_usd, max_tokens, max_cost_usd, failure_policy,
+            max_retries, retry_count, reservation_released, reserved_at, released_at,
+            tree_root_run_id, depth, scope_snapshot_json
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
+                   ?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,
+                   ?35,?36,?37)",
+        params![
+            session.id,
+            session.parent_conversation_id,
+            session.child_conversation_id,
+            session.parent_run_id,
+            session.task_call_id,
+            session.name,
+            session.task,
+            session.status,
+            session.provider_id,
+            session.key_id,
+            session.model_id,
+            attempted_json,
+            session.last_activity_at,
+            session.closed_at,
+            session.error,
+            session.created_at,
+            session.updated_at,
+            session.project_path,
+            session.project_id,
+            session.project_identity_version,
+            session.permission_profile,
+            session.agent_profile_id,
+            session.max_steps,
+            serde_json::to_string(&session.tool_allowlist).unwrap_or_else(|_| "[]".into()),
+            session.tokens_used as i64,
+            session.cost_usd,
+            session.max_tokens.map(|v| v as i64),
+            session.max_cost_usd,
+            session.failure_policy,
+            session.max_retries as i64,
+            session.retry_count as i64,
+            session.reservation_released as i64,
+            session.reserved_at,
+            session.released_at,
+            session.tree_root_run_id,
+            session.depth as i64,
+            session.scope_snapshot_json,
+        ],
+    )
+    .map_err(|e| format!("insert_subagent_session failed: {e}"))?;
+    Ok(())
+}
+
+pub fn update_subagent_session_status(
+    id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let closed = matches!(
+        status,
+        "closed" | "failed" | "cancelled" | "interrupted" | "completed"
+    );
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.execute(
+        "UPDATE subagent_session
+         SET status = ?1,
+             error = COALESCE(?2, error),
+             updated_at = ?3,
+             last_activity_at = ?3,
+             closed_at = CASE WHEN ?4 THEN ?3 ELSE closed_at END
+         WHERE id = ?5",
+        params![status, error, now, closed as i32, id],
+    )
+    .map_err(|e| format!("update_subagent_session_status failed: {e}"))?;
+    Ok(())
+}
+
+pub fn update_session_binding(
+    id: &str,
+    binding: &RouteBinding,
+    attempted: &[RouteBinding],
+) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let attempted_json =
+        serde_json::to_string(attempted).map_err(|e| format!("attempted serialize: {e}"))?;
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.execute(
+        "UPDATE subagent_session
+         SET provider_id = ?1, key_id = ?2, model_id = ?3,
+             attempted_bindings_json = ?4, updated_at = ?5, last_activity_at = ?5
+         WHERE id = ?6",
+        params![
+            binding.provider_id,
+            binding.key_id,
+            binding.model_id,
+            attempted_json,
+            now,
+            id
+        ],
+    )
+    .map_err(|e| format!("update_session_binding failed: {e}"))?;
+    Ok(())
+}
+
+pub fn touch_subagent_session(id: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    let n = conn
+        .execute(
+            "UPDATE subagent_session SET last_activity_at = ?1, updated_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )
+        .map_err(|e| format!("touch_subagent_session failed: {e}"))?;
+    if n == 0 {
+        return Err(format!("subagent session not found: {id}"));
+    }
+    Ok(())
+}
+
+pub fn touch_by_child_conversation(child_conversation_id: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.execute(
+        "UPDATE subagent_session SET last_activity_at = ?1, updated_at = ?1
+         WHERE child_conversation_id = ?2 AND status IN ('pending_assignment','open','queued','running','waiting','idle')",
+        params![now, child_conversation_id],
+    )
+    .map_err(|e| format!("touch_by_child_conversation failed: {e}"))?;
+    Ok(())
+}
+
+pub fn close_subagent_session(id: &str, status: &str, error: Option<&str>) -> Result<(), String> {
+    let status = match status {
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "interrupted" => "interrupted",
+        "completed" => "completed",
+        _ => "closed",
+    };
+    update_subagent_session_status(id, status, error)
+}
+
+fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SubagentSession> {
+    let attempted_raw: String = row.get(11)?;
+    Ok(SubagentSession {
+        id: row.get(0)?,
+        parent_conversation_id: row.get(1)?,
+        child_conversation_id: row.get(2)?,
+        parent_run_id: row.get(3)?,
+        task_call_id: row.get(4)?,
+        name: row.get(5)?,
+        task: row.get(6)?,
+        status: row.get(7)?,
+        provider_id: row.get(8)?,
+        key_id: row.get(9)?,
+        model_id: row.get(10)?,
+        attempted_bindings: super::subagent_route::parse_bindings(&attempted_raw),
+        last_activity_at: row.get(12)?,
+        closed_at: row.get(13)?,
+        error: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        project_path: row.get(17)?,
+        project_id: row.get(18)?,
+        project_identity_version: row.get(19)?,
+        permission_profile: row.get(20)?,
+        agent_profile_id: row.get(21)?,
+        max_steps: row.get(22)?,
+        tool_allowlist: row
+            .get::<_, String>(23)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default(),
+        tokens_used: row.get::<_, i64>(24).unwrap_or(0).max(0) as u64,
+        cost_usd: row.get::<_, f64>(25).unwrap_or(0.0).max(0.0),
+        max_tokens: row.get::<_, Option<i64>>(26)?.map(|v| v.max(0) as u64),
+        max_cost_usd: row.get::<_, Option<f64>>(27)?,
+        failure_policy: row
+            .get::<_, String>(28)
+            .unwrap_or_else(|_| "isolate".into()),
+        max_retries: row.get::<_, i64>(29).unwrap_or(0).max(0) as u32,
+        retry_count: row.get::<_, i64>(30).unwrap_or(0).max(0) as u32,
+        reservation_released: row.get::<_, i64>(31).unwrap_or(0) != 0,
+        reserved_at: row.get(32)?,
+        released_at: row.get(33)?,
+        tree_root_run_id: row.get(34)?,
+        depth: row.get::<_, i64>(35).unwrap_or(0).max(0) as u32,
+        scope_snapshot_json: row.get::<_, String>(36).unwrap_or_else(|_| "{}".into()),
+    })
+}
+
+const SESSION_SELECT: &str =
+    "SELECT id, parent_conversation_id, child_conversation_id, parent_run_id,
+    task_call_id, name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
+    last_activity_at, closed_at, error, created_at, updated_at,
+    project_path, project_id, project_identity_version, permission_profile, agent_profile_id,
+    max_steps, tool_allowlist_json,
+    tokens_used, cost_usd, max_tokens, max_cost_usd, failure_policy,
+    max_retries, retry_count, reservation_released, reserved_at, released_at,
+    tree_root_run_id, depth, scope_snapshot_json
+ FROM subagent_session";
+
+pub fn get_subagent_session(id: &str) -> Result<Option<SubagentSession>, String> {
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.query_row(
+        &format!("{SESSION_SELECT} WHERE id = ?1"),
+        params![id],
+        row_to_session,
+    )
+    .optional()
+    .map_err(|e| format!("get_subagent_session failed: {e}"))
+}
+
+pub fn list_subagent_sessions(
+    parent_conversation_id: Option<&str>,
+    include_closed: bool,
+) -> Result<Vec<SubagentSession>, String> {
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    let mut out = Vec::new();
+    match (parent_conversation_id, include_closed) {
+        (Some(pid), true) => {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "{SESSION_SELECT} WHERE parent_conversation_id = ?1 ORDER BY created_at DESC"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![pid], row_to_session)
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                out.push(r.map_err(|e| e.to_string())?);
+            }
+        }
+        (Some(pid), false) => {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "{SESSION_SELECT}
+                     WHERE parent_conversation_id = ?1
+                       AND status IN ('pending_assignment','open','queued','running','waiting','idle')
+                     ORDER BY created_at DESC"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![pid], row_to_session)
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                out.push(r.map_err(|e| e.to_string())?);
+            }
+        }
+        (None, true) => {
+            let mut stmt = conn
+                .prepare(&format!("{SESSION_SELECT} ORDER BY created_at DESC"))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], row_to_session)
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                out.push(r.map_err(|e| e.to_string())?);
+            }
+        }
+        (None, false) => {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "{SESSION_SELECT}
+                     WHERE status IN ('pending_assignment','open','queued','running','waiting','idle')
+                     ORDER BY created_at DESC"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], row_to_session)
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                out.push(r.map_err(|e| e.to_string())?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn list_active_for_reaper() -> Result<Vec<SubagentSession>, String> {
+    list_subagent_sessions(None, false)
+}
+
+/// Look up session by child conversation id (most recent open-ish row).
+pub fn get_session_by_child_conversation(
+    child_conversation_id: &str,
+) -> Result<Option<SubagentSession>, String> {
+    let child = child_conversation_id.trim();
+    if child.is_empty() {
+        return Ok(None);
+    }
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.query_row(
+        &format!(
+            "{SESSION_SELECT} WHERE child_conversation_id = ?1 ORDER BY created_at DESC LIMIT 1"
+        ),
+        params![child],
+        row_to_session,
+    )
+    .optional()
+    .map_err(|e| format!("get_session_by_child_conversation failed: {e}"))
+}
+
+/// Classify provider/engine errors for failover eligibility.
+pub fn is_failover_eligible_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("permission")
+        || lower.contains("denied")
+        || lower.contains("tool_not_allowlisted")
+        || lower.contains("max steps")
+        || lower.contains("max_steps")
+        || lower.contains("doom loop")
+    {
+        return false;
+    }
+    lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("429")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("network")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("connection")
+        || lower.contains("5xx")
+        || lower.contains("502")
+        || lower.contains("503")
+        || lower.contains("504")
+        || lower.contains("internal server")
+        || lower.contains("provider error")
+}
