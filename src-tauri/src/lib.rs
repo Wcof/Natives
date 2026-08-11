@@ -453,19 +453,14 @@ pub fn run() {
                 });
             }
 
-            // ── Assistant.db Host legacy migration (startup-only one-way) ──
-            // The agent daemon owns the canonical schema and the historical
-            // `assistant_*` conversation/run/message/event/queue tables. The Host
-            // only runs a one-way legacy migration service here (D2-01 /
-            // MIG-004 / DATA-002): it keeps old DB rows readable as a migration
-            // source and maintains the Host-owned provider mirror / project
-            // tables. No runtime DataStore state is registered — normal business
-            // paths read the Daemon or natives.db.
-            let assistant_db_path = data_dir.join("assistant.db");
-            daemon::data::LegacyMigrationService::open(&assistant_db_path.to_string_lossy())
-                .map_err(|e| format!("failed to open assistant legacy migration: {e}"))?
-                .run()
-                .map_err(|e| format!("failed to run assistant legacy migration: {e}"))?;
+            // ── Daemon DB authority ──
+            // The Agent Daemon owns assistant.db exclusively. The Host never
+            // opens, writes, ATTACHes or migrates it (MODULAR §10.3 /
+            // §11.3.2: cross_db_host = 0). Provider mirror / projects /
+            // settings are Host-owned and live in the Host's own natives.db
+            // (db::ensure_host_owned_tables at init_db_pool time). Legacy
+            // assistant_* session migration is owned by the Daemon's
+            // host_authority_migration, not by the Host.
 
             // ── P1 Runtime 抽象层：仅注册独立 CLI runtime ──
             // Native Assistant 的生产执行入口是 Protocol v2 Agent Daemon；
