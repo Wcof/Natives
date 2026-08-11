@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   Bell,
   Blocks,
-  BookMarked,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -29,7 +28,7 @@ import { BUILTIN_TOOLS } from '@/lib/builtin-tools';
 import { favoritesNavTarget, type FavoriteItem } from '@/lib/favorites-client';
 import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
 import SidebarDirTree from '../SidebarDirTree';
-import { QUICK_ACCESS_ITEMS, SETTINGS_NAV_ITEMS, type ModuleItem } from './model';
+import { QUICK_ACCESS_ITEMS, FILE_MANAGER_DIRS, SETTINGS_NAV_ITEMS, type ModuleItem } from './model';
 import type { SidebarController } from './useSidebar';
 
 export function SidebarNavItem({
@@ -243,7 +242,7 @@ function QuickAccessSection({ c }: { c: SidebarController }) {
   const { locale } = c;
   return (
     <>
-      {/* Quick Access List — fixed system shortcuts */}
+      {/* Quick Access List — fixed home shortcut */}
       <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
         {t(locale, 'sidebar.quickAccess')}
       </div>
@@ -252,9 +251,9 @@ function QuickAccessSection({ c }: { c: SidebarController }) {
           const Icon = item.icon;
           const isActive = c.activeNavigationId === item.target;
           const label = t(locale, 'sidebar.quickAccessDirs.' + item.id);
-          // 行渲染保持原样；arrow 为目录树注入的行首 ▸/▾（不可用时为 null）
-          const row = (arrow: ReactNode) => (
+          return (
             <button
+              key={item.id}
               type="button"
               onClick={() => c.selectNavigation(item.target, item.target)}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
@@ -264,26 +263,64 @@ function QuickAccessSection({ c }: { c: SidebarController }) {
               }`}
               title={label}
             >
-              {arrow}
               <Icon size={15} className="shrink-0" />
               <span className="truncate text-sm">{label}</span>
             </button>
           );
-          // 非目录项（主页）无树；目录项包懒加载目录树（fanbox navDirLi 行为）
-          if (!item.path) return <div key={item.id}>{row(null)}</div>;
-          return (
-            <SidebarDirTree
-              key={item.id}
-              path={item.path}
-              locale={locale}
-              activeNavigationId={c.activeNavigationId}
-              onNavigate={c.handleDirTreeNavigate}
-              renderRow={row}
-            />
-          );
         })}
       </div>
     </>
+  );
+}
+
+/**
+ * Collapsible "文件管理器" section: Desktop / Documents / Downloads are flat
+ * navigation items (no expandable tree, no arrows). Clicking one opens the
+ * Files view at that directory via `__files__:<path>`.
+ */
+function FileManagerSection({ c }: { c: SidebarController }) {
+  const { locale, fileManagerExpanded } = c;
+  return (
+    <div className="mb-1">
+      <div className="flex items-center px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+        <span className="min-w-0 flex-1 truncate">{t(locale, 'sidebar.fileManager')}</span>
+        <button
+          type="button"
+          onClick={() => c.setFileManagerExpanded((value: boolean) => !value)}
+          className="rounded p-1 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+          title={fileManagerExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
+          aria-label={fileManagerExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
+          aria-expanded={fileManagerExpanded}
+        >
+          {fileManagerExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
+      </div>
+      {fileManagerExpanded && (
+        <div className="mb-3 flex flex-col gap-0.5 px-3">
+          {FILE_MANAGER_DIRS.map((item) => {
+            const Icon = item.icon;
+            const isActive = c.activeNavigationId === item.target;
+            const label = t(locale, 'sidebar.quickAccessDirs.' + item.id);
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => c.selectNavigation(item.target, item.target)}
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
+                  isActive
+                    ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+                }`}
+                title={label}
+              >
+                <Icon size={15} className="shrink-0" />
+                <span className="truncate text-sm">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -520,8 +557,9 @@ export function SidebarBody({ c }: { c: SidebarController }) {
         </button>
       </div>
 
-      {/* Quick Access / Favorites / Assistant / Modules / Builtin Tools */}
+      {/* Quick Access / File Manager / Favorites / Assistant / Modules / Builtin Tools */}
       <QuickAccessSection c={c} />
+      <FileManagerSection c={c} />
       <FavoritesSection c={c} />
       <AssistantSection c={c} />
       <ModulesSection c={c} />
@@ -567,19 +605,6 @@ function BottomNav({ c }: { c: SidebarController }) {
       >
         <Blocks size={16} />
         <span>{t(locale, 'nav.capabilities')}</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => c.selectNavigation('__library__', '__library__')}
-        aria-current={c.activeNavigationId === '__library__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
-          c.activeNavigationId === '__library__'
-            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
-            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-        }`}
-      >
-        <BookMarked size={16} />
-        <span>{t(locale, 'nav.library')}</span>
       </button>
       <button
         type="button"

@@ -24,6 +24,7 @@ export const nav = {
     expand: 'Expand sidebar',
     dragToResize: 'Drag to resize',
     quickAccess: 'Quick Access',
+    fileManager: 'File Manager',
     favorites: 'Favorites',
     noFavorites: 'No favorites yet',
     noModules: 'No modules installed yet',

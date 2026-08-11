@@ -51,6 +51,9 @@ export interface SidebarController {
   setFavoritesExpanded: Dispatch<SetStateAction<boolean>>;
   visibleFavorites: FavoriteItem[];
   hiddenFavoriteCount: number;
+  /** Collapsible "文件管理器" section (fixed system directories, no arrows). */
+  fileManagerExpanded: boolean;
+  setFileManagerExpanded: Dispatch<SetStateAction<boolean>>;
   assistantExpanded: boolean;
   setAssistantExpanded: Dispatch<SetStateAction<boolean>>;
   activeNavigationId: string | null;
@@ -88,6 +91,7 @@ export function useSidebar({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const { favorites } = useFavorites();
   const [favoritesExpanded, setFavoritesExpanded] = useState(false);
+  const [fileManagerExpanded, setFileManagerExpanded] = useState(true);
   const [assistantExpanded, setAssistantExpanded] = useState(true);
   const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
     () => getNavigationId(activeModuleId),

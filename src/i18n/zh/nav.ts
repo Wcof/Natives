@@ -24,6 +24,7 @@ export const nav = {
     expand: '展开侧边栏',
     dragToResize: '拖拽调整大小',
     quickAccess: '快速访问',
+    fileManager: '文件管理器',
     favorites: '收藏',
     noFavorites: '暂无收藏',
     noModules: '还没有安装任何模块',

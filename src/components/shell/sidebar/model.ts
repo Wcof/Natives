@@ -37,12 +37,13 @@ export interface QuickAccessItem {
   icon: LucideIcon;
 }
 
-export const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
-  {
-    id: 'home',
-    target: '__dashboard__',
-    icon: LayoutDashboard,
-  },
+/**
+ * Fixed system directories shown inside the collapsible "文件管理器" section.
+ * They are flat navigation items (no expandable tree / arrows): clicking one
+ * opens the Files view at that directory. `documents` intentionally points at
+ * the real `~/Documents` — the previous `~/.natives` mapping was wrong.
+ */
+export const FILE_MANAGER_DIRS: readonly QuickAccessItem[] = [
   {
     id: 'desktop',
     target: '__files__:~/Desktop',
@@ -51,8 +52,8 @@ export const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
   },
   {
     id: 'documents',
-    target: '__files__:~/.natives',
-    path: '~/.natives',
+    target: '__files__:~/Documents',
+    path: '~/Documents',
     icon: FileText,
   },
   {
@@ -60,6 +61,14 @@ export const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
     target: '__files__:~/Downloads',
     path: '~/Downloads',
     icon: Download,
+  },
+];
+
+export const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
+  {
+    id: 'home',
+    target: '__dashboard__',
+    icon: LayoutDashboard,
   },
 ];
 
