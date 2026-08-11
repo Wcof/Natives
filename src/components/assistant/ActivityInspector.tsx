@@ -122,7 +122,13 @@ export default function ActivityInspector(props: ActivityInspectorProps) {
         )}
 
         {run && effectiveTab === 'run' && (
-          <RunPanel run={run} locale={locale} providerLabel={providerLabel} onRetry={onRetry} />
+          <RunPanel
+            run={run}
+            locale={locale}
+            providerLabel={providerLabel}
+            onRetry={onRetry}
+            runError={props.runError}
+          />
         )}
 
         {run && effectiveTab === 'tasks' && !tasksCapabilityMissing && (

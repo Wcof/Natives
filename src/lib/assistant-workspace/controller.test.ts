@@ -649,8 +649,12 @@ test('subscribeRun transport error sets reconnecting; next event clears it', asy
     () => subscribeRun(adapter, dispatch, () => state, runId, 0),
     /disconnected/,
   );
+  // Product decision 4: a single-run transport error is run-level. The global
+  // banner gets a generic reconnecting without the raw error text; the raw
+  // message lands in the run's own fold (runErrors).
   assert.equal(state.connection, 'reconnecting');
-  assert.ok(state.connectionError);
+  assert.equal(state.connectionError, null);
+  assert.ok(state.runErrors[runId], 'raw run error is stored run-level');
 
   // Simulate recovery: reconnect and consume remaining events.
   await adapter.connect();

@@ -378,6 +378,19 @@ export class FixtureAssistantAdapter implements AssistantGateway {
           }));
         return clone(children) as T;
       }
+      case 'run.getActivity': {
+        const runId = String(p.run_id ?? p.runId);
+        const run = this.runs[runId];
+        if (!run) throw new Error(`run not found: ${runId}`);
+        return clone({
+          run_id: run.id,
+          conversation_id: run.conversationId,
+          status: run.status,
+          error_code: run.errorCode ?? null,
+          finished_at: run.finishedAt ?? null,
+          last_event_sequence: run.lastEventSequence ?? 0,
+        }) as T;
+      }
       case 'workspace.restore': {
         return { ok: true, rewound: true } as T;
       }

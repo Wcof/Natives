@@ -110,17 +110,38 @@ export interface HostWatchBridge {
   listen(listener: (frame: WatchFrame) => void): () => void;
 }
 
+/**
+ * Tauri v2 JS contract: invoke args are camelCase and Tauri maps them to the
+ * Rust command's snake_case parameters (`run_id`, `after_durable_sequence`,
+ * `after_live_sequence`). Passing snake_case keys from JS leaves the params
+ * unmapped, so the watch commands silently miss their arguments.
+ */
+export function buildWatchStartParams(
+  runId: string,
+  afterDurableSequence: number,
+  afterLiveSequence: number,
+): Record<string, unknown> {
+  return { runId, afterDurableSequence, afterLiveSequence };
+}
+
+export function buildWatchStopParams(runId: string): Record<string, unknown> {
+  return { runId };
+}
+
+export function buildWatchStateParams(runId: string): Record<string, unknown> {
+  return { runId };
+}
+
 /** Build the default Tauri-hosted bridge (lazy; tests inject a fake instead). */
 function createTauriWatchBridge(): HostWatchBridge | null {
   if (typeof window === 'undefined') return null;
   return {
     async start(runId, afterDurableSequence, afterLiveSequence) {
       try {
-        const result = await cmd<{ ok?: boolean; error?: string }>('run_watch_start', {
-          run_id: runId,
-          after_durable_sequence: afterDurableSequence,
-          after_live_sequence: afterLiveSequence,
-        });
+        const result = await cmd<{ ok?: boolean; error?: string }>(
+          'run_watch_start',
+          buildWatchStartParams(runId, afterDurableSequence, afterLiveSequence),
+        );
         return { ok: Boolean(result.ok), error: result.error };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -128,7 +149,7 @@ function createTauriWatchBridge(): HostWatchBridge | null {
     },
     async stop(runId) {
       try {
-        await cmd('run_watch_stop', { run_id: runId });
+        await cmd('run_watch_stop', buildWatchStopParams(runId));
       } catch {
         // best-effort unsubscribe
       }
@@ -141,7 +162,7 @@ function createTauriWatchBridge(): HostWatchBridge | null {
           lastLiveSequence?: number;
           terminal?: boolean;
           error?: string | null;
-        }>('run_watch_state', { run_id: runId });
+        }>('run_watch_state', buildWatchStateParams(runId));
         return {
           active: Boolean(result.active),
           lastDurableSequence: result.lastDurableSequence ?? 0,
@@ -354,6 +375,11 @@ export class DaemonAssistantAdapter implements AssistantGateway {
 
       const source = this.createFrameSource(bridge, runId, signal);
       let sawFrame = false;
+      // Progress = at least one event-bearing frame since the last (re)start.
+      // Heartbeats / resync frames alone are NOT progress: a stream that only
+      // ever delivers `resync_required` and never an event must exhaust the
+      // reconnect budget instead of looping forever.
+      let sawEvent = false;
       try {
         for (;;) {
           const frame = await source.next();
@@ -374,6 +400,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
           projection = out.state.projection;
           liveBuffer = out.state.liveBuffer;
 
+          if (out.events.length > 0) sawEvent = true;
           for (const ev of out.events) {
             this.projectionRecovery.set(runId, projection.recovery);
             yield ev;
@@ -401,7 +428,21 @@ export class DaemonAssistantAdapter implements AssistantGateway {
         this.liveCursorByRun.set(runId, liveSeq);
         return;
       }
-      if (sawFrame) consecutiveFailures = 0;
+      // Bounded reconnect (product decision 4): a stream that keeps closing
+      // without delivering any EVENT counts as a failure; after the budget is
+      // exhausted the caller reconciles (run.getActivity → run.cancel). A
+      // stream that delivered events (daemon restart) resets the counter.
+      if (sawEvent) {
+        consecutiveFailures = 0;
+      } else {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_WATCH_RECONNECTS) {
+          throw new WatchStreamUnavailableError(
+            runId,
+            `stream closed ${consecutiveFailures} times without progress`,
+          );
+        }
+      }
       await sleep(200);
     }
     this.liveCursorByRun.set(runId, liveSeq);

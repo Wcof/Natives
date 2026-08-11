@@ -11,6 +11,7 @@ export const assistant = {
     configureProvider: 'Configure an AI provider first',
     connecting: 'Connecting...',
     conversationTitle: 'Conversation title',
+    runWatchExhausted: 'Connection lost, reconnects stopped — reconciling run state with the engine…',
     daemonNotConnected: 'Assistant service is not connected',
     deleteConversation: 'Delete conversation',
     deleteConversationConfirm: 'Delete “{title}”? This cannot be undone.',

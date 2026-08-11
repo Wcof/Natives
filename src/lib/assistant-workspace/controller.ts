@@ -293,15 +293,52 @@ export async function subscribeRun(
         error: message,
       });
     }
-    dispatch({
-      type: 'disconnect/soft',
-    });
+    // Product decision 4: a single-run watch failure is a run-level concern.
+    // It lands in the run's own fold (runErrors) — never verbatim in the global
+    // ConnectionBanner. The banner only reflects daemon-level connectivity, so
+    // it gets a generic "reconnecting" without the raw error text.
+    dispatch({ type: 'run/error/set', runId, error: message });
     dispatch({
       type: 'connection/set',
       connection: 'reconnecting',
-      error: message,
+      error: null,
     });
     throw err;
+  }
+}
+
+/** Shared i18n key set when a run's reconnect budget is exhausted. */
+export const RUN_WATCH_EXHAUSTED_KEY = 'assistant.runWatchExhausted';
+
+/**
+ * Reconcile a run after its reconnect budget is exhausted: query the daemon's
+ * authoritative run snapshot (`run.getActivity`) and, if the run is still
+ * active, cancel it authoritatively (`run.cancel`). The run's fold shows the
+ * exhausted state; the global banner stays generic.
+ */
+export async function reconcileExhaustedRun(
+  gateway: AssistantGateway,
+  dispatch: Dispatch,
+  runId: string,
+): Promise<void> {
+  let status = '';
+  try {
+    const activity = await gateway.request<Record<string, unknown>>('run.getActivity', {
+      run_id: runId,
+    });
+    status = String(activity?.status ?? '');
+  } catch {
+    // Daemon unreachable: keep the run recovering; the global reconnect flow
+    // (connectWorkspace) owns daemon-level connectivity.
+    dispatch({ type: 'run/error/set', runId, error: RUN_WATCH_EXHAUSTED_KEY });
+    return;
+  }
+  if (isActiveRunStatus(status)) {
+    await cancelRun(gateway, dispatch, runId);
+    dispatch({ type: 'run/error/set', runId, error: RUN_WATCH_EXHAUSTED_KEY });
+  } else {
+    // Already terminal — nothing to cancel; clear transient run error.
+    dispatch({ type: 'recovering/set', runId, recovering: false });
   }
 }
 

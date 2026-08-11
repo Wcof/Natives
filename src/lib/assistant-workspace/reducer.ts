@@ -380,6 +380,13 @@ function applyOneEvent(
       };
     }
     next = evictTerminalRunEvents(next);
+    // Terminal event: clear run-level errors — the fold shows the real terminal
+    // status/error from the daemon now.
+    if (next.runErrors[runId]) {
+      const runErrors = { ...next.runErrors };
+      delete runErrors[runId];
+      next = { ...next, runErrors };
+    }
   }
 
   next = mergeLiveIntoMessages(next, next.runs[runId]!, live, isTerminalRunStatus(next.runs[runId]!.status));
@@ -667,6 +674,15 @@ export function workspaceReducer(
             ? 'connected'
             : state.connection,
       };
+    }
+
+    case 'run/error/set': {
+      // Run-level transport/watch error. Stored on the run (ActivityInspector
+      // fold), never surfaced verbatim in the global banner (product decision 4).
+      const runErrors = { ...state.runErrors };
+      if (action.error) runErrors[action.runId] = action.error;
+      else delete runErrors[action.runId];
+      return { ...state, runErrors };
     }
 
     case 'projection/recovery':

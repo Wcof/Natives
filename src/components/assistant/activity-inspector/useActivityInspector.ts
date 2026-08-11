@@ -41,6 +41,8 @@ import {
 
 export interface ActivityInspectorProps {
   run: Run | null;
+  /** Run-level watch/transport error shown in the run fold (never global banner). */
+  runError?: string | null;
   /** Root / main-run event tree. Main Todo is always derived from this. */
   events: RunEvent[];
   /** Selected child session events (sub-task Todo source). */

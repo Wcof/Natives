@@ -3,12 +3,19 @@
 import { useCallback, useRef } from 'react';
 import { isActiveRunStatus } from '@/lib/assistant-protocol';
 import { useAssistantDispatch, useAssistantGateway, useAssistantStore } from './context';
-import { cancelRun, respondPermission, retryRun, subscribeRun } from './controller';
+import { cancelRun, respondPermission, retryRun, subscribeRun, reconcileExhaustedRun } from './controller';
 import { cancelUnwantedSubscriptions, replaceRunSubscription } from './subscription-coordination';
 
 /** Quiet-resubscribe backoff: grows per empty poll, capped so a live run stays responsive. */
 const RESUB_STEP_MS = 250;
 const RESUB_MAX_MS = 2000;
+
+/**
+ * Bounded reconnect (product decision 4): after this many quiet resubscribe
+ * attempts without progress the loop gives up and reconciles the run with the
+ * daemon (run.getActivity → authoritative run.cancel if still active).
+ */
+export const MAX_RESUB_ATTEMPTS = 8;
 
 /**
  * Run lifecycle for any surface that talks to the engine.
@@ -64,6 +71,17 @@ export function useAssistantRun() {
       if (nextSeq > afterSequence) resubAttemptsRef.current[runId] = 0;
       const attempt = (resubAttemptsRef.current[runId] ?? 0) + 1;
       resubAttemptsRef.current[runId] = attempt;
+
+      // Bounded reconnect (product decision 4): the budget is per-run; once
+      // exhausted we stop quietly resubscribing and reconcile authoritatively
+      // (run.getActivity → run.cancel if still active) instead of looping
+      // forever. The run's fold shows the exhausted state.
+      if (attempt > MAX_RESUB_ATTEMPTS) {
+        delete resubAttemptsRef.current[runId];
+        delete subSignalsRef.current[runId];
+        void reconcileExhaustedRun(gateway, dispatch, runId);
+        return;
+      }
 
       window.setTimeout(
         () => {

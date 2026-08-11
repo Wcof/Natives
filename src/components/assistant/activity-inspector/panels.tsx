@@ -121,11 +121,14 @@ export function RunPanel({
   locale,
   providerLabel,
   onRetry,
+  runError,
 }: {
   run: Run;
   locale: string;
   providerLabel: (providerId: string, modelId: string) => string;
   onRetry?: () => void;
+  /** Run-level watch/transport error (product decision 4: never global banner). */
+  runError?: string | null;
 }) {
   return (
     <div className="space-y-2">
@@ -136,6 +139,14 @@ export function RunPanel({
       </div>
       <Row label={t(locale, 'activityInspector.model')} value={providerLabel(run.providerId, run.modelId)} />
       {run.activity && <Row label={t(locale, 'activityInspector.activity')} value={run.activity} />}
+      {runError && (
+        <div
+          className="rounded border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-2 text-[var(--danger)]"
+          data-testid="run-level-error"
+        >
+          {t(locale, runError)}
+        </div>
+      )}
       {run.errorMessage && (
         <div className="rounded border border-[var(--danger)]/30 bg-[var(--danger-soft)] p-2 text-[var(--danger)]">
           {run.errorMessage}

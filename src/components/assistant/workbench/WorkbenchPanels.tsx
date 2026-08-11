@@ -103,6 +103,7 @@ export function WorkbenchPanels({
         >
           <ActivityInspector
             run={rootRun ?? activeRun}
+            runError={state.runErrors[(rootRun ?? activeRun)?.id ?? ''] ?? null}
             events={rootEvents}
             selectedChildEvents={selectedChildEvents}
             mainTodos={mainTodos}

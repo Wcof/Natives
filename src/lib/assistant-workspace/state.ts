@@ -69,6 +69,8 @@ export interface AssistantWorkspaceState {
   lastSequenceByRun: Record<string, number>;
   /** Runs currently recovering from sequence gap */
   recoveringRuns: Record<string, boolean>;
+  /** Run-level transport/watch errors (never surfaced verbatim in the global banner). */
+  runErrors: Record<string, string>;
   /** Renderer-local projection status; never persisted as a daemon event. */
   projectionRecoveryByRun: Record<string, ProjectionRecovery>;
 
@@ -109,6 +111,7 @@ export function createInitialWorkspaceState(): AssistantWorkspaceState {
     eventsByRun: {},
     lastSequenceByRun: {},
     recoveringRuns: {},
+    runErrors: {},
     projectionRecoveryByRun: {},
     interactions: {},
     interactionOrder: [],
@@ -148,6 +151,7 @@ export type WorkspaceAction =
   | { type: 'event/applyBatch'; events: RunEvent[] }
   | { type: 'event/replay'; runId: string; events: RunEvent[] }
   | { type: 'recovering/set'; runId: string; recovering: boolean }
+  | { type: 'run/error/set'; runId: string; error: string | null }
   | { type: 'projection/recovery'; runId: string; recovery: ProjectionRecovery }
   | { type: 'interaction/upsert'; interaction: InteractionRequest }
   | { type: 'interaction/remove'; id: string }

@@ -3,12 +3,22 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DaemonAssistantAdapter } from './daemon-adapter';
+import {
+  DaemonAssistantAdapter,
+  buildWatchStartParams,
+  buildWatchStopParams,
+  buildWatchStateParams,
+  WatchStreamUnavailableError,
+} from './daemon-adapter';
 import type { HostWatchBridge, WatchFrame } from './daemon-adapter';
 
 /** In-memory host watch bridge for tests. */
 function makeTestBridge() {
   let listener: ((frame: WatchFrame) => void) | null = null;
+  let resolveReady: (() => void) | null = null;
+  let ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
   const started: Array<{ runId: string; durable: number; live: number }> = [];
   const stopped: string[] = [];
   const bridge: HostWatchBridge = {
@@ -21,6 +31,10 @@ function makeTestBridge() {
     },
     listen(fn) {
       listener = fn;
+      resolveReady?.();
+      ready = new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      });
       return () => {
         listener = null;
       };
@@ -30,6 +44,10 @@ function makeTestBridge() {
     bridge,
     started,
     stopped,
+    /** Resolves once the adapter's current frame listener is registered. */
+    whenListening() {
+      return ready;
+    },
     emit(frame: WatchFrame) {
       listener?.(frame);
     },
@@ -288,5 +306,119 @@ test('message_completed clears transient live state (stale live delta dropped)',
   const textDeltas = types.filter((t) => t === 'text_delta');
   assert.equal(textDeltas.length, 1, 'stale live delta cleared by message_completed');
   assert.ok(types.includes('completed'));
+});
+
+// ─── Tauri JS contract: camelCase args (问题 2) ────────────────────────────
+
+test('watch bridge params are camelCase per the Tauri v2 JS contract', () => {
+  // Rust command params stay snake_case (run_id / after_durable_sequence /
+  // after_live_sequence); Tauri maps camelCase JS keys to them. Passing
+  // snake_case keys from JS leaves the args unmapped, so the watch commands
+  // silently miss their arguments.
+  assert.deepEqual(buildWatchStartParams('r1', 3, 7), {
+    runId: 'r1',
+    afterDurableSequence: 3,
+    afterLiveSequence: 7,
+  });
+  assert.deepEqual(buildWatchStopParams('r1'), { runId: 'r1' });
+  assert.deepEqual(buildWatchStateParams('r1'), { runId: 'r1' });
+  // No snake_case keys may leak into the invoke args.
+  const startKeys = Object.keys(buildWatchStartParams('r1', 1, 2));
+  assert.ok(!startKeys.some((k) => k.includes('_')));
+  assert.ok(!Object.keys(buildWatchStopParams('r1')).some((k) => k.includes('_')));
+  assert.ok(!Object.keys(buildWatchStateParams('r1')).some((k) => k.includes('_')));
+});
+
+// ─── Bounded reconnect (问题 4) ────────────────────────────────────────────
+
+test('subscribe gives up with WatchStreamUnavailableError when stream closes without progress', async () => {
+  // The host bridge starts successfully but only ever delivers resync frames
+  // (never an event). The adapter must exhaust its reconnect budget instead of
+  // looping forever — the caller then reconciles (run.getActivity → run.cancel).
+  const bridge = makeTestBridge();
+  const adapter = new DaemonAssistantAdapter({
+    requestFn: async (method) => {
+      if (method === 'daemon.ping') return { ok: true };
+      throw new Error(`unexpected ${method}`);
+    },
+    watchBridge: bridge.bridge,
+  });
+  await adapter.connect();
+
+  const collect = (async () => {
+    for await (const _e of adapter.subscribe('r5', 0)) {
+      // no events expected
+    }
+  })();
+  await bridge.whenListening();
+
+  // Resync-only frames carry no events. Each close is a reconnect attempt and
+  // every attempt without an event consumes the budget (MAX_WATCH_RECONNECTS =
+  // 3), so the third close must throw WatchStreamUnavailableError.
+  for (let i = 0; i < 2; i += 1) {
+    bridge.emit({
+      frame_type: 'resync_required',
+      run_id: 'r5',
+      lane: 'durable',
+      reason: 'stream_closed',
+    });
+    // The adapter tears down and re-registers its listener on each reconnect;
+    // wait for that before emitting the next frame so it is not dropped.
+    await bridge.whenListening();
+  }
+  // Third close exhausts the budget: the adapter throws and never re-listens,
+  // so there is no further whenListening to await.
+  bridge.emit({
+    frame_type: 'resync_required',
+    run_id: 'r5',
+    lane: 'durable',
+    reason: 'stream_closed',
+  });
+
+  await assert.rejects(
+    async () => {
+      await collect;
+    },
+    (err: unknown) => err instanceof WatchStreamUnavailableError,
+    'stream that never delivers an event must exhaust the reconnect budget',
+  );
+});
+
+test('subscribe keeps reconnecting while the stream still delivers events', async () => {
+  const bridge = makeTestBridge();
+  const adapter = new DaemonAssistantAdapter({
+    requestFn: async (method) => {
+      if (method === 'daemon.ping') return { ok: true };
+      throw new Error(`unexpected ${method}`);
+    },
+    watchBridge: bridge.bridge,
+  });
+  await adapter.connect();
+
+  const types: string[] = [];
+  const collect = (async () => {
+    for await (const e of adapter.subscribe('r6', 0)) {
+      types.push(e.type);
+    }
+  })();
+  await bridge.whenListening();
+
+  // Deliver an event (progress) between closes: the budget resets and the
+  // adapter keeps reconnecting instead of giving up.
+  bridge.emit(DURABLE('r6', 1, 'started'));
+  await new Promise((r) => setTimeout(r, 20));
+  bridge.emit({
+    frame_type: 'resync_required',
+    run_id: 'r6',
+    lane: 'durable',
+    reason: 'stream_closed',
+  });
+  await bridge.whenListening();
+  bridge.emit(DURABLE('r6', 2, 'completed', { reason: 'ok' }));
+  await collect;
+
+  assert.ok(types.includes('started'));
+  assert.ok(types.includes('completed'));
+  assert.ok(bridge.started.length >= 2, 'reconnected after stream_closed with progress');
 });
 

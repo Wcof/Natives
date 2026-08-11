@@ -11,6 +11,7 @@ export const assistant = {
     configureProvider: '请先配置 AI 供应商',
     connecting: '正在连接...',
     conversationTitle: '会话标题',
+    runWatchExhausted: '连接中断，重连已停止，正在与引擎核对运行状态…',
     daemonNotConnected: '助理服务未连接',
     deleteConversation: '删除会话',
     deleteConversationConfirm: '确定删除“{title}”吗？此操作无法撤销。',
