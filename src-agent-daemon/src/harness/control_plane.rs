@@ -74,8 +74,15 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
         "harness.hook.catalog" => hook_catalog(&params),
         "harness.profile.list" => profile_list(&params),
         "harness.profile.get" => profile_get(&params),
-        "harness.profile.create" => profile_create(&params),
-        "harness.profile.archive" => profile_archive(&params),
+        // 问题9（唯一 Harness）：profile.create/archive 已退役——全局只有当前
+        // global binding 指向的 profile；无 binding 时幂等使用 harness.global.default。
+        // 读接口（list/get）保留供诊断；写入口显式 invalid（retired），避免仅隐藏 UI。
+        "harness.profile.create" => Err(HarnessError::invalid(
+            "harness.profile.create is retired: the app uses a single global Harness",
+        )),
+        "harness.profile.archive" => Err(HarnessError::invalid(
+            "harness.profile.archive is retired: the app uses a single global Harness",
+        )),
         "harness.draft.get" => draft_get(&params),
         "harness.draft.save" => draft_save(&params),
         "harness.draft.validate" => draft_validate(&params),

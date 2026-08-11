@@ -103,6 +103,13 @@ pub(super) fn binding_get(params: &Value) -> Result<Value, HarnessError> {
 
 pub(super) fn binding_set(params: &Value) -> Result<Value, HarnessError> {
     let (scope_type, scope_id) = binding_scope(params)?;
+    // 问题9（唯一 Harness）：project/session binding 写入口退役。新 run 只解析
+    // 唯一 global binding 指向的 profile；历史 run 继续展示当时冻结 snapshot。
+    if scope_type != "global" {
+        return Err(HarnessError::invalid(format!(
+            "harness.binding.set is retired for scope '{scope_type}': the app uses a single global Harness"
+        )));
+    }
     let profile_id = req_str(params, &["profile_id", "profileId"])?;
     let mode = opt_str(params, &["mode"]).unwrap_or_else(|| "follow_published".into());
     if !["follow_published", "pinned"].contains(&mode.as_str()) {

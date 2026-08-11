@@ -221,26 +221,46 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
   const load = useCallback(async (requestedProfileId?: string) => {
     setLoading(true); setError(null); setNotice(null);
     try {
-      const [listed, identities, projectList, providerList] = await Promise.all([
-        assistantV2.request<{ profiles?: Profile[] }>('harness.profile.list', {}),
+      const [binding, identities, projectList, providerList] = await Promise.all([
+        // 问题9：唯一 Harness = 当前 global binding 指向的 profile；无 binding 时
+        // Daemon 幂等使用 harness.global.default（repository.ensure_defaults）。
+        assistantV2
+          .request<{ binding?: { profile_id?: string; profileId?: string } | null }>(
+            'harness.binding.get',
+            { scope_type: 'global' },
+          )
+          .catch(() => null),
         assistantV2.request<{ items?: ProjectIdentity[] }>('project.identity.list', {}),
         projectApi.list(),
         providerApi.list(),
       ]);
-      const nextProfiles = listed.profiles ?? [];
-      const selected = requestedProfileId || profileIdRef.current || nextProfiles[0]?.id || '';
+      const boundProfileId =
+        binding?.binding?.profile_id ?? binding?.binding?.profileId ?? '';
+      const globalProfileId = boundProfileId || 'harness.global.default';
+      // 只保留唯一 global profile 视图；历史 profile 数据保留可读但不进入列表。
+      const listed = await assistantV2
+        .request<{ profiles?: Profile[] }>('harness.profile.list', {})
+        .catch(() => ({ profiles: [] as Profile[] }));
+      const globalProfile =
+        listed.profiles?.find((item) => item.id === globalProfileId) ??
+        listed.profiles?.find((item) => item.kind === 'global_template') ??
+        null;
+      const nextProfiles = globalProfile ? [globalProfile] : (listed.profiles ?? []);
+      const selected = requestedProfileId || globalProfileId;
       setProfiles(nextProfiles);
       setProjectIdentities(identities.items ?? []);
       setProjects(projectList);
       setProviders(providerList);
       setProfileId(selected);
       profileIdRef.current = selected;
+      // 进入即预览唯一 Harness（无列表选择步骤）。
+      if (requestedProfileId || !detailMode) setDetailMode('preview');
     } catch (cause) {
       setProfiles([]); fail(cause);
     } finally {
       setLoading(false);
     }
-  }, [fail]);
+  }, [detailMode, fail]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
