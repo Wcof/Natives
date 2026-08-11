@@ -78,7 +78,6 @@ export default function ConfirmDialog({
 
   return createPortal(
     <div
-      role="presentation"
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',

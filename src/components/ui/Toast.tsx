@@ -72,14 +72,6 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               animation: !t.dismissing ? `toastSlideUp 0.2s ease` : undefined,
             }}
             onClick={() => removeToast(t.id)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                removeToast(t.id);
-              }
-            }}
           >
             {t.type === 'error' && <XCircle size={14} style={{ flexShrink: 0 }} />}
             {t.type === 'success' && <CheckCircle size={14} style={{ flexShrink: 0 }} />}

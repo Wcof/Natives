@@ -141,15 +141,7 @@ export default function ChangeInbox() {
               {changes.map((ch) => (
                 <div
                   key={ch.path}
-                  role="button"
-                  tabIndex={0}
                   onClick={() => handleNavigate(ch.path)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleNavigate(ch.path);
-                    }
-                  }}
                   style={{
                     padding: '4px 8px', fontSize: FONT_SIZE.sm, color: 'var(--text)',
                     borderRadius: BORDER_RADIUS.sm, cursor: 'pointer', marginBottom: 2,

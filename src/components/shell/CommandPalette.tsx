@@ -376,12 +376,6 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
                 aria-selected={index === selectedIndex}
                 tabIndex={0}
                 onClick={() => handleSelect(cmd)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleSelect(cmd);
-                  }
-                }}
                 onFocus={() => setSelectedIndex(index)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: SPACING.sm,

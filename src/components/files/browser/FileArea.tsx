@@ -104,15 +104,6 @@ export default function FileArea({
           onBlankClick();
         }
       }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          const target = e.target as HTMLElement;
-          if (!target.closest('[data-file-entry]')) {
-            e.preventDefault();
-            onBlankClick();
-          }
-        }
-      }}
       onContextMenu={(e) => {
         // Blank area right-click — only if not on a file/dir element
         const target = e.target as HTMLElement;

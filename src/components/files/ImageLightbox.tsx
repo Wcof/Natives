@@ -33,7 +33,6 @@ export default function ImageLightbox({ src, alt, onClose }: ImageLightboxProps)
   return (
     <div
       className="lightbox-overlay"
-      role="presentation"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       onWheel={handleWheel}
       style={{

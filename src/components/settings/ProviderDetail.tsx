@@ -455,7 +455,6 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                         {dropdownOpen && (discovered[selected.id]?.length ?? 0) > 0 && (
                           <>
                             <div
-                              role="presentation"
                               style={{ position: 'fixed', inset: 0, zIndex: 998 }}
                               onClick={() => setDropdownOpen(false)}
                             />
