@@ -13,7 +13,8 @@ import { ProviderSettingsWorkspace } from '@/components/settings/provider-routin
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
 import ExecutionEngineSettingsPanel from '@/components/settings/ExecutionEngineSettingsPanel';
-import PersonalOverview from '@/components/settings/PersonalOverview';
+import { UsageDashboard } from '@/components/dashboard/UsageDashboard';
+import StorageOverview from '@/components/settings/StorageOverview';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
@@ -539,7 +540,13 @@ export default function SettingsPage({
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'personal':
-        return <PersonalOverview locale={locale} onNavigate={onNavigate} />;
+        // 问题7：设置页直接复用个人主页 UsageDashboard（同一筛选/图表/缓存/
+        // 同步状态机），仅通过既有 children 接缝追加真实 StorageOverview。
+        return (
+          <UsageDashboard>
+            <StorageOverview />
+          </UsageDashboard>
+        );
       case 'general':
         return renderGeneral();
       case 'appearance':
