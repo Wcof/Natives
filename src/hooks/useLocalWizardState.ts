@@ -21,6 +21,16 @@ export interface LocalWizardCallbacks {
   onSaved: () => void;
 }
 
+/**
+ * Optional prefill for the wizard (问题13 HTML import): parent directory,
+ * title and the relative entry file of the picked HTML file.
+ */
+export interface LocalWizardInitial {
+  root?: string;
+  title?: string;
+  entryFile?: string;
+}
+
 export interface LocalWizardState {
   step: LocalWizardStep;
   setStep: (s: LocalWizardStep) => void;
@@ -52,6 +62,9 @@ export interface LocalWizardState {
   setPortMode: (v: 'auto' | 'fixed') => void;
   portValue: string;
   setPortValue: (v: string) => void;
+  /** Relative entry file for a custom static plan (default index.html). */
+  entryFile: string;
+  setEntryFile: (v: string) => void;
   aiPreview: string | null;
   aiBusy: boolean;
   aiPendingConfirm: boolean;
@@ -70,11 +83,14 @@ export interface LocalWizardState {
  * after save" choice is made by which save button is pressed (saveOnly vs
  * saveStart) — there is no separate checkbox to drift from the buttons.
  */
-export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks): LocalWizardState {
+export function useLocalWizardState(
+  { onToast, onSaved }: LocalWizardCallbacks,
+  initial?: LocalWizardInitial,
+): LocalWizardState {
   const locale = useLocale();
   const [step, setStep] = useState<LocalWizardStep>('basic');
-  const [root, setRoot] = useState('');
-  const [title, setTitle] = useState('');
+  const [root, setRoot] = useState(initial?.root ?? '');
+  const [title, setTitle] = useState(initial?.title ?? '');
   const [desc, setDesc] = useState('');
   const [scanning, setScanning] = useState(false);
   const [scan, setScan] = useState<LocalProjectScanResult | null>(null);
@@ -89,6 +105,7 @@ export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks):
   const [openPath, setOpenPath] = useState('/');
   const [portMode, setPortMode] = useState<'auto' | 'fixed'>('auto');
   const [portValue, setPortValue] = useState('');
+  const [entryFile, setEntryFile] = useState(initial?.entryFile ?? 'index.html');
   const [aiPreview, setAiPreview] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiPendingConfirm, setAiPendingConfirm] = useState(false);
@@ -111,6 +128,7 @@ export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks):
     setOpenPath('/');
     setPortMode('auto');
     setPortValue('');
+    setEntryFile('index.html');
     setAiPreview(null);
     setAiBusy(false);
     setAiPendingConfirm(false);
@@ -162,7 +180,7 @@ export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks):
           runtime: 'static_http',
           program: 'internal',
           cwdRelative: cwd.trim() || '.',
-          entryFile: 'index.html',
+          entryFile: entryFile.trim() || 'index.html',
           args: [],
           environmentKeys: [],
           port: {
@@ -182,6 +200,7 @@ export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks):
       return {
         ...base,
         source: 'user',
+        entryFile: entryFile.trim() || base.entryFile || 'index.html',
         cwdRelative: cwd.trim() || base.cwdRelative || '.',
         openPath: openPath.trim() || base.openPath || '/',
         healthPath: openPath.trim() || base.healthPath || '/',
@@ -207,7 +226,7 @@ export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks):
         value: portMode === 'fixed' && portValue ? Number(portValue) : undefined,
       },
     };
-  }, [autoOpen, cwd, openPath, plan, pm, portMode, portValue, scan, script]);
+  }, [autoOpen, cwd, openPath, plan, pm, portMode, portValue, scan, script, entryFile]);
 
   const save = useCallback(
     async (startAfter: boolean) => {
@@ -321,6 +340,8 @@ export function useLocalWizardState({ onToast, onSaved }: LocalWizardCallbacks):
     setPortMode,
     portValue,
     setPortValue,
+    entryFile,
+    setEntryFile,
     aiPreview,
     aiBusy,
     aiPendingConfirm,

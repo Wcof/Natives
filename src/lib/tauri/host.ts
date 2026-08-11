@@ -125,34 +125,24 @@ export const codegraph: NativesAPI['codegraph'] = {
 };
 
   // Dialog （文件/目录选择，经 Tauri dialog plugin）
+  // 问题13：用户取消仍返回空值；真实插件/权限错误必须抛出（不再 catch 吞掉），
+  // 由调用方经 classifyError 展示。
 export const dialog: NativesAPI['dialog'] = {
     pickDirectory: async () => {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const selected = await open({ directory: true, multiple: false });
-        return selected as string | null;
-      } catch {
-        return null;
-      }
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: true, multiple: false });
+      return selected as string | null;
     },
     pickFiles: async () => {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const selected = await open({ directory: false, multiple: true });
-        if (!selected) return [];
-        return Array.isArray(selected) ? selected : [selected];
-      } catch {
-        return [];
-      }
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: false, multiple: true });
+      if (!selected) return [];
+      return Array.isArray(selected) ? selected : [selected];
     },
     saveFile: async () => {
-      try {
-        const { save } = await import('@tauri-apps/plugin-dialog');
-        const selected = await save();
-        return selected as string | null;
-      } catch {
-        return null;
-      }
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const selected = await save();
+      return selected as string | null;
     },
 };
 
@@ -300,4 +290,3 @@ export const menubar: NativesAPI['menubar'] = {
     await cmd('menubar_quit').catch(() => {});
   },
 };
-

@@ -117,6 +117,7 @@ export const dashboard = {
     installSuccess: '模块安装成功',
     installFailed: '模块安装失败',
     invalidPackage: '无法读取模块清单（manifest.json 缺失或损坏），已取消安装：{name}',
+    importUnsupported: '仅支持 .zip 模块包或 .html/.htm 文件导入',
     installed: '已安装',
     enabled: '已启用',
     disabled: '已禁用',

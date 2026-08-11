@@ -8,9 +8,10 @@ import { shouldAutoOpenAfterStart } from '@/lib/creative-app';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import { useCreativeWindows } from '@/hooks/useCreativeWindows';
 import { useBrowserWindow } from '@/hooks/useBrowserWindow';
-import { useCreativeImport } from '@/hooks/useCreativeImport';
+import { useCreativeImport, type HtmlImportInitial } from '@/hooks/useCreativeImport';
 import { useCreativeDock } from '@/hooks/useCreativeDock';
 import { useModuleImportWizard } from '@/hooks/useModuleImportWizard';
+import { useToast } from '@/components/ui/Toast';
 import CatalogShell from './workshop/CatalogShell';
 import WindowSurface from './workshop/WindowSurface';
 import ModuleImportDialog from './workshop/ModuleImportDialog';
@@ -29,11 +30,9 @@ export default function WorkshopPage() {
   const prefersReducedMotion = useReducedMotion();
   const locale = useLocale();
   const { apps, loading, error, reload, busyIds, withBusy } = useCreativeAppCatalog();
-  const [toast, setToast] = useState<string | null>(null);
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 2400);
-  }, []);
+  // 问题13：统一全局 ToastProvider（zIndex 10001，Modal 之上），不再自造 z-50 toast。
+  const { toast } = useToast();
+  const showToast = useCallback((msg: string) => toast(msg), [toast]);
 
   const browserHostRef = useRef<HTMLDivElement | null>(null);
   const windows = useCreativeWindows(browserHostRef);
@@ -46,6 +45,8 @@ export default function WorkshopPage() {
   const logsRef = useRef<LogsControllerHandle | null>(null);
   const editRef = useRef<LocalEditDialogHandle | null>(null);
   const [localWizardOpen, setLocalWizardOpen] = useState(false);
+  /** 问题13：HTML 导入预填 local_project wizard（父目录 + 相对 entryFile + 标题）。 */
+  const [localWizardInitial, setLocalWizardInitial] = useState<HtmlImportInitial | null>(null);
   const [githubWizardOpen, setGithubWizardOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CreativeAppSummary | null>(null);
 
@@ -130,7 +131,15 @@ export default function WorkshopPage() {
   );
 
   const handleAddImport = useCallback(() => {
-    void imports.pickAndImport(moduleImport.beginImport, showToast);
+    void imports.pickAndImport(
+      moduleImport.beginImport,
+      showToast,
+      // 问题13：.html/.htm → local_project wizard 预填（父目录 + 相对 entryFile）。
+      (initial) => {
+        setLocalWizardInitial(initial);
+        setLocalWizardOpen(true);
+      },
+    );
   }, [imports, moduleImport.beginImport, showToast]);
 
   if (windows.browserApp) {
@@ -212,9 +221,14 @@ export default function WorkshopPage() {
       {localWizardOpen && (
         <LocalImportWizard
           open
-          onClose={() => setLocalWizardOpen(false)}
+          initial={localWizardInitial}
+          onClose={() => {
+            setLocalWizardInitial(null);
+            setLocalWizardOpen(false);
+          }}
           onToast={showToast}
           onSaved={() => {
+            setLocalWizardInitial(null);
             setLocalWizardOpen(false);
             void reload();
           }}
@@ -247,12 +261,6 @@ export default function WorkshopPage() {
           }, showToast);
         }}
       />
-
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[var(--text)] text-[var(--bg)] px-4 py-2 rounded-lg text-xs font-medium shadow-lg z-50 animate-fade-in">
-          {toast}
-        </div>
-      )}
     </motion.div>
   );
 }

@@ -4,7 +4,7 @@ import React from 'react';
 import { t, useLocale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
 import { canProceedFromScan } from '@/lib/local-creative';
-import { useLocalWizardState } from '@/hooks/useLocalWizardState';
+import { useLocalWizardState, type LocalWizardInitial } from '@/hooks/useLocalWizardState';
 import type { LocalWizardStep } from '@/lib/local-creative';
 import LocalLaunchStep from './LocalLaunchStep';
 import LocalConfirmStep from './LocalConfirmStep';
@@ -15,6 +15,8 @@ export interface LocalImportWizardProps {
   onToast: (message: string) => void;
   /** Called after a successful save so the page can refresh the catalog. */
   onSaved: () => void;
+  /** Optional prefill (问题13 HTML import: root / title / entry file). */
+  initial?: LocalWizardInitial | null;
 }
 
 const STEPS: LocalWizardStep[] = ['basic', 'scan', 'launch', 'confirm'];
@@ -23,9 +25,9 @@ const STEPS: LocalWizardStep[] = ['basic', 'scan', 'launch', 'confirm'];
  * Four-step local project import wizard (basic → scan → launch → confirm).
  * All state lives in `useLocalWizardState`; this component only wires steps.
  */
-export default function LocalImportWizard({ open, onClose, onToast, onSaved }: LocalImportWizardProps) {
+export default function LocalImportWizard({ open, onClose, onToast, onSaved, initial }: LocalImportWizardProps) {
   const locale = useLocale();
-  const w = useLocalWizardState({ onToast, onSaved });
+  const w = useLocalWizardState({ onToast, onSaved }, initial ?? undefined);
 
   if (!open) return null;
 

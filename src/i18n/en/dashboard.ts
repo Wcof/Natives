@@ -117,6 +117,7 @@ export const dashboard = {
     installSuccess: 'Module installed successfully',
     installFailed: 'Module installation failed',
     invalidPackage: 'Cannot read module manifest (manifest.json missing or corrupt), installation cancelled: {name}',
+    importUnsupported: 'Only .zip module packages or .html/.htm files can be imported',
     installed: 'Installed',
     enabled: 'Enabled',
     disabled: 'Disabled',
