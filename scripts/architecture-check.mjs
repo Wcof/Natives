@@ -477,6 +477,104 @@ function a11yAstHits(src, rel) {
   return hits;
 }
 
+// W2/webpack_module_shadow: a top-level runtime binding named `module` in a
+// client TS/TSX SourceFile shadows Webpack's factory parameter `module` inside
+// the same direct eval that Next React Refresh appends HMR runtime to — the
+// injected footer reads `module.hot.data` and crashes on the facade object
+// (no `.hot`). Only TOP-LEVEL bindings matter: HMR injection is appended at
+// module scope, so function/class-local `module` cannot shadow it.
+// Allowed: export aliases (`export { moduleApi as module }`), property names
+// (`api.module.list()`, `{ module: moduleApi }`), type-only imports, strings,
+// comments. Fatal when found (no baseline exemption).
+function collectWebpackModuleShadow(root = ROOT) {
+  const map = new Map();
+  const srcRoot = join(root, 'src');
+  if (!existsSync(srcRoot)) return map;
+  for (const p of walk(srcRoot)) {
+    if (!isHandwrittenTs(p)) continue;
+    if (/\.test\.(ts|tsx)$/.test(p)) continue;
+    const src = readFileSync(p, 'utf8');
+    let ts;
+    try {
+      ts = loadTypeScript();
+    } catch {
+      // No typescript available: best-effort line scan (not a pass). Only
+      // top-level statement starts are considered; alias exports are skipped.
+      const lines = src.split('\n');
+      lines.forEach((line, i) => {
+        const t = line.trim();
+        if (/(^|;|\{)\s*(const|let|var)\s+module\b/.test(t) && !/as\s+module\b/.test(t)) {
+          map.set(`${relToRoot(p)}:${i + 1}`, t.slice(0, 110));
+        }
+      });
+      continue;
+    }
+    const sf = ts.createSourceFile('x.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const isTypeOnlyStmt = (s) =>
+      (s.modifiers || []).some((m) => m.kind === ts.SyntaxKind.DeclareKeyword) ||
+      (s.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword) && s.isTypeOnly;
+    for (const stmt of sf.statements) {
+      if (isTypeOnlyStmt(stmt)) continue;
+      let binding = null;
+      if (ts.isVariableStatement(stmt)) {
+        for (const decl of stmt.declarationList.declarations) {
+          const names = bindingNamesOf(ts, decl.name);
+          if (names.includes('module')) {
+            binding = decl.name.getText(sf);
+            break;
+          }
+        }
+      } else if (
+        (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) &&
+        stmt.name &&
+        stmt.name.text === 'module'
+      ) {
+        binding = stmt.name.text;
+      } else if (ts.isImportDeclaration(stmt)) {
+        const clause = stmt.importClause;
+        if (!clause || clause.isTypeOnly) continue;
+        if (clause.name && clause.name.text === 'module') {
+          binding = clause.name.text;
+        } else if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+          if (clause.namedBindings.name.text === 'module') binding = clause.namedBindings.name.text;
+        } else if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+          for (const spec of clause.namedBindings.elements) {
+            if (spec.isTypeOnly) continue;
+            const local = spec.name.text;
+            if (local === 'module') {
+              binding = local;
+              break;
+            }
+          }
+        }
+      }
+      if (binding !== null) {
+        const pos = sf.getLineAndCharacterOfPosition(stmt.getStart(sf));
+        map.set(`${relToRoot(p)}:${pos.line + 1}`, `top-level runtime binding \`${binding}\` shadows webpack module`);
+      }
+    }
+  }
+  return map;
+}
+
+// Collect the local binding names of a variable declaration name node,
+// including destructuring patterns (`const { module } = obj` binds `module`;
+// `const { module: x } = obj` binds `x` and is safe).
+function bindingNamesOf(ts, nameNode) {
+  const out = [];
+  const visit = (n) => {
+    if (ts.isIdentifier(n)) {
+      out.push(n.text);
+    } else if (ts.isObjectBindingPattern(n) || ts.isArrayBindingPattern(n)) {
+      for (const el of n.elements) {
+        if (ts.isBindingElement(el)) visit(el.name);
+      }
+    }
+  };
+  visit(nameNode);
+  return out;
+}
+
 function collectBudgetFunctions(root = ROOT) {
   const map = new Map();
   for (const r of [join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src'), join(root, 'crates')]) {
@@ -536,6 +634,7 @@ const CHECKS = [
   { id: 'unregistered_interval', collect: collectUnregisteredInterval, fail: false },
   { id: 'hooks_reverse', collect: collectHooksReverse, fail: true },
   { id: 'a11y_clickable', collect: collectA11yClickable, fail: true },
+  { id: 'webpack_module_shadow', collect: collectWebpackModuleShadow, fail: true },
   { id: 'budget_functions', collect: collectBudgetFunctions, fail: false },
 ];
 
@@ -658,6 +757,7 @@ export {
   collectUnregisteredInterval,
   collectHooksReverse,
   collectA11yClickable,
+  collectWebpackModuleShadow,
   collectBudgetFunctions,
   isFatalCheck,
   shouldFailCheck,

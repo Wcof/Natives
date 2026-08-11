@@ -155,8 +155,140 @@ test('F5: multiline TSX div onClick without role/keyboard is flagged', () => {
 });
 
 // ---------------------------------------------------------------------------
-// F6: empty scan scope is fatal, never an implicit pass
+// W2a: top-level `export const module = {}` must be flagged (fail-closed)
 // ---------------------------------------------------------------------------
+test('W2a: top-level export const module is flagged by webpack_module_shadow', () => {
+  const dir = makeFixture('w2a');
+  try {
+    const p = join(dir, 'src', 'lib', 'tauri', 'bad.ts');
+    mkdirSync(join(dir, 'src', 'lib', 'tauri'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        'export const module = {',
+        '  scan: () => cmd("module_scan"),',
+        '};',
+      ].join('\n'),
+    );
+    const found = arch.collectWebpackModuleShadow(dir);
+    assert.ok(found.size >= 1, 'top-level export const module must be flagged');
+    assert.ok([...found.keys()].some((k) => k.includes('bad.ts')), 'flagged file is the fixture');
+    assert.equal(
+      arch.shouldFailCheck({ id: 'webpack_module_shadow', fail: true }, found, {}),
+      true,
+      'fatal gate must fail on top-level module binding',
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// W2b: safe alias `const moduleApi = {}; export { moduleApi as module };` must
+// stay green (this is the accepted fix shape)
+// ---------------------------------------------------------------------------
+test('W2b: export alias `{ moduleApi as module }` stays green', () => {
+  const dir = makeFixture('w2b');
+  try {
+    const p = join(dir, 'src', 'lib', 'tauri', 'ok.ts');
+    mkdirSync(join(dir, 'src', 'lib', 'tauri'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        'const moduleApi = {',
+        '  scan: () => cmd("module_scan"),',
+        '};',
+        'export { moduleApi as module };',
+      ].join('\n'),
+    );
+    const found = arch.collectWebpackModuleShadow(dir);
+    assert.equal(found.size, 0, 'export alias must not create a local binding');
+    assert.equal(
+      arch.shouldFailCheck({ id: 'webpack_module_shadow', fail: true }, found, {}),
+      false,
+      'safe facade must stay green',
+    );
+    const row = arch.runChecks(dir).rows.find((r) => r.id === 'webpack_module_shadow');
+    assert.equal(row && row.status, 'ok', 'end-to-end gate must stay green');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// W2c: properties, type-only imports, strings, comments and nested locals must
+// stay green (no false positives)
+// ---------------------------------------------------------------------------
+test('W2c: properties, type-only imports, strings, comments and nested locals stay green', () => {
+  const dir = makeFixture('w2c');
+  try {
+    const p = join(dir, 'src', 'safe.tsx');
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        "import type { module } from './types';",
+        'api.module.list();',
+        'const obj = { module: moduleApi };',
+        'const s = "module";',
+        '// const module = 1;',
+        'function f() { const module = 1; return module; }',
+      ].join('\n'),
+    );
+    const found = arch.collectWebpackModuleShadow(dir);
+    assert.equal(found.size, 0, 'safe patterns must not be flagged');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// W2d: `const module` / `let module` / `var module` at top level are all flagged
+// ---------------------------------------------------------------------------
+test('W2d: const/let/var module at top level are all flagged', () => {
+  const dir = makeFixture('w2d');
+  try {
+    for (const [name, decl] of [
+      ['c.ts', 'const module = 1;'],
+      ['l.ts', 'let module: unknown;'],
+      ['v.ts', 'var module = 2;'],
+    ]) {
+      const p = join(dir, 'src', name);
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(p, decl);
+      const found = arch.collectWebpackModuleShadow(dir);
+      assert.ok(found.size >= 1, `${decl} must be flagged`);
+    }
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// W2e: top-level function/class named `module` and runtime import aliasing to
+// `module` are flagged
+// ---------------------------------------------------------------------------
+test('W2e: function/class module and import alias to module are flagged', () => {
+  const dir = makeFixture('w2e');
+  try {
+    const p = join(dir, 'src', 'decls.ts');
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        'import { cmd as module } from "./core";',
+        'function module() {}',
+        'class module {}',
+      ].join('\n'),
+    );
+    const found = arch.collectWebpackModuleShadow(dir);
+    assert.ok(found.size >= 1, 'function/class/import-alias module must be flagged');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+
 test('F6: gate with no scanned files must fail (empty scope)', () => {
   const dir = makeFixture('f6');
   try {
