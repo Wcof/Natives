@@ -93,10 +93,7 @@ export function runBundleCheck(root = ROOT, manifestPath = join(root, '.next', '
   let failed = false;
 
   for (const route of routes) {
-    // Next 15.5 app-build-manifest uses `<route>/page` keys (e.g. `/page`,
-    // `/files/page`) while deriveRoutes yields `/`, `/files`. Fall back to the
-    // `/page`-suffixed key so the gate stays valid across manifest formats.
-    const routeFiles = pages[route] ?? pages[`${route === '/' ? '' : route}/page`] ?? [];
+    const routeFiles = pages[route] ?? [];
     if (routeFiles.length === 0) {
       missingRoutes.push(route);
       rows.push({ route, status: 'missing-chunk', bytes: 0 });
