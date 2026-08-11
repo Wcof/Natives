@@ -47,6 +47,39 @@ pub(crate) fn register_tools_for_surface(
     }
 }
 
+/// 问题10：唯一「有效工具」解析。基础工具 → 可选 allowlist → 永远减 denylist。
+///
+/// 修复 deny-only 失效：此前两处重复实现都是
+/// `if let (Some(allowlist), Some(disallowed))` —— allowlist 为 None（继承全量
+/// builtins）时 denylist 完全不生效。本函数把「无 allowlist」视为「全量 builtin
+/// 名集合」，denylist 永远减法；allowlist 存在时在其上做减法。返回 `None` 表示
+/// 无任何减法（调用方可继续走全量注册），`Some` 为过滤后的最终集合。
+pub(crate) fn resolve_effective_tools(
+    allowlist: Option<&[String]>,
+    disallowed: Option<&[String]>,
+) -> Option<Vec<String>> {
+    let denied: std::collections::HashSet<&str> = disallowed
+        .into_iter()
+        .flatten()
+        .map(|s| s.as_str())
+        .collect();
+    if denied.is_empty() {
+        return allowlist.map(|list| list.to_vec());
+    }
+    let base: Vec<String> = match allowlist {
+        Some(list) => list.to_vec(),
+        None => capability_gateway::tools::builtin_tools()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect(),
+    };
+    Some(
+        base.into_iter()
+            .filter(|name| !denied.contains(name.as_str()))
+            .collect(),
+    )
+}
+
 /// Collect relative paths that a write-side tool is about to touch.
 pub(crate) fn normalize_permission_scope(scope: &str) -> String {
     match scope.trim().to_ascii_lowercase().as_str() {
@@ -54,6 +87,47 @@ pub(crate) fn normalize_permission_scope(scope: &str) -> String {
         "session" => "session".into(),
         "project" | "always" | "forever" => "project".into(),
         _ => "once".into(),
+    }
+}
+
+#[cfg(test)]
+mod resolve_effective_tools_tests {
+    use super::*;
+
+    fn list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_disallowed_returns_allowlist_unchanged() {
+        let allow = list(&["read_file", "bash"]);
+        let out = resolve_effective_tools(Some(&allow), None);
+        assert_eq!(out, Some(allow));
+    }
+
+    #[test]
+    fn allowlist_minus_disallowed() {
+        let allow = list(&["read_file", "bash", "write_file"]);
+        let denied = list(&["bash"]);
+        let out = resolve_effective_tools(Some(&allow), Some(&denied)).unwrap();
+        assert_eq!(out, vec!["read_file".to_string(), "write_file".to_string()]);
+    }
+
+    #[test]
+    fn deny_only_without_allowlist_still_filters_builtins() {
+        // 问题10：deny-only（无 allowlist）也必须生效——此前
+        // `if let (Some, Some)` 双条件让 denylist 完全失效。
+        let denied = list(&["bash", "write_file"]);
+        let out = resolve_effective_tools(None, Some(&denied)).unwrap();
+        assert!(!out.contains(&"bash".to_string()));
+        assert!(!out.contains(&"write_file".to_string()));
+        assert!(out.contains(&"read_file".to_string()), "builtins retained except denied");
+    }
+
+    #[test]
+    fn empty_disallowed_returns_none_to_keep_full_surface() {
+        let out = resolve_effective_tools(None, Some(&[]));
+        assert_eq!(out, None);
     }
 }
 

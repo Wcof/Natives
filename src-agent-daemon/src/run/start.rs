@@ -133,6 +133,20 @@ impl RunManager {
             ) {
                 list.retain(|tool| !disallowed.iter().any(|denied| denied == tool));
             }
+            // 问题10：deny-only（无 allowlist）时 denylist 也必须生效——用唯一
+            // resolve_effective_tools 把「无 allowlist」展开为全量 builtin 后减法。
+            if allowlist.is_none() {
+                let disallowed = capability_snapshot
+                    .profile
+                    .as_ref()
+                    .and_then(|profile| profile.disallowed_tools.as_ref());
+                if let Some(effective) = crate::production::resolve_effective_tools(
+                    None,
+                    disallowed.map(Vec::as_slice),
+                ) {
+                    allowlist = Some(effective);
+                }
+            }
             let mut gateway = capability_gateway::CapabilityGateway::new();
             gateway.set_project_root(project_root.to_string_lossy().to_string());
             crate::production::register_tools_for_surface(&mut gateway, allowlist.as_deref());

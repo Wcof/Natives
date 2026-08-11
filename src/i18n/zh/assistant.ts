@@ -505,6 +505,8 @@ export const assistant = {
       aiGenerateCancel: '放弃',
       aiGenerateFailed: '生成运行未完成',
       aiGenerateProjectRequired: '请先打开一个项目，以便助手运行获得工作区。',
+      aiGenerateNoModel: '没有可用的模型组合：请先在供应商设置中配置可用的 Key 与模型。',
+      noCredentialHint: 'Expert 不绑定供应商/密钥/模型；运行时会从当前会话真实可用的供应商与模型中选择，密钥经系统凭证托管。',
     },
     picker: {
       open: '能力',

@@ -505,6 +505,8 @@ export const assistant = {
       aiGenerateCancel: 'Discard',
       aiGenerateFailed: 'The generation run did not complete',
       aiGenerateProjectRequired: 'Open a project first so the assistant run has a workspace.',
+      aiGenerateNoModel: 'No usable model combination: configure an available key and model in provider settings first.',
+      noCredentialHint: 'Experts do not bind a provider/key/model; runs pick from the session\u2019s real available providers and models, with keys resolved by the credential broker.',
     },
     picker: {
       open: 'Capabilities',

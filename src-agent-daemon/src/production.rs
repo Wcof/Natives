@@ -141,8 +141,8 @@ use self::production_reaper::lookup_model_context_window;
 #[cfg(not(test))]
 use self::production_reaper::spawn_subagent_reaper;
 pub(crate) use self::production_routing::{
-    normalize_permission_scope, register_tools_for_surface, restart_subagent_with_binding,
-    validate_route_binding, wake_assignment_waiter,
+    normalize_permission_scope, register_tools_for_surface, resolve_effective_tools,
+    restart_subagent_with_binding, validate_route_binding, wake_assignment_waiter,
 };
 
 /// Bundled inputs for a production engine turn (replaces the former 10
@@ -603,13 +603,16 @@ impl ProductionRuntime {
                     .and_then(builtin_surface_allowlist)
             })
             .or_else(|| profile.as_ref().and_then(|profile| profile.tools.clone()));
-        if let (Some(allowlist), Some(disallowed)) = (
-            tool_allowlist.as_mut(),
-            profile
-                .as_ref()
-                .and_then(|profile| profile.disallowed_tools.as_ref()),
-        ) {
-            allowlist.retain(|tool| !disallowed.iter().any(|denied| denied == tool));
+        // 问题10：唯一有效工具解析（denylist 永远减法，deny-only 也生效）。
+        let disallowed = profile
+            .as_ref()
+            .and_then(|profile| profile.disallowed_tools.as_ref());
+        let effective = crate::production::resolve_effective_tools(
+            tool_allowlist.as_deref(),
+            disallowed.map(Vec::as_slice),
+        );
+        if let Some(effective) = effective {
+            tool_allowlist = Some(effective);
         }
         let tools = PermissionGatedTools {
             gateway: {

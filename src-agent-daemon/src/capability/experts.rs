@@ -166,9 +166,11 @@ fn insert_expert(params_value: &Value, default_source: &str) -> Result<Value, St
             list_json(params_value, "disallowedTools"),
             str_field(params_value, "permissionMode"),
             list_json(params_value, "skills"),
-            str_field(params_value, "providerId"),
-            str_field(params_value, "keyId"),
-            str_field(params_value, "modelId"),
+            // 问题10：Expert 不再绑定凭证——provider_id/key_id/model_id 列保留
+            // inert，恒为 NULL，不再读写（运行期由会话真实 provider/model 决定）。
+            Option::<String>::None,
+            Option::<String>::None,
+            Option::<String>::None,
             params_value
                 .get("params")
                 .map(|v| v.to_string())
@@ -254,9 +256,7 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
     }
     for (key, col) in [
         ("permissionMode", "permission_mode"),
-        ("providerId", "provider_id"),
-        ("keyId", "key_id"),
-        ("modelId", "model_id"),
+        // 问题10：provider_id/key_id/model_id 列保留 inert，update 不再写。
     ] {
         if let Some(v) = params_value.get(key) {
             match v.as_str() {

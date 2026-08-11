@@ -94,9 +94,6 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
   const [disallowedText, setDisallowedText] = useState((expert?.disallowedTools ?? []).join(', '));
   const [permissionMode, setPermissionMode] = useState(expert?.permissionMode ?? '');
   const [selectedSkills, setSelectedSkills] = useState<string[]>(expert?.skills ?? []);
-  const [providerId, setProviderId] = useState(expert?.providerId ?? '');
-  const [keyId, setKeyId] = useState(expert?.keyId ?? '');
-  const [modelId, setModelId] = useState(expert?.modelId ?? '');
   const [enabled, setEnabled] = useState(expert?.enabled ?? true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -123,9 +120,11 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
       disallowedTools: splitList(disallowedText),
       permissionMode: permissionMode || null,
       skills: selectedSkills,
-      providerId: providerId.trim() || null,
-      keyId: keyId.trim() || null,
-      modelId: modelId.trim() || null,
+      // 问题10：Expert 不保存 provider/key/model —— 生成时由用户按真实可用
+      // provider/model 选择，运行期 Key 经 Host credential broker 解析。
+      providerId: null,
+      keyId: null,
+      modelId: null,
       enabled,
     };
     try {
@@ -170,8 +169,16 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
         setGenerateError(t(locale, 'capabilities.experts.aiGenerateProjectRequired'));
         return;
       }
-      const genProvider = (providerId && providerId.trim()) || 'openai';
-      const genModel = (modelId && modelId.trim()) || 'gpt-4o';
+      // 问题10：生成模型来自真实可用 provider/model（不再是硬编码 openai/gpt-4o）。
+      const { provider: providerApi } = await import('@/lib/tauri/provider');
+      const providers = await providerApi.list();
+      const provider = providers.find((p) => p.keys.some((k) => k.isActive)) ?? providers[0];
+      if (!provider || !provider.models?.length) {
+        setGenerateError(t(locale, 'capabilities.experts.aiGenerateNoModel'));
+        return;
+      }
+      const genProvider = provider.id;
+      const genModel = provider.models[0]!.id;
       const created = await gateway.request<{ id?: string }>('conversation.create', {
         mode: 'agent',
         title: t(locale, 'capabilities.experts.aiGenerateTitle'),
@@ -362,37 +369,14 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          <input
-            value={providerId}
-            onChange={(e) => setProviderId(e.target.value)}
-            placeholder={t(locale, 'capabilities.experts.provider')}
-            aria-label={t(locale, 'capabilities.experts.provider')}
-            className="rounded border px-3 py-2 font-mono text-xs"
-            style={inputStyle}
-          />
-          <input
-            value={keyId}
-            onChange={(e) => setKeyId(e.target.value)}
-            placeholder={t(locale, 'capabilities.experts.keyId')}
-            aria-label={t(locale, 'capabilities.experts.keyId')}
-            className="rounded border px-3 py-2 font-mono text-xs"
-            style={inputStyle}
-          />
-          <input
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-            placeholder={t(locale, 'capabilities.experts.model')}
-            aria-label={t(locale, 'capabilities.experts.model')}
-            className="rounded border px-3 py-2 font-mono text-xs"
-            style={inputStyle}
-          />
-        </div>
-
         <label className="flex items-center justify-between gap-2 text-sm" style={{ color: 'var(--text)' }}>
           {t(locale, 'capabilities.experts.enabledLabel')}
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         </label>
+
+        <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>
+          {t(locale, 'capabilities.experts.noCredentialHint')}
+        </p>
 
         {formError ? <p className="text-sm" style={{ color: 'var(--danger)' }}>{formError}</p> : null}
 

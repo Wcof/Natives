@@ -87,11 +87,6 @@ export default function ExpertList({
               >
                 {expert.enabled ? t(locale, 'capabilities.common.enabled') : t(locale, 'capabilities.common.disabled')}
               </span>
-              {expert.modelId ? (
-                <span className="truncate font-mono text-[10px]" style={{ color: 'var(--text-disabled)' }}>
-                  {expert.modelId}
-                </span>
-              ) : null}
             </div>
             {expert.description ? (
               <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-secondary)' }}>{expert.description}</p>
