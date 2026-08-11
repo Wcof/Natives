@@ -62,7 +62,7 @@ export { agent, skills, library, subagent, assistantV2, project } from './tauri/
 import { cmd } from './tauri/core';
 import type { NativesAPI } from './tauri/types';
 import { terminal } from './tauri/terminal';
-import { module } from './tauri/module';
+import { module as moduleApi } from './tauri/module';
 import { creativeApp, creativeDraft } from './tauri/creative';
 import { fs, archive, search, git, disk, thumbnail } from './tauri/files';
 import { provider, providerRouting } from './tauri/provider';
@@ -122,7 +122,7 @@ export const nativesAPI: NativesAPI = {
   builtinTool,
 
   // Module
-  module,
+  module: moduleApi,
 
   // Creative App (multi-source)
   creativeApp,

@@ -9,7 +9,7 @@ import { cmd } from './core';
 import type { NativesAPI } from './types';
 
 /** Workshop 模块生命周期 / 权限 / 审计 域命令。 */
-export const module: NativesAPI['module'] = {
+const moduleApi: NativesAPI['module'] = {
   scan: () => cmd('module_scan'),
   install: (pathOrZip: string) => cmd('module_install', { pathOrZip }),
   readManifest: (source: string) => cmd('module_read_manifest', { source }),
@@ -43,3 +43,8 @@ export const module: NativesAPI['module'] = {
   rollback: (params: { moduleId: string; oldContent: string }) =>
     cmd('rollback_module', params),
 };
+
+// 公共导出名保持 `module`（兼容既有 import / HMR 契约）。
+// 注意：顶层 binding 命名 `moduleApi`，避免遮蔽 Webpack/React Refresh 的
+// factory 参数 `module`（`module.hot.data` 读取崩溃的根因）。
+export { moduleApi as module };
