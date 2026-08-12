@@ -11,8 +11,8 @@ use agent_core::{
 };
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
-    history_message_to_provider, HistoryMessage, HistoryToolCall, ImageSource, ProviderAdapter,
-    ProviderError, ProviderRequest, ProviderTool, RequestControls,
+    history_message_to_provider, HistoryMessage, ProviderAdapter, ProviderError, ProviderRequest,
+    ProviderTool, RequestControls,
 };
 use provider_adapters::stream::ProviderEvent;
 use tokio_util::sync::CancellationToken;

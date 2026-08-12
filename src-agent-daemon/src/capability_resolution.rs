@@ -528,6 +528,9 @@ mod tests {
             "id": id,
             "name": id,
             "systemPrompt": format!("You are {id}."),
+            // 审计收口 #11：Team coordinator 的 fail-closed 校验要求有效工具
+            // 含 `task`，fixture 统一补齐以免 create 被校验拒绝。
+            "tools": ["task"],
         }))
         .unwrap();
     }

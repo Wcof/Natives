@@ -117,6 +117,9 @@ fn team_crud_validates_members_and_delete_reference_check() {
                 "id": id,
                 "name": id,
                 "systemPrompt": "persona",
+                // 审计收口 #11：Team coordinator 的 fail-closed 校验要求有效工具
+                // 含 `task`，fixture 统一补齐以免 team_create 被校验拒绝。
+                "tools": ["task"],
             }))
             .unwrap();
         }
@@ -425,7 +428,9 @@ fn host_subagent_migration_runs_once_and_maps_fields() {
         let empty = experts::get(&json!({ "id": "h2" })).unwrap();
         assert_eq!(empty["expert"]["systemPrompt"], "You are Empty.");
         assert_eq!(empty["expert"]["enabled"], false);
-        assert_eq!(empty["expert"]["keyId"], "k9");
+        // 审计收口 #9：Expert 不再绑定凭证——迁移后 keyId 恒为 NULL（运行期由
+        // 会话真实 provider/credential broker 决定），与 h1 的 'auto' 一致。
+        assert!(empty["expert"]["keyId"].is_null());
 
         // Second invocation is a no-op (one-shot guard).
         let again = experts::migrate_host_subagents_from(&natives_db).unwrap();
