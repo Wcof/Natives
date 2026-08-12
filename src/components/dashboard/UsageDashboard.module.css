@@ -12,17 +12,25 @@
 
 .header {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  margin-bottom: 16px;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-height: 52px;
+  margin-bottom: 20px;
 }
 
 .title {
   font-family: var(--font-display, 'Inter', system-ui, sans-serif);
   font-size: 1.5rem;
-  font-weight: 700;
+  font-weight: 650;
   color: var(--text);
   letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .headerActions {

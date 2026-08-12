@@ -1,8 +1,8 @@
 # UI/UE 03 · 反馈、动效与可访问性
 
-> **版本**: 1.0.0 · **日期**: 2026-06-15
+> **版本**: 1.1.0 · **日期**: 2026-08-12
 > **关联 ADR**: 无
-> **关联源文件**: `src/lib/design-tokens.ts`（`TRANSITION`）、`src/app/globals.css`、`src/lib/chime.ts`（提示音）、`src/hooks/useFocusTrap.ts`
+> **关联源文件**: `src/lib/design-tokens.ts`（`TRANSITION` / `SPINNER_EASING`）、`src/app/styles/tokens.css`（CSS motion 变量）、`src/app/globals.css`、`src/lib/chime.ts`（提示音）、`src/hooks/useFocusTrap.ts`
 
 ---
 
@@ -17,8 +17,8 @@
 #### R-U13 · 动效必须使用统一缓动曲线
 - **等级**：MUST
 - **分类**：反馈
-- **规则**：所有过渡/动画**必须**引用 `design-tokens.ts` 的 `TRANSITION`（`fast` / `normal` / `slow`，统一用 `cubic-bezier(0.16, 1, 0.3, 1)`）。**禁止**自定义其它缓动曲线或写死 `ease` / `linear`。
-- **正例**：`transition: TRANSITION.fast`、`animation: edIn 0.24s cubic-bezier(0.16,1,0.3,1)`。
+- **规则**：所有过渡/动画**必须**引用 `design-tokens.ts` 的 `TRANSITION`（`fast` / `normal` / `slow`，统一用 `cubic-bezier(0.16, 1, 0.3, 1)`）或对应 CSS 变量。**禁止**自定义其它缓动曲线或写死 `ease` / `linear`。持续旋转的加载 spinner 是唯一 `linear` 例外，必须引用 `SPINNER_EASING` / `--spinner-easing`，不得把该例外扩展到普通入场或状态切换。
+- **正例**：`transition: TRANSITION.fast`、`animation: edIn var(--transition-normal)`。
 - **反例**：`transition: all 0.5s ease` → 曲线不统一，整体节奏混乱。
 - **为什么**：统一曲线 = 统一「物理感」，是 macOS 级质感的基础（见 `STYLE_GUIDE_AUDIT.md` C 节）。
 - **检查方法**：`grep -rn "transition\|animation" src` 核对曲线来源。
@@ -26,7 +26,7 @@
 #### R-U14 · 动效时长分级，禁止长动效阻塞操作
 - **等级**：SHOULD
 - **分类**：反馈、性能
-- **规则**：动效时长**应该**按 `TRANSITION` 三档：微交互 fast（约 0.12s）、常规 normal（约 0.2s）、入场/面板 slow（约 0.3s）。**禁止**超过约 0.4s 的动效（会让人感觉卡顿）。
+- **规则**：动效时长**应该**按 `TRANSITION` 三档：微交互 fast（`120ms`）、常规 normal（`200ms`）、入场/面板 slow（`300ms`）。**禁止**超过约 `400ms` 的非循环动效（会让人感觉卡顿）。
 - **为什么**：长动效在频繁操作时是负担。
 - **检查方法**：review 动效时长。
 
@@ -36,6 +36,14 @@
 - **规则**：面板切换、iframe 打开、命令面板唤起**应该**有 `edIn`（淡入+轻微上移）等入场动效，用 `cubic-bezier(0.16,1,0.3,1)`。
 - **为什么**：硬切会显得「网页套壳」，入场动效是原生感的细节（`STYLE_GUIDE_AUDIT.md` C 节）。
 - **检查方法**：主要切换入口核对入场动效。
+
+#### R-U15.1 · 装饰动效必须优先 transform / opacity 并响应减弱动效
+- **等级**：MUST
+- **分类**：反馈、性能、可访问性
+- **规则**：不改变信息布局的入场、退出、hover 与状态切换必须只动画 `transform` / `opacity`；禁止用 `top` / `left` / `width` / `height` / `filter` / `box-shadow` 制作可由合成层完成的装饰动效。用户直接拖拽面板、确定型进度条和确需重排的布局变化属于例外，但必须避免与输入竞争。
+- **减弱动效**：新增动效必须提供 `@media (prefers-reduced-motion: reduce)` 或等价运行时分支，移除装饰位移并将过渡即时化或缩短至不可感知。持续 spinner 在减弱动效下必须停止旋转或替换为静态图标 + 加载文案，且任何状态不得只靠运动表达。
+- **为什么**：`transform` / `opacity` 通常不触发布局和重绘；尊重系统减弱动效可避免眩晕并保持状态可理解。
+- **检查方法**：DevTools 检查动画属性；开启系统“减弱动态效果”验证面板、Toast、Popover 与 loading 状态。
 
 ---
 
@@ -72,6 +80,7 @@
 
 - [ ] 我的动效用 `TRANSITION` 与统一曲线，没有 `ease`/`linear`（R-U13）。
 - [ ] 动效时长不超过约 0.4s（R-U14）。
+- [ ] 装饰动效只使用 transform/opacity，并在 reduced-motion 下取消位移与持续旋转（R-U15.1）。
 - [ ] 焦点环用 `:focus-visible`，没有全局 `outline: none`（R-U16）。
 - [ ] 自定义交互元素有键盘可达路径与 ARIA 属性（R-U17）。
 - [ ] 提示音节制且可关闭（R-U18）。

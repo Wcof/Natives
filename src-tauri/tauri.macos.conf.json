@@ -14,7 +14,7 @@
         "hiddenTitle": true,
         "trafficLightPosition": {
           "x": 20,
-          "y": 30
+          "y": 17
         },
         "fullscreen": false,
         "resizable": true,

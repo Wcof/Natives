@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Blocks, Bot, Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
+import { AlertCircle, Blocks, Bot, Check, CheckCircle2, ChevronDown, Clock3, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import {
   canSendAssistantDraft,
@@ -24,6 +24,7 @@ import {
   savePersistedQuestionHistory,
 } from '@/lib/assistant-workspace/persistence';
 import { fsApi } from '@/lib/files-api';
+import { mapSubagentUiStatus } from '@/lib/assistant-activity-view';
 import { useToast } from '@/components/ui/Toast';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
@@ -96,18 +97,12 @@ const PERMISSION_LABEL_KEYS: Record<AssistantPermissionProfile, string> = {
   full_access: 'messageInput.permissionFullAccess',
 } as const;
 
-const AGENT_ACCENTS = [
-  { solid: 'var(--agent-accent-1)', soft: 'color-mix(in srgb, var(--agent-accent-1) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-1) 38%, transparent)' },
-  { solid: 'var(--agent-accent-2)', soft: 'color-mix(in srgb, var(--agent-accent-2) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-2) 38%, transparent)' },
-  { solid: 'var(--agent-accent-3)', soft: 'color-mix(in srgb, var(--agent-accent-3) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-3) 38%, transparent)' },
-  { solid: 'var(--agent-accent-4)', soft: 'color-mix(in srgb, var(--agent-accent-4) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-4) 38%, transparent)' },
-  { solid: 'var(--agent-accent-5)', soft: 'color-mix(in srgb, var(--agent-accent-5) 12%, transparent)', border: 'color-mix(in srgb, var(--agent-accent-5) 38%, transparent)' },
-];
-
-function agentAccent(id: string) {
-  let hash = 0;
-  for (let index = 0; index < id.length; index++) hash = (hash * 31 + id.charCodeAt(index)) | 0;
-  return AGENT_ACCENTS[Math.abs(hash) % AGENT_ACCENTS.length]!;
+function SubagentStatusIcon({ status }: { status?: string }) {
+  const key = mapSubagentUiStatus(status).key;
+  if (key === 'completed') return <CheckCircle2 size={12} aria-hidden />;
+  if (key === 'closed') return <AlertCircle size={12} aria-hidden />;
+  if (key === 'pending_assignment') return <Clock3 size={12} aria-hidden />;
+  return <Clock3 size={12} aria-hidden />;
 }
 
 export default function MessageInput(props: MessageInputProps) {
@@ -146,7 +141,6 @@ export default function MessageInput(props: MessageInputProps) {
   const questionHistoryIndexRef = useRef(questionHistory.length);
   const questionHistoryDraftRef = useRef(input);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
-  const activeAccent = activeSubagent ? agentAccent(activeSubagent.id) : null;
 
   // Native currently exposes no slash commands — empty list, honest empty state.
   const availableCommands = useMemo(() => listSlashCommands(), []);
@@ -472,28 +466,30 @@ export default function MessageInput(props: MessageInputProps) {
       : t(locale, 'messageInput.describeTask');
 
   return (
-    <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
+    <div className="mx-auto w-full max-w-[var(--reading-width)] px-5 pb-5 pt-2">
       {(subagents.length > 0 || Boolean(changeSummary && changeSummary.fileCount > 0)) && (
         <div className="mb-2 flex flex-wrap items-center gap-2">
           {subagents.map((agent) => {
-            const accent = agentAccent(agent.id);
             const selected = activeSubagent?.id === agent.id;
+            const statusKey = mapSubagentUiStatus(agent.status).key;
             return (
               <button
                 key={agent.id}
                 type="button"
                 onClick={() => onSelectSubagent?.(agent.id)}
-                className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition hover:brightness-95"
-                style={{
-                  color: accent.solid,
-                  backgroundColor: selected ? accent.soft : 'var(--surface)',
-                  borderColor: selected ? accent.border : 'var(--border-subtle)',
-                }}
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:bg-[var(--surface-hover)] ${
+                  selected
+                    ? 'border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text)]'
+                    : 'border-[var(--border-subtle)] bg-[var(--surface)]'
+                }`}
                 aria-pressed={selected}
                 title={t(locale, 'messageInput.openAgentConversation', { name: agent.name })}
               >
-                <span className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-[var(--neutral-1000)]" style={{ backgroundColor: accent.solid }} aria-hidden>{agent.name.slice(0, 1).toUpperCase()}</span>
+                <SubagentStatusIcon status={agent.status} />
                 <span className="max-w-32 truncate">{agent.name}</span>
+                <span className="text-[10px] text-[var(--text-disabled)]">
+                  {t(locale, `assistant.activity.subagentStatus.${statusKey}`)}
+                </span>
               </button>
             );
           })}
@@ -507,7 +503,12 @@ export default function MessageInput(props: MessageInputProps) {
           ) : null}
         </div>
       )}
-      <div className="relative rounded-[22px] border bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)]" style={activeAccent ? { borderColor: activeAccent.border, boxShadow: `0 8px 30px ${activeAccent.soft}` } : undefined}>
+      <div
+        className="relative rounded-[16px] border border-[var(--border-strong)] bg-[var(--composer)] shadow-[var(--shadow-card)] focus-within:border-[var(--text-secondary)]"
+        style={{
+          transition: 'border-color var(--transition-normal), box-shadow var(--transition-normal), background-color var(--transition-normal)',
+        }}
+      >
         <SlashCommandPopover
           isOpen={slashOpen}
           query={slashQuery}
@@ -537,11 +538,14 @@ export default function MessageInput(props: MessageInputProps) {
             ))}
           </div>
         )}
-        {activeSubagent && activeAccent && (
+        {activeSubagent && (
           <div className="px-4 pt-3">
-            <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium" style={{ color: activeAccent.solid, backgroundColor: activeAccent.soft, borderColor: activeAccent.border }}>
-              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: activeAccent.solid }} />
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-hover)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
+              <Bot size={12} aria-hidden />
               {activeSubagent.name}
+              <span className="text-[10px] text-[var(--text-disabled)]">
+                {t(locale, `assistant.activity.subagentStatus.${mapSubagentUiStatus(activeSubagent.status).key}`)}
+              </span>
             </span>
           </div>
         )}
@@ -559,6 +563,7 @@ export default function MessageInput(props: MessageInputProps) {
                 : t(locale, 'messageInput.runningEnterCancelSend')
               : placeholder
           }
+          aria-label={placeholder}
           disabled={effectiveDisabled}
           rows={1}
           className={`block w-full resize-none bg-transparent px-4 pb-2 ${activeSubagent ? 'pt-2' : 'pt-4'} text-[15px] leading-6 text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed`}
@@ -571,6 +576,7 @@ export default function MessageInput(props: MessageInputProps) {
               onClick={() => void handleAddFiles()}
               disabled={effectiveDisabled}
               title={t(locale, 'messageInput.addAttachment')}
+              aria-label={t(locale, 'messageInput.addAttachment')}
               className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
             >
               <Plus size={18} />
@@ -581,6 +587,7 @@ export default function MessageInput(props: MessageInputProps) {
                 onClick={() => setPermissionOpen(open => !open)}
                 disabled={effectiveDisabled}
                 title={t(locale, 'messageInput.permissionProfile')}
+                aria-label={t(locale, 'messageInput.permissionProfile')}
                 className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
               >
                 <ShieldCheck size={15} />
@@ -637,9 +644,9 @@ export default function MessageInput(props: MessageInputProps) {
           <div className="flex min-w-0 items-center gap-1">
             <ModelSelectorDropdown providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel} onSelect={onSelectModel} locale={locale} />
             {isStreaming || submitting ? (
-              <button type="button" onClick={onStop} disabled={isStopping} title={isStopping ? t(locale, 'messageInput.stopping') : t(locale, 'assistant.stopGeneration')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] disabled:opacity-50"><Square size={12} fill="currentColor" /></button>
+              <button type="button" onClick={onStop} disabled={isStopping} title={isStopping ? t(locale, 'messageInput.stopping') : t(locale, 'assistant.stopGeneration')} aria-label={isStopping ? t(locale, 'messageInput.stopping') : t(locale, 'assistant.stopGeneration')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] disabled:opacity-50"><Square size={12} fill="currentColor" /></button>
             ) : (
-              <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={t(locale, 'assistant.send')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>
+              <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={t(locale, 'assistant.send')} aria-label={t(locale, 'assistant.send')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>
             )}
           </div>
         </div>

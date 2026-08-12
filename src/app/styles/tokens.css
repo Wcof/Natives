@@ -54,6 +54,10 @@
   --surface-hover: #E8E7EA;
   --surface-active: #D4D3D7;
   --sidebar: #E8E7EA;
+  --canvas: var(--background);
+  --raised: var(--surface);
+  --inset: var(--surface-hover);
+  --composer: var(--surface);
 
   /* ── Grayscale steps (Light) ── */
   --gray-50: #FAFAFA;
@@ -73,12 +77,16 @@
   /* ── Border ── */
   --border: #D4D3D7;
   --border-subtle: #E8E7EA;
+  --border-strong: var(--neutral-800);
 
   /* ── Text ── */
   --text: #18181A;
   --text-body: #48474D;
   --text-secondary: #646268;
   --text-disabled: #9B999E;
+  --text-tertiary: var(--neutral-600);
+  --text-ghost: var(--text-disabled);
+  --selection: color-mix(in srgb, var(--neutral-150) 18%, transparent);
 
   /* ── Control (V1.1) ── */
   --control-bg: #E8E7EA;
@@ -141,10 +149,13 @@
   --shadow-popup: 0 8px 24px rgba(0, 0, 0, 0.08);
   --shadow-modal: 0 20px 40px rgba(0, 0, 0, 0.12);
 
-  /* ── Transition ── */
-  --transition: 150ms ease;
-  --transition-fast: 100ms ease;
-  --transition-slow: 200ms ease;
+  /* ── Motion ── */
+  --motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+  --spinner-easing: linear;
+  --transition-fast: 120ms var(--motion-easing);
+  --transition-normal: 200ms var(--motion-easing);
+  --transition-slow: 300ms var(--motion-easing);
+  --transition: var(--transition-normal);
 
   /* ── Typography ── */
   --font-ui: Inter, SF Pro Display, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -160,6 +171,10 @@
   --terminal-height: 280px;
   --terminal-min: 160px;
   --terminal-max: 50vh;
+  --reading-width: 760px;
+  --titlebar-height: 48px;
+  --control-compact: 32px;
+  --turn-gap: 40px;
 
   /* ── Z-index ── */
   --z-dragbar: 5;
@@ -260,6 +275,10 @@
   --surface-hover: #202024;
   --surface-active: #323137;
   --sidebar: #111113;
+  --canvas: var(--background);
+  --raised: var(--surface-hover);
+  --inset: var(--neutral-100);
+  --composer: var(--surface-hover);
 
   /* ── Grayscale steps (Dark) ── */
   --gray-50: #010101;
@@ -276,12 +295,16 @@
   /* ── Border ── */
   --border: #323137;
   --border-subtle: #202024;
+  --border-strong: var(--neutral-400);
 
   /* ── Text ── */
   --text: #FAFAFC;
   --text-body: #D4D3D7;
   --text-secondary: #9B999E;
   --text-disabled: #646268;
+  --text-tertiary: var(--neutral-600);
+  --text-ghost: var(--text-disabled);
+  --selection: color-mix(in srgb, var(--neutral-950) 24%, transparent);
 
   /* ── Control (V1.1) ── */
   --control-bg: #27262B;
@@ -433,6 +456,10 @@ body {
 
 main {
   background: var(--background);
+}
+
+::selection {
+  background: var(--selection);
 }
 
 /* ── Input caret ── */

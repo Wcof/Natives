@@ -1,8 +1,8 @@
 # UI/UE 01 · 设计令牌与主题系统
 
-> **版本**: 1.1.0 · **日期**: 2026-07-14
+> **版本**: 1.2.0 · **日期**: 2026-08-12
 > **关联 ADR**: [ADR 0009](../../adr/0009-monochrome-dashboard-theme.md)、[ADR 0010](../../adr/0010-global-neutral-spectrum.md)
-> **关联源文件**: `src/lib/design-tokens.ts`（TS 常量）、`src/lib/theme-engine.ts`（深浅主题 + Zod 校验 + 应用）、`src/app/globals.css`、`docs/STYLE_GUIDE_AUDIT.md`（历史改造清单，已被本篇收口为规范）
+> **关联源文件**: `src/lib/design-tokens.ts`（TS 常量）、`src/app/styles/tokens.css`（CSS 语义与原始色板）、`src/lib/theme-engine.ts`（深浅主题 + Zod 校验 + 应用）、`src/app/globals.css`、`docs/STYLE_GUIDE_AUDIT.md`（历史改造清单，已被本篇收口为规范）
 
 ---
 
@@ -20,8 +20,8 @@ Natives 同时维护两套令牌，各有用途：
 
 | 令牌集 | 位置 | 用途 | 是否随主题变 |
 |--------|------|------|-------------|
-| **TS 常量** | `src/lib/design-tokens.ts`（`SPACING` / `FONT_SIZE` / `BORDER_RADIUS` / `TRANSITION` / `SHADOW`） | 给 inline style / 计算用，**不随主题变** | 否（结构性数值） |
-| **CSS 语义变量** | `theme-engine.ts` 的 `THEMES` → 注入为 `--background` / `--surface` / `--text` / `--primary` 等 | 给样式表 / `var(--x)` 引用，**随主题变** | 是（主题相关） |
+| **TS 常量** | `src/lib/design-tokens.ts`（`SPACING` / `FONT_SIZE` / `BORDER_RADIUS` / `TRANSITION` / `LAYOUT` / `SHADOW`） | 给 inline style / 计算用，**不随主题变** | 否（结构性数值） |
+| **CSS 语义变量** | `tokens.css` 的固定色板与派生角色 + `theme-engine.ts` 的 `THEMES` 核心主题值 | 给样式表 / `var(--x)` 引用，**随主题变** | 是（主题相关） |
 
 #### R-U1 · 视觉值必须引用令牌，禁止魔法数字
 - **等级**：MUST
@@ -138,14 +138,22 @@ Natives 同时维护两套令牌，各有用途：
 |---|---|---|
 | `--background` | `--neutral-0` (`#010101`) | `--neutral-950` (`#FAFAFC`) |
 | `--surface` | `--neutral-150` (`#18181A`) | `--neutral-1000` (`#FFFFFF`) |
+| `--canvas` | `--background` | `--background` |
+| `--raised` | `--surface-hover` | `--surface` |
+| `--inset` | `--neutral-100` (`#111113`) | `--surface-hover` |
+| `--composer` | `--surface-hover` | `--surface` |
 | `--surface-hover` | `--neutral-200` (`#202024`) | `--neutral-900` (`#E8E7EA`) |
 | `--sidebar` | `--neutral-100` (`#111113`) | `--neutral-900` (`#E8E7EA`) |
 | `--border-subtle` | `--neutral-200` (`#202024`) | `--neutral-900` (`#E8E7EA`) |
 | `--border` | `--neutral-300` (`#323137`) | `--neutral-850` (`#D4D3D7`) |
+| `--border-strong` | `--neutral-400` (`#48474D`) | `--neutral-800` (`#B7B5BA`) |
 | `--text` | `--neutral-950` (`#FAFAFC`) | `--neutral-150` (`#18181A`) |
 | `--text-body` | `--neutral-850` (`#D4D3D7`) | `--neutral-400` (`#48474D`) |
 | `--text-secondary` | `--neutral-700` (`#9B999E`) | `--neutral-500` (`#646268`) |
 | `--text-disabled` | `--neutral-500` (`#646268`) | `--neutral-700` (`#9B999E`) |
+| `--text-tertiary` | `--neutral-600` (`#7F7D83`) | `--neutral-600` (`#7F7D83`) |
+| `--text-ghost` | `--text-disabled` | `--text-disabled` |
+| `--selection` | 24% `--neutral-950` | 18% `--neutral-150` |
 | `--primary` | `--neutral-950` (`#FAFAFC`) | `--neutral-150` (`#18181A`) |
 | `--primary-hover` | `--neutral-850` (`#D4D3D7`) | `--neutral-300` (`#323137`) |
 | `--primary-soft` | `--neutral-250` (`#27262B`) | `--neutral-900` (`#E8E7EA`) |
@@ -198,6 +206,18 @@ Natives 同时维护两套令牌，各有用途：
 - **分类**：主题、数据可视化、可访问性
 - **规则**：danger、warning、success、info、Diff 与终端 ANSI 保留独立色相。它们只表达明确语义，不得作为普通系列色或装饰强调色；普通增长/下降数据若不代表成功或故障，仍使用中性色并配合 `+` / `−`、箭头和文字说明。
 - **为什么**：限制彩色出现频率，既保持全局黑白灰品牌，也让真正重要的异常和状态更醒目。
+
+#### R-U2.10 · 阅读工作台必须共享结构令牌
+
+- **等级**：MUST
+- **分类**：布局、排版、组件
+- **规则**：会话、编辑器、设置等生产力工作台必须引用共享结构令牌，不得按页面复制同义尺寸：
+  - `--reading-width` / `LAYOUT.readingWidth`：正文与 Composer 的最大阅读宽度，基线 `760px`。
+  - `--titlebar-height` / `LAYOUT.titlebarHeight`：主窗口标题栏高度，基线 `48px`。
+  - `--control-compact` / `LAYOUT.controlCompact`：紧凑桌面控件的可见高度，基线 `32px`；命中区不得因图标较小而同步缩小。
+  - `--turn-gap` / `LAYOUT.turnGap`：会话新回合的垂直分隔，基线 `40px`；普通同回合内容使用既有间距令牌。
+- **规则补充**：正文、代码、表单必须优先消费稳定的 `--canvas` / `--raised` / `--inset` / `--composer` 表面角色；浮层和选中态分别消费 `--border-strong` / `--selection`，禁止用品牌色制造普通结构层级。
+- **为什么**：统一阅读宽度、标题栏与回合节奏，能让 Shell、Assistant 和设置页共享同一视觉骨架，同时避免为参考设计复制第二套色板。
 
 
 #### R-U3 · 皮肤切换必须即时且经 Zod 校验
@@ -300,6 +320,7 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
 - [ ] 若我新增了语义键，已在深浅主题全部补齐（R-U2）。
 - [ ] 我的第一方 UI 颜色来自固定的 15 级中性色板，没有页面私有灰色（R-U2.5）。
 - [ ] 我的深浅主题按统一语义映射消费色板，正文与关键图形达到对比度要求（R-U2.6）。
+- [ ] 我的阅读列、标题栏、紧凑控件和回合间距使用共享结构令牌（R-U2.10）。
 - [ ] 我的体量图表使用 `--chart-volume-0..8`，零值、缺失值和非零值没有混淆（R-U2.7）。
 - [ ] 我的分类图表同时提供标签/数值，没有只靠相邻灰色区分类别（R-U2.8）。
 - [ ] 我的彩色只用于语义状态、Diff、终端 ANSI 或用户内容，没有作为普通图表装饰色（R-U2.9）。

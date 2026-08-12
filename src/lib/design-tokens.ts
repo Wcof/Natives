@@ -37,11 +37,24 @@ export const BORDER_RADIUS = {
   pill: 999,
 } as const;
 
-// ── Transition (V1.0 规范：150ms ease) ──
+// ── Motion (R-U13/14: one curve, three durations) ──
+export const MOTION_EASING = 'cubic-bezier(0.16, 1, 0.3, 1)' as const;
+
 export const TRANSITION = {
-  fast: '100ms ease',
-  normal: '150ms ease',
-  slow: '200ms ease',
+  fast: `120ms ${MOTION_EASING}`,
+  normal: `200ms ${MOTION_EASING}`,
+  slow: `300ms ${MOTION_EASING}`,
+} as const;
+
+// Continuous loading rotation is the only linear-easing exception (R-U13).
+export const SPINNER_EASING = 'linear' as const;
+
+// ── Shared desktop layout geometry ──
+export const LAYOUT = {
+  readingWidth: 760,
+  titlebarHeight: 48,
+  controlCompact: 32,
+  turnGap: 40,
 } as const;
 
 // ── Shadow (V1.0 三级，深色尽量不用) ──
@@ -55,8 +68,12 @@ export const SHADOW = {
 export const THEME_TOKENS = {
   // Backgrounds
   background: 'var(--background)',
+  canvas: 'var(--canvas)',
   surface: 'var(--surface)',
   surfaceHover: 'var(--surface-hover)',
+  raised: 'var(--raised)',
+  inset: 'var(--inset)',
+  composer: 'var(--composer)',
   sidebar: 'var(--sidebar)',
 
   // Grayscale steps
@@ -75,7 +92,10 @@ export const THEME_TOKENS = {
   text: 'var(--text)',
   textBody: 'var(--text-body)',
   textSecondary: 'var(--text-secondary)',
+  textTertiary: 'var(--text-tertiary)',
+  textGhost: 'var(--text-ghost)',
   textDisabled: 'var(--text-disabled)',
+  selection: 'var(--selection)',
 
   // Brand
   primary: 'var(--primary)',
@@ -86,6 +106,7 @@ export const THEME_TOKENS = {
   // Border
   border: 'var(--border)',
   borderSubtle: 'var(--border-subtle)',
+  borderStrong: 'var(--border-strong)',
 
   // Semantic
   danger: 'var(--danger)',
@@ -108,7 +129,7 @@ export const CARD_STYLE: React.CSSProperties = {
   border: `1px solid ${THEME_TOKENS.border}`,
   borderRadius: BORDER_RADIUS.lg,
   padding: SPACING.xl,
-  transition: `all ${TRANSITION.normal}`,
+  transition: `background-color ${TRANSITION.normal}, border-color ${TRANSITION.normal}, box-shadow ${TRANSITION.normal}`,
 };
 
 /** Standard Input (V1.0 规范第 6 节) */
@@ -148,7 +169,7 @@ export const SECTION_HEADER_STYLE: React.CSSProperties = {
 export const OVERLAY_STYLE: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(0, 0, 0, 0.4)',
+  background: 'var(--overlay-medium)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',

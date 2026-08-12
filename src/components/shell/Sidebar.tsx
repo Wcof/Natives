@@ -18,8 +18,7 @@ export default function Sidebar(props: SidebarProps) {
   const { locale } = c;
 
   return (
-    <div className={`doppelrand-outer h-full ${c.isCollapsed ? 'w-0 !border-0 !border-none overflow-visible' : 'relative'}`} style={c.isCollapsed ? { border: 'none' } : undefined}>
-    <div className={`doppelrand-inner h-full ${c.isCollapsed ? 'w-0 !border-0 !border-none overflow-visible' : ''}`} style={c.isCollapsed ? { border: 'none' } : undefined}>
+    <div className={`shell-sidebar-frame h-full ${c.isCollapsed ? 'w-0 overflow-visible' : 'relative'}`}>
     <aside
       className={`flex flex-col h-full ${c.isCollapsed ? 'overflow-visible' : 'overflow-hidden'}${c.isResizing ? ' is-resizing' : ''}`}
       style={{
@@ -30,7 +29,7 @@ export default function Sidebar(props: SidebarProps) {
         zIndex: c.isCollapsed ? 60 : undefined,
         background: c.isCollapsed ? 'transparent' : 'var(--sidebar)',
         border: 'none',
-        borderRight: c.isCollapsed ? 'none' : '1px solid var(--border)',
+        borderRight: 'none',
         transition: c.isResizing ? 'none' : undefined,
         pointerEvents: c.isCollapsed ? 'none' : 'auto',
       }}
@@ -42,7 +41,6 @@ export default function Sidebar(props: SidebarProps) {
     >
       <SidebarChrome c={c} />
     </aside>
-    </div>
     {/* Right-edge resize handle — expanded only */}
     {!c.isCollapsed && (
       <div

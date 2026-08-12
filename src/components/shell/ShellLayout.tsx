@@ -325,15 +325,14 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       {/* ── V1.0 纯色背景，无 grain / blob / WebGL Liquid Glass ── */}
 
       <div className="w-full h-full" style={{ opacity: themeReady ? 1 : 0 }}>
-      <div className="w-full h-full bg-[var(--background)] p-3 flex gap-3 overflow-visible box-border relative isolate">
+      <div className="shell-workspace w-full h-full flex overflow-visible box-border relative isolate">
       {/* ── 工作区顶部拖拽条：必须从侧栏右侧开始，否则会盖住「折叠」按钮 ──
           侧栏 z-50 > 本层 z-30，双重保证侧栏标题栏可点。 */}
       <div
         data-tauri-drag-region
         className="absolute top-0 z-30"
         style={{
-          // p-3(12) + sidebar + gap-3(12)
-          left: `${12 + (effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth) + 12}px`,
+          left: `${effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth}px`,
           right: '0px',
           height: '20px',
         }}
@@ -365,7 +364,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       <div className="flex-1 flex flex-col min-w-0 h-full box-border relative z-10">
         {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
         <div
-          className={`flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col${state.terminalCollapsed || isSettingsMode ? '' : ' mb-3'}`}
+          className="flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col"
           style={{ paddingTop: 0 }}
         >
           {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}

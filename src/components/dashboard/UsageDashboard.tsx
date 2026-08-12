@@ -156,9 +156,19 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
     return uniqueSessionCount(filteredComp.sessions);
   }, [data?.comparison, sourceFilter, modelFilter]);
 
+  const dashboardHeader = (
+    <header className={styles.header}>
+      <div>
+        <h1 className={styles.title}>{t(locale, 'dashboard.title')}</h1>
+        <p className={styles.subtitle}>{t(locale, 'dashboard.subtitle')}</p>
+      </div>
+    </header>
+  );
+
   if (state.kind === 'reading-cache') {
     return (
       <div className={styles.container}>
+        {dashboardHeader}
         <div className={styles.toolbarSection}>
           <UsageToolbar
             preset={preset}
@@ -195,6 +205,7 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
   if (state.kind === 'missing-cache') {
     return (
       <div className={styles.container}>
+        {dashboardHeader}
         <div className={styles.toolbarSection}>
           <UsageToolbar
             preset={preset}
@@ -237,6 +248,7 @@ export function UsageDashboard({ children }: UsageDashboardProps = {}) {
 
   return (
     <div className={styles.container}>
+      {dashboardHeader}
       {/* Toolbar: date presets + filters + unified sync row */}
       <UsageToolbar
         preset={preset}

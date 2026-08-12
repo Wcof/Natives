@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════
-   Layout Shell — 纯色 Surface，无 backdrop-filter
+   Layout Shell — unified desktop workspace
    ═══════════════════════════════════════════ */
 
 .shell {
@@ -12,6 +12,29 @@
   transition: grid-template-columns var(--transition),
               grid-template-rows var(--transition);
   background: var(--background);
+}
+
+.shell-workspace {
+  min-width: 0;
+  background: var(--canvas, var(--background));
+}
+
+.shell-sidebar-frame {
+  position: relative;
+  background: var(--sidebar);
+  border-right: 1px solid var(--sidebar-border, var(--border));
+}
+
+.sidebar-nav-active {
+  color: var(--text);
+  background: var(--surface-active);
+  box-shadow: inset 2px 0 0 var(--text-secondary);
+  font-weight: 600;
+}
+
+.sidebar-nav-active:hover {
+  color: var(--text);
+  background: var(--surface-active);
 }
 
 .shell.sidebar-collapsed {
@@ -198,7 +221,7 @@
   justify-content: space-between;
   gap: 4px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
   min-width: 0;
   overflow: hidden;
 }
@@ -288,21 +311,16 @@
 /* ── Titlebar row + native/fallback window chrome ── */
 /* Geometry contract (keep in sync with tauri.macos.conf.json trafficLightPosition)
  *
- * Shell outer pad (p-3)           = 12
- * doppelrand border               = 1
- * titlebar-row height             = 52
- * collapse button                 = 28×28, flex-centered → center at 12+1+26 = 39
- * traffic lights (~14px): y is top inset of cluster (wry only moves origin.x;
- *   taller titlebar via y pushes cluster down). Center match → y ≈ 39 − 7 = 32
- *   Use y: 30 (optical tweak for native button metrics).
- * x = outer(12) + row pad(8) = 20
+ * Unified titlebar height         = var(--titlebar-height) / 48px
+ * traffic lights (~14px): y is the cluster top inset, so 17 + 7 = row center 24.
+ * x remains 20px to match the sidebar's optical left edge.
  */
 .titlebar-row {
   display: flex;
   width: 100%;
   align-items: center;
-  height: 52px;
-  min-height: 52px;
+  height: var(--titlebar-height);
+  min-height: var(--titlebar-height);
   padding: 0 10px 0 8px;
   box-sizing: border-box;
   gap: 4px;
@@ -317,8 +335,8 @@
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  height: 52px;
-  min-height: 52px;
+  height: var(--titlebar-height);
+  min-height: var(--titlebar-height);
   gap: 6px;
   padding: 0 8px;
 }

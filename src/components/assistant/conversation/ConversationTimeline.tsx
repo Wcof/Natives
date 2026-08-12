@@ -182,6 +182,7 @@ const MessageRow = memo(function MessageRow({
   onCopy,
   onFork,
   runEvents,
+  startsTurn,
 }: {
   message: Message;
   locale: string;
@@ -195,6 +196,8 @@ const MessageRow = memo(function MessageRow({
   /** W8: fork this conversation at the selected user message. */
   onFork?: (messageId: string) => void;
   runEvents: RunEvent[];
+  /** A user message starts a new conversational turn and gets extra rhythm. */
+  startsTurn: boolean;
 }) {
   const user = message.role === 'user';
   const messageLive = message.status === 'streaming' || message.status === 'running';
@@ -275,12 +278,16 @@ const MessageRow = memo(function MessageRow({
   const hasReasoning = bodyBlocks.some((block) => block.type === 'reasoning');
 
   return (
-    <article className={user ? 'ml-auto max-w-[78%]' : 'mr-auto w-full max-w-[760px]'}>
+    <article
+      className={`group ${startsTurn ? 'mt-7' : 'mt-2.5'} ${
+        user ? 'ml-auto max-w-[72%]' : 'mr-auto w-full'
+      }`}
+    >
       <div
         className={
           user
-            ? 'rounded-2xl rounded-br-md bg-[var(--surface-hover)] px-4 py-2.5 text-left text-[var(--text)]'
-            : 'text-left text-[var(--neutral-0)] dark:text-[var(--neutral-1000)]'
+            ? 'rounded-[14px] rounded-br-md bg-[var(--surface-hover)] px-3.5 py-2 text-left text-sm leading-6 text-[var(--text)]'
+            : 'text-left text-[var(--text-body)]'
         }
       >
         {!user && (thinking || toolActivity.length > 0) && (
@@ -327,34 +334,39 @@ const MessageRow = memo(function MessageRow({
           <span className="tabular-nums">· {duration}</span>
         )}
         {!user && tokens > 0 && <span className="tabular-nums">· {tokens} tokens</span>}
-        <button
-          type="button"
-          onClick={() => onCopy(message.id, messagePlainText(message.contentBlocks))}
-          title={t(locale, 'common.copy')}
-          className="ml-1 rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-        >
-          {copiedId === message.id ? <Check size={12} /> : <Copy size={12} />}
-        </button>
-        {isLastRetryable && onRetry && (
+        <span className="ml-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <button
             type="button"
-            onClick={onRetry}
-            title={t(locale, 'common.retry')}
-            className="rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            onClick={() => onCopy(message.id, messagePlainText(message.contentBlocks))}
+            title={t(locale, 'common.copy')}
+            aria-label={t(locale, 'common.copy')}
+            className="rounded p-1 transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:bg-[var(--surface-hover)] focus-visible:text-[var(--text-secondary)]"
           >
-            <RefreshCw size={12} />
+            {copiedId === message.id ? <Check size={12} /> : <Copy size={12} />}
           </button>
-        )}
-        {onFork && message.role === 'user' && (
-          <button
-            type="button"
-            onClick={() => onFork(message.id)}
-            title={t(locale, 'common.fork')}
-            className="rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-          >
-            <GitFork size={12} />
-          </button>
-        )}
+          {isLastRetryable && onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              title={t(locale, 'common.retry')}
+              aria-label={t(locale, 'common.retry')}
+              className="rounded p-1 transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:bg-[var(--surface-hover)] focus-visible:text-[var(--text-secondary)]"
+            >
+              <RefreshCw size={12} />
+            </button>
+          )}
+          {onFork && message.role === 'user' && (
+            <button
+              type="button"
+              onClick={() => onFork(message.id)}
+              title={t(locale, 'common.fork')}
+              aria-label={t(locale, 'common.fork')}
+              className="rounded p-1 transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:bg-[var(--surface-hover)] focus-visible:text-[var(--text-secondary)]"
+            >
+              <GitFork size={12} />
+            </button>
+          )}
+        </span>
       </div>
     </article>
   );
@@ -374,7 +386,8 @@ const MessageRow = memo(function MessageRow({
     prev.copiedId === next.copiedId &&
     prev.onCopy === next.onCopy &&
     prev.onFork === next.onFork &&
-    prev.runEvents === next.runEvents
+    prev.runEvents === next.runEvents &&
+    prev.startsTurn === next.startsTurn
   );
 });
 
@@ -519,7 +532,7 @@ export default function ConversationTimeline({
       }}
       className="relative h-full overflow-y-auto"
     >
-      <div className="mx-auto flex w-full max-w-[860px] flex-col gap-7 px-5 py-7">
+      <div className="mx-auto flex w-full max-w-[var(--reading-width)] flex-col px-5 py-7">
         {hiddenOlderCount > 0 ? (
           <button
             type="button"
@@ -538,7 +551,7 @@ export default function ConversationTimeline({
             {loadingOlder ? t(locale, 'timeline.loading') : t(locale, 'timeline.loadOlder')}
           </button>
         ) : null}
-        {visibleMessages.map((message) => (
+        {visibleMessages.map((message, index) => (
           <MessageRow
             key={message.id}
             message={message}
@@ -553,6 +566,7 @@ export default function ConversationTimeline({
             runEvents={
               message.runId ? eventsByRun[message.runId] ?? EMPTY_RUN_EVENTS : EMPTY_RUN_EVENTS
             }
+            startsTurn={index > 0 && message.role === 'user'}
           />
         ))}
         {showChangeSummary && (

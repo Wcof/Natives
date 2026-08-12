@@ -35,6 +35,7 @@ pub mod project_identity;
 pub mod prompt_queue_store;
 pub mod proposal_fact;
 pub mod provider;
+pub mod provider_messages;
 pub mod request_rectifier;
 pub mod routing;
 pub mod rpc;

@@ -137,8 +137,8 @@
 
 /* Right panel — V1.0 */
 .right-panel {
-  background: var(--sidebar);
-  border-left: 1px solid var(--border);
+  background: var(--surface);
+  border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   overflow: hidden;

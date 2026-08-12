@@ -19,6 +19,8 @@ mod create;
 mod credential;
 #[path = "manager_tests_permission.rs"]
 mod permission;
+#[path = "manager_team_tests.rs"]
+mod team;
 #[path = "manager_tests_persist.rs"]
 mod persist;
 #[path = "manager_tests_resume.rs"]

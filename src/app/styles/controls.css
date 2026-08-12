@@ -591,8 +591,8 @@
 
 /* Surface section (no border separator) */
 .surface-section {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
+  background: var(--canvas, var(--background));
+  border-radius: 0;
 }
 
 /* Buttons — V1.0 primary */

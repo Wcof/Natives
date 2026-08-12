@@ -149,7 +149,7 @@ export type TauriInvokeFn = <T = unknown>(
  * params helper。
  */
 export function createTauriWatchBridge(
-  invoke: TauriInvokeFn = cmd,
+  invoker: TauriInvokeFn = cmd,
   subscribeFrames: (listener: (frame: WatchFrame) => void) => () => void = (listener) =>
     subscribe<WatchFrameEvent>(WATCH_FRAME_EVENT, (payload) => {
       listener(payload.frame);
@@ -160,7 +160,7 @@ export function createTauriWatchBridge(
   return {
     async start(runId, afterDurableSequence, afterLiveSequence) {
       try {
-        const result = await invoke<{ ok?: boolean; error?: string }>(
+        const result = await invoker<{ ok?: boolean; error?: string }>(
           'run_watch_start',
           buildWatchStartParams(runId, afterDurableSequence, afterLiveSequence),
         );
@@ -171,14 +171,14 @@ export function createTauriWatchBridge(
     },
     async stop(runId) {
       try {
-        await invoke('run_watch_stop', buildWatchStopParams(runId));
+        await invoker('run_watch_stop', buildWatchStopParams(runId));
       } catch {
         // best-effort unsubscribe
       }
     },
     async state(runId) {
       try {
-        const result = await invoke<{
+        const result = await invoker<{
           active?: boolean;
           lastDurableSequence?: number;
           lastLiveSequence?: number;

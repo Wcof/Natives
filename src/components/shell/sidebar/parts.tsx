@@ -71,12 +71,12 @@ export function SidebarNavItem({
         collapsed
           ? `flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
               isActive
-                ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                ? 'sidebar-nav-active'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`
           : `flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
               isActive
-                ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                ? 'sidebar-nav-active'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`
       }
@@ -218,12 +218,12 @@ function SettingsNav({ c }: { c: SidebarController }) {
                 c.isCollapsed
                   ? `flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
                       isActive
-                        ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                        ? 'sidebar-nav-active'
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
                     }`
                   : `flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
                       isActive
-                        ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                        ? 'sidebar-nav-active'
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
                     }`
               }
@@ -258,7 +258,7 @@ function QuickAccessSection({ c }: { c: SidebarController }) {
               onClick={() => c.selectNavigation(item.target, item.target)}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
                 isActive
-                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                  ? 'sidebar-nav-active'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
               }`}
               title={label}
@@ -308,7 +308,7 @@ function FileManagerSection({ c }: { c: SidebarController }) {
                 onClick={() => c.selectNavigation(item.target, item.target)}
                 className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
                   isActive
-                    ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                    ? 'sidebar-nav-active'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
                 }`}
                 title={label}
@@ -347,7 +347,7 @@ function FavoritesSection({ c }: { c: SidebarController }) {
                 role="listitem"
                 className={`group flex w-full items-center gap-1 rounded-lg transition-all ${
                   isActive
-                    ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                    ? 'sidebar-nav-active'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
                 }`}
               >
@@ -586,7 +586,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         aria-current={c.activeNavigationId === '__jobs__' ? 'page' : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
           c.activeNavigationId === '__jobs__'
-            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+            ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
         }`}
       >
@@ -599,7 +599,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         aria-current={c.activeNavigationId === '__capabilities__' ? 'page' : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
           c.activeNavigationId === '__capabilities__'
-            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+            ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
         }`}
       >
@@ -612,7 +612,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         aria-current={c.activeNavigationId === '__settings__' ? 'page' : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
           c.activeNavigationId === '__settings__'
-            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+            ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
         }`}
       >
@@ -625,7 +625,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         aria-current={c.activeNavigationId === '__workshop__' ? 'page' : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
           c.activeNavigationId === '__workshop__'
-            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+            ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
         }`}
       >
