@@ -284,6 +284,33 @@ impl RealProvider {
             };
             match adapter.stream(request.clone(), credential.clone()).await {
                 Ok(stream) => {
+                    // 审计收口 #8：回退不止处理 `adapter.stream()` 的启动错误——
+                    // 若 404/405/形状不兼容作为第一个 `ProviderEvent::Error` 从
+                    // stream 到达（首增量前），同样关闭当前流换下一候选；任何
+                    // 首增量后的错误原样失败，禁止重放。
+                    let mut stream = stream;
+                    let first = stream.next().await;
+                    if let Some(ProviderEvent::Error(first_error)) = &first {
+                        let retryable = provider_adapters::should_retry_next_candidate(
+                            &format!("{:?}", first_error.category),
+                            &first_error.code,
+                        );
+                        if retryable {
+                            // 首增量前协议不兼容：丢弃当前流，记录 fallback 并换下一候选。
+                            fallback_error = Some(first_error.clone());
+                            continue;
+                        }
+                    }
+                    // 首事件不是可回退错误：把 peek 的首事件放回流，采用该候选。
+                    let stream: std::pin::Pin<
+                        Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>,
+                    > = match first {
+                        Some(event) => Box::pin(
+                            futures_util::stream::once(futures_util::future::ready(event))
+                                .chain(stream),
+                        ),
+                        None => Box::pin(stream),
+                    };
                     established = Some(stream);
                     break;
                 }
