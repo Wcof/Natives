@@ -55,7 +55,7 @@ export default function ImageLightbox({ src, alt, onClose }: ImageLightboxProps)
           maxWidth: '90vw',
           maxHeight: '90vh',
           objectFit: 'contain',
-          transition: 'transform 0.1s ease-out',
+          transition: 'transform var(--transition-fast)',
         }}
       />
       <div style={{

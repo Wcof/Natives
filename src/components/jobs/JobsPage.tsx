@@ -359,13 +359,14 @@ export default function JobsPage() {
                       style={{
                         position: 'absolute',
                         top: 1,
-                        left: job.enabled ? 17 : 1,
+                        left: 1,
                         width: 14,
                         height: 14,
                         borderRadius: '50%',
                         background: 'var(--surface)',
                         boxShadow: 'var(--shadow-card)',
-                        transition: 'left 0.15s ease',
+                        transform: job.enabled ? 'translateX(16px)' : 'translateX(0)',
+                        transition: 'transform var(--transition-fast)',
                       }}
                     />
                   </button>

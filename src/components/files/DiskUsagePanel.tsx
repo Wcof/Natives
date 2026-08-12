@@ -119,7 +119,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: 'var(--overlay)',
-        animation: 'fadeIn 150ms ease',
+        animation: 'fadeIn var(--transition-normal)',
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -244,7 +244,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                     position: 'absolute', left: 0, top: 0, bottom: 0,
                     width: `${barWidth}%`, borderRadius: BORDER_RADIUS.sm,
                     background: 'var(--accent-soft)',
-                    transition: 'width 0.3s ease',
+                    transition: 'width var(--transition-normal)',
                   }} />
                   <span style={{
                     position: 'relative', zIndex: 1, display: 'inline-flex',
