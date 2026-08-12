@@ -3,8 +3,8 @@
 
 #[cfg_attr(not(test), allow(unused_imports))]
 use super::{
-    ensure_expert_exists, expert_row_to_json, insert_expert, insert_members, now_iso,
-    parse_members, required_str, str_field, validate_team_settings,
+    ensure_expert_exists, expert_row_to_json, expert_tool_ids, insert_expert, insert_members,
+    now_iso, parse_members, required_str, str_field, validate_team_settings,
     validate_team_settings_with_defaults, EXPERT_COLS,
 };
 use crate::capability::store;
@@ -114,6 +114,29 @@ pub fn team_create(params_value: &Value) -> Result<Value, String> {
         // Default lead = first member.
         None => Some(members[0].0.clone()),
     };
+
+    // 审计收口 #11：fail-closed——coordinator 必须属于 roster；
+    // lead 的有效工具必须包含 `task`（否则配置可保存成功，但模型根本看不到
+    // task schema，Team 运行必失败）。成员有效且无重复。
+    let member_ids: std::collections::HashSet<&str> =
+        members.iter().map(|(id, _, _)| id.as_str()).collect();
+    if member_ids.len() != members.len() {
+        return Err("team members must be unique".into());
+    }
+    if let Some(c) = &coordinator {
+        if !member_ids.contains(c.as_str()) {
+            return Err(format!(
+                "coordinatorExpertId {c} must be one of the team members (roster)"
+            ));
+        }
+        // lead 的有效工具必须包含 task（真 subagent primitive，不造 DAG 引擎）。
+        let lead_tools = expert_tool_ids(c)?;
+        if !lead_tools.iter().any(|t| t == "task") {
+            return Err(format!(
+                "coordinator expert {c} must have the `task` tool in its effective tools"
+            ));
+        }
+    }
 
     let data = store()?;
     let mut conn = data.conn()?;
@@ -285,8 +308,13 @@ mod tests {
     }
 
     fn make_experts() {
+        // 审计收口 #11：coordinator 必须属于 roster 且有效工具含 `task`——
+        // fixture 的 lead expert 需显式声明 task 工具。
         insert_expert(
-            &serde_json::json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead."}),
+            &serde_json::json!({
+                "id": "lead", "name": "Lead", "systemPrompt": "Lead.",
+                "tools": ["task"]
+            }),
             "manual",
         )
         .unwrap();
@@ -311,6 +339,7 @@ mod tests {
                 "maxConcurrent": 2,
                 "coordinatorExpertId": "lead",
                 "members": [
+                    {"expertId": "lead", "roleHint": "coordinator"},
                     {"expertId": "member", "roleHint": "builds", "taskTemplate": "Do the thing."},
                 ],
             }))
@@ -339,7 +368,7 @@ mod tests {
                 "failurePolicy": "require_all",
                 "maxConcurrent": 5,
                 "coordinatorExpertId": "lead",
-                "members": [{"expertId": "member"}],
+                "members": [{"expertId": "lead"}, {"expertId": "member"}],
             }))
             .unwrap();
             assert_eq!(created["team"]["failurePolicy"], "require_all");
@@ -429,7 +458,7 @@ mod tests {
                 "failurePolicy": "isolate",
                 "maxConcurrent": 1,
                 "coordinatorExpertId": "lead",
-                "members": [{"expertId": "member"}],
+                "members": [{"expertId": "lead"}, {"expertId": "member"}],
             }))
             .unwrap();
             let deleted = team_delete(&serde_json::json!({"id": "del-team"})).unwrap();

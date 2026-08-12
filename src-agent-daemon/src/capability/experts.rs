@@ -33,9 +33,11 @@ fn expert_row_to_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "disallowedTools": serde_json::from_str::<Value>(&disallowed).unwrap_or_else(|_| json!([])),
         "permissionMode": row.get::<_, Option<String>>("permission_mode")?,
         "skills": serde_json::from_str::<Value>(&skills).unwrap_or_else(|_| json!([])),
-        "providerId": row.get::<_, Option<String>>("provider_id")?,
-        "keyId": row.get::<_, Option<String>>("key_id")?,
-        "modelId": row.get::<_, Option<String>>("model_id")?,
+        // 审计收口 #10：Expert 不再携带凭证/模型——provider_id/key_id/model_id
+        // 列保留 inert（历史数据只读），运行时读取恒为 null，绝不进入角色。
+        "providerId": Value::Null,
+        "keyId": Value::Null,
+        "modelId": Value::Null,
         "params": serde_json::from_str::<Value>(&params_json).unwrap_or_else(|_| json!({})),
         "enabled": row.get::<_, i64>("enabled")? != 0,
         "source": row.get::<_, String>("source")?,
@@ -405,9 +407,8 @@ pub fn export_md(params_value: &Value) -> Result<Value, String> {
     push_kv("name", expert["name"].as_str());
     push_kv("description", expert["description"].as_str());
     push_kv("permissionMode", expert["permissionMode"].as_str());
-    push_kv("providerId", expert["providerId"].as_str());
-    push_kv("keyId", expert["keyId"].as_str());
-    push_kv("modelId", expert["modelId"].as_str());
+    // 审计收口 #10：导出不含凭证/模型——运行期 Key 经 Host credential broker
+    // 解析，模型由真实可用 provider/model 决定。
     let list_line = |v: &Value| -> Option<String> {
         let items: Vec<&str> = v.as_array()?.iter().filter_map(Value::as_str).collect();
         if items.is_empty() {
@@ -466,6 +467,32 @@ fn ensure_expert_exists(conn: &rusqlite::Connection, id: &str) -> Result<(), Str
     } else {
         Err(format!("expert not found: {id}"))
     }
+}
+
+/// 审计收口 #11：读取 expert 的 allow 工具列表（tools_json 列）。
+/// 无 allowlist（空数组 = 继承全量 builtin）时返回空——调用方按
+/// `resolve_effective_tools` 语义展开（全量 builtin 含 `task`）。
+pub(crate) fn expert_tool_ids(id: &str) -> Result<Vec<String>, String> {
+    let data = store()?;
+    let conn = data.conn()?;
+    let raw: String = conn
+        .query_row(
+            "SELECT tools_json FROM capability_expert WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("expert not found: {id}: {e}"))?;
+    let parsed: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!([]));
+    Ok(parsed
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 type MemberTuple = (String, String, String);
@@ -687,7 +714,8 @@ mod tests {
     fn team_contract_retires_strategy_and_keeps_failure_policy_and_max_concurrent() {
         with_temp_db(|| {
             insert_expert(
-                &json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead."}),
+                // 审计收口 #11：coordinator 有效工具必须含 task。
+                &json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead.", "tools": ["task"]}),
                 "manual",
             )
             .unwrap();
@@ -706,6 +734,7 @@ mod tests {
                 "maxConcurrent": 4,
                 "coordinatorExpertId": "lead",
                 "members": [
+                    {"expertId": "lead", "roleHint": "coordinator"},
                     {"expertId": "member", "roleHint": "builds"},
                 ],
             }))
@@ -721,7 +750,18 @@ mod tests {
                 team["members"][0].get("taskTemplate").is_none(),
                 "taskTemplate is retired from the API contract"
             );
-            assert_eq!(team["members"][0]["expertId"], "member");
+            // 审计收口 #11：coordinator 属于 roster，lead 与 member 都在成员列表。
+            let member_ids: Vec<&str> = team["members"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|m| m["expertId"].as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(member_ids.contains(&"lead"), "lead must be in roster");
+            assert!(member_ids.contains(&"member"), "member must be in roster");
 
             // Round-trip through update keeps the real fields.
             let updated = team_update(&json!({
@@ -868,7 +908,8 @@ mod tests {
     fn team_contract_hides_task_template_from_api() {
         with_temp_db(|| {
             insert_expert(
-                &json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead."}),
+                // 审计收口 #11：coordinator 有效工具必须含 task。
+                &json!({"id": "lead", "name": "Lead", "systemPrompt": "Lead.", "tools": ["task"]}),
                 "manual",
             )
             .unwrap();
@@ -886,6 +927,7 @@ mod tests {
                 "maxConcurrent": 1,
                 "coordinatorExpertId": "lead",
                 "members": [
+                    {"expertId": "lead", "roleHint": "coordinator"},
                     {"expertId": "member", "roleHint": "builds", "taskTemplate": "Do the thing."},
                 ],
             }))
@@ -896,7 +938,18 @@ mod tests {
                 team["members"][0].get("taskTemplate").is_none(),
                 "taskTemplate must not be advertised in the API contract"
             );
-            assert_eq!(team["members"][0]["expertId"], "member");
+            // 审计收口 #11：coordinator 属于 roster，lead 与 member 都在成员列表。
+            let member_ids: Vec<&str> = team["members"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|m| m["expertId"].as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(member_ids.contains(&"lead"), "lead must be in roster");
+            assert!(member_ids.contains(&"member"), "member must be in roster");
             // strategy is retired: not in team JSON.
             assert!(
                 team.get("strategy").is_none(),

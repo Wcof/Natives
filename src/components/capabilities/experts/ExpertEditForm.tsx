@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import type { AssistantGateway } from '@/lib/assistant-gateway';
@@ -31,8 +31,6 @@ const inputStyle = {
 } as const;
 
 const PERMISSION_MODES = ['', 'readonly', 'ask', 'full_access'] as const;
-
-const splitList = (text: string): string[] => text.split(',').map((s) => s.trim()).filter(Boolean);
 
 /** Ceiling on an AI-generated prompt draft (same as the task tool's persona limit). */
 const MAX_GENERATED_PROMPT_BYTES = 16_000;
@@ -90,8 +88,12 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
   const [name, setName] = useState(expert?.name ?? '');
   const [description, setDescription] = useState(expert?.description ?? '');
   const [systemPrompt, setSystemPrompt] = useState(expert?.systemPrompt ?? '');
-  const [toolsText, setToolsText] = useState((expert?.tools ?? []).join(', '));
-  const [disallowedText, setDisallowedText] = useState((expert?.disallowedTools ?? []).join(', '));
+  // 审计收口 #10：工具来自真实 tool.list（builtinTool.list），不再手输逗号串。
+  const [tools, setTools] = useState<string[]>(expert?.tools ?? []);
+  const [disallowedTools, setDisallowedTools] = useState<string[]>(expert?.disallowedTools ?? []);
+  const [availableTools, setAvailableTools] = useState<string[]>([]);
+  const [toolsLoading, setToolsLoading] = useState(true);
+  const [toolsError, setToolsError] = useState<string | null>(null);
   const [permissionMode, setPermissionMode] = useState(expert?.permissionMode ?? '');
   const [selectedSkills, setSelectedSkills] = useState<string[]>(expert?.skills ?? []);
   const [enabled, setEnabled] = useState(expert?.enabled ?? true);
@@ -100,6 +102,33 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
+
+  // 真实工具列表：Host `builtin_tool_list` 是唯一来源（loading/error/retry 明确）。
+  const loadTools = async () => {
+    setToolsLoading(true);
+    setToolsError(null);
+    try {
+      const list = (await window.nativesAPI?.builtinTool?.list?.()) ?? [];
+      setAvailableTools(list.map((tool) => tool.id).filter(Boolean));
+    } catch (cause) {
+      setToolsError(classifyError(cause).userMessage);
+    } finally {
+      setToolsLoading(false);
+    }
+  };
+  useEffect(() => {
+    void loadTools();
+  }, []);
+
+  const toggleTool = (id: string) => {
+    setTools((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
+    // allow 与 deny 互斥：同一工具不能同时出现在两个列表。
+    setDisallowedTools((prev) => prev.filter((s) => s !== id));
+  };
+  const toggleDisallowedTool = (id: string) => {
+    setDisallowedTools((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
+    setTools((prev) => prev.filter((s) => s !== id));
+  };
 
   const toggleSkill = (id: string) => {
     setSelectedSkills((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
@@ -116,8 +145,8 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
       name: name.trim(),
       description: description.trim(),
       systemPrompt: promptOverride ?? systemPrompt,
-      tools: splitList(toolsText),
-      disallowedTools: splitList(disallowedText),
+      tools,
+      disallowedTools,
       permissionMode: permissionMode || null,
       skills: selectedSkills,
       // 问题10：Expert 不保存 provider/key/model —— 生成时由用户按真实可用
@@ -192,55 +221,64 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
         setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
         return;
       }
-      const generationPrompt = [
-        'You are an expert-prompt author. Write the SYSTEM PROMPT body for an AI Expert persona.',
-        `Expert name: ${name.trim()}`,
-        description.trim() ? `Expert description: ${description.trim()}` : '',
-        'Output only the system prompt text itself — no markdown fences, no commentary, no preamble.',
-      ]
-        .filter(Boolean)
-        .join('\n');
+      // 审计收口 #10：AI 生成的临时 conversation 绝不进入普通会话列表——
+      // 成功/失败/取消后一律删除（零会话污染）。
+      let cleanupRun: Promise<unknown> | null = null;
+      try {
+        const generationPrompt = [
+          'You are an expert-prompt author. Write the SYSTEM PROMPT body for an AI Expert persona.',
+          `Expert name: ${name.trim()}`,
+          description.trim() ? `Expert description: ${description.trim()}` : '',
+          'Output only the system prompt text itself — no markdown fences, no commentary, no preamble.',
+        ]
+          .filter(Boolean)
+          .join('\n');
 
-      const started = await gateway.request<Record<string, unknown>>('run.start', {
-        conversation_id: conversationId,
-        provider_id: genProvider,
-        model_id: genModel,
-        permission_profile: 'readonly',
-        content: generationPrompt,
-        project_path: projectPath,
-        runtime_id: 'native',
-      });
-      const wire = started && typeof started === 'object' ? started : {};
-      const runId = String(wire.daemon_run_id ?? wire.daemonRunId ?? wire.id ?? '');
-      if (!runId) {
-        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
-        return;
-      }
-      let text = '';
-      let status: string | null = null;
-      for await (const event of gateway.subscribe(runId, 0)) {
-        if (event.type === 'text_delta') {
-          const piece = event.payload?.text;
-          if (typeof piece === 'string') text += piece;
-        } else if (
-          event.type === 'completed' ||
-          event.type === 'failed' ||
-          event.type === 'cancelled' ||
-          event.type === 'interrupted'
-        ) {
-          status = event.type;
+        const started = await gateway.request<Record<string, unknown>>('run.start', {
+          conversation_id: conversationId,
+          provider_id: genProvider,
+          model_id: genModel,
+          permission_profile: 'readonly',
+          content: generationPrompt,
+          project_path: projectPath,
+          runtime_id: 'native',
+        });
+        const wire = started && typeof started === 'object' ? started : {};
+        const runId = String(wire.daemon_run_id ?? wire.daemonRunId ?? wire.id ?? '');
+        if (!runId) {
+          setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+          return;
         }
+        let text = '';
+        let status: string | null = null;
+        for await (const event of gateway.subscribe(runId, 0)) {
+          if (event.type === 'text_delta') {
+            const piece = event.payload?.text;
+            if (typeof piece === 'string') text += piece;
+          } else if (
+            event.type === 'completed' ||
+            event.type === 'failed' ||
+            event.type === 'cancelled' ||
+            event.type === 'interrupted'
+          ) {
+            status = event.type;
+          }
+        }
+        if (status !== 'completed') {
+          setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+          return;
+        }
+        const trimmed = text.trim();
+        if (!trimmed) {
+          setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
+          return;
+        }
+        setDraft(trimmed.slice(0, MAX_GENERATED_PROMPT_BYTES));
+      } finally {
+        // 无论成功/失败/取消，临时会话一律清理，不污染普通会话列表。
+        cleanupRun = gateway.request('conversation.delete', { id: conversationId }).catch(() => undefined);
       }
-      if (status !== 'completed') {
-        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
-        return;
-      }
-      const trimmed = text.trim();
-      if (!trimmed) {
-        setGenerateError(t(locale, 'capabilities.experts.aiGenerateFailed'));
-        return;
-      }
-      setDraft(trimmed.slice(0, MAX_GENERATED_PROMPT_BYTES));
+      await cleanupRun;
     } catch (e) {
       setGenerateError(classifyError(e).userMessage);
     } finally {
@@ -304,22 +342,92 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
           </button>
           {generateError ? <p className="text-xs" style={{ color: 'var(--danger)' }}>{generateError}</p> : null}
         </div>
-        <input
-          value={toolsText}
-          onChange={(e) => setToolsText(e.target.value)}
-          placeholder={t(locale, 'capabilities.experts.tools')}
-          aria-label={t(locale, 'capabilities.experts.tools')}
-          className="w-full rounded border px-3 py-2 font-mono text-xs"
-          style={inputStyle}
-        />
-        <input
-          value={disallowedText}
-          onChange={(e) => setDisallowedText(e.target.value)}
-          placeholder={t(locale, 'capabilities.experts.disallowedTools')}
-          aria-label={t(locale, 'capabilities.experts.disallowedTools')}
-          className="w-full rounded border px-3 py-2 font-mono text-xs"
-          style={inputStyle}
-        />
+        <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
+          <span className="mb-1.5 block text-xs font-semibold uppercase" style={{ color: 'var(--text-secondary)' }}>
+            {t(locale, 'capabilities.experts.tools')}
+          </span>
+          {toolsLoading ? (
+            <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>
+              {t(locale, 'common.loading')}
+            </p>
+          ) : toolsError ? (
+            <div role="alert" className="flex items-center gap-2 text-xs" style={{ color: 'var(--danger)' }}>
+              <span>{toolsError}</span>
+              <button type="button" className="underline" onClick={() => void loadTools()}>
+                {t(locale, 'common.retry')}
+              </button>
+            </div>
+          ) : availableTools.length === 0 ? (
+            <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>
+              {t(locale, 'capabilities.experts.noToolsAvailable')}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {/* allow 多选（互斥：与 deny 不同时出现） */}
+              <div>
+                <span className="mb-1 block text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {t(locale, 'capabilities.experts.allowTools')}
+                </span>
+                <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
+                  {availableTools.map((toolId) => {
+                    const active = tools.includes(toolId);
+                    const denied = disallowedTools.includes(toolId);
+                    if (denied) return null;
+                    return (
+                      <button
+                        key={toolId}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={active}
+                        aria-label={`${t(locale, 'capabilities.experts.allowTools')}: ${toolId}`}
+                        onClick={() => toggleTool(toolId)}
+                        className="rounded-full border px-2.5 py-1 font-mono text-xs"
+                        style={{
+                          borderColor: active ? 'var(--primary)' : 'var(--border-subtle)',
+                          background: active ? 'var(--primary)' : 'transparent',
+                          color: active ? 'var(--accent-ink)' : 'var(--text-secondary)',
+                        }}
+                      >
+                        {toolId}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* deny 多选（互斥：与 allow 不同时出现） */}
+              <div>
+                <span className="mb-1 block text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {t(locale, 'capabilities.experts.disallowedTools')}
+                </span>
+                <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
+                  {availableTools.map((toolId) => {
+                    const denied = disallowedTools.includes(toolId);
+                    const allowed = tools.includes(toolId);
+                    if (allowed) return null;
+                    return (
+                      <button
+                        key={toolId}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={denied}
+                        aria-label={`${t(locale, 'capabilities.experts.disallowedTools')}: ${toolId}`}
+                        onClick={() => toggleDisallowedTool(toolId)}
+                        className="rounded-full border px-2.5 py-1 font-mono text-xs"
+                        style={{
+                          borderColor: denied ? 'var(--danger)' : 'var(--border-subtle)',
+                          background: denied ? 'var(--danger)' : 'transparent',
+                          color: denied ? 'var(--accent-ink)' : 'var(--text-secondary)',
+                        }}
+                      >
+                        {toolId} ✕
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
         <select
           value={permissionMode ?? ''}
           onChange={(e) => setPermissionMode(e.target.value)}
