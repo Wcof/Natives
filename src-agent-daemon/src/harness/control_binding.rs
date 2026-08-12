@@ -33,6 +33,14 @@ pub(super) fn version_rollback(params: &Value) -> Result<Value, HarnessError> {
     repository::with_conn(|conn| {
         let source = repository::get_version(conn, &version_id)?
             .ok_or_else(|| HarnessError::not_found(format!("version not found: {version_id}")))?;
+        // 审计收口 #9：rollback 只允许 current global；旧 profile 写入口 fail-closed。
+        let current = repository::current_global_profile_id(conn)?;
+        if source.profile_id != current {
+            return Err(HarnessError::invalid(format!(
+                "version.rollback targets non-global profile {}; the app maintains a single global Harness",
+                source.profile_id
+            )));
+        }
         let current = repository::current_version(conn, &source.profile_id)?
             .ok_or_else(|| HarnessError::not_found("profile has no current published version"))?;
         if current.id != expected_current {

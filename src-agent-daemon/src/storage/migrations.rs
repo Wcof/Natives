@@ -61,6 +61,9 @@ pub const ALL: &[(i64, &str)] = &[
     // 38 moves creative draft metadata under the Daemon-authoritative
     // assistant.db (W3 P0-2); the capability gateway no longer opens natives.db.
     (38, MIGRATION_038),
+    // 39 (审计收口 #9): 唯一 global Harness——历史 project/session bindings
+    // 标记 inactive（数据保留只读），运行时解析只使用 current global。
+    (39, MIGRATION_039),
 ];
 
 /// FNV-1a 64-bit checksum (self-implemented; no new crate). Used to detect
@@ -152,6 +155,8 @@ fn postcondition_satisfied(conn: &Connection, version: i64) -> bool {
         35 => table_exists("creative_proposal_fact"),
         36 => column_exists("subagent_session", "tokens_used"),
         37 => column_exists("resume_plan", "decision"), // last ALTER of v37
+        38 => table_exists("creative_drafts"),
+        39 => column_exists("harness_binding", "inactive_at"),
         _ => true,
     }
 }
@@ -400,6 +405,7 @@ use migrations_late::{
     MIGRATION_021, MIGRATION_022, MIGRATION_023, MIGRATION_024, MIGRATION_025, MIGRATION_026,
     MIGRATION_027, MIGRATION_028, MIGRATION_029, MIGRATION_030, MIGRATION_031, MIGRATION_032,
     MIGRATION_033, MIGRATION_034, MIGRATION_035, MIGRATION_036, MIGRATION_037, MIGRATION_038,
+    MIGRATION_039,
 };
 use migrations_mid::{
     MIGRATION_011, MIGRATION_012, MIGRATION_013, MIGRATION_014, MIGRATION_015, MIGRATION_016,

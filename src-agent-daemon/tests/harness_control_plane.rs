@@ -6,6 +6,7 @@
 //! optimistic draft, a foreign key that ties a snapshot to its Run. A mocked
 //! repository would assert nothing.
 
+use harness_core::resolver::ProfileLayer;
 use natives_agent_daemon::rpc::harness::repository::{self, DEFAULT_GLOBAL_PROFILE_ID};
 use natives_agent_daemon::rpc::harness::{self, control_plane};
 use serde_json::{json, Value};
@@ -154,10 +155,22 @@ fn migration_creates_every_harness_table() {
 #[allow(clippy::await_holding_lock)] // serial() 串行化 guard 跨 await 持有
 async fn subscribe_replays_persisted_notices_with_a_cursor() {
     let _serial = serial();
+    // 审计收口 #9：profile.create 已退役，fixture 用 SQL 构造已发布 global profile。
+    let profile = new_profile("Subscription profile");
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
-        "harness.profile.create",
-        json!({ "name": "Subscription profile", "kind": "global_template" }),
+        "harness.draft.save",
+        json!({
+            "profile_id": profile,
+            "revision": 0,
+            "document": {
+                "schema_version": 1,
+                "hook_semantics_version": "legacy_v1",
+                "hooks": [{ "hook_id": PROBE_HOOK_ID, "timeout_ms": 5_000 }]
+            }
+        }),
     );
+    call("harness.draft.publish", json!({ "profile_id": profile }));
 
     let first = harness::request("harness.subscribe", json!({ "cursor": 0, "wait_ms": 0 }))
         .await
@@ -183,10 +196,22 @@ async fn subscribe_replays_persisted_notices_with_a_cursor() {
         .await
     });
     tokio::task::yield_now().await;
+    // 唤醒订阅者：发布第二个 profile 产生新的 published notice。
+    let wake = new_profile("Wake subscriber");
+    let _wake_binding = SqlGlobalBinding::pointing_at(&wake);
     call(
-        "harness.profile.create",
-        json!({ "name": "Wake subscriber", "kind": "global_template" }),
+        "harness.draft.save",
+        json!({
+            "profile_id": wake,
+            "revision": 0,
+            "document": {
+                "schema_version": 1,
+                "hook_semantics_version": "legacy_v1",
+                "hooks": [{ "hook_id": PROBE_HOOK_ID, "timeout_ms": 3_000 }]
+            }
+        }),
     );
+    call("harness.draft.publish", json!({ "profile_id": wake }));
     let pushed = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
         .await
         .expect("subscriber was not woken")
@@ -537,14 +562,69 @@ fn a_hook_url_secret_never_reaches_the_catalog() {
 
 // ── drafts, publishing, rollback ────────────────────────────────────────────
 
+/// Create a Harness profile row directly (审计收口 #9：`harness.profile.create`
+/// 已退役 fail-closed，测试 fixture 不能再用退役 RPC 构造 profile)。
+/// 不插入 version——发布状态由各测试通过 draft.publish 产生，与生产语义一致。
 fn new_profile(name: &str) -> String {
-    call(
-        "harness.profile.create",
-        json!({ "name": name, "kind": "global_template" }),
-    )["profile"]["id"]
-        .as_str()
-        .expect("profile id")
-        .to_string()
+    isolate_env();
+    let id = format!("profile-{}", uuid::Uuid::new_v4());
+    let store = repository::store().expect("open store");
+    let conn = store.conn().expect("connection");
+    conn.execute(
+        "INSERT INTO harness_profile (id, name, kind) VALUES (?1, ?2, 'global_template')",
+        rusqlite::params![id, name],
+    )
+    .expect("insert profile row");
+    id
+}
+
+/// 审计收口 #9 fixture：直接 SQL 把 global binding 指向 profile（绕过
+/// binding.set 的 published 校验——测试需要"未发布但已是 current global"
+/// 的状态来验证 draft.publish 产生第一个 version）。Drop 恢复默认 global，
+/// 避免污染后续测试。
+struct SqlGlobalBinding;
+
+impl SqlGlobalBinding {
+    fn pointing_at(profile_id: &str) -> Self {
+        let store = repository::store().expect("open store");
+        let conn = store.conn().expect("connection");
+        conn.execute(
+            "INSERT OR REPLACE INTO harness_binding
+                (scope_type, scope_id, profile_id, version_id, mode, updated_at)
+             VALUES ('global', 'global', ?1, NULL, 'follow_published', datetime('now'))",
+            rusqlite::params![profile_id],
+        )
+        .expect("bind global profile");
+        Self
+    }
+}
+
+impl Drop for SqlGlobalBinding {
+    fn drop(&mut self) {
+        let store = repository::store().expect("open store");
+        let conn = store.conn().expect("connection");
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO harness_binding
+                (scope_type, scope_id, profile_id, version_id, mode, updated_at)
+             VALUES ('global', 'global', ?1, NULL, 'follow_published', datetime('now'))",
+            rusqlite::params![DEFAULT_GLOBAL_PROFILE_ID],
+        );
+    }
+}
+
+/// 审计收口 #9 fixture：直接 SQL 把 global binding 指向 profile（绕过
+/// binding.set 的 published 校验——测试需要"未发布但已是 current global"
+/// 的状态来验证 draft.publish 产生第一个 version）。
+fn bind_global_sql(profile: &str) {
+    let store = repository::store().expect("open store");
+    let conn = store.conn().expect("connection");
+    conn.execute(
+        "INSERT OR REPLACE INTO harness_binding
+            (scope_type, scope_id, profile_id, version_id, mode, updated_at)
+         VALUES ('global', 'global', ?1, NULL, 'follow_published', datetime('now'))",
+        rusqlite::params![profile],
+    )
+    .expect("bind global profile");
 }
 
 fn seed_run(tag: &str) -> (String, String) {
@@ -571,3 +651,41 @@ fn seed_run(tag: &str) -> (String, String) {
 // W3 over_1000 split: remaining tests live in the tail submodule.
 #[path = "harness_control_plane/tail.rs"]
 mod tail;
+
+#[test]
+fn audit9_legacy_project_and_session_bindings_do_not_affect_new_runs() {
+    // 审计收口 #9：运行时只解析唯一 current global。即使 DB 里残留旧的
+    // project/session bindings（迁移前版本写入），新 run 也只加载 global 层，
+    // 旧绑定数据保留只读但不参与解析。
+    let _serial = serial();
+    isolate_env();
+    let profile = new_profile("legacy-target");
+    let (conversation, run) = seed_run("audit9-legacy-binding");
+    let store = repository::store().expect("store");
+    let conn = store.conn().expect("connection");
+    // 直接插入旧的 project/session bindings（绕过已退役的 binding.set 写入口，
+    // 模拟迁移前的历史数据）。
+    conn.execute(
+        "INSERT OR REPLACE INTO harness_binding
+            (scope_type, scope_id, profile_id, version_id, mode, updated_at)
+         VALUES ('project', 'proj-legacy', ?1, NULL, 'follow_published', datetime('now')),
+                ('session', ?2, ?1, NULL, 'follow_published', datetime('now'))",
+        rusqlite::params![profile, conversation],
+    )
+    .expect("insert legacy project/session bindings");
+
+    // resolve_run 返回 RunHarnessPlan（结构体）；snapshot.layers 是解析证据。
+    let plan = control_plane::resolve_run(&run, Some(&conversation), None, None)
+        .expect("resolve run with legacy bindings");
+    let layers = &plan.snapshot.layers;
+    assert_eq!(
+        layers.len(),
+        1,
+        "only the global layer applies (唯一 current global)"
+    );
+    assert_eq!(layers[0].layer, ProfileLayer::Global);
+    assert_ne!(
+        layers[0].profile_id, profile,
+        "legacy project/session binding must not leak"
+    );
+}

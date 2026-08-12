@@ -46,6 +46,13 @@ pub(super) fn draft_save(params: &Value) -> Result<Value, HarnessError> {
             )
         })?;
     repository::with_conn(|conn| {
+        // 审计收口 #9：只允许维护唯一 current global；旧 profile 写入口 fail-closed。
+        let current = repository::current_global_profile_id(conn)?;
+        if profile_id != current {
+            return Err(HarnessError::invalid(format!(
+                "draft.save targets non-global profile {profile_id}; the app maintains a single global Harness"
+            )));
+        }
         let saved = repository::save_draft(conn, &profile_id, &document, revision)?;
         Ok(serde_json::json!({
             "profile_id": saved.profile_id,
@@ -96,6 +103,13 @@ pub(super) fn draft_publish(params: &Value) -> Result<Value, HarnessError> {
     let discovered = discovered_hooks(params);
 
     repository::with_conn(|conn| {
+        // 审计收口 #9：publish 只允许 current global；旧 profile 写入口 fail-closed。
+        let current = repository::current_global_profile_id(conn)?;
+        if profile_id != current {
+            return Err(HarnessError::invalid(format!(
+                "draft.publish targets non-global profile {profile_id}; the app maintains a single global Harness"
+            )));
+        }
         let draft = repository::get_or_create_draft(conn, &profile_id)?;
         // Publishing is a write against a document the caller believes it has
         // seen. Checking the revision here closes the same window `draft.save`

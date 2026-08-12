@@ -52,17 +52,6 @@ export interface NativeHarnessController {
   projectIdentities: ProjectIdentity[];
   profileProject: (profile?: Profile | null) => ProjectIdentity | undefined;
   // create profile form
-  newProfileName: string;
-  setNewProfileName: (name: string) => void;
-  newProfileKind: 'global_template' | 'project_overlay';
-  setNewProfileKind: (kind: 'global_template' | 'project_overlay') => void;
-  newProfileProjectPath: string;
-  setNewProfileProjectPath: (path: string) => void;
-  // bind project
-  bindProfileId: string;
-  setBindProfileId: (id: string) => void;
-  bindProjectPath: string;
-  setBindProjectPath: (path: string) => void;
   // selected profile detail
   selectedProfile: Profile | null;
   currentProject: ProjectIdentity | undefined;
@@ -112,14 +101,10 @@ export interface NativeHarnessController {
   loadRuns: (runId?: string) => Promise<void>;
   selectRun: (runId: string) => void;
   selectProfile: (id: string, mode: DetailMode, target?: WorkspaceTarget) => void;
-  openCreateProfile: () => void;
-  createProfile: () => Promise<void>;
   save: () => Promise<void>;
   reviewDraft: () => Promise<void>;
   publish: (id?: string) => Promise<void>;
   setDefaultProfile: (id: string) => Promise<void>;
-  bindProject: () => Promise<void>;
-  archiveProfile: (id: string) => Promise<void>;
   runFromCanvas: () => Promise<void>;
   replaceDocument: (next: Blueprint) => void;
   updateHook: (index: number, patch: Partial<NativeHook>) => void;
@@ -155,11 +140,6 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [projectIdentities, setProjectIdentities] = useState<ProjectIdentity[]>([]);
-  const [newProfileName, setNewProfileName] = useState('');
-  const [newProfileKind, setNewProfileKind] = useState<'global_template' | 'project_overlay'>('project_overlay');
-  const [newProfileProjectPath, setNewProfileProjectPath] = useState('');
-  const [bindProfileId, setBindProfileId] = useState('');
-  const [bindProjectPath, setBindProjectPath] = useState('');
   const [liveRuns, setLiveRuns] = useState<Run[]>([]);
   const [selectedRunId, setSelectedRunId] = useState('');
   const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
@@ -350,25 +330,6 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
     setCanvasMode('understand');
   };
 
-  const openCreateProfile = () => {
-    if (dirty) {
-      setConfirmState({
-        title: t(locale, 'settings.engineEngineeringDiscardTitle'),
-        message: t(locale, 'settings.engineEngineeringDiscardConfirm'),
-        onConfirm: () => {
-          setConfirmState(null);
-          openCreateProfile();
-        },
-      });
-      return;
-    }
-    setDetailMode('create');
-    setProfileId('');
-    profileIdRef.current = '';
-    setError(null);
-    setNotice(null);
-  };
-
   const replaceDocument = (next: Blueprint) => {
     setDocument(normalizeBlueprint(next)); setDirty(true); setReview(null); setNotice(null);
   };
@@ -417,27 +378,6 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
       setNotice(t(locale, 'settings.engineEngineeringPublished'));
     } catch (cause) { fail(cause); } finally { setBusy(false); }
   };
-  const createProfile = async () => {
-    if (!newProfileName.trim()) return;
-    setBusy(true); setError(null);
-    try {
-      let projectId: string | undefined;
-      if (newProfileKind === 'project_overlay') {
-        const project = projects.find((item) => item.path === newProfileProjectPath);
-        if (!project) throw new Error(t(locale, 'settings.engineEngineeringProjectRequired'));
-        const identity = await assistantV2.request<{ project_id: string }>('project.identity.register', { path: project.path, name: project.label });
-        projectId = identity.project_id;
-      }
-      const result = await assistantV2.request<{ profile: Profile }>('harness.profile.create', {
-        name: newProfileName.trim(), kind: newProfileKind, project_id: projectId,
-      });
-      setNewProfileName('');
-      setNewProfileProjectPath('');
-      await load(result.profile.id);
-      selectProfile(result.profile.id, 'edit', 'hooks');
-      setNotice(t(locale, 'settings.engineEngineeringProfileCreated'));
-    } catch (cause) { fail(cause); } finally { setBusy(false); }
-  };
   const setDefaultProfile = async (id: string) => {
     setBusy(true); setError(null);
     try {
@@ -445,45 +385,6 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
         scope_type: 'global', scope_id: 'global', profile_id: id, mode: 'follow_published',
       });
       setNotice(t(locale, 'settings.engineEngineeringDefaultSet'));
-    } catch (cause) { fail(cause); } finally { setBusy(false); }
-  };
-  const bindProject = async () => {
-    if (!bindProfileId || !bindProjectPath) return;
-    setBusy(true); setError(null);
-    try {
-      const project = projects.find((item) => item.path === bindProjectPath);
-      if (!project) throw new Error(t(locale, 'settings.engineEngineeringProjectRequired'));
-      const identity = await assistantV2.request<{ project_id: string }>('project.identity.register', { path: project.path, name: project.label });
-      await assistantV2.request('harness.binding.set', {
-        scope_type: 'project', scope_id: identity.project_id, profile_id: bindProfileId, mode: 'follow_published',
-      });
-      setBindProfileId('');
-      setBindProjectPath('');
-      setNotice(t(locale, 'settings.engineEngineeringBound'));
-    } catch (cause) { fail(cause); } finally { setBusy(false); }
-  };
-  const archiveProfile = async (id: string) => {
-    if (!confirmState) {
-      setConfirmState({
-        title: t(locale, 'settings.engineEngineeringDeleteTitle'),
-        message: t(locale, 'settings.engineEngineeringDeleteConfirm'),
-        onConfirm: () => {
-          setConfirmState(null);
-          void archiveProfile(id);
-        },
-      });
-      return;
-    }
-    setBusy(true); setError(null);
-    try {
-      await assistantV2.request('harness.profile.archive', { profile_id: id });
-      if (id === profileId) {
-        setDetailMode(null);
-        setProfileId('');
-        profileIdRef.current = '';
-      }
-      await load();
-      setNotice(t(locale, 'settings.engineEngineeringDeleted'));
     } catch (cause) { fail(cause); } finally { setBusy(false); }
   };
   const runFromCanvas = async () => {
@@ -628,8 +529,6 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
     detailMode, setDetailMode, workspaceTarget, targetStageId, focusPromptId, canvasMode, setCanvasMode,
     profiles, loading, busy, error, notice, query, setQuery, filteredProfiles,
     projects, providers, projectIdentities, profileProject,
-    newProfileName, setNewProfileName, newProfileKind, setNewProfileKind, newProfileProjectPath, setNewProfileProjectPath,
-    bindProfileId, setBindProfileId, bindProjectPath, setBindProjectPath,
     selectedProfile, currentProject, workspace, document, revision, review, dirty, detailLoading, sourceCandidate,
     liveRuns, selectedRunId, setSelectedRunId, selectedRun, selectedRunStatus, traceEntries, runSnapshot,
     promptPreview, versions, auxLoading,
@@ -637,8 +536,8 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
     runPrompt, setRunPrompt, runProviderId, setRunProviderId, runModelId, setRunModelId, runProjectPath, setRunProjectPath,
     runModels, runProvider,
     confirmState, dismissConfirm: () => setConfirmState(null),
-    load, loadRuns, selectRun, selectProfile, openCreateProfile, createProfile, save, reviewDraft, publish,
-    setDefaultProfile, bindProject, archiveProfile, runFromCanvas, replaceDocument, updateHook, updateAdapter,
+    load, loadRuns, selectRun, selectProfile, save, reviewDraft, publish,
+    setDefaultProfile, runFromCanvas, replaceDocument, updateHook, updateAdapter,
     updateOverlay, setNodeHookEnabled, authorizeNodeHook, removeNodeHook, removeNodePrompt, openCanvasWorkspace,
   };
 }

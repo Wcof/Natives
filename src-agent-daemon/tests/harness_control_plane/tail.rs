@@ -19,6 +19,8 @@ fn new_session_overlay_profiles_are_rejected() {
 fn acknowledging_tracked_drift_consumes_candidate_and_updates_manifest() {
     let _serial = serial();
     let profile = new_profile("drift-ack");
+    // 审计收口 #9：draft/publish 只允许 current global。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
         "harness.draft.publish",
         json!({ "profile_id": profile, "revision": 0 }),
@@ -81,6 +83,8 @@ fn acknowledging_tracked_drift_consumes_candidate_and_updates_manifest() {
 fn incomplete_native_adapter_cannot_be_published() {
     let _serial = serial();
     let profile = new_profile("invalid native adapter");
+    // 审计收口 #9：draft/publish 只允许 current global。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
         "harness.draft.save",
         json!({
@@ -123,6 +127,8 @@ fn overlay_document(hook_id: &str, timeout_ms: u64) -> Value {
 fn saving_a_draft_with_a_stale_revision_is_a_conflict_not_an_overwrite() {
     let _serial = serial();
     let profile = new_profile("conflict");
+    // 审计收口 #9：draft/publish 只允许 current global。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     let draft = call("harness.draft.get", json!({ "profile_id": profile }));
     assert_eq!(draft["revision"], 0);
 
@@ -154,6 +160,8 @@ fn saving_a_draft_with_a_stale_revision_is_a_conflict_not_an_overwrite() {
 fn a_draft_that_overlays_a_locked_hook_cannot_be_published() {
     let _serial = serial();
     let profile = new_profile("locked");
+    // 审计收口 #9：draft/publish 只允许 current global。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
         "harness.draft.save",
         json!({
@@ -179,6 +187,8 @@ fn publishing_produces_an_immutable_version_a_diff_and_an_audit_row() {
     let _serial = serial();
     let project = TempProject::with_hooks(PROBE_HOOK);
     let profile = new_profile("publish");
+    // 审计收口 #9：draft/publish 只允许 current global。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
         "harness.draft.save",
         json!({
@@ -219,6 +229,8 @@ fn publishing_produces_an_immutable_version_a_diff_and_an_audit_row() {
 fn rollback_republishes_forward_instead_of_rewinding_a_pointer() {
     let _serial = serial();
     let profile = new_profile("rollback");
+    // 审计收口 #9：draft/publish/rollback 只允许 current global。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
         "harness.draft.save",
         json!({
@@ -263,7 +275,9 @@ fn rollback_republishes_forward_instead_of_rewinding_a_pointer() {
 // ── the configuration hierarchy ─────────────────────────────────────────────
 
 #[test]
-fn a_project_overlay_wins_over_the_global_template() {
+fn a_legacy_project_overlay_binding_is_inert_for_new_runs() {
+    // 审计收口 #9：运行时只解析唯一 current global——历史 project binding
+    // （迁移前写入）不参与 hook.catalog / run 解析。
     let _serial = serial();
     let project = TempProject::with_hooks(PROBE_HOOK);
     let project_id = call(
@@ -274,60 +288,48 @@ fn a_project_overlay_wins_over_the_global_template() {
         .unwrap()
         .to_string();
 
-    // Global says 5s.
+    // Global says 5s（唯一 current global）。
     let global = new_profile("hierarchy-global");
+    let _global_binding = SqlGlobalBinding::pointing_at(&global);
     call(
         "harness.draft.save",
         json!({ "profile_id": global, "revision": 0, "document": overlay_document(PROBE_HOOK_ID, 5_000) }),
     );
     call("harness.draft.publish", json!({ "profile_id": global }));
-    let _global_binding = GlobalBinding::pointing_at(&global);
 
-    // Project says 9s.
-    let overlay = call(
-        "harness.profile.create",
-        json!({ "name": "hierarchy-project", "kind": "project_overlay", "project_id": project_id }),
-    )["profile"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    call(
-        "harness.draft.save",
-        json!({ "profile_id": overlay, "revision": 0, "document": overlay_document(PROBE_HOOK_ID, 9_000) }),
-    );
-    call("harness.draft.publish", json!({ "profile_id": overlay }));
-    call(
-        "harness.binding.set",
-        json!({ "scope_type": "project", "scope_id": project_id, "profile_id": overlay }),
-    );
+    // 残留的历史 project overlay profile + binding（直接 SQL 写入，模拟迁移前数据）。
+    let overlay = new_profile("hierarchy-project-legacy");
+    let store = repository::store().expect("store");
+    let conn = store.conn().expect("connection");
+    conn.execute(
+        "INSERT OR REPLACE INTO harness_binding
+            (scope_type, scope_id, profile_id, version_id, mode, updated_at)
+         VALUES ('project', ?1, ?2, NULL, 'follow_published', datetime('now'))",
+        rusqlite::params![project_id, overlay],
+    )
+    .expect("insert legacy project binding");
 
     let catalog = call(
         "harness.hook.catalog",
         json!({ "project_path": project.path(), "project_id": project_id }),
     );
+    let layers = catalog["layers"].as_array().unwrap();
+    assert_eq!(
+        layers.len(),
+        1,
+        "only the global layer applies (唯一 current global)"
+    );
+    assert_eq!(layers[0]["layer"], "global");
     let probe = catalog["hooks"]
         .as_array()
         .unwrap()
         .iter()
         .find(|h| h["id"] == PROBE_HOOK_ID)
         .expect("probe hook");
-    assert_eq!(probe["timeout_ms"], 9_000, "project must beat global");
-    assert_eq!(probe["overrides"][0]["field"], "timeout_ms");
-    assert_eq!(probe["overrides"][0]["layer"], "project");
-    assert_eq!(catalog["layers"].as_array().unwrap().len(), 2);
-
-    // Without the project id, only the global layer applies.
-    let global_only = call(
-        "harness.hook.catalog",
-        json!({ "project_path": project.path() }),
+    assert_eq!(
+        probe["timeout_ms"], 5_000,
+        "legacy project overlay must not override global"
     );
-    let probe = global_only["hooks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|h| h["id"] == PROBE_HOOK_ID)
-        .expect("probe hook");
-    assert_eq!(probe["timeout_ms"], 5_000);
 }
 
 #[test]
@@ -376,12 +378,13 @@ fn resolve_run_persists_evidence_that_a_later_publish_cannot_change() {
     let (conversation, run) = seed_run("frozen");
 
     let profile = new_profile("frozen");
+    // 审计收口 #9：draft/publish 只允许 current global——必须先绑定再保存。
+    let _global_binding = SqlGlobalBinding::pointing_at(&profile);
     call(
         "harness.draft.save",
         json!({ "profile_id": profile, "revision": 0, "document": overlay_document(PROBE_HOOK_ID, 6_000) }),
     );
     call("harness.draft.publish", json!({ "profile_id": profile }));
-    let _global_binding = GlobalBinding::pointing_at(&profile);
 
     let plan = control_plane::resolve_run(
         &run,

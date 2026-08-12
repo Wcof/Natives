@@ -245,6 +245,15 @@ pub fn get_binding(
     .map_err(sql)
 }
 
+/// 审计收口 #9：当前唯一 global binding 指向的 profile id。
+/// 运行时只有这一个 profile 可被维护（prompt/hook/tool/node）、发布或回滚；
+/// 历史 project/session bindings 已由 MIGRATION_039 标记 inactive，不参与。
+pub fn current_global_profile_id(conn: &Connection) -> Result<String, HarnessError> {
+    let binding = get_binding(conn, "global", GLOBAL_SCOPE_ID)?
+        .ok_or_else(|| HarnessError::not_found("required global Harness binding is missing"))?;
+    Ok(binding.profile_id)
+}
+
 pub fn set_binding(
     conn: &Connection,
     scope_type: &str,
@@ -343,20 +352,18 @@ pub fn version_for_binding(
 
 /// Resolve the layer stack for one Run, weakest first.
 ///
-/// Missing project or session bindings are simply absent layers, which is the
-/// frozen hierarchy working as designed (decision B): a project that has never
-/// been configured inherits the global template rather than failing.
+/// 审计收口 #9：运行时只解析唯一 current global Harness。project/session
+/// bindings 由幂等迁移标记为 inactive（数据保留只读），不再参与新 run 的
+/// 层解析——历史 profile/version/run snapshot 保持可查不可激活。
 pub fn resolve_layers(
     conn: &Connection,
-    project_id: Option<&str>,
-    conversation_id: Option<&str>,
+    _project_id: Option<&str>,
+    _conversation_id: Option<&str>,
 ) -> Result<Vec<(ProfileLayer, ProfileRow, VersionRow)>, HarnessError> {
     let mut layers = Vec::new();
-    let scopes: [(ProfileLayer, &str, Option<&str>); 3] = [
-        (ProfileLayer::Global, "global", Some(GLOBAL_SCOPE_ID)),
-        (ProfileLayer::Project, "project", project_id),
-        (ProfileLayer::Session, "session", conversation_id),
-    ];
+    // 唯一 current global：project/session bindings 不参与运行时解析。
+    let scopes: [(ProfileLayer, &str, Option<&str>); 1] =
+        [(ProfileLayer::Global, "global", Some(GLOBAL_SCOPE_ID))];
     for (layer, scope_type, scope_id) in scopes {
         let Some(scope_id) = scope_id.filter(|s| !s.trim().is_empty()) else {
             continue;

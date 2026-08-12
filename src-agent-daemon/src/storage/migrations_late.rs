@@ -597,3 +597,13 @@ CREATE TABLE IF NOT EXISTS creative_draft_revisions (
     PRIMARY KEY (draft_id, revision)
 );
 ";
+
+/// 039 — 审计收口 #9：唯一 global Harness。
+/// 历史 project/session bindings 标记 inactive（数据保留只读，不 DROP），
+/// 运行时解析只使用 current global（resolve_layers 已收口）。幂等：重入时
+/// ALTER 存在性检查 + UPDATE 仅命中未标记行。
+pub(crate) const MIGRATION_039: &str = "
+ALTER TABLE harness_binding ADD COLUMN inactive_at TEXT;
+UPDATE harness_binding SET inactive_at = datetime('now')
+ WHERE scope_type IN ('project','session') AND inactive_at IS NULL;
+";
