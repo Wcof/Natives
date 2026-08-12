@@ -488,6 +488,7 @@ function CodeEditorPane({ entry, code, mtime, reload, locale, ext }: {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [savedTickLabel, setSavedTickLabel] = useState<string | null>(null);
+  const monacoRef = useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(null);
 
   const { save, hasConflict, overwrite, dismissConflict, savedAt, saveError } = useEditorSave({
     path: entry.path,
@@ -568,6 +569,9 @@ function CodeEditorPane({ entry, code, mtime, reload, locale, ext }: {
             language={ext}
             onChange={handleChange}
             onSave={handleManualSave}
+            onEditorReady={(editor) => {
+              monacoRef.current = editor;
+            }}
           />
         </Suspense>
       </div>

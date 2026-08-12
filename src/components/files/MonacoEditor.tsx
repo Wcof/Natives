@@ -19,6 +19,8 @@ interface MonacoEditorProps {
   /** 每次输入回调（自动保存防抖由调用方负责） */
   onChange?: (value: string) => void;
   readOnly?: boolean;
+  /** 审计收口 #12：把 Monaco 实例交给父级，供内建 find/replace action 使用。 */
+  onEditorReady?: (editor: editor.IStandaloneCodeEditor | null) => void;
 }
 
 // Language mapping (from Natives2)
@@ -36,7 +38,7 @@ const EXT_TO_LANG: Record<string, string> = {
 
 const WORD_WRAP_EXTS = new Set(['md', 'markdown', 'txt', 'log', 'srt', 'vtt', 'ass']);
 
-export default function MonacoEditor({ content, language, onSave, onChange, readOnly }: MonacoEditorProps) {
+export default function MonacoEditor({ content, language, onSave, onChange, readOnly, onEditorReady }: MonacoEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
   const lang = EXT_TO_LANG[language] || 'plaintext';
@@ -70,13 +72,22 @@ export default function MonacoEditor({ content, language, onSave, onChange, read
 
   const handleMount = useCallback<OnMount>((editor, monaco) => {
     editorRef.current = editor;
+    onEditorReady?.(editor);
     // Cmd+S save
     if (onSave) {
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
         onSave(editor.getValue());
       });
     }
-  }, [onSave]);
+  }, [onSave, onEditorReady]);
+
+  // 卸载时通知父级 editor 失效
+  useEffect(() => {
+    return () => {
+      onEditorReady?.(null);
+      editorRef.current = null;
+    };
+  }, [onEditorReady]);
 
   return (
     <Editor

@@ -22,6 +22,7 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
     Array<{ node: Text; start: number; end: number; range: Range }>
   >([]);
   const currentRangeRef = useRef<Range | null>(null);
+  const findTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** 移除上一次高亮，避免叠加。 */
   const clearHighlight = useCallback(() => {
@@ -35,6 +36,10 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
   }, []);
 
   const close = useCallback(() => {
+    if (findTimerRef.current) {
+      clearTimeout(findTimerRef.current);
+      findTimerRef.current = null;
+    }
     clearHighlight();
     setOpen(false);
     setQuery('');
@@ -122,8 +127,21 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
 
   useEffect(() => {
     if (!open) return;
-    if (query) runFind(query);
-    else { setCount(0); setIndex(-1); }
+    // 审计收口 #12：大文档防抖——每击键同步全量扫描会卡主线程，
+    // idle 100ms 后再跑（主任务 ≤50ms 红线）。
+    if (findTimerRef.current) clearTimeout(findTimerRef.current);
+    if (query) {
+      findTimerRef.current = setTimeout(() => runFind(query), 100);
+    } else {
+      setCount(0);
+      setIndex(-1);
+    }
+    return () => {
+      if (findTimerRef.current) {
+        clearTimeout(findTimerRef.current);
+        findTimerRef.current = null;
+      }
+    };
   }, [query, matchCase, open, runFind]);
 
   // 卸载清理
