@@ -441,7 +441,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
                   if (!editableText) return undefined;
                   return (
                     <button
-                      className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
+                      className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
                       onClick={() => setEditMode(!editMode)}
                       title={editMode ? 'View mode' : 'Edit mode'}
                     >

@@ -81,7 +81,7 @@ export default function SlashCommandPopover({
               aria-selected={index === selectedIndex}
               onClick={() => onSelect(cmd)}
               onMouseEnter={() => onHoverIndex(index)}
-              className={`flex items-center gap-2.5 w-full rounded-lg px-2.5 py-2 text-left transition-all ${
+              className={`flex items-center gap-2.5 w-full rounded-lg px-2.5 py-2 text-left transition-[color,background-color,border-color,opacity,transform] ${
                 index === selectedIndex
                   ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'

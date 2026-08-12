@@ -35,7 +35,7 @@ export default function AppBrowserPanel({
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
         <button
           type="button"
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]"
           onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.(app.id)}
           title={t(locale, 'workshop.browserBack')}
         >
@@ -43,7 +43,7 @@ export default function AppBrowserPanel({
         </button>
         <button
           type="button"
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]"
           onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.(app.id)}
           title={t(locale, 'workshop.browserForward')}
         >
@@ -51,7 +51,7 @@ export default function AppBrowserPanel({
         </button>
         <button
           type="button"
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]"
           onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.(app.id)}
           title={t(locale, 'workshop.browserReload')}
         >
@@ -115,7 +115,7 @@ export default function AppBrowserPanel({
         </button>
         <button
           type="button"
-          className="flex h-8 items-center gap-1.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+          className="flex h-8 items-center gap-1.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform]"
           onClick={onClose}
         >
           <X size={14} />

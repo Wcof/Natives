@@ -512,7 +512,7 @@ export default function LiquidGlass({
     return (
       <div
         className={mergeClasses(
-          'bg-brand-olive-sidebar transition-all duration-[400ms] ease-ease-out-expo hover:bg-[var(--neutral-1000)]/[0.04]',
+          'bg-brand-olive-sidebar transition-[color,background-color,border-color,opacity,transform] duration-[400ms] ease-ease-out-expo hover:bg-[var(--neutral-1000)]/[0.04]',
           className,
         )}
         style={style}

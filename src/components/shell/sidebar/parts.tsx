@@ -69,12 +69,12 @@ export function SidebarNavItem({
       aria-label={label}
       className={
         collapsed
-          ? `flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
+          ? `flex h-9 w-9 items-center justify-center rounded-lg transition-[color,background-color,border-color,opacity,transform] ${
               isActive
                 ? 'sidebar-nav-active'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`
-          : `flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
+          : `flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-[color,background-color,border-color,opacity,transform] ${
               isActive
                 ? 'sidebar-nav-active'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -192,8 +192,8 @@ function SettingsNav({ c }: { c: SidebarController }) {
           aria-label={t(c.locale, 'settings.backHome')}
           className={
             c.isCollapsed
-              ? 'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)] transition-all mb-0.5 shrink-0'
-              : 'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)] transition-all font-medium mb-0.5 shrink-0'
+              ? 'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)] transition-[color,background-color,border-color,opacity,transform] mb-0.5 shrink-0'
+              : 'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)] transition-[color,background-color,border-color,opacity,transform] font-medium mb-0.5 shrink-0'
           }
         >
           <ArrowLeft size={15} className="shrink-0" />
@@ -216,12 +216,12 @@ function SettingsNav({ c }: { c: SidebarController }) {
               title={label}
               className={
                 c.isCollapsed
-                  ? `flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
+                  ? `flex h-9 w-9 items-center justify-center rounded-lg transition-[color,background-color,border-color,opacity,transform] ${
                       isActive
                         ? 'sidebar-nav-active'
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
                     }`
-                  : `flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
+                  : `flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-[color,background-color,border-color,opacity,transform] ${
                       isActive
                         ? 'sidebar-nav-active'
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
@@ -256,7 +256,7 @@ function QuickAccessSection({ c }: { c: SidebarController }) {
               key={item.id}
               type="button"
               onClick={() => c.selectNavigation(item.target, item.target)}
-              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-[color,background-color,border-color,opacity,transform] ${
                 isActive
                   ? 'sidebar-nav-active'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -306,7 +306,7 @@ function FileManagerSection({ c }: { c: SidebarController }) {
                 key={item.id}
                 type="button"
                 onClick={() => c.selectNavigation(item.target, item.target)}
-                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-[color,background-color,border-color,opacity,transform] ${
                   isActive
                     ? 'sidebar-nav-active'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -345,7 +345,7 @@ function FavoritesSection({ c }: { c: SidebarController }) {
             const row = (arrow: ReactNode) => (
               <div
                 role="listitem"
-                className={`group flex w-full items-center gap-1 rounded-lg transition-all ${
+                className={`group flex w-full items-center gap-1 rounded-lg transition-[color,background-color,border-color,opacity,transform] ${
                   isActive
                     ? 'sidebar-nav-active'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -575,7 +575,7 @@ function BottomNav({ c }: { c: SidebarController }) {
       <button
         type="button"
         onClick={c.onNotificationClick}
-        className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-all hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
+        className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-[color,background-color,border-color,opacity,transform] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
       >
         <Bell size={16} />
         <span>{t(locale, 'notifications.title')}</span>
@@ -584,7 +584,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         type="button"
         onClick={() => c.selectNavigation('__jobs__', '__jobs__')}
         aria-current={c.activeNavigationId === '__jobs__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
           c.activeNavigationId === '__jobs__'
             ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -597,7 +597,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         type="button"
         onClick={() => c.selectNavigation('__capabilities__', '__capabilities__')}
         aria-current={c.activeNavigationId === '__capabilities__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
           c.activeNavigationId === '__capabilities__'
             ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -610,7 +610,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         type="button"
         onClick={() => c.selectNavigation('__settings__', 'settings:personal')}
         aria-current={c.activeNavigationId === '__settings__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
           c.activeNavigationId === '__settings__'
             ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -623,7 +623,7 @@ function BottomNav({ c }: { c: SidebarController }) {
         type="button"
         onClick={() => c.selectNavigation('__workshop__', 'modules')}
         aria-current={c.activeNavigationId === '__workshop__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
           c.activeNavigationId === '__workshop__'
             ? 'sidebar-nav-active'
             : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'

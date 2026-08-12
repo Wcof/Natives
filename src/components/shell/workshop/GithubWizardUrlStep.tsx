@@ -22,7 +22,7 @@ export default function GithubWizardUrlStep({ w, locale }: GithubWizardUrlStepPr
           value={w.repoUrl}
           onChange={(e) => w.setRepoUrl(e.target.value)}
           placeholder={t(locale, 'workshop.githubRepoPlaceholder')}
-          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
         />
       </div>
 
@@ -36,7 +36,7 @@ export default function GithubWizardUrlStep({ w, locale }: GithubWizardUrlStepPr
               key={m}
               type="button"
               onClick={() => w.setTokenMode(m)}
-              className={`h-7 text-[11px] font-medium rounded-md transition-all ${
+              className={`h-7 text-[11px] font-medium rounded-md transition-[color,background-color,border-color,opacity,transform] ${
                 w.tokenMode === m
                   ? 'bg-[var(--surface)] text-[var(--primary)] shadow-sm font-semibold'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
@@ -59,7 +59,7 @@ export default function GithubWizardUrlStep({ w, locale }: GithubWizardUrlStepPr
             value={w.tokenInput}
             onChange={(e) => w.setTokenInput(e.target.value)}
             placeholder={t(locale, 'workshop.githubTokenPlaceholder')}
-            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
           />
           <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
             <input
@@ -83,7 +83,7 @@ export default function GithubWizardUrlStep({ w, locale }: GithubWizardUrlStepPr
       <div className="flex justify-end gap-2 pt-2">
         <button
           type="button"
-          className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+          className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform]"
           disabled={w.inspecting || !w.repoUrl.trim()}
           onClick={() => void w.runInspect(false)}
         >
@@ -91,7 +91,7 @@ export default function GithubWizardUrlStep({ w, locale }: GithubWizardUrlStepPr
         </button>
         <button
           type="button"
-          className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 transition-all flex items-center gap-1.5"
+          className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 transition-[color,background-color,border-color,opacity,transform] flex items-center gap-1.5"
           disabled={w.inspecting || !w.repoUrl.trim()}
           onClick={() => void w.runInspect(true)}
         >

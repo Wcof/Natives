@@ -151,7 +151,7 @@ export default function ModelSelectorDropdown({
                               onSelect(provider.id, model);
                               setIsOpen(false);
                             }}
-                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-all ${
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-[color,background-color,border-color,opacity,transform] ${
                               isSelected
                                 ? 'bg-[var(--accent)] font-medium text-[var(--accent-ink)]'
                                 : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
@@ -181,7 +181,7 @@ export default function ModelSelectorDropdown({
         onClick={() => setIsOpen((open) => !open)}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
-        className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] text-[var(--text-secondary)] transition-all hover:bg-[var(--surface-hover)]"
+        className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] text-[var(--text-secondary)] transition-[color,background-color,border-color,opacity,transform] hover:bg-[var(--surface-hover)]"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="10" />

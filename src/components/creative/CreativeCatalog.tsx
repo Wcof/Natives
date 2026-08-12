@@ -98,13 +98,13 @@ const BADGE_STYLE = {
 } as const;
 
 const BTN_PRIMARY =
-  'h-8 px-3 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-40 disabled:pointer-events-none';
+  'h-8 px-3 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 active:scale-95 transition-[color,background-color,border-color,opacity,transform] flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-40 disabled:pointer-events-none';
 const BTN_SECONDARY =
-  'h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0';
+  'h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform] flex items-center justify-center gap-1.5 shrink-0';
 const BTN_ICON =
-  'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0';
+  'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform] flex items-center justify-center gap-1.5 shrink-0';
 const BTN_DANGER =
-  'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--danger)] hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]/20 transition-all flex items-center justify-center gap-1.5 shrink-0 ml-auto';
+  'h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--danger)] hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]/20 transition-[color,background-color,border-color,opacity,transform] flex items-center justify-center gap-1.5 shrink-0 ml-auto';
 
 export interface CreativeCatalogProps {
   apps: CreativeAppSummary[];
@@ -141,7 +141,7 @@ interface CardShellProps {
 function CardShell({ app, locale, onResolveOrphan, children }: CardShellProps) {
   const badge = BADGE_STYLE[sourceBadge(app.source)];
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex flex-col justify-between transition-all hover:border-[var(--border-hover)] hover:shadow-sm">
+    <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex flex-col justify-between transition-[color,background-color,border-color,opacity,transform] hover:border-[var(--border-hover)] hover:shadow-sm">
       <div>
         <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5 mb-2.5">
           <div className="font-semibold text-sm text-[var(--text)] truncate" title={app.title}>

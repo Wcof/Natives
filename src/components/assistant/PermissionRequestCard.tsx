@@ -221,7 +221,7 @@ export default function PermissionRequestCard({
               data-permission-scope={scope}
               disabled={submitting}
               onClick={() => handleApprove(scope)}
-              className={`w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left text-xs font-medium text-[var(--text)] transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--surface-hover)] hover:border-[var(--primary)]/40 ${focusRing}`}
+              className={`w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left text-xs font-medium text-[var(--text)] transition-[color,background-color,border-color,opacity,transform] disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--surface-hover)] hover:border-[var(--primary)]/40 ${focusRing}`}
             >
               {labelForScope(scope, copy)}
             </button>
@@ -232,7 +232,7 @@ export default function PermissionRequestCard({
             data-permission-reject
             disabled={submitting}
             onClick={handleReject}
-            className={`w-full rounded-lg border border-[var(--border-subtle)] bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--danger)] transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]/30 ${focusRing}`}
+            className={`w-full rounded-lg border border-[var(--border-subtle)] bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--danger)] transition-[color,background-color,border-color,opacity,transform] disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]/30 ${focusRing}`}
           >
             {copy.reject}
           </button>

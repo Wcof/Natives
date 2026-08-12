@@ -96,14 +96,14 @@ export default function DeleteDialog({
         <div className="flex justify-end gap-2 pt-3">
           <button
             type="button"
-            className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+            className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform]"
             onClick={onClose}
           >
             {t(locale, 'common.cancel')}
           </button>
           <button
             type="button"
-            className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--danger)] text-[var(--accent-ink)] hover:opacity-90 transition-all flex items-center gap-1.5"
+            className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--danger)] text-[var(--accent-ink)] hover:opacity-90 transition-[color,background-color,border-color,opacity,transform] flex items-center gap-1.5"
             onClick={() => void doDelete()}
           >
             <Trash2 size={14} />

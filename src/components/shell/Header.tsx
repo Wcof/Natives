@@ -402,7 +402,7 @@ export default function Header({
             {/* View mode toggle */}
             <div className="flex items-center gap-0.5 rounded-lg bg-[var(--surface)] p-0.5 border border-[var(--border)]">
               <button
-                className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
+                className={`flex h-7 w-7 items-center justify-center rounded-md transition-[color,background-color,border-color,opacity,transform] ${
                   (fs?.viewMode ?? 'grid') === 'grid'
                     ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
                     : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
@@ -413,7 +413,7 @@ export default function Header({
                 <Grid3x3 size={14} />
               </button>
               <button
-                className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
+                className={`flex h-7 w-7 items-center justify-center rounded-md transition-[color,background-color,border-color,opacity,transform] ${
                   (fs?.viewMode ?? 'grid') === 'list'
                     ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
                     : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
@@ -435,7 +435,7 @@ export default function Header({
                 ]).map((opt) => (
                   <button
                     key={opt.key}
-                    className={`flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold transition-all ${
+                    className={`flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold transition-[color,background-color,border-color,opacity,transform] ${
                       (fs?.gridSize ?? 'md') === opt.key
                         ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
@@ -487,7 +487,7 @@ export default function Header({
                         key={opt.key}
                         role="menuitemradio"
                         aria-checked={active}
-                        className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-xs transition-all ${
+                        className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-xs transition-[color,background-color,border-color,opacity,transform] ${
                           active
                             ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-2)]'
@@ -522,7 +522,7 @@ export default function Header({
                         key={opt.key}
                         role="menuitemradio"
                         aria-checked={active}
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-[color,background-color,border-color,opacity,transform] ${
                           active
                             ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-2)]'
@@ -557,7 +557,7 @@ export default function Header({
 
                 >
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-[color,background-color,border-color,opacity,transform] ${
                       !fs?.showHidden
                         ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
@@ -571,7 +571,7 @@ export default function Header({
                     <span>{t(locale, 'fileBrowser.hideHidden')}</span>
                   </button>
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-[color,background-color,border-color,opacity,transform] ${
                       fs?.showHidden
                         ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'

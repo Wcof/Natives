@@ -87,7 +87,7 @@ export default function CatalogShell({
         <div className="flex items-center gap-2 relative">
           <button
             type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]"
             onClick={onReload}
             title={t(locale, 'common.refresh')}
           >
@@ -96,7 +96,7 @@ export default function CatalogShell({
 
           <button
             type="button"
-            className="flex h-8 items-center gap-1.5 px-3 rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] text-xs font-medium hover:opacity-90 active:scale-95 transition-all shadow-sm"
+            className="flex h-8 items-center gap-1.5 px-3 rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] text-xs font-medium hover:opacity-90 active:scale-95 transition-[color,background-color,border-color,opacity,transform] shadow-sm"
             onClick={() => setAddMenu(addMenu === 'open' ? 'closed' : 'open')}
           >
             <Plus size={14} />
@@ -112,7 +112,7 @@ export default function CatalogShell({
                     creative home; import flows start here. */}
                 <button
                   type="button"
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform] w-full text-left"
                   onClick={onAddImport}
                 >
                   <Package size={14} className="text-[var(--text-secondary)]" />
@@ -120,7 +120,7 @@ export default function CatalogShell({
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform] w-full text-left"
                   onClick={onAddLocal}
                 >
                   <Folder size={14} className="text-[var(--text-secondary)]" />
@@ -128,7 +128,7 @@ export default function CatalogShell({
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform] w-full text-left"
                   onClick={onAddGithub}
                 >
                   <Github size={14} className="text-[var(--text-secondary)]" />

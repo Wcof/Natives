@@ -57,7 +57,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
         <select
           value={w.selectedTag}
           onChange={(e) => w.setSelectedTag(e.target.value)}
-          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
         >
           {(inspect.availableTags.length
             ? inspect.availableTags
@@ -78,7 +78,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
         <select
           value={w.selectedCandidate?.id || ''}
           onChange={(e) => onCandidateChange(e.target.value)}
-          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
         >
           {inspect.candidates.map((c) => (
             <option key={c.id} value={c.id}>
@@ -96,7 +96,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
           <input
             value={w.hostPort}
             onChange={(e) => w.setHostPort(e.target.value)}
-            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
           />
         </div>
         <div>
@@ -106,7 +106,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
           <input
             value={w.service}
             onChange={(e) => w.setService(e.target.value)}
-            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
           />
         </div>
         <div>
@@ -116,7 +116,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
           <input
             value={w.openPath}
             onChange={(e) => w.setOpenPath(e.target.value)}
-            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
           />
         </div>
         <div>
@@ -126,7 +126,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
           <input
             value={w.healthPath}
             onChange={(e) => w.setHealthPath(e.target.value)}
-            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+            className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
           />
         </div>
       </div>
@@ -146,7 +146,7 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
                   type={e.secret ? 'password' : 'text'}
                   value={w.envValues[e.key] || ''}
                   onChange={(ev) => w.setEnvValues({ ...w.envValues, [e.key]: ev.target.value })}
-                  className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+                  className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]"
                 />
               </div>
             ))}
@@ -188,14 +188,14 @@ export default function GithubWizardManualStep({ w, locale }: GithubWizardManual
       <div className="flex justify-end gap-2 pt-2">
         <button
           type="button"
-          className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+          className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-[color,background-color,border-color,opacity,transform]"
           onClick={() => w.setStep('url')}
         >
           {t(locale, 'common.back')}
         </button>
         <button
           type="button"
-          className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 transition-all flex items-center gap-1.5"
+          className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--accent-ink)] hover:opacity-90 transition-[color,background-color,border-color,opacity,transform] flex items-center gap-1.5"
           disabled={!w.selectedCandidate || inspect.blockers.length > 0}
           onClick={() => {
             if (inspect && w.selectedCandidate) void w.runInstall(inspect, w.selectedCandidate, false);

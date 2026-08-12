@@ -154,7 +154,7 @@ export default function RightPanel({
         <div className="right-panel-tabs flex items-center gap-1 min-w-0">
           {/* ── Always show 4 mode-tab icons: Preview / Info / Git / Notifications ── */}
           <button
-            className={`flex items-center justify-center p-1.5 rounded-lg transition-all shrink-0 ${
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-[color,background-color,border-color,opacity,transform] shrink-0 ${
               mode === 'file-preview' && previewSubMode === 'preview'
                 ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                 : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -168,7 +168,7 @@ export default function RightPanel({
             <FileText size={15} />
           </button>
           <button
-            className={`flex items-center justify-center p-1.5 rounded-lg transition-all shrink-0 ${
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-[color,background-color,border-color,opacity,transform] shrink-0 ${
               mode === 'file-preview' && previewSubMode === 'info'
                 ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                 : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -182,7 +182,7 @@ export default function RightPanel({
             <Info size={15} />
           </button>
           <button
-            className={`flex items-center justify-center p-1.5 rounded-lg transition-all shrink-0 ${
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-[color,background-color,border-color,opacity,transform] shrink-0 ${
               mode === 'file-preview' && previewSubMode === 'git'
                 ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                 : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -196,7 +196,7 @@ export default function RightPanel({
             <GitBranch size={15} />
           </button>
           <button
-            className={`flex items-center justify-center p-1.5 rounded-lg transition-all shrink-0 ${
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-[color,background-color,border-color,opacity,transform] shrink-0 ${
               mode === 'notifications'
                 ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
                 : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -229,7 +229,7 @@ export default function RightPanel({
         )}
 
         <button
-          className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all shrink-0"
+          className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-[color,background-color,border-color,opacity,transform] shrink-0"
           onClick={handleClose}
           title={t(locale, 'rightPanel.closePanel')}
           aria-label={t(locale, 'rightPanel.closePanel')}

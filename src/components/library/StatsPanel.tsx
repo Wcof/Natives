@@ -38,7 +38,7 @@ export function StatsPanel({ stats }: { stats: LibraryStats | null }) {
               </span>
               <div className="h-4 flex-1 overflow-hidden rounded" style={{ background: 'var(--surface)' }}>
                 <div
-                  className="h-full rounded transition-all"
+                  className="h-full rounded transition-[color,background-color,border-color,opacity,transform]"
                   style={{ width: `${(f.count / maxCount) * 100}%`, background: 'var(--accent)' }}
                 />
               </div>

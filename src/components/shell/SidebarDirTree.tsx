@@ -140,7 +140,7 @@ function DirTreeChildren({
               type="button"
               onClick={() => onNavigate(child.path)}
               title={child.path}
-              className={`flex w-full items-center gap-1.5 rounded-lg px-3 py-1 text-left transition-all ${
+              className={`flex w-full items-center gap-1.5 rounded-lg px-3 py-1 text-left transition-[color,background-color,border-color,opacity,transform] ${
                 isActive
                   ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'

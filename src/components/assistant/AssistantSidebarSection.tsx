@@ -307,7 +307,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                 openMenu(`project:${group.id}`, trigger ?? (event.currentTarget as HTMLElement));
               }} className="mt-0.5">
               {/* ── Project Header ── */}
-              <div className="group/project relative flex items-center gap-0.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all">
+              <div className="group/project relative flex items-center gap-0.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-[color,background-color,border-color,opacity,transform]">
                 <button
                   type="button"
                   onClick={() => toggleProject(group.id)}
@@ -347,7 +347,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                     disabled={navigation.isCreatingConversation}
                     aria-label={t(locale, 'assistant.newConversation')}
                     title={t(locale, 'assistant.newConversation')}
-                    className="drag-none rounded-md p-1 text-inherit hover:bg-[var(--neutral-0)]/10 dark:hover:bg-[var(--neutral-1000)]/10 disabled:opacity-35 transition-all"
+                    className="drag-none rounded-md p-1 text-inherit hover:bg-[var(--neutral-0)]/10 dark:hover:bg-[var(--neutral-1000)]/10 disabled:opacity-35 transition-[color,background-color,border-color,opacity,transform]"
                   >
                     {navigation.isCreatingConversation ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
                   </button>
@@ -366,7 +366,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                         event.stopPropagation();
                         openMenu(`project:${group.id}`, event.currentTarget);
                       }}
-                      className="drag-none rounded-md p-1 text-inherit hover:bg-[var(--neutral-0)]/10 dark:hover:bg-[var(--neutral-1000)]/10 transition-all"
+                      className="drag-none rounded-md p-1 text-inherit hover:bg-[var(--neutral-0)]/10 dark:hover:bg-[var(--neutral-1000)]/10 transition-[color,background-color,border-color,opacity,transform]"
                     >
                       <MoreHorizontal size={12} />
                     </button>
@@ -485,16 +485,16 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
               if (!group?.path) return null;
               return (
                 <>
-                  <button type="button" role="menuitem" onClick={() => { togglePinned(group.id); setMenuId(null); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                  <button type="button" role="menuitem" onClick={() => { togglePinned(group.id); setMenuId(null); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]">
                     {pinned.has(group.id) ? <PinOff size={12} /> : <Pin size={12} />}{pinned.has(group.id) ? t(locale, 'assistant.unpinProject') : t(locale, 'assistant.pinProject')}
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRenameProjectTarget({ id: group.id, path: group.path!, label: group.label }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRenameProjectTarget({ id: group.id, path: group.path!, label: group.label }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]">
                     <Pencil size={12} />{t(locale, 'assistant.renameProject')}
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); void window.nativesAPI?.shell.showItemInFolder(group.path!); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); void window.nativesAPI?.shell.showItemInFolder(group.path!); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]">
                     <FolderSearch size={12} />{t(locale, 'assistant.showProjectInFinder')}
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRemoveProjectTarget({ id: group.id, label: group.label, path: group.path! }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRemoveProjectTarget({ id: group.id, label: group.label, path: group.path! }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-[color,background-color,border-color,opacity,transform]">
                     <Trash2 size={12} />{t(locale, 'assistant.removeProject')}
                   </button>
                 </>
@@ -515,13 +515,13 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
               if (!conversation) return null;
               return (
                 <>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.pinConversation?.(conversation!.id, conversation!.projectId ?? groupPath ?? null, !conversation!.pinned); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.pinConversation?.(conversation!.id, conversation!.projectId ?? groupPath ?? null, !conversation!.pinned); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]">
                     {conversation.pinned ? <PinOff size={12} /> : <Pin size={12} />}{conversation.pinned ? t(locale, 'assistant.unpinConversation') : t(locale, 'assistant.pinConversation')}
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRenameTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRenameTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]">
                     <Pencil size={12} />{t(locale, 'assistant.renameConversation')}
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.archiveConversation(conversation!.id); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.archiveConversation(conversation!.id); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]">
                     <Archive size={12} />{t(locale, 'assistant.archive')}
                   </button>
                   <button
@@ -535,11 +535,11 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                         else toast(t(locale, 'assistant.copyConversationIdFailed'), 'error');
                       });
                     }}
-                    className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+                    className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-[color,background-color,border-color,opacity,transform]"
                   >
                     <Copy size={12} />{t(locale, 'assistant.copyConversationId')}
                   </button>
-                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setDeleteTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setDeleteTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-[color,background-color,border-color,opacity,transform]">
                     <Trash2 size={12} />{t(locale, 'assistant.deleteConversation')}
                   </button>
                 </>

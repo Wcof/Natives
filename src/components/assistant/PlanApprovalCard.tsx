@@ -446,7 +446,7 @@ export default function PlanApprovalCard({
             data-plan-approve
             disabled={submitting}
             onClick={handleApprove}
-            className={`w-full rounded-lg border px-3 py-2 text-left text-xs font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+            className={`w-full rounded-lg border px-3 py-2 text-left text-xs font-medium transition-[color,background-color,border-color,opacity,transform] disabled:cursor-not-allowed disabled:opacity-60 ${
               alarming
                 ? 'border-[var(--danger)]/40 bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--danger-soft)]'
                 : 'border-[var(--primary)]/40 bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)]'
@@ -459,7 +459,7 @@ export default function PlanApprovalCard({
             data-plan-reject
             disabled={submitting}
             onClick={handleReject}
-            className={`w-full rounded-lg border border-[var(--border-subtle)] bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)] transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--surface-hover)] hover:text-[var(--text)] ${focusRing}`}
+            className={`w-full rounded-lg border border-[var(--border-subtle)] bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)] transition-[color,background-color,border-color,opacity,transform] disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--surface-hover)] hover:text-[var(--text)] ${focusRing}`}
           >
             {copy.reject}
           </button>

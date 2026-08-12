@@ -86,7 +86,7 @@ export default function CreativeDock({
               title={tabLabel}
               aria-label={tabLabel}
               onClick={() => onSelect(tab)}
-              className={`flex items-center gap-1.5 pl-2 pr-1.5 py-1.5 rounded-lg text-xs transition-all ${
+              className={`flex items-center gap-1.5 pl-2 pr-1.5 py-1.5 rounded-lg text-xs transition-[color,background-color,border-color,opacity,transform] ${
                 isActive
                   ? 'bg-[var(--accent)] text-[var(--on-accent)] shadow-sm'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
