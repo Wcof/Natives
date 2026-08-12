@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createInitialWorkspaceState } from './state';
 import {
+  resolveSurfaceRoot,
   selectAllPendingInteractions,
   selectArtifacts,
   selectChildRuns,
@@ -63,5 +64,17 @@ describe('assistant workspace selectors', () => {
     assert.equal(selectPendingInteractions(state, 'c-new').length, 1);
     // 全局徽章仍统计全部（含未绑定）。
     assert.equal(selectAllPendingInteractions(state).length, 2);
+  });
+
+  it('问题3：store activeConversationId 是唯一 root authority（resolveSurfaceRoot）', () => {
+    // 新项目创建：store active 已切到 temp 会话，但本地 selectedRoot 仍指向旧会话。
+    // 第一帧 root 必须跟随 store active（temp），绝不沿用旧 local root 串旧投影。
+    assert.equal(resolveSurfaceRoot('temp-1', 'c-old'), 'temp-1');
+    assert.equal(resolveSurfaceRoot('temp-1', null), 'temp-1');
+    // store active 为空时回退 selectedRoot（subagent 树根等）。
+    assert.equal(resolveSurfaceRoot(null, 'c-old'), 'c-old');
+    assert.equal(resolveSurfaceRoot(undefined, 'c-old'), 'c-old');
+    // 两侧都空 → null。
+    assert.equal(resolveSurfaceRoot(null, null), null);
   });
 });

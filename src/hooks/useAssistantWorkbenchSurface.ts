@@ -27,6 +27,7 @@ import {
   selectPromptQueue,
   selectRunEvents,
   selectSurfaceConversationId,
+  resolveSurfaceRoot,
   useAssistantDispatch,
   useAssistantGateway,
   useAssistantStore,
@@ -113,7 +114,9 @@ export function useAssistantWorkbenchSurface({
 
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
 
-  const rootConversationId = selectedRootConversationId ?? storeActiveId;
+  // 审计收口 #3：store activeConversationId 是唯一 root authority——新建项目
+  // 原子切换后第一帧 root 即为新 temp 会话，绝不沿用旧 local root 串旧投影。
+  const rootConversationId = resolveSurfaceRoot(storeActiveId, selectedRootConversationId);
   const surfaceConversationId = selectSurfaceConversationId(
     rootConversationId,
     selectedChildConversationId,

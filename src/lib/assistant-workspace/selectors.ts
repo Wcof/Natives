@@ -315,6 +315,22 @@ export function selectSurfaceConversationId(
   return root;
 }
 
+/**
+ * 审计收口 #3：store activeConversationId 是唯一 root authority。
+ *
+ * 本地 selectedRootConversationId 只应作为 fallback（例如 subagent child 视图
+ * 保持树根），绝不能优先于 store active——否则新建项目后第一帧仍会投影旧
+ * timeline/授权/run。新项目创建必须通过 reducer 原子切换 store active。
+ */
+export function resolveSurfaceRoot(
+  storeActiveId: string | null | undefined,
+  selectedRootConversationId: string | null | undefined,
+): string | null {
+  const active = storeActiveId?.trim() || null;
+  if (active) return active;
+  return selectedRootConversationId?.trim() || null;
+}
+
 interface ArtifactsTreeCacheEntry {
   childIds: string[];
   arrays: Array<import('@/lib/assistant-protocol').Artifact[] | undefined>;
