@@ -77,7 +77,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               cursor: 'pointer',
               maxWidth: 360,
               display: 'inline-flex', alignItems: 'center', gap: SPACING.xs,
-              animation: !t.dismissing ? `toastSlideUp 0.2s ease` : undefined,
+              animation: !t.dismissing ? `toastSlideUp ${TRANSITION.normal}` : undefined,
             }}
             onClick={() => removeToast(t.id)}
           >

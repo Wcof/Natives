@@ -4,7 +4,7 @@
  * 通用进度条组件 — 复用自 UsagePanel 和 Dashboard
  * 对齐 Natives2 usagePanel.bar() 样式
  */
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
 export function ProgressBar({ label, used, limit, color }: {
   label: string; used: number; limit: number; color: string;
@@ -23,7 +23,7 @@ export function ProgressBar({ label, used, limit, color }: {
         <div style={{
           width: `${pct}%`, height: '100%',
           background: isDanger ? 'var(--danger)' : color,
-          borderRadius: BORDER_RADIUS.sm, transition: 'width 0.3s ease',
+          borderRadius: BORDER_RADIUS.sm, transition: `width ${TRANSITION.normal}`,
         }} />
       </div>
     </div>

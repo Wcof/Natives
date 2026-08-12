@@ -406,7 +406,7 @@
   cursor: default;
   color: var(--text-secondary);
   background: transparent;
-  transition: background-color 100ms ease, color 100ms ease;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }

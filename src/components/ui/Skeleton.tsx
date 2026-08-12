@@ -34,7 +34,7 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
           width: '100%', aspectRatio: '1', borderRadius: BORDER_RADIUS.sm,
           background: 'var(--surface)',
           marginBottom: SPACING.sm,
-          animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+          animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
         }} />
         <Skeleton lines={2} />
       </div>
@@ -47,7 +47,7 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
         <div style={{
           width: 40, height: 40, borderRadius: '50%',
           background: 'var(--surface)',
-          animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+          animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
           flexShrink: 0,
         }} />
         <div style={{ flex: 1 }}>
@@ -69,19 +69,19 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
             <div style={{
               width: 24, height: 12, borderRadius: BORDER_RADIUS.sm,
               background: 'var(--surface)',
-              animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+              animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
               animationDelay: `${i * 0.1}s`,
             }} />
             <div style={{
               flex: 1, height: 12, borderRadius: BORDER_RADIUS.sm,
               background: 'var(--surface)',
-              animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+              animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
               animationDelay: `${i * 0.1 + 0.05}s`,
             }} />
             <div style={{
               width: 60, height: 12, borderRadius: BORDER_RADIUS.sm,
               background: 'var(--surface)',
-              animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+              animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
               animationDelay: `${i * 0.1 + 0.1}s`,
             }} />
           </div>
@@ -101,7 +101,7 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
             width: i === lines - 1 ? '60%' : '100%',
             borderRadius: BORDER_RADIUS.sm,
             background: 'var(--surface)',
-            animation: 'skeleton-pulse 1.5s ease-in-out infinite',
+            animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
             animationDelay: `${i * 0.1}s`,
           }}
         />

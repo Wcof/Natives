@@ -110,17 +110,17 @@
 .anim-fadeIn { animation: fadeIn var(--transition) forwards; }
 .anim-dropIn { animation: dropIn var(--transition) forwards; }
 .anim-slideUp { animation: slideUp var(--transition-slow) forwards; }
-.anim-skeleton { animation: skeleton-pulse 1.5s ease infinite; }
-.anim-changedBreath { animation: changedBreath 2.2s ease-in-out infinite; }
-.anim-changedPulse { animation: changedPulse 0.5s ease-out; }
-.anim-clFlash { animation: clFlash 2s ease-in-out infinite; }
-.anim-livePulse { animation: livePulse 2s ease-in-out infinite; }
-.anim-liveZap { animation: liveZap 2.5s ease infinite; background-size: 200% 100%; }
-.anim-liveZapRow { animation: liveZapRow 3s linear infinite; background-size: 200% 100%; }
-.anim-termCatch { animation: termCatch 0.3s ease-out forwards; }
-.anim-termAwait { animation: termAwait 1.8s ease-in-out infinite; }
-.anim-tabpulse { animation: tabpulse 2s ease-in-out infinite; }
-.anim-areaRipple { animation: areaRipple 1s ease-out forwards; }
+.anim-skeleton { animation: skeleton-pulse 1.5s var(--motion-easing) infinite; }
+.anim-changedBreath { animation: changedBreath 2.2s var(--motion-easing) infinite; }
+.anim-changedPulse { animation: changedPulse 0.5s var(--motion-easing); }
+.anim-clFlash { animation: clFlash 2s var(--motion-easing) infinite; }
+.anim-livePulse { animation: livePulse 2s var(--motion-easing) infinite; }
+.anim-liveZap { animation: liveZap 2.5s var(--motion-easing) infinite; background-size: 200% 100%; }
+.anim-liveZapRow { animation: liveZapRow 3s var(--motion-easing) infinite; background-size: 200% 100%; }
+.anim-termCatch { animation: termCatch 0.3s var(--motion-easing) forwards; }
+.anim-termAwait { animation: termAwait 1.8s var(--motion-easing) infinite; }
+.anim-tabpulse { animation: tabpulse 2s var(--motion-easing) infinite; }
+.anim-areaRipple { animation: areaRipple 1s var(--motion-easing) forwards; }
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -183,9 +183,9 @@
 /* ── Theme transitioning ── */
 .theme-transitioning,
 .theme-transitioning * {
-  transition: background-color var(--transition-slow) ease,
-              border-color var(--transition-slow) ease,
-              color var(--transition-slow) ease !important;
+  transition: background-color var(--transition-slow) var(--motion-easing),
+              border-color var(--transition-slow) var(--motion-easing),
+              color var(--transition-slow) var(--motion-easing) !important;
 }
 
 @keyframes natives-loader-spin {
