@@ -545,8 +545,3 @@ async fn mcp_call_through_permission_gate_emits_events() {
         );
     }
 }
-
-/// 问题11：Expert Team = 协调者按需委派真实 Subagent。
-/// - team roster 成员（fixture）→ 创建真实 child run（SubagentCreated 事件）
-/// - 非 roster 成员 → fail-closed（TEAM_MEMBER_INVALID）
-/// - 无 team 时传 agent → fail-closed（TEAM_NOT_ACTIVE）

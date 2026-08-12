@@ -155,7 +155,8 @@ test('fixture ask user interaction', async () => {
   const events = await drainSubscribe(adapter, run.id, 0);
   let state = withRun(run.id);
   state = workspaceReducer(state, { type: 'event/applyBatch', events });
-  assert.equal(selectPendingInteractions(state)[0]!.kind, 'ask_user');
+  // #3 语义：pending interaction 显式绑定会话才投影；run 绑定 conv-1。
+  assert.equal(selectPendingInteractions(state, 'conv-1')[0]!.kind, 'ask_user');
 });
 
 test('fixture subagent + artifact', async () => {

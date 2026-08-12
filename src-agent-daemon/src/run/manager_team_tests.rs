@@ -1,16 +1,5 @@
 use super::*;
 
-// 审计收口 W5：Expert Team 真 child run 测试独立成文件，
-// 保持 manager_tests_permission.rs 在 700 行审查阈值内。
-
-#[tokio::test]
-async fn expert_team_roster_spawns_real_child_run_and_rejects_outsiders() {
-    let _env_guard = crate::storage::DataStore::env_test_lock();
-    std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-    // DB-backed Expert profiles so `load_profile("builder")` resolves (the task
-    // tool fail-closes when a roster member's profile cannot be loaded).
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join(format!("team-{}.db", Uuid::new_v4()));
 #[tokio::test]
 async fn expert_team_roster_spawns_real_child_run_and_rejects_outsiders() {
     let _env_guard = crate::storage::DataStore::env_test_lock();

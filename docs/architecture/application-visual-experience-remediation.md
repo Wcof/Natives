@@ -1,10 +1,10 @@
 # 全应用视觉与交互体验整改
 
 > 状态：方案冻结，Wave 1–3 已启动并完成首批集成。  
-> Natives 审计基线：`60107ab2d21e`（2026-08-12；实施前必须记录新的集成 HEAD）。  
+> Natives 审计基线：`60107ab2d21e`；首批集成 HEAD：`1943c57`（2026-08-12）。
 > Waku 参考：`/Volumes/UNTITLED/本人材料/project/waku`；审阅时仓库报告 HEAD `925c7533cd88744cd76531f8a938e07cbb1b0213`，工作树非干净，因此本方案只引用已核对的源码行为，不把该 commit 当作可复现截图基线。  
 > 产品面：Hub 主工作台为主，覆盖 Workshop 管理面、Embed 宿主 Chrome 与 Menubar Widget；不改变 web-module / capability 双轨。  
-> **唯一来源**：本文是本轮全应用视觉、布局、交互整改的唯一方案、工作包、进度与验收来源。不得另建 UI task pack、进度快照或页面私有设计规范。
+> **执行包**：本文保留设计总纲与首批集成基线；后续细化后的唯一实施入口为 `/Users/ldh/Downloads/project/uitask/README.md`，其工作包、验收编号、证据规范和进度台账不得再复制为第三套来源。
 
 ## 0. 权威、范围与完成定义
 
@@ -332,10 +332,10 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 
 | Wave | 状态 | 集成 commit | 证据 | Blocker |
 |---|---|---|---|---|
-| 0 · 基线 | completed | working tree | Waku dark/light 参考截图 + Natives browser before | 参考仓 dirty，证据以已核源码与截图为准 |
-| 1 · Foundation | in progress | working tree | 语义表面、阅读宽度、统一 motion；typecheck/colors/定向 lint 通过 | 通用 UI 原子仍待后续 Wave 覆盖 |
-| 2 · Shell | in progress | working tree | 连续工作台、中性导航选中态、48px titlebar | 全页面最小窗口矩阵待后续 Goal 完成 |
-| 3 · 业务面 | in progress | working tree | Assistant Timeline/Composer + Home 标题层级已集成 | Files/Jobs/Workshop/Settings 等待 WP-C/D/E 后续执行 |
+| 0 · 基线 | completed | `1943c57` | Waku dark/light 参考截图 + Natives browser before/首批 after | 参考仓 dirty，证据以已核源码与截图为准 |
+| 1 · Foundation | in progress | `1943c57` | 语义表面、阅读宽度、统一 motion；typecheck/colors/定向 lint 通过 | 通用 UI 原子仍待后续 Wave 覆盖；全量 lint 被既有 `embedded_prod` / `global_singleton` 清单债务阻断，新增债务为 0 |
+| 2 · Shell | in progress | `1943c57` | 连续工作台、中性导航选中态、48px titlebar；1280×720 dark 浏览器实测可见 | 全页面最小窗口与 light 矩阵待后续 Goal 完成 |
+| 3 · 业务面 | in progress | `1943c57` | Assistant Timeline/Composer + Home 标题层级已集成；相关类型与定向测试通过 | Files/Jobs/Workshop/Settings 等待 WP-C/D/E 后续执行；全量测试既有 fixture 失败 1 项（770/771 通过） |
 | 4 · 统一校准 | pending | — | — | — |
 | 5 · 验收 | pending | — | — | — |
 
@@ -343,20 +343,4 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 
 ## 11. Goal 启动指令
 
-复制以下指令启动主 Agent：
-
-```text
-请创建并持续执行一个 Goal：完整落实 Natives 全应用视觉与交互体验整改，不以 token 成本或 MVP 缩减范围，直到专业视觉、完整交互、可访问性、性能和统一门禁全部达到 docs/architecture/application-visual-experience-remediation.md 的完成标准。
-
-使用分支 `codex/application-visual-experience`；若调用方已提供分支或 Worktree，则复用，禁止重复创建。开始前完整阅读 AGENTS.md、docs/README.md、docs/standards/README.md、docs/architecture/application-visual-experience-remediation.md 及其“权威、范围与完成定义”所列 standards/ADR。本文是唯一方案、工作包、进度和验收源，不创建 UI task pack、独立进度快照或第二套规范。
-
-参考 `/Volumes/UNTITLED/本人材料/project/waku` 时必须先记录其 HEAD 和 dirty 状态，并以源码行为作为证据。严格执行本文 Adopt/Adapt/Reject：吸收中性层级、紧凑桌面布局、Transcript/Composer、渐进披露、焦点恢复、reduce-motion 和性能纪律；不得复制 Waku 的 GPUI 技术栈、珊瑚/蓝色普通强调色、SVG 资产、seed/mock 数据或页面私有像素值。Natives 继续服从 ADR-0010、Tauri 透明链路、Liquid Glass 分层和真实数据红线。
-
-使用主 Agent + 最多 3 个 Subagent，并严格按第 6 节 WP-A..E 文件所有权协作。Wave 1 Foundation 先行；Wave 2 Shell 在 Foundation 稳定后执行；Wave 3 再并行 WP-C、WP-D、WP-E。`src/i18n/zh.ts`、`src/i18n/en.ts` 只由主 Agent 集中修改。任何 Agent 遇到跨包问题，只把证据和建议发送给 owner，不越权编辑共享文件。
-
-实施必须覆盖本文第 5 节全部页面，不以首页或单个 tracer path 代表完成。每个异步表面必须处理 loading/error/success，并按域处理 empty/partial/stale；用户可见数据必须真实可追溯。所有交互覆盖鼠标、键盘、focus-visible、Modal 焦点归还、长中英文和 prefers-reduced-motion。普通内容层禁止强玻璃、折射、色差和动态扭曲。
-
-每个 Wave 使用独立原子提交，先记录 before，再记录同设备、Release、同数据路径的 after。按第 8 节执行 dark/light × 1440×900/1180×760/960×600 × loading/success/empty/error/partial-stale 矩阵；Menubar 执行 400×600 的 missing/partial/stale/error/success 专项。记录交互 p95、动画 FPS、Bundle、CPU/RSS，并禁止用豁免掩盖回退。
-
-合并到唯一 candidate HEAD 后运行 `rtk npm run typecheck`、`rtk npm run lint`、`rtk npm run test`、`rtk npm run perf:check`，以及触及区域的 Rust/协议/Extension Host 检查。仅在同一 HEAD 的页面矩阵、键盘路径、真实状态、性能证据和全部门禁完成后，更新本文第 10 节并把 Goal 标记 complete。最终报告必须列出 Wave/commit、页面 before/after、Adopt/Adapt/Reject 偏差、a11y、性能、门禁、剩余 blocker 和每个原子回滚点。
-```
+新版完整提示词已迁移到 `/Users/ldh/Downloads/project/uitask/GOAL.md`。启动 Agent 时必须复制该文件全文，不能继续使用本文旧版简化提示词。
