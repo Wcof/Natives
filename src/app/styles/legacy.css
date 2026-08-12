@@ -39,7 +39,7 @@
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background-color var(--transition), color var(--transition), border-color var(--transition);
   white-space: nowrap;
 }
 
@@ -174,7 +174,7 @@
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background-color var(--transition), color var(--transition);
   white-space: nowrap;
 }
 

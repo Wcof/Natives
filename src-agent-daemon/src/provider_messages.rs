@@ -3,7 +3,7 @@
 //! Extracted from `provider.rs` so the adapter file stays under the 700-line
 //! review threshold (审计收口 W5：candidate 相比基线不新增超 700 行文件)。
 
-use agent_core::{EngineMessage, EngineError};
+use agent_core::{EngineError, EngineMessage};
 use provider_adapters::capabilities::{
     HistoryMessage, HistoryToolCall, ImageSource, ProviderError,
 };

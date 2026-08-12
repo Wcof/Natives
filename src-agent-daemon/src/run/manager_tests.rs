@@ -19,11 +19,11 @@ mod create;
 mod credential;
 #[path = "manager_tests_permission.rs"]
 mod permission;
-#[path = "manager_team_tests.rs"]
-mod team;
 #[path = "manager_tests_persist.rs"]
 mod persist;
 #[path = "manager_tests_resume.rs"]
 mod resume;
 #[path = "manager_tests_start.rs"]
 mod start;
+#[path = "manager_team_tests.rs"]
+mod team;

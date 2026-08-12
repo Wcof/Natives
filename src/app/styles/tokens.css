@@ -368,8 +368,11 @@
 :root,
 [data-theme="light"] {
   --bg: var(--background);
+  --bg-1: var(--background);
   --bg-2: var(--surface);
   --bg-3: var(--surface-hover);
+  --hover: var(--surface-hover);
+  --shadow-sm: var(--shadow-card);
   --panel: var(--surface);
   --accent: var(--primary);
   --accent-soft: var(--primary-soft);

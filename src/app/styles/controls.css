@@ -18,13 +18,31 @@
   font-weight: 500;
   cursor: pointer;
   color: var(--text);
-  transition: all var(--transition);
+  transition: background-color var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition);
   white-space: nowrap;
 }
 
 .btn:hover {
   background: var(--surface-hover);
   border-color: var(--primary);
+}
+
+.btn:active {
+  background: var(--surface-active);
+  transform: scale(0.985);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+  pointer-events: none;
 }
 
 .btn-primary {
@@ -537,7 +555,7 @@
   font-size: 13px;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
   color: var(--text);
 }
 

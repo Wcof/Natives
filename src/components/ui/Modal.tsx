@@ -154,7 +154,7 @@ export default function Modal({
                 onClick={onClose}
                 aria-label={t(locale, 'common.close')}
                 title={t(locale, 'common.close')}
-                style={{ display: 'flex', height: '32px', width: '32px', flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: BORDER_RADIUS.xs, border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', background: 'transparent', transition: `all ${TRANSITION.fast}` }}
+                style={{ display: 'flex', height: '32px', width: '32px', flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: BORDER_RADIUS.xs, border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', background: 'transparent', transition: `background-color ${TRANSITION.fast}, color ${TRANSITION.fast}` }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)'; (e.currentTarget as HTMLElement).style.color = 'var(--text)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)'; }}
               >
