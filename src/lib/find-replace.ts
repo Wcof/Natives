@@ -46,3 +46,30 @@ export function navigateMatch(
   if (direction === 'next') return (current + 1) % count;
   return (current - 1 + count) % count;
 }
+
+/** 文本节点段：拼接全文时的起点偏移。 */
+export interface TextSegment {
+  /** 该 text node 在拼接全文中的起始偏移。 */
+  start: number;
+  /** 该 text node 的字符长度。 */
+  length: number;
+}
+
+/**
+ * 审计收口 #12：把「全文匹配偏移 → 落在哪个 text node」的定位抽成纯逻辑，
+ * 供只读 Preview 的跨 text-node DOM Range 选区使用（搜索范围只限内容，
+ * 不含 toolbar/find bar）。返回所在段的索引与段内偏移；无段时返回 null。
+ */
+export function locateMatchInSegments(
+  matchStart: number,
+  matchEnd: number,
+  segments: readonly TextSegment[],
+): { segmentIndex: number; nodeOffset: number; clampLength: number } | null {
+  if (segments.length === 0) return null;
+  const seg =
+    segments.find((s) => matchStart < s.start + s.length) ?? segments[segments.length - 1]!;
+  const nodeOffset = matchStart - seg.start;
+  const clampLength = Math.max(0, Math.min(matchEnd - matchStart, seg.length - nodeOffset));
+  const segmentIndex = segments.indexOf(seg);
+  return { segmentIndex, nodeOffset, clampLength };
+}

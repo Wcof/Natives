@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { FIND_MATCH_LIMIT, findMatches, navigateMatch } from './find-replace';
+import {
+  FIND_MATCH_LIMIT,
+  findMatches,
+  locateMatchInSegments,
+  navigateMatch,
+} from './find-replace';
 
 describe('findMatches', () => {
   it('空查询 / 空文本返回空', () => {
@@ -52,5 +57,43 @@ describe('navigateMatch', () => {
   it('当前未选时默认跳首项', () => {
     assert.equal(navigateMatch(-1, 3, 'next'), 0);
     assert.equal(navigateMatch(-1, 3, 'prev'), 2);
+  });
+});
+
+describe('审计收口 #12：locateMatchInSegments 跨 text-node 选区定位', () => {
+  // 模拟拼接全文 "hello world foo" 由三个 text node 组成：
+  // node0 "hello " (0..6), node1 "world " (6..12), node2 "foo" (12..15)
+  const segments = [
+    { start: 0, length: 6 },
+    { start: 6, length: 6 },
+    { start: 12, length: 3 },
+  ];
+
+  it('匹配落在第一个 text node', () => {
+    assert.deepEqual(locateMatchInSegments(0, 5, segments), {
+      segmentIndex: 0,
+      nodeOffset: 0,
+      clampLength: 5,
+    });
+  });
+
+  it('匹配起点落在第二个 text node（跨节点选区）', () => {
+    assert.deepEqual(locateMatchInSegments(7, 11, segments), {
+      segmentIndex: 1,
+      nodeOffset: 1,
+      clampLength: 4,
+    });
+  });
+
+  it('匹配终点超出所在段时 clamp 到段长（不越界）', () => {
+    assert.deepEqual(locateMatchInSegments(10, 14, segments), {
+      segmentIndex: 1,
+      nodeOffset: 4,
+      clampLength: 2, // node1 只剩 2 个字符
+    });
+  });
+
+  it('空段返回 null', () => {
+    assert.equal(locateMatchInSegments(0, 1, []), null);
   });
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { findMatches, navigateMatch, FIND_MATCH_LIMIT } from '@/lib/find-replace';
+import { findMatches, locateMatchInSegments, navigateMatch, FIND_MATCH_LIMIT } from '@/lib/find-replace';
 
 /**
  * 文件面板内的查找状态机（问题12）。
@@ -72,13 +72,17 @@ export function useFindReplace(containerRef: React.RefObject<HTMLElement | null>
         limit: FIND_MATCH_LIMIT,
       });
       const ranges = matches.map((match) => {
-        // 定位起始匹配落在哪个文本节点
-        const seg = segments.find((s) => match.start < s.start + s.node.data.length) ?? segments.at(-1);
-        const nodeStart = seg?.start ?? 0;
-        const nodeOffset = match.start - nodeStart;
+        // 定位起始匹配落在哪个文本节点（跨 text-node 选区，纯逻辑定位）。
+        const located = locateMatchInSegments(
+          match.start,
+          match.end,
+          segments.map((s) => ({ start: s.start, length: s.node.data.length })),
+        );
+        const seg = located ? segments[located.segmentIndex] : segments.at(-1);
+        const nodeOffset = located?.nodeOffset ?? 0;
         const range = document.createRange();
         range.setStart(seg!.node, nodeOffset);
-        range.setEnd(seg!.node, nodeOffset + Math.min(match.end - match.start, seg!.node.data.length - nodeOffset));
+        range.setEnd(seg!.node, nodeOffset + (located?.clampLength ?? 0));
         return { node: seg!.node, start: match.start, end: match.end, range };
       });
       rangesRef.current = ranges;
