@@ -8,7 +8,9 @@ import {
   buildWatchStartParams,
   buildWatchStopParams,
   buildWatchStateParams,
+  createTauriWatchBridge,
   WatchStreamUnavailableError,
+  type TauriInvokeFn,
 } from './daemon-adapter';
 import type { HostWatchBridge, WatchFrame } from './daemon-adapter';
 
@@ -327,6 +329,41 @@ test('watch bridge params are camelCase per the Tauri v2 JS contract', () => {
   assert.ok(!startKeys.some((k) => k.includes('_')));
   assert.ok(!Object.keys(buildWatchStopParams('r1')).some((k) => k.includes('_')));
   assert.ok(!Object.keys(buildWatchStateParams('r1')).some((k) => k.includes('_')));
+});
+
+test('default Tauri bridge sends exact command names and exact camelCase payloads (审计收口 #2)', async () => {
+  // 审计收口 #2：默认 bridge 必须走真实生产接缝（command invoker 注入后仍用
+  // 同一 createTauriWatchBridge 实现），断言 exact command name 与 exact
+  // camelCase payload，而不是只测 params helper。
+  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  // 测试只捕获调用；bridge 内部以 `invoke<T>` 显式断言返回值形状。
+  const invoke = (async (command: string, args?: Record<string, unknown>) => {
+    calls.push({ command, args });
+    if (command === 'run_watch_start') return { ok: true };
+    if (command === 'run_watch_state') {
+      return { active: true, lastDurableSequence: 5, lastLiveSequence: 0, terminal: false };
+    }
+    return {};
+  }) as unknown as TauriInvokeFn;
+  const bridge = createTauriWatchBridge(invoke, () => () => undefined, true);
+  assert.ok(bridge, 'bridge built with injected invoker');
+
+  const start = await bridge.start('r-watch', 2, 0);
+  assert.deepEqual(start, { ok: true, error: undefined });
+  await bridge.stop('r-watch');
+  const stateFn = bridge.state;
+  assert.ok(stateFn, 'state is available on the default bridge');
+  const state = await stateFn('r-watch');
+  assert.equal(state.active, true);
+  assert.equal(state.lastDurableSequence, 5);
+
+  assert.deepEqual(
+    calls.map((c) => c.command),
+    ['run_watch_start', 'run_watch_stop', 'run_watch_state'],
+  );
+  assert.deepEqual(calls[0]!.args, { runId: 'r-watch', afterDurableSequence: 2, afterLiveSequence: 0 });
+  assert.deepEqual(calls[1]!.args, { runId: 'r-watch' });
+  assert.deepEqual(calls[2]!.args, { runId: 'r-watch' });
 });
 
 // ─── Bounded reconnect (问题 4) ────────────────────────────────────────────

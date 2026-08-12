@@ -132,13 +132,35 @@ export function buildWatchStateParams(runId: string): Record<string, unknown> {
   return { runId };
 }
 
-/** Build the default Tauri-hosted bridge (lazy; tests inject a fake instead). */
-function createTauriWatchBridge(): HostWatchBridge | null {
-  if (typeof window === 'undefined') return null;
+/**
+ * Tauri command invoker：与 `@/lib/tauri/core` 的 `cmd` 同签名（泛型返回），
+ * 供默认 bridge 注入与契约测试捕获 exact command/payload。
+ */
+export type TauriInvokeFn = <T = unknown>(
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
+
+/**
+ * Build the default Tauri-hosted bridge (lazy; tests inject a fake instead).
+ *
+ * 审计收口 #2：invoker 与 frame-subscribe 可注入，默认走真实 `cmd`/`subscribe`，
+ * 这样测试能捕获 exact command name 与 exact camelCase payload，而不只是测
+ * params helper。
+ */
+export function createTauriWatchBridge(
+  invoke: TauriInvokeFn = cmd,
+  subscribeFrames: (listener: (frame: WatchFrame) => void) => () => void = (listener) =>
+    subscribe<WatchFrameEvent>(WATCH_FRAME_EVENT, (payload) => {
+      listener(payload.frame);
+    }),
+  isBrowser: boolean = typeof window !== 'undefined',
+): HostWatchBridge | null {
+  if (!isBrowser) return null;
   return {
     async start(runId, afterDurableSequence, afterLiveSequence) {
       try {
-        const result = await cmd<{ ok?: boolean; error?: string }>(
+        const result = await invoke<{ ok?: boolean; error?: string }>(
           'run_watch_start',
           buildWatchStartParams(runId, afterDurableSequence, afterLiveSequence),
         );
@@ -149,14 +171,14 @@ function createTauriWatchBridge(): HostWatchBridge | null {
     },
     async stop(runId) {
       try {
-        await cmd('run_watch_stop', buildWatchStopParams(runId));
+        await invoke('run_watch_stop', buildWatchStopParams(runId));
       } catch {
         // best-effort unsubscribe
       }
     },
     async state(runId) {
       try {
-        const result = await cmd<{
+        const result = await invoke<{
           active?: boolean;
           lastDurableSequence?: number;
           lastLiveSequence?: number;
@@ -182,9 +204,7 @@ function createTauriWatchBridge(): HostWatchBridge | null {
       }
     },
     listen(listener) {
-      return subscribe<WatchFrameEvent>(WATCH_FRAME_EVENT, (payload) => {
-        listener(payload.frame);
-      });
+      return subscribeFrames(listener);
     },
   };
 }
