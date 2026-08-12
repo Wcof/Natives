@@ -79,6 +79,7 @@ export const settings = {
     overviewStorageUsed: '{percent}% used',
     overviewStorageAvailable: '{size} available',
     overviewStorageUnavailable: 'System disk information is unavailable.',
+    overviewStorageUnknown: 'Disk capacity is unknown; no percentage is shown.',
     overviewStorageSource: 'Source: system root volume',
     overviewRecentProjects: 'Recently used projects',
     overviewAllProjects: 'View all projects',

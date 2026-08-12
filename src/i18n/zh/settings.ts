@@ -79,6 +79,7 @@ export const settings = {
     overviewStorageUsed: '已使用 {percent}%',
     overviewStorageAvailable: '可用 {size}',
     overviewStorageUnavailable: '无法读取系统磁盘信息。',
+    overviewStorageUnknown: '磁盘容量未知，不显示百分比。',
     overviewStorageSource: '来源：系统根卷',
     overviewRecentProjects: '最近使用的项目',
     overviewAllProjects: '查看全部项目',

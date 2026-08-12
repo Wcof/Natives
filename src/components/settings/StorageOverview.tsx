@@ -38,6 +38,96 @@ export function storagePercent(info: StorageInfo): number | null {
   return Math.min(100, (info.usedBytes / info.totalBytes) * 100);
 }
 
+/** 审计收口 #7：百分比文案——percent 参数不含 `%`（模板自带 {percent}%）。 */
+export function storageUsedLabel(locale: ReturnType<typeof useLocale>, percent: number): string {
+  return t(locale, 'settings.overviewStorageUsed', { percent: String(Math.round(percent)) });
+}
+
+/** 展示组件：同一数据流的纯投影（loading/error/ready/unavailable）。 */
+export function StorageOverviewContent({
+  locale,
+  loading,
+  error,
+  info,
+  onRetry,
+}: {
+  locale: ReturnType<typeof useLocale>;
+  loading: boolean;
+  error: string | null;
+  info: StorageInfo | null;
+  onRetry: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+        <RefreshCw size={13} className="animate-spin" />
+        {t(locale, 'common.loading')}
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <EmptyState
+        title={t(locale, 'settings.overviewStorageUnavailable')}
+        description={error}
+        action={{ label: t(locale, 'common.retry'), onClick: onRetry }}
+      />
+    );
+  }
+  if (!info) {
+    return (
+      <EmptyState
+        title={t(locale, 'settings.overviewStorageUnavailable')}
+        description={t(locale, 'settings.overviewStorageUnknown')}
+        action={{ label: t(locale, 'common.retry'), onClick: onRetry }}
+      />
+    );
+  }
+  const percent = storagePercent(info);
+  if (percent === null) {
+    // totalBytes<=0 / 未知容量：绝不伪装成真实 0%——渲染 unavailable + retry。
+    return (
+      <EmptyState
+        title={t(locale, 'settings.overviewStorageUnavailable')}
+        description={t(locale, 'settings.overviewStorageUnknown')}
+        action={{ label: t(locale, 'common.retry'), onClick: onRetry }}
+      />
+    );
+  }
+  return (
+    <div className="space-y-2 text-xs text-[var(--text-secondary)]">
+      <div className="flex items-center justify-between gap-3">
+        {/* 审计收口 #7：percent 参数不含 %（文案模板自带 {percent}%），
+            避免渲染成 50%%；且恰好一个 %。 */}
+        <span>{storageUsedLabel(locale, percent)}</span>
+        <span className="font-mono text-[var(--text)]">
+          {formatBytes(info.usedBytes)} / {formatBytes(info.totalBytes)}
+        </span>
+      </div>
+      <div
+        className="h-2 w-full overflow-hidden rounded-full bg-[var(--surface-hover)]"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(percent)}
+        aria-label={t(locale, 'settings.overviewStorage')}
+      >
+        <div
+          className="h-full rounded-full bg-[var(--primary)]"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span>{t(locale, 'settings.overviewStorageAvailable', { size: formatBytes(info.availableBytes) })}</span>
+        <span className="inline-flex items-center gap-1 text-[var(--text-disabled)]">
+          <TriangleAlert size={11} />
+          {t(locale, 'settings.overviewStorageSource')}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * 问题7：设置页「个人概览」的存储卡。只展示真实根卷 used/total/available，
  * 复用 `diskApi().systemInfo`（commands/disk.rs 根卷权威），失败不显示 0。
@@ -87,62 +177,13 @@ export default function StorageOverview() {
         <HardDrive size={16} className="text-[var(--primary)]" />
         {t(locale, 'settings.overviewStorage')}
       </div>
-
-      {loading && (
-        <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-          <RefreshCw size={13} className="animate-spin" />
-          {t(locale, 'common.loading')}
-        </div>
-      )}
-
-      {!loading && error && (
-        <EmptyState
-          title={t(locale, 'settings.overviewStorageUnavailable')}
-          description={error}
-          action={{
-            label: t(locale, 'common.retry'),
-            onClick: () => void load(),
-          }}
-        />
-      )}
-
-      {!loading && !error && info && (
-        <div className="space-y-2 text-xs text-[var(--text-secondary)]">
-          {(() => {
-            const percent = storagePercent(info);
-            return (
-              <>
-                <div className="flex items-center justify-between gap-3">
-                  <span>{t(locale, 'settings.overviewStorageUsed', { percent: `${Math.round(percent ?? 0)}%` })}</span>
-                  <span className="font-mono text-[var(--text)]">
-                    {formatBytes(info.usedBytes)} / {formatBytes(info.totalBytes)}
-                  </span>
-                </div>
-                <div
-                  className="h-2 w-full overflow-hidden rounded-full bg-[var(--surface-hover)]"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(percent ?? 0)}
-                  aria-label={t(locale, 'settings.overviewStorage')}
-                >
-                  <div
-                    className="h-full rounded-full bg-[var(--primary)]"
-                    style={{ width: `${percent ?? 0}%` }}
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span>{t(locale, 'settings.overviewStorageAvailable', { size: formatBytes(info.availableBytes) })}</span>
-                  <span className="inline-flex items-center gap-1 text-[var(--text-disabled)]">
-                    <TriangleAlert size={11} />
-                    {t(locale, 'settings.overviewStorageSource')}
-                  </span>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-      )}
+      <StorageOverviewContent
+        locale={locale}
+        loading={loading}
+        error={error}
+        info={info}
+        onRetry={() => void load()}
+      />
     </section>
   );
 }
