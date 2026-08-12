@@ -6,6 +6,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -240,6 +241,9 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
   const [runtime, setRuntime] = useState(emptyRuntime);
   /** Engine-backed actions registered only while AssistantWorkbench is mounted. */
   const [workbenchActions, setWorkbenchActions] = useState<AssistantWorkspaceActions | null>(null);
+  /** 审计收口 #1：上一次成功读取的 hidden 集合——hidden 拉取失败时保留，
+   * 绝不 fail-open 成空集合让已软删项目复活。 */
+  const lastHiddenRef = useRef<string[]>([]);
   const { toast } = useToast();
 
   const publishNavigation = useCallback(
@@ -356,8 +360,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         console.error('Failed to list projects:', e);
         if (firstError === null) firstError = e;
         return null;
-      }),
-      (async () => {
+      }),      (async () => {
         try {
           const request = api.assistantV2?.request;
           if (!request) return [];
@@ -405,7 +408,19 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       readPinnedConversationIds(),
       // 问题1：软删项目路径（product decision 1）——侧栏不得从 daemon 会话
       // project_id 反向重建被隐藏的项目。
-      api.project.listHidden().then((paths) => paths ?? []).catch(() => [] as string[]),
+      // 审计收口 #1：hidden 读取失败必须保留上一份已知集合并显示 classified
+      // error（fail-closed），不能用空集合让已隐藏项目复活。
+      api.project
+        .listHidden()
+        .then((paths) => {
+          lastHiddenRef.current = paths ?? [];
+          return paths ?? [];
+        })
+        .catch((e) => {
+          console.error('Failed to list hidden projects:', e);
+          if (firstError === null) firstError = e;
+          return lastHiddenRef.current;
+        }),
     ]);
 
     if (registeredProjects === null || conversations === null) {

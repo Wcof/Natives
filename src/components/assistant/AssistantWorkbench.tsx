@@ -399,6 +399,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     publishNavigation,
     setActiveProjectPath,
     setRegisteredProjects,
+    setHiddenProjectPaths,
     setPinnedConversationIds,
     stateRef,
     toast,

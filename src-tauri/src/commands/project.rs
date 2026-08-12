@@ -170,14 +170,23 @@ pub fn project_rename(id: String, label: String) -> Result<()> {
 
 /// Soft-remove a project registration (logical delete).
 /// Sessions keep their project_id so they reappear when the project is re-added.
+///
+/// Fails with "Project not found" when the id/path does not exist or is already
+/// soft-deleted — the Renderer must not show a success toast for a no-op
+/// (审计收口 #1：not-found 不假成功).
 #[tauri::command]
 pub fn project_remove(id: String) -> Result<()> {
     let conn = db::get_main_conn().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE assistant_projects SET deleted_at = ?1 WHERE (id = ?2 OR path = ?2) AND deleted_at IS NULL",
-        rusqlite::params![now, id],
-    ).map_err(|e| format!("Failed to remove project: {e}"))?;
+    let changed = conn
+        .execute(
+            "UPDATE assistant_projects SET deleted_at = ?1 WHERE (id = ?2 OR path = ?2) AND deleted_at IS NULL",
+            rusqlite::params![now, id],
+        )
+        .map_err(|e| format!("Failed to remove project: {e}"))?;
+    if changed == 0 {
+        return Err("Project not found".into());
+    }
     Ok(())
 }
 

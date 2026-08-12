@@ -18,6 +18,7 @@ import { useAssistantDispatch, useAssistantGateway } from '@/lib/assistant-works
 import { classifyError } from '@/lib/error-classifier';
 import { selectAssistantModel, toProviderInfo } from '@/lib/provider-model-selection';
 import { writeActiveProject } from '@/lib/active-project';
+import { removeProjectFromHost } from '@/lib/assistant-project-remove';
 import {
   collectTempConversationIds,
   createTempSession,
@@ -50,6 +51,7 @@ export interface UseAssistantWorkbenchActionsOptions {
   setRegisteredProjects: (
     projects: Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string; exists?: boolean }>,
   ) => void;
+  setHiddenProjectPaths: (paths: string[]) => void;
   setPinnedConversationIds: (
     updater: Set<string> | ((prev: Set<string>) => Set<string>),
   ) => void;
@@ -68,6 +70,7 @@ export function useAssistantWorkbenchActions({
   publishNavigation,
   setActiveProjectPath,
   setRegisteredProjects,
+  setHiddenProjectPaths,
   setPinnedConversationIds,
   stateRef,
   toast,
@@ -181,21 +184,46 @@ export function useAssistantWorkbenchActions({
           pendingCreateProjectPath: undefined,
         }));
       },      removeProject: async (path) => {
-        try {
-          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
-          const match = projects.find((p) => p.path === path || p.id === path);
-          await window.nativesAPI?.project?.remove?.(match?.id ?? path);
-          const next = (await window.nativesAPI?.project?.list?.()) ?? [];
-          if (next.some((project) => project.path === path || project.id === path)) {
-            throw new Error('Project remains registered after removal');
-          }
-          setRegisteredProjects(next);
-          if (activeProjectPath === path) setActiveProjectPath(null);
-          return true;
-        } catch (err) {
-          toast(classifyError(err).userMessage, 'error');
-          return false;
-        }
+        // 审计收口 #1：删除 = Host 可见性软删，唯一实现 removeProjectFromHost。
+        // refresh visible + hidden + navigation projection 在一个接缝内完成；
+        // 重新添加只走同一 Host 权威，禁止 Renderer 侧二次删会话或从 daemon
+        // project_id 复活。Host 检查 affected rows；不存在/已删除不假成功。
+        return removeProjectFromHost({
+          api:
+            window.nativesAPI?.project
+              ? {
+                  list: async () => (await window.nativesAPI?.project?.list?.()) ?? null,
+                  listHidden: async () => (await window.nativesAPI?.project?.listHidden?.()) ?? null,
+                  remove: async (id) => {
+                    await window.nativesAPI?.project?.remove?.(id);
+                  },
+                }
+              : null,
+          path,
+          activeProjectPath,
+          setRegisteredProjects,
+          setHiddenProjectPaths,
+          setActiveProjectPath,
+          publishNavigation: (updater) => {
+            publishNavigation((prev) => {
+              const partial = updater({
+                groups: prev.groups,
+                activeProjectPath: prev.activeProjectPath ?? null,
+              });
+              // removeProjectFromHost 只过滤导航组、不改变组结构，
+              // 因此窄类型 groups 可以安全合并回完整快照。
+              return {
+                ...prev,
+                groups: partial.groups as typeof prev.groups,
+                activeProjectPath: partial.activeProjectPath,
+              };
+            });
+          },
+          writeActiveProject: async (nextPath) => {
+            void writeActiveProject(window.nativesAPI, nextPath).catch(() => undefined);
+          },
+          onError: (message) => toast(classifyError(new Error(message)).userMessage, 'error'),
+        });
       },
       renameProject: async (path, label) => {
         try {

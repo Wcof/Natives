@@ -164,6 +164,9 @@ export function useAssistantWorkbenchPublishers({
     activeId,
     activeProjectPath,
     registeredProjects,
+    // 审计收口 #1：hidden set 变化必须立即重新分组，否则已软删项目
+    // 会从 daemon 会话 project_id 反向复活。
+    hiddenProjectPaths,
     pinnedConversationIds,
     loadingConversations,
     providerReadiness,
