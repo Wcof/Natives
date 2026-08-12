@@ -78,6 +78,7 @@ pub fn creative_app_rescan_local(
         &c,
         &InspectLocalRequest {
             project_root: rec.canonical_project_root,
+            entry_file: None,
         },
     )
 }
@@ -102,6 +103,7 @@ pub(crate) fn create_local_app(
         conn,
         &InspectLocalRequest {
             project_root: root_s.clone(),
+            entry_file: None,
         },
     )?;
 

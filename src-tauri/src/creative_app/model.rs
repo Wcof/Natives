@@ -755,6 +755,10 @@ pub struct LocalToolVersions {
 #[serde(rename_all = "camelCase")]
 pub struct InspectLocalRequest {
     pub project_root: String,
+    /// 审计收口 #13：用户明确选择的 HTML entry（相对 project_root，可选）。
+    /// 存在时 scan/plan 优先使用它，而不是硬编码 index.html。
+    #[serde(default)]
+    pub entry_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

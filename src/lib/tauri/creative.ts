@@ -166,7 +166,7 @@ export const creativeApp: NativesAPI['creativeApp'] = {
       subscribe<CreativeAppProgressEvent>('creative-app-progress', (payload) => callback(payload)),
     onLog: (callback) =>
       subscribe<CreativeAppLogEvent>('creative-app-log', (payload) => callback(payload)),
-    inspectLocal: (request: { projectRoot: string }) =>
+    inspectLocal: (request: { projectRoot: string; entryFile?: string }) =>
       cmd<LocalProjectScanResult>('creative_app_inspect_local', { request }),
     createLocal: (request: CreateLocalCreativeRequest) =>
       cmd<CreativeAppSummary>('creative_app_create_local', { request }),

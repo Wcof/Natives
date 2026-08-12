@@ -294,7 +294,7 @@ pub fn fingerprint_plan(root: &Path, plan: &LaunchPlan) -> String {
     format!("{:016x}", h.finish())
 }
 
-fn normalize_rel(s: &str) -> Result<String> {
+pub(crate) fn normalize_rel(s: &str) -> Result<String> {
     let t = s.trim().trim_start_matches("./");
     if t.is_empty() {
         return Ok(".".into());

@@ -246,6 +246,17 @@ pub fn inspect_local_project(
         vue_config,
         has_vue_file,
     );
+    // 审计收口 #13：用户明确选择的 HTML entry 优先于自动 index 发现——
+    // 目录有/无 index.html 都尊重用户选择，project 判定为 Html 静态项目。
+    let project_kind = match (project_kind, req.entry_file.as_deref()) {
+        (_, Some(entry))
+            if entry.to_ascii_lowercase().ends_with(".html")
+                || entry.to_ascii_lowercase().ends_with(".htm") =>
+        {
+            LocalProjectKind::Html
+        }
+        (kind, _) => kind,
+    };
 
     if package_json_path.is_some() && !has_node_modules {
         // also check cwd relative node_modules next to package.json
@@ -285,6 +296,7 @@ pub fn inspect_local_project(
         preferred_script.as_deref(),
         &script_bodies,
         has_index_html,
+        req.entry_file.as_deref(),
         &mut risks,
     );
     // A Compose-only project gets a Docker Compose plan (batch 5) unless its
@@ -524,13 +536,40 @@ fn build_rule_plan(
     preferred_script: Option<&str>,
     script_bodies: &BTreeMap<String, String>,
     has_index_html: bool,
+    user_entry_file: Option<&str>,
     risks: &mut Vec<String>,
 ) -> Option<LaunchPlan> {
     match kind {
         LocalProjectKind::Html => {
-            if !has_index_html {
-                return None;
-            }
+            // 审计收口 #13：用户明确选择的 HTML entry 优先于自动 index 发现；
+            // 目录有/无 index 都尊重选择；普通「导入目录」无选择时仍回退 index.html。
+            let entry: Option<String> = match user_entry_file {
+                Some(raw) => {
+                    let entry_n = match crate::creative_app::local::plan::normalize_rel(raw) {
+                        Ok(n) => n,
+                        Err(_) => {
+                            risks
+                                .push(format!("selected entry is not a safe relative path: {raw}"));
+                            return None;
+                        }
+                    };
+                    let entry_path = match resolve_under(root, &entry_n) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            risks.push(format!("selected entry escapes project root: {entry_n}"));
+                            return None;
+                        }
+                    };
+                    if !entry_path.is_file() {
+                        risks.push(format!("selected entry not found: {entry_n}"));
+                        return None;
+                    }
+                    Some(entry_n)
+                }
+                None if has_index_html => Some("index.html".into()),
+                None => None,
+            };
+            let entry = entry?;
             let plan = LaunchPlan {
                 schema_version: 1,
                 source: LaunchPlanSource::Rule,
@@ -539,7 +578,7 @@ fn build_rule_plan(
                 program: LaunchProgram::Internal,
                 cwd_relative: ".".into(),
                 script: None,
-                entry_file: Some("index.html".into()),
+                entry_file: Some(entry),
                 script_runner: None,
                 args: vec![],
                 environment_keys: vec![],
@@ -552,7 +591,11 @@ fn build_rule_plan(
                 startup_timeout_ms: 60_000,
                 auto_open: true,
                 confidence: Some(0.95),
-                reason: "root index.html detected".into(),
+                reason: if user_entry_file.is_some() {
+                    "user-selected HTML entry respected".into()
+                } else {
+                    "root index.html detected".into()
+                },
                 compose: None,
                 trade_approval: None,
                 process_profile: None,

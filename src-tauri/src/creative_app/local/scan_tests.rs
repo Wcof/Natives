@@ -29,6 +29,7 @@ fn scans_static_html() {
         &conn,
         &InspectLocalRequest {
             project_root: dir.to_string_lossy().into(),
+            entry_file: None,
         },
     )
     .unwrap();
@@ -56,6 +57,7 @@ fn scans_vite_package() {
         &conn,
         &InspectLocalRequest {
             project_root: dir.to_string_lossy().into(),
+            entry_file: None,
         },
     )
     .unwrap();
@@ -77,6 +79,7 @@ fn skips_env_files_in_tree() {
         &conn,
         &InspectLocalRequest {
             project_root: dir.to_string_lossy().into(),
+            entry_file: None,
         },
     )
     .unwrap();
@@ -99,6 +102,7 @@ fn compose_trade_command_is_blocked() {
         &conn,
         &InspectLocalRequest {
             project_root: dir.to_string_lossy().into(),
+            entry_file: None,
         },
     )
     .unwrap();
@@ -133,6 +137,7 @@ fn compose_webserver_command_is_not_blocked() {
         &conn,
         &InspectLocalRequest {
             project_root: dir.to_string_lossy().into(),
+            entry_file: None,
         },
     )
     .unwrap();
@@ -159,6 +164,7 @@ fn detects_python_dockerfile_makefile_evidence() {
         &conn,
         &InspectLocalRequest {
             project_root: dir.to_string_lossy().into(),
+            entry_file: None,
         },
     )
     .unwrap();
@@ -195,5 +201,89 @@ fn dry_run_projection_proves_safe_mode() {
         !config_proves_dry_run(&dir),
         "dry_run:false must not prove safe mode"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn html_import_respects_user_selected_entry_even_without_index() {
+    // 审计收口 #13：目录无 index.html、用户显式选择 demo.html → plan 用 demo.html。
+    let dir = temp_dir();
+    fs::write(dir.join("demo.html"), "<html><body>demo</body></html>").unwrap();
+    let conn = mem();
+    let r = inspect_local_project(
+        &conn,
+        &InspectLocalRequest {
+            project_root: dir.to_string_lossy().into(),
+            entry_file: Some("demo.html".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(r.project_kind, LocalProjectKind::Html);
+    assert_eq!(
+        r.rule_plan.as_ref().unwrap().entry_file.as_deref(),
+        Some("demo.html")
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn html_import_user_entry_wins_over_index_html() {
+    // 审计收口 #13：目录同时有 index.html 与用户所选 demo.html → 用户所选优先。
+    let dir = temp_dir();
+    fs::write(dir.join("index.html"), "<html/>").unwrap();
+    fs::write(dir.join("demo.html"), "<html><body>demo</body></html>").unwrap();
+    let conn = mem();
+    let r = inspect_local_project(
+        &conn,
+        &InspectLocalRequest {
+            project_root: dir.to_string_lossy().into(),
+            entry_file: Some("demo.html".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        r.rule_plan.as_ref().unwrap().entry_file.as_deref(),
+        Some("demo.html")
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn html_import_rejects_traversal_entry() {
+    // 审计收口 #13：`../escape.html` 越界 → 拒绝，rule_plan 不生成假 plan。
+    let dir = temp_dir();
+    fs::write(dir.join("index.html"), "<html/>").unwrap();
+    let conn = mem();
+    let r = inspect_local_project(
+        &conn,
+        &InspectLocalRequest {
+            project_root: dir.to_string_lossy().into(),
+            entry_file: Some("../escape.html".into()),
+        },
+    )
+    .unwrap();
+    assert!(r.rule_plan.is_none(), "越界 entry 不得生成 plan");
+    assert!(r
+        .risks
+        .iter()
+        .any(|risk| risk.contains("escape") || risk.contains("unsafe")));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn html_import_rejects_missing_entry() {
+    // 审计收口 #13：用户所选文件不存在 → 拒绝，不伪造 index 回退。
+    let dir = temp_dir();
+    let conn = mem();
+    let r = inspect_local_project(
+        &conn,
+        &InspectLocalRequest {
+            project_root: dir.to_string_lossy().into(),
+            entry_file: Some("missing.html".into()),
+        },
+    )
+    .unwrap();
+    assert!(r.rule_plan.is_none(), "不存在 entry 不得生成 plan");
+    assert!(r.risks.iter().any(|risk| risk.contains("not found")));
     let _ = fs::remove_dir_all(&dir);
 }

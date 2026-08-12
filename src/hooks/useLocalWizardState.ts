@@ -150,7 +150,12 @@ export function useLocalWizardState(
       setScanning(true);
       setScanError(null);
       try {
-        const result = await window.nativesAPI?.creativeApp?.inspectLocal?.({ projectRoot: rootPath });
+        const result = await window.nativesAPI?.creativeApp?.inspectLocal?.({
+          projectRoot: rootPath,
+          // 审计收口 #13：用户明确选择的 HTML entry 优先于自动 index 发现，
+          // 贯穿到 scan → plan → create/start。
+          entryFile: entryFile.trim() || undefined,
+        });
         if (!result) throw new Error('inspectLocal unavailable');
         setScan(result);
         setPm(pickPackageManager(result));
@@ -164,7 +169,7 @@ export function useLocalWizardState(
         setScanning(false);
       }
     },
-    [locale, onToast],
+    [entryFile, locale, onToast],
   );
 
   const applyCustomPlan = useCallback((): LaunchPlan | null => {

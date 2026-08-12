@@ -200,7 +200,7 @@ export interface NativesAPI {
     proposalReject: (proposalId: string) => Promise<CreativeAppProposalRejectResult>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
     onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
-    inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
+    inspectLocal: (request: { projectRoot: string; entryFile?: string }) => Promise<LocalProjectScanResult>;
     createLocal: (request: CreateLocalCreativeRequest) => Promise<CreativeAppSummary>;
     updateLocal: (request: UpdateLocalCreativeRequest) => Promise<CreativeAppSummary>;
     rescanLocal: (id: string) => Promise<LocalProjectScanResult>;

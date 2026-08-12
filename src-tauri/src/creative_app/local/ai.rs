@@ -183,6 +183,7 @@ pub fn preview_local_ai(
         conn,
         &InspectLocalRequest {
             project_root: project_root.to_string(),
+            entry_file: None,
         },
     )?;
     let preview = build_ai_payload_preview(&scan);
@@ -216,6 +217,7 @@ pub async fn analyze_with_ai(
         conn,
         &InspectLocalRequest {
             project_root: project_root.to_string(),
+            entry_file: None,
         },
     )?;
     let preview = build_ai_payload_preview(&scan);
