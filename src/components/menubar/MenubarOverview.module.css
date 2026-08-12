@@ -173,7 +173,7 @@
   background: var(--accent);
   border-radius: 2px 2px 0 0;
   transform-origin: bottom;
-  animation: menubarGrow 0.5s ease both;
+  animation: menubarGrow var(--transition-slow) var(--motion-easing) both;
 }
 
 @keyframes menubarGrow {
