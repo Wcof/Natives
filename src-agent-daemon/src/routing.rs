@@ -92,6 +92,12 @@ fn circuit_write_lock() -> &'static Mutex<()> {
 /// `provider_route_bindings` are Host-owned and served over the authenticated
 /// broker socket. Missing/disabled config intentionally falls back to the
 /// caller's direct target so an upgrade cannot break existing runs.
+///
+/// 审计收口 #8：即使 routing settings enabled，也**不再**把旧
+/// `provider_route_bindings` 的跨 provider failover 目标并入生产 plan——
+/// 旧 bindings 数据保留只读，但不参与执行。自动协议选择（Chat/Responses/
+/// Anthropic Messages 三协议）由 `provider.rs` 的 resolver 在同一
+/// provider+model 内完成，绝不跨 provider 重放。
 pub fn load_plan(
     primary_provider: String,
     primary_key: Option<String>,
@@ -113,36 +119,12 @@ pub fn load_plan(
             };
         }
     };
-    if !plan.enabled {
-        return RoutingPlan {
-            enabled: false,
-            targets: vec![primary],
-        };
-    }
-
-    let mut targets = vec![primary];
-    for target in plan.targets {
-        if target.provider_id.trim().is_empty() || target.model_id.trim().is_empty() {
-            continue;
-        }
-        if targets.iter().any(|existing| {
-            existing.provider_id == target.provider_id
-                && existing.credential_kind == target.credential_kind
-                && existing.credential_id == target.credential_id
-                && existing.model_id == target.model_id
-        }) {
-            continue;
-        }
-        targets.push(RouteTarget {
-            provider_id: target.provider_id,
-            credential_kind: target.credential_kind,
-            credential_id: target.credential_id,
-            model_id: target.model_id,
-        });
-    }
+    // 路由开关仅作为协议解析的使能信号；旧 route bindings 不进入 targets。
+    let _ = plan.enabled;
+    let _ = plan.targets;
     RoutingPlan {
-        enabled: true,
-        targets,
+        enabled: false,
+        targets: vec![primary],
     }
 }
 
@@ -989,5 +971,17 @@ mod tests {
             Some(v) => std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v),
             None => std::env::remove_var("NATIVES_ASSISTANT_DB_PATH"),
         }
+    }
+
+    #[test]
+    fn load_plan_fails_closed_to_primary_only_when_broker_unreachable() {
+        // Broker socket is unavailable in the test environment → fail-closed to
+        // exactly the primary target. 审计收口 #8：生产 plan 绝不包含旧 route
+        // bindings 的跨 provider failover 目标。
+        let plan = load_plan("openai".into(), Some("k1".into()), "gpt-4o".into());
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].provider_id, "openai");
+        assert_eq!(plan.targets[0].credential_id.as_deref(), Some("k1"));
+        assert_eq!(plan.targets[0].model_id, "gpt-4o");
     }
 }

@@ -244,10 +244,14 @@ impl RealProvider {
             crate::routing::rectifier_enabled(),
         );
 
-        // 问题8：自动协议路由。开关开启时按 resolver 决策生成候选协议顺序，
-        // 只在首个 delta 前对 404/405/协议形状不兼容回退下一候选；
+        // 问题8（审计收口 #8）：自动协议路由。开关开启时按 resolver 决策生成
+        // 候选协议顺序，只在首个增量前对 404/405/协议形状不兼容回退下一候选；
         // 401/403/429/配额/权限/网络故障不换协议，首增量后绝不重放。
         // 开关关闭时只用供应商显式协议（既有行为不变）。
+        //
+        // 关键修复：开启路由时**不得**把当前协议作为 `explicit` 传给 resolver——
+        // `candidate_protocols` 遇 explicit 会立即短路返回单候选，自动切换因此
+        // 事实上被关闭。只有显式配置（开关关闭）才走 single-candidate 路径。
         let explicit_protocol = provider_adapters::parse_protocol(&protocol)
             .unwrap_or(provider_adapters::Protocol::OpenAiChatCompletions);
         let mut candidates: Vec<provider_adapters::Protocol> = if crate::routing::routing_enabled()
@@ -255,7 +259,7 @@ impl RealProvider {
             provider_adapters::candidate_protocols(&provider_adapters::ProtocolContext {
                 provider_type: &protocol,
                 base_url: base_url.as_deref(),
-                explicit: Some(&protocol),
+                explicit: None,
                 model,
                 previous_success: None,
             })
@@ -320,13 +324,9 @@ impl RealProvider {
                     }
                     fallback_error = Some(e);
                     // 仅对可回退错误（404/405/形状不兼容）尝试下一候选。
-                    // 无 governor fallback 记录接口（只有 rate-limit 通道），
-                    // 回退事件交给上层事件流/日志呈现。
-                    if let Some(governor) = crate::global_governor() {
-                        governor
-                            .record_rate_limit(&self.provider_id, &route_key_id, None)
-                            .await;
-                    }
+                    // 审计收口 #8：协议不兼容**绝不**记录成 rate limit——
+                    // 那会污染 governor 的限流账本，把一次 endpoint 不兼容
+                    // 误判成上游限流。回退事件交给上层事件流/日志呈现。
                     continue;
                 }
             }

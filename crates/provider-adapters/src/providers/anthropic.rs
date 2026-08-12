@@ -490,7 +490,14 @@ impl ProviderAdapter for AnthropicAdapter {
         };
         let proxy_url = credential.proxy_url.clone();
         let base = credential.base_url.unwrap_or_else(|| self.base_url.clone());
-        let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+        // 审计收口 #8：endpoint 规范化——base 已含 `/v1` 时不得重复追加，
+        // 否则会得到 `/v1/v1/messages`。与 Chat/Responses 的规范化一致。
+        let trimmed = base.trim_end_matches('/');
+        let url = if trimmed.ends_with("/v1") {
+            format!("{trimmed}/messages")
+        } else {
+            format!("{trimmed}/v1/messages")
+        };
         let body = build_messages_body(&request);
 
         let client = match proxy_url.as_deref() {
