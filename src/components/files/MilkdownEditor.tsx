@@ -3,7 +3,15 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { Crepe } from '@milkdown/crepe';
 import { semanticEqual } from '@/lib/markdown-semantic';
+import { findMatches, FIND_MATCH_LIMIT } from '@/lib/find-replace';
 import { t, type Locale } from '@/i18n';
+
+/** 审计收口 #12：Milkdown 查找替换的只读接口（ProseMirror transaction 改内存模型）。 */
+export interface MilkdownFindReplace {
+  find(query: string, caseSensitive?: boolean): { index: number; count: number };
+  replaceOne(replacement: string): boolean;
+  replaceAll(replacement: string): number;
+}
 
 interface MilkdownEditorProps {
   content: string;
@@ -13,6 +21,8 @@ interface MilkdownEditorProps {
   onDirtyChange?: (dirty: boolean) => void;
   /** 有损锁定横幅的文案语言 */
   locale?: Locale;
+  /** 审计收口 #12：把查找替换 handle 交给父级（FindReplaceBar 驱动）。 */
+  onFindReplaceReady?: (handle: MilkdownFindReplace | null) => void;
 }
 
 /**
@@ -23,7 +33,7 @@ interface MilkdownEditorProps {
  * 语义无损校验（fanbox semanticSig）：Crepe 归一化产物与原文渲染比对，
  * 往返有损 → 锁只读并禁写盘，绝不静默丢内容（源码可用代码模式改）。
  */
-export default function MilkdownEditor({ content, onSave, onDirtyChange, locale = 'zh' }: MilkdownEditorProps) {
+export default function MilkdownEditor({ content, onSave, onDirtyChange, locale = 'zh', onFindReplaceReady }: MilkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Crepe | null>(null);
   const getValueRef = useRef<() => string>(() => content);
@@ -32,6 +42,9 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange, locale 
   /** 往返有损锁：true 时禁止一切写盘 */
   const lossyRef = useRef(false);
   const [lossyLocked, setLossyLocked] = useState(false);
+  /** 审计收口 #12：查找替换 handle 的稳定引用（避免 effect 反复重建）。 */
+  const onFindReplaceReadyRef = useRef(onFindReplaceReady);
+  onFindReplaceReadyRef.current = onFindReplaceReady;
 
   // YAML frontmatter protection
   const frontmatterMatch = content.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)/);
@@ -86,6 +99,84 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange, locale 
 
         // Set baseline after Crepe normalizes content
         baselineRef.current = frontmatter + editor.getMarkdown();
+
+        // 审计收口 #12：Milkdown 查找替换——ProseMirror transaction 改内存模型，
+        // 替换后走 dirty→autosave→expectedMtime 冲突链（queueSave），不直接改 DOM。
+        try {
+          const { editorViewCtx } = await import('@milkdown/core');
+          // CrepeBuilder 的 `editor` getter 返回 @milkdown/kit/core Editor，
+          // 其 `action` 可从 ctx 读取 ProseMirror EditorView。
+          const view = editor.editor.action((ctx) => ctx.get(editorViewCtx));
+          if (view) {
+            const matchesRef: Array<{ from: number; to: number }> = [];
+            let activeIndex = -1;
+            const handle: MilkdownFindReplace = {
+              find(query, caseSensitive = false) {
+                matchesRef.length = 0;
+                activeIndex = -1;
+                const trimmed = query.trim();
+                if (!trimmed) return { index: -1, count: 0 };
+                // 收集全部 text node 及其 doc position（不直接改 DOM）。
+                const doc = view.state.doc;
+                const textNodes: Array<{ text: string; from: number }> = [];
+                doc.descendants((node, pos) => {
+                  if (node.isText && node.text != null) {
+                    textNodes.push({ text: node.text, from: pos });
+                  }
+                  return true;
+                });
+                let full = '';
+                const starts: number[] = [];
+                for (const t of textNodes) {
+                  starts.push(full.length);
+                  full += t.text;
+                }
+                const matches = findMatches(full, trimmed, { caseSensitive, limit: FIND_MATCH_LIMIT });
+                for (const m of matches) {
+                  // 定位偏移落在哪个 text node → doc position。
+                  const idx = starts.findIndex((s, i) => m.start < s + (textNodes[i]?.text.length ?? 0));
+                  const segIndex = idx === -1 ? starts.length - 1 : idx;
+                  const node = textNodes[segIndex];
+                  if (!node) continue;
+                  const nodeOffset = m.start - (starts[segIndex] ?? 0);
+                  const from = node.from + nodeOffset;
+                  const to = node.from + Math.min(m.end - m.start, node.text.length - nodeOffset);
+                  matchesRef.push({ from, to });
+                }
+                if (matchesRef.length > 0) activeIndex = 0;
+                return { index: activeIndex, count: matchesRef.length };
+              },
+              replaceOne(replacement) {
+                if (activeIndex < 0 || activeIndex >= matchesRef.length) return false;
+                const { from, to } = matchesRef[activeIndex]!;
+                const tr = view.state.tr.insertText(replacement, from, to);
+                view.dispatch(tr);
+                queueSave();
+                matchesRef.splice(activeIndex, 1);
+                if (activeIndex >= matchesRef.length) activeIndex = matchesRef.length - 1;
+                return true;
+              },
+              replaceAll(replacement) {
+                if (matchesRef.length === 0) return 0;
+                let count = 0;
+                // 从后往前替换，避免偏移失效。
+                for (let i = matchesRef.length - 1; i >= 0; i -= 1) {
+                  const { from, to } = matchesRef[i]!;
+                  const tr = view.state.tr.insertText(replacement, from, to);
+                  view.dispatch(tr);
+                  count += 1;
+                }
+                queueSave();
+                matchesRef.length = 0;
+                activeIndex = -1;
+                return count;
+              },
+            };
+            onFindReplaceReadyRef.current?.(handle);
+          }
+        } catch {
+          // ProseMirror view 不可用（老版本/异常）→ 不提供替换，只读 Preview 查找兜底。
+        }
 
         // 语义无损校验：Crepe 归一化产物 vs 原文。有损 → 锁只读 + 禁写盘
         void semanticEqual(bodyContent, editor.getMarkdown()).then((ok) => {

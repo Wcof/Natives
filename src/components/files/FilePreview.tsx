@@ -26,6 +26,7 @@ import { PreviewService } from '@/lib/preview/service';
 const MilkdownEditor = lazy(() => import('./MilkdownEditor'));
 const MonacoEditor = lazy(() => import('./MonacoEditor'));
 const ImageEditor = lazy(() => import('./ImageEditor'));
+import type { MilkdownFindReplace } from './MilkdownEditor';
 
 interface FilePreviewProps {
   entry: FileEntry;
@@ -396,6 +397,46 @@ function MdWysiwygEditor({ path, locale }: { path: string; locale: Locale }) {
     onExternalChange: reload,
   });
 
+  // 审计收口 #12：Milkdown 编辑路径的查找替换——ProseMirror transaction 改内存
+  // 模型并走 dirty→autosave→expectedMtime 冲突链（MilkdownEditor 内 queueSave）。
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [matchCase, setMatchCase] = useState(false);
+  const [findIndex, setFindIndex] = useState(-1);
+  const [findCount, setFindCount] = useState(0);
+  const [replacement, setReplacement] = useState('');
+  const milkdownFindRef = useRef<MilkdownFindReplace | null>(null);
+  const editorHostRef = useRef<HTMLDivElement | null>(null);
+
+  const runFind = useCallback(
+    (value: string) => {
+      const handle = milkdownFindRef.current;
+      if (!handle) return;
+      const result = handle.find(value, matchCase);
+      setFindIndex(result.index);
+      setFindCount(result.count);
+    },
+    [matchCase],
+  );
+  const handleFindReplaceReady = useCallback((handle: MilkdownFindReplace | null) => {
+    milkdownFindRef.current = handle;
+  }, []);
+
+  // Cmd/Ctrl+F 在 Milkdown 编辑区打开查找（FilePreview 键盘段已排除 .milkdown-host）。
+  useEffect(() => {
+    const el = editorHostRef.current;
+    if (!el) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        e.stopPropagation();
+        setFindOpen(true);
+      }
+    };
+    el.addEventListener('keydown', onKeyDown, true);
+    return () => el.removeEventListener('keydown', onKeyDown, true);
+  }, []);
+
   // 本地图片改写：`![](./图/x.png)` → convertFileSrc URL（渲染可见），
   // 落盘经 restore 精确还原原文；用户新拖入的资产 URL 还原为真实路径
   const baseDir = path.substring(0, path.lastIndexOf('/')) || '/';
@@ -418,22 +459,66 @@ function MdWysiwygEditor({ path, locale }: { path: string; locale: Locale }) {
 
   return (
     <>
+      {findOpen && (
+        <FindReplaceBar
+          locale={locale}
+          query={findQuery}
+          onQueryChange={(value) => {
+            setFindQuery(value);
+            runFind(value);
+          }}
+          matchCase={matchCase}
+          onToggleMatchCase={() => {
+            const next = !matchCase;
+            setMatchCase(next);
+            runFind(findQuery);
+          }}
+          index={findIndex}
+          count={findCount}
+          onNavigate={(direction) => {
+            const handle = milkdownFindRef.current;
+            if (!handle) return;
+            const count = handle.find(findQuery, matchCase).count;
+            if (count <= 0) return;
+            const next =
+              direction === 'next'
+                ? (findIndex < 0 ? 0 : (findIndex + 1) % count)
+                : (findIndex < 0 ? count - 1 : (findIndex - 1 + count) % count);
+            setFindIndex(next);
+          }}
+          onClose={() => setFindOpen(false)}
+          canReplace
+          replacement={replacement}
+          onReplacementChange={setReplacement}
+          onReplaceOne={() => {
+            const ok = milkdownFindRef.current?.replaceOne(replacement) ?? false;
+            if (ok) runFind(findQuery);
+          }}
+          onReplaceAll={() => {
+            const n = milkdownFindRef.current?.replaceAll(replacement) ?? 0;
+            if (n > 0) runFind(findQuery);
+          }}
+        />
+      )}
       <Suspense fallback={
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
           <MathCurveLoader size={40} />
           <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
         </div>
       }>
-        <MilkdownEditor
-          content={displayContent}
-          filePath={path}
-          locale={locale}
-          onSave={(newContent) => {
-            const restored = rewriteRef.current ? rewriteRef.current.restore(newContent) : newContent;
-            void save(restored);
-          }}
-          onDirtyChange={(dirty) => { dirtyRef.current = dirty; }}
-        />
+        <div ref={editorHostRef} style={{ flex: 1, minHeight: 0 }}>
+          <MilkdownEditor
+            content={displayContent}
+            filePath={path}
+            locale={locale}
+            onSave={(newContent) => {
+              const restored = rewriteRef.current ? rewriteRef.current.restore(newContent) : newContent;
+              void save(restored);
+            }}
+            onDirtyChange={(dirty) => { dirtyRef.current = dirty; }}
+            onFindReplaceReady={handleFindReplaceReady}
+          />
+        </div>
       </Suspense>
       <SaveConflictDialog
         open={hasConflict}
