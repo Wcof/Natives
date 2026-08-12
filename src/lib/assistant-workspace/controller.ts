@@ -293,16 +293,11 @@ export async function subscribeRun(
         error: message,
       });
     }
-    // Product decision 4: a single-run watch failure is a run-level concern.
-    // It lands in the run's own fold (runErrors) — never verbatim in the global
-    // ConnectionBanner. The banner only reflects daemon-level connectivity, so
-    // it gets a generic "reconnecting" without the raw error text.
+    // Product decision 4 (审计收口 #4)：单 run watch 失败是 run 级关注点，
+    // 只进 run 自己的折叠栏（runErrors/recovering），绝不写全局 connection。
+    // 全局 Banner 只反映 daemon 级 starting/offline/fatal/incompatible；
+    // 预算耗尽后由调用方 reconcileExhaustedRun 做权威对账（run.cancel 写回）。
     dispatch({ type: 'run/error/set', runId, error: message });
-    dispatch({
-      type: 'connection/set',
-      connection: 'reconnecting',
-      error: null,
-    });
     throw err;
   }
 }
@@ -315,30 +310,48 @@ export const RUN_WATCH_EXHAUSTED_KEY = 'assistant.runWatchExhausted';
  * authoritative run snapshot (`run.getActivity`) and, if the run is still
  * active, cancel it authoritatively (`run.cancel`). The run's fold shows the
  * exhausted state; the global banner stays generic.
+ *
+ * 审计收口 #4：getActivity / cancel 返回的权威 Run 必须 upsert 回 store，
+ * 并清 recovering/transport error；同 run cancel 恰好一次（cancelRun 内部
+ * 已 upsert 终态，随后订阅停止，无终态 event 消费者的问题被消除）。
  */
 export async function reconcileExhaustedRun(
   gateway: AssistantGateway,
   dispatch: Dispatch,
   runId: string,
 ): Promise<void> {
-  let status = '';
+  let authoritative: Record<string, unknown> | null = null;
   try {
     const activity = await gateway.request<Record<string, unknown>>('run.getActivity', {
       run_id: runId,
     });
-    status = String(activity?.status ?? '');
+    authoritative = activity ?? null;
   } catch {
     // Daemon unreachable: keep the run recovering; the global reconnect flow
     // (connectWorkspace) owns daemon-level connectivity.
     dispatch({ type: 'run/error/set', runId, error: RUN_WATCH_EXHAUSTED_KEY });
     return;
   }
+  const status = authoritative && typeof authoritative === 'object' ? String((authoritative as { status?: unknown }).status ?? '') : '';
+  if (authoritative && 'id' in (authoritative as object)) {
+    const run = 'providerId' in (authoritative as object)
+      ? (authoritative as unknown as Run)
+      : { ...authoritative, id: String((authoritative as { id?: unknown }).id) };
+    if ('status' in run) {
+      // 权威快照写回 store；终态即终止订阅，清 recovering。
+      dispatch({ type: 'run/upsert', run: run as Run });
+    }
+  }
   if (isActiveRunStatus(status)) {
+    // 权威 cancel：cancelRun 返回的权威 Run 也会被 upsert（恰好一次终态）。
     await cancelRun(gateway, dispatch, runId);
     dispatch({ type: 'run/error/set', runId, error: RUN_WATCH_EXHAUSTED_KEY });
+    // 权威终态写回后，run 级 recovering/transport 状态必须清除。
+    dispatch({ type: 'recovering/set', runId, recovering: false });
   } else {
     // Already terminal — nothing to cancel; clear transient run error.
     dispatch({ type: 'recovering/set', runId, recovering: false });
+    dispatch({ type: 'run/error/set', runId, error: null });
   }
 }
 
@@ -595,8 +608,18 @@ export async function cancelRun(
   dispatch: Dispatch,
   runId: string,
 ): Promise<void> {
-  await gateway.request('run.cancel', { run_id: runId });
-  // Do not invent terminal status — wait for interrupted event
+  // 审计收口 #4：run.cancel 返回权威 Run，必须 upsert 回 store（清
+  // recovering/transport error 的最终权威终态），不能丢弃终态。
+  const result = await gateway.request<Run | Record<string, unknown>>('run.cancel', {
+    run_id: runId,
+  });
+  if (result && typeof result === 'object' && 'id' in result) {
+    const run =
+      'providerId' in result ? (result as Run) : { ...(result as Record<string, unknown>), id: String(result.id) };
+    if ('status' in run) {
+      dispatch({ type: 'run/upsert', run: run as Run });
+    }
+  }
 }
 
 export async function retryRun(

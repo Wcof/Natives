@@ -6,29 +6,20 @@ import { useAssistantDispatch, useAssistantGateway, useAssistantStore } from './
 import { cancelRun, respondPermission, retryRun, subscribeRun, reconcileExhaustedRun } from './controller';
 import { cancelUnwantedSubscriptions, replaceRunSubscription } from './subscription-coordination';
 
-/** Quiet-resubscribe backoff: grows per empty poll, capped so a live run stays responsive. */
+/** Quiet empty-poll续接间隔：正常长轮询空轮后重订阅一次（不设独立预算）。 */
 const RESUB_STEP_MS = 250;
-const RESUB_MAX_MS = 2000;
 
 /**
- * Bounded reconnect (product decision 4): after this many quiet resubscribe
- * attempts without progress the loop gives up and reconciles the run with the
- * daemon (run.getActivity → authoritative run.cancel if still active).
- */
-export const MAX_RESUB_ATTEMPTS = 8;
-
-/**
- * Run lifecycle for any surface that talks to the engine.
- *
- * `controller.ts` already exposes the individual calls as free functions. What
- * was missing — and what every consumer would otherwise have to rebuild — is the
- * subscription loop around them: per-run abort signals, quiet resubscribe with
- * backoff, and the rule that an empty poll must NOT be reported as a lost
- * connection. That last one is not a detail; treating quiet polls as failures
- * previously produced spurious "reconnecting" banners during perfectly healthy
- * runs, and any second implementation would rediscover that the hard way.
- *
- * Consumers: AssistantWorkbench and the creator workbench's CreationSession.
+ * Bounded reconnect (product decision 4, 审计收口 #4)：
+ * Adapter（readPersistentStream）是唯一的重连预算 owner（MAX_WATCH_RECONNECTS、
+ * 退避、双游标、watch handle、AbortController 全部在 Adapter 内）。本 Hook
+ * 只启动/中止一个订阅：
+ * - 订阅抛错（预算耗尽 / transport）→ 不再自行重订阅，调用
+ *   reconcileExhaustedRun 做权威对账（run.getActivity → run.cancel 写回）；
+ * - iterator 正常结束且无 terminal（长轮询空轮）→ 静默续接一次，保持 live，
+ *   不重置任何重连预算。
+ * 单 run 的 transport 状态绝不写全局 connection（全局 Banner 只表示 daemon
+ * 级 starting/offline/fatal/incompatible）。
  */
 export function useAssistantRun() {
   const state = useAssistantStore();
@@ -41,7 +32,6 @@ export function useAssistantRun() {
   stateRef.current = state;
 
   const subSignalsRef = useRef<Record<string, { aborted: boolean }>>({});
-  const resubAttemptsRef = useRef<Record<string, number>>({});
 
   const startSubscription = useCallback(
     async (runId: string, afterSequence: number) => {
@@ -51,45 +41,36 @@ export function useAssistantRun() {
       try {
         await subscribeRun(gateway, dispatch, () => stateRef.current, runId, afterSequence, signal);
       } catch {
-        // Real transport errors flip connection state inside the controller.
-        // Anything else is handled by the quiet-resubscribe path below.
+        // 预算耗尽 / transport 错误：Adapter 已耗尽唯一预算，不再重订阅。
+        // 权威对账（run.getActivity → run.cancel 恰好一次）由
+        // reconcileExhaustedRun 完成，权威 Run 写回 store，清 recovering。
+        if (!signal.aborted) {
+          const run = stateRef.current.runs[runId];
+          if (run && isActiveRunStatus(run.status)) {
+            void reconcileExhaustedRun(gateway, dispatch, runId);
+          }
+        }
+        delete subSignalsRef.current[runId];
+        return;
       }
       if (signal.aborted) return;
 
       const run = stateRef.current.runs[runId];
       if (!run || !isActiveRunStatus(run.status)) {
-        delete resubAttemptsRef.current[runId];
         delete subSignalsRef.current[runId];
         return;
       }
 
-      // The iterator ending without a terminal event is normal long-poll
-      // behaviour, not a disconnect. Resubscribe quietly with backoff and leave
-      // the global connection state alone.
+      // 长轮询空轮正常结束（无 terminal、无错误）：静默续接一次保持 live。
+      // 不重置 Adapter 的重连预算；重连预算耗尽只发生在 Adapter 内部抛错路径。
       const nextSeq = stateRef.current.lastSequenceByRun[runId] ?? afterSequence;
-      // Receiving events resets the delay; only silence stretches it.
-      if (nextSeq > afterSequence) resubAttemptsRef.current[runId] = 0;
-      const attempt = (resubAttemptsRef.current[runId] ?? 0) + 1;
-      resubAttemptsRef.current[runId] = attempt;
-
-      // Bounded reconnect (product decision 4): the budget is per-run; once
-      // exhausted we stop quietly resubscribing and reconcile authoritatively
-      // (run.getActivity → run.cancel if still active) instead of looping
-      // forever. The run's fold shows the exhausted state.
-      if (attempt > MAX_RESUB_ATTEMPTS) {
-        delete resubAttemptsRef.current[runId];
-        delete subSignalsRef.current[runId];
-        void reconcileExhaustedRun(gateway, dispatch, runId);
-        return;
-      }
-
       window.setTimeout(
         () => {
           if (!signal.aborted && subSignalsRef.current[runId] === signal) {
             void startSubscription(runId, nextSeq);
           }
         },
-        Math.min(RESUB_STEP_MS * attempt, RESUB_MAX_MS),
+        RESUB_STEP_MS,
       );
     },
     [gateway, dispatch],
@@ -117,7 +98,7 @@ export function useAssistantRun() {
   const retainSubscriptions = useCallback(
     (wanted: Set<string>) => {
       const cancelled = cancelUnwantedSubscriptions(subSignalsRef.current, wanted);
-      for (const runId of cancelled) delete resubAttemptsRef.current[runId];
+      for (const runId of cancelled) delete subSignalsRef.current[runId];
       for (const runId of wanted) ensureRunSubscription(runId);
     },
     [ensureRunSubscription],
@@ -127,7 +108,6 @@ export function useAssistantRun() {
   const abortAllSubscriptions = useCallback(() => {
     cancelUnwantedSubscriptions(subSignalsRef.current, new Set());
     subSignalsRef.current = {};
-    resubAttemptsRef.current = {};
   }, []);
 
   const stop = useCallback(
