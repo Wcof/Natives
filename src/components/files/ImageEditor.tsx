@@ -488,7 +488,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           <div
             role="dialog"
             aria-modal="true"
-            aria-label={t(locale, 'common.textInput')}
+            aria-label={t(locale, 'imageEditor.textInputDialogLabel')}
             style={{
               background: 'var(--surface)', borderRadius: 12,
               border: '1px solid var(--border)', padding: 20,

@@ -425,6 +425,174 @@ async fn follow_up_closes_previous_turn_before_next_provider_call() {
     );
 }
 
+#[tokio::test]
+async fn text_completion_consumes_steering_once_before_next_provider_call() {
+    struct SteeringReceiver {
+        offered: AtomicBool,
+        acked: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::EngineInputReceiver for SteeringReceiver {
+        async fn drain(
+            &self,
+            kind: crate::PendingInputKind,
+            _mode: crate::DrainMode,
+            point: crate::InputSafePoint,
+        ) -> Result<Vec<crate::PendingInput>, String> {
+            assert_eq!(point, crate::InputSafePoint::BeforeRunEnd);
+            if kind == crate::PendingInputKind::Steering
+                && !self.offered.swap(true, Ordering::SeqCst)
+            {
+                Ok(vec![crate::PendingInput {
+                    id: "steering-1".into(),
+                    kind,
+                    content: "change direction".into(),
+                    lease_token: Some("lease-1".into()),
+                }])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        async fn ack(
+            &self,
+            input: &crate::PendingInput,
+            _turn_id: Option<&str>,
+        ) -> Result<(), String> {
+            assert_eq!(input.lease_token.as_deref(), Some("lease-1"));
+            self.acked.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct CapturingProvider {
+        rounds: Mutex<Vec<Vec<EngineProviderEvent>>>,
+        requests: Mutex<Vec<Vec<EngineMessage>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl EngineProvider for CapturingProvider {
+        async fn stream(
+            &self,
+            _model: &str,
+            messages: Vec<EngineMessage>,
+            _tools: &[ToolSchema],
+            _system_prompt: Option<&str>,
+            _cancel: CancellationToken,
+        ) -> Result<EngineProviderEventStream, EngineError> {
+            self.requests.lock().unwrap().push(messages);
+            Ok(Box::pin(futures_util::stream::iter(
+                self.rounds.lock().unwrap().remove(0),
+            )))
+        }
+    }
+
+    let receiver = Arc::new(SteeringReceiver {
+        offered: AtomicBool::new(false),
+        acked: AtomicUsize::new(0),
+    });
+    let provider = CapturingProvider {
+        rounds: Mutex::new(vec![
+            vec![
+                EngineProviderEvent::TextDelta("first".into()),
+                EngineProviderEvent::Completed,
+            ],
+            vec![
+                EngineProviderEvent::TextDelta("second".into()),
+                EngineProviderEvent::Completed,
+            ],
+        ]),
+        requests: Mutex::new(Vec::new()),
+    };
+    let engine =
+        AgentEngine::new(EventSequencer::memory_only()).with_input_receiver(receiver.clone());
+
+    engine
+        .run(
+            EngineRunConfig {
+                run_id: format!("text-steering-{}", uuid::Uuid::new_v4()),
+                conversation_id: "text-steering".into(),
+                model: "model".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "start".into(),
+                max_steps: 3,
+            },
+            &provider,
+            &FakeTools,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receiver.acked.load(Ordering::SeqCst), 1);
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .iter()
+            .any(|message| message.role == "user"
+                && message.content == "[steering]\nchange direction")
+    );
+}
+
+#[tokio::test]
+async fn cancelled_text_completion_leaves_queued_inputs_unleased() {
+    struct CountingReceiver(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl crate::EngineInputReceiver for CountingReceiver {
+        async fn drain(
+            &self,
+            _kind: crate::PendingInputKind,
+            _mode: crate::DrainMode,
+            _point: crate::InputSafePoint,
+        ) -> Result<Vec<crate::PendingInput>, String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+
+        async fn ack(
+            &self,
+            _input: &crate::PendingInput,
+            _turn_id: Option<&str>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    let receiver = Arc::new(CountingReceiver(AtomicUsize::new(0)));
+    let engine =
+        AgentEngine::new(EventSequencer::memory_only()).with_input_receiver(receiver.clone());
+    let provider = FakeProvider {
+        rounds: Mutex::new(vec![vec![
+            EngineProviderEvent::TextDelta("partial".into()),
+            EngineProviderEvent::CompletedWithReason {
+                reason: crate::ProviderStopReason::Cancelled,
+            },
+        ]]),
+    };
+
+    engine
+        .run(
+            EngineRunConfig {
+                run_id: format!("cancelled-steering-{}", uuid::Uuid::new_v4()),
+                conversation_id: "cancelled-steering".into(),
+                model: "model".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "start".into(),
+                max_steps: 1,
+            },
+            &provider,
+            &FakeTools,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receiver.0.load(Ordering::SeqCst), 0);
+}
+
 /// TASK-010 (C02): steering inputs are drained at safe points and injected
 /// as COMPLETE User messages in FIFO order — never a half Assistant
 /// message, never reordered, and each input is acked.

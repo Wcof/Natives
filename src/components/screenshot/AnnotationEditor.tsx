@@ -1,15 +1,16 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Edit2, ArrowRight, Type, EyeOff, Square, Trash2, X } from 'lucide-react';
+import { Edit2, ArrowRight, Type, EyeOff, Square, Trash2, X, Save, Undo2 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { classifyError } from '@/lib/error-classifier';
 
 interface AnnotationEditorProps {
   locale: Locale;
   imageUrl: string;
-  onSave: (dataUrl: string) => void;
+  onSave: (dataUrl: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -44,6 +45,8 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
   const [currentAction, setCurrentAction] = useState<DrawAction | null>(null);
   const [textInput, setTextInput] = useState('');
   const [textPos, setTextPos] = useState<{ x: number; y: number } | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
 
   // Load image onto canvas
@@ -61,8 +64,11 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
         ctx.drawImage(img, 0, 0);
       }
     };
+    img.onerror = () => {
+      setSaveError(classifyError(new Error('file read failed'), { locale }).userMessage);
+    };
     img.src = imageUrl;
-  }, [imageUrl]);
+  }, [imageUrl, locale]);
 
   // Redraw all actions
   const redraw = useCallback(() => {
@@ -151,12 +157,21 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
     setActions([]);
   };
 
-  const handleSave = () => {
+  const handleSave = useCallback(async () => {
+    if (saveState === 'saving') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dataUrl = canvas.toDataURL('image/png');
-    onSave(dataUrl);
-  };
+    setSaveState('saving');
+    setSaveError(null);
+    try {
+      await onSave(canvas.toDataURL('image/png'));
+      setSaveState('saved');
+    } catch (cause) {
+      const error = classifyError(cause, { locale });
+      setSaveError([error.userMessage, error.actionHint].filter(Boolean).join(' '));
+      setSaveState('idle');
+    }
+  }, [locale, onSave, saveState]);
 
   return (
     <div
@@ -167,7 +182,11 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
       aria-label={t(locale, 'screenshot.title')}
       onKeyDown={(e) => {
         trap.handleKeyDown(e);
-        if (e.key === 'Escape') onClose();
+        if (e.key === 'Escape' && saveState !== 'saving') onClose();
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          void handleSave();
+        }
       }}
       style={{
         position: 'fixed',
@@ -218,6 +237,9 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
               <button
                 key={c}
                 onClick={() => setColor(c)}
+                type="button"
+                aria-label={t(locale, 'screenshot.colorOption', { index: COLORS.indexOf(c) + 1 })}
+                aria-pressed={color === c}
                 style={{
                   width: 20,
                   height: 20,
@@ -238,23 +260,39 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
           max={20}
           value={size}
           onChange={(e) => setSize(Number(e.target.value))}
+          aria-label={t(locale, 'screenshot.brush')}
           style={{ width: 80 }}
           title={t(locale, 'screenshot.brush')}
         />
 
         <button className="btn btn-sm" onClick={handleUndo} disabled={actions.length === 0}>
-          ↩ {t(locale, 'screenshot.undo')}
+          <Undo2 size={12} /> {t(locale, 'screenshot.undo')}
         </button>
         <button className="btn btn-sm" onClick={handleClear} disabled={actions.length === 0}>
 <Trash2 size={12} /> {t(locale, 'screenshot.clearAll')}
         </button>
-        <button className="btn btn-sm btn-primary" onClick={handleSave}>
-          💾 {t(locale, 'common.save')}
+        <button
+          className="btn btn-sm btn-primary"
+          onClick={() => void handleSave()}
+          disabled={saveState === 'saving'}
+          aria-label={t(locale, 'common.save')}
+        >
+          <Save size={12} /> {saveState === 'saving' ? t(locale, 'screenshot.saving') : t(locale, 'common.save')}
         </button>
-        <button className="btn btn-sm" onClick={onClose}>
+        <button className="btn btn-sm" onClick={onClose} disabled={saveState === 'saving'}>
           <X size={12} /> {t(locale, 'screenshot.close')}
         </button>
       </div>
+
+      {(saveError || saveState === 'saved') && (
+        <div
+          role={saveError ? 'alert' : 'status'}
+          aria-live="polite"
+          style={{ padding: `${SPACING.sm}px ${SPACING.lg}px`, color: saveError ? 'var(--danger)' : 'var(--success)' }}
+        >
+          {saveError || t(locale, 'screenshot.saved')}
+        </div>
+      )}
 
       {/* Canvas */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: SPACING.lg }}>

@@ -1,6 +1,6 @@
 # UI/UE 02 · 交互模式
 
-> **版本**: 1.0.0 · **日期**: 2026-06-15
+> **版本**: 1.0.1 · **日期**: 2026-08-12
 > **关联 ADR**: 无
 > **关联源文件**: `src/lib/notification-ui.ts`（toast / 通知中心 / 错误页）、`src/components/shell/CommandPalette.tsx`、`src/components/ui/EmptyState.tsx`
 
@@ -94,7 +94,7 @@
 
 由于 Natives Control Hub 小组件移除了所有的 OS 原生标题栏与窗口控制 Chrome，窗口移动需要借助页面内容本身进行承载：
 
-#### R-U13 · 水晶卡片主体必须支持拖动且排斥交互控件
+#### R-U12.1 · 水晶卡片主体必须支持拖动且排斥交互控件
 - **等级**：MUST
 - **分类**：交互、桌面集成
 - **规则**：
@@ -112,5 +112,4 @@
 - [ ] 我的空列表用 `EmptyState` + i18n 文案，没有假数据（R-U9）。
 - [ ] 加载态有视觉指示，不与空态混淆（R-U10）。
 - [ ] 快捷键跨平台兼容，全局入口走命令面板（R-U11, R-U12）。
-- [ ] 无边框窗口的主体卡片支持 `-webkit-app-region: drag`，且所有内部交互按键排斥拖拽（`-webkit-app-region: no-drag`）（R-U13）。
-
+- [ ] 无边框窗口的主体卡片支持 `-webkit-app-region: drag`，且所有内部交互按键排斥拖拽（`-webkit-app-region: no-drag`）（R-U12.1）。

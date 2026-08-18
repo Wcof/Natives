@@ -8,7 +8,8 @@
 //!
 //! Run: `cargo test -p natives-agent-daemon --test stream_watch -- --nocapture`
 
-use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse, RpcRequest};
+use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse};
+use assistant_protocol::v2::V2Request;
 use natives_agent_daemon::rpc::RpcServer;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -88,11 +89,14 @@ async fn send_rpc(
     method: &str,
     params: Value,
 ) {
-    let req = RpcRequest {
+    let req = V2Request {
         protocol_version: "2.0.0".to_string(),
         request_id: uuid::Uuid::new_v4().to_string(),
+        session_id: None,
         client_id: "stream-client".to_string(),
         session_token: session_token.to_string(),
+        run_id: None,
+        idempotency_key: None,
         method: method.to_string(),
         params,
     };

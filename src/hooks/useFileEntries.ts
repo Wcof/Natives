@@ -15,9 +15,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { t, type Locale } from '@/i18n';
+import { type Locale } from '@/i18n';
 import { type FileEntry, type StatResult } from '@/types/file';
 import { fsApi, hasNativeFiles } from '@/lib/files-api';
+import { classifyError, type ClassifiedError } from '@/lib/error-classifier';
 import { FILE_EVENTS, dispatchFileEvent, onFileEvent } from '@/lib/file-events';
 import {
   SelfOpenedTracker,
@@ -49,7 +50,6 @@ export interface UseFileEntriesOptions {
   recentOpenedMode: boolean;
   /** 最近打开 LRU 快照（来自 useRecentFiles） */
   recentOpenedPaths: string[];
-  showToast: (msg: string) => void;
   locale: Locale;
 }
 
@@ -57,12 +57,26 @@ export interface UseFileEntriesResult {
   entries: FileEntry[];
   dirProject: string | null;
   loading: boolean;
+  error: ClassifiedError | null;
   nativeMissing: boolean;
   /** 最近一次变更点亮路径集合（fileFlash 事件驱动） */
   flashPaths: Set<string>;
   loadEntries: () => Promise<void>;
   /** 打开/预览类动作登记 selfOpened，3s 窗口内 fs_watch 忽略其假变更 */
   markSelfOpened: (path: string) => void;
+}
+
+interface DirectoryLoadError {
+  path: string;
+  classified: ClassifiedError;
+}
+
+export function resolveDirectoryLoading(
+  loading: boolean,
+  currentPath: string,
+  settledPath: string | null,
+): boolean {
+  return loading || settledPath !== currentPath;
 }
 
 export function useFileEntries({
@@ -73,7 +87,6 @@ export function useFileEntries({
   recentMode,
   recentOpenedMode,
   recentOpenedPaths,
-  showToast,
   locale,
 }: UseFileEntriesOptions): UseFileEntriesResult {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -82,6 +95,10 @@ export function useFileEntries({
   /** 浏览器 dev 模式（无 Tauri IPC）：渲染明确的降级占位，不再静默报错。 */
   const [nativeMissing, setNativeMissing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [settledPath, setSettledPath] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<DirectoryLoadError | null>(null);
+  /** 路径切换在 effect 发起新请求前就隐藏旧目录错误，避免一帧 stale error。 */
+  const error = loadError?.path === currentPath ? loadError.classified : null;
   /** 代次守卫：快速导航时丢弃过期的 loadEntries 响应，防止旧内容覆盖新目录 */
   const loadIdRef = useRef(0);
   /** 供 loadEntries 读取的最新 LRU 快照，避免把 paths 放进依赖数组导致预览时重载 */
@@ -96,6 +113,7 @@ export function useFileEntries({
     // 代次守卫：只有最新一次调用允许写回状态
     const rid = ++loadIdRef.current;
     setLoading(true);
+    setLoadError(null);
     try {
       const fs = fsApi();
 
@@ -156,14 +174,18 @@ export function useFileEntries({
           setDirProject(null);
         }
       }
-    } catch {
+    } catch (cause) {
       if (rid !== loadIdRef.current) return;
-      showToast(t(locale, 'fileBrowser.loadFailed'));
       setEntries([]);
+      setDirProject(null);
+      setLoadError({ path: currentPath, classified: classifyError(cause, { locale }) });
     } finally {
-      if (rid === loadIdRef.current) setLoading(false);
+      if (rid === loadIdRef.current) {
+        setSettledPath(currentPath);
+        setLoading(false);
+      }
     }
-  }, [currentPath, sortBy, sortDir, showHidden, recentMode, recentOpenedMode, locale, showToast]);
+  }, [currentPath, sortBy, sortDir, showHidden, recentMode, recentOpenedMode, locale]);
 
   // 初始加载 + 目录/排序/过滤变化时刷新
   useEffect(() => {
@@ -249,7 +271,8 @@ export function useFileEntries({
   return {
     entries,
     dirProject,
-    loading,
+    loading: resolveDirectoryLoading(loading, currentPath, settledPath),
+    error,
     nativeMissing,
     flashPaths,
     loadEntries,

@@ -6,8 +6,8 @@
 //! holds only the routing layer and the honest `_ =>` unsupported fallback.
 
 use assistant_protocol::error::{DaemonError, ErrorCategory};
-use assistant_protocol::v1::daemon::RpcRequest;
 use assistant_protocol::v2::methods::names;
+use assistant_protocol::v2::V2Request;
 use assistant_protocol::version::ProtocolVersion;
 
 use crate::rpc::framing::send_error;
@@ -26,7 +26,7 @@ use crate::rpc::handlers::task::dispatch_task;
 /// Route a single RPC request to its domain handler.
 pub async fn handle_rpc(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &RpcRequest,
+    request: &V2Request,
     protocol_version: &ProtocolVersion,
     daemon_version: &str,
     started_at: &std::time::Instant,
@@ -213,7 +213,7 @@ pub async fn handle_rpc(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

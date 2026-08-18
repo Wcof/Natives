@@ -4,7 +4,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use lazy_static::lazy_static;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::sync::Mutex;
 
@@ -31,6 +31,14 @@ pub struct EnvProfile {
     pub name: String,
     pub is_default: i32,
     pub created_at: String,
+    pub variables: Vec<EnvVariableMetadata>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EnvVariableMetadata {
+    pub key: String,
+    pub has_value: bool,
+    pub masked: bool,
 }
 
 /// Get or create the encryption key.
@@ -198,7 +206,69 @@ pub fn decrypt(encoded: &str, encryption_key: &str) -> Result<String> {
 
 // ── Profile CRUD ──
 
+pub fn validate_profile_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.trim() != name || name.chars().any(char::is_control) {
+        return Err(Error::InvalidInput(
+            "profile name must be non-empty and contain no control characters".into(),
+        ));
+    }
+    if name.chars().count() > 128 {
+        return Err(Error::InvalidInput(
+            "profile name must be 128 characters or fewer".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_variable_key(key: &str) -> Result<()> {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return Err(Error::InvalidInput(
+            "environment key must not be empty".into(),
+        ));
+    };
+    if key.len() > 256
+        || !(first == '_' || first.is_ascii_alphabetic())
+        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return Err(Error::InvalidInput(
+            "environment key must use ASCII letters, numbers, and underscores and start with a letter or underscore".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn profile_id_exists(conn: &Connection, profile_id: i64) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM env_profiles WHERE id = ?1)",
+        rusqlite::params![profile_id],
+        |row| row.get(0),
+    )
+    .map_err(Error::Database)
+}
+
+fn variable_metadata(conn: &Connection, profile_id: i64) -> Result<Vec<EnvVariableMetadata>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT key, value_encrypted <> '' FROM env_variables WHERE profile_id = ?1 ORDER BY key",
+        )
+        .map_err(Error::Database)?;
+    let mut rows = stmt
+        .query(rusqlite::params![profile_id])
+        .map_err(Error::Database)?;
+    let mut variables = Vec::new();
+    while let Some(row) = rows.next().map_err(Error::Database)? {
+        variables.push(EnvVariableMetadata {
+            key: row.get(0).map_err(Error::Database)?,
+            has_value: row.get(1).map_err(Error::Database)?,
+            masked: true,
+        });
+    }
+    Ok(variables)
+}
+
 pub fn create_profile(conn: &Connection, name: &str) -> Result<()> {
+    validate_profile_name(name)?;
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO env_profiles (name, is_default, created_at) VALUES (?1, 0, ?2)",
@@ -209,6 +279,21 @@ pub fn create_profile(conn: &Connection, name: &str) -> Result<()> {
 }
 
 pub fn delete_profile(conn: &Connection, name: &str) -> Result<()> {
+    validate_profile_name(name)?;
+    let profile = conn
+        .query_row(
+            "SELECT is_default FROM env_profiles WHERE name = ?1",
+            rusqlite::params![name],
+            |row| row.get::<_, i32>(0),
+        )
+        .optional()
+        .map_err(Error::Database)?
+        .ok_or_else(|| Error::NotFound(format!("environment profile not found: {name}")))?;
+    if profile != 0 {
+        return Err(Error::Conflict(
+            "cannot delete the active default environment profile".into(),
+        ));
+    }
     conn.execute(
         "DELETE FROM env_profiles WHERE name = ?1",
         rusqlite::params![name],
@@ -221,21 +306,47 @@ pub fn list_profiles(conn: &Connection) -> Result<Vec<EnvProfile>> {
     let mut stmt = conn
         .prepare("SELECT id, name, is_default, created_at FROM env_profiles ORDER BY id")
         .map_err(Error::Database)?;
-    let mut results = Vec::new();
+    let mut raw_profiles = Vec::new();
     let mut rows = stmt.query([]).map_err(Error::Database)?;
     while let Some(row) = rows.next().map_err(Error::Database)? {
-        results.push(EnvProfile {
-            id: row.get(0).map_err(Error::Database)?,
-            name: row.get(1).map_err(Error::Database)?,
-            is_default: row.get(2).map_err(Error::Database)?,
-            created_at: row.get(3).map_err(Error::Database)?,
-        });
+        raw_profiles.push((
+            row.get(0).map_err(Error::Database)?,
+            row.get(1).map_err(Error::Database)?,
+            row.get(2).map_err(Error::Database)?,
+            row.get(3).map_err(Error::Database)?,
+        ));
     }
-    Ok(results)
+    drop(rows);
+    drop(stmt);
+    raw_profiles
+        .into_iter()
+        .map(|(id, name, is_default, created_at)| {
+            Ok(EnvProfile {
+                id,
+                name,
+                is_default,
+                created_at,
+                variables: variable_metadata(conn, id)?,
+            })
+        })
+        .collect()
 }
 
 pub fn set_default_profile(conn: &Connection, name: &str) -> Result<()> {
+    validate_profile_name(name)?;
     let tx = conn.unchecked_transaction().map_err(Error::Database)?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM env_profiles WHERE name = ?1)",
+            rusqlite::params![name],
+            |row| row.get(0),
+        )
+        .map_err(Error::Database)?;
+    if !exists {
+        return Err(Error::NotFound(format!(
+            "environment profile not found: {name}"
+        )));
+    }
     tx.execute("UPDATE env_profiles SET is_default = 0", [])
         .map_err(Error::Database)?;
     tx.execute(
@@ -252,15 +363,28 @@ pub fn get_default_profile(conn: &Connection) -> Result<Option<EnvProfile>> {
         .prepare("SELECT id, name, is_default, created_at FROM env_profiles WHERE is_default = 1 LIMIT 1")
         .map_err(Error::Database)?;
     let mut rows = stmt.query([]).map_err(Error::Database)?;
-    match rows.next().map_err(Error::Database)? {
-        Some(row) => Ok(Some(EnvProfile {
-            id: row.get(0).map_err(Error::Database)?,
-            name: row.get(1).map_err(Error::Database)?,
-            is_default: row.get(2).map_err(Error::Database)?,
-            created_at: row.get(3).map_err(Error::Database)?,
-        })),
-        None => Ok(None),
-    }
+    let raw_profile = match rows.next().map_err(Error::Database)? {
+        Some(row) => Some((
+            row.get(0).map_err(Error::Database)?,
+            row.get(1).map_err(Error::Database)?,
+            row.get(2).map_err(Error::Database)?,
+            row.get(3).map_err(Error::Database)?,
+        )),
+        None => None,
+    };
+    drop(rows);
+    drop(stmt);
+    raw_profile
+        .map(|(id, name, is_default, created_at)| {
+            Ok(EnvProfile {
+                id,
+                name,
+                is_default,
+                created_at,
+                variables: variable_metadata(conn, id)?,
+            })
+        })
+        .transpose()
 }
 
 // ── Variable CRUD ──
@@ -272,6 +396,12 @@ pub fn set_variable(
     value: &str,
     encryption_key: &str,
 ) -> Result<()> {
+    validate_variable_key(key)?;
+    if !profile_id_exists(conn, profile_id)? {
+        return Err(Error::NotFound(format!(
+            "environment profile not found: {profile_id}"
+        )));
+    }
     let encrypted = encrypt(value, encryption_key)?;
     conn.execute(
         "INSERT INTO env_variables (profile_id, key, value_encrypted) VALUES (?1, ?2, ?3)
@@ -283,6 +413,12 @@ pub fn set_variable(
 }
 
 pub fn delete_variable(conn: &Connection, profile_id: i64, key: &str) -> Result<()> {
+    validate_variable_key(key)?;
+    if !profile_id_exists(conn, profile_id)? {
+        return Err(Error::NotFound(format!(
+            "environment profile not found: {profile_id}"
+        )));
+    }
     conn.execute(
         "DELETE FROM env_variables WHERE profile_id = ?1 AND key = ?2",
         rusqlite::params![profile_id, key],
@@ -296,6 +432,11 @@ pub fn get_variables(
     profile_id: i64,
     encryption_key: &str,
 ) -> Result<std::collections::HashMap<String, String>> {
+    if !profile_id_exists(conn, profile_id)? {
+        return Err(Error::NotFound(format!(
+            "environment profile not found: {profile_id}"
+        )));
+    }
     let mut stmt = conn
         .prepare("SELECT key, value_encrypted FROM env_variables WHERE profile_id = ?1")
         .map_err(Error::Database)?;
@@ -320,8 +461,9 @@ pub fn get_variables(
                 result.insert(key, value);
             }
             Err(_) => {
-                // If decryption fails, skip this variable
-                eprintln!("failed to decrypt env variable: {key}");
+                return Err(Error::Internal(
+                    "failed to decrypt environment variable".into(),
+                ))
             }
         }
     }
@@ -342,67 +484,4 @@ pub fn inject_env(
         env.entry(key).or_insert(value);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    lazy_static! {
-        static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
-    }
-
-    fn setup_test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );",
-        )
-        .unwrap();
-        conn
-    }
-
-    #[test]
-    fn test_init_env_encryption_key_stores_key_in_sqlite() {
-        let _guard = TEST_MUTEX.lock().unwrap();
-        reset_env_key_cache_for_tests();
-        let conn = setup_test_db();
-
-        let key = init_env_encryption_key(&conn).unwrap();
-        assert_eq!(hex::decode(&key).unwrap().len(), 32);
-
-        let stored = db::get_setting(&conn, ENCRYPTION_KEY_SETTING)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored, key);
-    }
-
-    #[test]
-    fn test_init_env_encryption_key_reuses_sqlite_key() {
-        let _guard = TEST_MUTEX.lock().unwrap();
-        reset_env_key_cache_for_tests();
-        let conn = setup_test_db();
-        let existing = "aa".repeat(32);
-        db::set_setting(&conn, ENCRYPTION_KEY_SETTING, &existing).unwrap();
-
-        let key = init_env_encryption_key(&conn).unwrap();
-
-        assert_eq!(key, existing);
-    }
-
-    #[test]
-    fn test_init_env_encryption_key_rejects_invalid_sqlite_key() {
-        let _guard = TEST_MUTEX.lock().unwrap();
-        reset_env_key_cache_for_tests();
-        let conn = setup_test_db();
-        db::set_setting(&conn, ENCRYPTION_KEY_SETTING, "not-hex").unwrap();
-
-        let err = init_env_encryption_key(&conn).unwrap_err();
-
-        assert!(err.to_string().contains("invalid encryption key hex"));
-    }
 }

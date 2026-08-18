@@ -3,6 +3,32 @@
 //! Split out of the former single-file `rpc.rs` (A2-03).
 
 use crate::rpc::required_param;
+use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
+
+#[derive(Debug)]
+pub(crate) enum ContextUsageError {
+    InvalidInput(String),
+    Internal(String),
+}
+
+impl ContextUsageError {
+    fn into_daemon_error(self) -> DaemonError {
+        match self {
+            Self::InvalidInput(message) => DaemonError::new(
+                error_codes::INVALID_INPUT,
+                ErrorCategory::Validation,
+                false,
+                message,
+            ),
+            Self::Internal(message) => DaemonError::new(
+                error_codes::INTERNAL_ERROR,
+                ErrorCategory::Internal,
+                false,
+                message,
+            ),
+        }
+    }
+}
 
 // {A2-03} handle_conversation_update (moved verbatim from rpc.rs)
 /// `conversation.update` — generic partial update.
@@ -87,15 +113,19 @@ pub(crate) async fn handle_conversation_update(
 // {A2-03} handle_context_usage_rpc (moved verbatim from rpc.rs)
 pub(crate) fn handle_context_usage_rpc(
     params: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, ContextUsageError> {
     use crate::checkpoint::estimate_context_usage;
     let conversation_id = params
         .get("conversation_id")
         .or_else(|| params.get("id"))
         .and_then(|v| v.as_str())
-        .ok_or("conversation_id is required")?;
+        .ok_or_else(|| ContextUsageError::InvalidInput("conversation_id is required".into()))?;
     // Load messages from daemon store and estimate.
-    let history = crate::conversation_store::engine_history(conversation_id).unwrap_or_default();
+    let history = crate::conversation_store::engine_history(conversation_id).map_err(|error| {
+        ContextUsageError::Internal(format!(
+            "failed to load context history for conversation {conversation_id}: {error}"
+        ))
+    })?;
     let mut conv_chars = 0usize;
     let mut tool_chars = 0usize;
     for m in &history {
@@ -136,10 +166,9 @@ pub(crate) fn handle_context_usage_rpc(
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_conversation(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{send_error, send_success};
-    use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
     use assistant_protocol::v2::methods::names;
     match request.method.as_str() {
         names::CONVERSATION_CREATE
@@ -176,6 +205,7 @@ pub(crate) async fn dispatch_conversation(
                 Err(e) => {
                     send_error(
                         writer,
+                &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -203,6 +233,7 @@ pub(crate) async fn dispatch_conversation(
                 Err(e) => {
                     send_error(
                         writer,
+                &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -242,7 +273,8 @@ pub(crate) async fn dispatch_conversation(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(writer, &DaemonError::new(code, category, false, e)).await
+                    send_error(writer,
+                &request.request_id, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -259,16 +291,8 @@ pub(crate) async fn dispatch_conversation(
                 .await
             }
             Err(e) => {
-                send_error(
-                    writer,
-                    &DaemonError::new(
-                        error_codes::INVALID_INPUT,
-                        ErrorCategory::Validation,
-                        false,
-                        e,
-                    ),
-                )
-                .await
+                send_error(writer,
+                &request.request_id, &e.into_daemon_error()).await
             }
         },
 
@@ -288,7 +312,93 @@ pub(crate) async fn dispatch_conversation(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer,
+                &request.request_id, &err).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conversation_store::test_support::{env_lock, ClearTestDb};
+
+    struct ContextUsageFixture {
+        _guard: crate::storage::EnvTestGuard,
+        _clear_db: ClearTestDb,
+        _dir: tempfile::TempDir,
+        store: crate::storage::DataStore,
+    }
+
+    impl ContextUsageFixture {
+        fn new(name: &str) -> Self {
+            let guard = env_lock();
+            let dir = tempfile::tempdir().expect("temporary context usage store");
+            let db = dir.path().join(format!("{name}.db"));
+            let artifacts = dir.path().join("artifacts");
+            crate::storage::set_test_db_override(Some(db.clone()), Some(artifacts.clone()));
+            let store = crate::storage::DataStore::new(&db, &artifacts).expect("migrate store");
+            Self {
+                _guard: guard,
+                _clear_db: ClearTestDb,
+                _dir: dir,
+                store,
+            }
+        }
+
+        fn add_conversation(&self, conversation_id: &str) {
+            crate::conversation_store::ensure_conversation_stub(
+                conversation_id,
+                "openai",
+                "gpt-4o",
+                None,
+                None,
+            )
+            .expect("create conversation fixture");
+        }
+    }
+
+    #[test]
+    fn context_usage_surfaces_history_decode_failure_as_internal_error() {
+        let fixture = ContextUsageFixture::new("context-usage-corrupt-history");
+        fixture.add_conversation("corrupt-conversation");
+        fixture
+            .store
+            .conn()
+            .expect("store connection")
+            .execute_batch(
+                "INSERT INTO message (id, conversation_id, role, status, created_at)
+                 VALUES ('corrupt-message', 'corrupt-conversation', 'user', 'complete', datetime('now'));
+                 INSERT INTO message_block (message_id, sort_order, block_type, block_json)
+                 VALUES ('corrupt-message', 0, 'text', '{invalid-json');",
+            )
+            .expect("insert corrupt persisted history");
+
+        let error = handle_context_usage_rpc(&serde_json::json!({
+            "conversation_id": "corrupt-conversation"
+        }))
+        .expect_err("corrupt history must not be reported as zero usage")
+        .into_daemon_error();
+
+        assert_eq!(error.code, error_codes::INTERNAL_ERROR);
+        assert_eq!(error.category, ErrorCategory::Internal);
+        assert!(error
+            .technical_message
+            .contains("invalid message block JSON"));
+    }
+
+    #[test]
+    fn context_usage_keeps_valid_empty_conversation_at_zero() {
+        let fixture = ContextUsageFixture::new("context-usage-empty-history");
+        fixture.add_conversation("empty-conversation");
+
+        let usage = handle_context_usage_rpc(&serde_json::json!({
+            "conversation_id": "empty-conversation"
+        }))
+        .expect("valid empty history must remain a successful usage estimate");
+
+        assert_eq!(usage["conversation_id"], "empty-conversation");
+        assert_eq!(usage["used_tokens"], 0);
+        assert_eq!(usage["usedTokens"], 0);
     }
 }

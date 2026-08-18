@@ -4,8 +4,8 @@
 //!
 //! 1. Client connects and sends `HandshakeRequest` (bootstrap token, client version).
 //! 2. Server validates bootstrap token, generates session token, responds `HandshakeResponse`.
-//! 3. Client sends `RpcRequest` with session token, method, and params.
-//! 4. Server authenticates, dispatches to handler, returns `RpcResponse`.
+//! 3. Client sends `V2Request` with session token, method, and params.
+//! 4. Server authenticates, dispatches to handler, returns `V2Response`.
 //! 5. Client can subscribe to run events via `SubscribeRequest` (stream).
 //!
 //! Messages are newline-delimited JSON (one JSON object per line, terminated by `\n`).

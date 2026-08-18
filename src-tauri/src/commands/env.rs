@@ -1,23 +1,7 @@
 use crate::{emit_db_state_changed, env_manager, Error, Result};
-use serde_json::Value as JsonValue;
 use tauri::State;
 
 use crate::AppState;
-
-#[tauri::command]
-pub fn env_get_variables(profile_id: String, state: State<'_, AppState>) -> Result<JsonValue> {
-    let pool_conn = state
-        .db
-        .get()
-        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &pool_conn;
-    let encryption_key = env_manager::get_encryption_key(conn)?;
-    let id: i64 = profile_id
-        .parse()
-        .map_err(|_| Error::InvalidInput("invalid profile id".into()))?;
-    let vars = env_manager::get_variables(conn, id, &encryption_key)?;
-    serde_json::to_value(vars).map_err(|e| Error::Internal(e.to_string()))
-}
 
 #[tauri::command]
 pub fn env_get_default_profile(state: State<'_, AppState>) -> Result<String> {
@@ -33,22 +17,13 @@ pub fn env_get_default_profile(state: State<'_, AppState>) -> Result<String> {
 }
 
 #[tauri::command]
-pub fn env_list_profiles(state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
+pub fn env_list_profiles(state: State<'_, AppState>) -> Result<Vec<env_manager::EnvProfile>> {
     let pool_conn = state
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &pool_conn;
-    let profiles = env_manager::list_profiles(conn)?;
-    serde_json::to_value(profiles)
-        .map(|v| {
-            if let JsonValue::Array(arr) = v {
-                arr
-            } else {
-                vec![]
-            }
-        })
-        .map_err(|e| Error::Internal(e.to_string()))
+    env_manager::list_profiles(conn)
 }
 
 #[tauri::command]
@@ -161,28 +136,4 @@ pub fn env_delete_variable(
     Ok(())
 }
 
-#[tauri::command]
-pub fn env_encrypt(text: String, state: State<'_, AppState>) -> Result<String> {
-    let pool_conn = state
-        .db
-        .get()
-        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &pool_conn;
-    let encryption_key = env_manager::get_encryption_key(conn)?;
-    env_manager::encrypt(&text, &encryption_key)
-}
-
-// env_decrypt intentionally removed — decryption must only happen server-side
-// for provider test and terminal env injection. Renderer receives only masked keys.
-// See provider.rs and env_manager.rs for legitimate decryption paths.
-
-#[cfg(test)]
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_env_error_invalid_profile_name() {
-        // Verify that empty profile names are rejected at the application level
-        let result = crate::Error::Internal("profile name cannot be empty".to_string());
-        assert!(matches!(result, crate::Error::Internal(_)));
-    }
-}
+// Decryption stays Host-only for provider use and terminal environment injection.

@@ -357,14 +357,34 @@ export async function reconcileExhaustedRun(
 
 export async function resolveProjectPath(options: {
   explicit?: string | null;
+  /** Stable ProjectIdentity UUID from the conversation, never a path itself. */
   conversationProjectId?: string | null;
+  gateway?: AssistantGateway;
   /** When true, last-resort readActiveProject via nativesAPI (desktop only). */
   tryActiveProject?: boolean;
 }): Promise<string | null> {
   const fromExplicit = options.explicit?.trim() || null;
   if (fromExplicit) return fromExplicit;
   const fromConv = options.conversationProjectId?.trim() || null;
-  if (fromConv) return fromConv;
+  if (fromConv) {
+    if (!options.gateway) return null;
+    const response = await options.gateway.request<unknown>('project.identity.list', {});
+    const items =
+      response && typeof response === 'object' && Array.isArray((response as { items?: unknown }).items)
+        ? (response as { items: unknown[] }).items
+        : [];
+    const identity = items.find(
+      (item): item is { project_id?: unknown; canonical_path?: unknown } =>
+        !!item &&
+        typeof item === 'object' &&
+        (item as { project_id?: unknown }).project_id === fromConv,
+    );
+    const canonicalPath =
+      identity && typeof identity.canonical_path === 'string'
+        ? identity.canonical_path.trim()
+        : '';
+    return canonicalPath || null;
+  }
   if (options.tryActiveProject === false) return null;
   try {
     const { readActiveProject } = await import('@/lib/active-project');
@@ -491,6 +511,7 @@ export async function sendOrQueue(
   const projectPath = await resolveProjectPath({
     explicit: projectPathParam,
     conversationProjectId: conversation?.projectId ?? null,
+    gateway,
     tryActiveProject: true,
   });
   if (!projectPath) {

@@ -27,6 +27,7 @@ use crate::production::RealProvider;
 
 const FAILURE_THRESHOLD: u32 = 3;
 const COOLDOWN: Duration = Duration::from_secs(60);
+const MAX_ROUTE_TARGETS: usize = 3;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RouteTarget {
@@ -40,6 +41,12 @@ pub struct RouteTarget {
 pub struct RoutingPlan {
     pub enabled: bool,
     pub targets: Vec<RouteTarget>,
+}
+
+impl RoutingPlan {
+    fn attempts(&self) -> impl Iterator<Item = &RouteTarget> {
+        self.targets.iter().take(MAX_ROUTE_TARGETS)
+    }
 }
 
 static CIRCUIT_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -90,14 +97,8 @@ fn circuit_write_lock() -> &'static Mutex<()> {
 /// Load the route plan via the Host broker lease (T104 / modular remediation
 /// W1). The daemon never opens natives.db — `provider_routing_settings` and
 /// `provider_route_bindings` are Host-owned and served over the authenticated
-/// broker socket. Missing/disabled config intentionally falls back to the
-/// caller's direct target so an upgrade cannot break existing runs.
-///
-/// 审计收口 #8：即使 routing settings enabled，也**不再**把旧
-/// `provider_route_bindings` 的跨 provider failover 目标并入生产 plan——
-/// 旧 bindings 数据保留只读，但不参与执行。自动协议选择（Chat/Responses/
-/// Anthropic Messages 三协议）由 `provider.rs` 的 resolver 在同一
-/// provider+model 内完成，绝不跨 provider 重放。
+/// broker socket. Missing or disabled config falls back to the caller's direct
+/// target so an upgrade cannot break existing runs.
 pub fn load_plan(
     primary_provider: String,
     primary_key: Option<String>,
@@ -109,22 +110,35 @@ pub fn load_plan(
         credential_id: primary_key,
         model_id: primary_model,
     };
-    let plan = match NativesDbBroker::open_default().and_then(|b| b.routing_plan("engine")) {
-        Ok(p) => p,
+    match NativesDbBroker::open_default().and_then(|b| b.routing_plan("engine")) {
+        Ok(plan) => configured_plan(
+            primary,
+            plan.enabled,
+            plan.targets
+                .into_iter()
+                .map(|target| RouteTarget {
+                    provider_id: target.provider_id,
+                    credential_kind: target.credential_kind,
+                    credential_id: target.credential_id,
+                    model_id: target.model_id,
+                })
+                .collect(),
+        ),
         Err(_) => {
             // Broker unreachable → fail closed to the primary target only.
-            return RoutingPlan {
-                enabled: false,
-                targets: vec![primary],
-            };
+            configured_plan(primary, false, Vec::new())
         }
-    };
-    // 路由开关仅作为协议解析的使能信号；旧 route bindings 不进入 targets。
-    let _ = plan.enabled;
-    let _ = plan.targets;
-    RoutingPlan {
-        enabled: false,
-        targets: vec![primary],
+    }
+}
+
+fn configured_plan(primary: RouteTarget, enabled: bool, targets: Vec<RouteTarget>) -> RoutingPlan {
+    if enabled && !targets.is_empty() {
+        RoutingPlan { enabled, targets }
+    } else {
+        RoutingPlan {
+            enabled: false,
+            targets: vec![primary],
+        }
     }
 }
 
@@ -234,7 +248,7 @@ impl RoutedProvider {
         system_prompt: Option<&str>,
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
-        let targets = self.plan.targets.clone();
+        let targets: Vec<_> = self.plan.attempts().cloned().collect();
         let base_model = model;
         let messages = messages.to_vec();
         let tools = tools.to_vec();
@@ -932,7 +946,7 @@ fn timeout_error(message: &str) -> EngineError {
         message: message.into(),
         code: "timeout".into(),
         retryable: true,
-        category: "Network".into(),
+        category: "Timeout".into(),
         retry_after_ms: None,
     }
 }
@@ -974,14 +988,53 @@ mod tests {
     }
 
     #[test]
-    fn load_plan_fails_closed_to_primary_only_when_broker_unreachable() {
-        // Broker socket is unavailable in the test environment → fail-closed to
-        // exactly the primary target. 审计收口 #8：生产 plan 绝不包含旧 route
-        // bindings 的跨 provider failover 目标。
-        let plan = load_plan("openai".into(), Some("k1".into()), "gpt-4o".into());
-        assert_eq!(plan.targets.len(), 1);
-        assert_eq!(plan.targets[0].provider_id, "openai");
-        assert_eq!(plan.targets[0].credential_id.as_deref(), Some("k1"));
-        assert_eq!(plan.targets[0].model_id, "gpt-4o");
+    fn configured_plan_retries_primary_then_secondary_and_is_bounded() {
+        let primary = RouteTarget {
+            provider_id: "primary".into(),
+            credential_kind: "api_key".into(),
+            credential_id: Some("k1".into()),
+            model_id: "first".into(),
+        };
+        let secondary = RouteTarget {
+            provider_id: "secondary".into(),
+            credential_kind: "api_key".into(),
+            credential_id: Some("k2".into()),
+            model_id: "second".into(),
+        };
+        let plan = configured_plan(
+            primary.clone(),
+            true,
+            vec![
+                primary,
+                secondary,
+                RouteTarget {
+                    provider_id: "third".into(),
+                    credential_kind: "api_key".into(),
+                    credential_id: None,
+                    model_id: "third".into(),
+                },
+                RouteTarget {
+                    provider_id: "unreachable-fourth".into(),
+                    credential_kind: "api_key".into(),
+                    credential_id: None,
+                    model_id: "fourth".into(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            plan.attempts()
+                .map(|target| target.provider_id.as_str())
+                .collect::<Vec<_>>(),
+            ["primary", "secondary", "third"]
+        );
+    }
+
+    #[test]
+    fn timeout_errors_keep_timeout_taxonomy() {
+        let EngineError::Provider { category, .. } = timeout_error("deadline") else {
+            panic!("routing timeout must be a provider error");
+        };
+        assert_eq!(category, "Timeout");
     }
 }

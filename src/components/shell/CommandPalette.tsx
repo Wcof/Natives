@@ -17,23 +17,69 @@ import {
   Package,
   Search,
   FileText,
-  Globe,
   Blocks,
   BookMarked,
   CalendarClock,
 } from 'lucide-react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 import { useHydrated } from '@/hooks/useHydrated';
 import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
-import { searchApi } from '@/lib/files-api';
+import { fsApi, searchApi } from '@/lib/files-api';
+import { classifyError } from '@/lib/error-classifier';
+import type { SearchResult } from '@/types/generated/SearchResult';
 
-/** 取搜索能力；非 Tauri 环境返回 null（调用方静默降级，与原可选链语义等价） */
-function searchApiOrNull(): ReturnType<typeof searchApi> | null {
-  try {
-    return searchApi();
-  } catch {
-    return null;
-  }
+const MAX_SEARCH_QUERY_LENGTH = 256;
+
+type FileRoot = { id: string; name: string; path: string };
+
+export function resolvePaletteSearchRoot(roots: FileRoot[]): string | null {
+  const path = roots.find((root) => root.id === 'home')?.path.trim();
+  return path && path !== '/' ? path : null;
+}
+
+export function searchResultLabel(result: SearchResult): string {
+  const normalized = result.path.replace(/\/+$/, '');
+  const name = normalized.slice(normalized.lastIndexOf('/') + 1) || normalized;
+  return result.line == null ? name : `${name}:${result.line}`;
+}
+
+export function createLatestRequestGate() {
+  let generation = 0;
+  return {
+    next: () => ++generation,
+    invalidate: () => { generation += 1; },
+    isCurrent: (request: number) => request === generation,
+  };
+}
+
+function parseSearchResults(value: unknown): SearchResult[] {
+  if (!Array.isArray(value)) throw new Error('file read failed: invalid search response');
+  const results = value.filter((item): item is SearchResult => {
+    if (typeof item !== 'object' || item === null) return false;
+    const result = item as Partial<SearchResult>;
+    return typeof result.path === 'string'
+      && (result.line === null || typeof result.line === 'number')
+      && (result.text === null || typeof result.text === 'string')
+      && (result.score === null || typeof result.score === 'number')
+      && (result.mtime === null || typeof result.mtime === 'number');
+  });
+  if (results.length !== value.length) throw new Error('file read failed: invalid search result');
+  return results;
+}
+
+function toSearchCommands(results: SearchResult[], icon: ReactNode): CommandItem[] {
+  return results.map((result) => ({
+    id: `__file__:${result.path}`,
+    label: searchResultLabel(result),
+    category: 'navigation',
+    icon,
+    description: result.text || result.path,
+  }));
+}
+
+function mergeCommands(current: CommandItem[], incoming: CommandItem[]): CommandItem[] {
+  const ids = new Set(current.map((command) => command.id));
+  return [...current, ...incoming.filter((command) => !ids.has(command.id))];
 }
 
 interface CommandItem {
@@ -75,10 +121,12 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const [locale, setLocale] = useState<Locale>('zh');
   const [allCommands, setAllCommands] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [results, setResults] = useState<CommandItem[]>(() => getStaticCommands(locale));
-  const [searchScope, setSearchScope] = useState<'global' | 'local'>('global');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<ReturnType<typeof classifyError> | null>(null);
   const mounted = useHydrated();
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchGateRef = useRef(createLatestRequestGate());
 
   // Load locale
   const { dialogRef, handleKeyDown: trapKeyDown } = useFocusTrap();
@@ -136,11 +184,65 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
       setSelectedIndex(0);
       setResults(allCommands);
+      setSearchError(null);
+      setIsSearching(false);
+    } else {
+      searchGateRef.current.invalidate();
+      setSearchError(null);
+      setIsSearching(false);
     }
   }, [isOpen, allCommands]);
 
+  const publishSearchError = useCallback((cause: unknown, request: number) => {
+    if (!searchGateRef.current.isCurrent(request)) return;
+    setSearchError(classifyError(cause, { locale }));
+    setIsSearching(false);
+  }, [locale]);
+
+  const runSearch = useCallback(async (
+    searchQuery: string,
+    mode: 'files' | 'content' | 'both',
+  ) => {
+    const normalizedQuery = searchQuery.trim().slice(0, MAX_SEARCH_QUERY_LENGTH);
+    if (normalizedQuery.length < 2) return;
+
+    const request = searchGateRef.current.next();
+    setSearchError(null);
+    setIsSearching(true);
+
+    try {
+      const roots = await fsApi().roots();
+      const root = resolvePaletteSearchRoot(roots);
+      if (!root) throw new Error('file read failed: authorized home root unavailable');
+
+      const search = searchApi();
+      const pending: Array<Promise<CommandItem[]>> = [];
+      if (mode === 'files' || mode === 'both') {
+        pending.push(search.files(normalizedQuery, root, { maxResults: 8 })
+          .then((value) => toSearchCommands(parseSearchResults(value), <FileText size={14} />)));
+      }
+      if (mode === 'content' || mode === 'both') {
+        pending.push(search.grep(normalizedQuery, root, { maxResults: 8 })
+          .then((value) => toSearchCommands(parseSearchResults(value), <Search size={14} />)));
+      }
+
+      const commandGroups = await Promise.all(pending);
+      if (!searchGateRef.current.isCurrent(request)) return;
+      setResults((current) => commandGroups.reduce(mergeCommands, current));
+      setIsSearching(false);
+    } catch (cause) {
+      publishSearchError(cause, request);
+    }
+  }, [publishSearchError]);
+
   // Filter results + file search
   useEffect(() => {
+    searchGateRef.current.invalidate();
+    setSearchError(null);
+    setIsSearching(false);
+
+    if (!isOpen) return;
+
     if (!query.trim()) {
       startTransition(() => { setResults(allCommands); });
 
@@ -161,89 +263,35 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     if (query.startsWith('content:') && query.length > 8) {
       const searchTerm = query.slice(8).trim();
       if (searchTerm.length >= 2) {
-        const root = searchScope === 'local' ? (process.env.HOME || '/') : '/';
-        searchApiOrNull()?.grep(searchTerm, root, { maxResults: 8 }).then((results) => {
-          if (Array.isArray(results) && results.length > 0) {
-            const contentCommands: CommandItem[] = results.map((r: { path: string; name: string; line?: number; match?: string }) => ({
-              id: `__file__:${r.path}`,
-              label: `${r.name}${r.line ? `:${r.line}` : ''}`,
-              category: 'navigation' as const,
-              icon: <Search size={14} />,
-              description: r.match || r.path,
-            }));
-            setResults((prev) => {
-              const cmdIds = new Set(prev.map((c) => c.id));
-              const newItems = contentCommands.filter((f) => !cmdIds.has(f.id));
-              return [...prev, ...newItems];
-            });
-          }
-        }).catch(() => { /* ignore */ });
+        void runSearch(searchTerm, 'content');
       }
       return;
     }
 
     // Also search files if query looks like a filename (has extension or starts with /)
     if (query.length >= 2 && (query.includes('.') || query.startsWith('/') || query.startsWith('~'))) {
-      const root = query.startsWith('~') || query.startsWith('/') ? '/' : (searchScope === 'local' ? (process.env.HOME || '/') : '/');
-      searchApiOrNull()?.files(query, root, { maxResults: 8 }).then((fileResults) => {
-        if (Array.isArray(fileResults) && fileResults.length > 0) {
-          const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
-            id: `__file__:${f.path}`,
-            label: f.name,
-            category: 'navigation' as const,
-            icon: <FileText size={14} />,
-            description: f.path,
-          }));
-          // Merge: commands first, then files
-          setResults((prev) => {
-            const cmdIds = new Set(prev.map((c) => c.id));
-            const newFiles = fileCommands.filter((f) => !cmdIds.has(f.id));
-            return [...prev, ...newFiles];
-          });
-        }
-      }).catch(() => { /* ignore */ });
+      void runSearch(query, 'files');
     }
-  }, [query, allCommands]);
+    return () => { searchGateRef.current.invalidate(); };
+  }, [isOpen, query, allCommands, runSearch]);
 
   const handleSearchNow = useCallback(() => {
     const q = query.trim();
     if (!q) return;
-    const root = searchScope === 'local' ? (process.env.HOME || '/') : '/';
-    // Search files by name
-    searchApiOrNull()?.files(q, root, { maxResults: 8 }).then((fileResults) => {
-      if (Array.isArray(fileResults) && fileResults.length > 0) {
-        const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
-          id: `__file__:${f.path}`,
-          label: f.name,
-          category: 'navigation' as const,
-          icon: <FileText size={14} />,
-          description: f.path,
-        }));
-        setResults((prev) => {
-          const cmdIds = new Set(prev.map((c) => c.id));
-          const newFiles = fileCommands.filter((f) => !cmdIds.has(f.id));
-          return [...prev, ...newFiles];
-        });
-      }
-    }).catch(() => { /* ignore */ });
-    // Search file content
-    searchApiOrNull()?.grep(q, root, { maxResults: 8 }).then((contentResults) => {
-      if (Array.isArray(contentResults) && contentResults.length > 0) {
-        const contentCommands: CommandItem[] = contentResults.map((r: { path: string; name: string; line?: number; match?: string }) => ({
-          id: `__file__:${r.path}`,
-          label: `${r.name}${r.line ? `:${r.line}` : ''}`,
-          category: 'navigation' as const,
-          icon: <Search size={14} />,
-          description: r.match || r.path,
-        }));
-        setResults((prev) => {
-          const cmdIds = new Set(prev.map((c) => c.id));
-          const newItems = contentCommands.filter((f) => !cmdIds.has(f.id));
-          return [...prev, ...newItems];
-        });
-      }
-    }).catch(() => { /* ignore */ });
-  }, [query, searchScope]);
+    void runSearch(q, 'both');
+  }, [query, runSearch]);
+
+  const handleQueryChange = useCallback((nextQuery: string) => {
+    searchGateRef.current.invalidate();
+    setQuery(nextQuery);
+  }, []);
+
+  const closePalette = useCallback(() => {
+    searchGateRef.current.invalidate();
+    setSearchError(null);
+    setIsSearching(false);
+    onClose();
+  }, [onClose]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Tab handled by shared useFocusTrap hook on the dialog container
@@ -267,7 +315,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         break;
       case 'Escape':
         e.preventDefault();
-        onClose();
+        closePalette();
         break;
     }
   };
@@ -291,7 +339,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     } else {
       onSelect(cmd.id);
     }
-    onClose();
+    closePalette();
   };
 
   const categoryColors: Record<string, string> = {
@@ -312,7 +360,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         background: 'var(--overlay)',
         animation: 'fadeIn 150ms ease',
       }}
-      onClick={onClose}
+      onClick={closePalette}
       aria-hidden="true"
     >
       {/* Command Palette — V1.0 纯色 Surface */}
@@ -348,7 +396,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
             type="text"
             placeholder={t(locale, 'commandPalette.placeholder')}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            maxLength={MAX_SEARCH_QUERY_LENGTH}
+            onChange={(e) => handleQueryChange(e.target.value)}
             onKeyDown={(e) => { trapKeyDown(e); handleKeyDown(e); }}
             style={{
               flex: 1,
@@ -364,7 +413,23 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         </div>
 
         <div style={{ maxHeight: 360, overflowY: 'auto', overflowX: 'hidden', padding: `${SPACING.xs}px 0` }}>
-          {results.length === 0 ? (
+          {searchError ? (
+            <div role="alert" style={{ padding: `${SPACING.lg}px`, color: 'var(--danger)', fontSize: FONT_SIZE.sm }}>
+              <div>{searchError.userMessage}</div>
+              {searchError.actionHint && (
+                <div style={{ marginTop: SPACING.xs, color: 'var(--text-secondary)' }}>{searchError.actionHint}</div>
+              )}
+              {searchError.retryable && query.trim().length >= 2 && (
+                <button type="button" onClick={handleSearchNow} style={{ marginTop: SPACING.sm }}>
+                  {t(locale, 'common.retry')}
+                </button>
+              )}
+            </div>
+          ) : isSearching ? (
+            <div role="status" style={{ padding: `${SPACING.xxl}px ${SPACING.lg}px`, textAlign: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.sm }}>
+              {t(locale, 'common.loading')}
+            </div>
+          ) : results.length === 0 ? (
             <div style={{ padding: `${SPACING.xxl}px ${SPACING.lg}px`, textAlign: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.sm }}>
               {t(locale, 'commandPalette.noResults')}
             </div>
@@ -429,32 +494,6 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           <span>{t(locale, 'commandPalette.select')}</span>
           <span>Esc {t(locale, 'commandPalette.close')}</span>
           <span>Tab {t(locale, 'commandPalette.cycle')}</span>
-          <div style={{ flex: 1 }} />
-          {/* Search scope toggle */}
-          <button
-            onClick={() => setSearchScope((s) => s === 'global' ? 'local' : 'global')}
-            style={{
-              background: 'var(--surface-hover)',
-              border: '1px solid var(--border)',
-              borderRadius: BORDER_RADIUS.xs,
-              padding: '2px 8px', fontSize: FONT_SIZE.micro, cursor: 'pointer',
-              color: searchScope === 'local' ? 'var(--primary)' : 'var(--text-secondary)',
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-            }}
-            title={searchScope === 'global' ? t(locale, 'commandPalette.searchScopeGlobal') : t(locale, 'commandPalette.searchScopeLocal')}
-          >
-            {searchScope === 'global' ? (
-              <>
-                <Globe size={11} />
-                <span>{t(locale, 'commandPalette.globalLabel')}</span>
-              </>
-            ) : (
-              <>
-                <Folder size={11} />
-                <span>{t(locale, 'commandPalette.localLabel')}</span>
-              </>
-            )}
-          </button>
         </div>
       </div>
     </div>

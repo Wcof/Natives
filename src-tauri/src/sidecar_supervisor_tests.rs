@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::Mutex;
+use std::sync::{Arc, Barrier, Mutex};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -53,7 +53,6 @@ fn require_uds_fault_without_binary() {
         runtime_dir: dir.clone(),
         socket_path: dir.join("t.sock"),
         pid_path: dir.join("t.pid"),
-        bootstrap_path: dir.join("boot"),
         daemon_bin: PathBuf::from("/nonexistent/natives-agent-daemon-xyz"),
         natives_db_path: dir.join("natives.db"),
         assistant_db_path: dir.join("assistant.db"),
@@ -85,7 +84,6 @@ fn readiness_requires_rpc_handshake_not_just_missing_socket() {
         runtime_dir: dir.clone(),
         socket_path: dir.join("t.sock"),
         pid_path: dir.join("t.pid"),
-        bootstrap_path: dir.join("boot"),
         daemon_bin: PathBuf::from("/unused"),
         natives_db_path: dir.join("natives.db"),
         assistant_db_path: dir.join("assistant.db"),
@@ -95,13 +93,28 @@ fn readiness_requires_rpc_handshake_not_just_missing_socket() {
         max_restarts: 1,
     };
     let err = SidecarSupervisor::new(cfg)
-        .wait_for_readiness("bootstrap", Duration::from_millis(1))
+        .wait_for_readiness("bootstrap", "instance", Duration::from_millis(1))
         .unwrap_err();
     assert!(err.contains("daemon readiness failed"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn spawn_lifeline_fixture(ignore_eof: bool) -> (Child, PathBuf) {
+    let script = lifeline_fixture_script();
+    let mut cmd = Command::new(&script);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("NATIVES_PARENT_LIFELINE", "stdio");
+    if ignore_eof {
+        cmd.env("NATIVES_FIXTURE_IGNORE_EOF", "1");
+    }
+    configure_fixture_process_group(&mut cmd);
+    let child = cmd.spawn().expect("spawn fixture");
+    (child, script)
+}
+
+fn lifeline_fixture_script() -> PathBuf {
     let script = std::env::temp_dir().join(format!("natives-lifeline-fixture-{}.sh", uuid_like()));
     let body = concat!(
         "#!/bin/sh\n",
@@ -119,14 +132,21 @@ fn spawn_lifeline_fixture(ignore_eof: bool) -> (Child, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let mut cmd = Command::new(&script);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .env("NATIVES_PARENT_LIFELINE", "stdio");
-    if ignore_eof {
-        cmd.env("NATIVES_FIXTURE_IGNORE_EOF", "1");
+    script
+}
+
+fn ignoring_lifeline_fixture_script() -> PathBuf {
+    let script = std::env::temp_dir().join(format!("natives-lifeline-ignore-{}.sh", uuid_like()));
+    std::fs::write(&script, "#!/bin/sh\nwhile true; do sleep 0.05; done\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    script
+}
+
+fn configure_fixture_process_group(cmd: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -139,8 +159,21 @@ fn spawn_lifeline_fixture(ignore_eof: bool) -> (Child, PathBuf) {
             });
         }
     }
-    let child = cmd.spawn().expect("spawn fixture");
-    (child, script)
+}
+
+fn fixture_config(dir: &Path, daemon_bin: PathBuf, max_restarts: u32) -> SupervisorConfig {
+    SupervisorConfig {
+        runtime_dir: dir.to_path_buf(),
+        socket_path: dir.join("t.sock"),
+        pid_path: dir.join("t.pid"),
+        daemon_bin,
+        natives_db_path: dir.join("natives.db"),
+        assistant_db_path: dir.join("assistant.db"),
+        require_uds: false,
+        health_timeout: Duration::from_millis(100),
+        shutdown_grace: Duration::from_millis(200),
+        max_restarts,
+    }
 }
 
 fn wait_timeout(
@@ -190,7 +223,6 @@ fn shutdown_is_idempotent() {
         runtime_dir: dir.clone(),
         socket_path: dir.join("t.sock"),
         pid_path: dir.join("t.pid"),
-        bootstrap_path: dir.join("boot"),
         daemon_bin: script.clone(),
         natives_db_path: dir.join("natives.db"),
         assistant_db_path: dir.join("assistant.db"),
@@ -214,6 +246,256 @@ fn shutdown_is_idempotent() {
     assert_eq!(sup.status().state, SupervisorState::Stopped);
     let _ = std::fs::remove_file(script);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exited_child_is_reaped_and_restarted_with_new_pid() {
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = lifeline_fixture_script();
+    let sup = SidecarSupervisor::new(fixture_config(&dir, script.clone(), 2));
+    sup.bypass_readiness_for_test();
+    let started = sup.ensure_started().unwrap();
+    let old_pid = started.pid.unwrap();
+    let old_generation = sup.state.lock().unwrap().broker_peer_generation.unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(sup.poll_child_health().state, SupervisorState::Healthy);
+
+    {
+        let mut inner = sup.state.lock().unwrap();
+        let child = inner.child.as_mut().unwrap();
+        force_kill_child_tree(child).unwrap();
+        wait_timeout(child, Duration::from_secs(2))
+            .unwrap()
+            .expect("killed child should exit");
+    }
+    let restarted = sup.ensure_healthy_or_restart().unwrap();
+    assert_eq!(restarted.state, SupervisorState::Healthy);
+    assert_eq!(restarted.restart_count, 1);
+    assert_ne!(restarted.pid, Some(old_pid));
+    let restarted_generation = sup.state.lock().unwrap().broker_peer_generation.unwrap();
+    assert_ne!(
+        old_generation, restarted_generation,
+        "restart must replace broker peer identity"
+    );
+    #[cfg(unix)]
+    assert_ne!(
+        unsafe { libc::kill(old_pid as i32, 0) },
+        0,
+        "old child was not reaped"
+    );
+
+    sup.shutdown().unwrap();
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn fresh_start_does_not_consume_restart_budget() {
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = lifeline_fixture_script();
+    let sup = SidecarSupervisor::new(fixture_config(&dir, script.clone(), 2));
+    sup.bypass_readiness_for_test();
+
+    let started = sup.ensure_started().unwrap();
+    assert_eq!(started.state, SupervisorState::Healthy);
+    assert_eq!(started.restart_count, 0);
+    assert!(started.pid.is_some());
+    assert!(!dir.join("bootstrap.token").exists());
+
+    sup.shutdown().unwrap();
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn healthy_child_probe_does_not_restart() {
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = lifeline_fixture_script();
+    let sup = SidecarSupervisor::new(fixture_config(&dir, script.clone(), 1));
+    sup.bypass_readiness_for_test();
+    sup.bypass_health_probe_for_test();
+    let started = sup.ensure_started().unwrap();
+
+    let checked = sup.ensure_healthy_or_restart().unwrap();
+    assert_eq!(checked.pid, started.pid);
+    assert_eq!(checked.restart_count, 0);
+
+    sup.shutdown().unwrap();
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn alive_unresponsive_child_is_restarted_once_with_bounded_probe() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = lifeline_fixture_script();
+    let sup = SidecarSupervisor::new(fixture_config(&dir, script.clone(), 2));
+    sup.bypass_readiness_for_test();
+    let started = sup.ensure_started().unwrap();
+    let old_pid = started.pid.unwrap();
+
+    let listener = UnixListener::bind(sup.config().socket_path.clone()).unwrap();
+    let (accepted_sender, accepted_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        accepted_sender.send(()).unwrap();
+        let _ = release_receiver.recv_timeout(Duration::from_secs(5));
+    });
+
+    let started_at = Instant::now();
+    let restarted = sup.ensure_healthy_or_restart().unwrap();
+    assert!(started_at.elapsed() < Duration::from_secs(3));
+    accepted_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(restarted.state, SupervisorState::Healthy);
+    assert_eq!(restarted.restart_count, 1);
+    assert_ne!(restarted.pid, Some(old_pid));
+
+    release_sender.send(()).unwrap();
+    server.join().unwrap();
+    sup.shutdown().unwrap();
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn failed_restart_attempts_exhaust_budget_without_unbounded_retry() {
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let sup = SidecarSupervisor::new(fixture_config(
+        &dir,
+        PathBuf::from("/nonexistent/natives-agent-daemon-budget"),
+        1,
+    ));
+
+    let first = sup.ensure_healthy_or_restart().unwrap();
+    assert!(matches!(first.state, SupervisorState::Faulted { .. }));
+    assert_eq!(first.restart_count, 1);
+    let second = sup.ensure_healthy_or_restart().unwrap_err();
+    assert!(second.contains("restart budget exhausted (1/1)"));
+    assert_eq!(sup.status().restart_count, 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn concurrent_restart_callers_claim_only_one_spawn() {
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = lifeline_fixture_script();
+    let sup = Arc::new(SidecarSupervisor::new(fixture_config(
+        &dir,
+        script.clone(),
+        3,
+    )));
+    sup.bypass_readiness_for_test();
+    let barrier = Arc::new(Barrier::new(5));
+    let mut threads = Vec::new();
+    for _ in 0..4 {
+        let sup = Arc::clone(&sup);
+        let barrier = Arc::clone(&barrier);
+        threads.push(std::thread::spawn(move || {
+            barrier.wait();
+            sup.ensure_healthy_or_restart()
+        }));
+    }
+    barrier.wait();
+    let results: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert!(results.iter().any(Result::is_ok));
+    assert!(results.iter().all(|result| {
+        result.is_ok() || result.as_ref().unwrap_err().contains("already in progress")
+    }));
+
+    let status = sup.status();
+    assert_eq!(status.state, SupervisorState::Healthy);
+    assert_eq!(status.restart_count, 1);
+    assert!(status.pid.is_some());
+    sup.shutdown().unwrap();
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn shutdown_stops_watchdog_and_refuses_future_restart() {
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = lifeline_fixture_script();
+    let sup = SidecarSupervisor::new(fixture_config(&dir, script.clone(), 2));
+    sup.bypass_readiness_for_test();
+    sup.ensure_started().unwrap();
+    sup.shutdown().unwrap();
+
+    assert!(!sup.watchdog_should_run());
+    assert!(sup.ensure_healthy_or_restart().is_err());
+    assert_eq!(sup.status().state, SupervisorState::Stopped);
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn shutdown_claim_clears_broker_peer_before_waiting_for_child_exit() {
+    use std::sync::mpsc;
+
+    let _peer_lock = crate::credential_broker::credential_broker_uds::lock_broker_peer_for_test();
+    let dir = tempfile_path();
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = ignoring_lifeline_fixture_script();
+    let sup = Arc::new(SidecarSupervisor::new(fixture_config(
+        &dir,
+        script.clone(),
+        1,
+    )));
+    sup.bypass_readiness_for_test();
+    let pid = sup.ensure_started().unwrap().pid.unwrap();
+    assert!(crate::credential_broker::credential_broker_uds::broker_peer_matches(pid));
+
+    let (sender, receiver) = mpsc::channel();
+    let shutdown_supervisor = Arc::clone(&sup);
+    std::thread::spawn(move || {
+        sender
+            .send(shutdown_supervisor.shutdown_with_grace(Duration::from_millis(200)))
+            .unwrap();
+    });
+
+    let deadline = Instant::now() + Duration::from_millis(100);
+    while crate::credential_broker::credential_broker_uds::broker_peer_matches(pid)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !crate::credential_broker::credential_broker_uds::broker_peer_matches(pid),
+        "shutdown claim must revoke broker identity before grace wait"
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "shutdown should still be in its grace wait"
+    );
+    receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

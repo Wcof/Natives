@@ -338,8 +338,8 @@ const MessageRow = memo(function MessageRow({
           <button
             type="button"
             onClick={() => onCopy(message.id, messagePlainText(message.contentBlocks))}
-            title={t(locale, 'common.copy')}
-            aria-label={t(locale, 'common.copy')}
+            title={t(locale, 'fileBrowser.copy')}
+            aria-label={t(locale, 'fileBrowser.copy')}
             className="rounded p-1 transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:bg-[var(--surface-hover)] focus-visible:text-[var(--text-secondary)]"
           >
             {copiedId === message.id ? <Check size={12} /> : <Copy size={12} />}
@@ -359,8 +359,8 @@ const MessageRow = memo(function MessageRow({
             <button
               type="button"
               onClick={() => onFork(message.id)}
-              title={t(locale, 'common.fork')}
-              aria-label={t(locale, 'common.fork')}
+              title={t(locale, 'assistant.fork')}
+              aria-label={t(locale, 'assistant.fork')}
               className="rounded p-1 transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:bg-[var(--surface-hover)] focus-visible:text-[var(--text-secondary)]"
             >
               <GitFork size={12} />

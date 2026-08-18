@@ -1,4 +1,99 @@
 use super::*;
+use crate::run::start::{set_detached_start_test_gate, DetachedStartTestGate};
+
+#[tokio::test]
+async fn detached_start_cancel_before_token_never_reaches_provider() {
+    let _env_guard = crate::storage::DataStore::env_test_lock();
+    let _env_restore = crate::storage::EnvRestore::capture();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("detached-cancel.db");
+    std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+    std::env::set_var("NATIVES_DB_PATH", &db_path);
+    std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+    std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+    crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+    let store =
+        Arc::new(crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap());
+    store
+        .conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
+             VALUES ('c-detached-cancel', 'agent', 'Detached cancel', 'openai', 'gpt-4o', 'full_access')",
+            [],
+        )
+        .unwrap();
+    let rm = Arc::new(RunManager::new_with_store(store));
+    let run = rm
+        .create_run(CreateRunRequest {
+            capability_selection: None,
+            disabled_tools: None,
+            conversation_id: "c-detached-cancel".into(),
+            provider_id: "openai".into(),
+            model_id: "gpt-4o".into(),
+            key_id: Some("k".into()),
+            agent_profile_id: None,
+            permission_profile: Some("full_access".into()),
+            content: Some("must not execute".into()),
+            attachments: None,
+            max_steps: Some(5),
+            parent_run_id: None,
+            project_path: Some(dir.path().to_string_lossy().into_owned()),
+            idempotency_key: Some(format!("detached-cancel-{}", Uuid::new_v4())),
+            effort: None,
+            runtime_id: None,
+        })
+        .unwrap();
+    let gate = DetachedStartTestGate::new();
+    set_detached_start_test_gate(Some(gate.clone()));
+
+    // Pause after detached preparation but before the old token-registration point.
+    rm.start_detached(StartRunRequest {
+        agent_profile_id: None,
+        capability_selection: None,
+        run_id: Some(run.id.clone()),
+        conversation_id: None,
+        provider_id: None,
+        model_id: None,
+        key_id: None,
+        content: Some("must not execute".into()),
+        attachments: None,
+        trigger_message_id: None,
+        permission_profile: Some("full_access".into()),
+        max_steps: Some(5),
+        project_path: Some(dir.path().to_string_lossy().into_owned()),
+        idempotency_key: None,
+        effort: None,
+        runtime_id: None,
+    })
+    .unwrap();
+    gate.wait_until_entered().await;
+
+    let cancelled = rm
+        .cancel(CancelRunRequest {
+            run_id: run.id.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status, RunStatusV2::Cancelled);
+    gate.release();
+    gate.wait_until_finished().await;
+    set_detached_start_test_gate(None);
+
+    assert!(
+        !rm.runtime.execution.is_registered(&run.id).await,
+        "a cancelled detached start must not leave a fresh execution token"
+    );
+    assert!(
+        !rm.runtime
+            .events
+            .replay_after(&run.id, 0)
+            .iter()
+            .any(|event| matches!(event.payload, RunEventKind::GenerationAttemptStarted { .. })),
+        "a run cancelled before its execution token exists must not call a provider"
+    );
+    crate::storage::set_test_db_override(None, None);
+}
 
 #[tokio::test]
 async fn start_cancel_retry_lifecycle_with_fixture() {
@@ -723,13 +818,12 @@ async fn cancel_vs_complete_race_single_terminal_and_consistent() {
 
 #[test]
 fn fail_run_if_active_is_idempotent_and_emits_failed_event() {
-    let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-    let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+    let _env_guard = crate::storage::DataStore::env_test_lock();
+    let _env_restore = crate::storage::EnvRestore::capture();
     std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
     std::env::remove_var("NATIVES_DB_PATH");
     // Hermetic: force in-memory RunManager so a leaked parallel-test
     // thread-local test_db_override cannot route us into a real store.
-    let _prev_mem = std::env::var("NATIVES_RUN_MANAGER_MEMORY").ok();
     std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
     let rm = Arc::new(RunManager::new());
     let run = rm
@@ -782,9 +876,4 @@ fn fail_run_if_active_is_idempotent_and_emits_failed_event() {
         .filter(|e| matches!(&e.payload, RunEventKind::Failed { .. }))
         .count();
     assert_eq!(failed_count, 1);
-    if let Some(v) = _prev_mem {
-        std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", v);
-    } else {
-        std::env::remove_var("NATIVES_RUN_MANAGER_MEMORY");
-    }
 }

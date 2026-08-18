@@ -2,9 +2,9 @@
 
 use agent_core::{
     HookEvent, HookRegistry, HookRequest, PermissionAggregate, PermissionProfile,
-    ToolExecutionResult,
+    ToolExecutionResult, TransitionMetadata,
 };
-use assistant_protocol::v2::RunEventKind;
+use assistant_protocol::v2::{RunEventKind, RunStatusV2};
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -61,6 +61,65 @@ pub fn hook_permission_gate(
 }
 
 impl PermissionGatedTools {
+    /// Move the owning run through the daemon's sole lifecycle authority.
+    /// Unit-level tool fixtures do not always install a RunManager entry, so
+    /// preserve their isolated behavior; a real run must journal the wait.
+    fn enter_permission_wait(&self) -> Result<(), String> {
+        let runs = crate::global_run_manager();
+        let Some(run) = runs.get_run(&self.parent_run_id) else {
+            return Ok(());
+        };
+        if run.status.is_terminal() || run.status == RunStatusV2::Cancelling {
+            return Ok(());
+        }
+        match runs.commit_status(
+            &self.parent_run_id,
+            RunStatusV2::WaitingPermission,
+            TransitionMetadata::empty()
+                .with_reason("waiting_permission")
+                .with_lifecycle_hint("waiting_permission"),
+        ) {
+            Ok(_) => Ok(()),
+            Err(_error)
+                if runs.get_run(&self.parent_run_id).is_some_and(|current| {
+                    current.status.is_terminal() || current.status == RunStatusV2::Cancelling
+                }) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Resume only a still-waiting run. A concurrent cancel/terminal commit
+    /// wins and must never be revived by a late permission response.
+    fn resume_after_permission(&self) -> Result<(), String> {
+        let runs = crate::global_run_manager();
+        if !runs
+            .get_run(&self.parent_run_id)
+            .is_some_and(|run| run.status == RunStatusV2::WaitingPermission)
+        {
+            return Ok(());
+        }
+        match runs.commit_status(
+            &self.parent_run_id,
+            RunStatusV2::Running,
+            TransitionMetadata::empty()
+                .with_reason("permission_resolved")
+                .with_lifecycle_hint("running"),
+        ) {
+            Ok(_) => Ok(()),
+            Err(_error)
+                if runs.get_run(&self.parent_run_id).is_some_and(|current| {
+                    current.status.is_terminal() || current.status == RunStatusV2::Cancelling
+                }) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Run the permission gate for one tool call.
     ///
     /// `None` means "proceed"; `Some` is the denial to return to the model.
@@ -291,6 +350,23 @@ impl PermissionGatedTools {
                 duration_ms: 0,
             });
         }
+        if let Err(error) = self.enter_permission_wait() {
+            let _ = self.interactions.resolve_permission(&permission_id).await;
+            let _ = crate::interaction_store::mark_resolved(
+                &permission_id,
+                serde_json::json!({"approved": false, "scope": "lifecycle_failed"}),
+            );
+            crate::prompt_queue_store::global_harness()
+                .set_pending_interaction(&self.conversation_id, None);
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "RUN_LIFECYCLE_FAILED",
+                    "error": format!("permission wait lifecycle could not be committed: {error}"),
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
         // Select permission response, timeout, and run cancel token (task-03).
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
@@ -356,6 +432,16 @@ impl PermissionGatedTools {
         {
             return Some(ToolExecutionResult {
                 output: serde_json::json!({"error": "permission event persistence failed"}),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
+        if let Err(error) = self.resume_after_permission() {
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error_code": "RUN_LIFECYCLE_FAILED",
+                    "error": format!("permission resume lifecycle could not be committed: {error}"),
+                }),
                 is_error: true,
                 duration_ms: 0,
             });

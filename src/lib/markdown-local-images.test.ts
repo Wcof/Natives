@@ -5,6 +5,7 @@ import {
   isExternalUrl,
   resolveLocalRef,
   assetUrlToPath,
+  rewriteAuthorizedLocalImages,
   rewriteLocalImages,
 } from './markdown-local-images';
 import { htmlSignature, semanticEqual } from './markdown-semantic';
@@ -65,6 +66,100 @@ describe('rewriteLocalImages', () => {
     const { restore } = rewriteLocalImages('x', '/d', toUrl);
     const edited = '![新图](asset://localhost/tmp/%E6%96%B0.png)';
     assert.equal(restore(edited), '![新图](/tmp/新.png)');
+  });
+
+  it('精确还原含中文与空格的 angle-bracket 路径', () => {
+    const md = '![封面](<./素材/夏 日.png> "标题")';
+    const { text, restore } = rewriteLocalImages(md, '/项目/文档', toUrl);
+    assert.ok(text.includes('asset://localhost/%E9%A1%B9%E7%9B%AE/%E6%96%87%E6%A1%A3/%E7%B4%A0%E6%9D%90/%E5%A4%8F%20%E6%97%A5.png'));
+    assert.equal(restore(text), md);
+  });
+});
+
+describe('rewriteAuthorizedLocalImages', () => {
+  const isWithinBase = (path: string, baseDir: string) =>
+    path === baseDir || path.startsWith(`${baseDir.replace(/\/+$/, '')}/`);
+
+  it('逐资源授权相对图片后才生成 URL，并保持可逆保存', async () => {
+    const calls: string[] = [];
+    const md = '![封面](<./素材/夏 日.png>)';
+    const rewrite = await rewriteAuthorizedLocalImages(md, '/项目/文档', {
+      authorizeFile: async (path) => {
+        calls.push(`authorize:${path}`);
+        return { path, name: '夏 日.png', kind: 'image', size: 1, mtime: 1 };
+      },
+      toAssetUrl: (file) => {
+        calls.push(`asset:${file.path}`);
+        return toUrl(file.path);
+      },
+      isWithinBase,
+    });
+
+    assert.deepEqual(calls, [
+      'authorize:/项目/文档/素材/夏 日.png',
+      'asset:/项目/文档/素材/夏 日.png',
+    ]);
+    assert.ok(rewrite.text.includes('asset://localhost/%E9%A1%B9%E7%9B%AE/%E6%96%87%E6%A1%A3/%E7%B4%A0%E6%9D%90/%E5%A4%8F%20%E6%97%A5.png'));
+    assert.equal(rewrite.restore(rewrite.text), md);
+  });
+
+  it('拒绝绝对/越 base 引用且不调用授权或生成 URL', async () => {
+    const calls: string[] = [];
+    const md = '![](/etc/passwd) ![](../../secret.png)';
+    const rewrite = await rewriteAuthorizedLocalImages(md, '/docs/project', {
+      authorizeFile: async (path) => {
+        calls.push(`authorize:${path}`);
+        return { path, name: 'x', kind: 'image', size: 1, mtime: 1 };
+      },
+      toAssetUrl: (file) => {
+        calls.push(`asset:${file.path}`);
+        return toUrl(file.path);
+      },
+      isWithinBase,
+    });
+
+    assert.deepEqual(calls, []);
+    assert.equal(rewrite.text, md);
+  });
+
+  it('缺失或拒绝授权时保留原引用且不生成 URL', async () => {
+    let assetCalls = 0;
+    const md = '![](./missing.png) ![](./denied.png)';
+    const rewrite = await rewriteAuthorizedLocalImages(md, '/docs', {
+      authorizeFile: async () => { throw new Error('denied'); },
+      toAssetUrl: () => {
+        assetCalls++;
+        return 'asset://localhost/forbidden';
+      },
+      isWithinBase,
+    });
+
+    assert.equal(assetCalls, 0);
+    assert.equal(rewrite.text, md);
+  });
+
+  it('快速替换 source 后丢弃旧授权结果且不生成旧 URL', async () => {
+    const controller = new AbortController();
+    let resolveAuthorization!: () => void;
+    const authorization = new Promise<void>((resolve) => { resolveAuthorization = resolve; });
+    let assetCalls = 0;
+    const pending = rewriteAuthorizedLocalImages('![](./old.png)', '/docs', {
+      authorizeFile: async (path) => {
+        await authorization;
+        return { path, name: 'old.png', kind: 'image', size: 1, mtime: 1 };
+      },
+      toAssetUrl: () => {
+        assetCalls++;
+        return 'asset://localhost/docs/old.png';
+      },
+      isWithinBase,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    resolveAuthorization();
+    await assert.rejects(pending, { name: 'AbortError' });
+    assert.equal(assetCalls, 0);
   });
 });
 

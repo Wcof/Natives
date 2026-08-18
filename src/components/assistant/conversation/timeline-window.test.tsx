@@ -99,6 +99,39 @@ describe('classifyTimelineDelta (pure)', () => {
 });
 
 describe('ConversationTimeline render window (component)', () => {
+  it('resolves copy and fork action labels in both locales', () => {
+    const message: Message = {
+      id: 'user-message',
+      role: 'user',
+      contentBlocks: [],
+      status: 'completed',
+      createdAt: new Date(1700000000000).toISOString(),
+    };
+
+    const zhHtml = renderToStaticMarkup(
+      <ConversationTimeline
+        messages={[message]}
+        loading={false}
+        locale="zh"
+        onFork={() => undefined}
+      />,
+    );
+    assert.match(zhHtml, /title="复制" aria-label="复制"/);
+    assert.match(zhHtml, /title="从此处派生" aria-label="从此处派生"/);
+
+    const enHtml = renderToStaticMarkup(
+      <ConversationTimeline
+        messages={[message]}
+        loading={false}
+        locale="en"
+        onFork={() => undefined}
+      />,
+    );
+    assert.match(enHtml, /title="Copy" aria-label="Copy"/);
+    assert.match(enHtml, /title="Fork from here" aria-label="Fork from here"/);
+    assert.doesNotMatch(`${zhHtml}${enHtml}`, /common\.(copy|fork)/);
+  });
+
   it(`mounts at most ${TIMELINE_WINDOW_SIZE} MessageRow for >200 messages`, () => {
     const total = 250;
     const html = renderToStaticMarkup(

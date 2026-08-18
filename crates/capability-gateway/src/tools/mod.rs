@@ -89,7 +89,8 @@ pub fn builtin_tools() -> Vec<Tool> {
             output_limit: 1_048_576,
             cancellable: true,
             parallel_safe: false,
-            conflict_key: None,
+            // ponytail: global project-write lease; derive a project-scoped key when the contract supports it.
+            conflict_key: Some("project-write".into()),
             idempotency: None,
         per_call_resource: None,
         handler: Arc::new(WriteFileTool),
@@ -137,7 +138,7 @@ pub fn builtin_tools() -> Vec<Tool> {
             output_limit: 1_048_576,
             cancellable: true,
             parallel_safe: false,
-            conflict_key: None,
+            conflict_key: Some("project-write".into()),
             idempotency: None,
         per_call_resource: None,
         handler: Arc::new(EditFileTool),

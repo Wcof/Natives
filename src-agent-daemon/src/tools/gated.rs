@@ -243,6 +243,45 @@ mod readonly_fast_path_tests {
         readonly_coding_loop_does_not_create_ledger_or_checkpoint();
     }
 
+    #[tokio::test]
+    async fn creative_proposal_fails_when_approval_fact_cannot_be_persisted() {
+        let _env_guard = crate::storage::DataStore::env_test_lock();
+        crate::run_manager::install_memory_global_for_test();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonical root");
+        let tools = tools_for("proposal-no-store", "full_access", &root);
+
+        let out = tools
+            .execute_tool(
+                crate::proposal_fact::PROPOSAL_TOOL,
+                serde_json::json!({
+                    "schemaVersion": 1,
+                    "kind": "create",
+                    "ownership": "managed",
+                    "title": "Dashboard",
+                    "projectRoot": root,
+                    "driver": {"kind": "staticHttp"},
+                    "openPath": "/",
+                    "healthPath": "/",
+                    "environmentKeys": [],
+                }),
+                &CancellationToken::new(),
+            )
+            .await;
+
+        assert!(
+            out.is_error,
+            "undurable proposal must fail: {:?}",
+            out.output
+        );
+        assert_eq!(out.output["ok"], serde_json::json!(false));
+        assert_eq!(out.output["error_code"], "PERSISTENCE_FAILED");
+        assert!(
+            !out.output.to_string().contains("Awaiting user approval"),
+            "an undurable proposal must not claim approval is pending"
+        );
+    }
+
     /// NE-P0-05 §19.5: the gated tool runtime shares the Run's frozen Hook
     /// Dispatcher with the permission gate and the notification hook. Two
     /// resolves for the same run return the same dispatcher (idempotent freeze),

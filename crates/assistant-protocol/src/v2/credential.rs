@@ -10,6 +10,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Opaque reference a daemon run holds while calling the Credential Broker.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -120,10 +121,39 @@ impl CredentialLeaseMeta {
 
 /// One JSON-line request envelope on the authenticated broker UDS channel
 /// (Daemon → Host). `method` is a `credential.*` name from [`super::names`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CredentialLeaseEnvelope {
+    /// Per-spawn Host identity. Reject stale or foreign daemons before decoding
+    /// the typed request payload.
+    pub instance_id: String,
+    /// Per-spawn broker authenticator, delivered once through the inherited
+    /// Host→Daemon channel. It is never an environment variable or persisted.
+    pub auth_token: String,
+    /// Caller-generated correlation id; the Host echoes it in every reply.
+    pub request_id: String,
     pub method: String,
     pub payload: serde_json::Value,
+}
+
+impl fmt::Debug for CredentialLeaseEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CredentialLeaseEnvelope")
+            .field("instance_id", &self.instance_id)
+            .field("auth_token", &"[REDACTED]")
+            .field("request_id", &self.request_id)
+            .field("method", &self.method)
+            .field("payload", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Broker session delivered once from Host to the spawned Daemon through its
+/// inherited lifeline. This is deliberately separate from the public envelope:
+/// it must never be logged, persisted, or placed in an environment variable.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CredentialBrokerSession {
+    pub instance_id: String,
+    pub auth_token: String,
 }
 
 /// One JSON-line reply envelope on the authenticated broker UDS channel
@@ -131,6 +161,7 @@ pub struct CredentialLeaseEnvelope {
 /// material. `data` carries the typed response payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialLeaseReply {
+    pub request_id: String,
     pub ok: bool,
     #[serde(default)]
     pub data: Option<serde_json::Value>,
@@ -139,16 +170,18 @@ pub struct CredentialLeaseReply {
 }
 
 impl CredentialLeaseReply {
-    pub fn ok(data: serde_json::Value) -> Self {
+    pub fn ok(request_id: impl Into<String>, data: serde_json::Value) -> Self {
         Self {
+            request_id: request_id.into(),
             ok: true,
             data: Some(data),
             error: None,
         }
     }
 
-    pub fn err(message: impl Into<String>) -> Self {
+    pub fn err(request_id: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
+            request_id: request_id.into(),
             ok: false,
             data: None,
             error: Some(message.into()),
@@ -393,18 +426,61 @@ mod tests {
 
     #[test]
     fn lease_reply_envelope_roundtrips_without_secrets() {
-        let ok = CredentialLeaseReply::ok(serde_json::json!({"leaseId": "L-1"}));
+        let ok = CredentialLeaseReply::ok("request-1", serde_json::json!({"leaseId": "L-1"}));
         let line = serde_json::to_string(&ok).unwrap();
         let back: CredentialLeaseReply = serde_json::from_str(&line).unwrap();
         assert!(back.ok);
+        assert_eq!(back.request_id, "request-1");
         assert_eq!(back.data.unwrap()["leaseId"], "L-1");
 
-        let err = CredentialLeaseReply::err("No active key for provider openai");
+        let err = CredentialLeaseReply::err("request-2", "No active key for provider openai");
         let line = serde_json::to_string(&err).unwrap();
         assert!(!line.contains("sk-"));
         let back: CredentialLeaseReply = serde_json::from_str(&line).unwrap();
         assert!(!back.ok);
         assert!(back.error.unwrap().contains("No active key"));
+    }
+
+    #[test]
+    fn broker_envelope_requires_identity_auth_and_request_correlation() {
+        let envelope = CredentialLeaseEnvelope {
+            instance_id: "instance-1".into(),
+            auth_token: "auth-1".into(),
+            request_id: "request-1".into(),
+            method: "credential.setting.get".into(),
+            payload: serde_json::json!({"key": ""}),
+        };
+        let value = serde_json::to_value(&envelope).unwrap();
+        for field in [
+            "instance_id",
+            "auth_token",
+            "request_id",
+            "method",
+            "payload",
+        ] {
+            assert!(value.get(field).is_some(), "missing {field}");
+        }
+        assert!(
+            serde_json::from_value::<CredentialLeaseEnvelope>(serde_json::json!({
+                "method": "credential.setting.get",
+                "payload": {},
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn broker_envelope_debug_redacts_auth_token() {
+        let envelope = CredentialLeaseEnvelope {
+            instance_id: "instance-1".into(),
+            auth_token: "broker-secret-token".into(),
+            request_id: "request-1".into(),
+            method: "credential.setting.get".into(),
+            payload: serde_json::json!({"key": ""}),
+        };
+        let debug = format!("{envelope:?}");
+        assert!(!debug.contains("broker-secret-token"));
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

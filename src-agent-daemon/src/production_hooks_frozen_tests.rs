@@ -3,6 +3,7 @@
 
 use super::*;
 use agent_core::{HookDecision, HookRegistry, HookRequest, HookResponse};
+use harness_core::blueprint::{HookAdapterSpecV3, NativeHookSpecV3};
 use harness_core::hooks::HookInvocationStatus;
 
 /// A loopback URL is rejected by `validate_http_hook_url` before any socket
@@ -126,6 +127,73 @@ fn frozen_dispatcher_freezes_a_run_and_ignores_later_registrations() {
             .plan_hash(),
         "plan-v1"
     );
+}
+
+#[test]
+fn frozen_dispatcher_is_removed_after_terminal_settlement() {
+    let run_id = format!("run-terminal-{}", uuid::Uuid::new_v4());
+    let frozen = freeze_run_hooks(
+        &run_id,
+        "effective-prompt-hash",
+        HookRegistry::new(),
+        EventSequencer::memory_only(),
+    );
+    let terminal = frozen.retain_until_terminal();
+    assert!(frozen_dispatcher_for_run(&run_id).is_some());
+
+    drop(terminal);
+
+    assert!(frozen_dispatcher_for_run(&run_id).is_none());
+}
+
+#[test]
+fn frozen_dispatcher_retains_resolved_native_permission_hook() {
+    let native = NativeHookSpecV3 {
+        id: "11111111-1111-1111-1111-111111111111".into(),
+        name: "Native permission gate".into(),
+        enabled: true,
+        event: HookEvent::PermissionRequest,
+        order: 0,
+        matcher: None,
+        conditions: Vec::new(),
+        timeout_ms: 10_000,
+        failure_policy: HookFailurePolicy::Fail,
+        adapter: HookAdapterSpecV3::Http {
+            url: PROBE_URL.into(),
+            allow_hosts: Vec::new(),
+            headers: Default::default(),
+            secret_header_refs: Default::default(),
+        },
+        trust_confirmed: true,
+    };
+    let definition = HookDefinition {
+        id: HookId::native(&native.id, native.event),
+        event: native.event,
+        source: HookSource::builtin("native-harness"),
+        order: native.order,
+        matcher: native.matcher.clone(),
+        conditions: native.conditions.clone(),
+        timeout_ms: native.timeout_ms,
+        failure_policy: native.failure_policy,
+        kind: native.adapter.to_hook_kind(),
+    };
+    let run_id = format!("run-native-{}", uuid::Uuid::new_v4());
+    let frozen = freeze_run_hooks(
+        &run_id,
+        "effective-prompt-hash",
+        compile_production_hooks_with_native(&[definition], &[native], None),
+        EventSequencer::memory_only(),
+    );
+    let terminal = frozen.retain_until_terminal();
+
+    assert_eq!(
+        frozen.describe_event(HookEvent::PermissionRequest)[0]
+            .id
+            .as_str(),
+        "native/11111111-1111-1111-1111-111111111111#PermissionRequest"
+    );
+
+    drop(terminal);
 }
 
 /// Every dispatched Hook emits exactly one HookInvocationStarted and one

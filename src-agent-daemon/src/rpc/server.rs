@@ -5,8 +5,9 @@
 
 use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
 use assistant_protocol::v1::daemon::{
-    DaemonHealth, DaemonStatus, HandshakeRequest, HandshakeResponse, RpcRequest,
+    DaemonHealth, DaemonStatus, HandshakeRequest, HandshakeResponse,
 };
+use assistant_protocol::v2::{V2Request, PROTOCOL_V2};
 use assistant_protocol::version::{negotiate, ProtocolVersion};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::framing::{send_error, FRAME_READ_TIMEOUT, MAX_FRAME_BYTES};
+use super::framing::{send_error, send_invalid_request, FRAME_READ_TIMEOUT, MAX_FRAME_BYTES};
 use super::handle_rpc;
 use super::SessionMap;
 
@@ -335,7 +336,7 @@ async fn handle_connection(
                     false,
                     format!("RPC frame exceeds {MAX_FRAME_BYTES} bytes"),
                 );
-                send_error(&mut writer, &err).await;
+                send_error(&mut writer, "", &err).await;
                 // A connection that overran the frame cap is unusable; close it
                 // so the session is cleaned up (finally-style teardown below).
                 break;
@@ -347,7 +348,7 @@ async fn handle_connection(
                     false,
                     "RPC frame read timed out".to_string(),
                 );
-                send_error(&mut writer, &err).await;
+                send_error(&mut writer, "", &err).await;
                 break;
             }
             Err(FrameError::Io) => break,
@@ -359,19 +360,49 @@ async fn handle_connection(
             continue;
         }
 
-        let request: RpcRequest = match serde_json::from_str(trimmed) {
-            Ok(req) => req,
+        let value: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
             Err(e) => {
-                let err = DaemonError::new(
-                    error_codes::INVALID_INPUT,
-                    ErrorCategory::Validation,
-                    false,
-                    format!("Invalid RPC JSON: {}", e),
-                );
-                send_error(&mut writer, &err).await;
+                send_invalid_request(&mut writer, "", format!("Invalid RPC JSON: {e}")).await;
                 continue;
             }
         };
+        let request_id = value
+            .get("request_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        // `session_id` is the V2 wire discriminator. It may be null until the
+        // separate V2 handshake exists, but it must be present so a v1 shell
+        // cannot silently enter the production command path.
+        if value.get("session_id").is_none() {
+            send_invalid_request(
+                &mut writer,
+                &request_id,
+                "V2 RPC requests must include `session_id`",
+            )
+            .await;
+            continue;
+        }
+        let request: V2Request = match serde_json::from_value(value) {
+            Ok(req) => req,
+            Err(e) => {
+                send_invalid_request(&mut writer, &request_id, format!("Invalid V2 RPC: {e}"))
+                    .await;
+                continue;
+            }
+        };
+
+        if request.protocol_version != PROTOCOL_V2 {
+            let err = DaemonError::new(
+                error_codes::PROTOCOL_INCOMPATIBLE,
+                ErrorCategory::Validation,
+                false,
+                format!("RPC protocol must be {PROTOCOL_V2}"),
+            );
+            send_error(&mut writer, &request.request_id, &err).await;
+            continue;
+        }
 
         // Validate session token
         {
@@ -383,7 +414,7 @@ async fn handle_connection(
                     false,
                     "Invalid session token".to_string(),
                 );
-                send_error(&mut writer, &err).await;
+                send_error(&mut writer, &request.request_id, &err).await;
                 continue;
             }
         }
@@ -402,7 +433,7 @@ async fn handle_connection(
     // Cleanup: remove session
     {
         let mut sessions = sessions.lock().await;
-        sessions.retain(|_, v| v != &handshake_req.client_id);
+        sessions.remove(&session_token);
     }
 
     Ok(())
@@ -481,24 +512,98 @@ mod tests {
         assert!(caps.extensions);
     }
 
-    /// Test client disconnect cleanup.
+    /// Closing a replaced connection must not revoke the replacement token.
     #[tokio::test]
-    async fn test_client_disconnect_cleanup() {
+    async fn test_replaced_connection_keeps_replacement_session() {
         let sessions: SessionMap = Arc::new(Mutex::new(HashMap::new()));
         let client_id = "client-1".to_string();
-        let token = Uuid::new_v4().to_string();
+        let bootstrap_token = "bootstrap-token".to_string();
+        let bootstrap_used = Arc::new(Mutex::new(false));
+        let protocol_version = ProtocolVersion::new(2, 0, 0);
+        let started_at = std::time::Instant::now();
+
+        let (connection_a, server_a) = tokio::net::UnixStream::pair().unwrap();
+        let a_task = tokio::spawn(handle_connection(
+            server_a,
+            sessions.clone(),
+            bootstrap_token.clone(),
+            bootstrap_used.clone(),
+            protocol_version.clone(),
+            "test".to_string(),
+            started_at,
+        ));
+        let (a_read, mut a_write) = connection_a.into_split();
+        let mut a_reader = BufReader::new(a_read);
+        let handshake = HandshakeRequest {
+            client_version: protocol_version.to_string(),
+            client_id: client_id.clone(),
+            bootstrap_token: bootstrap_token.clone(),
+        };
+        a_write
+            .write_all(format!("{}\n", serde_json::to_string(&handshake).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        let mut line = String::new();
+        a_reader.read_line(&mut line).await.unwrap();
+        let token_a = serde_json::from_str::<HandshakeResponse>(&line)
+            .unwrap()
+            .session_token;
+
+        let (connection_b, server_b) = tokio::net::UnixStream::pair().unwrap();
+        let b_task = tokio::spawn(handle_connection(
+            server_b,
+            sessions.clone(),
+            bootstrap_token.clone(),
+            bootstrap_used,
+            protocol_version.clone(),
+            "test".to_string(),
+            started_at,
+        ));
+        let (b_read, mut b_write) = connection_b.into_split();
+        let mut b_reader = BufReader::new(b_read);
+        b_write
+            .write_all(format!("{}\n", serde_json::to_string(&handshake).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        line.clear();
+        b_reader.read_line(&mut line).await.unwrap();
+        let token_b = serde_json::from_str::<HandshakeResponse>(&line)
+            .unwrap()
+            .session_token;
+        assert_ne!(token_a, token_b);
+
+        drop(a_write);
+        drop(a_reader);
+        a_task.await.unwrap().unwrap();
+
+        let request = V2Request::new(
+            client_id,
+            token_b.clone(),
+            "daemon.ping",
+            serde_json::json!({}),
+        );
+        b_write
+            .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        line.clear();
+        b_reader.read_line(&mut line).await.unwrap();
+        let response: assistant_protocol::v2::V2SuccessResponse =
+            serde_json::from_str(&line).unwrap();
+        assert!(response.success);
+        assert_eq!(response.request_id, request.request_id);
+        assert_eq!(response.data["pong"], true);
 
         {
-            let mut sessions = sessions.lock().await;
-            sessions.insert(token.clone(), client_id.clone());
+            let sessions = sessions.lock().await;
+            assert!(!sessions.contains_key(&token_a));
+            assert!(sessions.contains_key(&token_b));
         }
 
-        // Simulate disconnect: remove by client_id
-        {
-            let mut sessions = sessions.lock().await;
-            sessions.retain(|_, v| v != &client_id);
-            assert!(sessions.is_empty());
-        }
+        drop(b_write);
+        drop(b_reader);
+        b_task.await.unwrap().unwrap();
+        assert!(sessions.lock().await.is_empty());
     }
 
     /// Test that forged tokens are rejected.

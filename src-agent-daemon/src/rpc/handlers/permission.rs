@@ -58,7 +58,7 @@ pub(crate) fn filter_permission_interactions(value: serde_json::Value) -> serde_
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_permission(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{run_manager, send_error, send_success};
     use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
@@ -81,6 +81,7 @@ pub(crate) async fn dispatch_permission(
             if request_id.is_empty() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -113,6 +114,7 @@ pub(crate) async fn dispatch_permission(
                     Err(e) => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 "permission_failed",
                                 ErrorCategory::PermissionDenied,
@@ -141,6 +143,7 @@ pub(crate) async fn dispatch_permission(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -183,7 +186,12 @@ pub(crate) async fn dispatch_permission(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(writer, &DaemonError::new(code, category, false, e)).await
+                    send_error(
+                        writer,
+                        &request.request_id,
+                        &DaemonError::new(code, category, false, e),
+                    )
+                    .await
                 }
             }
         }
@@ -211,7 +219,12 @@ pub(crate) async fn dispatch_permission(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(writer, &DaemonError::new(code, category, false, e)).await
+                    send_error(
+                        writer,
+                        &request.request_id,
+                        &DaemonError::new(code, category, false, e),
+                    )
+                    .await
                 }
             }
         }
@@ -239,7 +252,12 @@ pub(crate) async fn dispatch_permission(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(writer, &DaemonError::new(code, category, false, e)).await
+                    send_error(
+                        writer,
+                        &request.request_id,
+                        &DaemonError::new(code, category, false, e),
+                    )
+                    .await
                 }
             }
         }
@@ -260,7 +278,7 @@ pub(crate) async fn dispatch_permission(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

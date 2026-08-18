@@ -923,6 +923,7 @@ fn roundtrip_timeout_is_distinct_from_stop() {
         Duration::from_millis(300),
         None,
         &stopping,
+        None,
     )
     .unwrap_err();
     assert!(
@@ -946,6 +947,7 @@ fn roundtrip_timeout_is_distinct_from_stop() {
         Duration::from_millis(300),
         None,
         &stopping,
+        None,
     )
     .unwrap_err();
     assert!(

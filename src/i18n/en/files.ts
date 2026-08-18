@@ -12,6 +12,8 @@ export const files = {
     dropPrompt: 'Drop files to insert path',
     followModeOn: 'Follow mode: ON (terminal follows file browser)',
     createFailed: 'Failed to create terminal',
+    profileLoading: 'Environment profiles are still loading',
+    profileLoadFailed: 'Environment profiles unavailable; terminal creation is paused',
     followWaiting: 'Follow mode active — waiting for agent edits…',
     followArtifact: 'Build artifact generated',
     followReadError: 'Failed to read file — preview unavailable',

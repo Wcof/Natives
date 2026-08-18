@@ -8,9 +8,8 @@
 //! - Client disconnect cleanup
 
 use assistant_protocol::error::DaemonError;
-use assistant_protocol::v1::daemon::{
-    HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
-};
+use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse};
+use assistant_protocol::v2::{V2Request, V2Response, V2SuccessResponse};
 use assistant_protocol::version::{negotiate, ProtocolVersion};
 
 // ---------------------------------------------------------------------------
@@ -102,17 +101,20 @@ fn test_replayed_bootstrap_token_rejected() {
 
 #[test]
 fn test_rpc_request_roundtrip() {
-    let req = RpcRequest {
+    let req = V2Request {
         protocol_version: "2.0.0".to_string(),
         request_id: "req-001".to_string(),
+        session_id: None,
         client_id: "client-1".to_string(),
         session_token: "session-abc".to_string(),
+        run_id: None,
+        idempotency_key: None,
         method: "daemon.getStatus".to_string(),
         params: serde_json::json!({}),
     };
 
     let json = serde_json::to_string(&req).unwrap();
-    let deserialized: RpcRequest = serde_json::from_str(&json).unwrap();
+    let deserialized: V2Request = serde_json::from_str(&json).unwrap();
 
     assert_eq!(deserialized.method, "daemon.getStatus");
     assert_eq!(deserialized.session_token, "session-abc");
@@ -120,19 +122,16 @@ fn test_rpc_request_roundtrip() {
 
 #[test]
 fn test_rpc_response_roundtrip() {
-    let resp = RpcResponse {
-        protocol_version: "2.0.0".to_string(),
-        request_id: "req-001".to_string(),
-        success: true,
-        data: Some(serde_json::json!({"status": "ok"})),
-        error: None,
-    };
+    let resp = V2Response::Success(V2SuccessResponse::new(
+        "req-001",
+        serde_json::json!({"status": "ok"}),
+    ));
 
     let json = serde_json::to_string(&resp).unwrap();
-    let deserialized: RpcResponse = serde_json::from_str(&json).unwrap();
+    let deserialized: V2Response = serde_json::from_str(&json).unwrap();
 
-    assert!(deserialized.success);
-    assert_eq!(deserialized.request_id, "req-001");
+    assert!(deserialized.is_success());
+    assert_eq!(deserialized.request_id(), "req-001");
 }
 
 #[test]

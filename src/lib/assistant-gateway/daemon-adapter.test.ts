@@ -13,6 +13,7 @@ import {
   type TauriInvokeFn,
 } from './daemon-adapter';
 import type { HostWatchBridge, WatchFrame } from './daemon-adapter';
+import type { RunEvent } from '@/lib/assistant-protocol';
 
 /** In-memory host watch bridge for tests. */
 function makeTestBridge() {
@@ -278,6 +279,94 @@ test('subscribe propagates WatchStreamUnavailableError when bridge start rejects
   );
 });
 
+test('subscribe installs its listener before start captures a synchronous terminal frame', async () => {
+  let listener: ((frame: WatchFrame) => void) | null = null;
+  let disposed = 0;
+  const bridge: HostWatchBridge = {
+    async start(runId) {
+      listener?.(DURABLE(runId, 1, 'completed', { reason: 'ok' }));
+      return { ok: true };
+    },
+    async stop() {},
+    listen(fn) {
+      listener = fn;
+      return () => {
+        listener = null;
+        disposed += 1;
+      };
+    },
+  };
+  const adapter = new DaemonAssistantAdapter({ watchBridge: bridge });
+
+  const events: RunEvent[] = [];
+  for await (const event of adapter.subscribe('r-sync-terminal', 0)) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.type), ['completed']);
+  assert.equal(disposed, 1, 'terminal watch listener is cleaned up');
+});
+
+test('failed start disposes the preinstalled watch listener', async () => {
+  let listener: ((frame: WatchFrame) => void) | null = null;
+  let disposed = 0;
+  const adapter = new DaemonAssistantAdapter({
+    watchBridge: {
+      async start() {
+        return { ok: false, error: 'watch unavailable' };
+      },
+      async stop() {},
+      listen(fn) {
+        listener = fn;
+        return () => {
+          listener = null;
+          disposed += 1;
+        };
+      },
+    },
+  });
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of adapter.subscribe('r-start-failure', 0)) {
+        // no events expected
+      }
+    },
+    WatchStreamUnavailableError,
+  );
+  assert.equal(listener, null);
+  assert.equal(disposed, 1);
+});
+
+test('host durable cursor never skips an unprojected terminal replay', async () => {
+  let listener: ((frame: WatchFrame) => void) | null = null;
+  const starts: number[] = [];
+  const bridge: HostWatchBridge = {
+    async start(runId, afterDurableSequence) {
+      starts.push(afterDurableSequence);
+      if (afterDurableSequence < 2) {
+        listener?.(DURABLE(runId, 2, 'completed', { reason: 'ok' }));
+      }
+      return { ok: true };
+    },
+    async stop() {},
+    async state() {
+      return { active: true, lastDurableSequence: 2, lastLiveSequence: 0, terminal: true };
+    },
+    listen(fn) {
+      listener = fn;
+      return () => {
+        listener = null;
+      };
+    },
+  };
+  const adapter = new DaemonAssistantAdapter({ watchBridge: bridge });
+
+  const events: RunEvent[] = [];
+  for await (const event of adapter.subscribe('r-late-renderer', 0)) events.push(event);
+
+  assert.deepEqual(starts, [0], 'only the Renderer cursor may advance durable replay');
+  assert.deepEqual(events.map((event) => event.type), ['completed']);
+});
+
 test('message_completed clears transient live state (stale live delta dropped)', async () => {
   const bridge = makeTestBridge();
   const adapter = new DaemonAssistantAdapter({
@@ -458,4 +547,3 @@ test('subscribe keeps reconnecting while the stream still delivers events', asyn
   assert.ok(types.includes('completed'));
   assert.ok(bridge.started.length >= 2, 'reconnected after stream_closed with progress');
 });
-

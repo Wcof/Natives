@@ -30,22 +30,28 @@ export function isExpectedMessageSource(
   );
 }
 
-/**
- * lifecycle:heartbeat 专用门：来源必须是期望窗口引用，且 data 声明为
- * 该 module 的心跳。source 不匹配时即使 data.type/moduleId 正确也被拒绝
- * —— 同 origin / 伪 moduleId 的伪造消息无法伪造真实 contentWindow 引用。
- */
-export function isHeartbeatFromModuleSource(
+/** Workshop lifecycle messages require the exact iframe source and the
+ * current module-bound session token. `origin` is intentionally irrelevant
+ * because a sandbox without allow-same-origin has an opaque origin. */
+export function isAuthenticatedLifecycleMessage(
   event: MessageEventLike,
   expectedSource: unknown,
   moduleId: string,
+  currentToken: string | undefined,
 ): boolean {
-  if (!isExpectedMessageSource(event, expectedSource)) return false;
-  const data = event.data as { type?: unknown; moduleId?: unknown } | null;
+  if (!currentToken || !isExpectedMessageSource(event, expectedSource)) return false;
+  const data = event.data as {
+    type?: unknown;
+    moduleId?: unknown;
+    token?: unknown;
+  } | null;
   return (
     data !== null &&
     typeof data === 'object' &&
-    data.type === 'lifecycle:heartbeat' &&
-    data.moduleId === moduleId
+    (data.type === 'lifecycle:ready' ||
+      data.type === 'lifecycle:heartbeat' ||
+      data.type === 'lifecycle:error') &&
+    data.moduleId === moduleId &&
+    data.token === currentToken
   );
 }

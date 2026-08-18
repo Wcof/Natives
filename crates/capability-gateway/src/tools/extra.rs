@@ -1,6 +1,9 @@
 //! Additional built-in tools required by the Native engine plan.
 
-use super::apply_patch_parser::{parse_patch_input, PatchOp};
+use super::{
+    apply_patch_parser::{parse_patch_input, PatchOp},
+    fs::atomic_write_file,
+};
 use crate::{
     PathScope, PermissionClass, SideEffect, Tool, ToolCallContext, ToolError, ToolHandler,
     ToolOutput,
@@ -178,11 +181,11 @@ async fn apply_planned(p: &Planned) -> Result<(), ToolError> {
                         retryable: true,
                     })?;
             }
-            tokio::fs::write(&p.abs, content)
+            atomic_write_file(&p.abs, content.as_bytes())
                 .await
                 .map_err(|e| ToolError {
                     code: "write_error".into(),
-                    message: e.to_string(),
+                    message: e.message,
                     retryable: true,
                 })?;
         }
@@ -230,7 +233,7 @@ async fn rollback_planned(p: &Planned) -> Result<(), ToolError> {
                 if let Some(parent) = p.abs.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
                 }
-                let _ = tokio::fs::write(&p.abs, bytes).await;
+                let _ = atomic_write_file(&p.abs, bytes).await;
             } else if p.abs.exists() && !p.existed {
                 let _ = tokio::fs::remove_file(&p.abs).await;
             }
@@ -240,7 +243,7 @@ async fn rollback_planned(p: &Planned) -> Result<(), ToolError> {
                 if to.exists() {
                     let _ = tokio::fs::rename(to, &p.abs).await;
                 } else if let Some(bytes) = &p.before {
-                    let _ = tokio::fs::write(&p.abs, bytes).await;
+                    let _ = atomic_write_file(&p.abs, bytes).await;
                 }
             }
         }
@@ -489,7 +492,35 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
         Tool {
             name: "apply_patch",
             description: "Write full file content as a patch application",
-            schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "patch": {"type": "string"},
+                    "files": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {"type": "string", "enum": ["add", "update", "delete", "move"]},
+                                "path": {"type": "string"},
+                                "from": {"type": "string"},
+                                "to": {"type": "string"},
+                                "content": {"type": "string"}
+                            },
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "anyOf": [
+                    {"required": ["path", "content"]},
+                    {"required": ["patch"]},
+                    {"required": ["files"]}
+                ],
+                "additionalProperties": false
+            }),
             side_effect: SideEffect::Write,
             permission_class: PermissionClass::ProjectWrite,
             path_scope: PathScope::Any,
@@ -497,7 +528,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
             output_limit: 1_048_576,
             cancellable: true,
             parallel_safe: false,
-            conflict_key: None,
+            // ponytail: global project-write lease; derive a project-scoped key when the contract supports it.
+            conflict_key: Some("project-write".into()),
             idempotency: None,
         per_call_resource: None,
         handler: Arc::new(ApplyPatchTool),

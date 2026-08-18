@@ -16,21 +16,37 @@ function fakeContext(): PreviewContext {
   };
 }
 
-test('builtin registry contains all C0 providers including html', () => {
+test('builtin registry excludes executable HTML while H0 is blocked', () => {
   const ids = BUILTIN_PROVIDERS.map((p) => p.id).sort();
-  assert.deepEqual(ids, ['archive', 'code', 'csv', 'html', 'json', 'markdown', 'media', 'pdf']);
+  assert.deepEqual(ids, ['archive', 'code', 'csv', 'json', 'markdown', 'media', 'pdf']);
   const reg = createBuiltinRegistry();
-  assert.equal(reg.size, 8);
+  assert.equal(reg.size, 7);
 });
 
-test('html file source routes through registry → service → typed model', async () => {
+test('html file source uses authorized bounded code preview without prepareHtml', async () => {
+  const calls: string[] = [];
+  const ctx = fakeContext();
+  ctx.authorizeFile = async (path) => {
+    calls.push(`authorize:${path}`);
+    return { path, name: 'a.html', kind: 'text', size: 5, mtime: 1 };
+  };
+  ctx.readText = async () => {
+    calls.push('readText');
+    return { content: 'hello', truncated: false, size: 5, mtime: 1, kind: 'text', encoding: 'utf-8' };
+  };
+  ctx.prepareHtml = async () => {
+    calls.push('prepareHtml');
+    throw new Error('executable HTML path must stay unreachable');
+  };
   const reg = createBuiltinRegistry();
-  const service = new PreviewService(reg, fakeContext());
+  const service = new PreviewService(reg, ctx);
   const model = await service.prepare({ source: { type: 'file', path: '/a.html', kind: 'text' }, mode: 'preview', surface: 'files' });
-  assert.equal(model.kind, 'html');
-  if (model.kind === 'html') {
-    assert.equal(model.sandbox, 'allow-scripts allow-forms');
+  assert.equal(model.kind, 'code');
+  if (model.kind === 'code') {
+    assert.equal(model.language, 'html');
+    assert.equal(model.source, 'hello');
   }
+  assert.deepEqual(calls, ['authorize:/a.html', 'readText']);
 });
 
 test('markdown file source routes through registry → service → typed model', async () => {

@@ -98,6 +98,16 @@ test('hidden project sessions never fall into unassigned', () => {
   assert.equal(groups.length, 0, 'hidden session must be filtered out entirely');
 });
 
+test('hidden project matches a daemon path with trailing slashes', () => {
+  const groups = groupAssistantConversations(
+    [{ id: 'legacy-session', projectId: '/work/hidden/', updatedAt: '2026-07-12T12:00:00Z', title: 'Legacy hidden' }],
+    [],
+    'Unassigned',
+    ['/work/hidden'],
+  );
+  assert.equal(groups.length, 0, 'equivalent path forms must not revive a hidden project');
+});
+
 test('engine unavailable still blocks creation', () => {
   assert.equal(projectCreationState({ engine: 'unavailable', providerReadiness: 'ready' }), 'engine_unavailable');
 });

@@ -114,7 +114,7 @@ export default function FindReplaceBar({
     <div
       className="flex items-center gap-1.5 border-b border-[var(--border)] bg-[var(--surface-hover)] px-2 py-1.5"
       role="search"
-      aria-label={t(locale, 'filePreview.findInFile')}
+      aria-label={t(locale, 'fileBrowser.findInFile')}
       onKeyDown={handleKeyDown}
     >
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -123,8 +123,8 @@ export default function FindReplaceBar({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onFocus={() => setFocused('find')}
-          placeholder={t(locale, 'filePreview.findPlaceholder')}
-          aria-label={t(locale, 'filePreview.findPlaceholder')}
+          placeholder={t(locale, 'fileBrowser.findPlaceholder')}
+          aria-label={t(locale, 'fileBrowser.findPlaceholder')}
           style={inputStyle}
         />
         {canReplace && (
@@ -132,8 +132,8 @@ export default function FindReplaceBar({
             value={replacement}
             onChange={(e) => onReplacementChange?.(e.target.value)}
             onFocus={() => setFocused('replace')}
-            placeholder={t(locale, 'filePreview.replacePlaceholder')}
-            aria-label={t(locale, 'filePreview.replacePlaceholder')}
+            placeholder={t(locale, 'fileBrowser.replacePlaceholder')}
+            aria-label={t(locale, 'fileBrowser.replacePlaceholder')}
             style={inputStyle}
           />
         )}
@@ -151,8 +151,8 @@ export default function FindReplaceBar({
       <button
         type="button"
         onClick={onToggleMatchCase}
-        title={t(locale, 'filePreview.findMatchCase')}
-        aria-label={t(locale, 'filePreview.findMatchCase')}
+        title={t(locale, 'fileBrowser.findMatchCase')}
+        aria-label={t(locale, 'fileBrowser.findMatchCase')}
         aria-pressed={matchCase}
         style={{ ...iconBtnStyle, color: matchCase ? 'var(--primary)' : undefined }}
       >
@@ -161,8 +161,8 @@ export default function FindReplaceBar({
       <button
         type="button"
         onClick={() => onNavigate('prev')}
-        title={t(locale, 'filePreview.findPrev')}
-        aria-label={t(locale, 'filePreview.findPrev')}
+        title={t(locale, 'fileBrowser.findPrev')}
+        aria-label={t(locale, 'fileBrowser.findPrev')}
         style={iconBtnStyle}
       >
         <ChevronUp size={14} />
@@ -170,8 +170,8 @@ export default function FindReplaceBar({
       <button
         type="button"
         onClick={() => onNavigate('next')}
-        title={t(locale, 'filePreview.findNext')}
-        aria-label={t(locale, 'filePreview.findNext')}
+        title={t(locale, 'fileBrowser.findNext')}
+        aria-label={t(locale, 'fileBrowser.findNext')}
         style={iconBtnStyle}
       >
         <ChevronDown size={14} />
@@ -180,8 +180,8 @@ export default function FindReplaceBar({
         <button
           type="button"
           onClick={onReplaceOne}
-          title={t(locale, 'filePreview.replaceOne')}
-          aria-label={t(locale, 'filePreview.replaceOne')}
+          title={t(locale, 'fileBrowser.replaceOne')}
+          aria-label={t(locale, 'fileBrowser.replaceOne')}
           style={iconBtnStyle}
         >
           <Replace size={14} />
@@ -191,8 +191,8 @@ export default function FindReplaceBar({
         <button
           type="button"
           onClick={onReplaceAll}
-          title={t(locale, 'filePreview.replaceAll')}
-          aria-label={t(locale, 'filePreview.replaceAll')}
+          title={t(locale, 'fileBrowser.replaceAll')}
+          aria-label={t(locale, 'fileBrowser.replaceAll')}
           style={{ ...iconBtnStyle, color: 'var(--text-secondary)' }}
         >
           <CornerDownLeft size={14} />

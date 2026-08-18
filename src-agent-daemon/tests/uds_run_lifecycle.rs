@@ -32,6 +32,12 @@ async fn sidecar_binary_routes_engineering_project_identity() {
         .env("NATIVES_ASSISTANT_DB_PATH", root.join("assistant.db"))
         .env("NATIVES_RUNTIME_DIR", &root)
         .env("NATIVES_DAEMON_FIXTURE", "1")
+        // This fixture exercises the standalone command UDS surface, not the
+        // Host-supervised broker contract. Do not inherit a parent lifeline or
+        // broker endpoint from the test runner: those require a one-shot Host
+        // broker session and authenticated listener respectively.
+        .env_remove("NATIVES_PARENT_LIFELINE")
+        .env_remove("NATIVES_BROKER_SOCKET")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -48,6 +54,14 @@ async fn sidecar_binary_routes_engineering_project_identity() {
     let result = async {
         let mut client =
             DaemonClient::connect(&socket, &bootstrap, client_protocol_version()).await?;
+        let status = client.call("daemon.getStatus", json!({})).await?;
+        assert_ne!(
+            status
+                .get("credential_broker_ready")
+                .and_then(|value| value.as_str()),
+            Some("ready"),
+            "standalone fixture must not claim Host broker readiness"
+        );
         let capabilities = client.call("daemon.getCapabilities", json!({})).await?;
         assert!(capabilities.to_string().contains("project.identity.list"));
         client.call("project.identity.list", json!({})).await

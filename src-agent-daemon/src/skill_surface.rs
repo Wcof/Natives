@@ -60,6 +60,43 @@ pub fn load_skill_for_project_with_surface(
     name: &str,
     parent_surface: Option<&[String]>,
 ) -> Result<Value, String> {
+    load_skill_for_project_with_selection(project, name, parent_surface, None)
+}
+
+/// Load one skill only when it belongs to the run's persisted selection.
+///
+/// A missing or malformed selection is denied rather than falling back to the
+/// process-wide trusted catalog. This keeps the on-demand tool aligned with the
+/// snapshot that the run was approved to use.
+pub fn load_selected_skill_for_project_with_surface(
+    project: &Path,
+    name: &str,
+    snapshot: Option<&Value>,
+    parent_surface: Option<&[String]>,
+) -> Result<Value, String> {
+    let snapshot =
+        snapshot.ok_or_else(|| "skill selection missing from run snapshot".to_string())?;
+    if snapshot.get("selectionActive").and_then(Value::as_bool) != Some(true) {
+        return Err("skill selection missing from run snapshot".into());
+    }
+    let selected = snapshot
+        .get("skillIds")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "skill selection is invalid in run snapshot".to_string())?;
+    let selected = selected
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "skill selection is invalid in run snapshot".to_string())?;
+    load_skill_for_project_with_selection(project, name, parent_surface, Some(&selected))
+}
+
+fn load_skill_for_project_with_selection(
+    project: &Path,
+    name: &str,
+    parent_surface: Option<&[String]>,
+    selected_ids: Option<&[&str]>,
+) -> Result<Value, String> {
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("invalid skill name".into());
     }
@@ -68,13 +105,24 @@ pub fn load_skill_for_project_with_surface(
     let mut matches = skills
         .list()
         .into_iter()
-        .filter(|skill| skill.name == name && skill.enabled && skill.trust == SkillTrust::Trusted)
+        .filter(|skill| {
+            skill.name == name
+                && skill.enabled
+                && skill.trust == SkillTrust::Trusted
+                && selected_ids.is_none_or(|ids| {
+                    ids.iter()
+                        .any(|id| *id == skill.id || (!id.contains(':') && *id == skill.name))
+                })
+        })
         .collect::<Vec<_>>();
     matches.sort_by_key(|skill| match skill.scope {
         SkillScope::Project => 0,
         SkillScope::User => 1,
     });
     let skill = matches.into_iter().next().ok_or_else(|| {
+        if selected_ids.is_some() {
+            return format!("skill `{name}` was not selected for this run");
+        }
         // Distinguish "no such skill" from "present but not trusted" so the model
         // does not retry forever and the user learns an approval is pending.
         match skills
@@ -210,6 +258,61 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("run_terminal"));
+    }
+
+    #[test]
+    fn selected_skill_load_is_scoped_and_capped_by_the_parent_surface() {
+        let fx = Fixture::new();
+        fx.write_skill(
+            ".natives/skills",
+            "selected-a",
+            "---\nname: selected-a\ndescription: a\nallowed-tools: read_file, run_terminal\n---\nA.\n",
+        );
+        fx.write_skill(
+            ".natives/skills",
+            "selected-b",
+            "---\nname: selected-b\ndescription: b\n---\nB.\n",
+        );
+        let store = fx.store();
+        let skills = store.list();
+        let selected_id = skills
+            .iter()
+            .find(|skill| skill.name == "selected-a")
+            .expect("selected a")
+            .id
+            .clone();
+        for skill in skills {
+            store.set_trust(&skill.id, SkillTrust::Trusted).unwrap();
+        }
+        let snapshot = json!({"selectionActive": true, "skillIds": [selected_id]});
+        let parent = vec!["read_file".to_string(), "grep".to_string()];
+
+        let loaded = load_selected_skill_for_project_with_surface(
+            &fx.root,
+            "selected-a",
+            Some(&snapshot),
+            Some(&parent),
+        )
+        .unwrap();
+        assert_eq!(loaded["allowed_tools"], json!(["read_file"]));
+        assert!(load_selected_skill_for_project_with_surface(
+            &fx.root,
+            "selected-b",
+            Some(&snapshot),
+            Some(&parent),
+        )
+        .unwrap_err()
+        .contains("not selected"));
+    }
+
+    #[test]
+    fn selected_skill_load_fails_closed_without_a_valid_snapshot() {
+        let fx = Fixture::new();
+        assert!(
+            load_selected_skill_for_project_with_surface(&fx.root, "anything", None, None,)
+                .unwrap_err()
+                .contains("selection missing")
+        );
     }
 
     // ─── Load-path guards ───

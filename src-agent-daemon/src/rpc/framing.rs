@@ -3,9 +3,10 @@
 //! Split out of the former single-file `rpc.rs` (A2-03): every function here
 //! serializes one response/error/event frame to the client write half.
 
-use assistant_protocol::error::DaemonError;
-use assistant_protocol::v1::daemon::{RpcRequest, RpcResponse};
-use assistant_protocol::v2::RunEventV2;
+use assistant_protocol::error::{DaemonError, ErrorCategory};
+use assistant_protocol::v2::{
+    RunEventV2, V2ErrorBody, V2ErrorResponse, V2Request, V2SuccessResponse,
+};
 use tokio::io::AsyncWriteExt;
 
 /// Maximum size of a single UDS frame (handshake or RPC), including the
@@ -25,14 +26,7 @@ pub(crate) async fn send_success(
     _session_token: &str,
     data: serde_json::Value,
 ) {
-    let resp = RpcResponse {
-        // Must match DaemonCapabilities / handshake (PROTOCOL_V2), never a stale 0.1.0.
-        protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
-        request_id: request_id.to_string(),
-        success: true,
-        data: Some(data),
-        error: None,
-    };
+    let resp = V2SuccessResponse::new(request_id, data);
     let json = serde_json::to_string(&resp).unwrap_or_default();
     let _ = writer.write_all(json.as_bytes()).await;
     let _ = writer.write_all(b"\n").await;
@@ -78,25 +72,51 @@ pub(crate) async fn write_stream_frame(
 }
 
 /// Send an error response.
-pub(crate) async fn send_error(writer: &mut tokio::net::unix::OwnedWriteHalf, error: &DaemonError) {
-    let json = serde_json::to_string(error).unwrap_or_default();
+pub(crate) async fn send_error(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    request_id: &str,
+    error: &DaemonError,
+) {
+    let mut response = V2ErrorResponse::from_daemon_error(request_id, error);
+    response.error.method_status = match error.code.as_str() {
+        "unsupported" => Some(assistant_protocol::v2::MethodStatus::Unsupported),
+        "invalid_request" => Some(assistant_protocol::v2::MethodStatus::InvalidRequest),
+        _ => None,
+    };
+    let json = serde_json::to_string(&response).unwrap_or_default();
+    let _ = writer.write_all(json.as_bytes()).await;
+    let _ = writer.write_all(b"\n").await;
+}
+
+pub(crate) async fn send_invalid_request(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    request_id: &str,
+    message: impl Into<String>,
+) {
+    let response = V2ErrorResponse::invalid_request(request_id, message);
+    let json = serde_json::to_string(&response).unwrap_or_default();
     let _ = writer.write_all(json.as_bytes()).await;
     let _ = writer.write_all(b"\n").await;
 }
 
 pub(crate) async fn send_rpc_failure(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &RpcRequest,
+    request: &V2Request,
     code: &str,
     message: String,
 ) {
-    let response = RpcResponse {
-        protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
-        request_id: request.request_id.clone(),
-        success: false,
-        data: None,
-        error: Some(serde_json::json!({"code": code, "message": message})),
-    };
+    let response = V2ErrorResponse::new(
+        &request.request_id,
+        V2ErrorBody {
+            code: code.into(),
+            category: ErrorCategory::Validation,
+            retryable: false,
+            message,
+            details: None,
+            method_status: None,
+            correlation_id: Some(uuid::Uuid::new_v4().to_string()),
+        },
+    );
     let json = serde_json::to_string(&response).unwrap_or_default();
     let _ = writer.write_all(json.as_bytes()).await;
     let _ = writer.write_all(b"\n").await;

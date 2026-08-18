@@ -107,6 +107,7 @@ impl McpRuntime {
                 Duration::from_secs(5),
                 None,
                 &stopping,
+                None,
             )?;
             let caps = McpServerCapabilities::from_initialize(
                 server_id,
@@ -146,6 +147,7 @@ impl McpRuntime {
                     Duration::from_secs(5),
                     None,
                     &stopping,
+                    None,
                 )?
             } else {
                 json!({})
@@ -226,6 +228,7 @@ impl McpRuntime {
         tool_name: &str,
         arguments: Value,
         progress: Option<McpProgressCallback>,
+        cancel: Option<&McpCancelCallback>,
     ) -> Result<Value, String> {
         let resp = self.stdio_request(
             server_id,
@@ -233,6 +236,7 @@ impl McpRuntime {
             json!({ "name": tool_name, "arguments": arguments }),
             Duration::from_secs(30),
             progress,
+            cancel,
         )?;
         if let Some(err) = resp.get("error") {
             return Err(format!("mcp tools/call error: {err}"));
@@ -253,6 +257,7 @@ impl McpRuntime {
         params: Value,
         timeout: Duration,
         progress: Option<McpProgressCallback>,
+        cancel: Option<&McpCancelCallback>,
     ) -> Result<Value, String> {
         // Resolve roots before taking any session lock: answering `roots/list`
         // mid-exchange must not need a second lock we already hold.
@@ -290,6 +295,7 @@ impl McpRuntime {
                 timeout,
                 progress.as_ref(),
                 &session.stopping,
+                cancel,
             )
         };
         self.record_notifications(server_id, notes);
@@ -316,7 +322,11 @@ pub(crate) fn stdio_roundtrip(
     timeout: Duration,
     progress: Option<&McpProgressCallback>,
     stopping: &AtomicBool,
+    cancel: Option<&McpCancelCallback>,
 ) -> Result<Value, String> {
+    if cancel.is_some_and(|callback| callback()) {
+        return Err("mcp call cancelled".into());
+    }
     let req = json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -327,7 +337,7 @@ pub(crate) fn stdio_roundtrip(
 
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if stopping.load(Ordering::SeqCst) {
+        if stopping.load(Ordering::SeqCst) || cancel.is_some_and(|callback| callback()) {
             return Err("mcp call cancelled".into());
         }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -336,11 +346,11 @@ pub(crate) fn stdio_roundtrip(
         }
         // recv_timeout gives a real deadline even when the child is silent —
         // a blocking read on the pipe would hang forever (T04).
-        let line = match lines.recv_timeout(remaining) {
+        let line = match lines.recv_timeout(remaining.min(Duration::from_millis(20))) {
             Ok(Ok(line)) => line,
             Ok(Err(e)) => return Err(e),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                return Err(format!("mcp {method} timeout"));
+                continue;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 return Err("mcp stdout closed".into());

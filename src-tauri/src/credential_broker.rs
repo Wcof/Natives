@@ -624,9 +624,31 @@ pub fn broker_setting_get(
 /// the JSON-line [`wire::CredentialLeaseReply`] to write back. Errors are
 /// redacted before they leave this function. The tiny UDS listener (lib.rs
 /// assembly) reads one line, calls this, writes one line.
-pub fn dispatch_broker_uds(payload_line: &str) -> std::result::Result<String, String> {
+pub fn dispatch_broker_uds(
+    payload_line: &str,
+    peer_pid: u32,
+) -> std::result::Result<String, String> {
+    // PID belongs to the connection identity and is checked before parsing any
+    // untrusted request bytes. The UDS listener applies the same check before
+    // its bounded read.
+    if !credential_broker_uds::broker_peer_matches(peer_pid) {
+        return Err("unauthorized broker peer".into());
+    }
     let envelope: wire::CredentialLeaseEnvelope = serde_json::from_str(payload_line.trim())
         .map_err(|e| redact_broker_error(&format!("broker envelope parse failed: {e}")))?;
+    // The payload stays an untyped Value until this per-spawn identity and
+    // authenticator have both been checked. No Host DB access occurs above.
+    if !credential_broker_uds::broker_peer_authorizes(
+        peer_pid,
+        &envelope.instance_id,
+        &envelope.auth_token,
+    ) {
+        return serde_json::to_string(&wire::CredentialLeaseReply::err(
+            envelope.request_id,
+            "unauthorized broker request",
+        ))
+        .map_err(|e| e.to_string());
+    }
 
     // Clone the method name so the match arms can move `envelope.payload` out
     // of the envelope without holding a borrow on a sibling field.
@@ -691,15 +713,14 @@ pub fn dispatch_broker_uds(payload_line: &str) -> std::result::Result<String, St
     };
 
     let reply = match result {
-        Ok(data) => wire::CredentialLeaseReply::ok(data),
-        Err(e) => wire::CredentialLeaseReply::err(redact_broker_error(&e)),
+        Ok(data) => wire::CredentialLeaseReply::ok(envelope.request_id, data),
+        Err(e) => wire::CredentialLeaseReply::err(envelope.request_id, redact_broker_error(&e)),
     };
     serde_json::to_string(&reply).map_err(|e| e.to_string())
 }
 
-/// Resolve and decrypt a single provider key for an active run, issuing a
-/// Run-bound short-TTL lease. Tauri command for the frontend/embedded path.
-#[tauri::command]
+/// Internal resolver for embedded diagnostics and tests. Production requests
+/// arrive through the authenticated broker UDS channel.
 pub async fn credential_broker_resolve(
     request: CredentialBrokerRequest,
 ) -> Result<CredentialBrokerResponse> {

@@ -4,7 +4,7 @@
  * T19 · PreviewRenderer — 穷尽式 renderer composition（唯一组装者）。
  * 只消费 PreviewModel；不决定「这个 path 该用谁」（那属于 registry/service）。
  * loading/error/fallback 由 PreviewSurface 负责，本组件只负责「模型 → 渲染」。
- * 新 kind 必须在此穷尽分支；html 已由 HtmlRenderer 按 sandbox 呈现（P2-01 垂直链）。
+ * 新 kind 必须在此穷尽分支；H0 BLOCKED 时 html 由 HtmlRenderer 防御性拒绝。
  */
 
 import { t, useLocale } from '@/i18n';

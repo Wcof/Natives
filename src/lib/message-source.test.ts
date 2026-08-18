@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isAuthenticatedLifecycleMessage,
   isExpectedMessageSource,
-  isHeartbeatFromModuleSource,
 } from './message-source';
 
 describe('isExpectedMessageSource', () => {
@@ -22,55 +22,41 @@ describe('isExpectedMessageSource', () => {
   });
 });
 
-describe('isHeartbeatFromModuleSource', () => {
+describe('isAuthenticatedLifecycleMessage', () => {
   const iframeWin = { contentWindow: true };
-  const heartbeat = {
+  const message = {
     source: iframeWin,
-    data: { type: 'lifecycle:heartbeat', moduleId: 'mod-1' },
+    data: {
+      type: 'lifecycle:ready',
+      moduleId: 'mod-1',
+      token: 'current-token',
+    },
   };
 
-  it('accepts a heartbeat from the expected iframe for the expected module', () => {
+  it('requires the exact source, module id, current token and lifecycle type', () => {
     assert.equal(
-      isHeartbeatFromModuleSource(heartbeat, iframeWin, 'mod-1'),
+      isAuthenticatedLifecycleMessage(message, iframeWin, 'mod-1', 'current-token'),
       true,
     );
-  });
-
-  it('rejects a heartbeat whose source is not the expected iframe, even with valid origin-like data', () => {
-    // Same data shape, same type/moduleId, but a different sender window.
-    const spoofed = { source: {}, data: { type: 'lifecycle:heartbeat', moduleId: 'mod-1' } };
-    assert.equal(isHeartbeatFromModuleSource(spoofed, iframeWin, 'mod-1'), false);
-  });
-
-  it('rejects a heartbeat with null source', () => {
     assert.equal(
-      isHeartbeatFromModuleSource({ source: null, data: heartbeat.data }, iframeWin, 'mod-1'),
+      isAuthenticatedLifecycleMessage({ ...message, source: {} }, iframeWin, 'mod-1', 'current-token'),
       false,
     );
-  });
-
-  it('rejects a matching source with a forged moduleId', () => {
     assert.equal(
-      isHeartbeatFromModuleSource(heartbeat, iframeWin, 'mod-2'),
+      isAuthenticatedLifecycleMessage(message, iframeWin, 'mod-2', 'current-token'),
       false,
     );
-  });
-
-  it('rejects a matching source with a non-heartbeat type', () => {
     assert.equal(
-      isHeartbeatFromModuleSource(
-        { source: iframeWin, data: { type: 'lifecycle:ready', moduleId: 'mod-1' } },
+      isAuthenticatedLifecycleMessage(message, iframeWin, 'mod-1', 'old-token'),
+      false,
+    );
+    assert.equal(
+      isAuthenticatedLifecycleMessage(
+        { source: iframeWin, data: { ...message.data, type: 'token-request' } },
         iframeWin,
         'mod-1',
+        'current-token',
       ),
-      false,
-    );
-  });
-
-  it('rejects a matching source with non-object or missing data', () => {
-    assert.equal(isHeartbeatFromModuleSource({ source: iframeWin }, iframeWin, 'mod-1'), false);
-    assert.equal(
-      isHeartbeatFromModuleSource({ source: iframeWin, data: 'nope' }, iframeWin, 'mod-1'),
       false,
     );
   });

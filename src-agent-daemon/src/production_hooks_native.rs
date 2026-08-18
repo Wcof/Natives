@@ -253,14 +253,22 @@ impl HookHandler for NativeAgentHook {
                 reason: "parent Run has no credential lease reference".into(),
             };
         };
-        let model_id = self
-            .model_override
-            .clone()
-            .unwrap_or(parent.model_id.clone());
-        let binding = crate::subagent_store::RouteBinding {
-            provider_id: parent.provider_id.clone(),
-            key_id: key_id.clone(),
-            model_id: model_id.clone(),
+        let policy = match crate::subagent_store::get_route_policy(&parent.conversation_id) {
+            Ok(Some(policy)) => policy,
+            Ok(None) => {
+                return HookOutcome::Failed {
+                    reason: "Agent Hook requires an independent route policy binding".into(),
+                }
+            }
+            Err(reason) => return HookOutcome::Failed { reason },
+        };
+        let binding = match crate::subagent_store::pick_independent_binding(
+            &policy,
+            &key_id,
+            self.model_override.as_deref(),
+        ) {
+            Ok(binding) => binding,
+            Err(reason) => return HookOutcome::Failed { reason },
         };
         let input = assistant_protocol::v2::redact_secrets(&request.input.to_string());
         let task = format!("Harness hook event:\n{input}");
@@ -280,9 +288,9 @@ impl HookHandler for NativeAgentHook {
         let created = match crate::child_run_orchestrator::create_child_run(
             crate::child_run_orchestrator::ChildRunSpec {
                 conversation_id,
-                provider_id: parent.provider_id,
-                model_id,
-                key_id: Some(key_id),
+                provider_id: binding.provider_id,
+                model_id: binding.model_id,
+                key_id: Some(binding.key_id),
                 agent_profile_id: None,
                 permission_profile: Some("readonly".into()),
                 content: Some(task),

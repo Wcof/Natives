@@ -224,7 +224,7 @@ mod tests {
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_provider(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{send_error, send_success};
     use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
@@ -296,6 +296,7 @@ pub(crate) async fn dispatch_provider(
                         Err(e) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     error_codes::PROVIDER_ERROR,
                                     ErrorCategory::Provider,
@@ -310,6 +311,7 @@ pub(crate) async fn dispatch_provider(
                 None => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::NOT_FOUND,
                             ErrorCategory::NotFound,
@@ -349,6 +351,7 @@ pub(crate) async fn dispatch_provider(
             if model.is_empty() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -370,6 +373,7 @@ pub(crate) async fn dispatch_provider(
                         Err(e) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     error_codes::UNAUTHORIZED,
                                     ErrorCategory::Auth,
@@ -395,6 +399,7 @@ pub(crate) async fn dispatch_provider(
                         Err(e) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     e.code.clone(),
                                     ErrorCategory::Provider,
@@ -409,6 +414,7 @@ pub(crate) async fn dispatch_provider(
                 None => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::NOT_FOUND,
                             ErrorCategory::NotFound,
@@ -431,6 +437,7 @@ pub(crate) async fn dispatch_provider(
                     Err(e) => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 error_codes::INVALID_INPUT,
                                 ErrorCategory::Validation,
@@ -472,7 +479,12 @@ pub(crate) async fn dispatch_provider(
                     } else {
                         "provider_error"
                     };
-                    send_error(writer, &DaemonError::new(code, category, true, e.message)).await;
+                    send_error(
+                        writer,
+                        &request.request_id,
+                        &DaemonError::new(code, category, true, e.message),
+                    )
+                    .await;
                 }
             }
         }
@@ -493,7 +505,7 @@ pub(crate) async fn dispatch_provider(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

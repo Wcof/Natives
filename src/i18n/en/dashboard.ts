@@ -199,6 +199,8 @@ export const dashboard = {
     dockLabel: 'Active Apps',
     dockMinimize: 'Minimize',
     dockClose: 'Close window',
+    appTitle: 'App title',
+    projectRoot: 'Project root',
     proposalTitle: 'Agent Proposal',
     proposalCreate: 'Create',
     proposalStart: 'Start',

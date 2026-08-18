@@ -1,43 +1,77 @@
 use super::*;
 
 #[tokio::test]
-async fn session_end_hook_fires_after_success() {
-    struct RecordingHook(Arc<Mutex<Vec<HookEvent>>>);
+async fn session_end_hook_reports_domain_outcome() {
+    struct RecordingHook(Arc<Mutex<Vec<bool>>>);
 
     #[async_trait::async_trait]
     impl crate::hooks::HookHandler for RecordingHook {
         async fn handle(&self, request: HookRequest) -> crate::hooks::HookResponse {
-            self.0.lock().unwrap().push(request.event);
+            self.0
+                .lock()
+                .unwrap()
+                .push(request.input["success"].as_bool().unwrap());
             crate::hooks::HookResponse {
                 decision: HookDecision::Allow,
             }
         }
     }
 
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let mut hooks = HookRegistry::new();
-    hooks.register(HookEvent::SessionEnd, Box::new(RecordingHook(seen.clone())));
-    let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
-    let provider = FakeProvider {
-        rounds: Mutex::new(Vec::new()),
-    };
-    engine
-        .run(
-            EngineRunConfig {
-                run_id: format!("run-hook-end-{}", uuid::Uuid::new_v4()),
-                conversation_id: format!("conversation-hook-end-{}", uuid::Uuid::new_v4()),
-                model: "model".into(),
-                system_prompt: None,
-                messages: Vec::new(),
-                user_content: "hello".into(),
-                max_steps: 2,
-            },
-            &provider,
-            &FakeTools,
-        )
-        .await
-        .unwrap();
-    assert_eq!(*seen.lock().unwrap(), vec![HookEvent::SessionEnd]);
+    for (rounds, expected_status, expected_success) in [
+        (
+            Vec::new(),
+            assistant_protocol::v2::RunStatusV2::Completed,
+            true,
+        ),
+        (
+            vec![vec![
+                EngineProviderEvent::TextDelta("failed".into()),
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::Error,
+                },
+            ]],
+            assistant_protocol::v2::RunStatusV2::Failed,
+            false,
+        ),
+        (
+            vec![vec![
+                EngineProviderEvent::TextDelta("cancelled".into()),
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::Cancelled,
+                },
+            ]],
+            assistant_protocol::v2::RunStatusV2::Cancelled,
+            false,
+        ),
+    ] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut hooks = HookRegistry::new();
+        hooks.register(HookEvent::SessionEnd, Box::new(RecordingHook(seen.clone())));
+        let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
+        let provider = FakeProvider {
+            rounds: Mutex::new(rounds),
+        };
+
+        let outcome = engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("run-hook-end-{}", uuid::Uuid::new_v4()),
+                    conversation_id: format!("conversation-hook-end-{}", uuid::Uuid::new_v4()),
+                    model: "model".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "hello".into(),
+                    max_steps: 2,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.target_status(), expected_status);
+        assert_eq!(*seen.lock().unwrap(), vec![expected_success]);
+    }
 }
 
 #[tokio::test]
@@ -199,6 +233,152 @@ async fn hook_deny_keeps_tool_call_and_emits_one_error_result() {
 }
 
 #[tokio::test]
+async fn pre_tool_modify_is_the_single_argument_authority() {
+    struct ModifyHook;
+    #[async_trait::async_trait]
+    impl crate::hooks::HookHandler for ModifyHook {
+        async fn handle(&self, _: HookRequest) -> crate::hooks::HookResponse {
+            crate::hooks::HookResponse {
+                decision: HookDecision::Modify {
+                    payload: json!({"enabled": true, "path": "modified"}),
+                },
+            }
+        }
+    }
+    struct RecordingTools(Arc<Mutex<Vec<Value>>>);
+    #[async_trait::async_trait]
+    impl EngineToolRuntime for RecordingTools {
+        async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+            vec![ToolSchema {
+                name: "echo".into(),
+                description: "echo".into(),
+                input_schema: json!({"type": "object"}),
+            }]
+        }
+
+        async fn execute_tool(
+            &self,
+            _name: &str,
+            input: Value,
+            _cancel: &CancellationToken,
+        ) -> ToolExecutionResult {
+            self.0.lock().unwrap().push(input.clone());
+            ToolExecutionResult {
+                output: json!({"input": input}),
+                is_error: false,
+                duration_ms: 1,
+            }
+        }
+    }
+    struct CapturingProvider {
+        rounds: Mutex<Vec<Vec<EngineProviderEvent>>>,
+        messages: Mutex<Vec<Vec<EngineMessage>>>,
+    }
+    #[async_trait::async_trait]
+    impl EngineProvider for CapturingProvider {
+        async fn stream(
+            &self,
+            _model: &str,
+            messages: Vec<EngineMessage>,
+            _tools: &[ToolSchema],
+            _system_prompt: Option<&str>,
+            _cancel: CancellationToken,
+        ) -> Result<EngineProviderEventStream, EngineError> {
+            self.messages.lock().unwrap().push(messages);
+            Ok(Box::pin(futures_util::stream::iter(
+                self.rounds.lock().unwrap().remove(0),
+            )))
+        }
+    }
+
+    let expected = json!({"enabled": true, "path": "modified"});
+    let expected_args = serde_json::to_string(&expected).unwrap();
+    let mut hooks = HookRegistry::new();
+    hooks.register(HookEvent::PreToolUse, Box::new(ModifyHook));
+    let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
+    let tools = RecordingTools(Arc::new(Mutex::new(Vec::new())));
+    let provider = CapturingProvider {
+        rounds: Mutex::new(vec![
+            vec![
+                EngineProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("modify-1".into()),
+                    name: Some("echo".into()),
+                    arguments_delta: r#"{"path":"original"}"#.into(),
+                },
+                EngineProviderEvent::CompletedWithReason {
+                    reason: ProviderStopReason::ToolUse,
+                },
+            ],
+            vec![
+                EngineProviderEvent::TextDelta("done".into()),
+                EngineProviderEvent::Completed,
+            ],
+        ]),
+        messages: Mutex::new(Vec::new()),
+    };
+    let run_id = format!("modify-run-{}", uuid::Uuid::new_v4());
+    engine
+        .run(
+            EngineRunConfig {
+                run_id: run_id.clone(),
+                conversation_id: "modify-conversation".into(),
+                model: "m".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "use echo".into(),
+                max_steps: 3,
+            },
+            &provider,
+            &tools,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(*tools.0.lock().unwrap(), vec![expected.clone()]);
+    let events = engine.events.replay_after(&run_id, 0);
+    let prepared_inputs = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            RunEventKind::ToolCallPrepared { input, .. } => Some(input.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(prepared_inputs, vec![expected.clone()]);
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            RunEventKind::ToolCallCompleted { output, .. } if output["input"] == expected
+        )
+    }));
+    let transcript_args = events.iter().find_map(|event| match &event.payload {
+        RunEventKind::MessageCompleted {
+            role,
+            content: Some(content),
+            ..
+        } if role == "assistant" => content["content"].as_array().and_then(|blocks| {
+            blocks.iter().find_map(|block| {
+                block["ToolCall"]["arguments_json"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+        }),
+        _ => None,
+    });
+    assert_eq!(transcript_args.as_deref(), Some(expected_args.as_str()));
+    let provider_messages = provider.messages.lock().unwrap();
+    assert_eq!(provider_messages.len(), 2);
+    assert_eq!(
+        provider_messages[1]
+            .iter()
+            .find_map(|message| message.tool_calls.as_ref())
+            .and_then(|calls| calls.first())
+            .map(|call| call.arguments.as_str()),
+        Some(expected_args.as_str())
+    );
+}
+
+#[tokio::test]
 async fn post_tool_use_deny_fails_run_loudly() {
     // T03: a PostToolUse hook that denies after the tool already executed must
     // fail the run with a `hook_refused` error — never be silently ignored.
@@ -213,9 +393,35 @@ async fn post_tool_use_deny_fails_run_loudly() {
             }
         }
     }
+    struct SideEffectRuntime(AtomicUsize);
+    #[async_trait::async_trait]
+    impl EngineToolRuntime for SideEffectRuntime {
+        async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+            vec![ToolSchema {
+                name: "echo".into(),
+                description: "echo".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }]
+        }
+
+        async fn execute_tool(
+            &self,
+            name: &str,
+            input: Value,
+            _cancel: &CancellationToken,
+        ) -> ToolExecutionResult {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            ToolExecutionResult {
+                output: serde_json::json!({"tool": name, "input": input}),
+                is_error: false,
+                duration_ms: 1,
+            }
+        }
+    }
     let mut hooks = HookRegistry::new();
     hooks.register(HookEvent::PostToolUse, Box::new(DenyPostHook));
     let engine = AgentEngine::new(EventSequencer::memory_only()).with_hooks(hooks);
+    let tools = SideEffectRuntime(AtomicUsize::new(0));
     let provider = FakeProvider {
         rounds: Mutex::new(vec![
             vec![
@@ -248,7 +454,7 @@ async fn post_tool_use_deny_fails_run_loudly() {
                 max_steps: 3,
             },
             &provider,
-            &FakeTools,
+            &tools,
         )
         .await
         .unwrap_err();
@@ -257,9 +463,11 @@ async fn post_tool_use_deny_fails_run_loudly() {
         error.to_string().contains("cannot be honoured"),
         "the refusal must explain the post-event contract: {error}"
     );
-    // The refusal aborts BEFORE the completion fact is appended, so the tool's
-    // effect stays unsettled (the ledger/resume gate treats it as uncertain —
-    // fail-closed, never replay-safe).
+    assert_eq!(
+        tools.0.load(Ordering::SeqCst),
+        1,
+        "the tool side effect ran once"
+    );
     let completed: Vec<_> = engine
         .events
         .replay_after(&run_id, 0)
@@ -268,8 +476,8 @@ async fn post_tool_use_deny_fails_run_loudly() {
         .collect();
     assert_eq!(
         completed.len(),
-        0,
-        "a refused post hook must not settle the tool's effect"
+        1,
+        "a refused post hook must not erase the executed tool outcome"
     );
 }
 

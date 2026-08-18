@@ -81,6 +81,20 @@ pub fn map_http_status(
     }
 }
 
+pub fn transport_error(code: &str, error: &reqwest::Error) -> ProviderError {
+    ProviderError {
+        code: code.into(),
+        message: error.to_string(),
+        category: if error.is_timeout() {
+            ProviderErrorCategory::Timeout
+        } else {
+            ProviderErrorCategory::Network
+        },
+        retryable: true,
+        retry_after_ms: None,
+    }
+}
+
 fn redact_http_body(body: &str) -> String {
     // Keep message short and free of credentials.
     let truncated: String = body.chars().take(400).collect();
@@ -108,13 +122,7 @@ pub async fn stream_chat_completions(
         .json(&body)
         .send()
         .await
-        .map_err(|e| ProviderError {
-            code: "network".into(),
-            message: e.to_string(),
-            category: ProviderErrorCategory::Network,
-            retryable: true,
-            retry_after_ms: None,
-        })?;
+        .map_err(|error| transport_error("network", &error))?;
 
     let status = response.status().as_u16();
     if !response.status().is_success() {
@@ -145,13 +153,7 @@ pub async fn stream_chat_completions(
                     }
                 }
                 Err(err) => {
-                    yield ProviderEvent::Error(ProviderError {
-                        code: "stream_error".into(),
-                        message: err.to_string(),
-                        category: ProviderErrorCategory::Network,
-                        retryable: true,
-                        retry_after_ms: None,
-                    });
+                    yield ProviderEvent::Error(transport_error("stream_error", &err));
                     return;
                 }
             }
@@ -223,13 +225,7 @@ pub async fn stream_responses_with_headers(
         .json(&body)
         .send()
         .await
-        .map_err(|e| ProviderError {
-            code: "network".into(),
-            message: e.to_string(),
-            category: ProviderErrorCategory::Network,
-            retryable: true,
-            retry_after_ms: None,
-        })?;
+        .map_err(|error| transport_error("network", &error))?;
 
     let status = response.status().as_u16();
     if !response.status().is_success() {
@@ -259,13 +255,7 @@ pub async fn stream_responses_with_headers(
                     }
                 }
                 Err(err) => {
-                    yield ProviderEvent::Error(ProviderError {
-                        code: "stream_error".into(),
-                        message: err.to_string(),
-                        category: ProviderErrorCategory::Network,
-                        retryable: true,
-                        retry_after_ms: None,
-                    });
+                    yield ProviderEvent::Error(transport_error("stream_error", &err));
                     return;
                 }
             }
@@ -307,23 +297,14 @@ pub async fn chat_completions(
         .json(&body)
         .send()
         .await
-        .map_err(|e| ProviderError {
-            code: "network".into(),
-            message: e.to_string(),
-            category: ProviderErrorCategory::Network,
-            retryable: true,
-            retry_after_ms: None,
-        })?;
+        .map_err(|error| transport_error("network", &error))?;
 
     let status = response.status().as_u16();
     let headers = response.headers().clone();
-    let text = response.text().await.map_err(|e| ProviderError {
-        code: "network".into(),
-        message: e.to_string(),
-        category: ProviderErrorCategory::Network,
-        retryable: true,
-        retry_after_ms: None,
-    })?;
+    let text = response
+        .text()
+        .await
+        .map_err(|error| transport_error("network", &error))?;
     if !(200..300).contains(&status) {
         return Err(map_http_status(status, &text, Some(&headers)));
     }
@@ -364,4 +345,32 @@ pub async fn chat_completions(
         Some(tool_calls)
     };
     Ok((content, tools, usage))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transport_timeouts_are_not_network_errors() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _stream = listener.accept().await.unwrap().0;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+
+        let error = Client::builder()
+            .timeout(Duration::from_millis(5))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(
+            transport_error("network", &error).category,
+            ProviderErrorCategory::Timeout
+        );
+    }
 }

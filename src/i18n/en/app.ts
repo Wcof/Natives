@@ -237,6 +237,7 @@ export const app = {
     failed: 'Save failed',
     newScreenshot: 'New screenshot detected',
     annotationTools: 'Annotation Tools',
+    colorOption: 'Color {index}',
     brush: 'Brush',
     arrow: 'Arrow',
     text: 'Text',

@@ -607,3 +607,11 @@ ALTER TABLE harness_binding ADD COLUMN inactive_at TEXT;
 UPDATE harness_binding SET inactive_at = datetime('now')
  WHERE scope_type IN ('project','session') AND inactive_at IS NULL;
 ";
+
+/// Migration 040: persist the complete run execution and project identity.
+/// Nullable columns preserve compatibility with already-created runs.
+pub(crate) const MIGRATION_040: &str = "
+ALTER TABLE run ADD COLUMN project_identity_version INTEGER;
+ALTER TABLE run ADD COLUMN effort TEXT;
+ALTER TABLE run ADD COLUMN runtime_id TEXT;
+";

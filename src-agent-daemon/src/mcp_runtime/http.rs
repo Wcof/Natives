@@ -559,7 +559,7 @@ impl McpRuntime {
         match config.transport {
             McpTransport::Stdio => {
                 let frame = self
-                    .stdio_request(server_id, method, params, timeout, None)
+                    .stdio_request(server_id, method, params, timeout, None, None)
                     .map_err(McpError::Transport)?;
                 if let Some(err) = frame.get("error") {
                     return Err(map_jsonrpc_error(server_id, method, err));

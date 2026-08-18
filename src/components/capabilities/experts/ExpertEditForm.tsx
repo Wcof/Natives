@@ -359,14 +359,14 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
             </div>
           ) : availableTools.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>
-              {t(locale, 'capabilities.experts.noToolsAvailable')}
+              {t(locale, 'settings.engineCapabilities.noToolsAvailable')}
             </p>
           ) : (
             <div className="space-y-2">
               {/* allow 多选（互斥：与 deny 不同时出现） */}
               <div>
                 <span className="mb-1 block text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  {t(locale, 'capabilities.experts.allowTools')}
+                  {t(locale, 'settings.engineCapabilities.allowTools')}
                 </span>
                 <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
                   {availableTools.map((toolId) => {
@@ -379,7 +379,7 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
                         type="button"
                         role="checkbox"
                         aria-checked={active}
-                        aria-label={`${t(locale, 'capabilities.experts.allowTools')}: ${toolId}`}
+                        aria-label={`${t(locale, 'settings.engineCapabilities.allowTools')}: ${toolId}`}
                         onClick={() => toggleTool(toolId)}
                         className="rounded-full border px-2.5 py-1 font-mono text-xs"
                         style={{

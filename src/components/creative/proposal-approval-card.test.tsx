@@ -16,7 +16,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 // tsx --test uses the classic JSX transform; mirror what Next injects at build.
 (globalThis as { React?: typeof React }).React = React;
 
-import ProposalApprovalCard from './ProposalApprovalCard';
+import { ProposalApprovalCardContent } from './ProposalApprovalCard';
+import type { Locale } from '@/i18n';
 import type { CreativeAppProposal } from '@/lib/tauri-adapter';
 
 function proposal(overrides: Partial<CreativeAppProposal> = {}): CreativeAppProposal {
@@ -54,10 +55,11 @@ function proposal(overrides: Partial<CreativeAppProposal> = {}): CreativeAppProp
   };
 }
 
-function render(input: CreativeAppProposal): string {
+function render(input: CreativeAppProposal, locale: Locale = 'zh'): string {
   return renderToStaticMarkup(
-    React.createElement(ProposalApprovalCard, {
+    React.createElement(ProposalApprovalCardContent, {
       proposal: input,
+      locale,
       onApprove: async () => false,
       onReject: async () => false,
       onToast: () => {},
@@ -104,10 +106,18 @@ describe('ProposalApprovalCard rendering', () => {
   });
 
   it('resolves every string through i18n in both locales', () => {
+    const expectations = {
+      en: ['App title', 'Project root'],
+      zh: ['应用名称', '项目根目录'],
+    } satisfies Record<'en' | 'zh', string[]>;
+
     for (const locale of ['en', 'zh'] as const) {
-      const html = render(proposal());
+      const html = render(proposal(), locale);
+      for (const label of expectations[locale]) {
+        assert.ok(html.includes(label), `missing ${locale} label: ${label}`);
+      }
       assert.equal(
-        html.includes('workshop.proposal'),
+        html.includes('workshop.'),
         false,
         `unresolved i18n key leaked in ${locale}`,
       );

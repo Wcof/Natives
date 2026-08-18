@@ -107,6 +107,27 @@ describe('W1-A #1 项目软删生产链（removeProjectFromHost）', () => {
     assert.ok(groups.some((g) => g.path === '/b'), '其他项目仍可见');
   });
 
+  it('侧栏路径带尾斜杠时仍移除 Host 的 canonical 项目', async () => {
+    const host = makeHost({ visible: ['/work/project'], hidden: [] });
+    let hiddenPaths: string[] = [];
+
+    const ok = await removeProjectFromHost({
+      api: host.api,
+      path: '/work/project/',
+      activeProjectPath: '/work/project/',
+      setRegisteredProjects: () => undefined,
+      setHiddenProjectPaths: (paths) => {
+        hiddenPaths = paths;
+      },
+      setActiveProjectPath: () => undefined,
+      publishNavigation: () => undefined,
+      writeActiveProject: async () => undefined,
+    });
+
+    assert.equal(ok, true, 'canonical Host record is removed');
+    assert.deepEqual(hiddenPaths, ['/work/project'], 'Host hidden set contains canonical path');
+  });
+
   it('重挂载仍隐藏：hidden 集合保留，软删项目不复活', () => {
     const host = makeHost({ visible: ['/a'], hidden: ['/gone'] });
     const groups = groupAssistantConversations(
@@ -133,22 +154,34 @@ describe('W1-A #1 项目软删生产链（removeProjectFromHost）', () => {
     assert.ok(groups.some((g) => g.path === '/a'), '重新添加后项目恢复显示');
   });
 
-  it('删除不存在项目：Host not-found 抛错，不假成功', async () => {
+  it('删除不存在项目：Host not-found 不得报告成功', async () => {
     const host = makeHost({ visible: ['/b'], hidden: [] });
     const errors: string[] = [];
+    let navGroups: Array<{ path: string | null }> = [{ path: '/missing' }, { path: '/b' }];
+    let registered: Array<{ id: string; path: string }> = host.visible.map((p) => ({ ...p }));
     const ok = await removeProjectFromHost({
       api: host.api,
       path: '/missing',
       activeProjectPath: null,
-      setRegisteredProjects: () => undefined,
+      setRegisteredProjects: (p) => {
+        registered = p as Array<{ id: string; path: string }>;
+      },
       setHiddenProjectPaths: () => undefined,
       setActiveProjectPath: () => undefined,
-      publishNavigation: () => undefined,
+      publishNavigation: (updater) => {
+        navGroups = (
+          typeof updater === 'function'
+            ? updater({ groups: navGroups, activeProjectPath: null })
+            : updater
+        ).groups as Array<{ path: string | null }>;
+      },
       writeActiveProject: async () => undefined,
       onError: (m) => errors.push(m),
     });
-    assert.equal(ok, false, '删除不存在必须失败');
-    assert.ok(errors.some((e) => e.includes('not found')), `错误信息透传: ${errors.join(', ')}`);
+    assert.equal(ok, false, 'Host 未移除任何记录时不得报告成功');
+    assert.ok(errors.length > 0, '操作失败会被上报');
+    assert.ok(navGroups.some((g) => g.path === '/missing'), '失败时不伪造已更新的导航投影');
+    assert.deepEqual(registered.map((p) => p.path), ['/b'], '失败不改写当前权威列表');
   });
 
   it('hidden 读取失败 fail-closed：不当作空集合', async () => {

@@ -4,9 +4,18 @@
 //! No embedding provider yet — keyword scan for CI; API ready for later upgrade.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
+
+/// Match the daemon's bounded search surfaces.
+pub const MAX_MEMORY_SEARCH_LIMIT: usize = 100;
+/// Match the skill-body ceiling; one memory record cannot dominate the store.
+const MAX_MEMORY_TEXT_BYTES: usize = 64_000;
+/// Match the bounded live-event cache budget.
+const MAX_MEMORY_BYTES: usize = 1024 * 1024;
+const MAX_MEMORY_ENTRIES: usize = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -51,6 +60,12 @@ impl MemoryStore {
     }
 
     fn reload(&mut self) {
+        let Ok(metadata) = std::fs::metadata(&self.path) else {
+            return;
+        };
+        if metadata.len() > MAX_MEMORY_BYTES as u64 {
+            return;
+        }
         let Ok(raw) = std::fs::read_to_string(&self.path) else {
             return;
         };
@@ -60,26 +75,24 @@ impl MemoryStore {
                 continue;
             }
             if let Ok(e) = serde_json::from_str::<MemoryEntry>(line) {
+                if !valid_entry(&e) {
+                    continue;
+                }
                 entries.push(e);
             }
         }
+        retain_within_bounds(&mut entries);
         if let Ok(mut c) = self.cache.lock() {
             *c = entries;
         }
     }
 
-    fn persist_append(&self, entry: &MemoryEntry) -> Result<(), String> {
-        use std::io::Write;
+    fn persist(&self, entries: &[MemoryEntry]) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .map_err(|e| e.to_string())?;
-        let line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
-        writeln!(f, "{line}").map_err(|e| e.to_string())
+        let bytes = serialized_bytes(entries)?;
+        agent_core::fs_util::atomic_write_bytes(&self.path, &bytes).map_err(|e| e.to_string())
     }
 
     pub fn add(
@@ -89,23 +102,39 @@ impl MemoryStore {
         text: &str,
         tags: Vec<String>,
     ) -> Result<MemoryEntry, String> {
-        if text.trim().is_empty() {
-            return Err("memory text required".into());
-        }
+        let (scope, project_path, text, tags) = normalized_input(scope, project_path, text, tags)?;
         // Never store secrets
-        let redacted = assistant_protocol::v2::redact_secrets(text);
+        let redacted = assistant_protocol::v2::redact_secrets(&text);
+        if redacted.len() > MAX_MEMORY_TEXT_BYTES {
+            return Err(format!("memory text exceeds {MAX_MEMORY_TEXT_BYTES} bytes"));
+        }
         let entry = MemoryEntry {
             id: Uuid::new_v4().to_string(),
-            scope: scope.to_string(),
+            scope,
             project_path,
             text: redacted,
             tags,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        self.persist_append(&entry)?;
-        if let Ok(mut c) = self.cache.lock() {
-            c.push(entry.clone());
+        if serialized_line_len(&entry)? > MAX_MEMORY_TEXT_BYTES {
+            return Err("memory entry exceeds record limit".into());
         }
+        let key = dedup_key(&entry);
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| "memory store unavailable".to_string())?;
+        if let Some(existing) = cache.iter().find(|existing| dedup_key(existing) == key) {
+            return Ok(existing.clone());
+        }
+        let mut next = cache.clone();
+        next.push(entry.clone());
+        retain_within_bounds(&mut next);
+        if !next.iter().any(|candidate| candidate.id == entry.id) {
+            return Err("memory entry exceeds storage limit".into());
+        }
+        self.persist(&next)?;
+        *cache = next;
         Ok(entry)
     }
 
@@ -145,15 +174,111 @@ impl MemoryStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        hits.truncate(limit.max(1));
+        hits.truncate(limit.clamp(1, MAX_MEMORY_SEARCH_LIMIT));
         hits
     }
 
     pub fn list(&self, limit: usize) -> Vec<MemoryEntry> {
         self.cache
             .lock()
-            .map(|c| c.iter().rev().take(limit.max(1)).cloned().collect())
+            .map(|c| {
+                c.iter()
+                    .rev()
+                    .take(limit.clamp(1, MAX_MEMORY_SEARCH_LIMIT))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
+    }
+}
+
+fn normalized_input(
+    scope: &str,
+    project_path: Option<String>,
+    text: &str,
+    tags: Vec<String>,
+) -> Result<(String, Option<String>, String, Vec<String>), String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("memory text required".into());
+    }
+    if text.len() > MAX_MEMORY_TEXT_BYTES {
+        return Err(format!("memory text exceeds {MAX_MEMORY_TEXT_BYTES} bytes"));
+    }
+    let project_path = project_path.map(|path| path.trim().to_string());
+    let project_path = match scope {
+        "workspace" => {
+            let path = project_path
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| "workspace memory requires project_path".to_string())?;
+            if path.contains('\0') || !Path::new(&path).is_absolute() {
+                return Err("project_path must be an absolute path".into());
+            }
+            Some(path)
+        }
+        "global" if project_path.as_deref().map_or(true, str::is_empty) => None,
+        "global" => return Err("global memory must not include project_path".into()),
+        _ => return Err("memory scope must be workspace or global".into()),
+    };
+    let mut tags: Vec<String> = tags
+        .into_iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    Ok((scope.to_string(), project_path, text.to_string(), tags))
+}
+
+fn valid_entry(entry: &MemoryEntry) -> bool {
+    normalized_input(
+        &entry.scope,
+        entry.project_path.clone(),
+        &entry.text,
+        entry.tags.clone(),
+    )
+    .is_ok()
+        && serialized_line_len(entry).is_ok_and(|len| len <= MAX_MEMORY_TEXT_BYTES)
+}
+
+fn dedup_key(entry: &MemoryEntry) -> String {
+    let mut hasher = Sha256::new();
+    for value in std::iter::once(entry.scope.as_str())
+        .chain(entry.project_path.as_deref())
+        .chain(std::iter::once(entry.text.as_str()))
+        .chain(entry.tags.iter().map(String::as_str))
+    {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn serialized_line_len(entry: &MemoryEntry) -> Result<usize, String> {
+    serde_json::to_vec(entry)
+        .map(|line| line.len() + 1)
+        .map_err(|e| e.to_string())
+}
+
+fn serialized_bytes(entries: &[MemoryEntry]) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    for entry in entries {
+        serde_json::to_writer(&mut bytes, entry).map_err(|e| e.to_string())?;
+        bytes.push(b'\n');
+    }
+    if bytes.len() > MAX_MEMORY_BYTES {
+        return Err("memory store exceeds storage limit".into());
+    }
+    Ok(bytes)
+}
+
+fn retain_within_bounds(entries: &mut Vec<MemoryEntry>) {
+    while entries.len() > MAX_MEMORY_ENTRIES
+        || serialized_bytes(entries)
+            .map(|bytes| bytes.len() > MAX_MEMORY_BYTES)
+            .unwrap_or(true)
+    {
+        entries.remove(0);
     }
 }
 
@@ -167,15 +292,30 @@ pub fn global_memory() -> &'static MemoryStore {
 mod tests {
     use super::*;
 
+    fn store(dir: &std::path::Path) -> MemoryStore {
+        MemoryStore {
+            path: dir.join("memory").join("entries.jsonl"),
+            cache: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn entry(id: usize, text: String) -> MemoryEntry {
+        MemoryEntry {
+            id: id.to_string(),
+            scope: "workspace".into(),
+            project_path: Some("/tmp/p".into()),
+            text,
+            tags: Vec::new(),
+            created_at: id.to_string(),
+        }
+    }
+
     #[test]
     fn add_and_search() {
         let dir = std::env::temp_dir().join(format!("natives-mem-{}", Uuid::new_v4()));
         std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
         // Fresh store (not global — construct directly)
-        let store = MemoryStore {
-            path: dir.join("memory").join("entries.jsonl"),
-            cache: Mutex::new(Vec::new()),
-        };
+        let store = store(&dir);
         store
             .add(
                 "workspace",
@@ -189,5 +329,93 @@ mod tests {
         assert!(hits[0].score >= 1.0);
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("NATIVES_RUNTIME_DIR");
+    }
+
+    #[test]
+    fn rejects_invalid_scope_and_project_path() {
+        let dir = std::env::temp_dir().join(format!("natives-mem-{}", Uuid::new_v4()));
+        let store = store(&dir);
+
+        assert!(store
+            .add("other", Some("/tmp/p".into()), "x", vec![])
+            .is_err());
+        assert!(store.add("workspace", None, "x", vec![]).is_err());
+        assert!(store
+            .add("workspace", Some("relative".into()), "x", vec![])
+            .is_err());
+        assert!(store
+            .add("global", Some("/tmp/p".into()), "x", vec![])
+            .is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_does_not_grow_store() {
+        let dir = std::env::temp_dir().join(format!("natives-mem-{}", Uuid::new_v4()));
+        let store = store(&dir);
+        let first = store
+            .add(
+                "workspace",
+                Some("/tmp/p".into()),
+                "remember this",
+                vec!["ops".into()],
+            )
+            .unwrap();
+        let duplicate = store
+            .add(
+                "workspace",
+                Some("/tmp/p".into()),
+                "remember this",
+                vec!["ops".into()],
+            )
+            .unwrap();
+
+        assert_eq!(duplicate.id, first.id);
+        assert_eq!(store.list(usize::MAX).len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("memory/entries.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bounds_record_cache_file_and_results() {
+        let dir = std::env::temp_dir().join(format!("natives-mem-{}", Uuid::new_v4()));
+        let store = store(&dir);
+        assert!(store
+            .add(
+                "workspace",
+                Some("/tmp/p".into()),
+                &"x".repeat(MAX_MEMORY_TEXT_BYTES + 1),
+                vec![],
+            )
+            .is_err());
+
+        {
+            let mut cache = store.cache.lock().unwrap();
+            *cache = (0..20)
+                .map(|id| entry(id, "x".repeat(MAX_MEMORY_TEXT_BYTES / 2)))
+                .collect();
+        }
+        store
+            .add("workspace", Some("/tmp/p".into()), "latest", vec![])
+            .unwrap();
+
+        assert!(store.cache.lock().unwrap().len() <= MAX_MEMORY_ENTRIES);
+        assert!(
+            std::fs::metadata(dir.join("memory/entries.jsonl"))
+                .unwrap()
+                .len()
+                <= MAX_MEMORY_BYTES as u64
+        );
+        assert!(store.search("x", usize::MAX).len() <= MAX_MEMORY_SEARCH_LIMIT);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

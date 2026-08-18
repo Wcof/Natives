@@ -170,8 +170,127 @@ fn lease_registry_ttl_expiry_fails_closed() {
 }
 
 #[test]
+fn dispatch_broker_uds_rejects_wrong_same_uid_pid_before_dispatch() {
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let daemon_pid = std::process::id();
+    let _peer = credential_broker_uds::install_broker_peer_for_test(daemon_pid).unwrap();
+    let error = dispatch_broker_uds(
+        r#"{"method":"credential.bogus","payload":{}}"#,
+        daemon_pid.saturating_add(1),
+    )
+    .unwrap_err();
+    assert!(error.contains("unauthorized broker peer"));
+}
+
+#[cfg(target_os = "macos")]
+fn broker_socket_reply(request: String) -> wire::CredentialLeaseReply {
+    use std::io::{Read, Write};
+    use std::net::Shutdown;
+
+    let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+    let server =
+        std::thread::spawn(move || credential_broker_uds::handle_broker_connection(server));
+    client.write_all(request.as_bytes()).unwrap();
+    client.write_all(b"\n").unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut reply_line = String::new();
+    client.read_to_string(&mut reply_line).unwrap();
+    server.join().unwrap().unwrap();
+    serde_json::from_str(&reply_line).unwrap()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn broker_socket_accepts_current_supervised_pid() {
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let _peer = credential_broker_uds::install_broker_peer_for_test(std::process::id()).unwrap();
+    let lease = lease_registry().issue(
+        "openai",
+        "k1",
+        "run-auth",
+        None,
+        chrono::Duration::seconds(60),
+    );
+    let accepted = broker_socket_reply(
+        serde_json::to_string(&wire::CredentialLeaseEnvelope {
+            instance_id: "test-instance".into(),
+            auth_token: "test-auth".into(),
+            request_id: "request-current".into(),
+            method: names::CREDENTIAL_LEASE_STATUS.into(),
+            payload: serde_json::json!({ "lease_id": lease.lease_id }),
+        })
+        .unwrap(),
+    );
+    assert!(
+        accepted.ok,
+        "current supervised PID must reach broker dispatch"
+    );
+}
+
+#[test]
+fn broker_peer_rejects_live_overwrite_and_stale_clear_preserves_newer_lifecycle() {
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let stale = credential_broker_uds::install_broker_peer_for_test(41).unwrap();
+    assert!(credential_broker_uds::install_broker_peer_for_test(42).is_err());
+    credential_broker_uds::clear_broker_peer(stale.generation());
+    let _current = credential_broker_uds::install_broker_peer_for_test(42).unwrap();
+    credential_broker_uds::clear_broker_peer(stale.generation());
+    assert!(credential_broker_uds::broker_peer_matches(42));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn broker_socket_rejects_wrong_peer_before_read() {
+    use std::sync::mpsc;
+
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let _peer =
+        credential_broker_uds::install_broker_peer_for_test(std::process::id().saturating_add(1))
+            .unwrap();
+    let (_client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        sender
+            .send(credential_broker_uds::handle_broker_connection(server))
+            .unwrap();
+    });
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .expect("wrong peer must be rejected before a blocking read");
+    assert!(result.unwrap_err().contains("PID mismatch"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn broker_socket_bounds_oversized_frame_without_waiting_for_eof() {
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let _peer = credential_broker_uds::install_broker_peer_for_test(std::process::id()).unwrap();
+    let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        sender
+            .send(credential_broker_uds::handle_broker_connection(server))
+            .unwrap();
+    });
+    client.write_all(&vec![b'x'; 16 * 1024 + 1]).unwrap();
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .expect("oversized frame must be bounded before the read timeout");
+    assert!(result.unwrap_err().contains("frame too large"));
+}
+
+#[test]
 fn dispatch_broker_uds_acquire_rejects_empty_provider_redacted() {
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let daemon_pid = std::process::id();
+    let _peer = credential_broker_uds::install_broker_peer_for_test(daemon_pid).unwrap();
     let envelope = wire::CredentialLeaseEnvelope {
+        instance_id: "test-instance".into(),
+        auth_token: "test-auth".into(),
+        request_id: "request-empty-provider".into(),
         method: names::CREDENTIAL_LEASE_ACQUIRE.to_string(),
         payload: serde_json::json!({
             "key_id": "k1",
@@ -181,9 +300,10 @@ fn dispatch_broker_uds_acquire_rejects_empty_provider_redacted() {
         }),
     };
     let line = serde_json::to_string(&envelope).unwrap();
-    let reply_line = dispatch_broker_uds(&line).unwrap();
+    let reply_line = dispatch_broker_uds(&line, daemon_pid).unwrap();
     let reply: wire::CredentialLeaseReply = serde_json::from_str(&reply_line).unwrap();
     assert!(!reply.ok);
+    assert_eq!(reply.request_id, "request-empty-provider");
     assert!(!reply_line.contains("sk-"));
     let err = reply.error.unwrap_or_default();
     assert!(err.contains("provider_id"), "{err}");
@@ -191,13 +311,47 @@ fn dispatch_broker_uds_acquire_rejects_empty_provider_redacted() {
 
 #[test]
 fn dispatch_broker_uds_unknown_method_fails_closed() {
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let daemon_pid = std::process::id();
+    let _peer = credential_broker_uds::install_broker_peer_for_test(daemon_pid).unwrap();
     let envelope = wire::CredentialLeaseEnvelope {
+        instance_id: "test-instance".into(),
+        auth_token: "test-auth".into(),
+        request_id: "request-unknown".into(),
         method: "credential.bogus".into(),
         payload: serde_json::json!({}),
     };
     let line = serde_json::to_string(&envelope).unwrap();
-    let reply_line = dispatch_broker_uds(&line).unwrap();
+    let reply_line = dispatch_broker_uds(&line, daemon_pid).unwrap();
     let reply: wire::CredentialLeaseReply = serde_json::from_str(&reply_line).unwrap();
     assert!(!reply.ok);
+    assert_eq!(reply.request_id, "request-unknown");
     assert!(reply.error.unwrap_or_default().contains("unknown"));
+}
+
+#[test]
+fn dispatch_broker_uds_rejects_stale_identity_or_auth_before_payload_decode() {
+    let _peer_lock = credential_broker_uds::lock_broker_peer_for_test();
+    let daemon_pid = std::process::id();
+    let _peer = credential_broker_uds::install_broker_peer_for_test(daemon_pid).unwrap();
+    for (instance_id, auth_token, request_id) in [
+        ("stale-instance", "test-auth", "request-stale-instance"),
+        ("test-instance", "stale-auth", "request-stale-auth"),
+    ] {
+        let line = serde_json::json!({
+            "instance_id": instance_id,
+            "auth_token": auth_token,
+            "request_id": request_id,
+            "method": names::CREDENTIAL_LEASE_ACQUIRE,
+            // This is deliberately not a valid typed lease payload. Auth must
+            // reject it before the dispatch deserializes it.
+            "payload": "not-a-lease-request",
+        })
+        .to_string();
+        let reply: wire::CredentialLeaseReply =
+            serde_json::from_str(&dispatch_broker_uds(&line, daemon_pid).unwrap()).unwrap();
+        assert!(!reply.ok);
+        assert_eq!(reply.request_id, request_id);
+        assert_eq!(reply.error.as_deref(), Some("unauthorized broker request"));
+    }
 }

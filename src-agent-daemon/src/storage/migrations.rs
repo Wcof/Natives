@@ -64,6 +64,8 @@ pub const ALL: &[(i64, &str)] = &[
     // 39 (审计收口 #9): 唯一 global Harness——历史 project/session bindings
     // 标记 inactive（数据保留只读），运行时解析只使用 current global。
     (39, MIGRATION_039),
+    // 40 makes run execution and project identity fields restart-recoverable.
+    (40, MIGRATION_040),
 ];
 
 /// FNV-1a 64-bit checksum (self-implemented; no new crate). Used to detect
@@ -157,6 +159,7 @@ fn postcondition_satisfied(conn: &Connection, version: i64) -> bool {
         37 => column_exists("resume_plan", "decision"), // last ALTER of v37
         38 => table_exists("creative_drafts"),
         39 => column_exists("harness_binding", "inactive_at"),
+        40 => column_exists("run", "runtime_id"),
         _ => true,
     }
 }
@@ -405,7 +408,7 @@ use migrations_late::{
     MIGRATION_021, MIGRATION_022, MIGRATION_023, MIGRATION_024, MIGRATION_025, MIGRATION_026,
     MIGRATION_027, MIGRATION_028, MIGRATION_029, MIGRATION_030, MIGRATION_031, MIGRATION_032,
     MIGRATION_033, MIGRATION_034, MIGRATION_035, MIGRATION_036, MIGRATION_037, MIGRATION_038,
-    MIGRATION_039,
+    MIGRATION_039, MIGRATION_040,
 };
 use migrations_mid::{
     MIGRATION_011, MIGRATION_012, MIGRATION_013, MIGRATION_014, MIGRATION_015, MIGRATION_016,
@@ -432,6 +435,54 @@ mod tests {
             );
             previous = *version;
         }
+    }
+
+    #[test]
+    fn run_identity_execution_columns_survive_migration_round_trip() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_pending(&conn).unwrap();
+
+        for column in [
+            "project_id",
+            "project_identity_version",
+            "effort",
+            "runtime_id",
+        ] {
+            let present: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('run') WHERE name = ?1",
+                    [column],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(present, "run.{column} must exist after migration");
+        }
+
+        conn.execute(
+            "INSERT INTO conversation (id, mode, provider_id, model_id)
+             VALUES ('migration-run', 'agent', 'openai', 'gpt-4o')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO run (
+                id, conversation_id, provider_id, model_id,
+                project_id, project_identity_version, effort, runtime_id
+             ) VALUES ('migration-run', 'migration-run', 'openai', 'gpt-4o',
+                       'project-1', 7, 'high', 'native')",
+            [],
+        )
+        .unwrap();
+        let row: (String, i64, String, String) = conn
+            .query_row(
+                "SELECT project_id, project_identity_version, effort, runtime_id
+                 FROM run WHERE id = 'migration-run'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("project-1".into(), 7, "high".into(), "native".into()));
     }
 
     /// Both parallel workstreams must survive the merge. Named explicitly so

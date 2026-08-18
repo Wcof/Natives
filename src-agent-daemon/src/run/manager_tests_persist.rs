@@ -109,9 +109,44 @@ fn sqlite_active_runs_are_interrupted_on_manager_startup() {
                     rusqlite::params![run_id, status],
                 )
                 .unwrap();
+            if status != "completed" {
+                let event =
+                    assistant_protocol::v2::RunEventV2::new(run_id, 1, RunEventKind::Queued);
+                store
+                    .conn()
+                    .unwrap()
+                    .execute(
+                        "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            run_id,
+                            event.run_sequence as i64,
+                            event.payload.type_name(),
+                            serde_json::to_string(&event).unwrap(),
+                            event.timestamp.to_rfc3339(),
+                            event.event_id,
+                        ],
+                    )
+                    .unwrap();
+            }
         }
 
-        let _rm = RunManager::new_with_store(store.clone());
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (
+                    id, conversation_id, status, provider_id, model_id, project_path,
+                    project_id, project_identity_version, effort, runtime_id
+                 ) VALUES (
+                    'restart-identity', 'restart-conv', 'completed', 'openai', 'gpt-4o',
+                    '/tmp/restart-project', 'project-restart', 9, 'high', 'native'
+                 )",
+                [],
+            )
+            .unwrap();
+
+        let rm = RunManager::new_with_store(store.clone());
         let rows: Vec<(String, String, Option<String>)> = {
             let conn = store.conn().unwrap();
             let mut stmt = conn
@@ -140,5 +175,45 @@ fn sqlite_active_runs_are_interrupted_on_manager_startup() {
         assert!(rows.iter().any(|(id, status, code)| {
             id == "restart-completed" && status == "completed" && code.is_none()
         }));
+        for run_id in ["restart-queued", "restart-running", "restart-waiting"] {
+            let events = rm
+                .replay_checked(ReplayRunRequest {
+                    run_id: run_id.into(),
+                    after_sequence: 0,
+                })
+                .unwrap();
+            assert_eq!(
+                events.len(),
+                2,
+                "{run_id} must have one terminal recovery event"
+            );
+            assert_eq!(events[0].run_sequence, 1);
+            assert_eq!(events[1].run_sequence, 2);
+            assert!(matches!(
+                &events[1].payload,
+                RunEventKind::Interrupted { reason } if reason == "daemon_restarted"
+            ));
+        }
+        let restarted = RunManager::new_with_store(store.clone());
+        for run_id in ["restart-queued", "restart-running", "restart-waiting"] {
+            let events = restarted
+                .replay_checked(ReplayRunRequest {
+                    run_id: run_id.into(),
+                    after_sequence: 0,
+                })
+                .unwrap();
+            assert_eq!(events.len(), 2, "{run_id} recovery must be idempotent");
+        }
+        let hydrated = rm
+            .get_run("restart-identity")
+            .expect("hydrated identity run");
+        assert_eq!(
+            hydrated.project_path.as_deref(),
+            Some("/tmp/restart-project")
+        );
+        assert_eq!(hydrated.project_id.as_deref(), Some("project-restart"));
+        assert_eq!(hydrated.project_identity_version, Some(9));
+        assert_eq!(hydrated.effort.as_deref(), Some("high"));
+        assert_eq!(hydrated.runtime_id.as_deref(), Some("native"));
     });
 }

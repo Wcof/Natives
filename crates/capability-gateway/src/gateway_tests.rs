@@ -126,6 +126,45 @@ mod p0_tests {
             .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
     }
 
+    #[tokio::test]
+    async fn apply_patch_accepts_every_advertised_input_form() {
+        let root = tempfile::tempdir().unwrap();
+        let mut gateway = CapabilityGateway::new();
+        gateway.set_project_root(root.path().to_string_lossy().into_owned());
+        gateway.register_builtins().unwrap();
+        let context = ToolCallContext::new(
+            root.path().to_path_buf(),
+            "run-patch".into(),
+            "conversation-patch".into(),
+            "call-patch".into(),
+            "autonomous".into(),
+        );
+
+        for input in [
+            serde_json::json!({"path": "legacy.txt", "content": "legacy"}),
+            serde_json::json!({"files": [{"op": "add", "path": "files.txt", "content": "files"}]}),
+            serde_json::json!({"patch": "*** Begin Patch\n*** Add File: patch.txt\n+patch\n*** End Patch"}),
+        ] {
+            gateway
+                .execute("apply_patch", input, &context)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("legacy.txt")).unwrap(),
+            "legacy"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("files.txt")).unwrap(),
+            "files"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("patch.txt")).unwrap(),
+            "patch"
+        );
+    }
+
     #[test]
     fn every_tool_has_a_verifiable_mode_and_writes_are_not_parallel() {
         let mut gateway = CapabilityGateway::new();

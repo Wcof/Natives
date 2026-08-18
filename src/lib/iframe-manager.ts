@@ -1,4 +1,7 @@
-import { isExpectedMessageSource } from './message-source';
+import {
+  isAuthenticatedLifecycleMessage,
+  isExpectedMessageSource,
+} from './message-source';
 
 // ── Sandbox Security Constant ──
 // MUST NOT include 'allow-same-origin' — that would let plugin iframes
@@ -33,14 +36,6 @@ export interface IframeInstance {
   sessionToken?: string;
   /** Whether this is an AI-generated module (stricter isolation rules). */
   isGenerated?: boolean;
-}
-
-/** Bridge proxy request shape from the sandbox (validated at the backend). */
-interface BridgeRequest {
-  namespace?: string;
-  method?: string;
-  requestId?: string;
-  args?: { key?: string; value?: unknown; prefix?: string };
 }
 
 const MAX_BACKGROUND = 5;
@@ -90,6 +85,7 @@ export class IframeManager {
   private heartbeatMisses = new Map<string, number>();
   private crashOverlays = new Map<string, HTMLDivElement>();
   private messageListenerCleanups = new Map<string, () => void>();
+  private tokenDispatches = new Map<string, Promise<void>>();
 
   createIframe(moduleId: string, url: string, isGenerated = false): HTMLIFrameElement {
     // If already exists, destroy old one
@@ -117,14 +113,11 @@ export class IframeManager {
       isGenerated,
     };
 
-    // ── Two-Stage Token Handshake ──
-    // Stage 1: iframe loads → state becomes 'hot'
-    // Stage 2: host dispatches a session-scoped token via postMessage
+    // Loading updates lifecycle state only. The iframe SDK must request its
+    // token after installing its listener (ADR-0001).
     iframe.onload = () => {
       instance.state = 'hot';
       instance.lastAccessed = Date.now();
-      // Dispatch session token to the sandbox
-      this.dispatchSessionToken(moduleId);
     };
 
     // Listen for token-request messages from the sandbox (bridge SDK)
@@ -364,23 +357,44 @@ export class IframeManager {
    * to this specific module_id. It grants access ONLY to the module's own
    * data namespace (`custom_module_data_[module_id]`).
    */
-  private async dispatchSessionToken(moduleId: string): Promise<void> {
+  private dispatchSessionToken(
+    moduleId: string,
+    expectedIframe: HTMLIFrameElement,
+  ): Promise<void> {
+    const previous = this.tokenDispatches.get(moduleId) ?? Promise.resolve();
+    const dispatch = previous
+      .catch(() => {})
+      .then(() => this.grantSessionToken(moduleId, expectedIframe));
+    this.tokenDispatches.set(moduleId, dispatch);
+    void dispatch.finally(() => {
+      if (this.tokenDispatches.get(moduleId) === dispatch) {
+        this.tokenDispatches.delete(moduleId);
+      }
+    });
+    return dispatch;
+  }
+
+  private async grantSessionToken(
+    moduleId: string,
+    expectedIframe: HTMLIFrameElement,
+  ): Promise<void> {
     const instance = this.instances.get(moduleId);
-    if (!instance?.element?.contentWindow) return;
+    if (instance?.element !== expectedIframe || !expectedIframe.contentWindow) return;
+    const target = expectedIframe.contentWindow;
 
     try {
       // Generate token via Tauri backend (HMAC-SHA256, 24h TTL)
       const token = await window.nativesAPI?.bridge?.generateToken(moduleId);
       if (!token) return;
 
+      // A reload/recreate may occur while the Host command is in flight.
+      // Never deliver that result to a replacement iframe.
+      if (this.instances.get(moduleId) !== instance || instance.element !== expectedIframe) return;
+
       instance.sessionToken = token;
 
-      // Get the HTTP port for the bridge endpoint
-      const port = await window.nativesAPI?.bridge?.getHttpPort();
-      const origin = port ? `http://localhost:${port}` : '*';
-
       // Stage 2: push token + module_id + namespace constraint into sandbox
-      instance.element.contentWindow.postMessage(
+      target.postMessage(
         {
           type: 'token-granted',
           token,
@@ -390,21 +404,18 @@ export class IframeManager {
           // The backend enforces this in route_bridge.
           namespace: `custom_module_data_${moduleId}`,
         },
-        origin,
+        '*',
       );
     } catch {
-      // Token generation failed — sandbox will operate without bridge access
+      // Fail closed: no token means no Workshop Bridge access.
+      console.error('[IframeManager] Session token handshake failed; Bridge access denied');
     }
   }
 
   /**
    * Set up a message listener on the host window to handle requests
-   * from the sandbox iframe. The sandbox cannot call invoke() directly
-   * (unique origin), so it uses postMessage → host proxies → Tauri IPC.
-   *
-   * CRITICAL: All proxied db operations are namespace-isolated. The host
-   * rewrites the key to `${namespace}/${originalKey}`, ensuring the sandbox
-   * can NEVER touch system-level data.
+   * from the sandbox iframe. Data operations use the authenticated HTTP
+   * Bridge; postMessage is limited to handshake and lifecycle signals.
    */
   private setupMessageListener(moduleId: string, iframe: HTMLIFrameElement): void {
     // SSR / Node test environments have no `window` — skip listener setup.
@@ -425,25 +436,21 @@ export class IframeManager {
 
       // Handle token-request from bridge SDK
       if (data.type === 'token-request') {
-        this.dispatchSessionToken(moduleId);
+        // Fail closed while rotating: lifecycle events from the prior session
+        // must stop being accepted as soon as a new handshake begins.
+        instance.sessionToken = undefined;
+        await this.dispatchSessionToken(moduleId, iframe);
         return;
       }
 
-      // Handle heartbeat
-      if (data.type === 'lifecycle:heartbeat') {
-        this.onHeartbeatReceived(moduleId);
-        return;
-      }
-
-      // Handle lifecycle:ready
-      if (data.type === 'lifecycle:ready') {
-        instance.lastAccessed = Date.now();
-        return;
-      }
-
-      // Handle bridge proxy requests from sandbox
-      if (data.type === 'bridge:proxy') {
-        await this.handleBridgeProxy(moduleId, data, iframe);
+      if (isAuthenticatedLifecycleMessage(
+        event,
+        iframe.contentWindow,
+        moduleId,
+        instance.sessionToken,
+      )) {
+        if (data.type === 'lifecycle:heartbeat') this.onHeartbeatReceived(moduleId);
+        if (data.type === 'lifecycle:ready') instance.lastAccessed = Date.now();
         return;
       }
     };
@@ -452,67 +459,6 @@ export class IframeManager {
     this.messageListenerCleanups.set(moduleId, () => {
       window.removeEventListener('message', handler);
     });
-  }
-
-  /**
-   * Proxy a bridge request from the sandbox to the Tauri backend.
-   * Enforces namespace isolation: all db keys are rewritten to
-   * `${namespace}/${key}`, making it impossible for generated code
-   * to access system-level or other modules' data.
-   */
-  private async handleBridgeProxy(
-    moduleId: string,
-    data: Record<string, unknown>,
-    iframe: HTMLIFrameElement,
-  ): Promise<void> {
-    const instance = this.instances.get(moduleId);
-    if (!instance?.sessionToken) return;
-
-    const { namespace, method, args, requestId } = data as BridgeRequest;
-    if (!namespace || !method || !requestId) return;
-
-    // Verify the namespace matches this module's isolation scope
-    const expectedNs = `custom_module_data_${moduleId}`;
-    if (namespace !== expectedNs) return; // Block cross-namespace access
-
-    try {
-      let result: unknown;
-
-      // Namespace-isolated db operations
-      if (method === 'db.get') {
-        const isolatedKey = `${expectedNs}/${args?.key}`;
-        result = await window.nativesAPI?.db?.get(isolatedKey);
-      } else if (method === 'db.set') {
-        const isolatedKey = `${expectedNs}/${args?.key}`;
-        await window.nativesAPI?.db?.set(isolatedKey, args?.value);
-        result = { ok: true };
-      } else if (method === 'db.delete') {
-        const isolatedKey = `${expectedNs}/${args?.key}`;
-        await window.nativesAPI?.db?.delete(isolatedKey);
-        result = { ok: true };
-      } else if (method === 'db.list') {
-        // List only keys within this module's namespace
-        const prefix = `${expectedNs}/${args?.prefix ?? ''}`;
-        result = await window.nativesAPI?.db?.list(prefix);
-      } else if (method === 'settings.getTheme') {
-        result = await window.nativesAPI?.getTheme?.();
-      } else if (method === 'settings.getLocale') {
-        result = await window.nativesAPI?.getLocale?.();
-      } else {
-        result = { error: `Blocked: method "${method}" not allowed in sandbox` };
-      }
-
-      // Send response back to sandbox
-      iframe.contentWindow?.postMessage(
-        { type: 'bridge:response', requestId, result },
-        '*',
-      );
-    } catch (err) {
-      iframe.contentWindow?.postMessage(
-        { type: 'bridge:response', requestId, result: { error: err instanceof Error ? err.message : String(err) } },
-        '*',
-      );
-    }
   }
 
   private touch(moduleId: string): void {

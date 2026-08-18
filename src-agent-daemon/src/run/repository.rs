@@ -18,11 +18,13 @@ impl RunManager {
                 parent_run_id, agent_profile_id, key_id, permission_profile,
                 project_path, retry_count, idempotency_key, revision, capability_snapshot_json,
                 retry_of_run_id, retry_of_turn_id, continued_from_run_id, branch_id,
-                branch_parent_message_id, checkpoint_id, resume_of_run_id
+                branch_parent_message_id, checkpoint_id, resume_of_run_id,
+                project_id, project_identity_version, effort, runtime_id
              )
              VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12,
-                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28,
+                ?29, ?30, ?31, ?32
              )
              ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
@@ -49,7 +51,11 @@ impl RunManager {
                 branch_id = excluded.branch_id,
                 branch_parent_message_id = excluded.branch_parent_message_id,
                 checkpoint_id = excluded.checkpoint_id,
-                resume_of_run_id = excluded.resume_of_run_id",
+                resume_of_run_id = excluded.resume_of_run_id,
+                project_id = excluded.project_id,
+                project_identity_version = excluded.project_identity_version,
+                effort = excluded.effort,
+                runtime_id = excluded.runtime_id",
             rusqlite::params![
                 run.id,
                 run.conversation_id,
@@ -79,6 +85,10 @@ impl RunManager {
                 run.branch_parent_message_id,
                 run.checkpoint_id,
                 run.resume_of_run_id,
+                run.project_id,
+                run.project_identity_version,
+                run.effort,
+                run.runtime_id,
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
@@ -103,7 +113,8 @@ impl RunManager {
                         step_count, max_steps, project_path, retry_count,
                         created_at, idempotency_key, COALESCE(revision, 0),
                         retry_of_run_id, retry_of_turn_id, continued_from_run_id,
-                        branch_id, branch_parent_message_id, checkpoint_id, resume_of_run_id
+                        branch_id, branch_parent_message_id, checkpoint_id, resume_of_run_id,
+                        project_id, project_identity_version, effort, runtime_id
                  FROM run WHERE idempotency_key = ?1 OR id = ?1 LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
@@ -144,11 +155,11 @@ impl RunManager {
             ),
             last_event_sequence: 0,
             idempotency_key: row.get(18).map_err(|e| e.to_string())?,
-            effort: None,
-            runtime_id: None,
+            effort: row.get(29).map_err(|e| e.to_string())?,
+            runtime_id: row.get(30).map_err(|e| e.to_string())?,
             revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
-            project_id: None,
-            project_identity_version: None,
+            project_id: row.get(27).map_err(|e| e.to_string())?,
+            project_identity_version: row.get(28).map_err(|e| e.to_string())?,
             retry_of_run_id: row.get(20).map_err(|e| e.to_string())?,
             retry_of_turn_id: row.get(21).map_err(|e| e.to_string())?,
             continued_from_run_id: row.get(22).map_err(|e| e.to_string())?,

@@ -263,6 +263,7 @@ impl AgentEngine {
         // Terminal telemetry: the session is over, so a decision cannot alter
         // the committed outcome. Observation-only by the frozen post-contract
         // (T03); the dispatch result is intentionally dropped.
+        let success = matches!(&result, Ok(crate::EngineOutcome::Completed { .. }));
         let _ = self
             .hooks
             .dispatch(HookRequest {
@@ -270,7 +271,7 @@ impl AgentEngine {
                 run_id,
                 tool_name: None,
                 input: json!({
-                    "success": result.is_ok(),
+                    "success": success,
                 }),
             })
             .await;

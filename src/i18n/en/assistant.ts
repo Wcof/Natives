@@ -641,6 +641,8 @@ export const assistant = {
       clearProposals: 'Clear proposals',
       undoLast: 'Undo last run',
       undoLastHint: 'Roll back the last {n} moves (trashed files must be restored from Trash)',
+      undoPartialFailure: '{failed} moves could not be undone; {pending} moves remain pending',
+      undoSuccess: 'Undid {n} moves',
       partialFailure: '{n} operations failed — unfinished proposals kept',
       executeSuccess: 'Executed {n} operations',
       actions: {

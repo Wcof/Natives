@@ -7,6 +7,7 @@ import { t as tr, type Locale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
 import { classifyError } from '@/lib/error-classifier';
 import { readActiveProject } from '@/lib/active-project';
+import type { ReleaseAction, ReleaseExecution, ReleasePlan, ReleaseStep } from '@/lib/tauri/types-api';
 
 /**
  * 发布向导 — 驱动真实后端链路：
@@ -23,12 +24,6 @@ interface ProjectInspection {
   hasCargoToml: boolean;
   gitDirty: boolean;
   gitBranch: string;
-}
-
-interface SequenceStep {
-  id: string;
-  label: string;
-  command: string;
 }
 
 type StepStatus = 'pending' | 'running' | 'ok' | 'fail';
@@ -55,8 +50,8 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
   const [inspecting, setInspecting] = useState(false);
   const [inspection, setInspection] = useState<ProjectInspection | null>(null);
   const [newVersion, setNewVersion] = useState('');
-  const [sequence, setSequence] = useState<SequenceStep[]>([]);
-  const [stepStatus, setStepStatus] = useState<Record<string, StepStatus>>({});
+  const [sequence, setSequence] = useState<ReleaseStep[]>([]);
+  const [stepStatus, setStepStatus] = useState<Partial<Record<ReleaseAction, StepStatus>>>({});
   const [stepError, setStepError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +102,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
     if (!newVersion.trim() || !api?.release?.getSequence) return;
     setError(null);
     try {
-      const result = (await api.release.getSequence(projectPath.trim(), newVersion.trim())) as { steps: SequenceStep[] };
+      const result: ReleasePlan = await api.release.getSequence(projectPath.trim(), newVersion.trim());
       setSequence(result.steps ?? []);
       setStepStatus({});
       setStepError(null);
@@ -125,23 +120,22 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
     try {
       for (const s of sequence) {
         if (cancelledRef.current) return;
-        setStepStatus((prev) => ({ ...prev, [s.id]: 'running' }));
-        if (s.command === 'update-version') {
+        if (stepStatus[s.action] === 'ok') continue;
+        setStepStatus((prev) => ({ ...prev, [s.action]: 'running' }));
+        if (s.action === 'update-version') {
           // 版本号写入走 prepare（package.json / Cargo.toml）
           await api.release.prepare(projectPath.trim(), newVersion.trim());
-          setStepStatus((prev) => ({ ...prev, [s.id]: 'ok' }));
+          setStepStatus((prev) => ({ ...prev, [s.action]: 'ok' }));
           continue;
         }
-        const result = (await api.release.execute(projectPath.trim(), s.command)) as {
-          success: boolean; stderr: string; stdout: string; exitCode: number | null;
-        };
+        const result: ReleaseExecution = await api.release.execute(projectPath.trim(), newVersion.trim(), s.action);
         if (!result.success) {
-          setStepStatus((prev) => ({ ...prev, [s.id]: 'fail' }));
+          setStepStatus((prev) => ({ ...prev, [s.action]: 'fail' }));
           setStepError((result.stderr || result.stdout || '').trim().slice(-800) || `exit ${result.exitCode}`);
           setRunning(false);
           return;
         }
-        setStepStatus((prev) => ({ ...prev, [s.id]: 'ok' }));
+        setStepStatus((prev) => ({ ...prev, [s.action]: 'ok' }));
       }
       setStep('done');
     } catch (e) {
@@ -257,16 +251,16 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
           </p>
           <div className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
             {sequence.map((s) => {
-              const status = stepStatus[s.id] ?? 'pending';
+              const status = stepStatus[s.action] ?? 'pending';
               return (
-                <div key={s.id} className="flex items-center gap-2 px-1.5 py-1 text-sm text-[var(--text)]">
+                <div key={s.action} className="flex items-center gap-2 px-1.5 py-1 text-sm text-[var(--text)]">
                   <span style={{ display: 'inline-flex', width: 14, flexShrink: 0 }}>
                     {status === 'ok' && <Check size={13} style={{ color: 'var(--diff-add)' }} />}
                     {status === 'fail' && <X size={13} style={{ color: 'var(--danger)' }} />}
                     {status === 'running' && <MathCurveLoader size={13} strokeWidth={1} particleCount={6} />}
                   </span>
                   <span className="flex-1">{s.label}</span>
-                  <code className="text-xs text-[var(--text-disabled)]" style={{ fontFamily: 'var(--font-mono)' }}>{s.command}</code>
+                  <code className="text-xs text-[var(--text-disabled)]" style={{ fontFamily: 'var(--font-mono)' }}>{s.display}</code>
                 </div>
               );
             })}

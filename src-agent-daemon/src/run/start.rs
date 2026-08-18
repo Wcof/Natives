@@ -5,7 +5,75 @@ use crate::production::{FixtureMode, FixtureProvider};
 use agent_core::{AgentEngine, EngineOutcome, EngineRunConfig, TransitionMetadata};
 use assistant_protocol::v2::{CreateRunRequest, RunStatusV2, RunV2, StartRunRequest};
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+pub(crate) struct DetachedStartTestGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    finished: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl DetachedStartTestGate {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            finished: tokio::sync::Notify::new(),
+        })
+    }
+
+    pub(crate) async fn wait_until_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.notify_one();
+    }
+
+    pub(crate) async fn wait_until_finished(&self) {
+        self.finished.notified().await;
+    }
+}
+
+#[cfg(test)]
+fn detached_start_test_gate() -> &'static std::sync::Mutex<Option<Arc<DetachedStartTestGate>>> {
+    static GATE: std::sync::OnceLock<std::sync::Mutex<Option<Arc<DetachedStartTestGate>>>> =
+        std::sync::OnceLock::new();
+    GATE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) fn set_detached_start_test_gate(gate: Option<Arc<DetachedStartTestGate>>) {
+    *detached_start_test_gate()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = gate;
+}
+
+#[cfg(test)]
+struct DetachedStartTestGuard(Option<Arc<DetachedStartTestGate>>);
+
+#[cfg(test)]
+impl Drop for DetachedStartTestGuard {
+    fn drop(&mut self) {
+        if let Some(gate) = &self.0 {
+            gate.finished.notify_one();
+        }
+    }
+}
+
+#[cfg(test)]
+async fn wait_for_detached_start_test_gate() -> DetachedStartTestGuard {
+    let gate = detached_start_test_gate()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(gate) = &gate {
+        gate.entered.notify_one();
+        gate.release.notified().await;
+    }
+    DetachedStartTestGuard(gate)
+}
 
 impl RunManager {
     /// Production start: real provider path when credentials exist; fixture path only under test flag.
@@ -341,6 +409,18 @@ impl RunManager {
             self.fail_run_if_active(&run.id, error.to_string(), error.code);
             return Err(error.to_string());
         }
+        // Freeze the exact resolved Harness dispatcher after its prompt hash is
+        // durable. Tool hooks reuse this registry instead of rediscovering files.
+        let _frozen_hook_lifetime = (runtime_id == "native").then(|| {
+            let frozen = crate::production_hooks::freeze_run_hooks(
+                &run.id,
+                &effective_prompt.effective_prompt_hash,
+                harness_plan.compile(effective_project_path.as_deref()),
+                self.runtime.events.clone(),
+            );
+            frozen.assert_plan_hash_matches_snapshot();
+            frozen.retain_until_terminal()
+        });
         // A retry/continue plan is only consumed once the detached run has
         // passed preparation and its immutable execution plan is durable. A
         // provider/tool failure after this point is a real new-run outcome,
@@ -354,13 +434,22 @@ impl RunManager {
         let _mcp_refs = McpRunRefGuard {
             run_id: run.id.clone(),
         };
+        #[cfg(test)]
+        let _detached_start_test_guard = wait_for_detached_start_test_gate().await;
+        let execution_token = self
+            .runtime
+            .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
+            .await?;
+        if let Some(terminal) = self
+            .get_run(&run.id)
+            .filter(|current| current.status.is_terminal())
+        {
+            self.runtime.execution.mark_finished(&run.id).await;
+            return Ok(terminal);
+        }
 
         // REQ-T02: Codex remains fail-closed (app-server not implemented).
         if runtime_id == "codex_cli" {
-            let cancel = self
-                .runtime
-                .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
-                .await?;
             let err = match crate::codex_runtime_bridge::run_codex_cli_turn(
                 &self.runtime,
                 &run.id,
@@ -372,7 +461,7 @@ impl RunManager {
                     .map(std::path::PathBuf::from)
                     .as_deref(),
                 &permission_profile,
-                cancel,
+                execution_token,
             )
             .await
             {
@@ -400,10 +489,6 @@ impl RunManager {
             && std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() != Some("1")
             && !cfg!(test)
         {
-            let cancel = self
-                .runtime
-                .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
-                .await?;
             // Commit Running before the turn: Preparing→{Completed,Cancelled} are not
             // legal edges, but Running→terminal are. CLI is actively running here.
             self.commit_status(
@@ -423,7 +508,7 @@ impl RunManager {
                 project.as_deref(),
                 &permission_profile,
                 &capability_snapshot,
-                cancel,
+                execution_token,
             )
             .await
             {
@@ -505,14 +590,9 @@ impl RunManager {
                     .or(run.project_path.as_deref())
                     .map(std::path::Path::new),
             );
-            let cancel = self
-                .runtime
-                .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
-                .await
-                .unwrap_or_else(|_| CancellationToken::new());
             let engine = Arc::new(
                 AgentEngine::with_live(self.runtime.events.clone(), self.runtime.live.clone())
-                    .with_cancel_token(cancel)
+                    .with_cancel_token(execution_token)
                     .with_hooks(hooks)
                     .with_progress_sink(Arc::new(
                         crate::production_tools::DaemonToolProgressSink::new(

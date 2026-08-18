@@ -199,6 +199,8 @@ export const dashboard = {
     dockLabel: '活动应用',
     dockMinimize: '最小化',
     dockClose: '关闭窗口',
+    appTitle: '应用名称',
+    projectRoot: '项目根目录',
     proposalTitle: 'Agent 提案',
     proposalCreate: '创建',
     proposalStart: '启动',

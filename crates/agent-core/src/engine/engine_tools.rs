@@ -181,27 +181,6 @@ impl AgentEngine {
                         is_error: true,
                         duration_ms: 0,
                     });
-                    let post_event = if result.is_error {
-                        HookEvent::PostToolUseFailure
-                    } else {
-                        HookEvent::PostToolUse
-                    };
-                    self.hooks
-                        .observe(HookRequest {
-                            event: post_event,
-                            run_id: run_id.to_string(),
-                            tool_name: Some(call.name.clone()),
-                            input: json!({ "input": call.input, "output": result.output }),
-                        })
-                        .await
-                        .map_err(|refusal| match refusal {
-                            crate::hooks::ObserveResult::Failed { reason } => {
-                                EngineError::HookRefused(reason)
-                            }
-                            crate::hooks::ObserveResult::Observe => {
-                                EngineError::HookRefused("post-hook observation failed".into())
-                            }
-                        })?;
                     let result_message_id = crate::MessageId::new().to_string();
                     if let Err(error) = self.append_critical(
                         run_id,
@@ -234,6 +213,27 @@ impl AgentEngine {
                     if !is_long_running_tool_result(&result) {
                         self.progress_sink.mark_tool_call_settled(&call.id).await;
                     }
+                    let post_event = if result.is_error {
+                        HookEvent::PostToolUseFailure
+                    } else {
+                        HookEvent::PostToolUse
+                    };
+                    self.hooks
+                        .observe(HookRequest {
+                            event: post_event,
+                            run_id: run_id.to_string(),
+                            tool_name: Some(call.name.clone()),
+                            input: json!({ "input": call.input, "output": result.output }),
+                        })
+                        .await
+                        .map_err(|refusal| match refusal {
+                            crate::hooks::ObserveResult::Failed { reason } => {
+                                EngineError::HookRefused(reason)
+                            }
+                            crate::hooks::ObserveResult::Observe => {
+                                EngineError::HookRefused("post-hook observation failed".into())
+                            }
+                        })?;
                     out.push(ExecutedToolCall {
                         id: call.id,
                         name: call.name,
@@ -258,27 +258,6 @@ impl AgentEngine {
                     self.progress_sink.clone(),
                 )
                 .await;
-            let post_event = if result.is_error {
-                HookEvent::PostToolUseFailure
-            } else {
-                HookEvent::PostToolUse
-            };
-            self.hooks
-                .observe(HookRequest {
-                    event: post_event,
-                    run_id: run_id.to_string(),
-                    tool_name: Some(call.name.clone()),
-                    input: json!({ "input": call.input, "output": result.output }),
-                })
-                .await
-                .map_err(|refusal| match refusal {
-                    crate::hooks::ObserveResult::Failed { reason } => {
-                        EngineError::HookRefused(reason)
-                    }
-                    crate::hooks::ObserveResult::Observe => {
-                        EngineError::HookRefused("post-hook observation failed".into())
-                    }
-                })?;
             let result_message_id = crate::MessageId::new().to_string();
             if let Err(error) = self.append_critical(
                 run_id,
@@ -306,6 +285,27 @@ impl AgentEngine {
             if !is_long_running_tool_result(&result) {
                 self.progress_sink.mark_tool_call_settled(&call.id).await;
             }
+            let post_event = if result.is_error {
+                HookEvent::PostToolUseFailure
+            } else {
+                HookEvent::PostToolUse
+            };
+            self.hooks
+                .observe(HookRequest {
+                    event: post_event,
+                    run_id: run_id.to_string(),
+                    tool_name: Some(call.name.clone()),
+                    input: json!({ "input": call.input, "output": result.output }),
+                })
+                .await
+                .map_err(|refusal| match refusal {
+                    crate::hooks::ObserveResult::Failed { reason } => {
+                        EngineError::HookRefused(reason)
+                    }
+                    crate::hooks::ObserveResult::Observe => {
+                        EngineError::HookRefused("post-hook observation failed".into())
+                    }
+                })?;
             out.push(ExecutedToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),
@@ -397,11 +397,6 @@ impl AgentEngine {
                     duration_ms: 0,
                 });
             }
-            doom.observe_tool(&name, &tool_args_fingerprint(&args));
-            if let Some(reason) = doom.diagnose() {
-                return Err(EngineError::DoomLoop(reason));
-            }
-
             // PreToolUse hooks may deny or modify arguments (always serial).
             let pre = self
                 .hooks
@@ -434,6 +429,13 @@ impl AgentEngine {
                     is_error: true,
                     duration_ms: 0,
                 });
+            }
+            let args = serde_json::to_string(&input).map_err(|error| {
+                EngineError::Message(format!("tool arguments are not JSON: {error}"))
+            })?;
+            doom.observe_tool(&name, &tool_args_fingerprint(&args));
+            if let Some(reason) = doom.diagnose() {
+                return Err(EngineError::DoomLoop(reason));
             }
 
             self.append_critical(

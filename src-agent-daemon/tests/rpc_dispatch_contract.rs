@@ -21,7 +21,7 @@
 //! - A handler that blocks past the timeout is a PASS: the fail-closed arm is a pure,
 //!   immediate error write, so anything that takes time is definitionally not it.
 
-use assistant_protocol::v1::daemon::RpcRequest;
+use assistant_protocol::v2::V2Request;
 use assistant_protocol::v2::{HOST_IMPLEMENTED_METHODS, IMPLEMENTED_METHODS};
 use assistant_protocol::version::ProtocolVersion;
 use std::time::Duration;
@@ -83,11 +83,14 @@ async fn probe(method: &str) -> Probe {
     let (client, server) = tokio::net::UnixStream::pair().expect("socket pair");
     let (_server_read, mut server_write) = server.into_split();
 
-    let request = RpcRequest {
+    let request = V2Request {
         protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
         request_id: format!("probe-{method}"),
+        session_id: None,
         client_id: "dispatch-contract".to_string(),
         session_token: "probe-session".to_string(),
+        run_id: None,
+        idempotency_key: None,
         method: method.to_string(),
         params: serde_json::json!({}),
     };

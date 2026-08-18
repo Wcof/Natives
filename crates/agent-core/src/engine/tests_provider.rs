@@ -530,6 +530,56 @@ async fn discards_partial_generation_error_without_retrying() {
         .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
 }
 
+#[tokio::test]
+async fn rejects_nonempty_provider_stream_without_completion() {
+    let engine = AgentEngine::new(EventSequencer::memory_only());
+    let run_id = format!("r-incomplete-stream-{}", uuid::Uuid::new_v4());
+    let err = engine
+        .run(
+            EngineRunConfig {
+                run_id: run_id.clone(),
+                conversation_id: "c1".into(),
+                model: "m".into(),
+                system_prompt: None,
+                messages: Vec::new(),
+                user_content: "hi".into(),
+                max_steps: 5,
+            },
+            &FakeProvider {
+                rounds: Mutex::new(vec![vec![EngineProviderEvent::TextDelta("partial".into())]]),
+            },
+            &FakeTools,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        EngineError::Provider { ref code, .. } if code == "INCOMPLETE_PROVIDER_STREAM"
+    ));
+    let events = engine.events.replay_after(&run_id, 0);
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            RunEventKind::GenerationAttemptDiscarded { reason, .. }
+                if reason == "INCOMPLETE_PROVIDER_STREAM"
+        )
+    }));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::GenerationAttemptStarted { .. }))
+            .count(),
+        1,
+        "partial output must fail closed instead of being retried"
+    );
+    assert!(!events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            RunEventKind::TurnCompleted { stop_reason, .. } if stop_reason == "unknown"
+        )
+    }));
+}
+
 // ---- provider backoff -------------------------------------------------
 
 #[test]

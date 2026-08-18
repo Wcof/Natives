@@ -1,6 +1,225 @@
 use super::*;
 
 #[tokio::test]
+async fn permission_gate_journals_wait_and_resume() {
+    let _env_guard = crate::storage::DataStore::env_test_lock();
+    let _env_restore = crate::storage::EnvRestore::capture();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("permission-lifecycle.db");
+    std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+    std::env::set_var("NATIVES_DB_PATH", &db_path);
+    std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+    crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+    let _store = crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
+    let rm = crate::run_manager::install_global_for_test(RunManager::new());
+    let run = rm
+        .create_run(CreateRunRequest {
+            capability_selection: None,
+            disabled_tools: None,
+            conversation_id: "c-permission-lifecycle".into(),
+            provider_id: "openai".into(),
+            model_id: "gpt-4o".into(),
+            key_id: Some("k".into()),
+            agent_profile_id: None,
+            permission_profile: Some("ask".into()),
+            content: Some("tool please".into()),
+            attachments: None,
+            max_steps: Some(5),
+            parent_run_id: None,
+            project_path: None,
+            idempotency_key: Some(format!("permission-lifecycle-{}", Uuid::new_v4())),
+            effort: None,
+            runtime_id: None,
+        })
+        .unwrap();
+    rm.commit_status(
+        &run.id,
+        RunStatusV2::Preparing,
+        TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+    )
+    .unwrap();
+    rm.commit_status(
+        &run.id,
+        RunStatusV2::Running,
+        TransitionMetadata::empty().with_lifecycle_hint("running"),
+    )
+    .unwrap();
+
+    let tools = Arc::new(crate::production::PermissionGatedTools {
+        gateway: {
+            let mut gateway = capability_gateway::CapabilityGateway::new();
+            let _ = gateway.register_builtins();
+            Arc::new(gateway)
+        },
+        permissions: rm.runtime.permissions.clone(),
+        events: rm.runtime.events.clone(),
+        interactions: rm.runtime.interactions.clone(),
+        subagents: rm.runtime.subagents.clone(),
+        task_outputs: rm.runtime.task_outputs_ref(),
+        engines: rm.runtime.engine_handles().await,
+        runtime: Some(rm.runtime.clone()),
+        provider_id: "openai".into(),
+        key_id: None,
+        parent_run_id: run.id.clone(),
+        conversation_id: run.conversation_id.clone(),
+        model_id: "gpt-4o".into(),
+        permission_profile: "ask".into(),
+        tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
+    });
+    let gate = tokio::spawn({
+        let tools = tools.clone();
+        async move {
+            let input = serde_json::json!({"path": "/tmp/permission-lifecycle", "content": "x"});
+            tools
+                .await_tool_permission("call-permission-lifecycle", "write_file", &input, true)
+                .await
+        }
+    });
+
+    let permission_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let events = rm.runtime.events.replay_after(&run.id, 0);
+            if let Some(permission_id) = events.iter().find_map(|event| match &event.payload {
+                RunEventKind::PermissionRequested { permission_id, .. } => {
+                    Some(permission_id.clone())
+                }
+                _ => None,
+            }) {
+                if rm.get_run(&run.id).map(|current| current.status)
+                    == Some(RunStatusV2::WaitingPermission)
+                {
+                    return permission_id;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("permission gate must journal WaitingPermission before blocking");
+
+    let waiting_events = rm.runtime.events.replay_after(&run.id, 0);
+    assert_eq!(
+        waiting_events
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::PermissionRequested { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        waiting_events
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::PermissionResponded { .. }))
+            .count(),
+        0
+    );
+    assert_eq!(
+        waiting_events
+            .iter()
+            .filter(|event| matches!(
+                &event.payload,
+                RunEventKind::Progress { message, .. } if message == "waiting_permission"
+            ))
+            .count(),
+        1
+    );
+
+    rm.respond_permission(&permission_id, true).await.unwrap();
+    assert!(gate.await.unwrap().is_none());
+    assert_eq!(
+        rm.get_run(&run.id).map(|current| current.status),
+        Some(RunStatusV2::Running)
+    );
+
+    let resolved_events = rm.runtime.events.replay_after(&run.id, 0);
+    assert_eq!(
+        resolved_events
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::PermissionRequested { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        resolved_events
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::PermissionResponded { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        resolved_events
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::Started))
+            .count(),
+        2,
+        "the initial start and resolved permission each commit exactly one Started event"
+    );
+
+    let terminal_race = tokio::spawn({
+        let tools = tools.clone();
+        async move {
+            let input =
+                serde_json::json!({"path": "/tmp/permission-terminal-race", "content": "x"});
+            tools
+                .await_tool_permission("call-permission-terminal-race", "write_file", &input, true)
+                .await
+        }
+    });
+    let terminal_race_permission_id =
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let events = rm.runtime.events.replay_after(&run.id, 0);
+                if let Some(permission_id) = events
+                    .iter()
+                    .filter_map(|event| match &event.payload {
+                        RunEventKind::PermissionRequested { permission_id, .. } => {
+                            Some(permission_id.clone())
+                        }
+                        _ => None,
+                    })
+                    .nth(1)
+                {
+                    if rm.get_run(&run.id).map(|current| current.status)
+                        == Some(RunStatusV2::WaitingPermission)
+                    {
+                        return permission_id;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("second permission gate must journal WaitingPermission before blocking");
+    rm.commit_status(
+        &run.id,
+        RunStatusV2::Interrupted,
+        TransitionMetadata::empty().with_lifecycle_hint("interrupted"),
+    )
+    .unwrap();
+    rm.respond_permission(&terminal_race_permission_id, true)
+        .await
+        .unwrap();
+    assert!(terminal_race.await.unwrap().is_none());
+    assert_eq!(
+        rm.get_run(&run.id).map(|current| current.status),
+        Some(RunStatusV2::Interrupted),
+        "a late permission response must not revive a terminal run"
+    );
+    assert_eq!(
+        rm.runtime
+            .events
+            .replay_after(&run.id, 0)
+            .iter()
+            .filter(|event| matches!(event.payload, RunEventKind::Started))
+            .count(),
+        2,
+        "a late response must not emit another lifecycle start"
+    );
+}
+
+#[tokio::test]
 async fn permission_gate_emits_request_and_respond() {
     let _env_guard = crate::storage::DataStore::env_test_lock();
     let _env_restore = crate::storage::EnvRestore::capture();
@@ -458,28 +677,39 @@ async fn mcp_call_through_permission_gate_emits_events() {
     std::env::set_var("NATIVES_RUNTIME_DIR", rt_dir.path());
     std::env::set_var("NATIVES_RUN_MANAGER_MEMORY", "1");
     crate::run_manager::install_global_for_test(crate::run_manager::RunManager::new());
-    // Register mock tool without live session → structured error + events.
+    let script = rt_dir.path().join("oversized_mcp.py");
+    std::fs::write(
+        &script,
+        r#"import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "test", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "echo", "description": "echo", "inputSchema": {"type": "object"}}]}
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": "x" * 256001}]}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"#,
+    )
+    .unwrap();
     let rt = crate::production::ProductionRuntime::new();
     crate::mcp_runtime::global_mcp()
         .register_server(agent_core::McpServerConfig {
             id: "gate-test".into(),
             transport: agent_core::McpTransport::Stdio,
-            command: Some("true".into()),
-            args: None,
+            command: Some("python3".into()),
+            args: Some(vec![script.to_string_lossy().to_string()]),
             url: None,
             trusted: true,
             auth_token: None,
             headers: None,
         })
         .unwrap();
-    crate::mcp_runtime::global_mcp()
-        .upsert_tool(agent_core::McpToolDescriptor {
-            server_id: "gate-test".into(),
-            name: "echo".into(),
-            description: "echo".into(),
-            input_schema: serde_json::json!({"type":"object"}),
-        })
-        .unwrap();
+    crate::mcp_runtime::global_mcp().start("gate-test").unwrap();
     let tools = crate::production::PermissionGatedTools {
         gateway: {
             let mut g = capability_gateway::CapabilityGateway::new();
@@ -515,8 +745,12 @@ async fn mcp_call_through_permission_gate_emits_events() {
             &CancellationToken::new(),
         )
         .await;
-    // No live session → error, but still gated + evented.
-    assert!(out.is_error || out.output.get("ok") == Some(&serde_json::json!(false)));
+    assert!(
+        out.is_error,
+        "oversized MCP result must fail: {:?}",
+        out.output
+    );
+    assert_eq!(out.output["code"], "output_limit");
     let evs = rt.events.replay_after("mcp-parent", 0);
     assert!(
         evs.iter()

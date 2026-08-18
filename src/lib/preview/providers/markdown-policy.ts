@@ -7,7 +7,9 @@
 // 所有 policy 均基于 markdown-safety 的既有安全判定，禁止新增宽松规则。
 
 import { isSafeImageSource, isSafeMarkdownUrl } from '@/lib/markdown-safety';
-import { resolveLocalRef, rewriteLocalImages } from '@/lib/markdown-local-images';
+import {
+  rewriteAuthorizedLocalImages as rewriteAuthorizedLocalImagesWithContext,
+} from '@/lib/markdown-local-images';
 import type { PreviewContext, PreviewUrlPolicy } from '../contracts';
 
 /** 已授权本地资产 URL（convertFileSrc 产物）：asset://localhost 或 http(s)://asset.localhost */
@@ -83,37 +85,6 @@ export function buildMarkdownRenderOptions(
 // 未授权/缺失/越根引用保持原文，由 urlTransform 的 markdown-safety 判定拦掉，
 // 绝不产出可访问的 asset:// URL，也不让单张坏图拖垮整篇文档预览。
 
-const MD_IMAGE_RE = /(!\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g;
-const HTML_IMG_RE = /(<img\b[^>]*?\bsrc=")([^"]+)(")/gi;
-
-async function collectAuthorizedRefs(
-  source: string,
-  baseDir: string,
-  authorizeFile: PreviewContext['authorizeFile'],
-): Promise<Set<string>> {
-  const refs = new Set<string>();
-  const collect = (raw: string): void => {
-    if (!raw) return;
-    const abs = resolveLocalRef(raw, baseDir);
-    if (abs && isWithinAuthorizedBase(abs, baseDir)) refs.add(abs);
-  };
-  for (const m of source.matchAll(MD_IMAGE_RE)) collect(m[2]!);
-  for (const m of source.matchAll(HTML_IMG_RE)) collect(m[2]!);
-
-  const authorized = new Set<string>();
-  for (const abs of refs) {
-    try {
-      const file = await authorizeFile(abs);
-      // 记录原始归一化路径 + Host 授权返回的权威路径，二者都可命中改写回调
-      authorized.add(abs);
-      if (file.path && file.path !== abs) authorized.add(file.path);
-    } catch {
-      // best-effort：缺失/越权引用不产出 asset URL（跳过即可，文档仍可预览）
-    }
-  }
-  return authorized;
-}
-
 /**
  * 逐资源授权并改写：返回渲染源与已授权资产清单。
  * 仅在 authorized-file-assets（file markdown）路径使用；assistant-safe 不走这里。
@@ -123,9 +94,10 @@ export async function rewriteAuthorizedLocalImages(
   baseDir: string,
   authorizeFile: PreviewContext['authorizeFile'],
 ): Promise<{ text: string; authorizedAssets: string[] }> {
-  const authorized = await collectAuthorizedRefs(source, baseDir, authorizeFile);
-  const { text } = rewriteLocalImages(source, baseDir, (abs) =>
-    authorized.has(abs) ? `asset://localhost${encodeURI(abs)}` : '',
-  );
-  return { text, authorizedAssets: [...authorized] };
+  const { text, authorizedAssets } = await rewriteAuthorizedLocalImagesWithContext(source, baseDir, {
+    authorizeFile,
+    toAssetUrl: (file) => `asset://localhost${encodeURI(file.path)}`,
+    isWithinBase: isWithinAuthorizedBase,
+  });
+  return { text, authorizedAssets };
 }

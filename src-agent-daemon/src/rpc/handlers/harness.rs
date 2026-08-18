@@ -8,7 +8,7 @@
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_harness(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{harness, send_error, send_success};
     use assistant_protocol::error::{DaemonError, ErrorCategory};
@@ -43,6 +43,7 @@ pub(crate) async fn dispatch_harness(
                     // throw that away.
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(e.code, e.category, false, e.message),
                     )
                     .await
@@ -66,7 +67,7 @@ pub(crate) async fn dispatch_harness(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

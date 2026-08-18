@@ -641,6 +641,8 @@ export const assistant = {
       clearProposals: '清空建议',
       undoLast: '撤销上次整理',
       undoLastHint: '回滚最近一次的 {n} 项移动（已删除文件需从废纸篓恢复）',
+      undoPartialFailure: '{failed} 项移动撤销失败，仍有 {pending} 项待处理',
+      undoSuccess: '已撤销 {n} 项移动',
       partialFailure: '{n} 项操作失败，未完成的建议已保留',
       executeSuccess: '已执行 {n} 项整理',
       actions: {

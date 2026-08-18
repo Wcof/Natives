@@ -8,6 +8,16 @@ use tokio_util::sync::CancellationToken;
 
 use super::gated::PermissionGatedTools;
 
+// Keep dynamic MCP calls aligned with CapabilityGateway's default manifest.
+const MCP_OUTPUT_LIMIT_BYTES: usize = 256_000;
+
+fn mcp_output_exceeds_limit(output: &Value) -> bool {
+    capability_gateway::policy::check_output_limit(
+        output.to_string().as_bytes(),
+        MCP_OUTPUT_LIMIT_BYTES as u64,
+    )
+}
+
 /// Process-wide registry of in-flight MCP tool calls (J03). A call enters when
 /// its invocation starts and leaves when it settles, so after a cancel the
 /// registry is quiet — there is no lingering request whose late response could
@@ -221,6 +231,18 @@ impl PermissionGatedTools {
                         duration_ms,
                     };
                 }
+                if mcp_output_exceeds_limit(&result) {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": format!(
+                                "tool `{name}` output exceeded {MCP_OUTPUT_LIMIT_BYTES} bytes"
+                            ),
+                            "code": "output_limit",
+                        }),
+                        is_error: true,
+                        duration_ms,
+                    };
+                }
                 ToolExecutionResult {
                     output: serde_json::json!({
                         "server": server_id,
@@ -322,5 +344,16 @@ mod tests {
             crate::tools::mcp::mcp_ledger_status(false, true),
             "uncertain"
         ); // cancel
+    }
+
+    #[test]
+    fn mcp_output_limit_allows_exact_boundary_and_rejects_one_byte_over() {
+        let exact = Value::String("x".repeat(MCP_OUTPUT_LIMIT_BYTES - 2));
+        let over = Value::String("x".repeat(MCP_OUTPUT_LIMIT_BYTES - 1));
+
+        assert_eq!(exact.to_string().len(), MCP_OUTPUT_LIMIT_BYTES);
+        assert!(!mcp_output_exceeds_limit(&exact));
+        assert_eq!(over.to_string().len(), MCP_OUTPUT_LIMIT_BYTES + 1);
+        assert!(mcp_output_exceeds_limit(&over));
     }
 }

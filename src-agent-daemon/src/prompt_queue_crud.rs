@@ -2,8 +2,8 @@
 //! `super` here is the `prompt_queue_store` module.
 
 use super::{
-    ensure_conversation_for_queue, global_harness, load_actor_snapshot, persist_actor_snapshot,
-    row_to_item, store, value_to_queue_item,
+    conversation_project_path, ensure_conversation_for_queue, global_harness, load_actor_snapshot,
+    persist_actor_snapshot, row_to_item, store, value_to_queue_item,
 };
 use crate::run_manager::global_run_manager;
 use agent_core::{CoordinatorAction, PromptSource, QueueItem};
@@ -324,9 +324,8 @@ pub(crate) async fn send_now(params: Value) -> Result<Value, String> {
     let store = store()?;
     let (conversation_id, content, _attachments_raw, provider_id, model_id, project_path) = {
         let conn = store.conn()?;
-        conn.query_row(
-            "SELECT q.conversation_id, q.content, q.attachments,
-                    c.provider_id, c.model_id, c.project_id
+        let (conversation_id, content, attachments, provider_id, model_id) = conn.query_row(
+            "SELECT q.conversation_id, q.content, q.attachments, c.provider_id, c.model_id
              FROM prompt_queue q
              JOIN conversation c ON c.id = q.conversation_id
              WHERE q.id = ?1",
@@ -338,13 +337,14 @@ pub(crate) async fn send_now(params: Value) -> Result<Value, String> {
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "prompt queue item not found".to_string())?
+        .ok_or_else(|| "prompt queue item not found".to_string())?;
+        let project_path = conversation_project_path(&conn, &conversation_id)?;
+        (conversation_id, content, attachments, provider_id, model_id, project_path)
     };
 
     // Ensure coordinator knows about this item (may already).
@@ -413,7 +413,7 @@ pub(crate) async fn send_now(params: Value) -> Result<Value, String> {
                     trigger_message_id: None,
                     permission_profile: None,
                     max_steps: None,
-                    project_path: project_path.clone(),
+                    project_path: Some(project_path.clone()),
                     idempotency_key: Some(format!("prompt-queue:{}", item.id)),
                     effort: None,
                     runtime_id: None,
@@ -479,7 +479,7 @@ pub(crate) async fn send_now(params: Value) -> Result<Value, String> {
         trigger_message_id: None,
         permission_profile: None,
         max_steps: None,
-        project_path,
+        project_path: Some(project_path),
         // Unified queue idempotency key (also used by drain / cancel-and-send).
         idempotency_key: Some(format!("prompt-queue:{}", item.id)),
         effort: None,

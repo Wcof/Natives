@@ -15,6 +15,16 @@ import type { VirtualFileViewHandle } from '@/lib/preview/contracts';
 import FileGrid from '../FileGrid';
 import FileList from '../FileList';
 import Skeleton from '@/components/ui/Skeleton';
+import { ErrorState } from '@/components/ui/EmptyState';
+import type { ClassifiedError } from '@/lib/error-classifier';
+
+export type FileAreaState = 'loading' | 'error' | 'success';
+
+export function resolveFileAreaState(loading: boolean, error: ClassifiedError | null): FileAreaState {
+  if (loading) return 'loading';
+  if (error) return 'error';
+  return 'success';
+}
 
 export interface FileDragHandlers {
   onDragEnter: (e: React.DragEvent) => void;
@@ -27,6 +37,8 @@ export interface FileAreaProps {
   locale: Locale;
   viewMode: 'grid' | 'list';
   loading: boolean;
+  error: ClassifiedError | null;
+  onRetry: () => void;
   /** 过滤后的渲染列表 */
   entries: FileEntry[];
   isDragging: boolean;
@@ -63,6 +75,8 @@ export default function FileArea({
   locale,
   viewMode,
   loading,
+  error,
+  onRetry,
   entries,
   isDragging,
   dragHandlers,
@@ -89,22 +103,26 @@ export default function FileArea({
   scrollContainerRef,
   onViewHandleReady,
 }: FileAreaProps) {
+  const state = resolveFileAreaState(loading, error);
+
   return (
     // File area — drop zone covers entire height including empty space
     <div
       ref={areaRef}
-      {...dragHandlers}
+      {...(state === 'success' ? dragHandlers : {})}
       style={{ flex: 1, overflow: 'auto', position: 'relative' }}
       role="listbox"
       aria-label={t(locale, 'fileBrowser.ariaLabelFiles')}
       tabIndex={0}
       onClick={(e) => {
+        if (state !== 'success') return;
         const target = e.target as HTMLElement;
         if (!target.closest('[data-file-entry]')) {
           onBlankClick();
         }
       }}
       onKeyDown={(e) => {
+        if (state !== 'success') return;
         if (e.key === 'Enter' || e.key === ' ') {
           const target = e.target as HTMLElement;
           if (!target.closest('[data-file-entry]')) {
@@ -114,6 +132,10 @@ export default function FileArea({
         }
       }}
       onContextMenu={(e) => {
+        if (state !== 'success') {
+          e.preventDefault();
+          return;
+        }
         // Blank area right-click — only if not on a file/dir element
         const target = e.target as HTMLElement;
         if (!target.closest('[data-file-entry]')) {
@@ -123,7 +145,7 @@ export default function FileArea({
       }}
     >
       {/* Drop overlay — fills entire area including empty space below files */}
-      {isDragging && (
+      {state === 'success' && isDragging && (
         <div
           style={{
             position: 'absolute',
@@ -144,7 +166,7 @@ export default function FileArea({
           {t(locale, 'fileBrowser.dropHere')}
         </div>
       )}
-      {loading ? (
+      {state === 'loading' ? (
         <div style={{ padding: viewMode === 'grid' ? 12 : 0 }}>
           {viewMode === 'grid' ? (
             <div
@@ -160,6 +182,12 @@ export default function FileArea({
             <Skeleton variant="table" lines={10} />
           )}
         </div>
+      ) : state === 'error' ? (
+        <ErrorState
+          message={[error?.userMessage, error?.actionHint].filter(Boolean).join(' ')}
+          onRetry={error?.retryable ? onRetry : undefined}
+          retryLabel={t(locale, 'common.retry')}
+        />
       ) : viewMode === 'grid' ? (
         <FileGrid
           ref={gridContainerRef}

@@ -1,5 +1,6 @@
-use crate::{agent, Error, Result};
+use crate::{agent, AppState, Error, Result};
 use std::path::Path;
+use tauri::State;
 
 /// 启用 skill：从 `_disabled/name` 移回父目录 `name`
 /// 处理符号链接：解析绝对目标后删旧链建新链
@@ -105,87 +106,62 @@ pub fn skills_get_deactivated_path(path: String) -> Result<String> {
 
 /// 卸载 skill：移到系统废纸篓（可恢复），而非永久删除
 #[tauri::command]
-pub fn skills_uninstall(path: String) -> Result<()> {
-    if !agent::validate_skill_dir(&path).unwrap_or(false) {
-        return Err(Error::Internal("skill not in scanned skills list".into()));
-    }
+pub async fn skills_uninstall(path: String, state: State<'_, AppState>) -> Result<()> {
+    let _permit = state
+        .skills_trash_slots
+        .acquire()
+        .await
+        .map_err(|e| Error::Internal(format!("skills trash semaphore closed: {e}")))?;
 
-    let skill_path = Path::new(&path);
-    if !skill_path.exists() {
-        return Err(Error::Internal("skill directory does not exist".into()));
-    }
+    tokio::task::spawn_blocking(move || {
+        if !agent::validate_skill_dir(&path).unwrap_or(false) {
+            return Err(Error::Internal("skill not in scanned skills list".into()));
+        }
 
-    trash_or_delete(skill_path)?;
+        let skill_path = Path::new(&path);
+        if !skill_path.exists() {
+            return Err(Error::Internal("skill directory does not exist".into()));
+        }
+
+        move_to_trash(skill_path)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("skills trash task failed: {e}")))??;
+
     agent::invalidate_skills_cache();
     Ok(())
 }
 
-/// 移到系统废纸篓，失败则永久删除
-fn trash_or_delete(skill_path: &Path) -> Result<()> {
-    let path_str = skill_path.to_string_lossy().to_string();
-
-    // macOS: 尝试 Finder AppleScript
-    if cfg!(target_os = "macos") {
-        let result = std::process::Command::new("osascript")
-            .args([
-                "-e",
-                "on run argv",
-                "-e",
-                "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)",
-                "-e",
-                "end run",
-                &path_str,
-            ])
-            .output();
-
-        match result {
-            Ok(output) if output.status.success() => return Ok(()),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if stderr.contains("-1743") || stderr.contains("-600") {
-                    // Finder 自动化未授权，降级为永久删除
-                    return force_delete(skill_path);
-                }
-                return Err(Error::Internal(format!(
-                    "failed to move to trash: {}",
-                    stderr
-                )));
-            }
-            Err(_) => {
-                // osascript 不可用，降级为永久删除
-                return force_delete(skill_path);
-            }
-        }
-    }
-
-    // Linux: 尝试 gio trash / trash-put / trash
-    if cfg!(target_os = "linux") {
-        for cmd in &["gio", "trash-put", "trash"] {
-            if let Ok(output) = std::process::Command::new(cmd).arg(&path_str).output() {
-                if output.status.success() {
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    // 降级：永久删除
-    force_delete(skill_path)
+fn move_to_trash(skill_path: &Path) -> Result<()> {
+    move_to_trash_with(skill_path, system_trash_delete)
 }
 
-fn force_delete(skill_path: &Path) -> Result<()> {
-    if skill_path.is_dir() {
-        std::fs::remove_dir_all(skill_path).map_err(Error::Io)?;
-    } else {
-        std::fs::remove_file(skill_path).map_err(Error::Io)?;
-    }
-    Ok(())
+fn move_to_trash_with<F, E>(skill_path: &Path, trash_delete: F) -> Result<()>
+where
+    F: FnOnce(&Path) -> std::result::Result<(), E>,
+    E: std::fmt::Display,
+{
+    trash_delete(skill_path)
+        .map_err(|e| Error::Internal(format!("failed to move skill to system trash: {e}")))
+}
+
+#[cfg(target_os = "macos")]
+fn system_trash_delete(skill_path: &Path) -> std::result::Result<(), trash::Error> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+    let mut context = trash::TrashContext::new();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(skill_path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_trash_delete(skill_path: &Path) -> std::result::Result<(), trash::Error> {
+    trash::delete(skill_path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn test_dir(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join("n2-test-skills").join(name);
@@ -195,29 +171,37 @@ mod tests {
     }
 
     #[test]
-    fn test_force_delete_dir() {
-        let dir = test_dir("fd_dir");
-        let sub = dir.join("subdir");
-        std::fs::create_dir(&sub).unwrap();
-        std::fs::write(sub.join("f.txt"), b"x").unwrap();
-        force_delete(&dir).expect("force_delete dir");
-        assert!(!dir.exists());
+    fn trash_failure_preserves_skill_fixture() {
+        let skill_dir = test_dir("trash_failure_preserves_skill_fixture");
+        let skill_file = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_file, b"fixture").expect("write temporary skill fixture");
+
+        let result = move_to_trash_with(&skill_dir, |_path| {
+            Err::<(), _>("injected trash permission failure")
+        });
+
+        assert!(matches!(
+            result,
+            Err(Error::Internal(message))
+                if message.contains("injected trash permission failure")
+        ));
+        assert!(skill_dir.exists());
+        assert_eq!(
+            std::fs::read(&skill_file).expect("read preserved skill fixture"),
+            b"fixture"
+        );
+
+        std::fs::remove_dir_all(skill_dir).expect("clean temporary skill fixture");
     }
 
     #[test]
-    fn test_force_delete_file() {
-        let dir = test_dir("fd_file");
-        let f = dir.join("target.txt");
-        std::fs::write(&f, b"x").unwrap();
-        force_delete(&f).expect("force_delete file");
-        assert!(!f.exists());
-    }
+    fn trash_success_returns_ok_without_fallback() {
+        let skill_dir = test_dir("trash_success_returns_ok_without_fallback");
+        let result = move_to_trash_with(&skill_dir, |_path| Ok::<(), &str>(()));
 
-    #[test]
-    fn test_force_delete_nonexistent() {
-        let path = Path::new("/tmp/_n2_nonexistent_skill_");
-        let r = force_delete(path);
-        assert!(r.is_err());
+        assert!(result.is_ok());
+
+        std::fs::remove_dir_all(skill_dir).expect("clean temporary skill fixture");
     }
 
     #[test]

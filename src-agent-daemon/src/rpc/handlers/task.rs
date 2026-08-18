@@ -8,7 +8,7 @@
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_task(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{run_manager, send_error, send_success};
     use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
@@ -97,6 +97,7 @@ pub(crate) async fn dispatch_task(
             if task_id.is_empty() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -123,6 +124,7 @@ pub(crate) async fn dispatch_task(
                 } else {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::NOT_FOUND,
                             ErrorCategory::NotFound,
@@ -146,6 +148,7 @@ pub(crate) async fn dispatch_task(
             if task_id.is_empty() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -180,6 +183,7 @@ pub(crate) async fn dispatch_task(
                     Err(e) if e == "timeout" => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 error_codes::TIMEOUT,
                                 ErrorCategory::Timeout,
@@ -192,6 +196,7 @@ pub(crate) async fn dispatch_task(
                     Err(e) => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 error_codes::NOT_FOUND,
                                 ErrorCategory::NotFound,
@@ -221,7 +226,7 @@ pub(crate) async fn dispatch_task(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

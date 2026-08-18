@@ -42,7 +42,6 @@ export const builtinTool: NativesAPI['builtinTool'] = {
 
   // Environment
 export const env: NativesAPI['env'] = {
-    getVariables: (profileId: string) => cmd('env_get_variables', { profileId }),
     getDefaultProfile: () => cmd('env_get_default_profile'),
     listProfiles: () => cmd('env_list_profiles'),
     createProfile: (name: string) => cmd('env_create_profile', { name }),
@@ -52,7 +51,6 @@ export const env: NativesAPI['env'] = {
       cmd('env_set_variable', { profileId, key, value }),
     deleteVariable: (profileId: string, key: string) =>
       cmd('env_delete_variable', { profileId, key }),
-    encrypt: (text: string) => cmd('env_encrypt', { text }),
 };
 
   // Shell
@@ -88,8 +86,7 @@ export const screenshot: NativesAPI['screenshot'] = {
         stop();
       };
     },
-    saveAnnotated: (dataUrl: string, targetPath?: string) =>
-      cmd('screenshot_save_annotated', { dataUrl, targetPath }),
+    saveAnnotated: (request) => cmd('screenshot_save_annotated', { request }),
 };
 
   // Release
@@ -99,8 +96,8 @@ export const release: NativesAPI['release'] = {
       cmd('release_prepare', { projectPath, version }),
     getSequence: (projectPath: string, version: string) =>
       cmd('release_get_sequence', { projectPath, version }),
-    execute: (projectPath: string, command: string) =>
-      cmd('release_execute', { projectPath, command }),
+    execute: (projectPath: string, version: string, action) =>
+      cmd('release_execute', { projectPath, version, action }),
 };
 
   // Update

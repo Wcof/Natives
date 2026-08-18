@@ -107,7 +107,13 @@ impl TokenManager {
             created_at: timestamp,
         };
 
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self
+            .tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // ADR-0001: one current token per module. Regeneration (including an
+        // iframe reload) revokes every prior session for this module only.
+        tokens.retain(|_, existing| existing.module_id != module_id);
         tokens.insert(hmac, entry);
         token
     }
@@ -120,7 +126,10 @@ impl TokenManager {
         }
         let hash = parts[0];
 
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self
+            .tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Lazy eviction of expired tokens
         let now = Self::now_ms();
@@ -136,10 +145,39 @@ impl TokenManager {
 
     /// Rotate stale tokens. Returns count of tokens removed.
     pub fn rotate_stale(&self) -> usize {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self
+            .tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let now = Self::now_ms();
         let before = tokens.len();
         tokens.retain(|_, entry| now.saturating_sub(entry.created_at) < ROTATION_INTERVAL_MS);
         before - tokens.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manager() -> TokenManager {
+        let conn = Connection::open_in_memory().expect("open test db");
+        crate::db::create_tables(&conn).expect("create tables");
+        TokenManager::new(&conn)
+    }
+
+    #[test]
+    fn regenerating_a_module_token_invalidates_only_that_modules_previous_token() {
+        let manager = manager();
+        let old_a_1 = manager.generate("module-a");
+        let old_a_2 = manager.generate("module-a");
+        let token_b = manager.generate("module-b");
+        let current_a = manager.generate("module-a");
+
+        assert!(!manager.validate(&old_a_1, "module-a"));
+        assert!(!manager.validate(&old_a_2, "module-a"));
+        assert!(manager.validate(&current_a, "module-a"));
+        assert!(manager.validate(&token_b, "module-b"));
+        assert!(!manager.validate(&current_a, "module-b"));
     }
 }

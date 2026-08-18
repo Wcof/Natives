@@ -9,7 +9,6 @@
 
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// Invoke a registered MCP tool with cancel + schema + trust checks.
@@ -111,7 +110,6 @@ async fn invoke_mcp_tool_on(
     audit(run_id, server_id, tool_name, "allow", "invoke", &arguments);
 
     let sid = server_id.to_string();
-    let sid_for_stop = sid.clone();
     let tname = tool_name.to_string();
     let args_for_transport = arguments.clone();
     let cancel_for_transport = cancel.clone();
@@ -130,14 +128,9 @@ async fn invoke_mcp_tool_on(
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            // Bounded cancel. `stop()` never waits on the in-flight exchange
-            // (the sessions mutex is lookup-only now); the child TERM/KILL/wait
-            // runs off the executor (R-B6). Aborting a `spawn_blocking` handle
-            // does not stop the thread, so the child signal is what unblocks the
-            // transport — then we await (bounded) for the thread to exit.
-            let stop_join = tokio::task::spawn_blocking(move || mcp.stop(&sid_for_stop));
-            let _ = stop_join.await;
-            let _ = tokio::time::timeout(Duration::from_secs(3), &mut invoke).await;
+            // A shared server belongs to its run references, not this request.
+            // The transport observes its request callback, abandons this response,
+            // and discards it by JSON-RPC id if it arrives late.
             audit(run_id, server_id, tool_name, "deny", "cancelled_during_invoke", &arguments);
             Err("mcp call cancelled".into())
         }
@@ -324,6 +317,7 @@ fn redact_args_summary(arguments: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn cancel_before_invoke() {
@@ -372,9 +366,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // T04: cancelling a call stuck inside a real stdio transport must settle
-    // in bounded time, reap the child, and detach the session — and the
-    // timeout error must remain distinguishable from a user cancel.
+    // A request cancellation must settle independently of a shared server.
     // -----------------------------------------------------------------------
 
     const HUNG: &str = r#"
@@ -396,11 +388,37 @@ for line in sys.stdin:
             time.sleep(3600)
 "#;
 
-    fn start_hung_on(rt: &crate::mcp_runtime::McpRuntime, id: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("mcp-invoke-hung-{}", uuid::Uuid::new_v4()));
+    const DELAYED: &str = r#"
+import sys, json, time
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    method = req.get("method")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"delayed","version":"0"}}}), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":{"tools":[{"name":"echo","description":"echo","inputSchema":{"type":"object","properties":{"request":{"type":"string"}},"required":["request"]}}]}}), flush=True)
+    elif method == "tools/call":
+        request = req["params"]["arguments"]["request"]
+        if request == "A":
+            time.sleep(0.4)
+        print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":{"request":request}}), flush=True)
+"#;
+
+    fn start_mock_on(
+        rt: &crate::mcp_runtime::McpRuntime,
+        id: &str,
+        kind: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mcp-invoke-{kind}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let script = dir.join("hung_mock.py");
-        std::fs::write(&script, HUNG).expect("write hung mock");
+        let script = dir.join(format!("{kind}_mock.py"));
+        std::fs::write(&script, source).expect("write mock");
         rt.register_server(agent_core::McpServerConfig {
             id: id.into(),
             transport: agent_core::McpTransport::Stdio,
@@ -413,16 +431,16 @@ for line in sys.stdin:
         })
         .expect("register");
         rt.start(id)
-            .unwrap_or_else(|e| panic!("hung mock start failed (python3 required): {e}"));
+            .unwrap_or_else(|e| panic!("mock start failed (python3 required): {e}"));
         dir
     }
 
     #[tokio::test]
-    async fn cancel_reaps_hung_stdio_call_in_bounded_time() {
+    async fn cancel_abandons_hung_stdio_call_without_stopping_the_server() {
         // Hermetic: a leaked local runtime, never the process-wide global.
         let rt: &'static crate::mcp_runtime::McpRuntime =
             Box::leak(Box::new(crate::mcp_runtime::McpRuntime::new()));
-        let dir = start_hung_on(rt, "hung-invoke");
+        let dir = start_mock_on(rt, "hung-invoke", "hung", HUNG);
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let handle = tokio::spawn(async move {
@@ -454,11 +472,64 @@ for line in sys.stdin:
             "user cancel took too long: {:?}",
             t0.elapsed()
         );
-        // Session detached → child reaped, registry quiet.
+        // Request cancellation must not exercise the server-lifecycle authority.
+        assert_eq!(rt.liveness("hung-invoke").unwrap()["alive"], true);
+        rt.stop("hung-invoke").expect("explicit test cleanup");
+        assert!(rt.liveness("hung-invoke").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cancelling_one_stdio_call_keeps_the_shared_server_for_its_sibling() {
+        let rt: &'static crate::mcp_runtime::McpRuntime =
+            Box::leak(Box::new(crate::mcp_runtime::McpRuntime::new()));
+        let dir = start_mock_on(rt, "shared-invoke", "delayed", DELAYED);
+        let cancel_a = CancellationToken::new();
+        let cancel_for_a = cancel_a.clone();
+        let a = tokio::spawn(async move {
+            invoke_mcp_tool_on(
+                rt,
+                "shared-invoke",
+                "echo",
+                json!({"request": "A"}),
+                &cancel_for_a,
+                Some("run-a"),
+                None,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let cancelled_at = std::time::Instant::now();
+        cancel_a.cancel();
+        let a_result = tokio::time::timeout(Duration::from_secs(1), a)
+            .await
+            .expect("cancelled call must settle")
+            .expect("cancelled call task must complete");
         assert!(
-            rt.liveness("hung-invoke").is_err(),
-            "session must be detached after cancel"
+            a_result.is_err(),
+            "late A response must not reach A: {a_result:?}"
         );
+        assert!(cancelled_at.elapsed() < Duration::from_secs(1));
+
+        let cancel_b = CancellationToken::new();
+        let b_result = tokio::time::timeout(
+            Duration::from_secs(2),
+            invoke_mcp_tool_on(
+                rt,
+                "shared-invoke",
+                "echo",
+                json!({"request": "B"}),
+                &cancel_b,
+                Some("run-b"),
+                None,
+            ),
+        )
+        .await
+        .expect("sibling call must not be stopped")
+        .expect("sibling call must succeed");
+        assert_eq!(b_result, json!({"request": "B"}));
+        assert_eq!(rt.liveness("shared-invoke").unwrap()["alive"], true);
+        rt.stop("shared-invoke").expect("test cleanup");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

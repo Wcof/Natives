@@ -224,10 +224,10 @@ export function TasksPanel({
                 type="button"
                 className="inline-flex items-center gap-0.5 text-[10px] text-[var(--primary)] hover:underline"
                 onClick={onRefreshTasks}
-                title={t(locale, 'assistant.activity.refresh')}
+                title={t(locale, 'common.refresh')}
               >
                 <RefreshCw size={10} />
-                {t(locale, 'assistant.activity.refresh')}
+                {t(locale, 'common.refresh')}
               </button>
               {showingChildSession && onBackToMain ? (
                 <button

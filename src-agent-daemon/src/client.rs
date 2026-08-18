@@ -10,10 +10,8 @@
 //! ```
 
 use crate::rpc::{read_frame, FrameError, FRAME_READ_TIMEOUT, MAX_FRAME_BYTES};
-use assistant_protocol::v1::daemon::{
-    HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
-};
-use assistant_protocol::v2::{RunEventV2, PROTOCOL_V2};
+use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse};
+use assistant_protocol::v2::{RunEventV2, V2Request, V2Response, PROTOCOL_V2};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -310,11 +308,14 @@ impl DaemonClient {
             ));
         }
         let request_id = Uuid::new_v4().to_string();
-        let req = RpcRequest {
+        let req = V2Request {
             protocol_version: self.protocol_version.clone(),
             request_id: request_id.clone(),
+            session_id: None,
             client_id: self.client_id.clone(),
             session_token: self.session_token.clone(),
+            run_id: None,
+            idempotency_key: None,
             method: method.to_string(),
             params,
         };
@@ -346,15 +347,11 @@ impl DaemonClient {
                 }
             };
         let resp_line = String::from_utf8_lossy(&resp_frame);
-        if let Ok(resp) = serde_json::from_str::<RpcResponse>(resp_line.trim()) {
-            if resp.success {
-                return Ok(resp.data.unwrap_or(Value::Null));
-            }
-            let msg = resp
-                .error
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "rpc failed".into());
-            return Err(DaemonClientError::Rpc(msg));
+        if let Ok(resp) = serde_json::from_str::<V2Response>(resp_line.trim()) {
+            return match resp {
+                V2Response::Success(response) => Ok(response.data),
+                V2Response::Error(response) => Err(DaemonClientError::Rpc(response.error.message)),
+            };
         }
         Err(DaemonClientError::Rpc(resp_line.trim().to_string()))
     }
@@ -415,7 +412,7 @@ impl DaemonClient {
     ///
     /// After this call the client is in **stream mode**: only
     /// [`DaemonClient::read_stream_frame`] may be used. The ACK is a normal
-    /// `RpcResponse`; every later line is a [`RunStreamFrameV2`]. The 30s
+    /// `V2Response`; every later line is a [`RunStreamFrameV2`]. The 30s
     /// frame timeout is safe because the daemon sends heartbeats on idle.
     pub async fn begin_watch(
         &mut self,
@@ -429,11 +426,14 @@ impl DaemonClient {
             ));
         }
         let request_id = Uuid::new_v4().to_string();
-        let req = RpcRequest {
+        let req = V2Request {
             protocol_version: self.protocol_version.clone(),
             request_id: request_id.clone(),
+            session_id: None,
             client_id: self.client_id.clone(),
             session_token: self.session_token.clone(),
+            run_id: Some(run_id.to_string()),
+            idempotency_key: None,
             method: "run.watch".to_string(),
             params: serde_json::json!({
                 "run_id": run_id,
@@ -470,17 +470,15 @@ impl DaemonClient {
                 }
             };
         let ack_line = String::from_utf8_lossy(&ack_frame);
-        let resp: RpcResponse =
+        let resp: V2Response =
             serde_json::from_str(ack_line.trim()).map_err(DaemonClientError::Json)?;
-        if !resp.success {
-            let msg = resp
-                .error
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "run.watch failed".into());
-            return Err(DaemonClientError::Rpc(msg));
-        }
+        let data = match resp {
+            V2Response::Success(response) => response.data,
+            V2Response::Error(response) => {
+                return Err(DaemonClientError::Rpc(response.error.message))
+            }
+        };
         // Validate the ACK advertises stream version 2 (frozen contract).
-        let data = resp.data.unwrap_or(Value::Null);
         let stream = data.get("stream").and_then(|v| v.as_str()).unwrap_or("");
         let version = data
             .get("streamVersion")

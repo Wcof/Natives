@@ -581,7 +581,13 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           if (workbenchActions) return await workbenchActions.removeProject(path);
           const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
           const match = projects.find((p) => p.path === path || p.id === path);
-          await window.nativesAPI?.project?.remove?.(match?.id ?? path);
+          try {
+            await window.nativesAPI?.project?.remove?.(match?.id ?? path);
+          } catch (e) {
+            // 幂等删除：Host not-found = 项目已不在可见集合（从未注册/已软删），
+            // 不当作失败，刷新后残留节点自然消失。
+            if (!(e instanceof Error && e.message.includes('Project not found'))) throw e;
+          }
           // Soft-delete: sessions keep their project_id, just refresh the project list.
           await refreshNavigationFromHost();
           return true;

@@ -131,6 +131,34 @@ pub fn pick_binding(
     }
 }
 
+/// Pick a policy binding that cannot reuse the parent Run's credential.
+///
+/// Agent Hooks are child runs too: unlike ordinary task assignment, they must
+/// never fall back to the parent key when their route pool is absent or spent.
+/// Keep model overrides inside the explicit binding so provider/model/key stay
+/// one authorized route tuple.
+pub fn pick_independent_binding(
+    policy: &RoutePolicy,
+    parent_key_id: &str,
+    model_override: Option<&str>,
+) -> Result<RouteBinding, String> {
+    let parent_key_id = parent_key_id.trim();
+    if parent_key_id.is_empty() {
+        return Err("parent credential key_id required for independent child route".into());
+    }
+    let attempted: Vec<_> = policy
+        .bindings
+        .iter()
+        .filter(|binding| {
+            binding.key_id == parent_key_id
+                || model_override.is_some_and(|model| binding.model_id != model)
+        })
+        .cloned()
+        .collect();
+    pick_binding(policy, &attempted)
+        .map_err(|reason| format!("no independent Agent Hook route binding: {reason}"))
+}
+
 /// Remove a route policy for a parent conversation (e.g. when bindings are broken/empty).
 pub fn delete_route_policy(parent_conversation_id: &str) -> Result<(), String> {
     let parent = parent_conversation_id.trim();
@@ -325,6 +353,30 @@ mod tests {
             assert_eq!(assigned[2].key_id, "k3");
             // Fourth would exhaust under exclusive attempt tracking.
             assert!(pick_binding(&policy, &attempted).is_err());
+        });
+    }
+
+    #[test]
+    fn independent_binding_never_reuses_the_parent_key() {
+        with_temp_db(|| {
+            let parent = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "parent-key".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let child = RouteBinding {
+                provider_id: "anthropic".into(),
+                key_id: "child-key".into(),
+                model_id: "claude".into(),
+            };
+            upsert_route_policy("parent-1", "default", &[parent, child.clone()]).unwrap();
+            let policy = get_route_policy("parent-1").unwrap().unwrap();
+
+            assert_eq!(
+                pick_independent_binding(&policy, "parent-key", None).unwrap(),
+                child
+            );
+            assert!(pick_independent_binding(&policy, "parent-key", Some("gpt-4o")).is_err());
         });
     }
 

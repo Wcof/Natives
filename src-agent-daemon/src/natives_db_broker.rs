@@ -15,18 +15,47 @@
 //! - The daemon never writes natives.db: the Host is the only writer.
 
 use assistant_protocol::v2::credential::{
-    CredentialBrokerRequest, CredentialBrokerResponse, CredentialLeaseEnvelope,
-    CredentialLeaseReply, CredentialLeaseRevokeRequest, CredentialPoolLeaseRequest,
-    CredentialPoolLeaseResponse, CredentialSecretLeaseRequest, CredentialSecretLeaseResponse,
-    CredentialSettingLeaseRequest, CredentialSettingLeaseResponse, HostSubagentsLeaseRequest,
-    HostSubagentsLeaseResponse, LoopbackSettingsLeaseRequest, LoopbackSettingsLeaseResponse,
-    RoutingPlanLeaseRequest, RoutingPlanLeaseResponse,
+    CredentialBrokerRequest, CredentialBrokerResponse, CredentialBrokerSession,
+    CredentialLeaseEnvelope, CredentialLeaseReply, CredentialLeaseRevokeRequest,
+    CredentialPoolLeaseRequest, CredentialPoolLeaseResponse, CredentialSecretLeaseRequest,
+    CredentialSecretLeaseResponse, CredentialSettingLeaseRequest, CredentialSettingLeaseResponse,
+    HostSubagentsLeaseRequest, HostSubagentsLeaseResponse, LoopbackSettingsLeaseRequest,
+    LoopbackSettingsLeaseResponse, RoutingPlanLeaseRequest, RoutingPlanLeaseResponse,
 };
 use assistant_protocol::v2::methods::names;
 use provider_adapters::capabilities::Credential;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
+
+static BROKER_SESSION: OnceLock<CredentialBrokerSession> = OnceLock::new();
+
+/// Install the one-shot Host-provided broker session before any broker request.
+/// The session arrives through the inherited lifeline, never an environment
+/// variable or a file.
+pub fn install_broker_session(session: CredentialBrokerSession) -> Result<(), String> {
+    if session.instance_id.trim().is_empty() || session.auth_token.trim().is_empty() {
+        return Err("broker session is incomplete".into());
+    }
+    BROKER_SESSION
+        .set(session)
+        .map_err(|_| "broker session already installed".into())
+}
+
+fn broker_session() -> Result<&'static CredentialBrokerSession, String> {
+    BROKER_SESSION
+        .get()
+        .ok_or_else(|| "broker session unavailable".into())
+}
+
+/// Exact Host spawn identity for `daemon.getStatus`; absent outside a
+/// supervised broker session.
+pub fn broker_instance_id() -> Option<&'static str> {
+    BROKER_SESSION
+        .get()
+        .map(|session| session.instance_id.as_str())
+}
 
 /// UDS lease client for the Host Credential Broker. Holds no database handle
 /// and no key material — only the broker socket endpoint.
@@ -85,6 +114,16 @@ impl NativesDbBroker {
 
     pub fn endpoint(&self) -> &Path {
         &self.endpoint
+    }
+
+    /// Authenticated no-secret probe used by daemon readiness. The empty
+    /// setting has no database read and proves the Host accepts this session.
+    pub fn probe(&self) -> Result<(), String> {
+        self.lease_request(
+            names::CREDENTIAL_SETTING_GET,
+            &serde_json::json!({ "key": "", "run_id": "daemon-readiness" }),
+        )?;
+        Ok(())
     }
 
     /// Fail-closed write guard: the daemon must NOT write natives.db (P0-007).
@@ -254,7 +293,12 @@ impl NativesDbBroker {
         let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
         let mut writer = stream;
 
+        let session = broker_session()?;
+        let request_id = uuid::Uuid::new_v4().to_string();
         let envelope = CredentialLeaseEnvelope {
+            instance_id: session.instance_id.clone(),
+            auth_token: session.auth_token.clone(),
+            request_id: request_id.clone(),
             method: method.to_string(),
             payload: payload.clone(),
         };
@@ -279,6 +323,9 @@ impl NativesDbBroker {
         }
         let reply: CredentialLeaseReply = serde_json::from_str(reply_line.trim())
             .map_err(|e| redact_err(&format!("credential broker reply parse failed: {e}")))?;
+        if reply.request_id != request_id {
+            return Err("credential broker reply correlation mismatch".into());
+        }
         if reply.ok {
             reply
                 .data
@@ -409,9 +456,9 @@ fn dirs_next_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Install the process-wide UDS lease broker. Returns true only when a broker
-/// socket endpoint is configured AND reachable (socket file present) — the
-/// daemon never falls back to reading natives.db.
+/// Install the process-wide UDS lease broker. Returns true only when an
+/// authenticated no-secret broker probe succeeds — a socket path alone is not
+/// readiness, and the daemon never falls back to reading natives.db.
 pub fn try_install_natives_db_broker() -> bool {
     let endpoint = match default_broker_socket_path() {
         Ok(p) => p,
@@ -430,6 +477,16 @@ pub fn try_install_natives_db_broker() -> bool {
         );
         return false;
     }
+    match NativesDbBroker::open_default().and_then(|broker| {
+        broker.probe()?;
+        Ok(())
+    }) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("[agent-daemon] UDS credential broker probe failed: {e}");
+            return false;
+        }
+    };
     match crate::production_credentials::install_uds_lease_broker() {
         Ok(()) => {
             eprintln!(

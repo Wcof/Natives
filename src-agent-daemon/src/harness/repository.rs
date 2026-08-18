@@ -636,7 +636,8 @@ pub fn sync_source(
          VALUES(?1,?2,?3,?4,datetime('now'))
          ON CONFLICT(source_id) DO UPDATE SET
            digest=CASE WHEN excluded.status='current' THEN excluded.digest ELSE harness_source_manifest.digest END,
-           mode=excluded.mode, status=excluded.status, updated_at=excluded.updated_at",
+           mode=CASE WHEN harness_source_manifest.mode='pinned' THEN 'pinned' ELSE excluded.mode END,
+           status=excluded.status, updated_at=excluded.updated_at",
         params![source_id, digest, mode, if drifted { "drifted" } else { "current" }],
     )
     .map_err(sql)?;

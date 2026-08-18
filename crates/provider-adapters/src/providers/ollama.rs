@@ -41,6 +41,7 @@ impl ProviderAdapter for OllamaAdapter {
             features: vec![
                 "streaming".into(),
                 "tool_calls".into(),
+                "function_calling".into(),
                 "system_prompt".into(),
             ],
             max_context_window: 32_000,

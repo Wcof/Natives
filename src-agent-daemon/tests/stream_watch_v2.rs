@@ -24,8 +24,9 @@
 //! proves.
 
 use agent_core::{EventSequencer, ToolProgressSink, ToolProgressUpdate};
-use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse, RpcRequest};
+use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse};
 use assistant_protocol::v2::RunEventKind;
+use assistant_protocol::v2::V2Request;
 use natives_agent_daemon::client::{client_protocol_version, DaemonClient};
 use natives_agent_daemon::rpc::RpcServer;
 use natives_agent_daemon::storage::DataStore;
@@ -152,11 +153,14 @@ async fn send_rpc(
     method: &str,
     params: Value,
 ) {
-    let req = RpcRequest {
+    let req = V2Request {
         protocol_version: "2.0.0".to_string(),
         request_id: uuid::Uuid::new_v4().to_string(),
+        session_id: None,
         client_id: "swv2-client".to_string(),
         session_token: session_token.to_string(),
+        run_id: None,
+        idempotency_key: None,
         method: method.to_string(),
         params,
     };

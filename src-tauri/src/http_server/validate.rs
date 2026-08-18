@@ -23,6 +23,10 @@ pub(crate) fn validate_origin(origin: &Option<String>, referer: &Option<String>)
     }
 }
 
+pub(crate) fn is_opaque_workshop_origin(origin: Option<&str>) -> bool {
+    origin == Some("null")
+}
+
 pub(crate) fn is_loopback_url(url: &str) -> bool {
     // Extract hostname from URL
     let after_scheme = if let Some(pos) = url.find("://") {

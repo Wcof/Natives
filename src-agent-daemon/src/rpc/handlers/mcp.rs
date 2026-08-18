@@ -3,7 +3,7 @@
 //! Split out of the former single-file `rpc.rs` (A2-03).
 
 use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
-use assistant_protocol::v1::daemon::RpcRequest;
+use assistant_protocol::v2::V2Request;
 
 // {A2-03} mcp_error_to_daemon (moved verbatim from rpc.rs)
 /// Map an [`McpError`] onto the daemon error envelope.
@@ -48,7 +48,7 @@ pub(crate) fn mcp_error_to_daemon(err: crate::mcp_runtime::McpError) -> DaemonEr
 
 // {A2-03} mcp_server_id (moved verbatim from rpc.rs)
 /// Read the MCP server id from either accepted param spelling.
-pub(crate) fn mcp_server_id(request: &RpcRequest) -> &str {
+pub(crate) fn mcp_server_id(request: &V2Request) -> &str {
     request
         .params
         .get("server_id")
@@ -63,7 +63,7 @@ pub(crate) fn mcp_server_id(request: &RpcRequest) -> &str {
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_mcp(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &V2Request,
 ) {
     use crate::rpc::{send_error, send_success};
     use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
@@ -113,6 +113,7 @@ pub(crate) async fn dispatch_mcp(
             if request.params.get("server").is_some() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -138,6 +139,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -171,6 +173,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INTERNAL_ERROR,
                             ErrorCategory::Internal,
@@ -194,6 +197,7 @@ pub(crate) async fn dispatch_mcp(
             );
             send_error(
                 writer,
+                &request.request_id,
                 &DaemonError::new(
                     error_codes::INVALID_INPUT,
                     ErrorCategory::Validation,
@@ -225,6 +229,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -258,6 +263,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -310,6 +316,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -344,6 +351,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -377,6 +385,7 @@ pub(crate) async fn dispatch_mcp(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -402,7 +411,7 @@ pub(crate) async fn dispatch_mcp(
                     )
                     .await;
                 }
-                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+                Err(e) => send_error(writer, &request.request_id, &mcp_error_to_daemon(e)).await,
             }
         }
 
@@ -418,7 +427,7 @@ pub(crate) async fn dispatch_mcp(
                     )
                     .await;
                 }
-                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+                Err(e) => send_error(writer, &request.request_id, &mcp_error_to_daemon(e)).await,
             }
         }
 
@@ -443,7 +452,7 @@ pub(crate) async fn dispatch_mcp(
                     )
                     .await;
                 }
-                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+                Err(e) => send_error(writer, &request.request_id, &mcp_error_to_daemon(e)).await,
             }
         }
 
@@ -460,7 +469,7 @@ pub(crate) async fn dispatch_mcp(
                     )
                     .await;
                 }
-                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+                Err(e) => send_error(writer, &request.request_id, &mcp_error_to_daemon(e)).await,
             }
         }
 
@@ -490,7 +499,7 @@ pub(crate) async fn dispatch_mcp(
                     )
                     .await;
                 }
-                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+                Err(e) => send_error(writer, &request.request_id, &mcp_error_to_daemon(e)).await,
             }
         }
 
@@ -553,7 +562,7 @@ pub(crate) async fn dispatch_mcp(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

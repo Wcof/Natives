@@ -15,11 +15,11 @@ import { goldenPermission, goldenTextStream } from '../assistant-fixtures/golden
 import { isActiveRunStatus, isTerminalRunStatus } from '../assistant-protocol';
 import { createInitialWorkspaceState, workspaceReducer } from './reducer';
 
-test('resolveProjectPath prefers explicit then conversation then null without window', async () => {
+test('resolveProjectPath prefers explicit and resolves a conversation UUID through project identity', async () => {
   assert.equal(
     await resolveProjectPath({
       explicit: ' /proj ',
-      conversationProjectId: '/other',
+      conversationProjectId: 'project-uuid',
       tryActiveProject: false,
     }),
     '/proj',
@@ -27,10 +27,27 @@ test('resolveProjectPath prefers explicit then conversation then null without wi
   assert.equal(
     await resolveProjectPath({
       explicit: null,
-      conversationProjectId: '/from-conv',
+      conversationProjectId: 'project-uuid',
+      gateway: {
+        async connect() {},
+        async disconnect() {},
+        async request<T>(method: AssistantMethod): Promise<T> {
+          assert.equal(method, 'project.identity.list');
+          return {
+            items: [
+              { project_id: 'other-uuid', canonical_path: '/other' },
+              { project_id: 'project-uuid', canonical_path: '/canonical/project' },
+            ],
+          } as T;
+        },
+        async *subscribe() {},
+        async getSnapshot() {
+          throw new Error('unused');
+        },
+      },
       tryActiveProject: false,
     }),
-    '/from-conv',
+    '/canonical/project',
   );
   assert.equal(
     await resolveProjectPath({

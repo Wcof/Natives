@@ -1,7 +1,7 @@
 'use client';
 
 import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
-import { type Locale } from '@/i18n';
+import { t, type Locale } from '@/i18n';
 import Sidebar, { SIDEBAR_COLLAPSED_WIDTH, clampSidebarWidth } from './Sidebar';
 import RightPanel, { clampRightPanelWidth } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
@@ -25,6 +25,8 @@ import { onFollowChange } from '@/lib/follow-mode';
 import { fsApi, hasNativeFiles, thumbnailApi } from '@/lib/files-api';
 import type { FileEntry } from '@/types/file';
 import type { PreviewSubMode } from '@/lib/preview/contracts';
+import { useToast } from '@/components/ui/Toast';
+import { classifyError } from '@/lib/error-classifier';
 
 // Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
@@ -61,6 +63,7 @@ import { useFileEvents } from './hooks/useFileEvents';
 import { isSettingsView, normalizeSettingsTarget } from './settings-navigation';
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
+  const { toast } = useToast();
   const {
     state, setState, stateRef,
     activeView, setActiveView,
@@ -503,13 +506,18 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         }}
         onSaveToMaterial={async (filePath) => {
           try {
-            // files-api 契约：fs 不可用（浏览器 dev）时静默跳过
-            if (!hasNativeFiles()) return;
+            if (!hasNativeFiles()) throw new Error('file write failed: native file service unavailable');
             const fileName = filePath.split('/').pop() || filePath;
             // 字节级复制（copy_entry 自动建父目录 + 同名去重）；
             // 禁止 readFile+writeFileAtomic 文本中转——会损坏 PNG 二进制
-            await fsApi().copyEntry(filePath, `~/Desktop/\u7d20\u6750/${fileName}`);
-          } catch { /* ignore in browser mode */ }
+            const result = await fsApi().copyEntry(filePath, `~/Desktop/\u7d20\u6750/${fileName}`);
+            if (!result.ok) throw new Error(`file write failed: ${result.error || 'copy failed'}`);
+            toast(t(locale, 'screenshot.saved'), 'success');
+            return true;
+          } catch (cause) {
+            toast(classifyError(cause, { locale }).userMessage, 'error');
+            return false;
+          }
         }}
         onAnnotate={async (filePath) => {
           // Load image as data URL for the annotation editor (CSP-safe, no file://)
@@ -527,7 +535,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
               const dataUrl = await thumbnail.generate(filePath, 0) as unknown as string;
               if (dataUrl) {
                 setAnnotationImageUrl(dataUrl);
-                return;
+                return true;
               }
             }
             if (hasNativeFiles()) {
@@ -536,11 +544,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
                 const ext = (filePath.split('.').pop() || 'png').toLowerCase();
                 const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
                 setAnnotationImageUrl(`data:${mime};base64,${result.content}`);
-                return;
+                return true;
               }
             }
-          } catch (err) {
-            console.error('[Shell] Failed to load image for annotation:', err);
+            throw new Error('file read failed: screenshot returned no image data');
+          } catch (cause) {
+            toast(classifyError(cause, { locale }).userMessage, 'error');
+            return false;
           }
         }}
         onDismiss={() => {}}
@@ -552,14 +562,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           locale={locale}
           imageUrl={annotationImageUrl}
           onSave={async (dataUrl) => {
-            try {
-              const api = window.nativesAPI;
-              if (api?.screenshot?.saveAnnotated) {
-                await api.screenshot.saveAnnotated(dataUrl, annotatingFile.replace(/\.(png|jpg|jpeg|webp)$/, '-annotated.png'));
-              }
-            } catch (err) {
-              console.error('[Shell] Failed to save annotation:', err);
-            }
+            const api = window.nativesAPI;
+            if (!api?.screenshot?.saveAnnotated) throw new Error('file write failed: screenshot service unavailable');
+            await api.screenshot.saveAnnotated({ sourcePath: annotatingFile, dataUrl });
+            toast(t(locale, 'screenshot.saved'), 'success');
             setAnnotatingFile(null);
             setAnnotationImageUrl(null);
           }}

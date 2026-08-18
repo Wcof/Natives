@@ -56,7 +56,12 @@ export async function removeProjectFromHost(deps: RemoveProjectDeps): Promise<bo
       return false;
     }
     const projects = (await api.list()) ?? [];
-    const match = projects.find((p) => p.path === path || p.id === path);
+    const normalizedPath = normalizeAssistantProjectPath(path);
+    const match = projects.find(
+      (project) =>
+        project.id === path ||
+        normalizeAssistantProjectPath(project.path) === normalizedPath,
+    );
     // Host 检查 affected rows；不存在或已删除会抛错，不假成功。
     await api.remove(match?.id ?? path);
     const next = (await api.list()) ?? [];
@@ -66,24 +71,45 @@ export async function removeProjectFromHost(deps: RemoveProjectDeps): Promise<bo
       deps.onError?.('Failed to refresh hidden projects after removal');
       return false;
     }
-    if (next.some((project) => project.path === path || project.id === path)) {
+    if (next.some(
+      (project) =>
+        project.id === path ||
+        normalizeAssistantProjectPath(project.path) === normalizedPath,
+    )) {
       deps.onError?.('Project remains registered after removal');
       return false;
     }
     deps.setRegisteredProjects(next);
     deps.setHiddenProjectPaths(hidden);
-    if (activeProjectPath === path) {
+    if (normalizeAssistantProjectPath(activeProjectPath ?? '') === normalizedPath) {
       // 不把 active 停留在已隐藏项目：选择下一个可见项目或空态。
-      const nextPath = next.find((p) => !hidden.includes(p.path))?.path ?? null;
+      const nextPath = next.find(
+        (project) => !hidden.some(
+          (hiddenPath) =>
+            normalizeAssistantProjectPath(hiddenPath) ===
+            normalizeAssistantProjectPath(project.path),
+        ),
+      )?.path ?? null;
       deps.setActiveProjectPath(nextPath);
       void deps.writeActiveProject(nextPath);
     }
     deps.publishNavigation((prev) => ({
       ...prev,
-      groups: prev.groups.filter((g) => g.path !== path && !(g.path && hidden.includes(g.path))),
+      groups: prev.groups.filter((group) => {
+        const groupPath = group.path ? normalizeAssistantProjectPath(group.path) : null;
+        return groupPath !== normalizedPath && !hidden.some(
+          (hiddenPath) => groupPath === normalizeAssistantProjectPath(hiddenPath),
+        );
+      }),
       activeProjectPath:
-        activeProjectPath === path
-          ? next.find((p) => !hidden.includes(p.path))?.path ?? null
+        normalizeAssistantProjectPath(activeProjectPath ?? '') === normalizedPath
+          ? next.find(
+              (project) => !hidden.some(
+                (hiddenPath) =>
+                  normalizeAssistantProjectPath(hiddenPath) ===
+                  normalizeAssistantProjectPath(project.path),
+              ),
+            )?.path ?? null
           : prev.activeProjectPath,
     }));
     return true;
@@ -92,3 +118,4 @@ export async function removeProjectFromHost(deps: RemoveProjectDeps): Promise<bo
     return false;
   }
 }
+import { normalizeAssistantProjectPath } from './assistant-project-path';

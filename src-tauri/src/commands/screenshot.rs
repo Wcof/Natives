@@ -18,6 +18,8 @@ pub fn screenshot_stop_watching(state: State<'_, AppState>) -> Result<()> {
 }
 
 #[tauri::command]
-pub fn screenshot_save_annotated(data_url: String, target_path: Option<String>) -> Result<String> {
-    screenshot::save_annotated(&data_url, target_path.as_deref())
+pub fn screenshot_save_annotated(
+    request: screenshot::SaveAnnotatedRequest,
+) -> Result<screenshot::SaveAnnotatedResult> {
+    screenshot::save_annotated(request)
 }

@@ -19,6 +19,7 @@ pub mod credential_broker;
 mod credential_broker_lease;
 pub mod daemon;
 pub mod daemon_authority;
+mod daemon_watchdog;
 pub mod db;
 mod disk_usage;
 mod env_manager;
@@ -95,6 +96,7 @@ pub struct AppState {
     pub fs_watcher: fs_watch::FsWatcher,
     pub lid_guard: lid_guard::LidGuard,
     pub wechat_bridge: Mutex<Option<wechat::bridge::Bridge>>,
+    pub skills_trash_slots: tokio::sync::Semaphore,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -255,6 +257,8 @@ pub fn run() {
                                 )
                                 .into());
                             }
+
+                            daemon_watchdog::start();
                         }
                         Err(e) => {
                             return Err(format!(
@@ -364,6 +368,7 @@ pub fn run() {
                 fs_watcher: fs_watch::FsWatcher::new(app.handle().clone()),
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
+                skills_trash_slots: tokio::sync::Semaphore::new(2),
             });
 
             // RunWatchStreamV2 host watch bridge (persistent run.watch —
@@ -703,7 +708,6 @@ pub fn run() {
             commands::creative_app::creative_app_get_local_config,
             commands::creative_app::creative_app_poll_local_exits,
             // Environment
-            commands::env::env_get_variables,
             commands::env::env_get_default_profile,
             commands::env::env_list_profiles,
             commands::env::env_create_profile,
@@ -711,7 +715,6 @@ pub fn run() {
             commands::env::env_set_default_profile,
             commands::env::env_set_variable,
             commands::env::env_delete_variable,
-            commands::env::env_encrypt,
             // Notifications
             commands::notification::notification_send,
             commands::notification::notification_list,
@@ -922,8 +925,6 @@ pub fn run() {
             // Assistant Service (in-process RPC, no sidecar)
             crate::assistant_service::assistant_rpc_request,
             crate::assistant_service::assistant_status,
-            // Credential Broker — daemon requests decrypted keys for a single run
-            crate::credential_broker::credential_broker_resolve,
             // Sidecar Supervisor — production UDS lifecycle (no silent embedded fallback)
             crate::sidecar_supervisor::daemon_supervisor_status,
             crate::sidecar_supervisor::daemon_supervisor_ensure,
@@ -959,3 +960,6 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(test)]
+mod env_manager_tests;

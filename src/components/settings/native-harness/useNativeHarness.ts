@@ -7,6 +7,7 @@ import type { ProjectSummary, ProviderSummary } from '@/lib/tauri/types';
 import { classifyError } from '@/lib/error-classifier';
 import { t, type Locale } from '@/i18n';
 import type { CanvasMode, CanvasNodeDetail, CanvasStage, CanvasWorkspaceTarget } from '../nativeExecutionCanvasModel';
+import { createHarnessNoticeBatcher } from './notice-batcher';
 import {
   ACTIVE_RUN_STATUSES,
   buildNodeDetails,
@@ -121,7 +122,6 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileId, setProfileId] = useState('');
   const profileIdRef = useRef('');
-  const noticeRefreshRef = useRef<number | null>(null);
   const [detailMode, setDetailMode] = useState<DetailMode | null>(null);
   const [workspaceTarget, setWorkspaceTarget] = useState<WorkspaceTarget>('preview');
   const [targetStageId, setTargetStageId] = useState<string | null>(null);
@@ -276,20 +276,19 @@ export function useNativeHarness(locale: Locale): NativeHarnessController {
     if (detailMode) void loadRuns();
   }, [detailMode, loadRuns]);
   useEffect(() => {
+    const batcher = createHarnessNoticeBatcher({
+      detailVisible: Boolean(detailMode),
+      dirty,
+      refreshWorkspace: () => void load(profileIdRef.current),
+      refreshRuns: () => void loadRuns(),
+      showRemoteChange: () => setNotice(t(locale, 'settings.engineEngineeringRemoteChange')),
+    });
     const unsubscribe = assistantV2.subscribeHarness((event) => {
-      if (event.kind === 'trace_updated' && detailMode) {
-        if (noticeRefreshRef.current != null) return;
-        noticeRefreshRef.current = window.setTimeout(() => {
-          noticeRefreshRef.current = null;
-          void loadRuns();
-        }, 50);
-      } else if (!dirty) void load(profileIdRef.current);
-      else setNotice(t(locale, 'settings.engineEngineeringRemoteChange'));
+      batcher.notify(event);
     }, { onError: fail });
     return () => {
       unsubscribe();
-      if (noticeRefreshRef.current != null) window.clearTimeout(noticeRefreshRef.current);
-      noticeRefreshRef.current = null;
+      batcher.dispose();
     };
   }, [detailMode, dirty, fail, load, loadRuns, locale]);
 

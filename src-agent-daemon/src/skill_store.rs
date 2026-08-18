@@ -66,8 +66,8 @@ mod skill_trust;
 
 pub use skill_parse::{parse_skill_markdown, ParsedSkill};
 pub use skill_surface::{
-    load_skill_for_project, load_skill_for_project_with_surface, prompt_for_project,
-    resolve_skill_tool_surface,
+    load_selected_skill_for_project_with_surface, load_skill_for_project,
+    load_skill_for_project_with_surface, prompt_for_project, resolve_skill_tool_surface,
 };
 use skill_trust::{
     content_hash, ledger_key, load_ledger, resolve_trust, save_ledger, TrustEntry, TrustLedger,

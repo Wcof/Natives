@@ -65,6 +65,15 @@ fn map_err(e: AuthorityError) -> String {
     e.message()
 }
 
+async fn ensure_uds_sidecar() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| {
+        crate::sidecar_supervisor::global_supervisor().ensure_healthy_or_restart()
+    })
+    .await
+    .map_err(|error| format!("sidecar health worker failed: {error}"))?
+    .map(|_| ())
+}
+
 /// Build or return cached authority for the current process env.
 pub async fn current_authority() -> Result<Arc<dyn ExecutionAuthority>, String> {
     {
@@ -84,8 +93,8 @@ pub async fn current_authority() -> Result<Arc<dyn ExecutionAuthority>, String> 
     } = &mode
     {
         if bootstrap_token.is_empty() || !socket.exists() {
-            crate::sidecar_supervisor::global_supervisor()
-                .ensure_healthy_or_restart()
+            ensure_uds_sidecar()
+                .await
                 .map_err(|e| format!("UDS daemon unavailable (no embedded fallback): {e}"))?;
             *guard = None;
         }
@@ -120,11 +129,9 @@ async fn recover_uds_authority(first_error: String) -> Result<(), String> {
         return Err(first_error);
     }
     reset_authority_cache().await;
-    crate::sidecar_supervisor::global_supervisor()
-        .ensure_healthy_or_restart()
-        .map_err(|restart_error| {
-            format!("{first_error}; UDS reconnect failed: {restart_error} (no embedded fallback)")
-        })?;
+    ensure_uds_sidecar().await.map_err(|restart_error| {
+        format!("{first_error}; UDS reconnect failed: {restart_error} (no embedded fallback)")
+    })?;
     reset_authority_cache().await;
     Ok(())
 }

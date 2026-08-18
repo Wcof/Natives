@@ -406,7 +406,6 @@ fn base_href_is_injected_before_head_close() {
 
 // ── CR-402: HTTP security — body limits, CSP partitioning, host validation ──
 
-#[allow(dead_code)] // 测试辅助：保留供后续 bridge 测试使用
 fn http_post(port: u16, path: &str, body: &str, extra_headers: &[&str]) -> String {
     use std::io::{Read, Write};
     let mut stream =
@@ -425,6 +424,101 @@ fn http_post(port: u16, path: &str, body: &str, extra_headers: &[&str]) -> Strin
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).expect("read response");
     String::from_utf8_lossy(&raw).into_owned()
+}
+
+fn http_options(port: u16, path: &str, extra_headers: &[&str]) -> String {
+    use std::io::{Read, Write};
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect to test server");
+    let mut req = format!("OPTIONS {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    for h in extra_headers {
+        req.push_str(h);
+        req.push_str("\r\n");
+    }
+    req.push_str("\r\n");
+    write!(stream, "{req}").expect("write request");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("read response");
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
+#[test]
+fn bridge_allows_only_opaque_workshop_cors() {
+    let f = fixture();
+    let token_manager = Arc::new(TokenManager::new(&f.conn));
+    let token = token_manager.generate("module-a");
+    let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+    let port = server.start(0).expect("start server");
+    let bridge_path = "/api/bridge/settings/getTheme";
+
+    let preflight = http_options(
+        port,
+        bridge_path,
+        &[
+            "Origin: null",
+            "Access-Control-Request-Method: POST",
+            "Access-Control-Request-Headers: content-type, x-session-token, x-module-id",
+        ],
+    );
+    assert!(preflight.starts_with("HTTP/1.1 204"), "{preflight}");
+    assert!(
+        preflight.contains("Access-Control-Allow-Origin: null"),
+        "{preflight}"
+    );
+    assert!(
+        preflight.contains("Access-Control-Allow-Methods: POST"),
+        "{preflight}"
+    );
+    assert!(
+        preflight
+            .contains("Access-Control-Allow-Headers: Content-Type, X-Session-Token, X-Module-Id"),
+        "{preflight}"
+    );
+
+    let token_header = format!("X-Session-Token: {token}");
+    let module_header = "X-Module-Id: module-a";
+    let post = http_post(
+        port,
+        bridge_path,
+        "{}",
+        &["Origin: null", &token_header, module_header],
+    );
+    assert!(post.starts_with("HTTP/1.1 200"), "{post}");
+    assert!(post.contains("Access-Control-Allow-Origin: null"), "{post}");
+
+    let external = http_options(port, bridge_path, &["Origin: https://evil.example"]);
+    assert!(external.starts_with("HTTP/1.1 403"), "{external}");
+
+    let non_bridge = http_options(port, "/modules/module-a/index.html", &["Origin: null"]);
+    assert!(non_bridge.starts_with("HTTP/1.1 405"), "{non_bridge}");
+}
+
+#[test]
+fn bridge_enforces_current_token_and_module_namespace() {
+    let f = fixture();
+    let token_manager = Arc::new(TokenManager::new(&f.conn));
+    let old_a = token_manager.generate("module-a");
+    let token_b = token_manager.generate("module-b");
+    let current_a = token_manager.generate("module-a");
+    let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+    let port = server.start(0).expect("start server");
+    let origin = format!("Origin: http://127.0.0.1:{port}");
+
+    let post = |token: &str, module_id: &str| {
+        let token_header = format!("X-Session-Token: {token}");
+        let module_header = format!("X-Module-Id: {module_id}");
+        http_post(
+            port,
+            "/api/bridge/settings/getTheme",
+            "{}",
+            &[&origin, &token_header, &module_header],
+        )
+    };
+
+    assert!(post(&old_a, "module-a").starts_with("HTTP/1.1 403"));
+    assert!(post(&current_a, "module-b").starts_with("HTTP/1.1 403"));
+    assert!(post(&current_a, "module-a").starts_with("HTTP/1.1 200"));
+    assert!(post(&token_b, "module-b").starts_with("HTTP/1.1 200"));
 }
 
 #[test]

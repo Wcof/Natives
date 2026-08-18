@@ -13,6 +13,8 @@ struct RunStartRequest {
     conversation_id: String,
     provider_id: String,
     model_id: String,
+    /// Credential reference only; the API key stays in the Host broker.
+    key_id: Option<String>,
     content: Option<String>,
     effort: Option<String>,
     runtime_id: Option<String>,
@@ -57,6 +59,13 @@ fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcRespons
         .and_then(Value::as_str)
         .ok_or_else(|| error_response("MISSING_PARAM", "model_id is required"))?
         .to_string();
+    let key_id = params
+        .get("key_id")
+        .or_else(|| params.get("keyId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key_id| !key_id.is_empty())
+        .map(str::to_string);
     let content = params
         .get("content")
         .and_then(Value::as_str)
@@ -128,6 +137,7 @@ fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcRespons
         conversation_id,
         provider_id,
         model_id,
+        key_id,
         content,
         effort,
         runtime_id,
@@ -269,7 +279,7 @@ fn build_create_run_request(
         conversation_id: req.conversation_id.clone(),
         provider_id: req.provider_id.clone(),
         model_id: req.model_id.clone(),
-        key_id: None,
+        key_id: req.key_id.clone(),
         agent_profile_id: req.agent_profile_id.clone(),
         permission_profile: Some(permission_profile.to_string()),
         content: Some(user_content.to_string()),
@@ -307,7 +317,7 @@ fn build_start_run_request(
         conversation_id: Some(req.conversation_id.clone()),
         provider_id: Some(req.provider_id.clone()),
         model_id: Some(req.model_id.clone()),
-        key_id: None,
+        key_id: req.key_id.clone(),
         content: Some(user_content),
         attachments,
         trigger_message_id: None,
@@ -486,6 +496,7 @@ mod tests {
             conversation_id: "c1".into(),
             provider_id: "openai".into(),
             model_id: "gpt".into(),
+            key_id: Some("key-1".into()),
             content: Some("hello".into()),
             effort: None,
             runtime_id: None,
@@ -557,6 +568,34 @@ mod tests {
             Some(137),
             "settings maxSteps must reach start request"
         );
+        assert_eq!(create.key_id.as_deref(), Some("key-1"));
+        assert_eq!(start.key_id.as_deref(), Some("key-1"));
+    }
+
+    #[test]
+    fn supplied_key_id_reaches_both_typed_run_requests() {
+        let request = parse_run_start_request(&serde_json::json!({
+            "conversation_id": "c1",
+            "provider_id": "openai",
+            "model_id": "gpt",
+            "key_id": "saved-key"
+        }))
+        .expect("parse key id");
+        let policy = ResolvedExecutionPolicyV1 {
+            version: 1,
+            runtime_id: crate::execution_engine_settings::RUNTIME_NATIVE.into(),
+            runtime_source: "test".into(),
+            settings_revision: 0,
+            max_steps: 1,
+            disabled_tools: Vec::new(),
+            fallback_used: false,
+            unavailable_policy: "fail".into(),
+        };
+
+        let create = build_create_run_request(&request, &policy, "ask", "", None, "id".into());
+        let start = build_start_run_request(&request, &policy, "ask", String::new(), None, "run");
+        assert_eq!(create.key_id.as_deref(), Some("saved-key"));
+        assert_eq!(start.key_id.as_deref(), Some("saved-key"));
     }
 
     /// Settings default runtime must reach the created Run (runtime_id on both

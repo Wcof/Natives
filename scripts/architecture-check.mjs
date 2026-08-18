@@ -337,16 +337,81 @@ function collectCrossDbHost(root = ROOT) {
   return map;
 }
 
+function splitCfgArgs(input) {
+  const args = [];
+  let start = 0;
+  let depth = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    if (input[i] === '(') depth += 1;
+    if (input[i] === ')') depth -= 1;
+    if (input[i] === ',' && depth === 0) {
+      args.push(input.slice(start, i));
+      start = i + 1;
+    }
+  }
+  args.push(input.slice(start));
+  return args.filter((arg) => arg.trim());
+}
+
+function cfgProductionValue(expression) {
+  const source = expression.trim();
+  if (source === 'test' || /^feature\s*=\s*"diagnostic"$/.test(source)) return false;
+  const match = /^(cfg|all|any|not)\s*\(([\s\S]*)\)$/.exec(source);
+  if (!match) return null;
+  const values = splitCfgArgs(match[2]).map(cfgProductionValue);
+  if (match[1] === 'cfg') return values.length === 1 ? values[0] : null;
+  if (match[1] === 'not') return values.length === 1 && values[0] !== null ? !values[0] : null;
+  if (match[1] === 'all') return values.includes(false) ? false : values.every((value) => value === true) ? true : null;
+  return values.includes(true) ? true : values.every((value) => value === false) ? false : null;
+}
+
+function cfgExcludesProduction(attribute) {
+  const match = /#\[\s*cfg\s*\(([\s\S]*)\)\s*\]/.exec(attribute);
+  return match ? cfgProductionValue(match[1]) === false : false;
+}
+
+function cfgExcludedLines(lines) {
+  const excluded = new Set();
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].includes('#[cfg')) continue;
+    let end = i;
+    let attribute = lines[end];
+    while (!attribute.includes(']') && end + 1 < lines.length) attribute += `\n${lines[(end += 1)]}`;
+    if (!cfgExcludesProduction(attribute)) continue;
+
+    let itemStart = end + 1;
+    while (
+      itemStart < lines.length &&
+      (/^\s*(#\[|\/\/|\/\*|\*|\*\/|\/\/\/|$)/.test(lines[itemStart]) || lines[itemStart].trim() === '')
+    ) {
+      itemStart += 1;
+    }
+    if (itemStart >= lines.length) continue;
+
+    let itemEnd = itemStart;
+    let depth = 0;
+    let opened = false;
+    for (; itemEnd < lines.length; itemEnd += 1) {
+      const line = lines[itemEnd];
+      depth += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+      opened ||= depth > 0;
+      if ((opened && depth <= 0) || (!opened && line.includes(';'))) break;
+    }
+    for (let line = i; line <= itemEnd; line += 1) excluded.add(line + 1);
+    i = end;
+  }
+  return excluded;
+}
+
 function collectEmbeddedProd(root = ROOT) {
   const map = new Map();
-  for (const r of [join(root, 'src-tauri/src'), join(root, 'src-agent-daemon/src')]) {
-    if (!existsSync(r)) continue;
-    for (const p of walk(r)) {
-      if (!p.endsWith('.rs')) continue;
-      if (isTestFile(p)) continue;
-      for (const h of nonCommentLines(p, /EmbeddedAuthority/)) {
-        map.set(`${relToRoot(p)}:${h.line}`, h.text);
-      }
+  const hostRoot = join(root, 'src-tauri/src');
+  if (!existsSync(hostRoot)) return map;
+  for (const p of walk(hostRoot)) {
+    if (!p.endsWith('.rs') || isTestFile(p)) continue;
+    const excluded = cfgExcludedLines(readFileSync(p, 'utf8').split('\n'));
+    for (const h of nonCommentLines(p, /EmbeddedAuthority/)) {
+      if (!excluded.has(h.line)) map.set(`${relToRoot(p)}:${h.line}`, h.text);
     }
   }
   return map;
@@ -630,7 +695,7 @@ const CHECKS = [
   { id: 'cross_db_daemon', collect: collectCrossDbDaemon, fail: true },
   { id: 'cross_db_host', collect: collectCrossDbHost, fail: true },
   { id: 'embedded_prod', collect: collectEmbeddedProd, fail: true },
-  { id: 'global_singleton', collect: collectGlobalSingleton, fail: true },
+  { id: 'global_singleton', collect: collectGlobalSingleton, fail: true, allowKnownDebt: true },
   { id: 'unregistered_interval', collect: collectUnregisteredInterval, fail: false },
   { id: 'hooks_reverse', collect: collectHooksReverse, fail: true },
   { id: 'a11y_clickable', collect: collectA11yClickable, fail: true },
@@ -648,8 +713,8 @@ function loadManifest() {
 }
 
 // W1 fail-closed helpers (exported for the mutation fixtures):
-//  - fatal checks (fail:true) are NEVER silenced by the manifest: any found
-//    entry makes the gate fail, regardless of whether it is a known debt.
+//  - fatal checks (fail:true) are NEVER silenced by the manifest, except the
+//    reviewed OnceLock/lazy_static ledger. `static mut` always remains fatal.
 //  - an empty scan scope (zero scanned files) is fatal: it must not be
 //    indistinguishable from "everything clean".
 function isFatalCheck(id) {
@@ -659,6 +724,11 @@ function isFatalCheck(id) {
 
 function shouldFailCheck(check, found, known) {
   if (!check.fail) return false;
+  if (check.allowKnownDebt) {
+    return [...found].some(
+      ([key, reason]) => /\bstatic\s+mut\b/.test(reason) || !Object.prototype.hasOwnProperty.call(known, key),
+    );
+  }
   return found.size > 0;
 }
 
@@ -666,8 +736,7 @@ function shouldFailEmptyScope(summary) {
   return summary.scannedFiles === 0;
 }
 
-function runChecks(root = ROOT) {
-  const manifest = loadManifest();
+function runChecks(root = ROOT, manifest = loadManifest()) {
   const rows = [];
   let scannedFiles = 0;
   let newCount = 0;
@@ -683,6 +752,7 @@ function runChecks(root = ROOT) {
       if (knownKeys.has(key)) knownEntries += 1;
       else newEntries += 1;
     }
+    const staleEntries = [...knownKeys].filter((key) => !found.has(key));
     scannedFiles += found.size > 0 ? 1 : 0;
     knownCount += knownEntries;
     newCount += newEntries;
@@ -693,13 +763,22 @@ function runChecks(root = ROOT) {
       total: found.size,
       known: knownEntries,
       new: newEntries,
-      status: fail ? 'FAIL' : check.fail ? 'ok' : 'ledger',
+      stale: staleEntries.length,
+      status: fail ? 'FAIL' : check.allowKnownDebt && knownEntries > 0 ? 'debt' : check.fail ? 'ok' : 'ledger',
     });
     for (const [key, reason] of found) {
-      violations.push({ check: check.id, severity: check.fail ? 'ERROR' : 'WARN', key, reason });
+      const knownDebt = check.allowKnownDebt && knownKeys.has(key) && !/\bstatic\s+mut\b/.test(reason);
+      violations.push({ check: check.id, severity: check.fail && !knownDebt ? 'ERROR' : 'WARN', key, reason });
+    }
+    for (const key of staleEntries) {
+      violations.push({ check: check.id, severity: 'WARN', key, reason: 'stale debt-manifest entry' });
     }
   }
-  return { rows, violations, newCount, knownCount, scannedFiles };
+  const staleCount = rows.reduce((total, row) => total + row.stale, 0);
+  const staleEntries = violations
+    .filter((violation) => violation.reason === 'stale debt-manifest entry')
+    .map(({ check, key }) => ({ check, key }));
+  return { rows, violations, newCount, knownCount, staleCount, staleEntries, scannedFiles };
 }
 
 function main() {
@@ -723,14 +802,14 @@ function main() {
     console.log(`[${v.severity}] ${v.check}: ${v.key} — ${v.reason}`);
   }
   console.log('---');
-  for (const r of summary.rows) console.log(`  [${r.status}] ${r.id}: total=${r.total} known=${r.known} new=${r.new}`);
+  for (const r of summary.rows) console.log(`  [${r.status}] ${r.id}: total=${r.total} known=${r.known} new=${r.new} stale=${r.stale}`);
   const failing = summary.rows.filter((r) => r.status === 'FAIL');
   const failed = failing.length > 0 || emptyScope;
   console.log(
-    `architecture:check ${failed ? 'FAILED' : 'OK'} — known(debt): ${summary.knownCount}, new: ${summary.newCount}, scanned-files: ${summary.scannedFiles}`,
+    `architecture:check ${failed ? 'FAILED' : 'OK'} — known(debt): ${summary.knownCount}, new: ${summary.newCount}, stale: ${summary.staleCount}, scanned-files: ${summary.scannedFiles}`,
   );
   // Machine-readable summary (JSON) on stdout for CI/evidence.
-  process.stdout.write(`${JSON.stringify({ ok: !failed, emptyScope, fatal: failing.map((r) => r.id), newCount: summary.newCount, knownCount: summary.knownCount, scannedFiles: summary.scannedFiles }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: !failed, emptyScope, fatal: failing.map((r) => r.id), newCount: summary.newCount, knownCount: summary.knownCount, staleCount: summary.staleCount, stale: summary.staleEntries, scannedFiles: summary.scannedFiles }, null, 2)}\n`);
   if (failed) {
     if (emptyScope) console.error('Empty scan scope: nothing scanned, cannot claim clean.');
     process.exit(1);

@@ -188,6 +188,7 @@ export const creative = {
     quality: 'Quality',
     saveAs: 'Save As',
     save: 'Save',
+    textInputDialogLabel: 'Add text to image',
     textInputTitle: 'Enter text',
     textInputPlaceholder: 'Type text…',
   },

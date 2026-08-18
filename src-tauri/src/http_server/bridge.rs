@@ -5,11 +5,25 @@ use crate::token_manager::TokenManager;
 use std::path::Path;
 use tiny_http::{Request, Response};
 
+pub(crate) fn with_bridge_cors<R: std::io::Read>(response: Response<R>) -> Response<R> {
+    response
+        .with_header(Header::from_bytes("Access-Control-Allow-Origin", "null").unwrap())
+        .with_header(Header::from_bytes("Access-Control-Allow-Methods", "POST").unwrap())
+        .with_header(
+            Header::from_bytes(
+                "Access-Control-Allow-Headers",
+                "Content-Type, X-Session-Token, X-Module-Id",
+            )
+            .unwrap(),
+        )
+}
+
 pub(crate) fn handle_bridge_request(
     mut request: Request,
     token_manager: &TokenManager,
     csp: Header,
     db_path: &Path,
+    opaque_workshop_origin: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // CR-402: check Content-Length before reading the body (413 if exceeded).
     if let Some(cl) = get_header(&request, "Content-Length") {
@@ -19,6 +33,11 @@ pub(crate) fn handle_bridge_request(
                     .with_status_code(413)
                     .with_header(csp.clone())
                     .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                let resp = if opaque_workshop_origin {
+                    with_bridge_cors(resp)
+                } else {
+                    resp
+                };
                 request.respond(resp)?;
                 return Ok(());
             }
@@ -53,6 +72,11 @@ pub(crate) fn handle_bridge_request(
             .with_status_code(401)
             .with_header(csp)
             .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+        let resp = if opaque_workshop_origin {
+            with_bridge_cors(resp)
+        } else {
+            resp
+        };
         request.respond(resp)?;
         return Ok(());
     }
@@ -63,6 +87,11 @@ pub(crate) fn handle_bridge_request(
             .with_status_code(403)
             .with_header(csp)
             .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+        let resp = if opaque_workshop_origin {
+            with_bridge_cors(resp)
+        } else {
+            resp
+        };
         request.respond(resp)?;
         return Ok(());
     }
@@ -80,6 +109,11 @@ pub(crate) fn handle_bridge_request(
     let resp = Response::from_string(&response_body)
         .with_header(csp)
         .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    let resp = if opaque_workshop_origin {
+        with_bridge_cors(resp)
+    } else {
+        resp
+    };
     request.respond(resp)?;
     Ok(())
 }

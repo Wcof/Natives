@@ -369,78 +369,83 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     let firstStart = true;
 
     while (!signal.aborted) {
-      // Dual-cursor recovery via `run_watch_state`: when the host is ALREADY
-      // actively streaming this run (late re-subscribe / Renderer restart), its
-      // lastDurableSequence/lastLiveSequence are the authoritative forward
-      // cursors. We only advance forward and never move a cursor backward;
-      // inactive/terminal records are not used to skip durable history.
+      // The Renderer projection is the durable replay authority. Host watch
+      // state may report frames emitted before this listener existed, so it
+      // can never advance the durable skip cursor.
       const recovered = await this.recoverCursors(bridge, runId, durableSeq, liveSeq);
       durableSeq = recovered.durable;
       liveSeq = recovered.live;
-      const started = await bridge
-        .start(runId, durableSeq, liveSeq)
-        .catch(() => ({ ok: false as const, error: 'watch_start_failed' }));
-      if (!started.ok) {
-        // An immediate rejection (embedded mode / old daemon) is an availability
-        // failure → fall back to legacy right away. Mid-stream reconnect
-        // failures retry a bounded number of times.
-        if (firstStart || consecutiveFailures >= MAX_WATCH_RECONNECTS) {
-          throw new WatchStreamUnavailableError(runId, started.error ?? 'unknown');
-        }
-        consecutiveFailures += 1;
-        await sleep(150 * consecutiveFailures);
-        continue;
-      }
-      firstStart = false;
-
       const source = this.createFrameSource(bridge, runId, signal);
+      let startFailed: WatchStartResult | null = null;
+      let started = false;
       // Progress = at least one event-bearing frame since the last (re)start.
       // Heartbeats / resync frames alone are NOT progress: a stream that only
       // ever delivers `resync_required` and never an event must exhaust the
       // reconnect budget instead of looping forever.
       let sawEvent = false;
       try {
-        for (;;) {
-          const frame = await source.next();
-          if (frame === 'closed') break;
-          const out = this.consumeWatchFrame(frame, runId, {
-            durableSeq,
-            liveSeq,
-            liveStaleUpTo,
-            liveFraction,
-            projection,
-            liveBuffer,
-          });
-          durableSeq = out.state.durableSeq;
-          liveSeq = out.state.liveSeq;
-          liveStaleUpTo = out.state.liveStaleUpTo;
-          liveFraction = out.state.liveFraction;
-          projection = out.state.projection;
-          liveBuffer = out.state.liveBuffer;
+        // Register before start: the host can synchronously replay or emit a
+        // terminal frame while `start` is still resolving.
+        const result = await bridge
+          .start(runId, durableSeq, liveSeq)
+          .catch(() => ({ ok: false as const, error: 'watch_start_failed' }));
+        if (!result.ok) {
+          startFailed = result;
+        } else {
+          started = true;
+          firstStart = false;
+          for (;;) {
+            const frame = await source.next();
+            if (frame === 'closed') break;
+            const out = this.consumeWatchFrame(frame, runId, {
+              durableSeq,
+              liveSeq,
+              liveStaleUpTo,
+              liveFraction,
+              projection,
+              liveBuffer,
+            });
+            durableSeq = out.state.durableSeq;
+            liveSeq = out.state.liveSeq;
+            liveStaleUpTo = out.state.liveStaleUpTo;
+            liveFraction = out.state.liveFraction;
+            projection = out.state.projection;
+            liveBuffer = out.state.liveBuffer;
 
-          if (out.events.length > 0) sawEvent = true;
-          for (const ev of out.events) {
-            this.projectionRecovery.set(runId, projection.recovery);
-            yield ev;
-          }
-          if (out.resyncLive) {
-            // Live buffer lost → drop transient live state; continue durable-only.
-            liveBuffer = [];
-            liveSeq = 0;
-            liveFraction = 0;
-          }
-          if (out.terminal) {
-            await bridge.stop(runId).catch(() => {});
-            this.liveCursorByRun.set(runId, liveSeq);
-            return;
-          }
-          if (out.streamClosed) {
-            break; // reconnect by durable/live cursor
+            if (out.events.length > 0) sawEvent = true;
+            for (const ev of out.events) {
+              this.projectionRecovery.set(runId, projection.recovery);
+              yield ev;
+            }
+            if (out.resyncLive) {
+              // Live buffer lost → drop transient live state; continue durable-only.
+              liveBuffer = [];
+              liveSeq = 0;
+              liveFraction = 0;
+            }
+            if (out.terminal) {
+              await bridge.stop(runId).catch(() => {});
+              this.liveCursorByRun.set(runId, liveSeq);
+              return;
+            }
+            if (out.streamClosed) {
+              break; // reconnect by durable/live cursor
+            }
           }
         }
       } finally {
         source.dispose();
-        await bridge.stop(runId).catch(() => {});
+        if (started) await bridge.stop(runId).catch(() => {});
+      }
+      if (startFailed) {
+        // An immediate rejection (embedded mode / old daemon) is an availability
+        // failure. Mid-stream reconnect failures retry a bounded number of times.
+        if (firstStart || consecutiveFailures >= MAX_WATCH_RECONNECTS) {
+          throw new WatchStreamUnavailableError(runId, startFailed.error ?? 'unknown');
+        }
+        consecutiveFailures += 1;
+        await sleep(150 * consecutiveFailures);
+        continue;
       }
       if (signal.aborted) {
         this.liveCursorByRun.set(runId, liveSeq);
@@ -468,11 +473,10 @@ export class DaemonAssistantAdapter implements AssistantGateway {
 
   /**
    * Recover the dual cursors from the host watch state before (re)starting the
-   * stream. The local `durableSeq`/`liveSeq` are the authoritative floor — the
-   * host cursors are only used to advance FORWARD when it is actively watching
-   * the run (late re-subscribe / Renderer restart), so durable history is never
-   * skipped on reconnect. Inactive/terminal records and query failures fall
-   * back to the local dual cursors.
+   * stream. The local durable cursor is the only replay cursor: it advances
+   * after a durable frame has been projected through this adapter. The Host
+   * cursor records emission, not Renderer consumption, and must not skip
+   * durable history. Its live cursor may still discard transient deltas.
    */
   private async recoverCursors(
     bridge: HostWatchBridge,
@@ -485,7 +489,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       const st = await bridge.state(runId);
       if (st.active) {
         return {
-          durable: Math.max(localDurable, st.lastDurableSequence ?? 0),
+          durable: localDurable,
           live: Math.max(localLive, st.lastLiveSequence ?? 0),
         };
       }

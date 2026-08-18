@@ -43,6 +43,7 @@ impl ProviderAdapter for DeepSeekAdapter {
             features: vec![
                 "streaming".into(),
                 "tool_calls".into(),
+                "function_calling".into(),
                 "reasoning".into(),
                 "system_prompt".into(),
                 // Automatic context caching; usage read back from

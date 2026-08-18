@@ -238,6 +238,7 @@ export const app = {
     failed: '保存失败',
     newScreenshot: '新截图已检测',
     annotationTools: '标注工具',
+    colorOption: '颜色 {index}',
     brush: '画笔',
     arrow: '箭头',
     text: '文字',

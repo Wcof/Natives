@@ -5,8 +5,8 @@ use tauri::State;
 use crate::AppState;
 
 #[tauri::command]
-pub fn update_check(state: State<'_, AppState>) -> Result<JsonValue> {
-    update_checker::check_for_updates(&state)
+pub async fn update_check(state: State<'_, AppState>) -> Result<JsonValue> {
+    update_checker::check_for_updates(&state).await
 }
 
 #[tauri::command]

@@ -2,7 +2,7 @@
 
 use super::lifecycle::{parse_db_time, run_status_from_db};
 use super::manager::RunManager;
-use assistant_protocol::v2::{RunStatusV2, RunV2};
+use assistant_protocol::v2::{RunEventKind, RunEventV2, RunStatusV2, RunV2};
 use std::collections::HashMap;
 
 impl RunManager {
@@ -16,33 +16,34 @@ impl RunManager {
         let Some(store) = &self.data_store else {
             return Ok(0);
         };
-        let conn = store.conn()?;
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| format!("PERSISTENCE_FAILED begin recovery tx: {e}"))?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let reason = r#"{"reason":"daemon_restarted"}"#;
+        let (changed, interrupted_events) = {
+            let conn = store.conn()?;
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| format!("PERSISTENCE_FAILED begin recovery tx: {e}"))?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let reason = r#"{"reason":"daemon_restarted"}"#;
 
-        // Collect active run ids first (for interaction/permission expiry filters).
-        let active_ids: Vec<String> = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT id FROM run WHERE status IN (
+            // Collect active run ids first (for interaction/permission expiry filters).
+            let active_ids: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT id FROM run WHERE status IN (
                         'created', 'queued', 'preparing', 'running', 'waiting_permission',
                         'waiting_subagent', 'cancelling'
                      )",
-                )
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("PERSISTENCE_FAILED read active runs: {e}"))?
-        };
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("PERSISTENCE_FAILED read active runs: {e}"))?
+            };
 
-        let changed = tx
-            .execute(
-                "UPDATE run
+            let changed = tx
+                .execute(
+                    "UPDATE run
                  SET status = 'interrupted',
                      error_code = 'daemon_restarted',
                      finished_at = ?1,
@@ -51,60 +52,103 @@ impl RunManager {
                     'created', 'queued', 'preparing', 'running', 'waiting_permission',
                     'waiting_subagent', 'cancelling'
                  )",
-                rusqlite::params![now],
-            )
-            .map_err(|e| format!("PERSISTENCE_FAILED interrupt active runs: {e}"))?;
+                    rusqlite::params![now],
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED interrupt active runs: {e}"))?;
 
-        // Expire pending interactions for those runs (history retained, listPending hides).
-        if !active_ids.is_empty() {
-            for rid in &active_ids {
+            let mut interrupted_events = Vec::with_capacity(active_ids.len());
+            for run_id in &active_ids {
+                let sequence: i64 = tx
+                    .query_row(
+                        "SELECT COALESCE(MAX(sequence), 0) + 1 FROM run_event WHERE run_id = ?1",
+                        rusqlite::params![run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("PERSISTENCE_FAILED allocate recovery event: {e}"))?;
+                let mut event = RunEventV2::new(
+                    run_id,
+                    sequence as u64,
+                    RunEventKind::Interrupted {
+                        reason: "daemon_restarted".into(),
+                    },
+                );
+                let payload = serde_json::to_string(&event)
+                    .map_err(|e| format!("PERSISTENCE_FAILED serialize recovery event: {e}"))?;
                 tx.execute(
-                    "UPDATE interaction
+                    "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        run_id,
+                        sequence,
+                        event.payload.type_name(),
+                        payload,
+                        event.timestamp.to_rfc3339(),
+                        event.event_id,
+                    ],
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED append recovery event: {e}"))?;
+                event.global_sequence = tx.last_insert_rowid() as u64;
+                interrupted_events.push(event);
+            }
+
+            // Expire pending interactions for those runs (history retained, listPending hides).
+            if !active_ids.is_empty() {
+                for rid in &active_ids {
+                    tx.execute(
+                        "UPDATE interaction
                      SET status = 'expired',
                          response = ?1,
                          responded_at = ?2
                      WHERE status = 'pending' AND run_id = ?3",
-                    rusqlite::params![reason, now, rid],
-                )
-                .map_err(|e| format!("PERSISTENCE_FAILED expire interaction: {e}"))?;
-                tx.execute(
-                    "UPDATE permission_request
+                        rusqlite::params![reason, now, rid],
+                    )
+                    .map_err(|e| format!("PERSISTENCE_FAILED expire interaction: {e}"))?;
+                    tx.execute(
+                        "UPDATE permission_request
                      SET status = 'expired'
                      WHERE status = 'pending' AND run_id = ?1",
-                    rusqlite::params![rid],
-                )
-                .map_err(|e| format!("PERSISTENCE_FAILED expire permission request: {e}"))?;
-            }
-        } else {
-            // Still expire any pending interactions whose run is already interrupted/missing.
-            tx.execute(
-                "UPDATE interaction
+                        rusqlite::params![rid],
+                    )
+                    .map_err(|e| format!("PERSISTENCE_FAILED expire permission request: {e}"))?;
+                }
+            } else {
+                // Still expire any pending interactions whose run is already interrupted/missing.
+                tx.execute(
+                    "UPDATE interaction
                  SET status = 'expired', response = ?1, responded_at = ?2
                  WHERE status = 'pending'
                    AND (run_id IS NULL OR run_id IN (
                    SELECT id FROM run WHERE status = 'interrupted'
                             AND error_code = 'daemon_restarted'
                    ))",
-                rusqlite::params![reason, now],
-            )
-            .map_err(|e| format!("PERSISTENCE_FAILED expire stale interactions: {e}"))?;
-        }
+                    rusqlite::params![reason, now],
+                )
+                .map_err(|e| format!("PERSISTENCE_FAILED expire stale interactions: {e}"))?;
+            }
 
-        // Clear session actor live pointers (no auto re-exec).
-        tx.execute(
-            "UPDATE session_actor
+            // Clear session actor live pointers (no auto re-exec).
+            tx.execute(
+                "UPDATE session_actor
              SET active_run_id = NULL,
                  running_prompt_id = NULL,
                  pending_interaction_id = NULL,
                  cancel_and_send_id = NULL,
                  cancel_requested = 0,
                  updated_at = ?1",
-            rusqlite::params![now],
-        )
-        .map_err(|e| format!("PERSISTENCE_FAILED clear session actors: {e}"))?;
+                rusqlite::params![now],
+            )
+            .map_err(|e| format!("PERSISTENCE_FAILED clear session actors: {e}"))?;
 
-        tx.commit()
-            .map_err(|e| format!("PERSISTENCE_FAILED commit recovery tx: {e}"))?;
+            if changed != interrupted_events.len() {
+                return Err("PERSISTENCE_FAILED recovery run/event mismatch".into());
+            }
+            tx.commit()
+                .map_err(|e| format!("PERSISTENCE_FAILED commit recovery tx: {e}"))?;
+            (changed, interrupted_events)
+        };
+        for event in interrupted_events {
+            self.runtime.events.inject_committed(event);
+        }
         Ok(changed)
     }
     fn runs_snapshot_path() -> std::path::PathBuf {
@@ -210,7 +254,8 @@ impl RunManager {
                         created_at, idempotency_key, COALESCE(revision, 0),
                         retry_of_run_id, retry_of_turn_id, continued_from_run_id,
                         branch_id, branch_parent_message_id, checkpoint_id, resume_of_run_id,
-                        capability_snapshot_json
+                        capability_snapshot_json, project_id, project_identity_version,
+                        effort, runtime_id
                  FROM run ORDER BY created_at",
             )
             .map_err(|e| e.to_string())?;
@@ -242,11 +287,11 @@ impl RunManager {
                     created_at: parse_db_time(row.get::<_, Option<String>>(17)?),
                     last_event_sequence: 0,
                     idempotency_key: row.get(18)?,
-                    effort: None,
-                    runtime_id: None,
+                    effort: row.get(30)?,
+                    runtime_id: row.get(31)?,
                     revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
-                    project_id: None,
-                    project_identity_version: None,
+                    project_id: row.get(28)?,
+                    project_identity_version: row.get(29)?,
                     retry_of_run_id: row.get(20)?,
                     retry_of_turn_id: row.get(21)?,
                     continued_from_run_id: row.get(22)?,

@@ -47,6 +47,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
             features: vec![
                 "streaming".into(),
                 "tool_calls".into(),
+                "function_calling".into(),
                 "system_prompt".into(),
             ],
             max_context_window: 128_000,
@@ -55,7 +56,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
             structured_output: false,
             image_input: false,
             file_input: false,
-            reasoning: true,
+            reasoning: false,
             system_prompt: true,
             function_calling: true,
         }
@@ -137,7 +138,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
                 streaming: true,
                 image_input: false,
                 file_input: false,
-                reasoning: true,
+                reasoning: false,
                 tool_calling: true,
                 structured_output: false,
                 function_calling: true,

@@ -7,6 +7,12 @@ function createMockIframe() {
   const style: Record<string, string> = {};
   let _onload: (() => void) | null = null;
   let removed = false;
+  const messages: Array<{ data: unknown; targetOrigin: string }> = [];
+  const contentWindow = {
+    postMessage: (data: unknown, targetOrigin: string) => {
+      messages.push({ data, targetOrigin });
+    },
+  };
   return {
     setAttribute: (name: string, value: string) => { attrs[name] = value; },
     getAttribute: (name: string) => attrs[name],
@@ -15,6 +21,8 @@ function createMockIframe() {
     set onload(fn: (() => void) | null) { _onload = fn; },
     remove: () => { removed = true; },
     get removed() { return removed; },
+    contentWindow,
+    messages,
     triggerLoad() { _onload?.(); },
   };
 }
@@ -23,6 +31,8 @@ type MockIframeElement = ReturnType<typeof createMockIframe>;
 
 function setupMocks() {
   const mockElements: MockIframeElement[] = [];
+  const messageListeners = new Set<(event: MessageEvent) => unknown>();
+  let tokenSequence = 0;
 
   (globalThis as unknown as { document?: unknown }).document = {
     createElement: (tag: string) => {
@@ -32,11 +42,31 @@ function setupMocks() {
       return el;
     },
   };
-  return mockElements;
+  (globalThis as unknown as { window?: unknown }).window = {
+    nativesAPI: {
+      bridge: {
+        generateToken: async () => `token-${++tokenSequence}`,
+        getHttpPort: async () => 4321,
+      },
+    },
+    addEventListener: (type: string, listener: (event: MessageEvent) => unknown) => {
+      if (type === 'message') messageListeners.add(listener);
+    },
+    removeEventListener: (type: string, listener: (event: MessageEvent) => unknown) => {
+      if (type === 'message') messageListeners.delete(listener);
+    },
+  };
+  return {
+    mockElements,
+    dispatchMessage: async (event: MessageEvent) => {
+      await Promise.all([...messageListeners].map((listener) => listener(event)));
+    },
+  };
 }
 
 function teardownMocks() {
   delete (globalThis as unknown as { document?: unknown }).document;
+  delete (globalThis as unknown as { window?: unknown }).window;
 }
 
 describe('IframeManager', () => {
@@ -77,6 +107,68 @@ describe('IframeManager', () => {
       assert.deepEqual(mgr.getAllModuleIds(), ['mod1']);
       assert.equal(mgr.getInstance('mod1')?.element, el2);
       assert.ok((el1 as unknown as MockIframeElement).removed);
+    });
+
+    it('grants a token only after a source-verified request and targets the opaque frame with *', async () => {
+      const mocks = setupMocks();
+      const el = mgr.createIframe('mod1', 'http://example.com') as unknown as MockIframeElement;
+
+      el.triggerLoad();
+      await Promise.resolve();
+      assert.equal(el.messages.length, 0, 'onload must not proactively grant a token');
+
+      await mocks.dispatchMessage({ source: {}, data: { type: 'token-request' } } as MessageEvent);
+      assert.equal(el.messages.length, 0, 'a different window cannot request a token');
+
+      await mocks.dispatchMessage({
+        source: el.contentWindow,
+        data: { type: 'token-request' },
+      } as unknown as MessageEvent);
+      assert.equal(el.messages.length, 1);
+      assert.equal(el.messages[0]?.targetOrigin, '*');
+      assert.deepEqual(el.messages[0]?.data, {
+        type: 'token-granted',
+        token: 'token-1',
+        moduleId: 'mod1',
+        namespace: 'custom_module_data_mod1',
+      });
+    });
+
+    it('rejects stale sources and accepts only lifecycle messages with the current token', async () => {
+      const mocks = setupMocks();
+      const oldEl = mgr.createIframe('mod1', 'http://first.com') as unknown as MockIframeElement;
+      await mocks.dispatchMessage({
+        source: oldEl.contentWindow,
+        data: { type: 'token-request' },
+      } as unknown as MessageEvent);
+
+      const newEl = mgr.createIframe('mod1', 'http://second.com') as unknown as MockIframeElement;
+      await mocks.dispatchMessage({
+        source: oldEl.contentWindow,
+        data: { type: 'token-request' },
+      } as unknown as MessageEvent);
+      assert.equal(newEl.messages.length, 0, 'destroyed iframe source must be rejected');
+
+      await mocks.dispatchMessage({
+        source: newEl.contentWindow,
+        data: { type: 'token-request' },
+      } as unknown as MessageEvent);
+      const instance = mgr.getInstance('mod1');
+      assert.equal(instance?.sessionToken, 'token-2');
+      assert.ok(instance);
+      instance.lastAccessed = 0;
+
+      await mocks.dispatchMessage({
+        source: newEl.contentWindow,
+        data: { type: 'lifecycle:ready', moduleId: 'mod1', token: 'token-1' },
+      } as unknown as MessageEvent);
+      assert.equal(instance.lastAccessed, 0, 'old token must be rejected');
+
+      await mocks.dispatchMessage({
+        source: newEl.contentWindow,
+        data: { type: 'lifecycle:ready', moduleId: 'mod1', token: 'token-2' },
+      } as unknown as MessageEvent);
+      assert.ok(instance.lastAccessed > 0, 'current source and token must succeed');
     });
   });
 
@@ -195,8 +287,7 @@ describe('IframeManager', () => {
       mgr.createIframe('mod1', 'http://example.com');
       const inst = mgr.getInstance('mod1');
       assert.ok(inst?.element);
-      const iframeWin = {};
-      (inst.element as unknown as MockIframeElement & { contentWindow?: unknown }).contentWindow = iframeWin;
+      const iframeWin = (inst.element as unknown as MockIframeElement).contentWindow;
       assert.equal(mgr.isManagedMessageSource(iframeWin), true);
     });
 
@@ -210,8 +301,7 @@ describe('IframeManager', () => {
       mgr.createIframe('mod1', 'http://example.com');
       const inst = mgr.getInstance('mod1');
       assert.ok(inst?.element);
-      const iframeWin = {};
-      (inst.element as unknown as MockIframeElement & { contentWindow?: unknown }).contentWindow = iframeWin;
+      const iframeWin = (inst.element as unknown as MockIframeElement).contentWindow;
       assert.equal(mgr.isManagedMessageSource(iframeWin), true);
       mgr.destroyIframe('mod1');
       assert.equal(mgr.isManagedMessageSource(iframeWin), false);

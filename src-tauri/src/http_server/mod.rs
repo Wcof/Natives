@@ -193,7 +193,8 @@ fn handle_request(
     let path_only = url.split('?').next().unwrap_or(&url).to_string();
     let method = request.method().clone();
 
-    // 2. Route matching — only GET/HEAD for static assets; POST for bridge only.
+    // 2. Route matching — only GET/HEAD for static assets; Bridge also permits
+    //    the opaque Workshop iframe's POST preflight.
     //    CSP is partitioned per-domain (CR-402): Workshop modules, Drafts, Local
     //    Projects, and Bridge each get a different CSP header.
     match &method {
@@ -251,7 +252,9 @@ fn handle_request(
             // 3. Origin validation for POST (CSRF protection)
             let origin = get_header(&request, "Origin").map(|h| h.to_string());
             let referer = get_header(&request, "Referer").map(|h| h.to_string());
-            if !validate_origin(&origin, &referer) {
+            let opaque_workshop_origin = path_only.starts_with("/api/bridge/")
+                && is_opaque_workshop_origin(origin.as_deref());
+            if !opaque_workshop_origin && !validate_origin(&origin, &referer) {
                 let resp = Response::from_string("Forbidden").with_status_code(403);
                 request.respond(resp)?;
                 return Ok(());
@@ -260,9 +263,27 @@ fn handle_request(
             if path_only.starts_with("/api/bridge/") {
                 let bridge_csp = Header::from_bytes("Content-Security-Policy", BRIDGE_CSP)
                     .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
-                handle_bridge_request(request, token_manager, bridge_csp, db_path)?;
+                handle_bridge_request(
+                    request,
+                    token_manager,
+                    bridge_csp,
+                    db_path,
+                    opaque_workshop_origin,
+                )?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
+                request.respond(resp)?;
+            }
+        }
+        Method::Options if path_only.starts_with("/api/bridge/") => {
+            let is_post_preflight =
+                get_header(&request, "Access-Control-Request-Method").as_deref() == Some("POST");
+            if is_opaque_workshop_origin(get_header(&request, "Origin").as_deref())
+                && is_post_preflight
+            {
+                request.respond(with_bridge_cors(Response::empty(204)))?;
+            } else {
+                let resp = Response::from_string("Forbidden").with_status_code(403);
                 request.respond(resp)?;
             }
         }

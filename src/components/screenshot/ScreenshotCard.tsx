@@ -10,8 +10,8 @@ import { useHydrated } from '@/hooks/useHydrated';
 interface ScreenshotCardProps {
   locale: Locale;
   onSendToTerminal: (filePath: string) => void;
-  onSaveToMaterial: (filePath: string) => void;
-  onAnnotate: (filePath: string) => void;
+  onSaveToMaterial: (filePath: string) => Promise<boolean>;
+  onAnnotate: (filePath: string) => Promise<boolean>;
   onDismiss: () => void;
 }
 
@@ -24,6 +24,7 @@ export default function ScreenshotCard({
 }: ScreenshotCardProps) {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
   const mounted = useHydrated();
 
   
@@ -45,15 +46,25 @@ export default function ScreenshotCard({
     setVisible(false);
   }, [filePath, onSendToTerminal]);
 
-  const handleSave = useCallback(() => {
-    if (filePath) onSaveToMaterial(filePath);
-    setVisible(false);
-  }, [filePath, onSaveToMaterial]);
+  const handleSave = useCallback(async () => {
+    if (!filePath || actionPending) return;
+    setActionPending(true);
+    try {
+      if (await onSaveToMaterial(filePath)) setVisible(false);
+    } finally {
+      setActionPending(false);
+    }
+  }, [actionPending, filePath, onSaveToMaterial]);
 
-  const handleAnnotate = useCallback(() => {
-    if (filePath) onAnnotate(filePath);
-    setVisible(false);
-  }, [filePath, onAnnotate]);
+  const handleAnnotate = useCallback(async () => {
+    if (!filePath || actionPending) return;
+    setActionPending(true);
+    try {
+      if (await onAnnotate(filePath)) setVisible(false);
+    } finally {
+      setActionPending(false);
+    }
+  }, [actionPending, filePath, onAnnotate]);
 
   if (!visible || !filePath) return null;
 
@@ -97,10 +108,10 @@ export default function ScreenshotCard({
           <button className="btn btn-sm" onClick={handleSend} title={t(locale, 'screenshot.sendToTerminal')}>
             <Terminal size={14} /> {t(locale, 'screenshot.sendToTerminal')}
           </button>
-          <button className="btn btn-sm" onClick={handleSave} title={t(locale, 'screenshot.saveToMaterial')}>
-            <FolderOpen size={14} /> {t(locale, 'screenshot.saveToMaterial')}
+          <button className="btn btn-sm" onClick={() => void handleSave()} disabled={actionPending} title={t(locale, 'screenshot.saveToMaterial')}>
+            <FolderOpen size={14} /> {actionPending ? t(locale, 'screenshot.saving') : t(locale, 'screenshot.saveToMaterial')}
           </button>
-          <button className="btn btn-sm btn-primary" onClick={handleAnnotate} title={t(locale, 'screenshot.annotate')}>
+          <button className="btn btn-sm btn-primary" onClick={() => void handleAnnotate()} disabled={actionPending} title={t(locale, 'screenshot.annotate')}>
             <Image size={14} /> {t(locale, 'screenshot.annotate')}
           </button>
         </div>

@@ -11,6 +11,7 @@ import { copyToClipboard } from '@/lib/clipboard';
 import { FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useTerminalSessions } from './useTerminalSessions';
 import { useToast } from '@/components/ui/Toast';
+import { classifyError } from '@/lib/error-classifier';
 
 interface TerminalPanelProps {
   isCollapsed: boolean;
@@ -54,8 +55,12 @@ export default function TerminalPanel({
   // Profile state (US26)
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: number }>>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
+  const profileLoadGeneration = useRef(0);
+  const profileReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Click outside listener for custom profile dropdown
   useEffect(() => {
@@ -92,26 +97,56 @@ export default function TerminalPanel({
     isAgentBusy,
   } = useTerminalSessions({ onSessionCreated, profiles, muted });
 
-  // Load environment profiles (US26)
-  useEffect(() => {
-    async function loadProfiles() {
-      try {
-        const api = window.nativesAPI;
-        if (!api?.env) return;
-        const list = await api.env.listProfiles();
-        const profileList = list as unknown as Array<{ id: number; name: string; is_default: number }>;
-        setProfiles(profileList);
-        // Auto-select default profile
-        const defaultProfile = profileList.find((p) => p.is_default === 1);
-        if (defaultProfile) {
-          setSelectedProfileId(defaultProfile.id);
-        } else if (profileList.length > 0) {
-          setSelectedProfileId(profileList[0]!.id);
-        }
-      } catch { /* ignore */ }
+  // Load environment profiles and refresh only for the env DB channel.
+  const loadProfiles = useCallback(async () => {
+    const requestId = ++profileLoadGeneration.current;
+    setProfileLoading(true);
+    setProfileLoadError(null);
+    try {
+      const api = window.nativesAPI;
+      if (!api?.env) throw new Error('Environment profile API unavailable');
+      const profileList = await api.env.listProfiles();
+      if (requestId !== profileLoadGeneration.current) return;
+      setProfiles(profileList);
+      setSelectedProfileId((current) => {
+        if (current !== null && profileList.some((profile) => profile.id === current)) return current;
+        return profileList.find((profile) => profile.is_default === 1)?.id ?? profileList[0]?.id ?? null;
+      });
+    } catch (error) {
+      if (requestId !== profileLoadGeneration.current) return;
+      setProfiles([]);
+      setSelectedProfileId(null);
+      setProfileLoadError(classifyError(error, { locale }).userMessage);
+    } finally {
+      if (requestId === profileLoadGeneration.current) setProfileLoading(false);
     }
-    loadProfiles();
-  }, []);
+  }, [locale]);
+
+  useEffect(() => {
+    void loadProfiles();
+    const unsubscribe = window.nativesAPI?.onDbStateChanged?.((_event, channel) => {
+      if (channel !== 'env') return;
+      if (profileReloadTimer.current) clearTimeout(profileReloadTimer.current);
+      profileReloadTimer.current = setTimeout(() => {
+        profileReloadTimer.current = null;
+        void loadProfiles();
+      }, 60);
+    });
+    return () => {
+      profileLoadGeneration.current += 1;
+      unsubscribe?.();
+      if (profileReloadTimer.current) clearTimeout(profileReloadTimer.current);
+      profileReloadTimer.current = null;
+    };
+  }, [loadProfiles]);
+
+  const createTerminalSession = useCallback(async (label?: string, profileId?: number) => {
+    if (profileLoading || profileLoadError) {
+      toast(profileLoadError || t(locale, 'terminal.profileLoading'), 'error');
+      return undefined;
+    }
+    return createSession(label, profileId);
+  }, [createSession, locale, profileLoadError, profileLoading, toast]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -181,7 +216,7 @@ export default function TerminalPanel({
         const termEl = terminalRef.current;
         if (termEl && (termEl.contains(document.activeElement) || !isCollapsed)) {
           e.preventDefault();
-          createSession();
+          void createTerminalSession(undefined, selectedProfileId ?? undefined);
         }
       }
       // Cmd+W: close current tab
@@ -227,7 +262,7 @@ export default function TerminalPanel({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [sessions, activeSessionId, isCollapsed, createSession, closeSession, switchSession]);
+  }, [sessions, activeSessionId, isCollapsed, selectedProfileId, createTerminalSession, closeSession, switchSession]);
 
   // Agent launch: 若当前前台进程是 shell 则复用当前 tab，否则新建 tab
   const launchAgent = useCallback(async (cmd: string) => {
@@ -243,7 +278,7 @@ export default function TerminalPanel({
         );
         if (!isShell) {
           // 前台跑着 TUI (vim/top/claude/codex)，新建 tab
-          const newId = await createSession(undefined, selectedProfileId ?? undefined);
+          const newId = await createTerminalSession(undefined, selectedProfileId ?? undefined);
           if (newId) {
             window.nativesAPI?.terminal?.write?.(newId, cmd + '\r');
           }
@@ -257,11 +292,11 @@ export default function TerminalPanel({
       return;
     }
     // No session, create one then send command directly
-    const newId = await createSession(undefined, selectedProfileId ?? undefined);
+    const newId = await createTerminalSession(undefined, selectedProfileId ?? undefined);
     if (newId) {
       window.nativesAPI?.terminal?.write?.(newId, cmd + '\r');
     }
-  }, [activeSessionId, createSession, selectedProfileId]);
+  }, [activeSessionId, createTerminalSession, selectedProfileId]);
 
   // Drag-drop file support
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -368,7 +403,7 @@ export default function TerminalPanel({
             ))}
             <button
               className="terminal-tab"
-              onClick={() => createSession(undefined, selectedProfileId ?? undefined)}
+              onClick={() => void createTerminalSession(undefined, selectedProfileId ?? undefined)}
               title={t(locale, 'terminal.newTab')}
               aria-label={t(locale, 'terminal.newTab')}
             >
@@ -415,6 +450,11 @@ export default function TerminalPanel({
               </div>
             )}
           </div>
+        )}
+        {profileLoadError && (
+          <span role="alert" className="text-xs text-[var(--danger)]" title={profileLoadError}>
+            {t(locale, 'terminal.profileLoadFailed')}
+          </span>
         )}
 
         <div className="terminal-actions">

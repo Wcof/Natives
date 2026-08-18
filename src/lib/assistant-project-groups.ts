@@ -1,3 +1,5 @@
+import { normalizeAssistantProjectPath } from './assistant-project-path';
+
 export interface AssistantProjectConversation {
   id: string;
   projectId: string | null;
@@ -58,7 +60,7 @@ export function projectCreationState(input: {
 }
 
 export function displayProjectName(path: string): string {
-  const normalized = path.trim().replace(/\/+$/, '');
+  const normalized = normalizeAssistantProjectPath(path);
   const parts = normalized.split('/').filter(Boolean);
   return parts.at(-1) ?? normalized;
 }
@@ -97,7 +99,9 @@ export function groupAssistantConversations(
   const registered: RegisteredProjectMeta[] = registeredProjects.map((item) =>
     typeof item === 'string' ? { path: item } : item,
   );
-  const hiddenPaths = new Set(Array.from(hiddenProjectPaths, (p) => p.trim()).filter(Boolean));
+  const hiddenPaths = new Set(
+    Array.from(hiddenProjectPaths, normalizeAssistantProjectPath).filter(Boolean),
+  );
 
   const byProject = new Map<string, AssistantProjectConversation[]>();
   const unassigned: AssistantProjectConversation[] = [];
@@ -105,7 +109,7 @@ export function groupAssistantConversations(
   const missingProjectPaths = new Set<string>();
 
   for (const proj of registered) {
-    const path = proj.path.trim();
+    const path = normalizeAssistantProjectPath(proj.path);
     if (!path || hiddenPaths.has(path)) continue;
     metaByPath.set(path, proj);
     if (proj.exists === false) {
@@ -117,7 +121,9 @@ export function groupAssistantConversations(
 
   for (const conversation of conversations) {
     if (conversation.parentConversationId?.trim()) continue;
-    const path = conversation.projectId?.trim() ?? '';
+    const path = conversation.projectId
+      ? normalizeAssistantProjectPath(conversation.projectId)
+      : '';
     // Soft-deleted project: hide the session entirely, never move it to
     // unassigned or re-invent the project from its project_id.
     if (hiddenPaths.has(path)) continue;
@@ -141,7 +147,7 @@ export function groupAssistantConversations(
   const groups: AssistantProjectGroup[] = [];
   const seen = new Set<string>();
   for (const proj of registered) {
-    const path = proj.path.trim();
+    const path = normalizeAssistantProjectPath(proj.path);
     if (!path || missingProjectPaths.has(path) || seen.has(path)) continue;
     seen.add(path);
     const items = byProject.get(path) ?? [];

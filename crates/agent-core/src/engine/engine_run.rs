@@ -309,10 +309,12 @@ impl AgentEngine {
                 let mut reasoning_acc = String::new();
                 let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
                 let mut saw_generation_delta = false;
+                let mut saw_provider_event = false;
                 let mut completed_reason: Option<ProviderStopReason> = None;
                 tokio::pin!(provider_events);
 
                 while let Some(event) = provider_events.next().await {
+                    saw_provider_event = true;
                     if self.cancel.is_cancelled() {
                         if !tool_acc.is_empty() {
                             completed_reason = Some(ProviderStopReason::Cancelled);
@@ -492,20 +494,39 @@ impl AgentEngine {
                     return Ok(EngineOutcome::Cancelled);
                 }
 
-                if completed_reason.is_none() && !tool_acc.is_empty() {
+                if completed_reason.is_none() && saw_provider_event {
                     self.events.append(
                         run_id,
                         RunEventKind::GenerationAttemptDiscarded {
                             attempt,
-                            reason: "INCOMPLETE_TOOL_CALL".into(),
+                            reason: "INCOMPLETE_PROVIDER_STREAM".into(),
                         },
                     );
-                    break (
-                        text_acc,
-                        reasoning_acc,
-                        tool_acc,
-                        Some(ProviderStopReason::Unknown("INCOMPLETE_TOOL_CALL".into())),
+                    self.events.append(
+                        run_id,
+                        RunEventKind::GenerationAttemptFailed {
+                            attempt,
+                            code: "INCOMPLETE_PROVIDER_STREAM".into(),
+                            retryable: false,
+                            retrying: false,
+                            retry_in_ms: None,
+                        },
                     );
+                    self.close_failed_turn(
+                        run_id,
+                        &turn_id,
+                        &assistant_message_id,
+                        "error",
+                        &text_acc,
+                        &reasoning_acc,
+                    )?;
+                    return Err(EngineError::Provider {
+                        message: "provider stream ended without a completion event".into(),
+                        code: "INCOMPLETE_PROVIDER_STREAM".into(),
+                        retryable: false,
+                        category: "unknown".into(),
+                        retry_after_ms: None,
+                    });
                 }
 
                 if !saw_generation_delta && attempt < 2 {
@@ -636,18 +657,54 @@ impl AgentEngine {
                         output_tokens: 0,
                     },
                 )?;
-                let follow_up_consumed = match self
-                    .drain_inputs(
-                        crate::PendingInputKind::FollowUp,
+                let accepts_queued_input =
+                    !matches!(stop_reason, Some(ProviderStopReason::Cancelled));
+                // A text-only response is also a genuine provider boundary:
+                // its turn is durable before queued steering joins context.
+                let steering_consumed = if accepts_queued_input {
+                    self.apply_safe_point(
+                        &config.conversation_id,
+                        crate::session_coordinator::SafePoint::ProviderBatchBoundary,
+                        &mut typed_messages,
+                    )
+                    .await?;
+                    self.drain_inputs(
+                        crate::PendingInputKind::Steering,
                         crate::DrainMode::All,
                         crate::InputSafePoint::BeforeRunEnd,
                         &mut typed_messages,
                         Some(turn_id.0.as_str()),
                     )
-                    .await
-                {
-                    Ok(consumed) => consumed,
-                    Err(error) => return Err(error),
+                    .await?
+                } else {
+                    false
+                };
+                if steering_consumed {
+                    self.live.append(
+                        run_id,
+                        RunEventKind::Progress {
+                            message: "steering_consumed".into(),
+                            percentage: None,
+                        },
+                    );
+                    continue;
+                }
+                let follow_up_consumed = if accepts_queued_input {
+                    match self
+                        .drain_inputs(
+                            crate::PendingInputKind::FollowUp,
+                            crate::DrainMode::All,
+                            crate::InputSafePoint::BeforeRunEnd,
+                            &mut typed_messages,
+                            Some(turn_id.0.as_str()),
+                        )
+                        .await
+                    {
+                        Ok(consumed) => consumed,
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    false
                 };
                 if follow_up_consumed {
                     // Live-lane signal (STREAM-CONTRACT-V2): high-frequency

@@ -61,6 +61,64 @@ import type {
   RuntimeDescriptor,
 } from './types-execution';
 
+export interface EnvVariableMetadata {
+  key: string;
+  has_value: boolean;
+  masked: boolean;
+}
+
+export interface EnvProfileMetadata {
+  id: number;
+  name: string;
+  is_default: number;
+  created_at: string;
+  variables: EnvVariableMetadata[];
+}
+
+export interface ScreenshotSaveAnnotatedRequest {
+  sourcePath: string;
+  dataUrl: string;
+}
+
+export interface ScreenshotSaveAnnotatedResult {
+  path: string;
+}
+
+export type ReleaseAction =
+  | 'update-version'
+  | 'npm-install'
+  | 'npm-build'
+  | 'cargo-build-release'
+  | 'git-commit'
+  | 'git-tag'
+  | 'git-push-branch'
+  | 'git-push-tags';
+
+export interface ReleaseStep {
+  action: ReleaseAction;
+  label: string;
+  display: string;
+}
+
+export interface ReleasePlan {
+  version: string;
+  steps: ReleaseStep[];
+}
+
+export interface ReleasePreparation {
+  version: string;
+  updatedFiles: string[];
+}
+
+export interface ReleaseExecution {
+  action: ReleaseAction;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  success: boolean;
+  alreadyComplete: boolean;
+}
+
 export interface NativesAPI {
   themeReady: () => void;
   app: { version: () => Promise<string> };
@@ -286,15 +344,13 @@ export interface NativesAPI {
     previewUrl: (draftId: string) => Promise<string>;
   };
   env: {
-    getVariables: (profileId: string) => Promise<unknown>;
     getDefaultProfile: () => Promise<string>;
-    listProfiles: () => Promise<string[]>;
+    listProfiles: () => Promise<EnvProfileMetadata[]>;
     createProfile: (name: string) => Promise<void>;
     deleteProfile: (name: string) => Promise<void>;
     setDefaultProfile: (name: string) => Promise<void>;
     setVariable: (profileId: string, key: string, value: string) => Promise<void>;
     deleteVariable: (profileId: string, key: string) => Promise<void>;
-    encrypt: (text: string) => Promise<string>;
     };
   getTheme: () => Promise<string>;
   setTheme: (theme: string) => Promise<void>;
@@ -390,13 +446,13 @@ export interface NativesAPI {
   onDbStateChanged: (callback: (event: unknown, channel: string, data: unknown) => void) => () => void;
   screenshot: {
     watch: (callback: (filePath: string) => void) => () => void;
-    saveAnnotated: (dataUrl: string, targetPath?: string) => Promise<string>;
+    saveAnnotated: (request: ScreenshotSaveAnnotatedRequest) => Promise<ScreenshotSaveAnnotatedResult>;
   };
   release: {
     inspect: (projectPath: string) => Promise<unknown>;
-    prepare: (projectPath: string, version: string) => Promise<unknown>;
-    getSequence: (projectPath: string, version: string) => Promise<unknown>;
-    execute: (projectPath: string, command: string) => Promise<unknown>;
+    prepare: (projectPath: string, version: string) => Promise<ReleasePreparation>;
+    getSequence: (projectPath: string, version: string) => Promise<ReleasePlan>;
+    execute: (projectPath: string, version: string, action: ReleaseAction) => Promise<ReleaseExecution>;
   };
   update: {
     check: () => Promise<unknown>;

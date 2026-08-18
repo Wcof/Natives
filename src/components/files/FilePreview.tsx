@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useCallback, useMemo, lazy, Suspense, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense, useRef } from 'react';
 import { Pencil } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { type FileEntry } from '@/types/file';
@@ -14,6 +14,9 @@ import { fsApi, hasNativeFiles } from '@/lib/files-api';
 import { rewriteLocalImages, type LocalImageRewrite } from '@/lib/markdown-local-images';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { type PreviewSource, type PreviewSubMode } from '@/lib/preview/contracts';
+import { PreviewProviderError } from '@/lib/preview/errors';
+import { authorizeImageEditAsset } from '@/lib/preview/image-edit';
+import { classifyError } from '@/lib/error-classifier';
 import MonacoDiffView from '@/components/assistant/diff/MonacoDiffView';
 import FindReplaceBar from './FindReplaceBar';
 import { useFindReplace } from '@/hooks/useFindReplace';
@@ -21,6 +24,7 @@ import ImageLightbox from './ImageLightbox';
 import PreviewSurface from '@/components/preview/PreviewSurface';
 import { createBuiltinRegistry, createDefaultContext } from '@/lib/preview/composition';
 import { PreviewService } from '@/lib/preview/service';
+import { formatSavedStatusLabel, startSavedStatusTicker } from './saved-status-ticker';
 
 // Lazy-loaded heavy components
 const MilkdownEditor = lazy(() => import('./MilkdownEditor'));
@@ -237,74 +241,40 @@ function CodeEditPane({ entry, locale, ext }: {
 
 // ── Image Edit Pane（写路径：只读预览由 PreviewSurface 呈现，此处仅编辑入口）──
 
-/** 为图像编辑构建可被 canvas 读取的 URL（HEIC/TIFF 走后端 sips 转码，失败回退 convertFileSrc）。 */
-function useImageEditUrl(path: string): string | null {
-  const [url, setUrl] = useState<string | null>(null);
+export { authorizeImageEditAsset } from '@/lib/preview/image-edit';
+
+interface ImageEditUrlState {
+  url: string | null;
+  error: unknown | null;
+  loading: boolean;
+}
+
+function useImageEditUrl(path: string): ImageEditUrlState {
+  const context = useMemo(() => createDefaultContext(), []);
+  const [state, setState] = useState<ImageEditUrlState>({ url: null, error: null, loading: true });
 
   useEffect(() => {
-    if (!hasNativeFiles()) return;
-    const fs = fsApi();
-
-    // HEIC/TIFF：webview 不支持直接解码，走后端 sips 转码缓存（W8）。
-    const lowerExt = path.split('.').pop()?.toLowerCase() || '';
-    if (['heic', 'heif', 'tif', 'tiff'].includes(lowerExt) && fs.convertImagePreview) {
-      let cancelled = false;
-      (async () => {
-        try {
-          const converted = await fs.convertImagePreview(path);
-          if (!cancelled && converted?.ok && converted.jpegPath) {
-            setUrl(fs.convertFileSrc?.(converted.jpegPath) ?? '');
-            return;
-          }
-        } catch { /* fall through */ }
-        if (!cancelled) setUrl(fs.convertFileSrc?.(path) ?? '');
-      })();
-      return () => { cancelled = true; };
-    }
-
-    if (fs.convertFileSrc) {
-      startTransition(() => { setUrl(fs.convertFileSrc?.(path) ?? ""); });
-      return;
-    }
-
-    // 浏览器 dev 兜底：readFile → Blob URL（编辑需要可读字节，不能只用 asset URL）
-    let cancelled = false;
-    let createdUrl: string | null = null;
+    const controller = new AbortController();
+    setState({ url: null, error: null, loading: true });
     (async () => {
       try {
-        const result = (await fs.readFile(path)) as string | { content?: string; encoding?: string };
-        if (cancelled) return;
-        const content = typeof result === 'string' ? result : result?.content;
-        if (!content) return;
-        const ext = path.split('.').pop()?.toLowerCase() || '';
-        const mimeMap: Record<string, string> = {
-          png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-          gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-        };
-        const mime = mimeMap[ext] || 'application/octet-stream';
-        let blob: Blob;
-        if (typeof result !== 'string' && result?.encoding === 'base64') {
-          const byteString = atob(content);
-          const ab = new ArrayBuffer(byteString.length);
-          const ia = new Uint8Array(ab);
-          for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-          blob = new Blob([ab], { type: mime });
-        } else {
-          blob = new Blob([content], { type: mime });
-        }
-        if (!cancelled) {
-          createdUrl = URL.createObjectURL(blob);
-          setUrl(createdUrl);
-        }
-      } catch { /* ignore */ }
+        const url = await authorizeImageEditAsset(
+          path,
+          context,
+          fsApi().convertImagePreview,
+          controller.signal,
+        );
+        if (!controller.signal.aborted) setState({ url, error: null, loading: false });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (error instanceof PreviewProviderError && error.code === 'cancelled') return;
+        setState({ url: null, error, loading: false });
+      }
     })();
-    return () => {
-      cancelled = true;
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
-    };
-  }, [path]);
+    return () => controller.abort();
+  }, [context, path]);
 
-  return url;
+  return state;
 }
 
 function ImageEditPane({ entry, locale, onImageClick }: {
@@ -312,8 +282,25 @@ function ImageEditPane({ entry, locale, onImageClick }: {
   locale: Locale;
   onImageClick: (src: string) => void;
 }) {
-  const imageUrl = useImageEditUrl(entry.path);
+  const { url: imageUrl, error, loading } = useImageEditUrl(entry.path);
   const [imageEditing, setImageEditing] = useState(false);
+
+  if (loading) {
+    return (
+      <div style={{ color: 'var(--text-disabled)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+        {t(locale, 'common.loading')}
+      </div>
+    );
+  }
+
+  if (error) {
+    const classified = classifyError(error, { locale });
+    return (
+      <div style={{ color: 'var(--danger)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+        {classified.userMessage}
+      </div>
+    );
+  }
 
   if (!imageUrl) return null;
 
@@ -623,20 +610,16 @@ function CodeEditorPane({ entry, code, mtime, reload, locale, ext }: {
     };
   }, [save]);
 
-  // 「N 秒前已保存」状态条，每秒刷新
+  // 「N 秒前已保存」状态条仅在文档可见时刷新。
   useEffect(() => {
     if (savedAt === null) { setSavedTickLabel(null); return; }
     const update = () => {
-      const secs = Math.max(0, Math.round((Date.now() - savedAt) / 1000));
-      setSavedTickLabel(
-        secs < 2
-          ? t(locale, 'filePreview.savedJustNow')
-          : t(locale, 'filePreview.savedSecondsAgo').replace('{seconds}', String(secs)),
-      );
+      setSavedTickLabel(formatSavedStatusLabel(savedAt, Date.now(), {
+        justNow: t(locale, 'filePreview.savedJustNow'),
+        secondsAgo: t(locale, 'filePreview.savedSecondsAgo'),
+      }));
     };
-    update();
-    const timer = setInterval(update, 1000);
-    return () => clearInterval(timer);
+    return startSavedStatusTicker(savedAt, update);
   }, [savedAt, locale]);
 
   return (

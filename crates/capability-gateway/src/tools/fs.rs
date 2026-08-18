@@ -11,10 +11,13 @@ pub struct ReadFileTool;
 /// Atomically write `content` to `path`: write a temp file in the same
 /// directory, fsync it, then rename over the target (P0-015). A crash before
 /// rename leaves the original intact; a concurrent writer cannot observe a
-/// half-written file. Returns the final path on success.
-pub async fn atomic_write_file(path: &str, content: &[u8]) -> Result<String, ToolError> {
+/// half-written file.
+pub async fn atomic_write_file(
+    path: impl AsRef<std::path::Path>,
+    content: &[u8],
+) -> Result<(), ToolError> {
     use tokio::io::AsyncWriteExt as _;
-    let target = std::path::Path::new(path);
+    let target = path.as_ref();
     let dir = target
         .parent()
         .map(|p| p.to_path_buf())
@@ -23,40 +26,48 @@ pub async fn atomic_write_file(path: &str, content: &[u8]) -> Result<String, Too
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "out".to_string());
-    let tmp_name = format!(".natives-tmp-{}-{}", file_name, std::process::id());
+    let tmp_name = format!(".natives-tmp-{file_name}-{}", uuid::Uuid::new_v4());
     let tmp_path = dir.join(&tmp_name);
 
     // Write + fsync the temp file.
-    {
-        let mut f = tokio::fs::File::create(&tmp_path)
+    let write_result: Result<(), ToolError> = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
             .await
             .map_err(|e| ToolError {
                 code: "write_error".into(),
                 message: format!("atomic write create temp failed: {e}"),
                 retryable: true,
             })?;
-        f.write_all(content).await.map_err(|e| ToolError {
+        file.write_all(content).await.map_err(|e| ToolError {
             code: "write_error".into(),
             message: format!("atomic write temp failed: {e}"),
             retryable: true,
         })?;
-        f.sync_all().await.map_err(|e| ToolError {
+        file.sync_all().await.map_err(|e| ToolError {
             code: "write_error".into(),
             message: format!("atomic write fsync failed: {e}"),
             retryable: true,
-        })?;
+        })
+    }
+    .await;
+    if let Err(error) = write_result {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(error);
     }
 
     // Rename over the target (atomic on same filesystem).
-    tokio::fs::rename(&tmp_path, target).await.map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        ToolError {
+    if let Err(error) = tokio::fs::rename(&tmp_path, target).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(ToolError {
             code: "write_error".into(),
-            message: format!("atomic write rename failed: {e}"),
+            message: format!("atomic write rename failed: {error}"),
             retryable: true,
-        }
-    })?;
-    Ok(path.to_string())
+        });
+    }
+    Ok(())
 }
 
 /// Async trait impl marker for `atomic_write_file` usage above.
@@ -513,5 +524,41 @@ impl ToolHandler for EditFileTool {
             truncated: false,
             duration_ms: 0,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::atomic_write_file;
+    use tokio::sync::Barrier;
+
+    #[tokio::test]
+    async fn concurrent_atomic_writes_use_distinct_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("shared.txt");
+        let barrier = std::sync::Arc::new(Barrier::new(16));
+        let contents: Vec<String> = (0..16)
+            .map(|index| format!("writer-{index}:{}", "x".repeat(32 * 1024)))
+            .collect();
+        let mut tasks = Vec::new();
+
+        for content in contents.clone() {
+            let barrier = barrier.clone();
+            let target = target.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                atomic_write_file(target, content.as_bytes()).await
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+
+        assert!(contents.contains(&std::fs::read_to_string(&target).unwrap()));
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".natives-tmp-")));
     }
 }

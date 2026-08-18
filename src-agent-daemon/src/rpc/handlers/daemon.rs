@@ -8,10 +8,10 @@
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_daemon(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
     protocol_version: &assistant_protocol::version::ProtocolVersion,
     _daemon_version: &str,
-    started_at: &std::time::Instant,
+    _started_at: &std::time::Instant,
 ) {
     use crate::rpc::{run_manager, send_error, send_rpc_failure, send_success};
     use assistant_protocol::error::{DaemonError, ErrorCategory};
@@ -32,9 +32,11 @@ pub(crate) async fn dispatch_daemon(
                 Ok(_) => ReadinessItem::Ready,
                 Err(e) => ReadinessItem::Unavailable(e),
             };
-            let broker_ready = match crate::natives_db_broker::default_broker_socket_path() {
-                Ok(p) if p.exists() => ReadinessItem::Ready,
-                _ => ReadinessItem::Unavailable("broker socket not present".into()),
+            let broker_ready = match crate::natives_db_broker::NativesDbBroker::open_default()
+                .and_then(|broker| broker.probe())
+            {
+                Ok(()) => ReadinessItem::Ready,
+                Err(_) => ReadinessItem::Unavailable("broker authentication unavailable".into()),
             };
             let health = if storage_ready.is_ready() {
                 ReadinessItem::Ready
@@ -42,11 +44,9 @@ pub(crate) async fn dispatch_daemon(
                 ReadinessItem::Degraded("storage unavailable".into())
             };
             let status = DaemonStatusV2 {
-                instance_id: format!(
-                    "{}-{}",
-                    std::process::id(),
-                    started_at.elapsed().as_millis()
-                ),
+                instance_id: crate::natives_db_broker::broker_instance_id()
+                    .unwrap_or("unbound")
+                    .to_string(),
                 protocol_version: protocol_version.to_string(),
                 health,
                 active_runs,
@@ -273,7 +273,7 @@ pub(crate) async fn dispatch_daemon(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

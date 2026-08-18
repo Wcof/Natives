@@ -395,6 +395,7 @@ impl ProviderAdapter for AnthropicAdapter {
             features: vec![
                 "streaming".into(),
                 "tool_calls".into(),
+                "function_calling".into(),
                 "reasoning".into(),
                 "system_prompt".into(),
                 // Real `image` content blocks; see `image_block`.
@@ -513,13 +514,7 @@ impl ProviderAdapter for AnthropicAdapter {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ProviderError {
-                code: "network".into(),
-                message: e.to_string(),
-                category: ProviderErrorCategory::Network,
-                retryable: true,
-                retry_after_ms: None,
-            })?;
+            .map_err(|error| crate::http_stream::transport_error("network", &error))?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -554,13 +549,7 @@ impl ProviderAdapter for AnthropicAdapter {
                         }
                     }
                     Err(err) => {
-                        yield ProviderEvent::Error(ProviderError {
-                            code: "stream_error".into(),
-                            message: err.to_string(),
-                            category: ProviderErrorCategory::Network,
-                            retryable: true,
-                            retry_after_ms: None,
-                        });
+                        yield ProviderEvent::Error(crate::http_stream::transport_error("stream_error", &err));
                         return;
                     }
                 }

@@ -10,6 +10,7 @@
  *   - a key exists in zh but not en, or en but not zh
  *   - a duplicate key is defined inside one locale object (last-write-wins
  *     would silently drop copy — a defect, not an accident)
+ *   - a production t() call uses a statically enumerable key absent from the locale
  * Bypass detection (R-I1): CJK literals, locale ternaries, JSX text.
  *
  * Usage:
@@ -185,6 +186,15 @@ export function runI18nCheck(root = ROOT) {
   for (const k of missingInEn) fatal(`missing in en: ${k}`);
   for (const k of missingInZh) fatal(`missing in zh: ${k}`);
 
+  if (zhRes.keys.size > 0) {
+    const callsites = auditTranslationCallsites(root, zhRes.keys);
+    for (const err of callsites.parseErrors) {
+      parseErrors.push(err);
+      fatal(`callsite parse: ${err}`);
+    }
+    for (const violation of callsites.violations) fatal(`missing callsite key: ${violation}`);
+  }
+
   if (violations.length > 0) exitCode = 1;
   return { exitCode, zhKeys: zhRes.keys.size, enKeys: enRes.keys.size, missingInEn, missingInZh, violations, parseErrors, emptyFiles };
 }
@@ -212,12 +222,172 @@ function walkFiles(dir, out) {
       walkFiles(full, out);
     } else if (
       /\.(ts|tsx)$/.test(entry) &&
-      !/\.test\.(ts|tsx)$/.test(entry) &&
+      !/\.(test|spec)\.(ts|tsx)$/.test(entry) &&
       !/\.d\.ts$/.test(entry)
     ) {
       out.push(full);
     }
   }
+}
+
+function i18nImportBinding(node) {
+  if (!tsModule.isImportDeclaration(node) || !tsModule.isStringLiteral(node.moduleSpecifier)) return null;
+  const moduleName = node.moduleSpecifier.text;
+  if (moduleName !== '@/i18n') return null;
+  const bindings = node.importClause?.namedBindings;
+  if (!bindings || !tsModule.isNamedImports(bindings)) return null;
+  for (const element of bindings.elements) {
+    const imported = element.propertyName?.text ?? element.name.text;
+    if (imported === 't') return element.name;
+  }
+  return null;
+}
+
+function unwrapTranslationWrapper(node) {
+  if (tsModule.isArrowFunction(node) || tsModule.isFunctionExpression(node)) return node;
+  if (
+    tsModule.isCallExpression(node) &&
+    tsModule.isIdentifier(node.expression) &&
+    node.expression.text === 'useCallback' &&
+    node.arguments.length > 0
+  ) {
+    const candidate = node.arguments[0];
+    if (tsModule.isArrowFunction(candidate) || tsModule.isFunctionExpression(candidate)) return candidate;
+  }
+  return null;
+}
+
+function returnedCallExpression(fn) {
+  if (tsModule.isCallExpression(fn.body)) return fn.body;
+  if (!tsModule.isBlock(fn.body)) return null;
+  const statement = fn.body.statements.find((item) => tsModule.isReturnStatement(item));
+  return statement?.expression && tsModule.isCallExpression(statement.expression)
+    ? statement.expression
+    : null;
+}
+
+function collectTranslationFunctions(sf, checker) {
+  const functions = new Map();
+  for (const statement of sf.statements) {
+    const localBinding = i18nImportBinding(statement);
+    const symbol = localBinding ? checker.getSymbolAtLocation(localBinding) : null;
+    if (symbol) functions.set(symbol, 1);
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    function visit(node) {
+      if (tsModule.isVariableDeclaration(node) && tsModule.isIdentifier(node.name) && node.initializer) {
+        const wrapper = unwrapTranslationWrapper(node.initializer);
+        const call = wrapper ? returnedCallExpression(wrapper) : null;
+        if (call && tsModule.isIdentifier(call.expression)) {
+          const sourceSymbol = checker.getSymbolAtLocation(call.expression);
+          const sourceKeyIndex = sourceSymbol ? functions.get(sourceSymbol) : undefined;
+          const keyArg = sourceKeyIndex === undefined ? undefined : call.arguments[sourceKeyIndex];
+          if (keyArg && tsModule.isIdentifier(keyArg)) {
+            const wrapperKeyIndex = wrapper.parameters.findIndex(
+              (parameter) => tsModule.isIdentifier(parameter.name) && parameter.name.text === keyArg.text,
+            );
+            const wrapperSymbol = checker.getSymbolAtLocation(node.name);
+            if (wrapperSymbol && wrapperKeyIndex >= 0 && functions.get(wrapperSymbol) !== wrapperKeyIndex) {
+              functions.set(wrapperSymbol, wrapperKeyIndex);
+              changed = true;
+            }
+          }
+        }
+      }
+      tsModule.forEachChild(node, visit);
+    }
+    visit(sf);
+  }
+  return functions;
+}
+
+/**
+ * Return every string value that can be supplied by a statically enumerable
+ * key expression. Unknown expressions are intentionally ignored; callers may
+ * still contain dynamic values, but any literal branch remains auditable.
+ */
+function staticKeyLiterals(node) {
+  if (!node) return [];
+  if (tsModule.isStringLiteral(node) || tsModule.isNoSubstitutionTemplateLiteral(node)) {
+    return [{ text: node.text, node }];
+  }
+  if (tsModule.isParenthesizedExpression(node)) {
+    return staticKeyLiterals(node.expression);
+  }
+  if (tsModule.isConditionalExpression(node)) {
+    return [...staticKeyLiterals(node.whenTrue), ...staticKeyLiterals(node.whenFalse)];
+  }
+  if (tsModule.isBinaryExpression(node)) {
+    const operator = node.operatorToken.kind;
+    if (operator === tsModule.SyntaxKind.BarBarToken || operator === tsModule.SyntaxKind.AmpersandAmpersandToken) {
+      return [...staticKeyLiterals(node.left), ...staticKeyLiterals(node.right)];
+    }
+  }
+  return [];
+}
+
+/**
+ * Verify referential integrity for statically knowable production t() keys.
+ * Dynamic expressions are intentionally outside this gate because their value
+ * cannot be proven from syntax alone; literal branches of a composite
+ * expression are still checked individually.
+ */
+export function auditTranslationCallsites(root, localeKeys) {
+  loadTypeScript();
+  const src = join(root, 'src');
+  const prodFiles = [];
+  const violations = [];
+  const parseErrors = [];
+  walkFiles(src, prodFiles);
+  const program = tsModule.createProgram({
+    rootNames: prodFiles,
+    options: {
+      jsx: tsModule.JsxEmit.Preserve,
+      noLib: true,
+      noResolve: true,
+      skipLibCheck: true,
+      target: tsModule.ScriptTarget.Latest,
+    },
+  });
+  const checker = program.getTypeChecker();
+
+  for (const file of prodFiles) {
+    const sf = program.getSourceFile(file);
+    if (!sf) {
+      parseErrors.push(`${relative(root, file)}:1: source file unavailable`);
+      continue;
+    }
+    if (sf.parseDiagnostics?.length > 0) {
+      for (const diagnostic of sf.parseDiagnostics) {
+        const position = diagnostic.start ?? 0;
+        const { line } = sf.getLineAndCharacterOfPosition(position);
+        parseErrors.push(`${relative(root, file)}:${line + 1}: syntax error`);
+      }
+      continue;
+    }
+
+    const translationFunctions = collectTranslationFunctions(sf, checker);
+    if (translationFunctions.size === 0) continue;
+    function visit(node) {
+      if (tsModule.isCallExpression(node) && tsModule.isIdentifier(node.expression)) {
+        const symbol = checker.getSymbolAtLocation(node.expression);
+        const keyIndex = symbol ? translationFunctions.get(symbol) : undefined;
+        const keyNode = keyIndex === undefined ? undefined : node.arguments[keyIndex];
+        for (const literal of staticKeyLiterals(keyNode)) {
+          if (!localeKeys.has(literal.text)) {
+            const { line } = sf.getLineAndCharacterOfPosition(literal.node.getStart(sf));
+            violations.push(`${relative(root, file)}:${line + 1}:${literal.text}`);
+          }
+        }
+      }
+      tsModule.forEachChild(node, visit);
+    }
+    visit(sf);
+  }
+  return { prodFiles: prodFiles.length, violations, parseErrors };
 }
 
 function isLocaleRef(node) {

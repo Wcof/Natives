@@ -12,6 +12,8 @@ export const files = {
     dropPrompt: '拖拽文件至此插入路径',
     followModeOn: '跟随模式：已开启（终端跟随文件浏览器）',
     createFailed: '终端创建失败',
+    profileLoading: '正在加载环境配置',
+    profileLoadFailed: '环境配置不可用，已暂停创建终端',
     followWaiting: '跟随模式已开启——等待 agent 写入文件…',
     followArtifact: '构建产物已生成',
     followReadError: '文件读取失败，无法预览',

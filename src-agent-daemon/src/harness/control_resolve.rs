@@ -72,10 +72,11 @@ pub fn prepare_run_with_tool_plan(
         let base_version_id = refs.first().map(|r| r.version_id.clone());
         let mut mismatches = Vec::new();
         for hook in &discovered {
-            let digest =
-                harness_core::sha256_hex(&serde_json::to_string(&hook.kind).unwrap_or_default());
-            if let Some((published, mode)) = repository::source_digest(conn, hook.id.as_str())? {
-                if published != digest && mode == "tracked" {
+            let digest = source_digest(hook)?;
+            let source = repository::source_digest(conn, hook.id.as_str())?;
+            let mode = source.as_ref().map_or("tracked", |(_, mode)| mode.as_str());
+            if let Some((published, source_mode)) = source.as_ref() {
+                if published != &digest && source_mode == "tracked" {
                     mismatches.push(serde_json::json!({
                         "source_id": hook.id.as_str(),
                         "published_digest": published,
@@ -86,7 +87,7 @@ pub fn prepare_run_with_tool_plan(
                     }));
                 }
             }
-            let _ = repository::sync_source(conn, hook.id.as_str(), &digest, "tracked")?;
+            let _ = repository::sync_source(conn, hook.id.as_str(), &digest, mode)?;
         }
         if let (Some(profile_id), Some(base_version_id)) = (drift_profile, base_version_id) {
             let candidate = serde_json::Value::Array(mismatches);
@@ -191,6 +192,14 @@ pub fn prepare_run_with_tool_plan(
     })
 }
 
+fn source_digest(hook: &HookDefinition) -> Result<String, HarnessError> {
+    let value =
+        serde_json::to_value(hook).map_err(|error| HarnessError::internal(error.to_string()))?;
+    Ok(harness_core::sha256_hex(&harness_core::canonical_json(
+        &value,
+    )))
+}
+
 /// Bind the compiled Provider prompt to a prepared Run and atomically persist
 /// the immutable Harness evidence. Raw prompt text is intentionally discarded.
 pub fn persist_run_plan(
@@ -240,5 +249,122 @@ impl RunHarnessPlan {
             &self.native_hooks,
             project,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness_core::hooks::{
+        Condition, ConditionOperator, HookEvent, HookFailurePolicy, HookKind,
+    };
+    use rusqlite::Connection;
+
+    fn manifest_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("open manifest database");
+        conn.execute_batch(
+            "CREATE TABLE harness_source_manifest (
+                source_id TEXT PRIMARY KEY,
+                digest TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE harness_notice (
+                cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                profile_id TEXT,
+                run_id TEXT
+            )",
+        )
+        .expect("create manifest table");
+        conn
+    }
+
+    #[test]
+    fn source_sync_preserves_pinned_mode_and_tracked_mode() {
+        let conn = manifest_conn();
+        repository::sync_source(&conn, "pinned", "same", "tracked").expect("seed source");
+        conn.execute(
+            "UPDATE harness_source_manifest SET mode = 'pinned' WHERE source_id = 'pinned'",
+            [],
+        )
+        .expect("pin source");
+
+        assert!(!repository::sync_source(&conn, "pinned", "same", "tracked").expect("sync pinned"));
+        assert_eq!(
+            repository::source_digest(&conn, "pinned")
+                .expect("read pinned")
+                .unwrap()
+                .1,
+            "pinned"
+        );
+
+        repository::sync_source(&conn, "tracked", "same", "tracked").expect("seed tracked source");
+        assert!(
+            !repository::sync_source(&conn, "tracked", "same", "tracked").expect("sync tracked")
+        );
+        assert_eq!(
+            repository::source_digest(&conn, "tracked")
+                .expect("read tracked")
+                .unwrap()
+                .1,
+            "tracked"
+        );
+    }
+
+    #[test]
+    fn operational_hook_fields_change_digest_and_pinned_drift_fails_closed() {
+        let hook = crate::production_hooks::discover_production_hooks(None)
+            .into_iter()
+            .next()
+            .expect("builtin hook");
+        let digest = source_digest(&hook).expect("digest hook");
+        macro_rules! assert_digest_changes {
+            ($field:ident, $value:expr) => {{
+                let mut changed = hook.clone();
+                changed.$field = $value;
+                assert_ne!(
+                    digest,
+                    source_digest(&changed).expect("digest changed hook"),
+                    stringify!($field)
+                );
+            }};
+        }
+        assert_digest_changes!(matcher, Some("Bash".into()));
+        assert_digest_changes!(
+            conditions,
+            vec![Condition {
+                field: "command".into(),
+                operator: ConditionOperator::Contains,
+                pattern: "rm".into(),
+            }]
+        );
+        assert_digest_changes!(timeout_ms, 1);
+        assert_digest_changes!(failure_policy, HookFailurePolicy::Skip);
+        assert_digest_changes!(event, HookEvent::PostToolUse);
+        assert_digest_changes!(order, 1);
+        assert_digest_changes!(
+            kind,
+            HookKind::Command {
+                program: "echo".into(),
+                args: vec![],
+                trusted: true,
+            }
+        );
+
+        let mut changed = hook;
+        changed.matcher = Some("Bash".into());
+        let observed = source_digest(&changed).expect("digest changed hook");
+        let conn = manifest_conn();
+        repository::sync_source(&conn, "source", &digest, "tracked").expect("seed source");
+        conn.execute(
+            "UPDATE harness_source_manifest SET mode = 'pinned' WHERE source_id = 'source'",
+            [],
+        )
+        .expect("pin source");
+        let error = repository::sync_source(&conn, "source", &observed, "tracked")
+            .expect_err("pinned drift");
+        assert!(error.message.contains("pinned Harness source drifted"));
     }
 }

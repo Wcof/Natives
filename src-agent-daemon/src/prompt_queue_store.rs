@@ -118,6 +118,31 @@ pub(crate) fn ensure_conversation_for_queue(
     conversation_store::ensure_conversation_stub(conversation_id, provider, model, None, project)
 }
 
+/// Resolve the conversation's stable ProjectIdentity to its verified canonical path.
+/// `conversation.project_id` is a UUID authority, never a filesystem path.
+pub(crate) fn conversation_project_path(
+    conn: &rusqlite::Connection,
+    conversation_id: &str,
+) -> Result<String, String> {
+    let project_id: Option<String> = conn
+        .query_row(
+            "SELECT project_id FROM conversation WHERE id = ?1",
+            params![conversation_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("conversation not found: {conversation_id}"))?;
+    let project_id = project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| format!("conversation has no project identity: {conversation_id}"))?;
+    crate::project_identity::store::verify_for_invocation(conn, project_id)
+        .map(|identity| identity.canonical_path)
+        .map_err(|error| format!("project identity verification failed for {conversation_id}: {error}"))
+}
+
 pub(crate) fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let attachments: Option<String> = row.get(4)?;
     // status column may be missing on pre-migration-012 DBs mid-upgrade.
@@ -211,20 +236,15 @@ pub async fn on_run_terminal(
             let store = store()?;
             let (provider_id, model_id, project_path) = {
                 let conn = store.conn()?;
-                conn.query_row(
-                    "SELECT provider_id, model_id, project_id FROM conversation WHERE id = ?1",
+                let (provider_id, model_id) = conn.query_row(
+                    "SELECT provider_id, model_id FROM conversation WHERE id = ?1",
                     params![conversation_id],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                        ))
-                    },
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                 )
                 .optional()
                 .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("conversation not found: {conversation_id}"))?
+                .ok_or_else(|| format!("conversation not found: {conversation_id}"))?;
+                (provider_id, model_id, conversation_project_path(&conn, conversation_id)?)
             };
 
             let start_req = StartRunRequest {
@@ -240,7 +260,7 @@ pub async fn on_run_terminal(
                 trigger_message_id: None,
                 permission_profile: None,
                 max_steps: None,
-                project_path,
+                project_path: Some(project_path),
                 // Unified with send_now: prompt-queue:{item_id}
                 idempotency_key: Some(format!("prompt-queue:{}", item.id)),
                 effort: None,
@@ -486,7 +506,7 @@ mod tests {
                     .drain(
                         PendingInputKind::Steering,
                         DrainMode::All,
-                        InputSafePoint::AfterToolBatch,
+                        InputSafePoint::BeforeRunEnd,
                     )
                     .await
                     .unwrap();

@@ -15,6 +15,7 @@ import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
 import ExecutionEngineSettingsPanel from '@/components/settings/ExecutionEngineSettingsPanel';
 import { UsageDashboard } from '@/components/dashboard/UsageDashboard';
 import StorageOverview from '@/components/settings/StorageOverview';
+import EnvironmentProfilesSettings from '@/components/settings/EnvironmentProfilesSettings';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
@@ -42,10 +43,10 @@ function ExecutionEngineSection({ locale }: { locale: Locale }) {
     <div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
         <button type="button" style={tabStyle(tab === 'runtime')} onClick={() => setTab('runtime')}>
-          {t(locale, 'executionEngine.tabRuntimeSettings')}
+          {t(locale, 'settings.executionEngine.tabRuntimeSettings')}
         </button>
         <button type="button" style={tabStyle(tab === 'harness')} onClick={() => setTab('harness')}>
-          {t(locale, 'executionEngine.tabHarness')}
+          {t(locale, 'settings.executionEngine.tabHarness')}
         </button>
       </div>
       {tab === 'runtime' ? (
@@ -364,6 +365,7 @@ export default function SettingsPage({
             <option value="en">{t(locale, 'settingsPage.langEnglish')}</option>
           </select>
         </div>
+        <EnvironmentProfilesSettings locale={locale} />
       </>
     );
   }

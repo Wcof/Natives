@@ -54,7 +54,7 @@ docs/
 │   ├── EXECUTION-ENGINE-CAPABILITY-AUDIT.md 执行引擎能力审计（进度表标签的证据源）
 │   ├── MODULAR_ARCHITECTURE_REMEDIATION.md 全仓模块化审计、整改与最终分支集成
 │   ├── macos-menubar-personal-overview.md   macOS 菜单栏常驻与个人概览浮窗
-│   ├── application-visual-experience-remediation.md  全应用视觉/布局/交互整改（唯一方案与进度源）
+│   ├── application-visual-experience-remediation.md  全应用视觉/布局/交互设计总纲与历史基线
 │   └── NATIVE_ENGINE_ENV.md
 ├── development/               ← 发布门禁与协作运行策略
 │   ├── natives-agent-build-cache-and-disk-policy.md  共享构建/低磁盘/双 Goal 策略
@@ -95,7 +95,7 @@ docs/
 | 助理 / 引擎 / Harness / Subagent 生产化 | `NATIVE_ENGINE_FULL_REMEDIATION.md` 第 19 节 |
 | 全仓模块化 / 超大文件 / 数据权威 / 合并 deploy | `MODULAR_ARCHITECTURE_REMEDIATION.md` |
 | macOS 菜单栏常驻 / 个人概览浮窗 | `macos-menubar-personal-overview.md` |
-| 全应用视觉 / UI / UE / 色彩 / Waku 风格整改 | `application-visual-experience-remediation.md`（唯一方案与进度源）+ `standards/ui-ux/` |
+| 全应用视觉 / UI / UE / 色彩 / Waku 风格整改 | `application-visual-experience-remediation.md`（设计总纲与历史基线）+ `/Users/ldh/Downloads/project/uitask/README.md`（唯一执行包与活动进度入口）+ `standards/ui-ux/` |
 | 并行 Goal / 构建缓存 / 磁盘不足 | `development/natives-agent-build-cache-and-disk-policy.md` 第 10 节 |
 | 发布门禁 / T12 验收 | `development/natives-agent-t12-release-gate-report.md` |
 | 引擎缺口定级 / 对标 Claude Code | `EXECUTION-ENGINE-CAPABILITY-AUDIT.md` |

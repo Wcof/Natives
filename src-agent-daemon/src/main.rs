@@ -23,6 +23,67 @@
 use natives_agent_daemon::rpc::RpcServer;
 use std::path::PathBuf;
 
+const MAX_BROKER_BOOTSTRAP_BYTES: usize = 4 * 1024;
+
+fn read_broker_session_from_lifeline(
+) -> Result<Option<assistant_protocol::v2::credential::CredentialBrokerSession>, String> {
+    let lifeline_enabled = std::env::var("NATIVES_PARENT_LIFELINE")
+        .map(|v| v.eq_ignore_ascii_case("stdio"))
+        .unwrap_or(false);
+    if !lifeline_enabled {
+        return Ok(None);
+    }
+    let mut input = std::io::stdin().lock();
+    let mut frame = read_broker_session_frame(&mut input)?;
+    parse_broker_session_frame(&mut frame).map(Some)
+}
+
+fn read_broker_session_frame(reader: &mut impl std::io::BufRead) -> Result<Vec<u8>, String> {
+    let mut frame = Vec::new();
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                frame.fill(0);
+                return Err(format!("broker session bootstrap read failed: {error}"));
+            }
+        };
+        if chunk.is_empty() {
+            frame.fill(0);
+            return Err("broker session bootstrap missing".into());
+        }
+        let take = chunk
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|index| index + 1)
+            .unwrap_or(chunk.len());
+        if frame.len() + take > MAX_BROKER_BOOTSTRAP_BYTES {
+            frame.fill(0);
+            return Err("broker session bootstrap frame too large".into());
+        }
+        frame.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if frame.ends_with(b"\n") {
+            return Ok(frame);
+        }
+    }
+}
+
+fn parse_broker_session_frame(
+    frame: &mut Vec<u8>,
+) -> Result<assistant_protocol::v2::credential::CredentialBrokerSession, String> {
+    let result = if frame.len() > MAX_BROKER_BOOTSTRAP_BYTES {
+        Err("broker session bootstrap frame too large".into())
+    } else if !frame.ends_with(b"\n") {
+        Err("broker session bootstrap must be one complete frame".into())
+    } else {
+        serde_json::from_slice(&frame[..frame.len() - 1])
+            .map_err(|_| "broker session bootstrap invalid".to_string())
+    };
+    frame.fill(0);
+    result
+}
+
 /// macOS/Linux sockaddr_un path limit (~104 incl. NUL). Prefer short /tmp when too long.
 #[cfg(unix)]
 fn shorten_socket_if_needed(path: PathBuf) -> PathBuf {
@@ -115,6 +176,20 @@ fn generate_bootstrap_token() -> String {
 
 #[tokio::main]
 async fn main() {
+    let broker_session = match read_broker_session_from_lifeline() {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("Daemon broker bootstrap rejected: {error}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(session) = broker_session {
+        if let Err(error) = natives_agent_daemon::natives_db_broker::install_broker_session(session)
+        {
+            eprintln!("Daemon broker bootstrap rejected: {error}");
+            std::process::exit(1);
+        }
+    }
     let config = DaemonConfig::from_env();
     // Ensure parent dir for socket exists (UDS path length limits still apply on some OS).
     if let Some(parent) = config.socket_path.parent() {
@@ -264,7 +339,10 @@ async fn parent_lifeline(enabled: bool) -> &'static str {
 
 #[cfg(test)]
 mod parent_lifeline_tests {
-    use super::parent_lifeline;
+    use super::{
+        parent_lifeline, parse_broker_session_frame, read_broker_session_frame,
+        MAX_BROKER_BOOTSTRAP_BYTES,
+    };
 
     #[tokio::test]
     async fn disabled_lifeline_is_pending_not_eof() {
@@ -272,5 +350,17 @@ mod parent_lifeline_tests {
             tokio::time::timeout(std::time::Duration::from_millis(50), parent_lifeline(false))
                 .await;
         assert!(result.is_err(), "disabled lifeline must not resolve");
+    }
+
+    #[test]
+    fn broker_session_frame_is_bounded_and_wiped() {
+        let mut valid = br#"{"instance_id":"instance-1","auth_token":"secret"}"#.to_vec();
+        valid.push(b'\n');
+        let session = parse_broker_session_frame(&mut valid).unwrap();
+        assert_eq!(session.instance_id, "instance-1");
+        assert!(valid.iter().all(|byte| *byte == 0));
+
+        let mut input = std::io::Cursor::new(vec![b'x'; MAX_BROKER_BOOTSTRAP_BYTES + 1]);
+        assert!(read_broker_session_frame(&mut input).is_err());
     }
 }

@@ -695,7 +695,9 @@ impl McpRuntime {
 
         let config = self.server_config(server_id)?;
         match config.transport {
-            McpTransport::Stdio => self.call_stdio_tool(server_id, &bare, arguments, progress),
+            McpTransport::Stdio => {
+                self.call_stdio_tool(server_id, &bare, arguments, progress, cancel.as_ref())
+            }
             McpTransport::Http | McpTransport::Sse => self.call_http_tool(
                 &config,
                 &bare,

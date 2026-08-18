@@ -9,7 +9,7 @@
 
 import React, { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { useLocale, t } from '@/i18n';
+import { useLocale, t, type Locale } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
 import type { CreativeAppProposal } from '@/lib/tauri-adapter';
 
@@ -28,14 +28,15 @@ export interface ProposalApprovalCardProps {
 /** Long values are visually truncated but always fully copyable. */
 function CopyableValue({
   value,
+  locale,
   onToast,
   dataAttr,
 }: {
   value: string;
+  locale: Locale;
   onToast: (message: string) => void;
   dataAttr?: string;
 }) {
-  const locale = useLocale();
   const [copied, setCopied] = useState(false);
   const MAX = 160;
   const truncated = value.length > MAX ? `${value.slice(0, MAX)}…` : value;
@@ -108,13 +109,13 @@ function argsOf(driver: CreativeAppProposal['driver']): string[] | null {
   }
 }
 
-export default function ProposalApprovalCard({
+export function ProposalApprovalCardContent({
   proposal,
   onApprove,
   onReject,
   onToast,
-}: ProposalApprovalCardProps) {
-  const locale = useLocale();
+  locale,
+}: ProposalApprovalCardProps & { locale: Locale }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -179,18 +180,18 @@ export default function ProposalApprovalCard({
         </div>
         <div className="flex justify-between gap-4">
           <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.projectRoot')}</span>
-          <CopyableValue value={proposal.projectRoot} onToast={onToast} dataAttr="proposal-root" />
+          <CopyableValue value={proposal.projectRoot} locale={locale} onToast={onToast} dataAttr="proposal-root" />
         </div>
         {executable && (
           <div className="flex justify-between gap-4">
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalExecutable')}</span>
-            <CopyableValue value={executable} onToast={onToast} dataAttr="proposal-executable" />
+            <CopyableValue value={executable} locale={locale} onToast={onToast} dataAttr="proposal-executable" />
           </div>
         )}
         {args && args.length > 0 && (
           <div className="flex justify-between gap-4">
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalArgs')}</span>
-            <CopyableValue value={args.join(' ')} onToast={onToast} dataAttr="proposal-args" />
+            <CopyableValue value={args.join(' ')} locale={locale} onToast={onToast} dataAttr="proposal-args" />
           </div>
         )}
         {proposal.driver.kind !== 'staticHttp' && (
@@ -218,6 +219,7 @@ export default function ProposalApprovalCard({
             <span className="text-[var(--text-secondary)] shrink-0">{t(locale, 'workshop.proposalEnvKeys')}</span>
             <CopyableValue
               value={proposal.environmentKeys.join(', ')}
+              locale={locale}
               onToast={onToast}
               dataAttr="proposal-env-keys"
             />
@@ -259,4 +261,9 @@ export default function ProposalApprovalCard({
       </div>
     </div>
   );
+}
+
+export default function ProposalApprovalCard(props: ProposalApprovalCardProps) {
+  const locale = useLocale();
+  return <ProposalApprovalCardContent {...props} locale={locale} />;
 }

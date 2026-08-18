@@ -216,7 +216,9 @@ Window
 
 任何页面整改都必须先列出现有组件和调用方，再决定复用、删除或修改；禁止为“统一”包一层只有单实现的 wrapper。
 
-## 6. 并行工作包与文件所有权
+## 6. 冻结历史（非执行合同）
+
+> 本节至第 10 节只保留首批集成的溯源快照，**禁止用于派单或继续实施**。后续执行只读 `/Users/ldh/Downloads/project/uitask/README.md`、`04-surface-ownership.md`、WP-01～WP-10 和对应 `evidence/<baseline-head>/progress-ledger.md`。
 
 并发上限为主 Agent + 3 个 Subagent。文件所有权按下表冻结；跨包发现问题时发给 owner，不直接越界编辑。
 
@@ -226,12 +228,12 @@ Window
 | WP-B · Shell | `src/components/shell/ShellLayout.tsx`、`Header.tsx`、`Sidebar.tsx`、`MainContent.tsx`、`RightPanel.tsx`、`Terminal.tsx`、`src/components/shell/sidebar/**`、Shell 布局 hooks/tests | Window Chrome、导航、面板、resize、自适应和焦点；不改 Workshop/Settings 域页 |
 | WP-C · Agent Workflows | `src/components/assistant/**`、`src/components/jobs/**`、`src/app/ai/page.tsx`、`src/app/jobs/page.tsx` 及对应测试 | Transcript、Composer、Activity、审批、连接状态与 Jobs 完整流程 |
 | WP-D · Product Surfaces | `src/components/files/**`、`capabilities/**`、`creative/**`、`settings/**`、`src/components/shell/WorkshopPage.tsx`、`shell/workshop/**`、`shell/SettingsPage.tsx`、对应路由与测试 | Files、Workshop、Capabilities、Settings、Modules/Store/Tools 的页面级统一 |
-| WP-E · Menubar & A11y QA | `src/components/menubar/**`、`src/hooks/useFocusTrap.ts`、Menubar/可访问性专项测试与证据文件 | Widget 视觉与状态、键盘走查、reduce-motion、对比度、截图矩阵；跨包缺陷交回 owner |
-| 主 Agent | `src/i18n/zh.ts`、`src/i18n/en.ts`、本文、`docs/README.md`、冲突整合与最终门禁 | 冻结契约、集中合并 i18n、防止共享文件冲突、统一验收与进度更新 |
+| WP-E · Menubar & A11y QA | `src/components/menubar/**`、`src/lib/useFocusTrap.ts`、Menubar/可访问性专项测试与证据文件 | Widget 视觉与状态、键盘走查、reduce-motion、对比度、截图矩阵；跨包缺陷交回 owner |
+| 主 Agent | `src/i18n/zh/**`、`src/i18n/en/**`、`src/i18n/zh.ts`、`src/i18n/en.ts`、本文、`docs/README.md`、冲突整合与最终门禁 | 冻结契约、集中合并 i18n、防止共享文件冲突、统一验收与进度更新 |
 
 WP-A 与 WP-B 不应同时编辑 `globals.css`；Shell 专用样式需求由 WP-B 提交清单，WP-A 统一落 token/style。WP-E 不在 QA 时顺手修改其它包文件。
 
-## 7. 实施波次与合并顺序
+## 7. 历史波次（禁止继续执行）
 
 ### Wave 0 · 基线与差距冻结
 
@@ -256,7 +258,7 @@ WP-B 在 Foundation 稳定后统一 Header/Sidebar/Main/RightPanel/Terminal，�
 
 并行执行 WP-C、WP-D、WP-E；主 Agent 集中处理 i18n。每个包至少交付一个贯穿真实数据、状态、键盘和最小窗口的 tracer path，然后完成包内所有列出的表面，不以 tracer path 代替完整范围。
 
-合并顺序：WP-C/WP-D 的独立提交 → WP-E Menubar 与 QA 测试 → 主 Agent i18n 与小冲突修正。
+历史合并顺序仅供溯源。新执行中 Subagent 不得提交；只由主 Agent 等待写入停止后串行创建聚焦提交。
 
 ### Wave 4 · 统一校准
 
@@ -270,7 +272,7 @@ WP-B 在 Foundation 稳定后统一 Header/Sidebar/Main/RightPanel/Terminal，�
 1. 完成第 8 节视觉、交互、a11y 和性能矩阵。
 2. 同设备、Release、同数据路径记录启动、交互 p95、动画 FPS、Bundle、CPU/RSS 前后数据。
 3. 运行全局门禁和触及区域专项测试。
-4. 把完成项、证据链接、剩余 blocker 和回滚点更新到本文；未满足不得标 complete。
+4. 把完成项、证据链接、剩余 blocker 和回滚点更新到执行包唯一进度台账；未满足不得标 complete。
 
 ## 8. 验收矩阵
 
@@ -316,20 +318,20 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 
 | 风险 | 早期信号 | 控制 | 回滚点 |
 |---|---|---|---|
-| 全局 token/CSS 级联造成跨页回归 | 单页变好、其它页对比或间距突变 | WP-A 单独原子提交；每批跑截图矩阵 | 回退对应 Foundation 提交，不回退业务逻辑 |
+| 全局 token/CSS 级联造成跨页回归 | 单页变好、其它页对比或间距突变 | 主 Agent 为 WP-01 创建独立原子提交；每批跑截图矩阵 | 回退对应 Foundation 提交，不回退业务逻辑 |
 | 参考 Waku 时引入品牌冲突 | 珊瑚/蓝色成为普通选中或主操作色 | ADR-0010 review；Adopt/Adapt/Reject 检查 | 回退到既有中性语义映射 |
 | 玻璃/阴影增加 GPU 与文本模糊 | FPS、GPU、文字边缘下降 | 玻璃仅 Shell/Navigation/Floating/Widget；实测 | 回退材质参数，保留布局与状态改进 |
 | 响应式隐藏必要操作 | 960×600 无法完成主路径 | 每页定义唯一主操作；次要动作进菜单/Palette | 回退该页面布局提交 |
-| 多 Agent 修改共享文件冲突 | `globals.css`、Shell、i18n 反复冲突 | 严格文件所有权；i18n 由主 Agent 集中 | 丢弃越权修改，保留 owner 提交 |
+| 多 Agent 修改共享文件冲突 | `globals.css`、Shell、i18n 反复冲突 | 严格文件所有权；i18n 由主 Agent 集中 | 停止冲突 Agent，主 Agent 核对并只集成 owner 的授权变更 |
 | 视觉统一破坏数据/安全语义 | 权限、来源、partial/stale 被弱化 | 产品/安全规范作为验收门 | 回退表现层，不回退真实状态和安全防线 |
 | 动效/Blur 导致性能回退 | 长会话滚动、页面切换超预算 | CSS 优先、reduce-motion、隐藏门控、前后测量 | 关闭装饰动效/降低材质，不加性能豁免 |
 | i18n 长文案溢出 | 英文按钮被截断、中文层级不自然 | 集中 i18n + 双语截图 | 回退局部布局，不删双语文案 |
 
-每个 Wave 使用独立、可回滚的原子提交。禁止用 feature flag 或第二套主题长期并存来规避回滚；问题发生时回退对应表现层提交。
+每个可独立验收的切片由主 Agent 创建独立、可回滚的原子提交。禁止用 feature flag 或第二套主题长期并存来规避回滚。
 
 ## 10. 进度记录
 
-只在本节维护状态，不建立外部进度表：
+以下是首批集成的冻结历史快照，不再更新。活动状态只维护在执行包的唯一进度台账：
 
 | Wave | 状态 | 集成 commit | 证据 | Blocker |
 |---|---|---|---|---|

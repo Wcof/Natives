@@ -472,9 +472,14 @@ impl EngineToolRuntime for PermissionGatedTools {
                     duration_ms: 0,
                 };
             };
-            return match crate::skill_store::load_skill_for_project(
+            let snapshot = crate::run_manager::global_run_manager()
+                .get_run(&self.parent_run_id)
+                .and_then(|run| run.capability_snapshot);
+            return match crate::skill_store::load_selected_skill_for_project_with_surface(
                 std::path::Path::new(project_root),
                 skill_name,
+                snapshot.as_ref(),
+                self.tool_allowlist.as_deref(),
             ) {
                 Ok(output) => ToolExecutionResult {
                     output,
@@ -865,34 +870,35 @@ impl EngineToolRuntime for PermissionGatedTools {
                         })
                         .await;
                 }
-                // T06: convert a successful `creative_proposal` tool result into
-                // a durable typed proposal fact so the Host can pull it over UDS
-                // and surface a pending approval inbox. The tool result itself
-                // stays a normal ToolOutput — the fact is the durable side
-                // record. A persistence failure must not fail the tool call
-                // (the model still completed its work); it only loses the
-                // bridge, which is logged for observability.
+                // T06: a successful creative proposal is only Host-visible after
+                // its fact is durable. Never report an approval-awaiting success
+                // for a proposal the Host cannot retrieve.
                 if name == crate::proposal_fact::PROPOSAL_TOOL
                     && output.get("ok").and_then(Value::as_bool) == Some(true)
                 {
-                    if let Some(payload) =
-                        crate::proposal_fact::proposal_from_tool_output(name, &output)
-                    {
-                        if let Some(store) =
-                            crate::run_manager::global_run_manager().data_store_ref()
-                        {
-                            if let Err(e) = crate::proposal_fact::record_proposal_fact(
-                                &store,
-                                &self.parent_run_id,
-                                turn_id,
-                                &stream_tool_call_id,
-                                &payload,
-                            ) {
-                                eprintln!(
-                                    "[proposal_fact] failed to record creative proposal fact: {e}"
-                                );
+                    let persisted =
+                        match crate::proposal_fact::proposal_from_tool_output(name, &output) {
+                            Some(payload) => {
+                                match crate::run_manager::global_run_manager().data_store_ref() {
+                                    Some(store) => crate::proposal_fact::record_proposal_fact(
+                                        &store,
+                                        &self.parent_run_id,
+                                        turn_id,
+                                        &stream_tool_call_id,
+                                        &payload,
+                                    )
+                                    .is_ok(),
+                                    None => false,
+                                }
                             }
-                        }
+                            None => false,
+                        };
+                    if !persisted {
+                        output = serde_json::json!({
+                            "ok": false,
+                            "error_code": "PERSISTENCE_FAILED",
+                            "error": "creative proposal could not be persisted for approval",
+                        });
                     }
                 }
                 let is_error =

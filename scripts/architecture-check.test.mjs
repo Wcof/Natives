@@ -120,6 +120,136 @@ test('F4: over_1000 entry present in manifest still fails the gate', () => {
   assert.equal(newCount, 0); // old counting alone would have passed -> false green
 });
 
+function singletonFixture(name, source) {
+  const dir = makeFixture(name);
+  const p = join(dir, 'src-tauri', 'src', 'singleton.rs');
+  mkdirSync(join(dir, 'src-tauri', 'src'), { recursive: true });
+  writeFileSync(p, source);
+  return { dir, found: arch.collectGlobalSingleton(dir) };
+}
+
+test('G1: known OnceLock remains visible non-failing debt', () => {
+  const { dir, found } = singletonFixture('g1', 'static STATE: OnceLock<u8> = OnceLock::new();');
+  try {
+    const summary = arch.runChecks(dir, { global_singleton: Object.fromEntries(found) });
+    const row = summary.rows.find((entry) => entry.id === 'global_singleton');
+    assert.deepEqual({ total: row.total, known: row.known, new: row.new, stale: row.stale, status: row.status }, { total: 1, known: 1, new: 0, stale: 0, status: 'debt' });
+    assert.equal(summary.knownCount, 1, 'fixture manifest is injected, not written to the repository');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('G2: new OnceLock fails global_singleton', () => {
+  const { dir } = singletonFixture('g2', 'static STATE: OnceLock<u8> = OnceLock::new();');
+  try {
+    const row = arch.runChecks(dir, {}).rows.find((entry) => entry.id === 'global_singleton');
+    assert.deepEqual({ known: row.known, new: row.new, status: row.status }, { known: 0, new: 1, status: 'FAIL' });
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('G3: known static mut remains fatal', () => {
+  const { dir, found } = singletonFixture('g3', 'static mut STATE: u8 = 0;');
+  try {
+    const row = arch.runChecks(dir, { global_singleton: Object.fromEntries(found) }).rows.find((entry) => entry.id === 'global_singleton');
+    assert.deepEqual({ known: row.known, new: row.new, status: row.status }, { known: 1, new: 0, status: 'FAIL' });
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('G4: stale singleton manifest entries are reported', () => {
+  const { dir } = singletonFixture('g4', 'fn no_global_state() {}');
+  try {
+    const summary = arch.runChecks(dir, { global_singleton: { 'src-tauri/src/removed.rs:1': 'stale' } });
+    const row = summary.rows.find((entry) => entry.id === 'global_singleton');
+    assert.equal(row.stale, 1);
+    assert.equal(summary.staleCount, 1);
+    assert.ok(summary.violations.some((entry) => entry.reason === 'stale debt-manifest entry'));
+    assert.deepEqual(summary.staleEntries, [{ check: 'global_singleton', key: 'src-tauri/src/removed.rs:1' }]);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A1: Embedded authority is forbidden only in the Host production surface.
+// ---------------------------------------------------------------------------
+test('A1: unguarded Host EmbeddedAuthority reference is fatal', () => {
+  const dir = makeFixture('a1');
+  try {
+    const p = join(dir, 'src-tauri', 'src', 'authority.rs');
+    mkdirSync(join(dir, 'src-tauri', 'src'), { recursive: true });
+    writeFileSync(p, 'fn production() { let _ = EmbeddedAuthority::new(); }');
+    const found = arch.collectEmbeddedProd(dir);
+    assert.equal(found.size, 1, 'unguarded Host reference must be found');
+    assert.equal(
+      arch.shouldFailCheck({ id: 'embedded_prod', fail: true }, found, {}),
+      true,
+      'unguarded Host reference must fail the fatal gate',
+    );
+    writeFileSync(
+      join(dir, 'src-tauri', 'src', 'production_cfg.rs'),
+      '#[cfg(not(test))]\nfn production_only() { let _ = EmbeddedAuthority::new(); }',
+    );
+    assert.equal(arch.collectEmbeddedProd(dir).size, 2, 'cfg(not(test)) remains in the production surface');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A2: test/diagnostic-only Host items, including multiline cfg/items, are not
+// part of the production compile surface.
+// ---------------------------------------------------------------------------
+test('A2: cfg(test|diagnostic) Host EmbeddedAuthority items are ignored', () => {
+  const dir = makeFixture('a2');
+  try {
+    const p = join(dir, 'src-tauri', 'src', 'authority.rs');
+    mkdirSync(join(dir, 'src-tauri', 'src'), { recursive: true });
+    writeFileSync(
+      p,
+      [
+        '#[cfg(any(test, feature = "diagnostic"))]',
+        'use embedded::EmbeddedAuthority;',
+        '',
+        '#[cfg(any(',
+        '  test,',
+        '  feature = "diagnostic",',
+        '))]',
+        'fn diagnostic_authority() {',
+        '  let _ = EmbeddedAuthority::new();',
+        '}',
+      ].join('\n'),
+    );
+    const found = arch.collectEmbeddedProd(dir);
+    assert.equal(found.size, 0, `test/diagnostic-only Host items must be ignored: ${JSON.stringify([...found])}`);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A3: Daemon authority definitions are legitimate implementation detail, not
+// a Host production fallback.
+// ---------------------------------------------------------------------------
+test('A3: Daemon EmbeddedAuthority definitions are ignored', () => {
+  const dir = makeFixture('a3');
+  try {
+    const p = join(dir, 'src-agent-daemon', 'src', 'authority.rs');
+    mkdirSync(join(dir, 'src-agent-daemon', 'src'), { recursive: true });
+    writeFileSync(
+      p,
+      ['pub struct EmbeddedAuthority;', 'impl EmbeddedAuthority { fn new() -> Self { Self } }'].join('\n'),
+    );
+    assert.equal(arch.collectEmbeddedProd(dir).size, 0, 'Daemon definitions must not be Host violations');
+  } finally {
+    cleanup(dir);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // F5: multiline TSX non-semantic click must be flagged by a11y (AST-based)
 // ---------------------------------------------------------------------------

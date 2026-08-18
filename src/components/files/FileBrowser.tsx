@@ -141,7 +141,6 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     recentMode: nav.recentMode,
     recentOpenedMode: nav.recentOpenedMode,
     recentOpenedPaths: recent.paths,
-    showToast,
     locale,
   });
 
@@ -206,6 +205,16 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     showToast,
     locale,
   });
+  const mutationBlocked = entriesHook.loading || entriesHook.error !== null;
+
+  // A non-success directory state invalidates mutation surfaces opened for the previous path.
+  useEffect(() => {
+    if (!mutationBlocked) return;
+    setContextMenu(null);
+    ops.setRenameTarget(null);
+    ops.setNewItemTarget(null);
+    ops.setTrashTarget(null);
+  }, [mutationBlocked, ops.setNewItemTarget, ops.setRenameTarget, ops.setTrashTarget]);
 
   // 对话框开着时不处理文件区键盘快捷键（与原行为一致：rename/new/trash/contextMenu 打开时跳过）
   const isDialogOpen = !!(ops.renameTarget || ops.newItemTarget || ops.trashTarget || contextMenu);
@@ -257,6 +266,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       if (isInputFocused) return;
       // Don't handle if a dialog is open
       if (isDialogOpen) return;
+      if (mutationBlocked) return;
 
       const list = filteredEntries;
       if (list.length === 0) return;
@@ -411,6 +421,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('keydown', handleFileKeyDown);
   }, [
     filteredEntries,
+    mutationBlocked,
     sel.selectedIndex,
     sel.selectedPaths,
     sel.setSelectedIndex,
@@ -462,11 +473,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           setSearchQuery(action.value ?? '');
           break;
         case 'newFolder': {
+          if (mutationBlocked) break;
           const dir = action.value ?? '';
           if (dir) ops.setNewItemTarget({ parentDir: dir, type: 'folder' });
           break;
         }
         case 'newFile': {
+          if (mutationBlocked) break;
           const dir = action.value ?? '';
           if (dir) ops.setNewItemTarget({ parentDir: dir, type: 'file' });
           break;
@@ -507,6 +520,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     nav.toggleRecent,
     nav.resolveAndNavigate,
     entriesHook.loadEntries,
+    mutationBlocked,
     fav.toggleFavorite,
     ops.setNewItemTarget,
   ]);
@@ -625,6 +639,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         locale={locale}
         viewMode={viewMode}
         loading={entriesHook.loading}
+        error={entriesHook.error}
+        onRetry={() => {
+          void entriesHook.loadEntries();
+        }}
         entries={filteredEntries}
         isDragging={drop.isDragging}
         dragHandlers={drop.dragHandlers}
@@ -660,7 +678,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         }}
       />
 
-      {!entriesHook.loading && filteredEntries.length === 0 && (
+      {!mutationBlocked && filteredEntries.length === 0 && (
         <FileEmptyState
           locale={locale}
           recentOpenedMode={nav.recentOpenedMode}
@@ -672,7 +690,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       )}
 
       {/* Status bar */}
-      {!entriesHook.loading && filteredEntries.length > 0 && (
+      {!mutationBlocked && filteredEntries.length > 0 && (
         <FileStatusBar
           locale={locale}
           entries={filteredEntries}
@@ -684,7 +702,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       )}
 
       {/* Context menu */}
-      {contextMenu && (
+      {!mutationBlocked && contextMenu && (
         <FileContextMenu
           entry={contextMenu.entry ?? undefined}
           x={contextMenu.x}
@@ -736,19 +754,21 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       )}
 
       {/* Rename / new file / new folder dialogs */}
-      <FileModals
-        locale={locale}
-        renameTarget={ops.renameTarget}
-        renameValue={ops.renameValue}
-        onRenameChange={ops.setRenameValue}
-        onRenameCancel={() => ops.setRenameTarget(null)}
-        onRenameConfirm={() => void ops.handleRenameConfirm()}
-        newItemTarget={ops.newItemTarget}
-        newItemName={ops.newItemName}
-        onNewItemChange={ops.setNewItemName}
-        onNewItemCancel={() => ops.setNewItemTarget(null)}
-        onNewItemConfirm={() => void ops.handleNewItemConfirm()}
-      />
+      {!mutationBlocked && (
+        <FileModals
+          locale={locale}
+          renameTarget={ops.renameTarget}
+          renameValue={ops.renameValue}
+          onRenameChange={ops.setRenameValue}
+          onRenameCancel={() => ops.setRenameTarget(null)}
+          onRenameConfirm={() => void ops.handleRenameConfirm()}
+          newItemTarget={ops.newItemTarget}
+          newItemName={ops.newItemName}
+          onNewItemChange={ops.setNewItemName}
+          onNewItemCancel={() => ops.setNewItemTarget(null)}
+          onNewItemConfirm={() => void ops.handleNewItemConfirm()}
+        />
+      )}
 
       {/* Global name/content search (fanbox cmdk-class, scoped + recursive) */}
       {globalSearchOpen && (
@@ -776,7 +796,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
       {/* Trash confirmation dialog */}
       <ConfirmDialog
-        open={!!ops.trashTarget}
+        open={!mutationBlocked && !!ops.trashTarget}
         title={t(locale, 'fileBrowser.moveToTrash')}
         message={
           ops.trashTarget

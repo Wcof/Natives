@@ -34,7 +34,7 @@ pub(crate) fn discover_agent_profiles(
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_discovery(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{send_error, send_success};
     use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
@@ -80,6 +80,7 @@ pub(crate) async fn dispatch_discovery(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INTERNAL_ERROR,
                             ErrorCategory::Internal,
@@ -174,6 +175,7 @@ pub(crate) async fn dispatch_discovery(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -202,7 +204,7 @@ pub(crate) async fn dispatch_discovery(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

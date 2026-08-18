@@ -1,6 +1,6 @@
 # UI/UE 01 · 设计令牌与主题系统
 
-> **版本**: 1.2.0 · **日期**: 2026-08-12
+> **版本**: 1.2.1 · **日期**: 2026-08-12
 > **关联 ADR**: [ADR 0009](../../adr/0009-monochrome-dashboard-theme.md)、[ADR 0010](../../adr/0010-global-neutral-spectrum.md)
 > **关联源文件**: `src/lib/design-tokens.ts`（TS 常量）、`src/app/styles/tokens.css`（CSS 语义与原始色板）、`src/lib/theme-engine.ts`（深浅主题 + Zod 校验 + 应用）、`src/app/globals.css`、`docs/STYLE_GUIDE_AUDIT.md`（历史改造清单，已被本篇收口为规范）
 
@@ -269,7 +269,7 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
     - `elasticity`: 0 （默认静止，禁用 hover 拉伸以防视疲劳，支持按需微调）
     - `cornerRadius`: 28 （对齐 HIG 圆角）
   - **无边框窗口拖拽规范**：主体卡片元素配置 `WebkitAppRegion: 'drag'`（拖拽移动），且内部所有按钮、滑块、标签页切换器等交互控件**必须**强制设为 `WebkitAppRegion: 'no-drag'`，以排除交互事件劫持（符合 R-U13）。
-- **参考代码**：[DashboardPage (src/app/page.tsx)](file:///Users/ldh/Downloads/project/AiNative/Natives/src/app/page.tsx) 是本项目小组件玻璃效果的官方标准实现。
+- **验收落点**：[MenubarSurface](../../../src/components/menubar/MenubarSurface.tsx) 与 [MenubarOverview.module.css](../../../src/components/menubar/MenubarOverview.module.css) 是当前 Widget 生产表面；实现是否达标以本节规则和真机证据为准，不将普通 Dashboard 当作 Liquid Glass 基线。
 - **为什么**：液态玻璃视觉涉及复杂的 WebGL 着色器和 SVG 滤镜混合，统一参数能防止不同开发阶段风格发生偏移，并确保在 Tauri v2 桌面框架中无边框拖拽和控件响应完美互斥。
 
 ---
@@ -300,7 +300,7 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
 - **为什么**：固定字体角色可避免主题切换同时改变颜色和排版，降低视觉漂移。
 - **检查方法**：标题类元素核对字体来源。
 
-#### R-U6 · 统一使用专业 SVG 图标，禁止使用 UI 字符 Emoji
+#### R-U5.5 · 统一使用专业 SVG 图标，禁止使用 UI 字符 Emoji
 - **等级**：MUST
 - **分类**：主题、组件
 - **规则**：项目中所有 UI 交互元素、文件类型标识、状态提示、操作按钮处的图标，**必须**统一使用来自 `lucide-react` 的专业 SVG 图标组件，**绝对禁止**使用原生 Emoji 字符（如 `📁`、`⚙️`、`⚠️`、`❌`、`✅` 等）作为 UI 图标。
@@ -331,4 +331,4 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
 - [ ] 终端配色随皮肤联动（R-U4）。
 - [ ] Widget / Control Hub 模式隐藏应用 Chrome，并只保留高质量单卡玻璃容器（R-U5.1-R-U5.3）。
 - [ ] 展示性文字消费 `--font-display`（R-U5）。
-- [ ] 所有的 UI 图标均使用 `lucide-react` 的 SVG 图标，无任何 Emoji 字符用作 UI 图标（R-U6）。
+- [ ] 所有的 UI 图标均使用 `lucide-react` 的 SVG 图标，无任何 Emoji 字符用作 UI 图标（R-U5.5）。

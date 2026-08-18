@@ -41,11 +41,11 @@ export function isSelectable(runtime: RuntimeDescriptor): boolean {
 
 function statusLabel(locale: Locale, status: string): string {
   const map: Record<string, string> = {
-    ready: t(locale, 'executionEngine.ready'),
-    degraded: t(locale, 'executionEngine.degraded'),
-    blocked: t(locale, 'executionEngine.blocked'),
-    disabled: t(locale, 'executionEngine.disabled'),
-    not_installed: t(locale, 'executionEngine.notInstalled'),
+    ready: t(locale, 'settings.executionEngine.ready'),
+    degraded: t(locale, 'settings.executionEngine.degraded'),
+    blocked: t(locale, 'settings.executionEngine.blocked'),
+    disabled: t(locale, 'settings.executionEngine.disabled'),
+    not_installed: t(locale, 'settings.executionEngine.notInstalled'),
   };
   return map[status] ?? status;
 }
@@ -105,7 +105,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
         native: { ...snapshot.settings.native, maxSteps: Math.min(200, Math.max(10, maxStepsDraft)) },
       };
       await executionEngine.saveSettings(updated);
-      toast(t(locale, 'executionEngine.saved'), 'success');
+      toast(t(locale, 'settings.executionEngine.saved'), 'success');
       await refresh();
     } catch (err) {
       toast(String(err), 'error');
@@ -125,7 +125,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           ...(fallback ? { externalUnavailablePolicy: fallback } : {}),
         };
         await executionEngine.saveSettings(updated);
-        toast(t(locale, 'executionEngine.saved'), 'success');
+        toast(t(locale, 'settings.executionEngine.saved'), 'success');
         await refresh();
       } catch (err) {
         toast(String(err), 'error');
@@ -150,7 +150,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           native: { ...snapshot.settings.native, disabledTools: normalized },
         };
         await executionEngine.saveSettings(updated);
-        toast(t(locale, 'executionEngine.saved'), 'success');
+        toast(t(locale, 'settings.executionEngine.saved'), 'success');
         await refresh();
       } catch (err) {
         toast(String(err), 'error');
@@ -227,7 +227,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
     return (
       <div className="settings-section-card" style={{ marginTop: 16, color: 'var(--danger)' }}>
         <div className="settings-section-heading">
-          <h4>{t(locale, 'executionEngine.title')}</h4>
+          <h4>{t(locale, 'settings.executionEngine.title')}</h4>
           <p>{error}</p>
         </div>
         <button type="button" className="btn btn-secondary" onClick={() => void refresh()}>
@@ -250,9 +250,9 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
   return (
     <div>
       {/* 卡片 1 — 默认 Runtime */}
-      <Card title={t(locale, 'executionEngine.defaultRuntimeTitle')}>
+      <Card title={t(locale, 'settings.executionEngine.defaultRuntimeTitle')}>
         <p style={{ color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-          {t(locale, 'executionEngine.defaultRuntimeDesc')}
+          {t(locale, 'settings.executionEngine.defaultRuntimeDesc')}
         </p>
         <div style={{ display: 'grid', gap: 8 }}>
           {snapshot.runtimes.map((rt) => (
@@ -274,11 +274,11 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
               <div style={{ flex: 1 }}>
                 <strong>
                   {rt.displayName}
-                  {rt.id === 'native' ? ` — ${t(locale, 'executionEngine.recommended')}` : ''}
+                  {rt.id === 'native' ? ` — ${t(locale, 'settings.executionEngine.recommended')}` : ''}
                 </strong>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {t(locale, 'executionEngine.authority')}: {rt.authority} ·{' '}
-                  {t(locale, 'executionEngine.status')}: {statusLabel(locale, rt.status)}
+                  {t(locale, 'settings.executionEngine.authority')}: {rt.authority} ·{' '}
+                  {t(locale, 'settings.executionEngine.status')}: {statusLabel(locale, rt.status)}
                   {rt.version ? ` · ${rt.version}` : ''}
                 </div>
                 {!isSelectable(rt) ? (
@@ -302,8 +302,8 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
                     onChange={(e) => void saveDefaultRuntime(rt.id, e.target.value)}
                     style={{ fontSize: 12, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)' }}
                   >
-                    <option value="fail">{t(locale, 'executionEngine.policyFail')}</option>
-                    <option value="fallback_native">{t(locale, 'executionEngine.policyFallbackNative')}</option>
+                    <option value="fail">{t(locale, 'settings.executionEngine.policyFail')}</option>
+                    <option value="fallback_native">{t(locale, 'settings.executionEngine.policyFallbackNative')}</option>
                   </select>
                 ) : null}
               </div>
@@ -313,15 +313,15 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
       </Card>
 
       {/* 卡片 2 — 当前解析结果（backend 决定，UI 不猜）+ 实际协商的传输状态 */}
-      <Card title={t(locale, 'executionEngine.resolvedTitle')}>
+      <Card title={t(locale, 'settings.executionEngine.resolvedTitle')}>
         <div>
-          <strong>{t(locale, 'executionEngine.effectiveRuntime')}</strong>: {resolved.runtimeId}
+          <strong>{t(locale, 'settings.executionEngine.effectiveRuntime')}</strong>: {resolved.runtimeId}
         </div>
         <div>
-          <strong>{t(locale, 'executionEngine.configSource')}</strong>: {resolved.source}
+          <strong>{t(locale, 'settings.executionEngine.configSource')}</strong>: {resolved.source}
         </div>
         <div>
-          <strong>{t(locale, 'executionEngine.fallbackUsed')}</strong>:{' '}
+          <strong>{t(locale, 'settings.executionEngine.fallbackUsed')}</strong>:{' '}
           {resolved.fallbackUsed ? t(locale, 'common.yes') : t(locale, 'common.no')}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{resolved.reason}</div>
@@ -343,9 +343,9 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
       </Card>
 
       {/* 卡片 3 — Native Engine（普通 UI 只留 maxSteps + 减法覆盖） */}
-      <Card title={t(locale, 'executionEngine.nativeEngineTitle')}>
+      <Card title={t(locale, 'settings.executionEngine.nativeEngineTitle')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label htmlFor="native-max-steps">{t(locale, 'executionEngine.maxSteps')}</label>
+          <label htmlFor="native-max-steps">{t(locale, 'settings.executionEngine.maxSteps')}</label>
           <input
             id="native-max-steps"
             type="number"
@@ -365,7 +365,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           </button>
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-          {t(locale, 'executionEngine.maxStepsHint')}
+          {t(locale, 'settings.executionEngine.maxStepsHint')}
         </div>
         <button
           type="button"
@@ -373,16 +373,16 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
           style={{ marginTop: 8 }}
           onClick={() => setAdvancedOpen((v) => !v)}
         >
-          {t(locale, 'executionEngine.advanced')}
+          {t(locale, 'settings.executionEngine.advanced')}
         </button>
         {advancedOpen ? (
           <div style={{ marginTop: 8, fontSize: 12 }}>
             <div>
-              <strong>{t(locale, 'executionEngine.disabledToolsTitle')}</strong>
+              <strong>{t(locale, 'settings.executionEngine.disabledToolsTitle')}</strong>
             </div>
             {snapshot.settings.native.disabledTools.length === 0 ? (
               <div style={{ color: 'var(--text-secondary)' }}>
-                {t(locale, 'executionEngine.noDisabledTools')}
+                {t(locale, 'settings.executionEngine.noDisabledTools')}
               </div>
             ) : (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '6px 0' }}>
@@ -471,18 +471,18 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
               ))}
             </div>
             <div style={{ color: 'var(--text-secondary)', marginTop: 6 }}>
-              {t(locale, 'executionEngine.disabledToolsHint')}
+              {t(locale, 'settings.executionEngine.disabledToolsHint')}
             </div>
           </div>
         ) : null}
       </Card>
 
       {/* 卡片 5 — 能力真相（真实 daemon 探测投影，非 Host 静态表） */}
-      <Card title={t(locale, 'executionEngine.capabilitiesTitle')}>
+      <Card title={t(locale, 'settings.executionEngine.capabilitiesTitle')}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
-              <th style={{ padding: 6 }}>{t(locale, 'executionEngine.capability')}</th>
+              <th style={{ padding: 6 }}>{t(locale, 'settings.executionEngine.capability')}</th>
               {snapshot.runtimes.map((rt) => (
                 <th key={rt.id} style={{ padding: 6 }}>
                   {rt.displayName}
@@ -509,7 +509,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
       </Card>
 
       {/* 卡片 6 — 高级诊断（折叠，只读） */}
-      <Card title={t(locale, 'executionEngine.diagnosticsTitle')}>
+      <Card title={t(locale, 'settings.executionEngine.diagnosticsTitle')}>
         <pre
           style={{
             fontSize: 11,
@@ -545,7 +545,7 @@ export default function ExecutionEngineSettingsPanel({ locale }: { locale: Local
 
       <div style={{ marginTop: 12 }}>
         <button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}>
-          {t(locale, 'executionEngine.refresh')}
+          {t(locale, 'settings.executionEngine.refresh')}
         </button>
       </div>
     </div>

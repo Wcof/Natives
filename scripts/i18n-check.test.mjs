@@ -24,6 +24,11 @@ function writeI18nTree(dir, zh, en) {
   writeFileSync(join(dir, 'src/i18n/zh.ts'), zh);
   writeFileSync(join(dir, 'src/i18n/en.ts'), en);
 }
+function writeProductionFile(dir, relativePath, content) {
+  const path = join(dir, 'src', relativePath);
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, content);
+}
 
 // I1: empty locale object must fail (old logic: extractKeys returned empty Set
 // for non-object input -> zh=0, en=0 -> "in sync" false green)
@@ -127,6 +132,209 @@ test('I7: comment headers do not break parsing', () => {
     );
     const res = i18n.runI18nCheck(dir);
     assert.equal(res.exitCode, 0, 'comment-leading locale must pass');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I8: valid direct and aliased wrapper literal keys pass', () => {
+  const dir = makeFixture('i8');
+  try {
+    writeI18nTree(
+      dir,
+      'export const zh = { common: { copy: "复制" } };\n',
+      'export const en = { common: { copy: "Copy" } };\n',
+    );
+    writeProductionFile(
+      dir,
+      'components/Valid.tsx',
+      [
+        "import { t as tr } from '@/i18n';",
+        "const translate = (key: string) => tr('zh', key);",
+        "export const direct = tr('zh', 'common.copy');",
+        "export const wrapped = translate('common.copy');",
+      ].join('\n'),
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 0, res.violations.join('\n'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I9: missing literal key fails with file, line, and key', () => {
+  const dir = makeFixture('i9');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    writeProductionFile(
+      dir,
+      'components/Broken.tsx',
+      "import { t } from '@/i18n';\nexport const label = t('zh', 'common.copy');\n",
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 1);
+    assert.ok(
+      res.violations.includes('missing callsite key: src/components/Broken.tsx:2:common.copy'),
+      res.violations.join('\n'),
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I10: dynamic and substitution-template keys are not reported', () => {
+  const dir = makeFixture('i10');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    writeProductionFile(
+      dir,
+      'components/Dynamic.tsx',
+      [
+        "import { t } from '@/i18n';",
+        "declare const key: string;",
+        "declare const flag: boolean;",
+        "declare const suffix: string;",
+        "export const dynamic = t('zh', key);",
+        'export const template = t(\'zh\', `common.${suffix}`);',
+      ].join('\n'),
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 0, res.violations.join('\n'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I15: statically enumerable conditional keys audit every branch', () => {
+  const dir = makeFixture('i15');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    writeProductionFile(
+      dir,
+      'components/Conditional.tsx',
+      [
+        "import { t } from '@/i18n';",
+        "declare const flag: boolean;",
+        "export const label = t('zh', flag ? 'common.save' : 'common.missing');",
+      ].join('\n'),
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 1, 'missing conditional branch must fail');
+    assert.ok(
+      res.violations.includes('missing callsite key: src/components/Conditional.tsx:3:common.missing'),
+      res.violations.join('\n'),
+    );
+    assert.equal(
+      res.violations.filter((violation) => violation.includes('common.save')).length,
+      0,
+      'valid conditional branch must not be reported',
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I16: parenthesized and short-circuit literal branches are audited', () => {
+  const dir = makeFixture('i16');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    writeProductionFile(
+      dir,
+      'components/Composite.tsx',
+      [
+        "import { t } from '@/i18n';",
+        "declare const flag: boolean;",
+        "declare const key: string;",
+        "export const parenthesized = t('zh', (flag ? 'common.save' : 'common.missing'));",
+        "export const fallback = t('zh', key || 'common.missing');",
+        "export const guarded = t('zh', flag && 'common.missing');",
+      ].join('\n'),
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 1, 'missing composite branches must fail');
+    assert.equal(
+      res.violations.filter((violation) => violation.includes('common.missing')).length,
+      3,
+      res.violations.join('\n'),
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I11: test and __tests__ callsites are excluded', () => {
+  const dir = makeFixture('i11');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    const invalidCall = "import { t } from '@/i18n';\nexport const label = t('zh', 'common.missing');\n";
+    writeProductionFile(dir, 'components/Excluded.test.tsx', invalidCall);
+    writeProductionFile(dir, 'components/Excluded.spec.tsx', invalidCall);
+    writeProductionFile(dir, 'components/__tests__/Excluded.tsx', invalidCall);
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 0, res.violations.join('\n'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I12: callsite audit uses keys from composed namespaces', () => {
+  const dir = makeFixture('i12');
+  try {
+    mkdirSync(join(dir, 'src/i18n/zh'), { recursive: true });
+    mkdirSync(join(dir, 'src/i18n/en'), { recursive: true });
+    writeFileSync(join(dir, 'src/i18n/zh/settings.ts'), 'export const settings = { settings: { executionEngine: { title: "执行引擎" } } };\n');
+    writeFileSync(join(dir, 'src/i18n/en/settings.ts'), 'export const settings = { settings: { executionEngine: { title: "Execution engine" } } };\n');
+    writeFileSync(join(dir, 'src/i18n/zh.ts'), 'export const zh = { ...settings };\n');
+    writeFileSync(join(dir, 'src/i18n/en.ts'), 'export const en = { ...settings };\n');
+    writeProductionFile(
+      dir,
+      'components/Settings.tsx',
+      "import { t } from '@/i18n';\nexport const title = t('zh', 'settings.executionEngine.title');\n",
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 0, res.violations.join('\n'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I13: a shadowed translation function name is not audited', () => {
+  const dir = makeFixture('i13');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    writeProductionFile(
+      dir,
+      'components/Shadowed.tsx',
+      [
+        "import { t } from '@/i18n';",
+        "export const valid = t('zh', 'common.save');",
+        "export function parse() {",
+        "  const t = (value: string) => Date.parse(value);",
+        "  return t('not.an.i18n.key');",
+        "}",
+      ].join('\n'),
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 0, res.violations.join('\n'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('I14: a local module named i18n is not treated as the translation authority', () => {
+  const dir = makeFixture('i14');
+  try {
+    writeI18nTree(dir, 'export const zh = { common: { save: "保存" } };\n', 'export const en = { common: { save: "Save" } };\n');
+    writeProductionFile(
+      dir,
+      'components/Feature.tsx',
+      [
+        "import { t } from '@/feature/i18n';",
+        "export const parsed = t('not.a.locale.key');",
+      ].join('\n'),
+    );
+    const res = i18n.runI18nCheck(dir);
+    assert.equal(res.exitCode, 0, res.violations.join('\n'));
   } finally {
     cleanup(dir);
   }

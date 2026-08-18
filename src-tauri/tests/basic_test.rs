@@ -33,24 +33,6 @@ fn test_result_type_alias() {
 
 // ── Update checker tests ──
 
-#[test]
-fn test_compare_versions() {
-    // check_for_updates requires full AppState (DB), so it's tested via integration tests.
-    // Unit-test the compare_versions helper instead:
-    assert_eq!(
-        natives_lib::update_checker::compare_versions("1.0.0", "1.0.1"),
-        -1
-    );
-    assert_eq!(
-        natives_lib::update_checker::compare_versions("1.0.1", "1.0.0"),
-        1
-    );
-    assert_eq!(
-        natives_lib::update_checker::compare_versions("1.0.0", "1.0.0"),
-        0
-    );
-}
-
 // ── Usage response tests ──
 
 #[test]

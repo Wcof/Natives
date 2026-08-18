@@ -270,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_serves_pending_facts_over_real_dispatch() {
-        use assistant_protocol::v1::daemon::RpcRequest;
+        use assistant_protocol::v2::V2Request;
         use assistant_protocol::version::ProtocolVersion;
         use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -297,11 +297,14 @@ mod tests {
         // Drive the real RPC dispatch (same path the Host uses over UDS).
         let (client, server) = tokio::net::UnixStream::pair().unwrap();
         let (_server_read, mut server_write) = server.into_split();
-        let request = RpcRequest {
+        let request = V2Request {
             protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
             request_id: "probe-proposal".into(),
+            session_id: None,
             client_id: "test".into(),
             session_token: "s".into(),
+            run_id: None,
+            idempotency_key: None,
             method: "proposal.listPending".into(),
             params: serde_json::json!({}),
         };

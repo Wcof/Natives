@@ -111,7 +111,7 @@ mod tests {
 // honest unsupported path (R-B1).
 pub(crate) async fn dispatch_run(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    request: &assistant_protocol::v1::daemon::RpcRequest,
+    request: &assistant_protocol::v2::V2Request,
 ) {
     use crate::rpc::{send_error, send_success, write_stream_frame};
     use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
@@ -145,6 +145,7 @@ pub(crate) async fn dispatch_run(
                         Err(e) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     "run_create_failed",
                                     ErrorCategory::Internal,
@@ -159,6 +160,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -190,6 +192,7 @@ pub(crate) async fn dispatch_run(
                         Err(e) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     "run_start_failed",
                                     ErrorCategory::Internal,
@@ -204,6 +207,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -232,6 +236,7 @@ pub(crate) async fn dispatch_run(
                     Err(e) => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 "run_cancel_failed",
                                 ErrorCategory::NotFound,
@@ -245,6 +250,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -295,6 +301,7 @@ pub(crate) async fn dispatch_run(
                                 Err(e) => {
                                     send_error(
                                         writer,
+                                        &request.request_id,
                                         &DaemonError::new(
                                             "run_retry_start_failed",
                                             ErrorCategory::Internal,
@@ -309,6 +316,7 @@ pub(crate) async fn dispatch_run(
                         Err(e) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     "run_retry_failed",
                                     ErrorCategory::NotFound,
@@ -323,6 +331,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -371,6 +380,7 @@ pub(crate) async fn dispatch_run(
                             Err(e) => {
                                 send_error(
                                     writer,
+                                    &request.request_id,
                                     &DaemonError::new(
                                         "run_continue_start_failed",
                                         ErrorCategory::Internal,
@@ -385,6 +395,7 @@ pub(crate) async fn dispatch_run(
                     Err(e) => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 "run_continue_failed",
                                 ErrorCategory::Conflict,
@@ -398,6 +409,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -442,6 +454,7 @@ pub(crate) async fn dispatch_run(
                                     Err(e) => {
                                         send_error(
                                             writer,
+                                            &request.request_id,
                                             &DaemonError::new(
                                                 "run_resume_start_failed",
                                                 ErrorCategory::Internal,
@@ -467,6 +480,7 @@ pub(crate) async fn dispatch_run(
                     Err(e) => {
                         send_error(
                             writer,
+                            &request.request_id,
                             &DaemonError::new(
                                 "run_resume_failed",
                                 ErrorCategory::Conflict,
@@ -480,6 +494,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -518,6 +533,7 @@ pub(crate) async fn dispatch_run(
                         Err(error) => {
                             send_error(
                                 writer,
+                                &request.request_id,
                                 &DaemonError::new(
                                     error_codes::INTERNAL_ERROR,
                                     ErrorCategory::Internal,
@@ -542,6 +558,7 @@ pub(crate) async fn dispatch_run(
                 Err(error) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INTERNAL_ERROR,
                             ErrorCategory::Internal,
@@ -594,6 +611,7 @@ pub(crate) async fn dispatch_run(
             if run_id.is_empty() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -609,6 +627,7 @@ pub(crate) async fn dispatch_run(
             if run_manager().get_run(&run_id).is_none() {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::NOT_FOUND,
                         ErrorCategory::NotFound,
@@ -801,7 +820,11 @@ pub(crate) async fn dispatch_run(
                         }
                     }
                     _ = heartbeat.tick() => {
-                        if last_frame_at.elapsed() >= heartbeat_interval {
+                        // Interval ticks can arrive a few microseconds before
+                        // `elapsed()` reaches its nominal duration. Accept that
+                        // scheduler jitter so a 15s heartbeat is not skipped,
+                        // which would create a 30s gap at the client timeout.
+                        if last_frame_at.elapsed() + std::time::Duration::from_millis(100) >= heartbeat_interval {
                             if write_stream_frame(
                                 writer,
                                 &RunStreamFrameV2::heartbeat(&run_id, durable_seq, live_cursor),
@@ -848,6 +871,7 @@ pub(crate) async fn dispatch_run(
             Err(e) => {
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         error_codes::INVALID_INPUT,
                         ErrorCategory::Validation,
@@ -874,6 +898,7 @@ pub(crate) async fn dispatch_run(
                 let not_found = e.contains("not found");
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         if not_found {
                             error_codes::NOT_FOUND
@@ -908,6 +933,7 @@ pub(crate) async fn dispatch_run(
                 let not_found = e.contains("not found");
                 send_error(
                     writer,
+                    &request.request_id,
                     &DaemonError::new(
                         if not_found {
                             error_codes::NOT_FOUND
@@ -945,6 +971,7 @@ pub(crate) async fn dispatch_run(
                 Err(e) => {
                     send_error(
                         writer,
+                        &request.request_id,
                         &DaemonError::new(
                             error_codes::INVALID_INPUT,
                             ErrorCategory::Validation,
@@ -973,7 +1000,7 @@ pub(crate) async fn dispatch_run(
                     request.method
                 ),
             );
-            send_error(writer, &err).await;
+            send_error(writer, &request.request_id, &err).await;
         }
     }
 }

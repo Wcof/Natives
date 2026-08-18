@@ -133,17 +133,23 @@ pub fn scan_sessions(project_path: &str) -> Result<Vec<SessionInfo>> {
         .join(".claude")
         .join("projects")
         .join(project_slug(project_path));
-    if !sessions_dir.is_dir() {
-        return Ok(Vec::new());
-    }
+    scan_sessions_dir(&sessions_dir)
+}
 
-    let entries = match std::fs::read_dir(&sessions_dir) {
+/// Scan one Claude project session directory.
+///
+/// A missing directory is expected for projects with no Claude sessions yet,
+/// but an existing path that cannot be read must remain observable to callers.
+fn scan_sessions_dir(sessions_dir: &Path) -> Result<Vec<SessionInfo>> {
+    let entries = match std::fs::read_dir(sessions_dir) {
         Ok(e) => e,
-        Err(_) => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
     };
 
     let mut sessions = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(crate::Error::Io)?;
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
@@ -230,7 +236,7 @@ fn detect_languages(dir: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::project_slug;
+    use super::{project_slug, scan_sessions_dir};
 
     #[test]
     fn project_slug_matches_claude_code_layout() {
@@ -239,5 +245,27 @@ mod tests {
             "-Users-ldh-Downloads-project-AiNative-Natives"
         );
         assert_eq!(project_slug("/home/a/my.app_v2"), "-home-a-my-app-v2");
+    }
+
+    #[test]
+    fn scan_sessions_dir_treats_missing_directory_as_empty() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let missing = temp.path().join("sessions");
+
+        let sessions = scan_sessions_dir(&missing).expect("missing session directory is empty");
+
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn scan_sessions_dir_propagates_non_directory_read_errors() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let file = temp.path().join("sessions");
+        std::fs::write(&file, b"not a directory").expect("session path fixture");
+
+        let error =
+            scan_sessions_dir(&file).expect_err("file path must not look like an empty directory");
+
+        assert!(matches!(error, crate::Error::Io(_)));
     }
 }

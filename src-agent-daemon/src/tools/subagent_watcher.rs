@@ -3,8 +3,8 @@
 //! durable budget incrementally, consumes the persisted failure policy, releases
 //! the slot exactly once, and re-enters itself when `Retry` re-queues the child.
 
-use agent_core::{EventSequencer, FailurePolicy, SubAgentManager, SubAgentStatus};
-use assistant_protocol::v2::RunEventKind;
+use agent_core::{ContentBlock, EventSequencer, FailurePolicy, SubAgentManager, SubAgentStatus};
+use assistant_protocol::v2::{RunEventKind, RunEventV2};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -169,6 +169,7 @@ async fn watch_subagent_run(
     mut budget_exceeded: Option<String>,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(child_timeout_ms.max(1));
+    let mut committed_child_text = None;
     loop {
         if tokio::time::Instant::now() >= deadline {
             // Timeout → unified cancel tree for the child, then fail it.
@@ -224,6 +225,9 @@ async fn watch_subagent_run(
             Ok(replayed) => {
                 for e in &replayed {
                     cursor = cursor.max(e.run_sequence);
+                }
+                if let Some(text) = final_committed_assistant_text(&replayed) {
+                    committed_child_text = Some(text);
                 }
                 let delta = usage_delta_from_events(&replayed);
                 if delta > 0 && budget_exceeded.is_none() {
@@ -398,13 +402,9 @@ async fn watch_subagent_run(
             return;
         }
 
-        let text = child_events
-            .iter()
-            .filter_map(|e| match &e.payload {
-                RunEventKind::TextDelta { text } => Some(text.clone()),
-                _ => None,
-            })
-            .collect::<String>();
+        if let Some(text) = final_committed_assistant_text(&child_events) {
+            committed_child_text = Some(text);
+        }
         if status == "completed" {
             child_completed_terminal(
                 events.clone(),
@@ -416,19 +416,14 @@ async fn watch_subagent_run(
                 &mem_task_id,
                 &child_run_id,
                 &project_path,
-                &text,
+                committed_child_text.as_deref().unwrap_or_default(),
                 failure_policy,
             )
             .await;
             return;
         }
 
-        let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
-        let message = if text.trim().is_empty() {
-            err_msg
-        } else {
-            format!("{err_msg}: {text}")
-        };
+        let message = run.error_code.clone().unwrap_or(status);
         child_failed_terminal(
             events.clone(),
             &subagents,
@@ -452,5 +447,66 @@ async fn watch_subagent_run(
         )
         .await;
         return;
+    }
+}
+
+/// Return the final durable assistant text. `TextDelta` is live-only; the
+/// completed message payload is the replayable authority for child output.
+fn final_committed_assistant_text(events: &[RunEventV2]) -> Option<String> {
+    let content = events.iter().rev().find_map(|event| match &event.payload {
+        RunEventKind::MessageCompleted {
+            role,
+            content: Some(content),
+            ..
+        } if role == "assistant" => Some(content),
+        _ => None,
+    })?;
+    serde_json::from_value::<Vec<ContentBlock>>(content.get("content")?.clone())
+        .ok()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect()
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completed_message(sequence: u64, turn_id: &str, text: &str) -> RunEventV2 {
+        RunEventV2::new(
+            "child-run",
+            sequence,
+            RunEventKind::MessageCompleted {
+                turn_id: turn_id.into(),
+                message_id: format!("message-{turn_id}"),
+                role: "assistant".into(),
+                content: Some(serde_json::json!({
+                    "message_id": format!("message-{turn_id}"),
+                    "role": "assistant",
+                    "content": serde_json::to_value(vec![ContentBlock::Text {
+                        text: text.into(),
+                    }]).unwrap(),
+                })),
+            },
+        )
+    }
+
+    #[test]
+    fn final_output_uses_last_durable_completed_message_without_text_deltas() {
+        let events = vec![
+            completed_message(1, "first", "intermediate response"),
+            completed_message(2, "final", "final child response"),
+        ];
+
+        assert_eq!(
+            final_committed_assistant_text(&events),
+            Some("final child response".into())
+        );
     }
 }

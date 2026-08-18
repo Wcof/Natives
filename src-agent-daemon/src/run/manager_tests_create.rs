@@ -216,8 +216,8 @@ fn create_run_idempotency_survives_sqlite_backed_restart() {
             parent_run_id: None,
             project_path: Some("/tmp/sqlite-idem".into()),
             idempotency_key: Some(idempotency_key.clone()),
-            effort: None,
-            runtime_id: None,
+            effort: Some("medium".into()),
+            runtime_id: Some("native".into()),
         };
 
         let first = RunManager::new_with_store(store.clone())
@@ -233,6 +233,8 @@ fn create_run_idempotency_survives_sqlite_backed_restart() {
             Some(idempotency_key.as_str())
         );
         assert_eq!(second.project_path.as_deref(), Some("/tmp/sqlite-idem"));
+        assert_eq!(second.effort.as_deref(), Some("medium"));
+        assert_eq!(second.runtime_id.as_deref(), Some("native"));
 
         let event_count: i64 = store
             .conn()

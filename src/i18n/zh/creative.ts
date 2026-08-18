@@ -188,6 +188,7 @@ export const creative = {
     quality: '质量',
     saveAs: '另存为',
     save: '保存',
+    textInputDialogLabel: '在图片中添加文字',
     textInputTitle: '输入文字',
     textInputPlaceholder: '输入文字…',
   },

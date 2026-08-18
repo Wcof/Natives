@@ -42,6 +42,21 @@ pub struct FrozenHookDispatcher {
     registry: Arc<HookRegistry>,
 }
 
+/// Keeps a Run's dispatcher registered until its starter reaches a terminal
+/// result. Dropping it removes the bounded, run-scoped registry entry.
+pub struct FrozenHookRunGuard {
+    run_id: String,
+}
+
+impl Drop for FrozenHookRunGuard {
+    fn drop(&mut self) {
+        frozen_dispatchers()
+            .lock()
+            .expect("frozen hook dispatcher registry poisoned")
+            .remove(&self.run_id);
+    }
+}
+
 impl FrozenHookDispatcher {
     pub fn run_id(&self) -> &str {
         &self.run_id
@@ -111,6 +126,13 @@ impl FrozenHookDispatcher {
 
     pub fn fail_closed_security(&self) -> bool {
         self.registry.fail_closed_security
+    }
+
+    /// Retain this Run's frozen dispatcher through terminal settlement.
+    pub fn retain_until_terminal(&self) -> FrozenHookRunGuard {
+        FrozenHookRunGuard {
+            run_id: self.run_id.clone(),
+        }
     }
 
     /// Dispatch, resolving each Hook's failure through its

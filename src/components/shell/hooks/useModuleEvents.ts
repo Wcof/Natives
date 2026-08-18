@@ -2,7 +2,6 @@
 
 import { useEffect } from 'react';
 import { getIframeManager } from '@/lib/iframe-manager';
-import { isHeartbeatFromModuleSource } from '@/lib/message-source';
 import { navigateToFiles } from '@/lib/file-events';
 import { classifyError } from '@/lib/error-classifier';
 import { pushRecentModule } from '@/lib/recent-modules';
@@ -86,17 +85,8 @@ export function useModuleEvents({
     iframe.style.height = '100%';
     iframe.style.border = 'none';
 
-    const handleMessage = (event: MessageEvent) => {
-      // R-S3: heartbeat 必须先来自真实模块 iframe 的 contentWindow，再核对
-      // type/moduleId。仅匹配 data 的伪消息（同 origin / 伪 moduleId）被拒收。
-      if (isHeartbeatFromModuleSource(event, iframe.contentWindow, moduleId)) {
-        manager?.onHeartbeatReceived(moduleId);
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
+    // IframeManager owns the single authenticated lifecycle listener. Keeping
+    // a second source-only heartbeat listener here would bypass token checks.
   }, [activeView, httpPort, iframeContainerRef, activeModuleRef, setCrashedModules]);
 
   // Release wizard, update, and navigate events
