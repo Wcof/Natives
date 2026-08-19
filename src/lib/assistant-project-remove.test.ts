@@ -100,7 +100,6 @@ describe('W1-A #1 项目软删生产链（removeProjectFromHost）', () => {
         { id: 's2', projectId: '/b', updatedAt: '2026-08-12T00:00:01Z', title: 'b' },
       ],
       registered.map((p) => p.path),
-      'Unassigned',
       hiddenPaths,
     );
     assert.ok(!groups.some((g) => g.path === '/a'), 'daemon 旧会话不会反向复活已删项目');
@@ -133,7 +132,6 @@ describe('W1-A #1 项目软删生产链（removeProjectFromHost）', () => {
     const groups = groupAssistantConversations(
       [{ id: 's1', projectId: '/gone', updatedAt: '2026-08-12T00:00:00Z', title: 'old' }],
       ['/a'],
-      'Unassigned',
       host.hidden,
     );
     assert.ok(!groups.some((g) => g.path === '/gone'), '重挂载后隐藏集合仍生效');
@@ -147,7 +145,6 @@ describe('W1-A #1 项目软删生产链（removeProjectFromHost）', () => {
     const groups = groupAssistantConversations(
       [{ id: 's1', projectId: '/a', updatedAt: '2026-08-12T00:00:00Z', title: 'restored' }],
       ['/a', '/b'],
-      'Unassigned',
       hiddenPaths,
     );
     assert.deepEqual(hiddenPaths, [], '重新添加后 hidden 移除该路径');

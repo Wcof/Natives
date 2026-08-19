@@ -38,6 +38,7 @@ fn credential() -> Credential {
         proxy_url: None,
         key_id: Some("live-anthropic-e2e".into()),
         provider_type: Some("anthropic".into()),
+        project_id: None,
     }
 }
 

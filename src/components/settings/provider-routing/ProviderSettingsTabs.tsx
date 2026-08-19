@@ -1,10 +1,10 @@
 'use client';
 
-import { Bot, Route, Store } from 'lucide-react';
+import { Bot, Link2, Route, Store } from 'lucide-react';
 import { BORDER_RADIUS, FONT_SIZE, SPACING } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
 
-export type ProviderSettingsTab = 'management' | 'routing' | 'subagents';
+export type ProviderSettingsTab = 'management' | 'oauth' | 'routing' | 'subagents';
 
 export function ProviderSettingsTabs({ locale, activeTab, onChange }: {
   locale: Locale;
@@ -13,6 +13,7 @@ export function ProviderSettingsTabs({ locale, activeTab, onChange }: {
 }) {
   const tabs: Array<{ id: ProviderSettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'management', label: t(locale, 'settings.providerManagementTab'), icon: <Store size={15} /> },
+    { id: 'oauth', label: t(locale, 'settings.providerOauthTab'), icon: <Link2 size={15} /> },
     { id: 'routing', label: t(locale, 'settings.providerRoutingTab'), icon: <Route size={15} /> },
     { id: 'subagents', label: t(locale, 'providerSettingsTabs.subagents'), icon: <Bot size={15} /> },
   ];

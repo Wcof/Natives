@@ -1,5 +1,7 @@
 # 供应商路由与 Sub2API 账号池
 
+> **收敛状态（2026-08-18）**：本文档描述的是 2026-08-11 冻结语义（曾计划退役 failover 绑定/loopback/rectifier/global proxy）。该退役计划已被 v4 选型 A 取代：**Natives-native Rust Model Gateway 复用这些组件作为唯一生产路径，不退役、不删除**。新架构见 [provider-proxy-architecture.md](./provider-proxy-architecture.md) 与 [ADR-0019](../adr/0019-unified-model-proxy-authority.md)（已选 A）。本文件保留 Sub2API 账号导入/安全语义中仍然成立的部分，其余为历史记录。
+
 ## 目标
 
 供应商设置新增“路由”页签。路由总开关开启后，Native Engine 与本地回环 API 共用同一套路由、故障转移、整流和出站代理逻辑。供应商模块新增 Sub2API 账号池，支持安全批量导入、批量删除，并能被执行引擎直接消费。

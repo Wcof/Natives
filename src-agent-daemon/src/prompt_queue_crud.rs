@@ -324,27 +324,35 @@ pub(crate) async fn send_now(params: Value) -> Result<Value, String> {
     let store = store()?;
     let (conversation_id, content, _attachments_raw, provider_id, model_id, project_path) = {
         let conn = store.conn()?;
-        let (conversation_id, content, attachments, provider_id, model_id) = conn.query_row(
-            "SELECT q.conversation_id, q.content, q.attachments, c.provider_id, c.model_id
+        let (conversation_id, content, attachments, provider_id, model_id) = conn
+            .query_row(
+                "SELECT q.conversation_id, q.content, q.attachments, c.provider_id, c.model_id
              FROM prompt_queue q
              JOIN conversation c ON c.id = q.conversation_id
              WHERE q.id = ?1",
-            params![id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "prompt queue item not found".to_string())?;
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "prompt queue item not found".to_string())?;
         let project_path = conversation_project_path(&conn, &conversation_id)?;
-        (conversation_id, content, attachments, provider_id, model_id, project_path)
+        (
+            conversation_id,
+            content,
+            attachments,
+            provider_id,
+            model_id,
+            project_path,
+        )
     };
 
     // Ensure coordinator knows about this item (may already).

@@ -523,15 +523,28 @@ mod tests {
         let started_at = std::time::Instant::now();
 
         let (connection_a, server_a) = tokio::net::UnixStream::pair().unwrap();
-        let a_task = tokio::spawn(handle_connection(
-            server_a,
+        // Wrap in an async block so the spawned task's Output is `()` — the
+        // same usage as the production accept loop. Spawning the raw future
+        // would require `Box<dyn Error>` (its Output) to be `Send`. Clone the
+        // captured handles first so the originals stay usable below.
+        let (a_sessions, a_token, a_used, a_protocol) = (
             sessions.clone(),
             bootstrap_token.clone(),
             bootstrap_used.clone(),
             protocol_version.clone(),
-            "test".to_string(),
-            started_at,
-        ));
+        );
+        let a_task = tokio::spawn(async move {
+            let _ = handle_connection(
+                server_a,
+                a_sessions,
+                a_token,
+                a_used,
+                a_protocol,
+                "test".to_string(),
+                started_at,
+            )
+            .await;
+        });
         let (a_read, mut a_write) = connection_a.into_split();
         let mut a_reader = BufReader::new(a_read);
         let handshake = HandshakeRequest {
@@ -550,15 +563,26 @@ mod tests {
             .session_token;
 
         let (connection_b, server_b) = tokio::net::UnixStream::pair().unwrap();
-        let b_task = tokio::spawn(handle_connection(
-            server_b,
+        // Same async-block wrapping as the first connection: spawned task
+        // Output must be `()`, matching the production accept loop.
+        let (b_sessions, b_token, b_used, b_protocol) = (
             sessions.clone(),
             bootstrap_token.clone(),
-            bootstrap_used,
+            bootstrap_used.clone(),
             protocol_version.clone(),
-            "test".to_string(),
-            started_at,
-        ));
+        );
+        let b_task = tokio::spawn(async move {
+            let _ = handle_connection(
+                server_b,
+                b_sessions,
+                b_token,
+                b_used,
+                b_protocol,
+                "test".to_string(),
+                started_at,
+            )
+            .await;
+        });
         let (b_read, mut b_write) = connection_b.into_split();
         let mut b_reader = BufReader::new(b_read);
         b_write
@@ -574,7 +598,7 @@ mod tests {
 
         drop(a_write);
         drop(a_reader);
-        a_task.await.unwrap().unwrap();
+        a_task.await.unwrap();
 
         let request = V2Request::new(
             client_id,
@@ -602,7 +626,7 @@ mod tests {
 
         drop(b_write);
         drop(b_reader);
-        b_task.await.unwrap().unwrap();
+        b_task.await.unwrap();
         assert!(sessions.lock().await.is_empty());
     }
 

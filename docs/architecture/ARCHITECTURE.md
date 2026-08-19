@@ -145,6 +145,7 @@ Tauri Host Main (Rust · src-tauri/)
 Agent Daemon (src-agent-daemon/ + crates/*)
 ├── Run / 会话权威存储
 ├── Provider 适配 + 工具 Capability Gateway
+├── 统一模型网关（model.gateway.stream，复用单一路由执行器 RoutedProvider）
 ├── 事件序列与持久化
 └── 协议 v2 RPC（诚实 capability 表面）
 
@@ -159,6 +160,8 @@ Workshop iframe（Unique Origin 沙箱）
 Embed 子 WebView（可选 · ADR-0013）
 └── 外部容器 GUI；无 Workshop Bridge
 ```
+
+> Provider OAuth 账户（Host 加密凭证 SoT）与统一模型网关（Daemon 执行）的详细权威边界见 [`provider-proxy-architecture.md`](./provider-proxy-architecture.md) 与 [ADR-0019](../adr/0019-unified-model-proxy-authority.md)。
 
 ### 4.2 五大防线
 

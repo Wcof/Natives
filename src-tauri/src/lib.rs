@@ -869,6 +869,15 @@ pub fn run() {
             provider_accounts::provider_routing_rotate_local_token,
             provider_accounts::provider_routing_list_bindings,
             provider_accounts::provider_routing_update_bindings,
+            // Provider OAuth browser flow (ADR-0019 P3)
+            commands::provider_oauth::provider_oauth_start,
+            commands::provider_oauth::provider_oauth_status,
+            commands::provider_oauth::provider_oauth_disconnect,
+            commands::provider_oauth::provider_oauth_refresh,
+            commands::provider_oauth::provider_oauth_set_project_id,
+            // Provider OAuth device-code flow (ADR-0019 P8)
+            commands::provider_oauth_device::provider_oauth_device_start,
+            commands::provider_oauth_device::provider_oauth_device_poll,
             // Library (fanbox clone — G4)
             commands::library::library_list_folders,
             commands::library::library_create_folder,

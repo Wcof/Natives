@@ -215,8 +215,8 @@ pub async fn mcp_oauth_start(
 
 /// Accept connections until the /callback redirect arrives or `timeout` expires.
 /// Returns the authorization code. Non-callback paths (e.g. /favicon.ico) get a
-/// 404 and the loop continues.
-fn wait_for_callback(
+/// 404 and the loop continues. Shared with `provider_oauth.rs` (ADR-0019 P3).
+pub(crate) fn wait_for_callback(
     listener: &TcpListener,
     expected_state: &str,
     timeout: Duration,
@@ -331,9 +331,9 @@ fn respond(stream: &mut std::net::TcpStream, status: u16, body: &str) {
     let _ = stream.flush();
 }
 
-// ── Small helpers ──
+// ── Small helpers (shared with provider_oauth.rs) ──
 
-fn validate_endpoint_url(url: &str, field: &str) -> Result<()> {
+pub(crate) fn validate_endpoint_url(url: &str, field: &str) -> Result<()> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(Error::Internal(format!("{field} must be an http(s) URL")));
@@ -342,13 +342,13 @@ fn validate_endpoint_url(url: &str, field: &str) -> Result<()> {
 }
 
 /// 32 random bytes, base64url without padding (43 chars — valid PKCE verifier).
-fn random_urlsafe_token() -> String {
+pub(crate) fn random_urlsafe_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn percent_encode(value: &str) -> String {
+pub(crate) fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len() * 3);
     for byte in value.bytes() {
         match byte {
@@ -361,7 +361,7 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
-fn percent_decode(value: &str) -> String {
+pub(crate) fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -390,7 +390,7 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn parse_query(query: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_query(query: &str) -> Vec<(String, String)> {
     query
         .split('&')
         .filter(|pair| !pair.is_empty())
@@ -405,7 +405,7 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
 }
 
 /// reqwest errors can embed the full request URL; keep only the error class.
-fn sanitize_reqwest_error(e: &reqwest::Error) -> &'static str {
+pub(crate) fn sanitize_reqwest_error(e: &reqwest::Error) -> &'static str {
     if e.is_timeout() {
         "timeout"
     } else if e.is_connect() {

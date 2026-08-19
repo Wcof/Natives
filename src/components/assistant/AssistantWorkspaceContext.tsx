@@ -349,7 +349,6 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     } catch {
       /* keep zh */
     }
-    const unassignedLabel = t(savedLocale, 'assistant.unassignedProjects');
 
     // `null` = request failed (≠ honest empty list). An engine outage must keep
     // the previous groups + surface loadError instead of wiping the sidebar.
@@ -451,7 +450,6 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         .filter((c) => !isTempConversationId(c.id))
         .map((c) => (pinnedIds.has(c.id) ? { ...c, pinned: true } : c)),
       projectMetas,
-      unassignedLabel,
       hiddenProjectPaths,
     );
     publishNavigation((prev) => ({

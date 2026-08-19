@@ -736,6 +736,9 @@ pub struct Credential {
     pub proxy_url: Option<String>,
     pub key_id: Option<String>,
     pub provider_type: Option<String>,
+    /// Google Cloud project id for OAuth-backed Cloud Code providers
+    /// (antigravity) — sent as `x-goog-cloud-target-resource`. Optional.
+    pub project_id: Option<String>,
 }
 
 /// Provider adapter trait — all providers must implement this.

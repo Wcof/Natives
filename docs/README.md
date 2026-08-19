@@ -37,6 +37,7 @@ docs/
 │   ├── 0013-…                创意双来源（内部+GitHub 容器）
 │   ├── 0014-…                创作台 P0 主流程冻结（AI 生成主流程）
 │   └── 0015-…                任务模块归属与派发接缝（Hub 面，job）
+│   └── 0019-…                统一模型代理 Authority 边界与实施选型（A：native Rust Model Gateway）
 ├── architecture/             ← 现状与领域设计（描述，非红线）
 │   ├── ARCHITECTURE.md       总览（已对齐 ADR-0012）
 │   ├── DESIGN_DISCUSSION.md  历史 Q&A（被 ADR 修订处见文首）
@@ -46,7 +47,8 @@ docs/
 │   ├── creative-app-creator-workbench.md   创作台落地设计（决策见 ADR-0014）
 │   ├── creative-app-local-remediation.md   本地项目 gap 整改设计（9 项，B1–B4/F5–F9）
 │   ├── creative-app-local-project-remediation.md  同域收敛现状与验收（承接上行 gap 设计，基线 deploy@4f130256）
-│   ├── provider-routing-sub2api.md         供应商路由与 Sub2API 账号池
+│   ├── provider-proxy-architecture.md      Provider OAuth + 统一模型代理架构（P0 审计/缺口/选型 A）
+│   ├── provider-routing-sub2api.md         供应商路由与 Sub2API 账号池（旧路由语义，2026-08-11 冻结）
 │   ├── application-performance-remediation.md     全应用性能整改记录
 │   ├── FILE_MANAGER_AUDIT.md               文件管理器审计（对照 fanbox，Hub 面）
 │   ├── NATIVE-DAEMON-CAPABILITY-MAP.md

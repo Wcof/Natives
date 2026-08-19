@@ -18,14 +18,11 @@ import {
   projectCreationState,
 } from '@/lib/assistant-project-groups';
 import { conversationsWithoutTemp, isTempConversationId } from '@/lib/assistant-temp-conversation';
-import { t } from '@/i18n';
-import type { Locale } from '@/i18n';
 import type { Conversation, RunEvent, Artifact, ContextUsage } from '@/lib/assistant-protocol';
 import type { ProviderReadiness } from '@/lib/provider-model-selection';
 import type { AssistantNavigationSnapshot, AssistantRuntimeSnapshot } from '@/lib/assistant-ui-types';
 
 export interface UseAssistantWorkbenchPublishersOptions {
-  locale: Locale;
   rootConversationId: string | null;
   activeId: string | null;
   activeProjectPath: string | null;
@@ -51,7 +48,6 @@ export interface UseAssistantWorkbenchPublishersOptions {
 }
 
 export function useAssistantWorkbenchPublishers({
-  locale,
   rootConversationId,
   activeId,
   activeProjectPath,
@@ -90,7 +86,6 @@ export function useAssistantWorkbenchPublishers({
         pinned: pinnedConversationIds.has(c.id),
       })),
       registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label, exists: p.exists })),
-      t(locale, 'assistant.unassignedProjects'),
       hiddenProjectPaths,
     );
     // Merge with projects already seeded by AssistantWorkspaceProvider so a
@@ -112,7 +107,6 @@ export function useAssistantWorkbenchPublishers({
               parentConversationId: c.parentConversationId ?? null,
             })),
             seedPaths,
-            t(locale, 'assistant.unassignedProjects'),
             hiddenProjectPaths,
           );
         }

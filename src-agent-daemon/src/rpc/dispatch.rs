@@ -16,6 +16,7 @@ use crate::rpc::handlers::capability::dispatch_capability;
 use crate::rpc::handlers::conversation::dispatch_conversation;
 use crate::rpc::handlers::daemon::dispatch_daemon;
 use crate::rpc::handlers::discovery::dispatch_discovery;
+use crate::rpc::handlers::gateway::dispatch_gateway;
 use crate::rpc::handlers::harness::dispatch_harness;
 use crate::rpc::handlers::mcp::dispatch_mcp;
 use crate::rpc::handlers::permission::dispatch_permission;
@@ -150,6 +151,7 @@ pub async fn handle_rpc(
         names::PROVIDER_DISCOVER_MODELS => dispatch_provider(writer, request).await,
         names::PROVIDER_TEST => dispatch_provider(writer, request).await,
         names::CREATIVE_LOCAL_ANALYZE => dispatch_provider(writer, request).await,
+        names::MODEL_GATEWAY_STREAM => dispatch_gateway(writer, request).await,
         names::PROPOSAL_LIST_PENDING => dispatch_discovery(writer, request).await,
         names::MCP_LIST => dispatch_mcp(writer, request).await,
         names::MCP_START => dispatch_mcp(writer, request).await,

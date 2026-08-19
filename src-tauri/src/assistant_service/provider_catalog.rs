@@ -64,10 +64,29 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
     let mut kstmt = natives
         .prepare("SELECT provider_id FROM provider_api_keys WHERE COALESCE(is_active, 1) = 1")
         .map_err(|e| e.to_string())?;
-    let active_providers: std::collections::HashSet<String> = kstmt
+    let active_key_providers: std::collections::HashSet<String> = kstmt
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
+        .collect();
+
+    // OAuth / account-pool providers (P1): a provider is *usable* when it has
+    // an active API key OR at least one active, non-expired account row.
+    let mut astmt = natives
+        .prepare(
+            "SELECT DISTINCT provider_id FROM provider_accounts
+             WHERE status = 'active'
+               AND (expires_at IS NULL OR expires_at = '' OR expires_at > datetime('now'))",
+        )
+        .map_err(|e| e.to_string())?;
+    let account_providers: std::collections::HashSet<String> = astmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let usable_providers: std::collections::HashSet<String> = active_key_providers
+        .union(&account_providers)
+        .cloned()
         .collect();
 
     // Optional model cache from assistant.db (discovery results); never required.
@@ -80,7 +99,12 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
             ) {
                 Ok(s) => s,
                 Err(_) => {
-                    return Ok(assemble_natives_providers(provider_rows, &active_providers, &std::collections::HashMap::new()));
+                    return Ok(assemble_natives_providers(
+                        provider_rows,
+                        &usable_providers,
+                        &active_key_providers,
+                        &std::collections::HashMap::new(),
+                    ));
                 }
             };
             let mut grouped: std::collections::HashMap<String, Vec<Value>> =
@@ -112,7 +136,8 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
 
     Ok(assemble_natives_providers(
         provider_rows,
-        &active_providers,
+        &usable_providers,
+        &active_key_providers,
         &model_rows,
     ))
 }
@@ -130,7 +155,8 @@ pub(crate) fn assemble_natives_providers(
         String,
         String,
     )>,
-    active_providers: &std::collections::HashSet<String>,
+    usable_providers: &std::collections::HashSet<String>,
+    active_key_providers: &std::collections::HashSet<String>,
     model_rows: &std::collections::HashMap<String, Vec<Value>>,
 ) -> Vec<Value> {
     let mut providers = Vec::new();
@@ -146,7 +172,7 @@ pub(crate) fn assemble_natives_providers(
         updated_at,
     ) in provider_rows
     {
-        if !active_providers.contains(&id) {
+        if !usable_providers.contains(&id) {
             continue;
         }
         let mut models = model_rows.get(&id).cloned().unwrap_or_default();
@@ -179,7 +205,8 @@ pub(crate) fn assemble_natives_providers(
             "api_base_url": base_url,
             "health_status": "unknown",
             "default_model": default_model,
-            "has_active_key": true,
+            "has_active_key": active_key_providers.contains(&id),
+            "has_usable_credential": true,
             "models": models,
             "created_at": created_at,
             "updated_at": updated_at,
@@ -188,10 +215,11 @@ pub(crate) fn assemble_natives_providers(
     providers
 }
 
-/// True when provider has an active key and model is either cached or the provider default.
-/// Reads the natives.db Settings SoT only — no `assistant_*` mirror fallback
-/// (MIG-004 / DATA-002). When the main pool is unavailable the check fails
-/// closed (`false`), never a stale mirror read.
+/// True when provider has an active API key OR at least one active, non-expired
+/// account row (OAuth / account-pool), and model is either cached or the
+/// provider default. Reads the natives.db Settings SoT only — no
+/// `assistant_*` mirror fallback (MIG-004 / DATA-002). When the main pool is
+/// unavailable the check fails closed (`false`), never a stale mirror read.
 pub(crate) fn provider_model_pair_available(provider_id: &str, model_id: &str) -> bool {
     let Ok(natives) = crate::db::get_main_conn() else {
         return false;
@@ -206,7 +234,18 @@ pub(crate) fn provider_model_pair_available(provider_id: &str, model_id: &str) -
             |row| row.get(0),
         )
         .unwrap_or(false);
-    if !has_key {
+    let has_account: bool = natives
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM provider_accounts
+                WHERE provider_id = ?1 AND status = 'active'
+                  AND (expires_at IS NULL OR expires_at = '' OR expires_at > datetime('now'))
+            )",
+            rusqlite::params![provider_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !has_key && !has_account {
         return false;
     }
     let default_model: Option<String> = natives

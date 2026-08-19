@@ -17,10 +17,11 @@
 use assistant_protocol::v2::credential::{
     CredentialBrokerRequest, CredentialBrokerResponse, CredentialBrokerSession,
     CredentialLeaseEnvelope, CredentialLeaseReply, CredentialLeaseRevokeRequest,
-    CredentialPoolLeaseRequest, CredentialPoolLeaseResponse, CredentialSecretLeaseRequest,
-    CredentialSecretLeaseResponse, CredentialSettingLeaseRequest, CredentialSettingLeaseResponse,
-    HostSubagentsLeaseRequest, HostSubagentsLeaseResponse, LoopbackSettingsLeaseRequest,
-    LoopbackSettingsLeaseResponse, RoutingPlanLeaseRequest, RoutingPlanLeaseResponse,
+    CredentialPoolLeaseRequest, CredentialPoolLeaseResponse, CredentialPoolRefreshRequest,
+    CredentialPoolRefreshResponse, CredentialSecretLeaseRequest, CredentialSecretLeaseResponse,
+    CredentialSettingLeaseRequest, CredentialSettingLeaseResponse, HostSubagentsLeaseRequest,
+    HostSubagentsLeaseResponse, LoopbackSettingsLeaseRequest, LoopbackSettingsLeaseResponse,
+    RoutingPlanLeaseRequest, RoutingPlanLeaseResponse,
 };
 use assistant_protocol::v2::methods::names;
 use provider_adapters::capabilities::Credential;
@@ -127,19 +128,30 @@ impl NativesDbBroker {
     }
 
     /// Fail-closed write guard: the daemon must NOT write natives.db (P0-007).
-    /// OAuth refresh persistence is the Host's job via broker lease; a call
-    /// that reaches the daemon with a write intent is a caller bug.
+    /// OAuth refresh persistence is the Host's job via broker lease (ADR-0019
+    /// P3) — the daemon hands the refreshed tokens back over the authenticated
+    /// socket and the Host re-encrypts and stores them.
     pub fn update_sub2api_credentials(
         &self,
-        _account_id: &str,
-        _credentials: &Value,
-        _expires_at: Option<&str>,
+        account_id: &str,
+        credentials: &Value,
+        expires_at: Option<&str>,
     ) -> Result<(), String> {
-        Err(
-            "natives.db write blocked: daemon holds only credential leases (T104); \
-             OAuth credential persistence must go through the Host broker"
-                .into(),
-        )
+        let req = CredentialPoolRefreshRequest {
+            account_id: account_id.to_string(),
+            credentials: credentials.clone(),
+            expires_at: expires_at.map(str::to_string),
+        };
+        let payload = serde_json::to_value(&req)
+            .map_err(|e| redact_err(&format!("refresh request serialize failed: {e}")))?;
+        let data = self.lease_request(names::CREDENTIAL_POOL_REFRESH, &payload)?;
+        let resp: CredentialPoolRefreshResponse = serde_json::from_value(data)
+            .map_err(|e| redact_err(&format!("refresh response parse failed: {e}")))?;
+        if resp.ok {
+            Ok(())
+        } else {
+            Err("Host broker rejected OAuth refresh persistence".into())
+        }
     }
 
     /// Resolve one provider key by requesting a Run-bound short-TTL lease from
@@ -383,6 +395,7 @@ pub(crate) fn credential_from_response(
         proxy_url: resp.proxy_url,
         key_id: Some(resp.key_id),
         provider_type: resp.provider_type,
+        project_id: resp.project_id,
     })
 }
 
@@ -581,6 +594,7 @@ mod tests {
             api_key: api_key.into(),
             base_url: Some("https://example.test".into()),
             provider_type: Some("anthropic_messages".into()),
+            project_id: None,
             proxy_url: None,
             lease: Some(CredentialLeaseMeta::new(
                 "openai",

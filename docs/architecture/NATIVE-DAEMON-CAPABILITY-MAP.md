@@ -196,6 +196,7 @@ NATIVES_RUNTIME_DIR → socket、memory、artifacts；旧 `scheduler/jobs.json` 
 |----|-------------------|
 | 守护进程 | `daemon.getCapabilities` `getStatus` `ping` |
 | 供应商 | `provider.list` `discoverModels` `test` |
+| 统一模型网关 | `model.gateway.stream`（复用 `RoutedProvider` 单一路由执行器；ADR-0019） |
 | 会话 | `conversation.create/list/get/fork/getMessages/appendMessage/rename/update_model/update_permission/archive/delete` `getContextUsage` |
 | Run | `run.create/start/cancel/retry/continue/resume/watch/replay/list/getEvents/listChildren/finish/getActivity` `workspace.restore*` |
 | 权限/交互 | `permission.respond` `interaction.listPending/respond` |

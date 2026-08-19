@@ -76,10 +76,8 @@ export interface RegisteredProjectMeta {
 /**
  * Group conversations by project.
  *
- * Project order (caller may further pin-sort):
- * 1. Registered projects keep the order of `registeredProjects` (backend last_opened_at DESC).
- * 2. Any conversation-only projects not in registered list are appended by latest conversation.
- * 3. Unassigned is always last.
+ * Project order (caller may further pin-sort): registered projects keep the
+ * order of `registeredProjects` (backend last_opened_at DESC).
  *
  * Conversation order within a project:
  * 1. Pinned conversations first (stable by updatedAt among pins).
@@ -89,11 +87,16 @@ export interface RegisteredProjectMeta {
  * daemon sessions still carry `project_id`, but the sidebar must NOT re-invent
  * the project node (extras) nor list those sessions — the project is hidden
  * until the user re-adds the path via `project.register`.
+ *
+ * The sidebar only projects registered projects. Any session whose `project_id`
+ * references a project that is soft-deleted, physically deleted (missing
+ * directory), unregistered (a legacy UUID / orphaned path), or has no project
+ * at all is hidden entirely — there is no "unassigned" bucket and no invented
+ * project node.
  */
 export function groupAssistantConversations(
   conversations: AssistantProjectConversation[],
   registeredProjects: Array<string | RegisteredProjectMeta> = [],
-  unassignedLabel = 'Unassigned',
   hiddenProjectPaths: Iterable<string> = [],
 ): AssistantProjectGroup[] {
   const registered: RegisteredProjectMeta[] = registeredProjects.map((item) =>
@@ -104,14 +107,11 @@ export function groupAssistantConversations(
   );
 
   const byProject = new Map<string, AssistantProjectConversation[]>();
-  const unassigned: AssistantProjectConversation[] = [];
-  const metaByPath = new Map<string, RegisteredProjectMeta>();
   const missingProjectPaths = new Set<string>();
 
   for (const proj of registered) {
     const path = normalizeAssistantProjectPath(proj.path);
     if (!path || hiddenPaths.has(path)) continue;
-    metaByPath.set(path, proj);
     if (proj.exists === false) {
       missingProjectPaths.add(path);
       continue;
@@ -124,13 +124,11 @@ export function groupAssistantConversations(
     const path = conversation.projectId
       ? normalizeAssistantProjectPath(conversation.projectId)
       : '';
-    // Soft-deleted project: hide the session entirely, never move it to
-    // unassigned or re-invent the project from its project_id.
+    // Hide any session that does not belong to a registered, existing project:
+    // soft-deleted, physically deleted (missing directory), orphaned legacy
+    // UUID/path, or no project at all.
     if (hiddenPaths.has(path)) continue;
-    if (!path || missingProjectPaths.has(path)) {
-      unassigned.push(conversation);
-      continue;
-    }
+    if (!path || !byProject.has(path)) continue;
     const group = byProject.get(path) ?? [];
     group.push(conversation);
     byProject.set(path, group);
@@ -160,42 +158,7 @@ export function groupAssistantConversations(
     });
   }
 
-  // Conversation-only projects not in the registered list (should be rare after unassigned policy).
-  const extras: AssistantProjectGroup[] = [];
-  for (const [path, items] of byProject.entries()) {
-    if (seen.has(path)) continue;
-    extras.push({
-      id: path,
-      path,
-      label: displayProjectName(path),
-      conversations: sortConversations(items),
-      lastOpenedAt: metaByPath.get(path)?.lastOpenedAt ?? null,
-    });
-  }
-  extras.sort((left, right) => {
-    const leftDate = left.conversations[0]?.updatedAt ?? '';
-    const rightDate = right.conversations[0]?.updatedAt ?? '';
-    if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
-    return left.label.localeCompare(right.label);
-  });
-  groups.push(...extras);
-
-  if (unassigned.length > 0) {
-    groups.push({
-      id: '__unassigned__',
-      path: null,
-      label: unassignedLabel,
-      conversations: sortConversations(unassigned),
-      lastOpenedAt: null,
-    });
-  }
-
-  // Unassigned always last; do not re-sort registered projects by session time.
-  return groups.sort((left, right) => {
-    if (left.path === null && right.path !== null) return 1;
-    if (left.path !== null && right.path === null) return -1;
-    return 0;
-  });
+  return groups;
 }
 
 /** Pin overlay: pinned projects first, preserving relative order within each bucket. */

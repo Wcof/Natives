@@ -46,6 +46,7 @@ export {
   runtime,
   capabilitySecret,
   mcpOauth,
+  providerOauth,
   themeReady,
   getTheme,
   setTheme,
@@ -93,6 +94,7 @@ import {
   runtime,
   capabilitySecret,
   mcpOauth,
+  providerOauth,
   themeReady,
   getTheme,
   setTheme,
@@ -257,6 +259,9 @@ export const nativesAPI: NativesAPI = {
 
   // ── MCP OAuth 浏览器流 (ADR-0016 决策 7) ──
   mcpOauth,
+
+  // ── Provider OAuth 浏览器流 (ADR-0019 P3) ──
+  providerOauth,
 
   // Assistant in-process RPC (no daemon sidecar)
   assistantV2,

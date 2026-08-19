@@ -528,7 +528,9 @@ mod typed_provider_history_tests {
 
 fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
     let lower = provider_id.to_ascii_lowercase();
-    if lower.contains("anthropic") || lower.contains("claude") {
+    if lower.contains("antigravity") {
+        Box::new(provider_adapters::providers::antigravity::AntigravityAdapter::new())
+    } else if lower.contains("anthropic") || lower.contains("claude") {
         Box::new(provider_adapters::providers::anthropic::AnthropicAdapter::new())
     } else if lower.contains("gemini") || lower.contains("google") {
         Box::new(provider_adapters::providers::gemini::GeminiAdapter::new())

@@ -295,7 +295,6 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
           </button>
         ) : orderedGroups.map(group => {
           const isCollapsed = collapsed.has(group.id);
-          const isUnassigned = group.id === 'unassigned' || !group.path;
           return (
             <section key={group.id}
               onContextMenu={(event) => {
@@ -318,11 +317,11 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                   title={group.path ?? undefined}
                   className="drag-none flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-inherit font-inherit"
                 >
-                  {isUnassigned ? <MessageSquare size={15} className="shrink-0" /> : isCollapsed ? <Folder size={15} className="shrink-0" /> : <FolderOpen size={15} className="shrink-0" />}
+                  {isCollapsed ? <Folder size={15} className="shrink-0" /> : <FolderOpen size={15} className="shrink-0" />}
                   <span className="min-w-0 flex-1 truncate text-sm">{group.label}</span>
-                  {!isUnassigned && <span className="tabular-nums text-[0.625rem] opacity-75">{group.conversations.length}</span>}
+                  <span className="tabular-nums text-[0.625rem] opacity-75">{group.conversations.length}</span>
                 </button>
-                {!isUnassigned && <>
+                <>
                   <button
                     type="button"
                     onClick={() => {
@@ -371,7 +370,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                       <MoreHorizontal size={12} />
                     </button>
                   </div>
-                </>}
+                </>
               </div>
 
               {/* ── Conversation Items ── */}

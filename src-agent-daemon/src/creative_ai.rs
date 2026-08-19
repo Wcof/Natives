@@ -249,6 +249,7 @@ mod tests {
             proxy_url: None,
             key_id: Some("k".into()),
             provider_type: Some("openai_compatible".into()),
+            project_id: None,
         };
         let out = analyze_local_creative_with(&sample_request(), cred, &adapter)
             .await
@@ -268,6 +269,7 @@ mod tests {
             proxy_url: None,
             key_id: None,
             provider_type: None,
+            project_id: None,
         };
         let err = analyze_local_creative_with(&sample_request(), cred, &adapter)
             .await

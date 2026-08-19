@@ -104,7 +104,7 @@ export default function Modal({
   const showHeader = Boolean(title) || showCloseButton;
   return createPortal(
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--overlay)', animation: `fadeIn ${TRANSITION.normal}`, pointerEvents: 'auto' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 'var(--z-dialog-overlay)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--overlay)', animation: `fadeIn ${TRANSITION.normal}`, pointerEvents: 'auto' }}
       onMouseDown={(event) => {
         if (
           closeOnBackdropClick &&
@@ -175,6 +175,6 @@ export default function Modal({
         </div>
       </div>
     </div>,
-    document.getElementById('content-overlay-root') ?? document.body,
+    document.body,
   );
 }

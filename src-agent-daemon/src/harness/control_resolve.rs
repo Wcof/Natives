@@ -100,17 +100,25 @@ pub fn prepare_run_with_tool_plan(
                 )?;
                 publish_notice(cursor);
                 let had_draft = repository::get_draft(conn, &profile_id)?.is_some();
-                let _ = repository::ensure_source_drift_candidate(conn, &profile_id, &candidate)?;
-                if !had_draft {
-                    repository::append_audit(
-                        conn,
-                        "source_drift_ack",
-                        Some(&profile_id),
-                        Some(&base_version_id),
-                        None,
-                        None,
-                        &serde_json::json!({"candidate": true, "source_count": candidate.as_array().map_or(0, Vec::len)}),
-                    )?;
+                match repository::ensure_source_drift_candidate(conn, &profile_id, &candidate) {
+                    Ok(_) => {
+                        if !had_draft {
+                            repository::append_audit(
+                                conn,
+                                "source_drift_ack",
+                                Some(&profile_id),
+                                Some(&base_version_id),
+                                None,
+                                None,
+                                &serde_json::json!({"candidate": true, "source_count": candidate.as_array().map_or(0, Vec::len)}),
+                            )?;
+                        }
+                    }
+                    // An unpublished Draft already exists (possibly tracking a
+                    // different drift candidate). Drift is already recorded for
+                    // acknowledgment — never block the run on it.
+                    Err(error) if error.code == "harness_draft_conflict" => {}
+                    Err(error) => return Err(error),
                 }
             }
         }

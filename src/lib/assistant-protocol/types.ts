@@ -731,11 +731,13 @@ export type AssistantMethod =
   | 'credential.lease.revoke'
   | 'credential.lease.status'
   | 'credential.pool.acquire'
+  | 'credential.pool.refresh'
   | 'credential.routing.settings'
   | 'credential.routing.plan'
   | 'credential.secret.acquire'
   | 'credential.setting.get'
-  | 'host.subagents.export';
+  | 'host.subagents.export'
+  | 'model.gateway.stream';
 
 /**
  * Capability library selection carried on run.start / conversation rows

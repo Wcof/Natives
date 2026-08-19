@@ -1,6 +1,7 @@
 //! Provider adapter implementations for six launch providers.
 
 pub mod anthropic;
+pub mod antigravity;
 pub mod deepseek;
 pub mod gemini;
 pub mod ollama;

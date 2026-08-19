@@ -179,11 +179,16 @@ pub const ALL_METHODS: &[&str] = &[
     "credential.lease.revoke",
     "credential.lease.status",
     "credential.pool.acquire",
+    "credential.pool.refresh",
     "credential.routing.settings",
     "credential.routing.plan",
     "credential.secret.acquire",
     "credential.setting.get",
     "host.subagents.export",
+    // Unified model access (ADR-0019, P2): generic model-gateway stream RPC —
+    // Host → Daemon unified model request without a full Agent Run state
+    // machine, reusing provider-adapters / RoutedProvider.
+    "model.gateway.stream",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -346,6 +351,8 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "conversation.getCapabilities",
     "creative.local.analyze",
     "proposal.listPending",
+    // Unified model access (ADR-0019, P2): the native-Rust Model Data Plane.
+    "model.gateway.stream",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -556,11 +563,16 @@ pub mod names {
     pub const CREDENTIAL_LEASE_REVOKE: &str = "credential.lease.revoke";
     pub const CREDENTIAL_LEASE_STATUS: &str = "credential.lease.status";
     pub const CREDENTIAL_POOL_ACQUIRE: &str = "credential.pool.acquire";
+    pub const CREDENTIAL_POOL_REFRESH: &str = "credential.pool.refresh";
     pub const CREDENTIAL_ROUTING_SETTINGS: &str = "credential.routing.settings";
     pub const CREDENTIAL_ROUTING_PLAN: &str = "credential.routing.plan";
     pub const CREDENTIAL_SECRET_ACQUIRE: &str = "credential.secret.acquire";
     pub const CREDENTIAL_SETTING_GET: &str = "credential.setting.get";
     pub const HOST_SUBAGENTS_EXPORT: &str = "host.subagents.export";
+
+    /// Unified model access (ADR-0019, P2): generic model-gateway stream RPC.
+    /// Catalogue-only until the ModelGateway service is wired.
+    pub const MODEL_GATEWAY_STREAM: &str = "model.gateway.stream";
 }
 
 /// Every advertised Harness method, in the order the design lists them.
@@ -612,6 +624,7 @@ pub const BROKER_LEASE_METHODS: &[&str] = &[
     names::CREDENTIAL_LEASE_REVOKE,
     names::CREDENTIAL_LEASE_STATUS,
     names::CREDENTIAL_POOL_ACQUIRE,
+    names::CREDENTIAL_POOL_REFRESH,
     names::CREDENTIAL_ROUTING_SETTINGS,
     names::CREDENTIAL_ROUTING_PLAN,
     names::CREDENTIAL_SECRET_ACQUIRE,

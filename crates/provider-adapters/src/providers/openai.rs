@@ -268,6 +268,7 @@ impl ProviderAdapter for OpenAiAdapter {
             proxy_url: None,
             key_id: None,
             provider_type: Some("openai".into()),
+            project_id: None,
         })
         .await
     }

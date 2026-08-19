@@ -47,7 +47,9 @@ pub use framing::MAX_FRAME_BYTES;
 pub use server::RpcServer;
 pub(crate) use server::{read_frame, FrameError};
 
-pub(crate) use framing::{send_error, send_rpc_failure, send_success, write_stream_frame};
+pub(crate) use framing::{
+    send_error, send_rpc_failure, send_success, write_json_line, write_stream_frame,
+};
 
 pub(crate) mod handlers {
     pub(crate) mod artifact;
@@ -55,6 +57,7 @@ pub(crate) mod handlers {
     pub(crate) mod conversation;
     pub(crate) mod daemon;
     pub(crate) mod discovery;
+    pub(crate) mod gateway;
     pub(crate) mod harness;
     pub(crate) mod mcp;
     pub(crate) mod permission;

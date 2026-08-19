@@ -70,6 +70,10 @@ pub struct CredentialBrokerResponse {
     /// Host-resolved proxy URL for the provider call (memory-only).
     #[serde(default)]
     pub proxy_url: Option<String>,
+    /// Google Cloud project id for OAuth-backed Cloud Code providers
+    /// (antigravity). Optional — absent for API-key and non-Cloud providers.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Short-lived lease metadata (no secret in lease id).
     #[serde(default)]
     pub lease: Option<CredentialLeaseMeta>,
@@ -248,6 +252,23 @@ pub struct CredentialPoolLeaseResponse {
     pub lease: Option<CredentialLeaseMeta>,
     #[serde(default)]
     pub accounts: Vec<CredentialPoolAccount>,
+}
+
+/// Persist a refreshed OAuth credential (Daemon → Host, ADR-0019 P3). The
+/// daemon refreshes an expiring account in memory and asks the Host to
+/// re-encrypt and store the new tokens — the daemon never writes natives.db
+/// (T104). Tokens never appear in the reply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialPoolRefreshRequest {
+    pub account_id: String,
+    pub credentials: serde_json::Value,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialPoolRefreshResponse {
+    pub ok: bool,
 }
 
 /// Loopback routing-settings lease (Daemon → Host). The bearer token rides in

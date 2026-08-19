@@ -269,6 +269,7 @@ impl ProviderAdapter for GeminiAdapter {
                     proxy_url: None,
                     key_id: None,
                     provider_type: Some("gemini".into()),
+                    project_id: None,
                 },
             )
             .await?;

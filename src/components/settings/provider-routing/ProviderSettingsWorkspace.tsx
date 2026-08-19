@@ -9,6 +9,7 @@ import { ProviderSettingsTabs, type ProviderSettingsTab } from './ProviderSettin
 import { RoutingPanel } from './RoutingPanel';
 import { SubagentProviderSettings } from './SubagentProviderSettings';
 import { Sub2ApiAccountPool } from './Sub2ApiAccountPool';
+import { ProviderOAuthAccounts } from './ProviderOAuthAccounts';
 
 export function ProviderSettingsWorkspace({ locale, providers, management, onProviderCreated }: { locale: Locale; providers: ProviderSummary[]; management: React.ReactNode; onProviderCreated: () => Promise<void> }) {
   const [tab, setTab] = useState<ProviderSettingsTab>('management');
@@ -41,6 +42,8 @@ export function ProviderSettingsWorkspace({ locale, providers, management, onPro
     <ProviderSettingsTabs locale={locale} activeTab={tab} onChange={setTab} />
     {tab === 'management' ? (
       <>{management}<Sub2ApiAccountPool locale={locale} providers={providers} api={api} onProviderCreated={onProviderCreated} /></>
+    ) : tab === 'oauth' ? (
+      <ProviderOAuthAccounts locale={locale} />
     ) : tab === 'subagents' ? (
       <SubagentProviderSettings locale={locale} providers={providers} />
     ) : (

@@ -83,6 +83,7 @@ pub fn resolve_credential_for_run(
                     proxy_url: cred.proxy_url,
                     key_id: cred.key_id.or_else(|| key_id.map(|s| s.to_string())),
                     provider_type: cred.provider_type,
+                    project_id: cred.project_id,
                 });
             }
             Ok(_) => {
@@ -116,6 +117,7 @@ pub fn resolve_credential_for_run(
                 proxy_url: None,
                 key_id: key_id.map(str::to_string),
                 provider_type: Some("anthropic".into()),
+                project_id: None,
             }),
             None => Err(format!(
                 "No credential for provider '{provider_id}' (broker + NATIVES_TEST_ANTHROPIC_KEY unavailable)"
@@ -138,6 +140,7 @@ pub fn resolve_credential_for_run(
             proxy_url: None,
             key_id: key_id.map(str::to_string),
             provider_type: Some("ollama".into()),
+            project_id: None,
         });
     } else {
         ("NATIVES_TEST_OPENAI_KEY", Some("NATIVES_TEST_OPENAI_BASE"))
@@ -193,6 +196,7 @@ pub fn resolve_credential_for_run(
                     }
                     .into(),
                 ),
+                project_id: None,
             })
         }
         None => Err(format!(
@@ -279,6 +283,7 @@ mod run_identity_tests {
                 proxy_url: None,
                 key_id: None,
                 provider_type: Some("openai".into()),
+                project_id: None,
             })
         }));
         let _ = resolve_credential_for_run("openai", None, "run-a").unwrap();

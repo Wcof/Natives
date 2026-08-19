@@ -94,6 +94,24 @@ fn circuit_write_lock() -> &'static Mutex<()> {
     CIRCUIT_WRITE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Decide the primary route target kind for a run (ADR-0019 P4).
+///
+/// When the caller did not select an API key and the provider has a usable
+/// account pool (OAuth-only provider), the primary target must route through
+/// `sub2api_pool` — otherwise `provider_api_keys = 0` + usable OAuth accounts
+/// can never start a run. When a key id is given, or no pool is available,
+/// the existing API-key behaviour is preserved (fail-closed if no key exists).
+fn primary_credential_kind(primary_key: Option<&str>, pool_available: bool) -> &'static str {
+    let has_key_selector = primary_key
+        .map(str::trim)
+        .is_some_and(|key| !key.is_empty() && key != "_primary_");
+    if !has_key_selector && pool_available {
+        "sub2api_pool"
+    } else {
+        "api_key"
+    }
+}
+
 /// Load the route plan via the Host broker lease (T104 / modular remediation
 /// W1). The daemon never opens natives.db — `provider_routing_settings` and
 /// `provider_route_bindings` are Host-owned and served over the authenticated
@@ -104,14 +122,34 @@ pub fn load_plan(
     primary_key: Option<String>,
     primary_model: String,
 ) -> RoutingPlan {
+    let broker = NativesDbBroker::open_default().ok();
+    // OAuth-only fallback probe (ADR-0019 P4): only when the caller did not
+    // select a concrete API key, ask the broker whether this provider has a
+    // usable account pool. Memory-only lease; the daemon never sees token
+    // material. A concrete key_id keeps the pre-existing API-key path without
+    // any extra broker round trip.
+    let unselected_key = primary_key
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|key| key.is_empty() || key == "_primary_");
+    let pool_available = unselected_key
+        && broker.as_ref().is_some_and(|b| {
+            b.resolve_sub2api_pool(&primary_provider)
+                .is_ok_and(|a| !a.is_empty())
+        });
+    let primary_kind = primary_credential_kind(primary_key.as_deref(), pool_available);
     let primary = RouteTarget {
         provider_id: primary_provider,
-        credential_kind: "api_key".into(),
-        credential_id: primary_key,
+        credential_kind: primary_kind.into(),
+        credential_id: if primary_kind == "api_key" {
+            primary_key
+        } else {
+            None
+        },
         model_id: primary_model,
     };
-    match NativesDbBroker::open_default().and_then(|b| b.routing_plan("engine")) {
-        Ok(plan) => configured_plan(
+    match broker.and_then(|b| b.routing_plan("engine").ok()) {
+        Some(plan) => configured_plan(
             primary,
             plan.enabled,
             plan.targets
@@ -124,7 +162,7 @@ pub fn load_plan(
                 })
                 .collect(),
         ),
-        Err(_) => {
+        None => {
             // Broker unreachable → fail closed to the primary target only.
             configured_plan(primary, false, Vec::new())
         }
@@ -405,11 +443,7 @@ impl Sub2ApiPoolProvider {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             messages.iter().for_each(|message| { message.role.hash(&mut hasher); message.content.hash(&mut hasher); });
             let affinity = hasher.finish();
-            accounts.sort_by_key(|account| (account.priority, inflight().lock().ok().and_then(|map| map.get(&account.id).copied()).unwrap_or(0)));
-            if let Some(priority) = accounts.first().map(|account| account.priority) {
-                let width = accounts.iter().take_while(|account| account.priority == priority).count();
-                if width > 1 { accounts[..width].rotate_left((affinity as usize) % width); }
-            }
+            order_pool_accounts(&mut accounts, affinity);
             for account in accounts {
                 if cancel.is_cancelled() { return; }
                 let account_target = RouteTarget {
@@ -449,6 +483,35 @@ impl Sub2ApiPoolProvider {
     }
 }
 
+/// Order a pool's accounts for selection (P5 routing policy, single executor):
+/// 1. ascending `priority` (lower number first), then fewest in-flight;
+/// 2. within the top-priority tier, rotate by the message-derived session
+///    affinity so equal-priority accounts share load but stick to a session.
+///
+/// Pure over the account list — the in-flight tie-break reads the global
+/// inflight map (bounded), so it stays deterministic for equal-priority pools
+/// with no in-flight requests.
+fn order_pool_accounts(accounts: &mut [Sub2ApiAccountCredential], affinity: u64) {
+    accounts.sort_by_key(|account| {
+        let inflight_count = inflight()
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&account.id).copied())
+            .unwrap_or(0);
+        (account.priority, inflight_count)
+    });
+    let Some(priority) = accounts.first().map(|account| account.priority) else {
+        return;
+    };
+    let width = accounts
+        .iter()
+        .take_while(|account| account.priority == priority)
+        .count();
+    if width > 1 {
+        accounts[..width].rotate_left((affinity as usize) % width);
+    }
+}
+
 async fn account_stream_history(
     account: &Sub2ApiAccountCredential,
     controls: &RequestControls,
@@ -459,8 +522,8 @@ async fn account_stream_history(
     cancel: CancellationToken,
 ) -> Result<EngineProviderEventStream, EngineError> {
     let mut account = account.clone();
-    if account.platform == "openai" && account.account_type == "oauth" && oauth_expiring(&account) {
-        refresh_codex_account(&mut account).await?;
+    if account.account_type == "oauth" && oauth_expiring(&account) {
+        refresh_oauth_account(&mut account).await?;
     }
     let mut request = ProviderRequest {
         model: model.to_string(),
@@ -518,6 +581,7 @@ async fn account_stream_history(
             proxy_url: account.proxy_url.clone(),
             key_id: Some(account.id.clone()),
             provider_type: Some(protocol_for(&account).into()),
+            project_id: None,
         };
         adapter_for(&account).stream(request, credential).await
     }
@@ -591,19 +655,23 @@ fn oauth_expiring(account: &Sub2ApiAccountCredential) -> bool {
         .unwrap_or(true)
 }
 
-async fn refresh_codex_account(account: &mut Sub2ApiAccountCredential) -> Result<(), EngineError> {
+async fn refresh_oauth_account(account: &mut Sub2ApiAccountCredential) -> Result<(), EngineError> {
     let refresh_token = optional_credential(account, "refresh_token")
         .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| {
-            oauth_pool_error("OpenAI OAuth access token expired and has no refresh token")
-        })?;
+        .ok_or_else(|| oauth_pool_error("OAuth access token expired and has no refresh token"))?;
+    // Generic OAuth accounts carry their own token endpoint + client id (stored
+    // by the Host `provider_oauth_start`); legacy Codex accounts fall back to
+    // the shared OpenAI OAuth constants.
+    let token_url = optional_credential(account, "token_url")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| CODEX_OAUTH_TOKEN_URL.into());
     let client_id = optional_credential(account, "client_id")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| CODEX_CLIENT_ID.into());
     let client = provider_adapters::http_client::client(account.proxy_url.as_deref())
         .map_err(|_| oauth_pool_error("outbound proxy is unavailable for OAuth refresh"))?;
     let response = client
-        .post(CODEX_OAUTH_TOKEN_URL)
+        .post(token_url)
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token.as_str()),
@@ -611,19 +679,19 @@ async fn refresh_codex_account(account: &mut Sub2ApiAccountCredential) -> Result
         ])
         .send()
         .await
-        .map_err(|_| oauth_pool_error("OpenAI OAuth refresh request failed"))?;
+        .map_err(|_| oauth_pool_error("OAuth refresh request failed"))?;
     if !response.status().is_success() {
-        return Err(oauth_pool_error("OpenAI OAuth refresh was rejected"));
+        return Err(oauth_pool_error("OAuth refresh was rejected"));
     }
     let payload: Value = response
         .json()
         .await
-        .map_err(|_| oauth_pool_error("OpenAI OAuth refresh returned invalid data"))?;
+        .map_err(|_| oauth_pool_error("OAuth refresh returned invalid data"))?;
     let access_token = payload
         .get("access_token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| oauth_pool_error("OpenAI OAuth refresh returned no access token"))?;
+        .ok_or_else(|| oauth_pool_error("OAuth refresh returned no access token"))?;
     let expires_at = payload
         .get("expires_in")
         .and_then(Value::as_i64)
@@ -633,7 +701,7 @@ async fn refresh_codex_account(account: &mut Sub2ApiAccountCredential) -> Result
     let credentials = account
         .credentials
         .as_object_mut()
-        .ok_or_else(|| oauth_pool_error("OpenAI OAuth credentials are invalid"))?;
+        .ok_or_else(|| oauth_pool_error("OAuth credentials are invalid"))?;
     credentials.insert(
         "access_token".into(),
         Value::String(access_token.to_string()),
@@ -985,6 +1053,62 @@ mod tests {
             Some(v) => std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v),
             None => std::env::remove_var("NATIVES_ASSISTANT_DB_PATH"),
         }
+    }
+
+    #[test]
+    fn primary_credential_kind_falls_back_to_pool_for_oauth_only_provider() {
+        // No key selected + usable pool → OAuth-only provider routes via pool.
+        assert_eq!(primary_credential_kind(None, true), "sub2api_pool");
+        assert_eq!(primary_credential_kind(Some(""), true), "sub2api_pool");
+        // Explicit key id keeps the API-key path even when a pool exists.
+        assert_eq!(primary_credential_kind(Some("k1"), true), "api_key");
+        assert_eq!(primary_credential_kind(Some("k1"), false), "api_key");
+        // No key and no pool → API-key path preserved (fail-closed downstream).
+        assert_eq!(primary_credential_kind(None, false), "api_key");
+        assert_eq!(
+            primary_credential_kind(Some("_primary_"), true),
+            "sub2api_pool"
+        );
+    }
+
+    fn account(id: &str, priority: i64) -> Sub2ApiAccountCredential {
+        Sub2ApiAccountCredential {
+            id: id.into(),
+            provider_id: "p".into(),
+            platform: "openai".into(),
+            account_type: "oauth".into(),
+            credentials: serde_json::json!({}),
+            extra: serde_json::json!({}),
+            priority,
+            concurrency: 1,
+            expires_at: None,
+            proxy_url: None,
+        }
+    }
+
+    #[test]
+    fn order_pool_accounts_prioritizes_lower_priority_first() {
+        let mut accounts = vec![account("a", 5), account("b", 1), account("c", 3)];
+        order_pool_accounts(&mut accounts, 0);
+        let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn order_pool_accounts_rotates_equal_priority_tier_by_affinity() {
+        let mut accounts = vec![account("a", 0), account("b", 0), account("c", 0)];
+        order_pool_accounts(&mut accounts, 1);
+        let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "c", "a"], "affinity=1 rotates the top tier");
+        // A different affinity shifts the same tier without reordering it.
+        let mut accounts = vec![account("a", 0), account("b", 0), account("c", 0)];
+        order_pool_accounts(&mut accounts, 2);
+        let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "a", "b"]);
+        // Single-account tier stays put regardless of affinity.
+        let mut accounts = vec![account("a", 0)];
+        order_pool_accounts(&mut accounts, 999);
+        assert_eq!(accounts[0].id, "a");
     }
 
     #[test]

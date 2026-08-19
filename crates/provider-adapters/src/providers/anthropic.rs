@@ -438,6 +438,7 @@ impl ProviderAdapter for AnthropicAdapter {
                     proxy_url: None,
                     key_id: None,
                     provider_type: Some("anthropic".into()),
+                    project_id: None,
                 },
             )
             .await?;

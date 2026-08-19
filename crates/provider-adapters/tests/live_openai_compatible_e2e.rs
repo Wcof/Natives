@@ -40,6 +40,7 @@ fn credential() -> Credential {
         proxy_url: None,
         key_id: Some("live-e2e".into()),
         provider_type: Some("openai_compatible".into()),
+        project_id: None,
     }
 }
 

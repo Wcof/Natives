@@ -140,7 +140,9 @@ pub(crate) fn conversation_project_path(
         .ok_or_else(|| format!("conversation has no project identity: {conversation_id}"))?;
     crate::project_identity::store::verify_for_invocation(conn, project_id)
         .map(|identity| identity.canonical_path)
-        .map_err(|error| format!("project identity verification failed for {conversation_id}: {error}"))
+        .map_err(|error| {
+            format!("project identity verification failed for {conversation_id}: {error}")
+        })
 }
 
 pub(crate) fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
@@ -236,15 +238,20 @@ pub async fn on_run_terminal(
             let store = store()?;
             let (provider_id, model_id, project_path) = {
                 let conn = store.conn()?;
-                let (provider_id, model_id) = conn.query_row(
-                    "SELECT provider_id, model_id FROM conversation WHERE id = ?1",
-                    params![conversation_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                let (provider_id, model_id) = conn
+                    .query_row(
+                        "SELECT provider_id, model_id FROM conversation WHERE id = ?1",
+                        params![conversation_id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("conversation not found: {conversation_id}"))?;
+                (
+                    provider_id,
+                    model_id,
+                    conversation_project_path(&conn, conversation_id)?,
                 )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("conversation not found: {conversation_id}"))?;
-                (provider_id, model_id, conversation_project_path(&conn, conversation_id)?)
             };
 
             let start_req = StartRunRequest {

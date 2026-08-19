@@ -68,6 +68,7 @@ impl ProviderAdapter for OllamaAdapter {
                     proxy_url: None,
                     key_id: None,
                     provider_type: Some("ollama".into()),
+                    project_id: None,
                 },
             )
             .await?;

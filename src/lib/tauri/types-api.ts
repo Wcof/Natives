@@ -667,6 +667,16 @@ export interface NativesAPI {
   mcpOauth: {
     start: (data: { serverId: string; authorizeUrl: string; tokenUrl: string; clientId: string; scopes?: string[]; redirectPort?: number }) => Promise<{ ok: boolean; hasRefresh: boolean }>;
   };
+  /** Provider OAuth 浏览器流 (ADR-0019 P3) — Host 侧 PKCE；Renderer 只拿安全 session 状态，绝不见 token */
+  providerOauth: {
+    start: (data: { providerId: string; platform?: string; authorizeUrl?: string; tokenUrl?: string; clientId?: string; scopes?: string[]; redirectPort?: number; identity?: string; accountName?: string; clientSecret?: string; projectId?: string }) => Promise<{ ok: boolean; accountId: string; state: string; hasRefresh: boolean }>;
+    status: (data: { providerId: string }) => Promise<Array<{ id: string; name: string; platform: string; status: string; expiresAt: string | null; hasRefresh: boolean; projectId?: string | null; email?: string | null }>>;
+    setProjectId: (data: { providerId: string; accountId: string; projectId: string }) => Promise<{ ok: boolean }>;
+    disconnect: (data: { providerId: string; accountId: string }) => Promise<{ ok: boolean }>;
+    refresh: (data: { providerId: string; accountId: string }) => Promise<{ ok: boolean; state: string; hasRefresh: boolean }>;
+    deviceStart: (data: { providerId: string; platform?: string; clientId?: string; accountName?: string; identity?: string }) => Promise<{ ok: boolean; sessionId: string; userCode: string; verificationUri: string; verificationUriComplete: string | null; expiresIn: number; interval: number }>;
+    devicePoll: (data: { sessionId: string }) => Promise<{ status: 'pending' | 'connected' | 'expired'; accountId?: string | null; state?: string | null; hasRefresh?: boolean | null; expiresIn?: number | null; interval?: number | null }>;
+  };
   /** Job module（任务）— 契约 v1：8 个 job_* 命令，JSON snake_case；强类型见 src/lib/jobs-api.ts */
   jobs: {
     list: () => Promise<unknown>;

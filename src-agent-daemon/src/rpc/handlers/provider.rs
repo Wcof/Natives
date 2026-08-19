@@ -15,6 +15,11 @@ pub(crate) fn resolve_provider_adapter(
     provider_id: &str,
 ) -> Option<Box<dyn provider_adapters::ProviderAdapter>> {
     let needle = provider_id.to_ascii_lowercase();
+    if needle.contains("antigravity") {
+        return Some(Box::new(
+            provider_adapters::providers::antigravity::AntigravityAdapter::new(),
+        ));
+    }
     provider_adapters::register_all().into_iter().find(|p| {
         let t = format!("{:?}", p.provider_type()).to_ascii_lowercase();
         t == needle
@@ -181,6 +186,7 @@ mod tests {
                 proxy_url: None,
                 key_id: Some("k".into()),
                 provider_type: Some("openai_compatible".into()),
+                project_id: None,
             },
             "model-under-test",
         )
@@ -206,6 +212,7 @@ mod tests {
                 proxy_url: None,
                 key_id: Some("k".into()),
                 provider_type: Some("openai_compatible".into()),
+                project_id: None,
             },
             "empty-model",
         )

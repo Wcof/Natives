@@ -58,6 +58,7 @@ fn credential_broker_install_is_invoked_before_env() {
                     proxy_url: None,
                     key_id: Some(key_id.unwrap_or("broker-key-1").to_string()),
                     provider_type: Some("openai_compatible".into()),
+                    project_id: None,
                 })
             },
         ));

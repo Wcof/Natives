@@ -71,6 +71,18 @@ pub(crate) async fn write_stream_frame(
     writer.write_all(b"\n").await
 }
 
+/// Write one `Serialize` value as a newline-delimited JSON line. Generic over
+/// the payload so non-`run.watch` streams (e.g. `model.gateway.stream`) share
+/// the same framing without a bespoke writer (R-B3).
+pub(crate) async fn write_json_line(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    value: &impl serde::Serialize,
+) -> std::io::Result<()> {
+    let json = serde_json::to_string(value).unwrap_or_default();
+    writer.write_all(json.as_bytes()).await?;
+    writer.write_all(b"\n").await
+}
+
 /// Send an error response.
 pub(crate) async fn send_error(
     writer: &mut tokio::net::unix::OwnedWriteHalf,

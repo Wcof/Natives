@@ -16,7 +16,7 @@
 //! - Errors are redacted before they leave the module.
 
 use crate::error::{Error, Result};
-use crate::provider_key_manager::envelope_decrypt;
+use crate::provider_key_manager::{envelope_decrypt, envelope_encrypt};
 use assistant_protocol::v2::credential as wire;
 use assistant_protocol::v2::methods::names;
 use rusqlite::OptionalExtension;
@@ -58,6 +58,7 @@ pub struct CredentialBrokerResponse {
     pub api_key: String,
     pub base_url: Option<String>,
     pub provider_type: Option<String>,
+    pub project_id: Option<String>,
     /// Short-lived lease (no key material); bound to run_id.
     #[serde(default)]
     pub lease: Option<CredentialLeaseMeta>,
@@ -100,6 +101,7 @@ pub fn resolve_for_daemon(
             proxy_url: global_proxy_for_daemon().ok().flatten(),
             key_id: Some(resp.key_id),
             provider_type: resp.provider_type,
+            project_id: resp.project_id,
         }),
         Err(e) => {
             let msg = redact_broker_error(&format!("{e}"));
@@ -174,6 +176,83 @@ pub use crate::credential_broker_lease::{lease_registry, CredentialLeaseRegistry
 // tauri command below.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Resolve an OAuth account (account_type='oauth') into a lease response, used
+/// as the fallback when a provider has no API key but an active OAuth account
+/// (e.g. antigravity). Returns the access_token as `api_key` — never logged.
+fn resolve_oauth_lease(
+    db: &rusqlite::Connection,
+    req: &wire::CredentialBrokerRequest,
+) -> std::result::Result<wire::CredentialBrokerResponse, String> {
+    let row = db
+        .query_row(
+            "SELECT a.id, a.credentials_encrypted, a.dek_encrypted, p.base_url,
+                    COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
+             FROM provider_accounts a
+             JOIN user_providers p ON a.provider_id = p.id
+             WHERE a.provider_id = ?1 AND a.account_type = 'oauth' AND a.status = 'active'
+               AND (a.expires_at IS NULL OR a.expires_at = '' OR a.expires_at > datetime('now'))
+             ORDER BY a.priority ASC, a.created_at ASC
+             LIMIT 1",
+            rusqlite::params![req.provider_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| redact_broker_error(&format!("OAuth account query failed: {e}")))?;
+    let Some((account_id, encrypted, dek, base_url, provider_type)) = row else {
+        return Err(redact_broker_error(&format!(
+            "No active key for provider {}",
+            req.provider_id
+        )));
+    };
+    let plaintext = envelope_decrypt(&encrypted, &dek, db)
+        .map_err(|e| redact_broker_error(&format!("OAuth decrypt failed: {e}")))?;
+    let creds: serde_json::Value = serde_json::from_str(&plaintext).map_err(|_| {
+        redact_broker_error(&format!(
+            "OAuth account '{account_id}' has invalid credentials"
+        ))
+    })?;
+    let api_key = creds
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if api_key.trim().is_empty() {
+        return Err(redact_broker_error(
+            "OAuth account has no access_token".into(),
+        ));
+    }
+    let project_id = creds
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let lease = lease_registry().issue(
+        &req.provider_id,
+        &account_id,
+        &req.run_id,
+        req.session_id.clone(),
+        wire::CredentialLeaseMeta::default_ttl(),
+    );
+    let proxy_url = global_proxy_for_daemon().ok().flatten();
+    Ok(wire::CredentialBrokerResponse {
+        key_id: account_id,
+        provider_id: req.provider_id.clone(),
+        api_key,
+        base_url,
+        provider_type,
+        proxy_url,
+        project_id,
+        lease: Some(lease),
+    })
+}
+
 /// Acquire one Run-bound short-TTL lease: validate, decrypt from natives.db,
 /// register the lease, persist lease metadata, return the material + lease.
 pub fn broker_acquire_lease(
@@ -227,11 +306,13 @@ pub fn broker_acquire_lease(
                 },
             )
         })
-        .map_err(|_| {
-            redact_broker_error(&format!("No active key for provider {}", req.provider_id))
-        })?;
+        .optional()
+        .map_err(|e| redact_broker_error(&format!("Credential query failed: {e}")))?;
 
-    let (key_id, encrypted_key, dek_encrypted, base_url, provider_type) = row;
+    let Some((key_id, encrypted_key, dek_encrypted, base_url, provider_type)) = row else {
+        // No API key — fall back to an active OAuth account (e.g. antigravity).
+        return resolve_oauth_lease(&db, &req);
+    };
     let api_key = envelope_decrypt(&encrypted_key, &dek_encrypted, &db).map_err(|e| {
         redact_broker_error(&format!(
             "Failed to decrypt key for provider {} (run {}): {e}",
@@ -271,6 +352,7 @@ pub fn broker_acquire_lease(
         base_url,
         provider_type,
         proxy_url,
+        project_id: None,
         lease: Some(lease),
     })
 }
@@ -391,6 +473,44 @@ pub fn broker_pool_acquire(
         lease: Some(lease),
         accounts,
     })
+}
+
+/// Persist refreshed OAuth tokens (Daemon → Host, ADR-0019 P3). Re-encrypts the
+/// daemon-supplied credentials with a fresh envelope and updates the account
+/// row in place; the daemon only ever handed over the decrypted value over the
+/// authenticated socket, so nothing extra is re-encrypted here. Fail-closed on
+/// unknown account id.
+pub fn broker_pool_refresh(
+    req: wire::CredentialPoolRefreshRequest,
+) -> std::result::Result<wire::CredentialPoolRefreshResponse, String> {
+    if req.account_id.trim().is_empty() {
+        return Err("account_id is required".into());
+    }
+    let db = crate::db::get_main_conn()
+        .map_err(|e| redact_broker_error(&format!("DB connection failed: {e}")))?;
+    let credentials_json = serde_json::to_string(&req.credentials)
+        .map_err(|_| redact_broker_error("OAuth refresh credentials are invalid"))?;
+    let (credentials_encrypted, dek_encrypted) = envelope_encrypt(&credentials_json, &db)
+        .map_err(|e| redact_broker_error(&format!("OAuth refresh encryption failed: {e}")))?;
+    let updated = db
+        .execute(
+            "UPDATE provider_accounts
+             SET credentials_encrypted = ?1, dek_encrypted = ?2, expires_at = ?3,
+                 status = 'active', updated_at = ?4
+             WHERE id = ?5 AND account_type = 'oauth'",
+            rusqlite::params![
+                credentials_encrypted,
+                dek_encrypted,
+                req.expires_at,
+                crate::provider_accounts_parse::now(),
+                req.account_id,
+            ],
+        )
+        .map_err(|e| redact_broker_error(&format!("OAuth refresh persist failed: {e}")))?;
+    if updated == 0 {
+        return Err("oauth account not found for refresh".into());
+    }
+    Ok(wire::CredentialPoolRefreshResponse { ok: true })
 }
 
 /// Acquire Host-owned loopback routing settings as a lease (Daemon → Host).
@@ -678,6 +798,12 @@ pub fn dispatch_broker_uds(
             broker_pool_acquire(req)
                 .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
         }
+        names::CREDENTIAL_POOL_REFRESH => {
+            let req: wire::CredentialPoolRefreshRequest = serde_json::from_value(envelope.payload)
+                .map_err(|e| redact_broker_error(&e.to_string()))?;
+            broker_pool_refresh(req)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
         names::CREDENTIAL_ROUTING_SETTINGS => {
             let req: wire::LoopbackSettingsLeaseRequest = serde_json::from_value(envelope.payload)
                 .map_err(|e| redact_broker_error(&e.to_string()))?;
@@ -745,6 +871,7 @@ pub async fn credential_broker_resolve(
             api_key: resp.api_key,
             base_url: resp.base_url,
             provider_type: resp.provider_type,
+            project_id: resp.project_id,
             lease: resp.lease.map(|l| CredentialLeaseMeta {
                 lease_id: l.lease_id,
                 provider_id: l.provider_id,

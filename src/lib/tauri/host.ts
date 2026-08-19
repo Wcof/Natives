@@ -233,6 +233,24 @@ export const mcpOauth: NativesAPI['mcpOauth'] = {
       cmd<{ ok: boolean; hasRefresh: boolean }>('mcp_oauth_start', { input: data }),
 };
 
+  // ── Provider OAuth 浏览器流 (ADR-0019 P3) ──
+export const providerOauth: NativesAPI['providerOauth'] = {
+    start: (data: { providerId: string; platform?: string; authorizeUrl?: string; tokenUrl?: string; clientId?: string; scopes?: string[]; redirectPort?: number; identity?: string; accountName?: string; clientSecret?: string; projectId?: string }) =>
+      cmd<{ ok: boolean; accountId: string; state: string; hasRefresh: boolean }>('provider_oauth_start', { input: data }),
+    status: (data: { providerId: string }) =>
+      cmd<Array<{ id: string; name: string; platform: string; status: string; expiresAt: string | null; hasRefresh: boolean; projectId?: string | null; email?: string | null }>>('provider_oauth_status', { input: data }),
+    setProjectId: (data: { providerId: string; accountId: string; projectId: string }) =>
+      cmd<{ ok: boolean }>('provider_oauth_set_project_id', { input: data }),
+    disconnect: (data: { providerId: string; accountId: string }) =>
+      cmd<{ ok: boolean }>('provider_oauth_disconnect', { input: data }),
+    refresh: (data: { providerId: string; accountId: string }) =>
+      cmd<{ ok: boolean; state: string; hasRefresh: boolean }>('provider_oauth_refresh', { input: data }),
+    deviceStart: (data: { providerId: string; platform?: string; clientId?: string; accountName?: string; identity?: string }) =>
+      cmd<{ ok: boolean; sessionId: string; userCode: string; verificationUri: string; verificationUriComplete: string | null; expiresIn: number; interval: number }>('provider_oauth_device_start', { input: data }),
+    devicePoll: (data: { sessionId: string }) =>
+      cmd<{ status: 'pending' | 'connected' | 'expired'; accountId?: string | null; state?: string | null; hasRefresh?: boolean | null; expiresIn?: number | null; interval?: number | null }>('provider_oauth_device_poll', { input: data }),
+};
+
   // FOUC Guard
 export const themeReady: NativesAPI['themeReady'] = () => {
     // Tauri: emit event to signal theme readiness

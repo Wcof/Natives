@@ -3,17 +3,40 @@ import test from 'node:test';
 
 import { classifyAssistantSurface, groupAssistantConversations, orderGroupsWithPins, projectCreationState } from './assistant-project-groups';
 
-test('groups conversations by their real project directory and keeps unassigned data explicit', () => {
+test('groups conversations by their registered project directory and hides no-project sessions', () => {
   const groups = groupAssistantConversations([
     { id: 'b', projectId: '/work/beta', updatedAt: '2026-07-12T10:00:00Z', title: 'B' },
     { id: 'a', projectId: '/work/alpha', updatedAt: '2026-07-12T11:00:00Z', title: 'A' },
     { id: 'u', projectId: '', updatedAt: '2026-07-12T12:00:00Z', title: 'U' },
-  ]);
-  assert.deepEqual(groups.map((g) => g.path), ['/work/alpha', '/work/beta', null]);
+  ], ['/work/alpha', '/work/beta']);
+  assert.deepEqual(groups.map((g) => g.path), ['/work/alpha', '/work/beta']);
   assert.deepEqual(groups[0]!.conversations.map((c) => c.id), ['a']);
   assert.deepEqual(groups[1]!.conversations.map((c) => c.id), ['b']);
-  assert.deepEqual(groups[2]!.conversations.map((c) => c.id), ['u']);
-  assert.equal(groups[2]!.label, 'Unassigned');
+  assert.ok(!groups.some((g) => g.path === null), 'no unassigned bucket');
+});
+
+test('unregistered legacy UUID project_id is hidden, never a fake project node', () => {
+  // A daemon session may carry a legacy project_id (a UUID) that never matches a
+  // registered project. It must be hidden entirely — neither re-invented as a
+  // project node nor surfaced in an unassigned bucket.
+  const groups = groupAssistantConversations(
+    [{ id: 'orphan', projectId: '79782adb-bbea-4e3e-8542-3a9002df1f2c', updatedAt: '2026-07-12T12:00:00Z', title: 'Orphan' }],
+    ['/work/real'],
+  );
+  assert.equal(groups.length, 1, 'only the registered project remains');
+  assert.equal(groups[0]!.path, '/work/real');
+  assert.ok(!groups.some((g) => g.path === '79782adb-bbea-4e3e-8542-3a9002df1f2c'), 'UUID must not become a project path');
+  assert.ok(!groups.some((g) => g.path === null), 'no unassigned bucket');
+});
+
+test('unregistered path project_id is hidden', () => {
+  const groups = groupAssistantConversations(
+    [{ id: 'orphan', projectId: '/project/test', updatedAt: '2026-07-12T12:00:00Z', title: 'Orphan' }],
+    ['/work/real'],
+  );
+  assert.equal(groups.length, 1, 'only the registered project remains');
+  assert.ok(!groups.some((g) => g.path === '/project/test'), 'unregistered path must not become a project path');
+  assert.ok(!groups.some((g) => g.path === null), 'no unassigned bucket');
 });
 
 test('registered projects appear even without conversations', () => {
@@ -56,18 +79,16 @@ test('sorts conversations inside a project by latest activity', () => {
   const [group] = groupAssistantConversations([
     { id: 'older', projectId: '/work/app', updatedAt: '2026-07-12T10:00:00Z', title: 'Older' },
     { id: 'newer', projectId: '/work/app', updatedAt: '2026-07-12T11:00:00Z', title: 'Newer' },
-  ]);
+  ], ['/work/app']);
   assert.deepEqual(group?.conversations.map(conversation => conversation.id), ['newer', 'older']);
 });
 
-test('conversations whose registered project directory is gone move to unassigned', () => {
+test('conversations whose registered project directory is gone are hidden', () => {
   const groups = groupAssistantConversations(
     [{ id: 'lost', projectId: '/Volumes/Offline/project', updatedAt: '2026-07-12T12:00:00Z', title: 'Lost' }],
     [{ path: '/Volumes/Offline/project', exists: false }],
   );
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0]!.path, null);
-  assert.deepEqual(groups[0]!.conversations.map((conversation) => conversation.id), ['lost']);
+  assert.equal(groups.length, 0, 'physically-deleted project session is hidden entirely');
 });
 
 test('soft-deleted (hidden) project never reappears from daemon project_id', () => {
@@ -80,7 +101,6 @@ test('soft-deleted (hidden) project never reappears from daemon project_id', () 
       { id: 'visible-session', projectId: '/work/visible', updatedAt: '2026-07-12T11:00:00Z', title: 'Visible' },
     ],
     [{ path: '/work/visible', exists: true }],
-    'Unassigned',
     ['/work/hidden'],
   );
   assert.equal(groups.length, 1, 'hidden project must not create a group');
@@ -92,7 +112,6 @@ test('hidden project sessions never fall into unassigned', () => {
   const groups = groupAssistantConversations(
     [{ id: 'hidden-session', projectId: '/work/hidden', updatedAt: '2026-07-12T12:00:00Z', title: 'Hidden' }],
     [],
-    'Unassigned',
     ['/work/hidden'],
   );
   assert.equal(groups.length, 0, 'hidden session must be filtered out entirely');
@@ -102,7 +121,6 @@ test('hidden project matches a daemon path with trailing slashes', () => {
   const groups = groupAssistantConversations(
     [{ id: 'legacy-session', projectId: '/work/hidden/', updatedAt: '2026-07-12T12:00:00Z', title: 'Legacy hidden' }],
     [],
-    'Unassigned',
     ['/work/hidden'],
   );
   assert.equal(groups.length, 0, 'equivalent path forms must not revive a hidden project');
@@ -129,23 +147,14 @@ test('keeps page, engine, and provider setup states distinct', () => {
   assert.equal(classifyAssistantSurface({ bridge: true, engine: 'ready', provider: 'ready' }), 'ready');
 });
 
-test('unassigned group always sorted last', () => {
-  const result = groupAssistantConversations([
-    { id: 'u1', projectId: '', updatedAt: '2026-07-12T12:00:00Z', title: 'Unassigned' },
-    { id: 'p1', projectId: '/work/proj', updatedAt: '2026-07-12T10:00:00Z', title: 'Project' },
-  ]);
-  assert.equal(result.length, 2);
-  // Unassigned should be last
-  assert.equal(result[1]!.path, null);
-});
-
-test('projectId null and empty both treated as unassigned', () => {
+test('projectId null and empty both hidden (no unassigned bucket)', () => {
   const result = groupAssistantConversations([
     { id: 'null-proj', projectId: null as unknown as string, updatedAt: '2026-07-12T12:00:00Z', title: 'Null' },
     { id: 'empty-proj', projectId: '', updatedAt: '2026-07-12T11:00:00Z', title: 'Empty' },
-  ]);
-  const unassignedGroup = result.find(g => g.path === null)!;
-  assert.equal(unassignedGroup.conversations.length, 2);
+  ], ['/work/proj']);
+  assert.equal(result.length, 1, 'only the registered project remains');
+  assert.equal(result[0]!.path, '/work/proj');
+  assert.equal(result[0]!.conversations.length, 0, 'no-project sessions are hidden');
 });
 
 
@@ -168,7 +177,7 @@ test('pinned conversations float within their project only', () => {
   const [group] = groupAssistantConversations([
     { id: 'older-pin', projectId: '/work/app', updatedAt: '2026-07-12T09:00:00Z', title: 'Older', pinned: true },
     { id: 'newer', projectId: '/work/app', updatedAt: '2026-07-12T11:00:00Z', title: 'Newer' },
-  ]);
+  ], ['/work/app']);
   assert.deepEqual(group?.conversations.map((c) => c.id), ['older-pin', 'newer']);
 });
 

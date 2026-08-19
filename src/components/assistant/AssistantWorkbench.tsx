@@ -297,7 +297,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   // --- Navigation + runtime publishers (C3) ---
   useAssistantWorkbenchPublishers({
-    locale,
     rootConversationId,
     activeId,
     activeProjectPath,

@@ -85,6 +85,7 @@ impl ProviderAdapter for DeepSeekAdapter {
                     proxy_url: None,
                     key_id: None,
                     provider_type: Some("deepseek".into()),
+                    project_id: None,
                 },
             )
             .await?;

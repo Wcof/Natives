@@ -122,6 +122,133 @@ fn run_start_is_always_host_owned() {
     assert!(!daemon_owned_method("artifact.open"));
 }
 
+/// P1: an OAuth-only provider (zero API keys, active non-expired account row)
+/// must be listed and pass the run.start preflight (`has_usable_credential`).
+#[test]
+fn oauth_only_provider_passes_preflight_and_is_listed() {
+    let _g = daemon_env_lock();
+    let main_pool_dir =
+        std::env::temp_dir().join(format!("natives-oauth-main-{}.db", uuid::Uuid::new_v4()));
+    let main_pool = crate::db::init_db_pool(&main_pool_dir).expect("init main pool");
+    {
+        let conn = main_pool.get().expect("main conn");
+        conn.execute_batch(
+            "ALTER TABLE user_providers ADD COLUMN default_model TEXT;
+             ALTER TABLE provider_api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;
+             INSERT INTO user_providers
+                 (id, preset_name, api_protocol, name, website_url, base_url,
+                  default_model, created_at, updated_at)
+             VALUES ('oauth1', 'openai', 'openai_responses', 'OAuth Only',
+                     '', '', 'gpt-5.6', datetime('now'), datetime('now'));
+             INSERT INTO provider_accounts
+                 (id, provider_id, name, platform, account_type, credentials_encrypted,
+                  dek_encrypted, extra_json, concurrency, priority, expires_at, status,
+                  identity_fingerprint, created_at, updated_at)
+             VALUES ('acc1', 'oauth1', 'account-a', 'openai', 'oauth',
+                     'enc', 'dek', '{}', 1, 0, NULL, 'active',
+                     'fp-1', datetime('now'), datetime('now'));",
+        )
+        .expect("seed natives.db OAuth-only provider");
+    }
+    crate::db::register_main_pool(main_pool);
+
+    // provider.list must include the OAuth-only provider with usable credential.
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let response = rt.block_on(dispatch_rpc("provider.list", &serde_json::json!({})));
+    assert!(
+        response.success,
+        "provider.list failed: {:?}",
+        response.error
+    );
+    let providers = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("providers"))
+        .and_then(|v| v.as_array())
+        .expect("providers array");
+    let oauth = providers
+        .iter()
+        .find(|p| p["id"] == "oauth1")
+        .expect("oauth-only provider listed");
+    assert_eq!(oauth["has_active_key"], false, "no API key");
+    assert_eq!(
+        oauth["has_usable_credential"], true,
+        "usable via account pool"
+    );
+
+    // run.start preflight must accept the OAuth-only pair (has_usable_credential).
+    assert!(super::provider_catalog::provider_model_pair_available(
+        "oauth1", "gpt-5.6"
+    ));
+
+    crate::db::clear_main_pool_for_tests();
+    let _ = std::fs::remove_file(&main_pool_dir);
+}
+
+/// P3: the Host broker's `credential.pool.refresh` path re-encrypts and persists
+/// refreshed OAuth tokens in place — un-blocking the daemon's on-demand OAuth
+/// refresh (previously a fail-closed stub).
+#[test]
+fn broker_pool_refresh_persists_reencrypted_tokens() {
+    let _g = daemon_env_lock();
+    let main_pool_dir =
+        std::env::temp_dir().join(format!("natives-refresh-main-{}.db", uuid::Uuid::new_v4()));
+    let main_pool = crate::db::init_db_pool(&main_pool_dir).expect("init main pool");
+    {
+        let conn = main_pool.get().expect("main conn");
+        conn.execute_batch(
+            "ALTER TABLE user_providers ADD COLUMN default_model TEXT;
+             ALTER TABLE provider_api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;
+             INSERT INTO user_providers
+                 (id, preset_name, api_protocol, name, website_url, base_url,
+                  default_model, created_at, updated_at)
+             VALUES ('oauth1', 'openai', 'openai_responses', 'OAuth Only',
+                     '', '', 'gpt-5.6', datetime('now'), datetime('now'));
+             INSERT INTO provider_accounts
+                 (id, provider_id, name, platform, account_type, credentials_encrypted,
+                  dek_encrypted, extra_json, concurrency, priority, expires_at, status,
+                  identity_fingerprint, created_at, updated_at)
+             VALUES ('acc1', 'oauth1', 'account-a', 'openai', 'oauth',
+                     'enc', 'dek', '{}', 1, 0, NULL, 'active',
+                     'fp-1', datetime('now'), datetime('now'));",
+        )
+        .expect("seed natives.db OAuth account");
+    }
+    crate::db::register_main_pool(main_pool);
+
+    let new_credentials = serde_json::json!({
+        "access_token": "refreshed-access",
+        "refresh_token": "rotated-refresh",
+        "token_url": "https://auth.example/oauth/token",
+        "client_id": "cid-1",
+    });
+    let result = crate::credential_broker::broker_pool_refresh(
+        assistant_protocol::v2::credential::CredentialPoolRefreshRequest {
+            account_id: "acc1".into(),
+            credentials: new_credentials.clone(),
+            expires_at: Some("2099-01-01T00:00:00Z".into()),
+        },
+    );
+    assert!(result.is_ok(), "refresh failed: {:?}", result.err());
+
+    // The stored envelope must now decrypt to the refreshed tokens.
+    let conn = crate::db::get_main_conn().expect("main conn");
+    let (encrypted, dek): (String, String) = conn
+        .query_row(
+            "SELECT credentials_encrypted, dek_encrypted FROM provider_accounts WHERE id = 'acc1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("account row");
+    let plain = crate::provider_key_manager::envelope_decrypt(&encrypted, &dek, &conn)
+        .expect("decrypt refreshed envelope");
+    let stored: serde_json::Value = serde_json::from_str(&plain).expect("valid credentials JSON");
+    assert_eq!(stored, new_credentials);
+
+    crate::db::clear_main_pool_for_tests();
+    let _ = std::fs::remove_file(&main_pool_dir);
+}
+
 #[tokio::test]
 async fn implemented_daemon_method_is_not_rejected_by_legacy_dispatch() {
     let response = dispatch_rpc("mcp.list", &serde_json::json!({})).await;
