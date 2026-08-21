@@ -1,0 +1,34 @@
+//! Workspace V2 — Host-side workspace domain.
+//!
+//! Single data authority: SQLite v27 (seven tables) + typed IPC. The renderer
+//! never touches the DB directly — every read/write flows through
+//! `crate::commands::workspace`.
+//!
+//! Layering:
+//! - `types`     — serde DTOs (camelCase, frozen contract shapes).
+//! - `store`     — raw SQL CRUD over the seven workspace tables.
+//! - `snapshot`  — assembly of `WorkspaceSnapshot` / `WorkspaceSessionSnapshot`.
+//!
+//! Schema ownership: the seven tables are created by `migrate_v27`
+//! (`crate::db::migrations_steps`); the legacy `settings:home_workspace`
+//! document is imported there too.
+
+pub mod snapshot;
+pub mod store;
+pub mod types;
+
+pub use snapshot::{load_session_snapshot, load_workspace_snapshot};
+pub use store::{
+    add_context_item, bind_tool_profile, close_tab, create_tab, create_workspace,
+    delete_workspace, get_context_item, get_tab, get_view_state, get_workspace, get_widget,
+    list_context_items, list_layouts, list_tabs, list_tool_profiles, list_view_states,
+    list_widgets, list_workspaces, remove_context_item, remove_widget, reorder_tabs,
+    save_layout, save_view_state, set_active_workspace, unbind_tool_profile, update_tab,
+    update_workspace, upsert_widget,
+};
+pub use types::{
+    normalize_theme, WorkspaceContextItem, WorkspaceContextItemInput, WorkspaceCreateRequest,
+    WorkspaceLayout, WorkspaceSessionSnapshot, WorkspaceSnapshot, WorkspaceSummary, WorkspaceTab,
+    WorkspaceTabInput, WorkspaceTabUpdate, WorkspaceToolProfile, WorkspaceUpdateRequest,
+    WorkspaceViewState, WorkspaceWidget, WorkspaceWidgetInput,
+};

@@ -1,15 +1,12 @@
 'use client';
-import { SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 
 /**
- * Skeleton loading placeholder — shows animated gray bars
- * instead of "Loading..." text for better perceived performance.
- *
- * Usage:
- *   <Skeleton lines={3} />
- *   <Skeleton variant="card" />
- *   <Skeleton variant="avatar" />
+ * Skeleton —— V2 委托版：转交给 design-system 的 Skeleton（消费语义 token）。
+ * 保留旧 props 兼容（lines / variant / width / height），
+ * variant: text|card|avatar|table → ds text|card|circle|bar。
  */
+
+import { Skeleton as DsSkeleton } from '@/components/ui/design-system';
 
 interface SkeletonProps {
   /** Number of text lines (default: 3) */
@@ -24,34 +21,15 @@ interface SkeletonProps {
 
 export default function Skeleton({ lines = 3, variant = 'text', width, height }: SkeletonProps) {
   if (variant === 'card') {
-    return (
-      <div style={{
-        padding: SPACING.md, borderRadius: BORDER_RADIUS.lg,
-        border: '0.0625rem solid var(--border)',
-        background: 'var(--surface)',
-      }}>
-        <div style={{
-          width: '100%', aspectRatio: '1', borderRadius: BORDER_RADIUS.sm,
-          background: 'var(--surface)',
-          marginBottom: SPACING.sm,
-          animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
-        }} />
-        <Skeleton lines={2} />
-      </div>
-    );
+    return <DsSkeleton variant="card" lines={lines} />;
   }
 
   if (variant === 'avatar') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.md }}>
-        <div style={{
-          width: 40, height: 40, borderRadius: '50%',
-          background: 'var(--surface)',
-          animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
-          flexShrink: 0,
-        }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <DsSkeleton variant="circle" height={height ?? 40} width={40} />
         <div style={{ flex: 1 }}>
-          <Skeleton lines={2} />
+          <DsSkeleton variant="text" lines={lines} />
         </div>
       </div>
     );
@@ -61,51 +39,24 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {Array.from({ length: lines }, (_, i) => (
-          <div key={i} style={{
-            display: 'flex', gap: SPACING.md, alignItems: 'center',
-            padding: `${SPACING.sm}px 0`,
-            borderBottom: '0.0625rem solid var(--border)',
-          }}>
-            <div style={{
-              width: 24, height: 12, borderRadius: BORDER_RADIUS.sm,
-              background: 'var(--surface)',
-              animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
-              animationDelay: `${i * 0.1}s`,
-            }} />
-            <div style={{
-              flex: 1, height: 12, borderRadius: BORDER_RADIUS.sm,
-              background: 'var(--surface)',
-              animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
-              animationDelay: `${i * 0.1 + 0.05}s`,
-            }} />
-            <div style={{
-              width: 60, height: 12, borderRadius: BORDER_RADIUS.sm,
-              background: 'var(--surface)',
-              animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
-              animationDelay: `${i * 0.1 + 0.1}s`,
-            }} />
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              gap: 12,
+              alignItems: 'center',
+              padding: '8px 0',
+              borderBottom: '1px solid var(--border-subtle)',
+            }}
+          >
+            <DsSkeleton variant="bar" width={24} height={12} />
+            <DsSkeleton variant="bar" height={12} />
+            <DsSkeleton variant="bar" width={60} height={12} />
           </div>
         ))}
       </div>
     );
   }
 
-  // Default: text lines
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm, width }}>
-      {Array.from({ length: lines }, (_, i) => (
-        <div
-          key={i}
-          style={{
-            height: height || 12,
-            width: i === lines - 1 ? '60%' : '100%',
-            borderRadius: BORDER_RADIUS.sm,
-            background: 'var(--surface)',
-            animation: 'skeleton-pulse 1.5s var(--motion-easing) infinite',
-            animationDelay: `${i * 0.1}s`,
-          }}
-        />
-      ))}
-    </div>
-  );
+  return <DsSkeleton variant="text" lines={lines} width={width} height={height} />;
 }

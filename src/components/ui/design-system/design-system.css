@@ -1,0 +1,26 @@
+/* ═══════════════════════════════════════════
+   Design System V2 — shared visual utilities
+   All values consume semantic tokens (no hex in components).
+   ═══════════════════════════════════════════ */
+
+/* 晶透液态：顶层 Specular Highlight（法则 1）+ 底部微光 */
+.ds-crystal {
+  position: relative;
+}
+
+.ds-crystal::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 0 0 var(--highlight-specular),
+    inset 0 -1px 0 0 color-mix(in srgb, var(--crystal-border) 60%, transparent);
+}
+
+/* 克制 glow 工具类（仅 focus/selected/status） */
+.ds-glow-focus { box-shadow: var(--glow-focus) !important; }
+.ds-glow-selected { box-shadow: var(--glow-selected) !important; }
+.ds-glow-status-success { box-shadow: var(--glow-status-success) !important; }
+.ds-glow-status-danger { box-shadow: var(--glow-status-danger) !important; }

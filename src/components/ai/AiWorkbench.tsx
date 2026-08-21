@@ -24,8 +24,8 @@ export default function AiWorkbench() {
   ];
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', padding: '0 16px' }}>
+    <div className="flex h-full min-h-0 flex-col bg-[var(--surface-subtle)]">
+      <div className="flex shrink-0 items-center gap-1 border-b border-[var(--border)] px-3">
         {tabs.map((item) => {
           const isActive = tab === item.id;
           return (
@@ -33,9 +33,10 @@ export default function AiWorkbench() {
               key={item.id}
               type="button"
               onClick={() => setTab(item.id)}
-              className={`flex items-center gap-2 py-3 px-4 text-xs font-medium border-b-2 transition-all ${
+              aria-selected={isActive}
+              className={`inline-flex items-center gap-2 rounded-t-lg border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
                 isActive
-                  ? 'border-[var(--primary)] text-[var(--text)] font-semibold'
+                  ? 'border-[var(--primary)] bg-[var(--surface)] text-[var(--text)]'
                   : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text)]'
               }`}
             >
@@ -45,7 +46,7 @@ export default function AiWorkbench() {
           );
         })}
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
         {tab === 'resources' && <AiResourcesPanel />}
         {tab === 'proxy' && <LocalProxyPanel />}
         {tab === 'tools' && <AiToolIntegrationsPanel />}

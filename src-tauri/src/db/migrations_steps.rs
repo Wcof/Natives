@@ -8,7 +8,7 @@ use super::{
     repair_creative_active_invariants, repair_creative_identity_ghosts, upgrade_startup_plans_v1,
 };
 use crate::Error;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 pub(super) fn migrate_v2(conn: &Connection) -> Result<(), Error> {
     // v2: reserved migration slot — no schema changes needed yet.
@@ -842,5 +842,274 @@ pub(super) fn migrate_v26(conn: &Connection) -> Result<(), Error> {
         ",
     )
     .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Migration v26→v27 (Workspace V2 design system).
+///
+/// Introduces the seven workspace tables (the single authority for workspace
+/// state — the renderer never writes these directly, only through typed IPC):
+///
+/// - `workspaces`               — workspace root entity.
+/// - `workspace_tabs`           — tabs inside a workspace.
+/// - `workspace_context_items`  — context items pinned to a workspace.
+/// - `workspace_widgets`        — widget instances (legacy Home widgets land here).
+/// - `workspace_layouts`        — per-breakpoint responsive layouts (lg/md/sm).
+/// - `workspace_view_states`    — keyed view state (split/window/scroll).
+/// - `workspace_tool_profiles`  — tool-profile bindings scoped to a workspace.
+///
+/// The step also performs two compat migrations, both idempotent:
+///
+/// 1. Legacy `settings:home_workspace` (schemaVersion 1, single JSON document)
+///    is imported into a `home` workspace row + `workspace_widgets` +
+///    `workspace_layouts` rows, then the legacy key is removed so the new
+///    tables are the only authority going forward.
+/// 2. `settings:theme` legacy aliases (`terminal-volt` / `frosted-jasmine`)
+///    are normalized to `dark` / `light` (V-002/V-004).
+pub(super) fn migrate_v27(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'workspace',
+            icon TEXT,
+            description TEXT,
+            theme TEXT NOT NULL DEFAULT 'dark',
+            is_active INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspaces_active
+            ON workspaces(is_active, position);
+
+        CREATE TABLE IF NOT EXISTS workspace_tabs (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            tab_type TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            ref_id TEXT,
+            url TEXT,
+            position INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_tabs_workspace
+            ON workspace_tabs(workspace_id, position);
+
+        CREATE TABLE IF NOT EXISTS workspace_context_items (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            item_kind TEXT NOT NULL,
+            ref_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_context_workspace
+            ON workspace_context_items(workspace_id, position);
+
+        CREATE TABLE IF NOT EXISTS workspace_widgets (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            widget_type TEXT NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            hidden INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_widgets_workspace
+            ON workspace_widgets(workspace_id, position);
+
+        CREATE TABLE IF NOT EXISTS workspace_layouts (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            breakpoint TEXT NOT NULL,
+            layout_json TEXT NOT NULL DEFAULT '[]',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, breakpoint)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_layouts_workspace
+            ON workspace_layouts(workspace_id);
+
+        CREATE TABLE IF NOT EXISTS workspace_view_states (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            view_key TEXT NOT NULL,
+            state_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, view_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_view_states_workspace
+            ON workspace_view_states(workspace_id);
+
+        CREATE TABLE IF NOT EXISTS workspace_tool_profiles (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            profile_id TEXT NOT NULL,
+            tool_key TEXT,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, profile_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_tool_profiles_workspace
+            ON workspace_tool_profiles(workspace_id);
+
+        INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '27');
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    import_legacy_home_workspace(conn)?;
+    normalize_legacy_theme(conn)?;
+    Ok(())
+}
+
+/// One-shot, idempotent import of the legacy `settings:home_workspace` JSON
+/// document (schemaVersion 1) into the v27 workspace tables.
+///
+/// The legacy document shape is:
+/// `{ schemaVersion: 1, hidden: string[], instances: [{id, widget_type, config}],
+///    layouts: { lg: LayoutItem[], md: LayoutItem[], sm: LayoutItem[] } }`.
+///
+/// Imported as a fixed `home` workspace (kind `home`, active when no other
+/// workspace is active). Widgets keep their original ids; layout items are
+/// stored as JSON per breakpoint. On success the legacy key is deleted.
+fn import_legacy_home_workspace(conn: &Connection) -> Result<(), Error> {
+    let Some(raw) = super::get_setting(conn, "settings:home_workspace")? else {
+        return Ok(());
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => {
+            // Corrupt legacy document: drop the key and move on, never fail startup.
+            let _ = super::delete_setting(conn, "settings:home_workspace");
+            return Ok(());
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let ws_id = "home";
+
+    let already_imported = conn
+        .query_row(
+            "SELECT 1 FROM workspaces WHERE id = ?1",
+            [ws_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(Error::Database)?;
+    if already_imported.is_some() {
+        // Import already done for this id — just drop the stale key.
+        super::delete_setting(conn, "settings:home_workspace")?;
+        return Ok(());
+    }
+
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Home");
+    let hidden: std::collections::HashSet<String> = value
+        .get("hidden")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    conn.execute(
+        "INSERT INTO workspaces
+            (id, name, kind, icon, description, theme, is_active, position, created_at, updated_at)
+         VALUES (?1, ?2, 'home', NULL, NULL, 'dark', 1, 0, ?3, ?3)",
+        rusqlite::params![ws_id, name, now],
+    )
+    .map_err(Error::Database)?;
+
+    if let Some(instances) = value.get("instances").and_then(|v| v.as_array()) {
+        for (i, inst) in instances.iter().enumerate() {
+            let Some(id) = inst.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let widget_type = inst
+                .get("widget_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let config = inst
+                .get("config")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let is_hidden = hidden.contains(id);
+            conn.execute(
+                "INSERT INTO workspace_widgets
+                    (id, workspace_id, widget_type, config_json, hidden, position, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+                 ON CONFLICT(id) DO NOTHING",
+                rusqlite::params![
+                    id,
+                    ws_id,
+                    widget_type,
+                    config.to_string(),
+                    if is_hidden { 1 } else { 0 },
+                    i as i64,
+                    now
+                ],
+            )
+            .map_err(Error::Database)?;
+        }
+    }
+
+    if let Some(layouts) = value.get("layouts").and_then(|v| v.as_object()) {
+        for (bp, arr) in layouts {
+            let layout_json = match arr.as_array() {
+                Some(arr) => serde_json::to_string(arr).unwrap_or_else(|_| "[]".into()),
+                None => "[]".into(),
+            };
+            let layout_id = format!("home-{bp}");
+            conn.execute(
+                "INSERT INTO workspace_layouts
+                    (id, workspace_id, breakpoint, layout_json, is_active, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+                 ON CONFLICT(workspace_id, breakpoint) DO UPDATE SET
+                    layout_json = excluded.layout_json,
+                    updated_at = excluded.updated_at",
+                rusqlite::params![layout_id, ws_id, bp, layout_json, now],
+            )
+            .map_err(Error::Database)?;
+        }
+    }
+
+    // The legacy K/V document is no longer authoritative.
+    super::delete_setting(conn, "settings:home_workspace")?;
+    Ok(())
+}
+
+/// V-002/V-004: normalize `settings:theme` to the two-value contract
+/// (`dark` | `light`). Legacy aliases (`terminal-volt`, `frosted-jasmine`)
+/// and any unknown values are rewritten to the canonical form.
+fn normalize_legacy_theme(conn: &Connection) -> Result<(), Error> {
+    let Some(theme) = super::get_setting(conn, "settings:theme")? else {
+        return Ok(());
+    };
+    let normalized = match theme.as_str() {
+        "dark" | "light" => theme.as_str(),
+        "terminal-volt" => "dark",
+        "frosted-jasmine" => "light",
+        // Unknown values are not persisted noise — fall back to the default.
+        _ => "dark",
+    };
+    if normalized != theme {
+        super::set_setting(conn, "settings:theme", normalized)?;
+    }
     Ok(())
 }

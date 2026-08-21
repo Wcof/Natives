@@ -344,6 +344,12 @@ pub fn apply(conn: &Connection) -> Result<(), Error> {
         migrate_v26(conn)?;
     }
 
+    // Migration v26→v27 (Workspace V2): seven workspace tables + legacy
+    // settings:home_workspace import + settings:theme normalization.
+    if current_version < 27 {
+        migrate_v27(conn)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "

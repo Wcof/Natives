@@ -1,0 +1,142 @@
+/* ═══════════════════════════════════════════
+   Widget Shell / Chrome（B-018/B-019）
+   只消费语义 token；drag handle 只做 hover chrome，
+   不接管 RGL 的 transform（motion 约束 §8）。
+   ═══════════════════════════════════════════ */
+
+.ws-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* RGL 拖拽期间由 host 设置 .ws-shell--dragging 以锁定交互 */
+}
+
+/* ── Header ── */
+.ws-shell-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  min-height: 30px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+}
+
+.ws-shell-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ws-shell-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* ── Body ── */
+.ws-shell-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Drag handle（hover chrome；不接管 transform） ── */
+.ws-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  cursor: grab;
+  background: transparent;
+  border: none;
+  opacity: 0.35;
+  transition: opacity var(--transition-fast, 120ms), background-color var(--transition-fast, 120ms);
+}
+
+.ws-drag-handle:hover,
+.ws-drag-handle:focus-visible {
+  opacity: 1;
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ws-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* 编辑态：拖拽把手常显，便于点击 */
+.ws-shell--editing .ws-drag-handle {
+  opacity: 0.9;
+}
+
+/* ── 编辑 chrome 按钮 ── */
+.ws-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity var(--transition-fast, 120ms), background-color var(--transition-fast, 120ms),
+    color var(--transition-fast, 120ms);
+}
+
+.ws-icon-button:hover,
+.ws-icon-button:focus-visible {
+  opacity: 1;
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ws-icon-button--danger:hover,
+.ws-icon-button--danger:focus-visible {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ── 拖拽/缩放期间交互锁定 ── */
+.ws-shell--dragging,
+.ws-shell--resizing {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── 状态占位（loading / error 居中） ── */
+.ws-shell-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 0;
+  padding: 8px;
+}
+
+/* reduced-motion：hover 过渡直接禁用（全局规则也会兜底） */
+html[data-reduced-motion='true'] .ws-drag-handle,
+html[data-reduced-motion='true'] .ws-icon-button {
+  transition: none;
+}

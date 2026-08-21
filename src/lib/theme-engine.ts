@@ -1,53 +1,42 @@
 import { z } from 'zod';
+import {
+  NEUTRAL_PALETTE,
+  CHART_VOLUME_DARK,
+  CHART_VOLUME_LIGHT,
+  V2_TOKENS,
+  THEMES,
+  TERMINAL_THEMES,
+  V2_THEME_NAMES,
+  type V2ThemeId,
+} from '@/lib/design-tokens';
 
-// ── AI Natives Design System V1.1 Theme Schema ──
-// 全局中性色阶 · ADR 0010
+// ── AI Natives Design System V2 Theme Engine ──
+// 单一主题应用器：CSS 与 TS 不再维护两套漂移真值。
+//   · 主题值唯一真值 = src/lib/design-tokens.ts 的 V2_TOKENS。
+//   · 本文件只负责「解析 → 应用 → 偏好 fallback」。
+//   · 内部 ID 固定 dark / light；旧名 terminal-volt / frosted-jasmine 只读兼容。
+//   · glow 仅用于 focus/selected/status；reduced-motion / reduced-transparency
+//     通过 data-* 属性 + CSS fallback 生效。
 
-// ── 15 级全局中性色板（固定，不随主题变化） ──
-export const NEUTRAL_PALETTE = {
-  0: '#010101',
-  100: '#111113',
-  150: '#18181A',
-  200: '#202024',
-  250: '#27262B',
-  300: '#323137',
-  400: '#48474D',
-  500: '#646268',
-  600: '#7F7D83',
-  700: '#9B999E',
-  800: '#B7B5BA',
-  850: '#D4D3D7',
-  900: '#E8E7EA',
-  950: '#FAFAFC',
-  1000: '#FFFFFF',
-} as const;
+export { NEUTRAL_PALETTE, CHART_VOLUME_DARK, CHART_VOLUME_LIGHT, THEMES, TERMINAL_THEMES };
 
-// ── Chart volume 色阶（0-8，数据体量映射） ──
-export const CHART_VOLUME_DARK: Record<number, string> = {
-  0: '#202024',
-  1: '#323137',
-  2: '#48474D',
-  3: '#646268',
-  4: '#7F7D83',
-  5: '#9B999E',
-  6: '#B7B5BA',
-  7: '#D4D3D7',
-  8: '#FAFAFC',
+// ── 旧名 → 内部 ID 的只读兼容映射 ──
+const LEGACY_THEME_ALIASES: Record<string, V2ThemeId> = {
+  'terminal-volt': 'dark',
+  'frosted-jasmine': 'light',
+  dark: 'dark',
+  light: 'light',
 };
 
-export const CHART_VOLUME_LIGHT: Record<number, string> = {
-  0: '#E8E7EA',
-  1: '#D4D3D7',
-  2: '#B7B5BA',
-  3: '#9B999E',
-  4: '#7F7D83',
-  5: '#646268',
-  6: '#48474D',
-  7: '#323137',
-  8: '#18181A',
-};
+/** 解析任意旧 ID 到内部固定 ID（dark / light）。未知值兜底 dark。 */
+export function normalizeThemeId(themeId: string | null | undefined): V2ThemeId {
+  if (!themeId) return 'dark';
+  const key = String(themeId).toLowerCase();
+  return LEGACY_THEME_ALIASES[key] ?? 'dark';
+}
 
-const ThemeSchema = z.object({
+// ── Zod 校验（R-U3）：仅 hex 核心子集必须校验；rgba/gradient 留在 CSS 层 ──
+const ThemeCoreSchema = z.object({
   background: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   surface: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   'surface-hover': z.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -72,164 +61,87 @@ const ThemeSchema = z.object({
   warning: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   info: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   success: z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  'diff-add': z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  'diff-del': z.string().regex(/^#[0-9a-fA-F]{6}$/),
-  'diff-mod': z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
 
-export type Theme = z.infer<typeof ThemeSchema>;
+/** 校验 hex 核心子集（向后兼容入口；V2 全量 token 由 design-tokens 保证）。 */
+export function validateTheme(theme: Record<string, unknown>): z.infer<typeof ThemeCoreSchema> {
+  return ThemeCoreSchema.parse(theme);
+}
 
-// ── V1.1 Built-in Themes (using NEUTRAL_PALETTE) ──
+/** 主题显示名 i18n key（设置页 / 命令面板共用）。 */
+export function getThemeNames(id: string): { labelKey: string; descKey: string } {
+  return V2_THEME_NAMES[normalizeThemeId(id)];
+}
 
-export const THEMES: Record<string, Theme> = {
-  light: {
-    background: NEUTRAL_PALETTE[950],
-    surface: NEUTRAL_PALETTE[1000],
-    'surface-hover': NEUTRAL_PALETTE[900],
-    sidebar: NEUTRAL_PALETTE[900],
-    border: NEUTRAL_PALETTE[850],
-    'border-subtle': NEUTRAL_PALETTE[900],
-    text: NEUTRAL_PALETTE[150],
-    'text-body': NEUTRAL_PALETTE[400],
-    'text-secondary': NEUTRAL_PALETTE[500],
-    'text-disabled': NEUTRAL_PALETTE[700],
-    primary: NEUTRAL_PALETTE[150],
-    'primary-hover': NEUTRAL_PALETTE[300],
-    'primary-soft': NEUTRAL_PALETTE[900],
-    'primary-dark': NEUTRAL_PALETTE[0],
-    'control-bg': NEUTRAL_PALETTE[900],
-    'control-bg-hover': NEUTRAL_PALETTE[850],
-    'control-fg': NEUTRAL_PALETTE[500],
-    'control-selected-bg': NEUTRAL_PALETTE[150],
-    'control-selected-bg-hover': NEUTRAL_PALETTE[300],
-    'control-selected-fg': NEUTRAL_PALETTE[950],
-    danger: '#DC2626',
-    warning: '#D97706',
-    info: '#2563EB',
-    success: '#059669',
-    'diff-add': '#059669',
-    'diff-del': '#DC2626',
-    'diff-mod': '#D97706',
-  },
-  dark: {
-    background: NEUTRAL_PALETTE[0],
-    surface: NEUTRAL_PALETTE[150],
-    'surface-hover': NEUTRAL_PALETTE[200],
-    sidebar: NEUTRAL_PALETTE[100],
-    border: NEUTRAL_PALETTE[300],
-    'border-subtle': NEUTRAL_PALETTE[200],
-    text: NEUTRAL_PALETTE[950],
-    'text-body': NEUTRAL_PALETTE[850],
-    'text-secondary': NEUTRAL_PALETTE[700],
-    'text-disabled': NEUTRAL_PALETTE[500],
-    primary: NEUTRAL_PALETTE[950],
-    'primary-hover': NEUTRAL_PALETTE[850],
-    'primary-soft': NEUTRAL_PALETTE[250],
-    'primary-dark': NEUTRAL_PALETTE[0],
-    'control-bg': NEUTRAL_PALETTE[250],
-    'control-bg-hover': NEUTRAL_PALETTE[300],
-    'control-fg': NEUTRAL_PALETTE[700],
-    'control-selected-bg': NEUTRAL_PALETTE[950],
-    'control-selected-bg-hover': NEUTRAL_PALETTE[850],
-    'control-selected-fg': NEUTRAL_PALETTE[0],
-    danger: '#EF4444',
-    warning: '#F59E0B',
-    info: '#3B82F6',
-    success: '#10B981',
-    'diff-add': '#10B981',
-    'diff-del': '#EF4444',
-    'diff-mod': '#F59E0B',
-  },
-};
+// ── 偏好 fallback：reduced motion / reduced transparency ──
 
-// ── Terminal ANSI Colors (per theme) ──
+type PreferenceKind = 'motion' | 'transparency';
 
-export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string; selectionBackground?: string }> = {
-  light: {
-    background: THEMES.light!.surface,
-    foreground: THEMES.light!.text,
-    cursor: THEMES.light!.primary,
-    selectionBackground: THEMES.light!.primary + '33',
-  },
-  dark: {
-    background: THEMES.dark!.surface,
-    foreground: THEMES.dark!.text,
-    cursor: THEMES.dark!.primary,
-    selectionBackground: THEMES.dark!.primary + '33',
-  },
-  'terminal-volt': {
-    background: THEMES.dark!.surface,
-    foreground: THEMES.dark!.text,
-    cursor: THEMES.dark!.primary,
-    selectionBackground: THEMES.dark!.primary + '33',
-  },
-  'frosted-jasmine': {
-    background: THEMES.light!.surface,
-    foreground: THEMES.light!.text,
-    cursor: THEMES.light!.primary,
-    selectionBackground: THEMES.light!.primary + '33',
-  },
-};
+function readPreference(kind: PreferenceKind): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  const query =
+    kind === 'motion'
+      ? '(prefers-reduced-motion: reduce)'
+      : '(prefers-reduced-transparency: reduce)';
+  try {
+    return window.matchMedia(query).matches;
+  } catch {
+    return false;
+  }
+}
 
-// ── Theme Application ──
+function syncPreferenceAttribute(kind: PreferenceKind): void {
+  const root = document.documentElement;
+  const attr = kind === 'motion' ? 'data-reduced-motion' : 'data-reduced-transparency';
+  root.setAttribute(attr, readPreference(kind) ? 'true' : 'false');
+}
 
-type ThemeListeners = (theme: string) => void;
+function subscribePreference(kind: PreferenceKind, cb: () => void): () => void {
+  if (typeof window === 'undefined' || !window.matchMedia) return () => {};
+  const query =
+    kind === 'motion'
+      ? '(prefers-reduced-motion: reduce)'
+      : '(prefers-reduced-transparency: reduce)';
+  try {
+    const mql = window.matchMedia(query);
+    const handler = () => {
+      syncPreferenceAttribute(kind);
+      cb();
+    };
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  } catch {
+    return () => {};
+  }
+}
+
+/** 是否启用 reduced motion（仅客户端有效）。 */
+export function getReducedMotion(): boolean {
+  return readPreference('motion');
+}
+
+/** 是否启用 reduced transparency（仅客户端有效）。 */
+export function getReducedTransparency(): boolean {
+  return readPreference('transparency');
+}
+
+/** 订阅系统偏好变化；返回取消订阅函数。 */
+export function onPreferenceChange(cb: () => void): () => void {
+  const unsub1 = subscribePreference('motion', cb);
+  const unsub2 = subscribePreference('transparency', cb);
+  return () => {
+    unsub1();
+    unsub2();
+  };
+}
+
+// ── 主题监听 ──
+
+type ThemeListeners = (theme: V2ThemeId) => void;
 const listeners = new Set<ThemeListeners>();
 
-export function validateTheme(theme: Record<string, unknown>): Theme {
-  return ThemeSchema.parse(theme);
-}
-
-export function normalizeThemeId(themeId: string | null | undefined): 'light' | 'dark' {
-  if (themeId === 'terminal-volt' || themeId === 'dark') return 'dark';
-  if (themeId === 'frosted-jasmine' || themeId === 'light') return 'light';
-  return 'dark'; // New default is dark
-}
-
-export function applyTheme(themeId: string): void {
-  const resolvedId = normalizeThemeId(themeId);
-
-  const theme = THEMES[resolvedId];
-  if (!theme) {
-    console.warn(`Theme '${themeId}' not found, falling back to dark`);
-    return applyTheme('dark');
-  }
-
-  const root = document.documentElement;
-  root.setAttribute('data-theme', resolvedId);
-
-  // Apply neutral palette CSS variables
-  for (const [key, value] of Object.entries(NEUTRAL_PALETTE)) {
-    root.style.setProperty(`--neutral-${key}`, value);
-  }
-
-  // Apply theme CSS variables
-  for (const [key, value] of Object.entries(theme)) {
-    const cssVar = `--${key}`;
-    root.style.setProperty(cssVar, value);
-  }
-
-  // Apply chart volume CSS variables
-  const chartVolumes = resolvedId === 'dark' ? CHART_VOLUME_DARK : CHART_VOLUME_LIGHT;
-  for (let i = 0; i <= 8; i++) {
-    const val = chartVolumes[i];
-    if (val) root.style.setProperty(`--chart-volume-${i}`, val);
-  }
-
-  // Apply terminal ANSI colors
-  const terminalTheme = TERMINAL_THEMES[resolvedId];
-  if (terminalTheme) {
-    root.style.setProperty('--terminal-bg', terminalTheme.background);
-    root.style.setProperty('--terminal-fg', terminalTheme.foreground);
-    root.style.setProperty('--terminal-cursor', terminalTheme.cursor);
-  }
-
-  // Add transitioning class
-  root.classList.add('theme-transitioning');
-  setTimeout(() => root.classList.remove('theme-transitioning'), 200);
-
-  // Notify listeners
-  listeners.forEach((cb) => cb(resolvedId));
+function notify(theme: V2ThemeId): void {
+  listeners.forEach((cb) => cb(theme));
 }
 
 export function onThemeChange(cb: ThemeListeners): () => void {
@@ -237,17 +149,95 @@ export function onThemeChange(cb: ThemeListeners): () => void {
   return () => listeners.delete(cb);
 }
 
-export function getThemeId(): string {
-  return document.documentElement.getAttribute('data-theme') || 'dark';
+export function getThemeId(): V2ThemeId {
+  if (typeof document === 'undefined') return 'dark';
+  const raw = document.documentElement.getAttribute('data-theme');
+  return normalizeThemeId(raw);
 }
 
-// ── Chart volume helper ──
+// ── 应用器 ──
 
 /**
- * Map a value to a chart volume level (0-8).
- * value = 0 → 0
- * non-zero → max(1, ceil(value / visibleMax * 8))
+ * V2 单一主题应用器：把 design-tokens.ts 的 V2_TOKENS 应用到 CSS 变量。
+ * 不维护第二套颜色真值 —— CSS 只保留首帧 fallback。
  */
+export function applyTheme(themeId: string): void {
+  const resolvedId = normalizeThemeId(themeId);
+
+  const tokens = V2_TOKENS[resolvedId];
+  if (!tokens) {
+    console.warn(`[theme-engine] Theme '${themeId}' not found, falling back to dark`);
+    return applyTheme('dark');
+  }
+
+  const root = document.documentElement;
+  root.setAttribute('data-theme', resolvedId);
+
+  // 1) Neutral palette（固定原始色板）
+  for (const [key, value] of Object.entries(NEUTRAL_PALETTE)) {
+    root.style.setProperty(`--neutral-${key}`, value);
+  }
+
+  // 2) V2 语义 token（单一真值源）
+  for (const [key, value] of Object.entries(tokens)) {
+    root.style.setProperty(`--${key}`, value);
+  }
+
+  // 3) Chart volume（0-8）
+  const chartVolumes = resolvedId === 'dark' ? CHART_VOLUME_DARK : CHART_VOLUME_LIGHT;
+  for (let i = 0; i <= 8; i++) {
+    const val = chartVolumes[i];
+    if (val) root.style.setProperty(`--chart-volume-${i}`, val);
+  }
+
+  // 4) Grayscale steps（兼容 V1 别名）
+  const graySteps: Record<string, string> =
+    resolvedId === 'dark'
+      ? {
+          '50': '#010101', '100': '#18181A', '200': '#202024', '300': '#27262B',
+          '400': '#323137', '500': '#646268', '600': '#9B999E', '700': '#D4D3D7',
+          '800': '#FAFAFC', '900': '#FFFFFF',
+        }
+      : {
+          '50': '#FAFAFA', '100': '#F4F4F2', '200': '#EDEDEB', '300': '#E2E2DF',
+          '400': '#D5D5D2', '500': '#999999', '600': '#666666', '700': '#333333',
+          '800': '#1E1E1E', '900': '#111111',
+        };
+  for (const [key, value] of Object.entries(graySteps)) {
+    root.style.setProperty(`--gray-${key}`, value);
+  }
+
+  // 5) Terminal ANSI（随皮肤联动）
+  const terminalTheme = TERMINAL_THEMES[resolvedId];
+  if (terminalTheme) {
+    root.style.setProperty('--terminal-bg', terminalTheme.background);
+    root.style.setProperty('--terminal-fg', terminalTheme.foreground);
+    root.style.setProperty('--terminal-cursor', terminalTheme.cursor);
+    if (terminalTheme.selectionBackground) {
+      root.style.setProperty('--terminal-selection', terminalTheme.selectionBackground);
+    }
+  }
+
+  // 6) 偏好 fallback 属性
+  syncPreferenceAttribute('motion');
+  syncPreferenceAttribute('transparency');
+
+  // 7) 过渡类 + 通知
+  root.classList.add('theme-transitioning');
+  setTimeout(() => root.classList.remove('theme-transitioning'), 200);
+
+  notify(resolvedId);
+}
+
+// ── 初始化：首次加载时同步偏好属性（幂等） ──
+if (typeof document !== 'undefined') {
+  syncPreferenceAttribute('motion');
+  syncPreferenceAttribute('transparency');
+  subscribePreference('motion', () => {});
+  subscribePreference('transparency', () => {});
+}
+
+// ── Chart volume helper（向后兼容） ──
 export function getChartVolumeLevel(value: number, visibleMax: number): 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 {
   if (value === 0 || visibleMax <= 0) return 0;
   const level = Math.ceil((value / visibleMax) * 8);

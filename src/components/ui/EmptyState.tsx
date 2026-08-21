@@ -1,10 +1,17 @@
 'use client';
 
+/**
+ * EmptyState / LoadingState / ErrorState / Skeleton —— V2 委托版。
+ * 统一转交 design-system primitives（消费语义 token，禁止 hex）。
+ * 保留旧导出与 props 兼容。
+ */
+
 import { type ReactNode } from 'react';
-import { Inbox, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Inbox } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
-import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
+import { Empty as DsEmpty, ErrorPrimitive as DsError, Skeleton as DsSkeleton } from '@/components/ui/design-system';
 import { MathCurveLoader } from './MathCurveLoader';
+import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 
 // ── Empty State (TASK-017) ──
 
@@ -18,19 +25,7 @@ interface EmptyStateProps {
 export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
   const renderedIcon = icon !== undefined ? icon : <Inbox size={32} />;
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      padding: `${SPACING.xxl}px ${SPACING.xl}px`, textAlign: 'center',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: SPACING.md }}>{renderedIcon}</div>
-      <div style={{ fontSize: FONT_SIZE.xl, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.xs }}>{title}</div>
-      {description && <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)', marginBottom: SPACING.lg, maxWidth: 280 }}>{description}</div>}
-      {action && (
-        <button className="btn btn-primary" onClick={action.onClick} style={{ fontSize: FONT_SIZE.md }}>
-          {action.label}
-        </button>
-      )}
-    </div>
+    <DsEmpty icon={renderedIcon} title={title} description={description} action={action} />
   );
 }
 
@@ -44,12 +39,18 @@ export function LoadingState({ message }: LoadingStateProps) {
   const locale = useLocale();
   const text = message ?? t(locale, 'common.loading');
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      padding: SPACING.xxl, gap: SPACING.md,
-    }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: SPACING.xxl,
+        gap: SPACING.md,
+      }}
+    >
       <MathCurveLoader size={60} />
-      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)', letterSpacing: '0.03em' }}>{text}</span>
+      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-tertiary)', letterSpacing: '0.03em' }}>{text}</span>
     </div>
   );
 }
@@ -66,20 +67,13 @@ interface ErrorStateProps {
 
 export function ErrorState({ message, onRetry, icon, retryLabel }: ErrorStateProps) {
   const locale = useLocale();
-  const renderedIcon = icon !== undefined ? icon : <AlertTriangle size={28} style={{ color: 'var(--warning)' }} />;
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      padding: SPACING.xxl, textAlign: 'center',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: SPACING.sm }}>{renderedIcon}</div>
-      <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', marginBottom: SPACING.md }}>{message}</div>
-      {onRetry && (
-        <button className="btn" onClick={onRetry} style={{ fontSize: FONT_SIZE.sm }}>
-          <RefreshCw size={14} style={{ marginRight: SPACING.xs }} /> {retryLabel ?? t(locale, 'common.retry')}
-        </button>
-      )}
-    </div>
+    <DsError
+      message={message}
+      onRetry={onRetry}
+      icon={icon}
+      retryLabel={retryLabel ?? t(locale, 'common.retry')}
+    />
   );
 }
 
@@ -92,16 +86,11 @@ interface SkeletonProps {
   borderRadius?: number;
 }
 
-export function Skeleton({ width = '100%', height = 12, count = 1, borderRadius = 4 }: SkeletonProps) {
+export function Skeleton({ width = '100%', height = 12, count = 1, borderRadius }: SkeletonProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="anim-skeleton" style={{
-          width: typeof width === 'number' ? `${width}px` : width,
-          height: typeof height === 'number' ? `${height}px` : height,
-          borderRadius,
-          background: 'var(--surface)',
-        }} />
+        <DsSkeleton key={i} variant="bar" width={width} height={height} borderRadius={borderRadius} />
       ))}
     </div>
   );

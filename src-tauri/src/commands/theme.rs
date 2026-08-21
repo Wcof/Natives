@@ -4,7 +4,18 @@ use tauri::State;
 use crate::AppState;
 
 const THEME_KEY: &str = "settings:theme";
-const DEFAULT_THEME: &str = "terminal-volt";
+/// V-002: the contract theme vocabulary is exactly `dark` | `light`.
+const DEFAULT_THEME: &str = "dark";
+
+/// Normalize any theme string to the two-value contract (`dark` | `light`).
+/// Legacy aliases (`terminal-volt` → `dark`, `frosted-jasmine` → `light`) and
+/// unknown values are mapped to the canonical vocabulary (V-002/V-004).
+fn normalize_theme(theme: &str) -> &'static str {
+    match theme {
+        "light" | "frosted-jasmine" => "light",
+        _ => "dark",
+    }
+}
 
 #[tauri::command]
 pub fn get_theme(state: State<'_, AppState>) -> Result<String> {
@@ -13,7 +24,9 @@ pub fn get_theme(state: State<'_, AppState>) -> Result<String> {
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &pool_conn;
-    Ok(db::get_setting(conn, THEME_KEY)?.unwrap_or_else(|| DEFAULT_THEME.to_string()))
+    let stored = db::get_setting(conn, THEME_KEY)?.unwrap_or_else(|| DEFAULT_THEME.to_string());
+    // V-002: never return a legacy alias or unknown value across IPC.
+    Ok(normalize_theme(&stored).to_string())
 }
 
 #[tauri::command]
@@ -22,16 +35,18 @@ pub fn set_theme(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<()> {
+    // V-002/V-004: only the canonical value is persisted and forwarded.
+    let normalized = normalize_theme(&theme);
     let pool_conn = state
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &pool_conn;
-    db::set_setting(conn, THEME_KEY, &theme)?;
-    emit_db_state_changed(&app_handle, "theme", serde_json::json!({ "theme": theme }));
+    db::set_setting(conn, THEME_KEY, normalized)?;
+    emit_db_state_changed(&app_handle, "theme", serde_json::json!({ "theme": normalized }));
 
     // ── 同步 Ghostty 主题配置（下次启动生效） ──
-    let _ = crate::ghostty_config::write_config(&theme);
+    let _ = crate::ghostty_config::write_config(normalized);
 
     Ok(())
 }
@@ -44,7 +59,8 @@ pub fn builtin_tool_ghostty_sync_theme(state: State<'_, AppState>) -> Result<Str
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &pool_conn;
-    let theme = db::get_setting(conn, THEME_KEY)?.unwrap_or_else(|| DEFAULT_THEME.to_string());
-    let path = crate::ghostty_config::write_config(&theme)?;
+    let stored = db::get_setting(conn, THEME_KEY)?.unwrap_or_else(|| DEFAULT_THEME.to_string());
+    let normalized = normalize_theme(&stored);
+    let path = crate::ghostty_config::write_config(normalized)?;
     Ok(path.to_string_lossy().to_string())
 }

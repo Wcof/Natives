@@ -284,7 +284,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
               <ResponsiveContainer width="100%" height="100%">
                 {trendMetric === 'token' ? (
                   <BarChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                     <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
                     <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
                     <Tooltip
@@ -299,7 +299,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
                   </BarChart>
                 ) : trendMetric === 'cost' ? (
                   <BarChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                     <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
                     <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
                     <Tooltip
@@ -312,7 +312,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
                   </BarChart>
                 ) : (
                   <BarChart data={trend.map((t_) => ({ ...t_, activeMinutes: (t_.activeSeconds ?? 0) / 60 }))}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                     <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
                     <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
                     <Tooltip
@@ -536,7 +536,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
             <div className={styles.chartBody}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={sourceDist} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                   <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
                   <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={60} />
                   <Tooltip
@@ -574,7 +574,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
             <div className={styles.chartBody}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={modelDist} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                   <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
                   <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
                   <Tooltip
@@ -611,7 +611,7 @@ export function UsageCharts({ daily, activity, sources }: Props) {
             <div className={styles.chartBody}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={projectDist} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                   <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
                   <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
                   <Tooltip

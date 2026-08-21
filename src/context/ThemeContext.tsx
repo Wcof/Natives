@@ -9,16 +9,28 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { applyTheme, normalizeThemeId } from '@/lib/theme-engine';
+import {
+  applyTheme,
+  normalizeThemeId,
+  getReducedMotion,
+  getReducedTransparency,
+  onPreferenceChange,
+} from '@/lib/theme-engine';
+import type { V2ThemeId } from '@/lib/design-tokens';
 
-// ── AI Natives V1.0 Theme Context ──
-// 已移除 Liquid Glass / WebGL canvas quota / backdrop-filter 动态注入。
-// V1.0 不使用 backdrop-filter，纯色 Surface + 轻边框。
+// ── AI Natives Design System V2 Theme Context ──
+// V2: Dark Glow（暗黑流光）+ Liquid Crystal（晶透液态）。
+// 内部 ID 固定 dark / light；旧名 terminal-volt / frosted-jasmine 只读兼容。
+// reduced-motion / reduced-transparency 通过 data-* 属性与 CSS fallback 生效。
 
 interface ThemeContextValue {
-  themeId: string;
+  themeId: V2ThemeId;
   setTheme: (id: string) => void;
   isDark: boolean;
+  /** 系统 prefers-reduced-motion 是否生效（客户端实时）。 */
+  reducedMotion: boolean;
+  /** 系统 prefers-reduced-transparency 是否生效（客户端实时）。 */
+  reducedTransparency: boolean;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -28,10 +40,11 @@ interface ThemeProviderProps {
 }
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  // 与 theme-engine 的 normalizeThemeId 兜底、后端 DEFAULT_THEME（terminal-volt→dark）
-  // 及 layout.tsx 的 SSR 初值统一为 dark，消除首帧闪变与三处漂移
-  const [themeId, setThemeId] = useState('dark');
+  const [themeId, setThemeId] = useState<V2ThemeId>('dark');
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [reducedTransparency, setReducedTransparency] = useState(false);
 
+  // 同步 data-theme 变化（MutationObserver，单一真值 = html[data-theme]）
   useEffect(() => {
     const root = document.documentElement;
     const syncThemeId = () => {
@@ -43,6 +56,16 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
 
     return () => observer.disconnect();
+  }, []);
+
+  // 同步系统偏好（motion / transparency）
+  useEffect(() => {
+    setReducedMotion(getReducedMotion());
+    setReducedTransparency(getReducedTransparency());
+    return onPreferenceChange(() => {
+      setReducedMotion(getReducedMotion());
+      setReducedTransparency(getReducedTransparency());
+    });
   }, []);
 
   const setTheme = useCallback((id: string) => {
@@ -57,8 +80,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
       themeId,
       setTheme,
       isDark: themeId === 'dark',
+      reducedMotion,
+      reducedTransparency,
     }),
-    [setTheme, themeId],
+    [setTheme, themeId, reducedMotion, reducedTransparency],
   );
 
   return (
@@ -78,8 +103,18 @@ export function useTheme(): ThemeContextValue {
   return context;
 }
 
-// ── Canvas quota 已废弃（V1.0 无 WebGL） ──
-// 保留导出以避免破坏旧 import，但永久返回 allowed: false。
+// ── 偏好 Hooks（供 design-system 组件消费，例如 AnimatedMetric 尊重 reduced motion） ──
+
+export function useReducedMotion(): boolean {
+  return useTheme().reducedMotion;
+}
+
+export function useReducedTransparency(): boolean {
+  return useTheme().reducedTransparency;
+}
+
+// ── 向后兼容：V1 废弃导出 ──
+// Canvas quota / Liquid Glass config 在 V2 中永久 no-op（V1.0 已禁用 WebGL）。
 interface CanvasQuota {
   allowed: boolean;
   release: () => void;
@@ -90,15 +125,12 @@ export function useCanvasQuota(_enabled = true): CanvasQuota {
   return { allowed: false, release };
 }
 
-// ── applyLiquidGlassConfig 已废弃（V1.0 无 Liquid Glass） ──
-// 保留导出以避免破坏旧 import，但为空操作。
 export const applyLiquidGlassConfig = (_config: {
   blurAmount?: number;
   saturation?: number;
   cornerRadius?: number;
 }) => {
-  // V1.0 no-op: backdrop-filter 已禁用
+  // V2 no-op: 玻璃强度统一走语义 token，不动态注入 WebGL 配置。
 };
 
-// 向后兼容：WebGL canvas 配额常量
 export const MAX_CONCURRENT_WEBGL_CANVASES = 0;

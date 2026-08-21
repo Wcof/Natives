@@ -19,10 +19,20 @@ pub struct GhosttyConfigColors {
     pub cursor: [u8; 3],
 }
 
-/// 根据主题 ID 返回对应的 Ghostty 色彩配置
-pub fn theme_to_ghostty(theme_id: &str) -> GhosttyConfigColors {
+/// Normalize a theme id to the two-value contract (`dark` | `light`).
+/// Legacy aliases (`terminal-volt` / `frosted-jasmine`) are accepted for
+/// backwards compatibility with callers that still pass the old ids.
+pub fn normalize_theme_id(theme_id: &str) -> &'static str {
     match theme_id {
-        "frosted-jasmine" | "light" => GhosttyConfigColors {
+        "light" | "frosted-jasmine" => "light",
+        _ => "dark",
+    }
+}
+
+/// 根据主题 ID 返回对应的 Ghostty 色彩配置（先归一化到 dark/light）。
+pub fn theme_to_ghostty(theme_id: &str) -> GhosttyConfigColors {
+    match normalize_theme_id(theme_id) {
+        "light" => GhosttyConfigColors {
             // Light theme (Monochrome 黑白灰)
             palette: [
                 [0x11, 0x18, 0x27], // 0  black      -> text
@@ -46,7 +56,7 @@ pub fn theme_to_ghostty(theme_id: &str) -> GhosttyConfigColors {
             background: [0xff, 0xff, 0xff], // terminal-bg (#ffffff)
             cursor: [0x00, 0x00, 0x00],     // accent (black, #000000)
         },
-        "terminal-volt" | "dark" => GhosttyConfigColors {
+        _ => GhosttyConfigColors {
             // Dark theme (Monochrome 黑白灰翻转)
             palette: [
                 [0x17, 0x1a, 0x21], // 0  black      -> bg (#171a21)
@@ -70,7 +80,6 @@ pub fn theme_to_ghostty(theme_id: &str) -> GhosttyConfigColors {
             background: [0x17, 0x1a, 0x21], // terminal-bg (#171a21)
             cursor: [0xff, 0xff, 0xff],     // accent (white, #ffffff)
         },
-        _ => theme_to_ghostty("dark"),
     }
 }
 

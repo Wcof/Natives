@@ -69,6 +69,7 @@ pub mod update_checker;
 pub mod usage;
 pub mod vendor_whitelist;
 mod wechat;
+mod workspace;
 
 pub use error::{Error, Result};
 

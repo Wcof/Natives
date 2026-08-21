@@ -122,10 +122,10 @@ export default function Modal({
         tabIndex={-1}
         className={['anim-dropIn', className].filter(Boolean).join(' ')}
         style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
+          background: 'var(--elevation-floating, var(--surface))',
+          border: '1px solid var(--border-subtle)',
           borderRadius: BORDER_RADIUS.lg,
-          boxShadow: 'var(--shadow-modal)',
+          boxShadow: 'var(--elev-shadow-floating, var(--shadow-modal))',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

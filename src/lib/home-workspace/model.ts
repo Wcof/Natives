@@ -3,10 +3,15 @@
 /**
  * Home Workspace 文档模型（ADR-0020 / Home Patch 决策 3/8）。
  *
+ * ⚠️ DEPRECATED (V2): 自 SQLite v27 起 Home 数据权威迁移到 `workspaces` /
+ * `workspace_widgets` / `workspace_layouts` 表（`migrate_v27` 把
+ * `settings:home_workspace` 导入为 `home` workspace）。本文件保留为只读兼容
+ * 模型，供既有 UI 在 V2 落地前过渡使用；新代码一律走
+ * `src/lib/workspace/contracts.ts` 的 TS 契约 + `src/lib/workspace/client.ts`。
+ *
  * - `WidgetDescriptor`  —— 代码注册的 Widget 定义（不是 Plugin）。
  * - `WidgetInstance`    —— 用户放置的实例（widget_type + config + layout）。
- * - `HomeWorkspaceDocument` —— 单份版本化 JSON，存 settings K/V（决策 8），
- *   V1 不建 Workspace 表、不做多 Workspace。
+ * - `HomeWorkspaceDocument` —— 单份版本化 JSON（legacy 形状，schemaVersion 1）。
  */
 
 import type { ResponsiveLayouts } from 'react-grid-layout';

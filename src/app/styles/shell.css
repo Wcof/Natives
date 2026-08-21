@@ -11,7 +11,8 @@
   grid-template-rows: 1fr var(--terminal-height);
   transition: grid-template-columns var(--transition),
               grid-template-rows var(--transition);
-  background: var(--background);
+  /* V2: 根背景消费 elevation-base 语义 token */
+  background: var(--elevation-base, var(--background));
 }
 
 .shell-workspace {
@@ -30,6 +31,8 @@
   background: var(--surface-active);
   box-shadow: inset 2px 0 0 var(--text-secondary);
   font-weight: 600;
+  /* V2: 克制 glow —— 仅选中态，无霓虹墙 */
+  box-shadow: inset 2px 0 0 var(--text-secondary), var(--glow-selected);
 }
 
 .sidebar-nav-active:hover {

@@ -1,7 +1,14 @@
 /* ═══════════════════════════════════════════
-   Doppelrand 兼容层 — 退化为纯色无边框
+   V2 legacy 兼容层 — 只保留兼容选择器（V-031 ✅）
+   (Design System V2：Dark Glow / Liquid Crystal)
+   旧的玻璃/噪点/霓虹类名全部退化为纯色无边框或无效果；
+   新增组件不得引用本文件，应消费 semantic token + design-system primitives。
+   V-031 状态：已清除与 V2 冲突的 hex 纯色与无条件 box-shadow:none 覆盖；
+   本文件不再覆盖 V2 材质（MaterialSurface / CrystalSurface / Surface），
+   仅保留旧类名的退化解。
    ═══════════════════════════════════════════ */
 
+/* ── Doppelrand 兼容（退化：纯色 + 无阴影，不再有霓虹边框） ── */
 .doppelrand-outer {
   position: relative;
   background: var(--background);
