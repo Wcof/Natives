@@ -256,12 +256,12 @@ pub fn set_active_workspace(conn: &Connection, id: &str) -> Result<Option<Worksp
     let now = now_rfc3339();
     conn.execute(
         "UPDATE workspaces SET is_active = 0, updated_at = ?1",
-        [now],
+        [&now],
     )
     .map_err(Error::Database)?;
     conn.execute(
         "UPDATE workspaces SET is_active = 1, updated_at = ?1 WHERE id = ?2",
-        rusqlite::params![now, id],
+        rusqlite::params![&now, id],
     )
     .map_err(Error::Database)?;
     get_workspace(conn, id)
@@ -629,6 +629,8 @@ pub fn list_layouts(conn: &Connection, workspace_id: &str) -> Result<Vec<Workspa
         .map_err(Error::Database)
 }
 
+/// 按 id 读取单条 layout（保留：Wave2 A-032 snapshot revision 全量读取使用）。
+#[allow(dead_code)]
 pub fn get_layout(conn: &Connection, id: &str) -> Result<Option<WorkspaceLayout>> {
     conn.query_row(
         &format!("SELECT {LAYOUT_COLS} FROM workspace_layouts WHERE id = ?1"),
