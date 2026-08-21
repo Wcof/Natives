@@ -35,6 +35,38 @@ fn lifecycle_requires_ids_and_run() {
 }
 
 #[test]
+fn pool_lease_requires_run_binding_before_database_access() {
+    let error = broker_pool_acquire(wire::CredentialPoolLeaseRequest {
+        provider_id: "antigravity".into(),
+        run_id: String::new(),
+    })
+    .unwrap_err();
+    assert!(error.contains("run_id"));
+}
+
+#[test]
+fn pool_refresh_rejects_mismatched_run_before_database_access() {
+    let lease = lease_registry().issue(
+        "antigravity",
+        "sub2api-pool",
+        "owning-run",
+        None,
+        chrono::Duration::seconds(60),
+    );
+    let error = broker_pool_refresh(wire::CredentialPoolRefreshRequest {
+        account_id: "account-1".into(),
+        provider_id: "antigravity".into(),
+        run_id: "other-run".into(),
+        lease_id: lease.lease_id,
+        credentials: serde_json::json!({}),
+        expires_at: None,
+        reauth_required: false,
+    })
+    .unwrap_err();
+    assert!(error.contains("lease"));
+}
+
+#[test]
 fn daemon_resolver_path_is_wired() {
     // Without natives.db keys this fails closed — never invents offline mock key.
     let err = resolve_for_daemon("openai", Some("missing"), "run-broker-test").unwrap_err();
@@ -165,8 +197,30 @@ fn lease_registry_ttl_expiry_fails_closed() {
     let registry = CredentialLeaseRegistry::default();
     // Negative TTL → already expired at issue time.
     let meta = registry.issue("openai", "k1", "run-1", None, chrono::Duration::seconds(-5));
-    let status = registry.status(&meta.lease_id).unwrap();
-    assert!(!status.active, "expired lease must report inactive");
+    assert!(registry.status(&meta.lease_id).is_err());
+    assert_eq!(registry.len(), 0, "expired lease must be pruned");
+}
+
+#[test]
+fn lease_registry_prunes_expired_entries_before_growth() {
+    let registry = CredentialLeaseRegistry::default();
+    for index in 0..100 {
+        registry.issue(
+            "openai",
+            "k1",
+            &format!("expired-run-{index}"),
+            None,
+            chrono::Duration::seconds(-1),
+        );
+    }
+    registry.issue(
+        "openai",
+        "k1",
+        "active-run",
+        None,
+        chrono::Duration::seconds(60),
+    );
+    assert_eq!(registry.len(), 1, "only the active lease should remain");
 }
 
 #[test]

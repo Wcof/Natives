@@ -796,3 +796,51 @@ pub(super) fn migrate_v24(conn: &Connection) -> Result<(), Error> {
     .map_err(Error::Database)?;
     Ok(())
 }
+
+/// Migration v24→v25 (FIL-005/008): persistent file metadata index + FTS5.
+///
+/// - `file_index`：非敏感文件元数据（path/kind/size/mtime/thumbnail）持久化，
+///   供 indexed search 与 Home/Files 查询复用，避免每次全量扫描。
+/// - FTS5 虚拟表存文件内容（content separated：正文与元数据分离，R-P1）。
+///   索引由 file_indexer 模块负责（initial scan + fs_watch 增量），
+///   本步只建 schema，保证幂等。
+pub(super) fn migrate_v25(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS file_index (
+            path TEXT PRIMARY KEY,
+            kind TEXT NOT NULL DEFAULT 'file',
+            size INTEGER NOT NULL DEFAULT 0,
+            mtime_ms INTEGER NOT NULL DEFAULT 0,
+            has_thumbnail INTEGER NOT NULL DEFAULT 0,
+            indexed_at_ms INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_index_kind
+            ON file_index(kind);
+        CREATE INDEX IF NOT EXISTS idx_file_index_mtime
+            ON file_index(mtime_ms);
+        INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '25');
+        ",
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Migration v25→v26 (FIL-008): FTS5 content index（content separated）。
+///
+/// FTS5 表不参与元数据查询，正文与元数据分离；索引内容由 file_indexer
+/// 写入（initial scan / fs_watch 增量 / debounce / coalesce）。
+pub(super) fn migrate_v26(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "
+        CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(
+            path UNINDEXED,
+            content,
+            tokenize = 'unicode61'
+        );
+        INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '26');
+        ",
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}

@@ -43,6 +43,7 @@ impl CredentialLeaseRegistry {
         let meta =
             wire::CredentialLeaseMeta::new(provider_id, key_id, run_id, session_id.clone(), ttl);
         if let Ok(mut guard) = self.inner.lock() {
+            prune_expired(&mut guard, chrono::Utc::now());
             guard.insert(
                 meta.lease_id.clone(),
                 LeaseEntry {
@@ -70,6 +71,7 @@ impl CredentialLeaseRegistry {
             .inner
             .lock()
             .map_err(|_| "lease registry lock poisoned".to_string())?;
+        prune_expired(&mut guard, chrono::Utc::now());
         let entry = guard
             .get_mut(lease_id)
             .ok_or_else(|| "lease not found".to_string())?;
@@ -88,15 +90,28 @@ impl CredentialLeaseRegistry {
         &self,
         lease_id: &str,
     ) -> std::result::Result<wire::CredentialLeaseStatus, String> {
-        let guard = self
+        let mut guard = self
             .inner
             .lock()
             .map_err(|_| "lease registry lock poisoned".to_string())?;
+        prune_expired(&mut guard, chrono::Utc::now());
         let entry = guard
             .get(lease_id)
             .ok_or_else(|| "lease not found or expired".to_string())?;
         Ok(lease_status_from_entry(lease_id, entry, chrono::Utc::now()))
     }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
+    }
+}
+
+fn prune_expired(
+    entries: &mut std::collections::HashMap<String, LeaseEntry>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    entries.retain(|_, entry| now < entry.expires_at);
 }
 
 fn lease_status_from_entry(

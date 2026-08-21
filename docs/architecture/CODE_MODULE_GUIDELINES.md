@@ -2,7 +2,7 @@
 
 > **版本**: 1.0.0 · **日期**: 2026-07-23  
 > **权威关系**：本文件为**架构级编码与模块边界指南**（含可操作阈值）。与产品红线冲突时，以 [`docs/standards/`](../standards/README.md) 为准；分层依赖的进程边界以 [`technical/01-layering.md`](../standards/technical/01-layering.md) 为准；前端组件单文件阈值以 [`frontend/01-structure.md`](../standards/frontend/01-structure.md) R-E6 为准（组件侧更严）。  
-> **适用范围**：本项目全部手写代码，包括前端、Tauri Host、Agent Daemon、Rust crates、执行引擎、Provider、工具系统、MCP、数据存储及相关测试代码。  
+> **适用范围**：本项目全部手写代码，包括前端、Tauri Host、Rust crates、领域服务（Files/Apps/AI/Proxy/Usage）、集成工具与相关测试代码。迁移期 legacy（Agent Daemon、Assistant、Jobs、Capabilities、Plugin Runtime）只允许安全、迁移与删除工作。  
 > **不适用范围**：自动生成代码、第三方代码、数据库迁移快照、协议生成文件和大规模静态数据。  
 > **核心目标**：通过明确的模块边界、单一状态归属和稳定内部接口，控制代码复杂度，避免超大文件、超级管理器、循环依赖和跨层调用。
 
@@ -53,13 +53,13 @@ manager.rs
 例如：
 
 ```text
-InteractionBroker：负责创建、等待、恢复和结束用户交互请求。
+CredentialBroker：负责签发、撤销与校验凭证租约。
 ```
 
 不合格的描述：
 
 ```text
-ProductionRuntime：负责 Agent 运行相关的各种功能。
+AiService：负责 AI 运行相关的各种功能。
 ```
 
 无法用一句话说清职责，通常意味着模块边界过大。
@@ -70,11 +70,11 @@ ProductionRuntime：负责 Agent 运行相关的各种功能。
 
 同一业务状态只能有一个权威写入者。
 
-例如 Run 状态应明确由一个模块负责提交：
+例如会话状态应明确由一个模块负责提交：
 
 ```text
-AgentEngine 产生状态变更请求
-→ RunLifecycleService 校验状态转移
+SessionService 产生状态变更请求
+→ LifecycleService 校验状态转移
 → Repository 持久化
 → 更新内存投影
 → 发布事件
@@ -83,10 +83,10 @@ AgentEngine 产生状态变更请求
 禁止多个模块分别修改同一状态：
 
 ```text
-UI 修改任务状态
-AgentEngine 修改任务状态
-RunManager 修改任务状态
-数据库代码再次修正任务状态
+UI 修改领域状态
+Host Service 修改领域状态
+Repository 修改领域状态
+数据库代码再次修正领域状态
 ```
 
 前端 Store、缓存和数据库中的状态只能作为权威状态的投影，不得成为并列真相源。
@@ -203,17 +203,17 @@ persist_result
 publish_events
 ```
 
-Agent Loop 主函数可以保留循环骨架，但不得把以下逻辑全部内嵌在循环中：
+领域编排主函数可以保留编排骨架，但不得把以下逻辑全部内嵌在循环或单个函数中：
 
 * 上下文组装；
-* Provider 调用；
-* Tool Call 解析；
+* 服务调用；
+* 请求解析；
 * 权限审批；
-* 工具执行；
+* 副作用执行；
 * 重试；
 * 状态持久化；
 * 事件广播；
-* 子 Agent 调度。
+* 子任务调度。
 
 ---
 
@@ -277,15 +277,15 @@ allowlists
 可以按语义拆分多个 `impl`：
 
 ```rust
-impl RunManager {
+impl AppService {
     // 生命周期入口
 }
 
-impl RunManager {
+impl AppService {
     // 查询能力
 }
 
-impl RunManager {
+impl AppService {
     // 恢复能力
 }
 ```
@@ -389,7 +389,7 @@ transport/
   stdio.rs
 ```
 
-供应商差异、传输差异和存储差异应位于适配层，不得渗透到 Agent Loop。
+供应商差异、传输差异和存储差异应位于适配层，不得渗透到领域编排层。
 
 ---
 
@@ -482,91 +482,87 @@ trait RunRepository {
 
 以下场景才使用 RPC、IPC 或 stdio：
 
-* Tauri Host 与 Daemon；
-* Daemon 与外部 CLI；
-* Daemon 与 MCP Server；
-* 本地客户端与云端 Executor。
-
-进程内部模块不得为了“解耦”而使用 HTTP 或 JSON-RPC 相互调用。
+* Tauri Host 与 Renderer（typed adapter / IPC）；
+* Tauri Host 与受监督 Sidecar（仅真实生命周期/隔离需求）；
+* Tauri Host 与外部 AI CLI（经 App Launch / 集成 Adapter）；
+* 进程内部模块不得为了“解耦”而使用 HTTP 或 JSON-RPC 相互调用。
 
 ---
 
-## 9. Agent 执行引擎专项规范
+## 9. 领域执行模块专项规范
 
-### 9.1 Agent 只负责决策
+> 本专章针对 Host 中的「领域执行」模块（App Runtime、Local Proxy Engine、AI Tool
+> Integration、Files/Usage 服务等）。旧 Agent Loop / RunManager / Capability
+> Gateway 语义已由 ADR-0020 冻结删除，本节只描述新基线下的执行职责边界。
 
-模型只能生成：
+### 9.1 模型只负责内容生成
 
-* 文本回复；
-* 结构化 Tool Call；
-* 任务计划；
-* 状态建议；
-* 子任务请求。
+对 Provider 的每次调用，模型只能生成：
+
+* 文本 / 结构化内容；
+* 结构化 Tool Call 请求。
 
 模型不得直接：
 
 * 执行 Shell；
 * 修改文件；
 * 访问数据库；
-* 更新 Run 状态；
-* 写入权限授权；
-* 创建绕过 Runtime 的子进程。
+* 直接写 Usage / 状态；
+* 创建绕过 Host 监督的子进程。
 
-正确链路：
+正确链路（Host 侧）：
 
 ```text
-模型提出 Action
-→ Action Schema 校验
-→ 权限策略判断
-→ 用户审批或策略授权
-→ Tool Runtime 执行
-→ 结果结构化
-→ 写入事件与会话
-→ 返回模型
+请求规范化
+→ 参数/权限校验
+→ Connection 选择
+→ Credential 解析（Keychain secret_ref）
+→ ProxyEngine 调用
+→ 流事件归一
+→ Usage 归一化
+→ 返回 Renderer
 ```
 
 ---
 
-### 9.2 Agent Loop 必须保持轻量
+### 9.2 执行编排必须保持轻量
 
-Agent Loop 只负责：
+ProxyEngine / App Runtime 的编排层只负责：
 
-1. 获取当前上下文；
-2. 调用 Provider；
-3. 解析模型响应；
-4. 调度 Tool Runtime；
-5. 接收 Observation；
-6. 判断继续或结束；
+1. 解析入站请求；
+2. 选择 Route / Connection；
+3. 调用传输层；
+4. 归一化事件；
+5. 处理错误 / 重试；
+6. 判断结束；
 7. 响应取消；
 8. 产生领域事件。
 
 以下能力必须独立：
 
 ```text
-ContextAssembler
-ProviderGateway
-ToolRuntime
-PermissionService
-InteractionBroker
-CancellationService
-RunLifecycleService
+RequestCodec
+Transport（HTTP/SSE）
+ConnectionResolver
+CredentialPool
+FailoverPolicy
+Cancellation
+UsageNormalizer
 EventPublisher
-CompactionService
-ChildRunCoordinator
+Supervisor
 ```
 
 ---
 
-### 9.3 Run 状态必须统一提交
+### 9.3 领域状态必须统一提交
 
-禁止 AgentEngine、RunManager、数据库和 UI 分别修改状态。
+禁止 Service、Repository、数据库和 UI 分别修改同一领域状态。
 
 推荐：
 
 ```text
-AgentEngine
-→ RunTransitionRequest
-→ RunLifecycleService
+Service
+→ TransitionRequest
 → 状态合法性校验
 → 持久化
 → 内存投影
@@ -579,65 +575,45 @@ AgentEngine
 
 ### 9.4 取消机制必须统一
 
-每个 Run 必须拥有统一的取消根节点：
+每个执行（Proxy 请求、App Runtime 实例、集成工具调用）必须拥有统一取消根节点：
 
 ```text
-RunCancellationToken
+CancellationToken
 ├── Provider Stream
-├── Tool Call
-├── Shell Process
-├── MCP Request
-├── Child Run
-└── External CLI
+├── 子进程
+├── HTTP 请求
+├── 集成工具调用
+└── 外部 CLI
 ```
 
-禁止不同模块各自维护互不关联的取消标志。
-
-Run 被标记为 `Cancelled` 前，必须明确：
-
-* 当前执行是否已停止；
-* 子进程是否已清理；
-* 子 Agent 是否已取消；
-* Provider 流是否已关闭；
-* 外部 CLI 是否已终止。
+禁止不同模块各自维护互不关联的取消标志。取消被确认前，必须明确：当前执行是否
+已停止、子进程是否已清理、socket/task 是否已回收。
 
 ---
 
-### 9.5 工具执行必须收敛
+### 9.5 副作用执行必须收敛
 
-所有原生工具执行必须经过统一链路：
+所有副作用执行（进程、文件写、端口监听、外部工具）必须经过统一监督链：
 
 ```text
-Tool Registry
-→ Schema Validation
-→ Path Scope
-→ Permission Policy
-→ Approval
-→ Execution
-→ Audit
+Registry/验证
+→ Scope 校验
+→ 权限策略
+→ 审批
+→ 执行（supervised）
+→ 审计
 ```
 
-以下入口不得绕过统一链路：
-
-* Scheduler；
-* 子 Agent；
-* UI；
-* MCP；
-* Skill；
-* Extension；
-* 自动修复；
-* Replay；
-* CLI Bridge。
-
-外部 CLI 自带 Harness 时，必须明确标记为独立执行后端，不得宣称其工具调用自动经过原生 Capability Gateway。
+外部 AI CLI（Claude Code / Codex / Gemini / OpenCode）作为独立工具运行时，必须明确
+标记为外部执行后端，不得宣称其内部能力自动经过原生集成层。
 
 ---
 
 ### 9.6 重试必须有幂等控制
 
-模型请求、Tool Call、Run Retry 和 Scheduler Trigger 必须有明确幂等标识。
+请求重试与执行重试必须有明确幂等标识。
 
-禁止在无法确认工具是否已成功执行时直接重复执行具有副作用的操作。
+禁止在无法确认副作用是否已成功执行时直接重复执行具有副作用的操作。
 
 高风险操作包括：
 
@@ -646,25 +622,25 @@ Tool Registry
 * Git push；
 * 网络请求；
 * 数据库迁移；
-* 发送消息；
-* MCP 写操作。
+* 端口占用；
+* 外部 API 写操作。
 
 ---
 
 ## 10. 超大模块专项整改规范
 
-### 10.1 `ProductionRuntime` 类型模块
+### 10.1 `RuntimeService` 类型模块
 
 如果 Runtime 同时负责：
 
 * Engine 注册；
-* Provider 创建；
+* Connection 创建；
 * 权限等待；
-* Tool Grant；
-* 子 Agent；
+* Credential 解析；
+* 子任务调度；
 * Hook；
 * 取消；
-* 任务输出；
+* 输出归一化；
 * 事件发布；
 
 则应拆为：
@@ -672,17 +648,17 @@ Tool Registry
 ```text
 runtime/
   mod.rs
-  production_runtime.rs
-  engine_registry.rs
-  cancellation_registry.rs
-  interaction_broker.rs
-  child_run_coordinator.rs
-  tool_grant_service.rs
-  hook_runtime.rs
-  runtime_event_publisher.rs
+  service.rs
+  registry.rs
+  cancellation.rs
+  connection_resolver.rs
+  credential_pool.rs
+  supervisor.rs
+  usage_normalizer.rs
+  event_publisher.rs
 ```
 
-`ProductionRuntime` 只保留：
+`RuntimeService` 只保留：
 
 * 组件组装；
 * 生命周期初始化；
@@ -691,24 +667,24 @@ runtime/
 
 ---
 
-### 10.2 `RunManager` 类型模块
+### 10.2 `SessionService` 类型模块
 
-如果 RunManager 同时负责：
+如果 SessionService 同时负责：
 
-* Run 创建；
+* 会话创建；
 * 状态转移；
 * SQLite；
 * 恢复；
 * 重试；
 * 订阅；
 * 事件回放；
-* Engine 启动；
+* 引擎启动；
 
 则应拆为：
 
 ```text
-run/
-  manager.rs
+session/
+  service.rs
   lifecycle.rs
   registry.rs
   repository.rs
@@ -718,7 +694,7 @@ run/
   model.rs
 ```
 
-RunManager 可作为 Facade，但不得继续持有全部实现逻辑。
+SessionService 可作为 Facade，但不得继续持有全部实现逻辑。
 
 ---
 
@@ -736,11 +712,11 @@ RPC 层仅允许负责：
 
 不得在 RPC Handler 中：
 
-* 创建 AgentEngine；
+* 创建领域 Service；
 * 执行 Shell；
-* 修改 Run 内部状态；
+* 修改领域内部状态；
 * 直接操作 SQLite；
-* 直接调用 MCP 工具；
+* 直接调用外部工具；
 * 拼装复杂业务流程。
 
 推荐：
@@ -752,12 +728,11 @@ rpc/
   auth.rs
   error.rs
   handlers/
-    run.rs
-    conversation.rs
-    permission.rs
-    tool.rs
-    mcp.rs
-    scheduler.rs
+    proxy.rs
+    apps.rs
+    files.rs
+    ai.rs
+    usage.rs
 ```
 
 ---
@@ -783,24 +758,24 @@ rpc/
 
 ### 11.2 关键测试覆盖
 
-Agent 执行引擎至少需要：
+领域执行模块至少需要：
 
-* Run 状态合法转移测试；
-* Agent Loop 结束条件测试；
-* 最大轮次测试；
-* Provider 超时测试；
-* Tool Call 参数校验测试；
+* 状态合法转移测试；
+* 生命周期结束条件测试；
+* 最大重试轮次测试；
+* Provider/上游超时测试；
+* 请求参数校验测试；
 * 路径逃逸测试；
 * 权限拒绝测试；
 * 权限等待取消测试；
 * 子进程树停止测试；
-* Run 取消级联测试；
-* 子 Agent 深度和并发限制测试；
+* 取消级联测试；
+* 并发限制测试；
 * 事件 persist-first 测试；
-* Daemon 重启恢复测试；
-* Tool Call 幂等测试；
-* Scheduler 重复触发测试；
-* MCP 信任边界测试；
+* 重启恢复测试；
+* 请求幂等测试；
+* 定时触发防重测试；
+* 外部工具信任边界测试；
 * 外部 CLI 终止测试。
 
 拆分模块时，不得只移动文件而不补充对应测试。
@@ -863,14 +838,14 @@ Agent 执行引擎至少需要：
 
 * [ ] 是否出现反向依赖；
 * [ ] 核心层是否依赖具体基础设施；
-* [ ] Provider 差异是否侵入 Agent Loop；
+* [ ] Provider 差异是否侵入领域编排层；
 * [ ] UI 是否直接调用底层执行器；
 * [ ] RPC 是否包含业务逻辑。
 
-### Agent 安全
+### 执行安全
 
-* [ ] 模型输出是否经过结构校验；
-* [ ] Tool Call 是否经过权限判断；
+* [ ] 上游响应是否经过结构校验；
+* [ ] 外部工具调用是否经过权限判断；
 * [ ] 路径是否经过 Scope 校验；
 * [ ] Shell 是否使用结构化 executable + args；
 * [ ] 是否支持超时和取消；
@@ -895,7 +870,7 @@ Codex、Claude Code 及其他 AI 协作者在新增、修改或重构代码时�
 2. 不因减少文件行数而创建无意义文件；
 3. 优先按能力域、状态域和生命周期拆分；
 4. 保持现有公开协议兼容，除非任务明确要求修改；
-5. 不得让 UI、RPC、Scheduler 或扩展绕过执行权威；
+5. 不得让 UI、RPC、定时任务或扩展绕过执行权威；
 6. 拆分前确认调用关系和测试覆盖；
 7. 拆分后更新模块导出、引用、测试和架构文档；
 8. 不得同时进行无关格式化或大范围重命名；

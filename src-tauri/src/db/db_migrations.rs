@@ -334,6 +334,16 @@ pub fn apply(conn: &Connection) -> Result<(), Error> {
         migrate_v24(conn)?;
     }
 
+    // Migration v24→v25 (FIL-005): persistent file metadata index.
+    if current_version < 25 {
+        migrate_v25(conn)?;
+    }
+
+    // Migration v25→v26 (FIL-008): FTS5 content index.
+    if current_version < 26 {
+        migrate_v26(conn)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "

@@ -1,6 +1,10 @@
 //! Authenticated localhost compatibility API backed by the daemon route provider.
 
-use agent_core::{EngineImage, EngineMessage, EngineProvider, EngineProviderEvent, EngineToolCall};
+mod completion_encoder;
+mod protocol;
+mod stream_encoder;
+
+use agent_core::{EngineProvider, EngineProviderEvent};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -8,6 +12,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::natives_db_broker::{LoopbackSettings, NativesDbBroker};
+use completion_encoder::CompletionEncoder;
+use protocol::parse_request;
+use stream_encoder::StreamEncoder;
 
 const MAX_BODY: usize = 32 * 1024 * 1024;
 
@@ -135,16 +142,16 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
         )
         .await;
     }
-    let messages = protocol_messages(&request.path, &body)?;
+    let parsed = parse_request(&request.path, &body)?;
     let stream_requested = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let provider = local_provider(&model)?;
+    let provider = local_provider(&model)?.with_controls(parsed.controls);
     let cancellation = tokio_util::sync::CancellationToken::new();
     let events = provider
         .stream(
             &model,
-            messages,
-            &[],
-            body.get("system").and_then(Value::as_str),
+            parsed.messages,
+            &parsed.tools,
+            parsed.system.as_deref(),
             cancellation,
         )
         .await
@@ -300,141 +307,6 @@ fn local_provider(model: &str) -> Result<crate::routing::RoutedProvider, String>
     ))
 }
 
-fn protocol_messages(path: &str, body: &Value) -> Result<Vec<EngineMessage>, String> {
-    let source = if path == "/v1/responses" {
-        body.get("input").cloned().unwrap_or(Value::Array(vec![]))
-    } else {
-        body.get("messages")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]))
-    };
-    match source {
-        Value::String(text) => Ok(vec![message("user", text)]),
-        Value::Array(items) => items
-            .into_iter()
-            .map(|item| {
-                let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
-                let content = item.get("content").unwrap_or(&item);
-                let text = content_text(content);
-                let images = content_images(content);
-                let tool_calls = item
-                    .get("tool_calls")
-                    .and_then(Value::as_array)
-                    .map(|calls| {
-                        calls
-                            .iter()
-                            .filter_map(|call| {
-                                let function = call.get("function").unwrap_or(call);
-                                Some(EngineToolCall {
-                                    id: call.get("id")?.as_str()?.to_string(),
-                                    name: function.get("name")?.as_str()?.to_string(),
-                                    arguments: function
-                                        .get("arguments")
-                                        .map(|value| {
-                                            if let Some(text) = value.as_str() {
-                                                text.to_string()
-                                            } else {
-                                                value.to_string()
-                                            }
-                                        })
-                                        .unwrap_or_else(|| "{}".into()),
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .filter(|calls| !calls.is_empty());
-                let tool_call_id = item
-                    .get("tool_call_id")
-                    .or_else(|| item.get("tool_use_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                Ok(EngineMessage {
-                    role: role.to_string(),
-                    content: text,
-                    tool_call_id,
-                    tool_name: item.get("name").and_then(Value::as_str).map(str::to_string),
-                    tool_calls,
-                    images,
-                })
-            })
-            .collect(),
-        _ => Err("messages/input must be a string or array".into()),
-    }
-}
-
-fn message(role: &str, content: String) -> EngineMessage {
-    EngineMessage::text(role, content)
-}
-fn content_text(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|part| {
-                part.get("text")
-                    .or_else(|| part.get("content"))
-                    .and_then(Value::as_str)
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Value::Object(object) => object
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        _ => String::new(),
-    }
-}
-
-/// Pull image parts out of an OpenAI-shaped `content` array.
-///
-/// Two spellings reach this ingress and both are accepted:
-/// - chat completions — `{"type":"image_url","image_url":{"url":…,"detail":…}}`
-/// - Responses API — `{"type":"input_image","image_url":"…"}`
-///
-/// A part whose URL is missing or empty is skipped rather than turned into an
-/// empty [`EngineImage`]: an image the adapters cannot encode would be reported
-/// to the model as a degraded note, which would be a lie about what the caller
-/// actually sent.
-fn content_images(value: &Value) -> Vec<EngineImage> {
-    let Value::Array(parts) = value else {
-        return Vec::new();
-    };
-    parts
-        .iter()
-        .filter_map(|part| {
-            let kind = part.get("type").and_then(Value::as_str).unwrap_or("");
-            if kind != "image_url" && kind != "input_image" {
-                return None;
-            }
-            let source = part.get("image_url")?;
-            // Chat completions nests `{url, detail}`; Responses passes a bare string.
-            let (url, detail) = match source {
-                Value::String(url) => (url.as_str(), None),
-                other => (
-                    other.get("url").and_then(Value::as_str)?,
-                    other.get("detail").and_then(Value::as_str),
-                ),
-            };
-            if url.trim().is_empty() {
-                return None;
-            }
-            Some(EngineImage {
-                url: url.to_string(),
-                // `data:` URIs carry their own MIME type; `media_type` exists for
-                // references that do not, and this ingress has no other source
-                // for it, so leaving it None is honest rather than guessed.
-                media_type: part
-                    .get("media_type")
-                    .or_else(|| part.get("mime_type"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                detail: detail.map(str::to_string),
-            })
-        })
-        .collect()
-}
-
 async fn write_response(
     stream: &mut TcpStream,
     code: u16,
@@ -458,16 +330,25 @@ async fn write_stream(
     mut events: agent_core::EngineProviderEventStream,
 ) -> Result<(), String> {
     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n").await.map_err(|e| e.to_string())?;
+    let mut encoder = StreamEncoder::new(path)?;
     while let Some(event) = events.next().await {
-        let frame = event_frame(path, event)?;
-        stream
-            .write_all(frame.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
+        let frame = encoder.encode(event)?;
+        if !frame.is_empty() {
+            stream
+                .write_all(frame.as_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        if encoder.is_terminal() {
+            break;
+        }
     }
-    if path == "/v1/chat/completions" {
+    if !encoder.is_terminal() {
+        return Err("provider stream ended without a terminal event".into());
+    }
+    if let Some(done) = encoder.chat_done_frame() {
         stream
-            .write_all(b"data: [DONE]\n\n")
+            .write_all(done.as_bytes())
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -480,63 +361,25 @@ async fn write_completion(
     model: &str,
     mut events: agent_core::EngineProviderEventStream,
 ) -> Result<(), String> {
-    let mut content = String::new();
-    let mut tool_calls: std::collections::BTreeMap<usize, (String, String, String)> =
-        std::collections::BTreeMap::new();
+    let mut encoder = CompletionEncoder::new(path, model)?;
     while let Some(event) = events.next().await {
-        match event {
-            EngineProviderEvent::TextDelta(delta) | EngineProviderEvent::ReasoningDelta(delta) => {
-                content.push_str(&delta)
-            }
-            EngineProviderEvent::Error { message, .. } => {
-                return write_response(
-                    stream,
-                    400,
-                    "application/json",
-                    serde_json::to_string(&json!({"error":{"message":message}}))
-                        .unwrap()
-                        .as_bytes(),
-                )
-                .await
-            }
-            EngineProviderEvent::ToolCallDelta {
-                index,
-                id,
-                name,
-                arguments_delta,
-            } => {
-                let entry = tool_calls.entry(index).or_default();
-                if let Some(id) = id {
-                    entry.0 = id;
-                }
-                if let Some(name) = name {
-                    entry.1 = name;
-                }
-                entry.2.push_str(&arguments_delta);
-            }
-            _ => {}
+        if let EngineProviderEvent::Error { message, .. } = &event {
+            return write_response(
+                stream,
+                400,
+                "application/json",
+                serde_json::to_string(&json!({"error":{"message":message}}))
+                    .unwrap()
+                    .as_bytes(),
+            )
+            .await;
+        }
+        encoder.push(event)?;
+        if encoder.is_terminal() {
+            break;
         }
     }
-    let openai_tools: Vec<Value> = tool_calls.values().map(|(id,name,args)| json!({"id":id,"type":"function","function":{"name":name,"arguments":args}})).collect();
-    let payload = if path == "/v1/messages" {
-        let blocks: Vec<Value> = if tool_calls.is_empty() {
-            vec![json!({"type":"text","text":content})]
-        } else {
-            tool_calls.values().map(|(id,name,args)| json!({"type":"tool_use","id":id,"name":name,"input":serde_json::from_str::<Value>(args).unwrap_or_else(|_| json!({}))})).collect()
-        };
-        json!({"id":"msg_local","type":"message","role":"assistant","model":model,"content":blocks,"stop_reason":if tool_calls.is_empty() { "end_turn" } else { "tool_use" }})
-    } else if path == "/v1/responses" {
-        let output = if tool_calls.is_empty() {
-            vec![
-                json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":content}]}),
-            ]
-        } else {
-            tool_calls.values().map(|(id,name,args)| json!({"type":"function_call","call_id":id,"name":name,"arguments":args})).collect()
-        };
-        json!({"id":"resp_local","object":"response","model":model,"output":output})
-    } else {
-        json!({"id":"chatcmpl-local","object":"chat.completion","model":model,"choices":[{"index":0,"message":{"role":"assistant","content":content,"tool_calls":openai_tools},"finish_reason":"stop"}]})
-    };
+    let payload = encoder.finish()?;
     write_response(
         stream,
         200,
@@ -544,78 +387,6 @@ async fn write_completion(
         serde_json::to_string(&payload).unwrap().as_bytes(),
     )
     .await
-}
-
-fn event_frame(path: &str, event: EngineProviderEvent) -> Result<String, String> {
-    match (path, event) {
-        (_, EngineProviderEvent::TextDelta(delta)) if path == "/v1/messages" => Ok(format!(
-            "event: content_block_delta\ndata: {}\n\n",
-            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":delta}})
-        )),
-        (_, EngineProviderEvent::TextDelta(delta)) if path == "/v1/responses" => Ok(format!(
-            "event: response.output_text.delta\ndata: {}\n\n",
-            json!({"type":"response.output_text.delta","delta":delta})
-        )),
-        (_, EngineProviderEvent::TextDelta(delta)) => Ok(format!(
-            "data: {}\n\n",
-            json!({"id":"chatcmpl-local","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":delta},"finish_reason":null}]})
-        )),
-        (_, EngineProviderEvent::ReasoningDelta(delta)) => Ok(format!(
-            "data: {}\n\n",
-            json!({"type":"response.reasoning.delta","delta":delta})
-        )),
-        (
-            _,
-            EngineProviderEvent::ToolCallDelta {
-                index,
-                id,
-                name,
-                arguments_delta,
-            },
-        ) if path == "/v1/chat/completions" => Ok(format!(
-            "data: {}\n\n",
-            json!({"id":"chatcmpl-local","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":index,"id":id,"type":"function","function":{"name":name,"arguments":arguments_delta}}]}}]})
-        )),
-        (
-            _,
-            EngineProviderEvent::ToolCallDelta {
-                index,
-                id,
-                name,
-                arguments_delta,
-            },
-        ) if path == "/v1/messages" => Ok(format!(
-            "event: content_block_delta\ndata: {}\n\n",
-            json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":arguments_delta},"id":id,"name":name})
-        )),
-        (
-            _,
-            EngineProviderEvent::ToolCallDelta {
-                index,
-                id,
-                name,
-                arguments_delta,
-            },
-        ) if path == "/v1/responses" => Ok(format!(
-            "event: response.function_call_arguments.delta\ndata: {}\n\n",
-            json!({"type":"response.function_call_arguments.delta","output_index":index,"call_id":id,"name":name,"delta":arguments_delta})
-        )),
-        (_, EngineProviderEvent::Completed | EngineProviderEvent::CompletedWithReason { .. })
-            if path == "/v1/messages" =>
-        {
-            Ok("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".into())
-        }
-        (_, EngineProviderEvent::Completed | EngineProviderEvent::CompletedWithReason { .. })
-            if path == "/v1/responses" =>
-        {
-            Ok("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n".into())
-        }
-        (_, EngineProviderEvent::Error { message, .. }) => Ok(format!(
-            "data: {}\n\n",
-            json!({"error":{"message":message}})
-        )),
-        _ => Ok(String::new()),
-    }
 }
 
 #[cfg(test)]
@@ -627,85 +398,5 @@ mod tests {
         assert!(authorized(Some(&"Bearer abc".into()), Some("abc")));
         assert!(!authorized(Some(&"Bearer ab".into()), Some("abc")));
         assert!(!authorized(None, Some("abc")));
-    }
-
-    /// The ingress used to keep only `text` parts, so an image posted to
-    /// `/v1/chat/completions` never became an `EngineImage` at all — the
-    /// adapters' image arms were unreachable and `image_input: true` was an
-    /// empty promise. Pin the whole shape, not just presence.
-    #[test]
-    fn chat_completions_image_parts_reach_the_engine() {
-        let messages = protocol_messages(
-            "/v1/chat/completions",
-            &json!({"messages":[{"role":"user","content":[
-                {"type":"text","text":"what is this"},
-                {"type":"image_url","image_url":{
-                    "url":"data:image/png;base64,iVBORw0KGgo=",
-                    "detail":"high"
-                }}
-            ]}]}),
-        )
-        .unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content, "what is this");
-        assert_eq!(messages[0].images.len(), 1);
-        assert_eq!(
-            messages[0].images[0].url,
-            "data:image/png;base64,iVBORw0KGgo="
-        );
-        assert_eq!(messages[0].images[0].detail.as_deref(), Some("high"));
-    }
-
-    /// The Responses API spells the same thing differently — a bare string
-    /// under `input_image` rather than a nested object.
-    #[test]
-    fn responses_input_image_reaches_the_engine() {
-        let messages = protocol_messages(
-            "/v1/responses",
-            &json!({"input":[{"role":"user","content":[
-                {"type":"input_image","image_url":"https://example.test/a.png"}
-            ]}]}),
-        )
-        .unwrap();
-        assert_eq!(messages[0].images.len(), 1);
-        assert_eq!(messages[0].images[0].url, "https://example.test/a.png");
-    }
-
-    /// An empty or missing URL must not become a placeholder image: the
-    /// adapters would announce a degraded image to the model, claiming the
-    /// caller sent a picture when it sent nothing.
-    #[test]
-    fn image_parts_without_a_url_are_skipped_not_placeheld() {
-        let messages = protocol_messages(
-            "/v1/chat/completions",
-            &json!({"messages":[{"role":"user","content":[
-                {"type":"text","text":"hi"},
-                {"type":"image_url","image_url":{"url":"   "}},
-                {"type":"image_url"}
-            ]}]}),
-        )
-        .unwrap();
-        assert!(messages[0].images.is_empty());
-        assert_eq!(messages[0].content, "hi");
-    }
-
-    #[test]
-    fn text_only_requests_carry_no_images() {
-        let messages = protocol_messages(
-            "/v1/chat/completions",
-            &json!({"messages":[{"role":"user","content":"plain"}]}),
-        )
-        .unwrap();
-        assert!(messages[0].images.is_empty());
-    }
-
-    #[test]
-    fn messages_accept_openai_and_anthropic_content_arrays() {
-        let messages = protocol_messages(
-            "/v1/messages",
-            &json!({"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}),
-        )
-        .unwrap();
-        assert_eq!(messages[0].content, "hi");
     }
 }

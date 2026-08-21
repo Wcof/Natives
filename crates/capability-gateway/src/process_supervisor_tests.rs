@@ -2,8 +2,6 @@
 
 use super::*;
 
-use super::*;
-
 #[tokio::test]
 async fn fake_supervisor_run_isolation() {
     let sup = FakeProcessSupervisor::new();
@@ -196,17 +194,23 @@ async fn shell_trap_term_child_is_terminated_within_budget() {
     let dir = std::env::temp_dir().join(format!("ps-term-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let marker = dir.join("term.txt");
+    let ready_marker = dir.join("ready.txt");
     let script = dir.join("trap_term.py");
     std::fs::write(
         &script,
         format!(
             r#"import signal, time, sys
 def handler(signum, frame):
-    open({marker:?}, "w").write("term")
+    with open({marker:?}, "w") as f:
+        f.write("term")
+        f.flush()
 signal.signal(signal.SIGTERM, handler)
+with open({ready_marker:?}, "w") as f:
+    f.write("ready")
+    f.flush()
 print("ready", flush=True)
 while True:
-    time.sleep(1)
+    time.sleep(0.05)
 "#
         ),
     )
@@ -228,8 +232,13 @@ while True:
         .await
         .expect("spawn trap_term.py (python3 required)");
 
-    // Give the child a moment to install its handler.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Deterministically wait for the child to install its signal handler.
+    for _ in 0..100 {
+        if ready_marker.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     let started = Instant::now();
     let cancelled = sup.cancel(&task_id).await.unwrap();

@@ -13,8 +13,7 @@ import { ProviderSettingsWorkspace } from '@/components/settings/provider-routin
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
 import ExecutionEngineSettingsPanel from '@/components/settings/ExecutionEngineSettingsPanel';
-import { UsageDashboard } from '@/components/dashboard/UsageDashboard';
-import StorageOverview from '@/components/settings/StorageOverview';
+import PersonalOverviewSummary from '@/components/settings/PersonalOverviewSummary';
 import EnvironmentProfilesSettings from '@/components/settings/EnvironmentProfilesSettings';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
@@ -542,13 +541,9 @@ export default function SettingsPage({
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'personal':
-        // 问题7：设置页直接复用个人主页 UsageDashboard（同一筛选/图表/缓存/
-        // 同步状态机），仅通过既有 children 接缝追加真实 StorageOverview。
-        return (
-          <UsageDashboard>
-            <StorageOverview />
-          </UsageDashboard>
-        );
+        // 决策 10：设置个人概览只保留摘要（完整 Usage 归「数据/用量」页）。
+        // 复用共享 useUsageData + summarizeOverviewUsage，不复制首页组件职责。
+        return <PersonalOverviewSummary />;
       case 'general':
         return renderGeneral();
       case 'appearance':

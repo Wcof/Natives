@@ -16,9 +16,21 @@
 //! Production rule: UDS failure must surface as an explicit fault state.
 //! Never silently fall back to Embedded.
 
-use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+#[path = "sidecar_supervisor_config.rs"]
+mod sidecar_supervisor_config;
+#[path = "sidecar_supervisor_helpers.rs"]
+mod sidecar_supervisor_helpers;
+
+pub use sidecar_supervisor_config::*;
+pub use sidecar_supervisor_helpers::*;
+
+#[cfg(test)]
+use sidecar_supervisor_helpers::uuid_like;
+use sidecar_supervisor_helpers::{
+    force_kill_child_tree, generate_bootstrap_token, which_in_path, write_broker_session,
+};
+
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,142 +38,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const DAEMON_RPC_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Supervisor state visible to UI / health commands.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SupervisorState {
-    Stopped,
-    Starting,
-    Healthy,
-    Degraded { reason: String },
-    Faulted { reason: String },
-    Restarting,
-    ShuttingDown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SupervisorStatus {
-    pub state: SupervisorState,
-    pub mode: String,
-    pub socket_path: Option<String>,
-    pub pid: Option<u32>,
-    pub restart_count: u32,
-    pub last_error: Option<String>,
-    /// True only when UDS is required and currently healthy.
-    pub production_ready: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct SupervisorConfig {
-    pub runtime_dir: PathBuf,
-    pub socket_path: PathBuf,
-    pub pid_path: PathBuf,
-    pub daemon_bin: PathBuf,
-    pub natives_db_path: PathBuf,
-    /// Daemon conversation/run authority DB (Phase 0 assistant.db).
-    pub assistant_db_path: PathBuf,
-    /// When true, missing UDS is Faulted (never Embedded).
-    pub require_uds: bool,
-    pub health_timeout: Duration,
-    /// How long Host waits after closing lifeline before force-killing the Daemon.
-    pub shutdown_grace: Duration,
-    pub max_restarts: u32,
-}
-
-impl SupervisorConfig {
-    /// Build from environment with sensible defaults.
-    pub fn from_env() -> Self {
-        let runtime_dir = std::env::var("NATIVES_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| default_runtime_dir());
-        let socket_path = std::env::var("NATIVES_DAEMON_SOCKET")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| runtime_dir.join("natives-agent.sock"));
-        let natives_db_path = std::env::var("NATIVES_DB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs_home()
-                    .map(|h| h.join(".natives").join("natives.db"))
-                    .unwrap_or_else(|| PathBuf::from("natives.db"))
-            });
-        let assistant_db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs_home()
-                    .map(|h| h.join(".natives").join("assistant.db"))
-                    .unwrap_or_else(|| PathBuf::from("assistant.db"))
-            });
-        let daemon_bin = std::env::var("NATIVES_DAEMON_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| resolve_bundled_daemon_bin());
-        let require_uds = std::env::var("NATIVES_DAEMON_MODE")
-            .map(|m| {
-                matches!(
-                    m.to_ascii_lowercase().as_str(),
-                    "uds" | "sidecar" | "remote"
-                )
-            })
-            .unwrap_or_else(|_| !cfg!(test))
-            || std::env::var("NATIVES_REQUIRE_UDS")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-
-        Self {
-            pid_path: runtime_dir.join("agent-daemon.pid"),
-            runtime_dir,
-            socket_path,
-            daemon_bin,
-            natives_db_path,
-            assistant_db_path,
-            require_uds,
-            health_timeout: Duration::from_secs(15),
-            shutdown_grace: Duration::from_millis(
-                std::env::var("NATIVES_DAEMON_SHUTDOWN_GRACE_MS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(2_000),
-            ),
-            max_restarts: 5,
-        }
-    }
-}
-
-fn resolve_bundled_daemon_bin() -> PathBuf {
-    let name = if cfg!(windows) {
-        "natives-agent-daemon.exe"
-    } else {
-        "natives-agent-daemon"
-    };
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for candidate in [
-                dir.join(name),
-                dir.parent().map(|p| p.join(name)).unwrap_or_default(),
-            ] {
-                if candidate.is_file() {
-                    return candidate;
-                }
-            }
-        }
-    }
-    PathBuf::from(name)
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
-fn default_runtime_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-        return PathBuf::from(xdg).join("natives");
-    }
-    dirs_home()
-        .map(|h| h.join(".natives").join("runtime"))
-        .unwrap_or_else(|| std::env::temp_dir().join("natives-runtime"))
-}
 
 /// In-process supervisor (Phase 2 skeleton — spawn + health + no silent fallback).
 pub struct SidecarSupervisor {
@@ -929,147 +805,6 @@ impl SidecarSupervisor {
     fn bypass_health_probe_for_test(&self) {
         self.health_probe_bypass.store(true, Ordering::SeqCst);
     }
-}
-
-fn force_kill_child_tree(child: &mut Child) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        let pid = child.id() as i32;
-        // Negative pid: signal the process group started via setpgid in spawn.
-        let rc = unsafe { libc::kill(-pid, libc::SIGKILL) };
-        if rc != 0 {
-            child.kill().map_err(|e| format!("kill child {pid}: {e}"))?;
-        }
-        let _ = child.try_wait();
-        Ok(())
-    }
-    #[cfg(windows)]
-    {
-        let pid = child.id();
-        // Kill full process tree, then wait/reap.
-        let status = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()
-            .map_err(|e| format!("taskkill spawn failed: {e}"))?;
-        if !status.success() {
-            // Fallback to direct kill if taskkill fails.
-            let _ = child.kill();
-        }
-        let _ = child.wait();
-        Ok(())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        child.kill().map_err(|e| format!("kill child: {e}"))?;
-        let _ = child.wait();
-        Ok(())
-    }
-}
-
-fn generate_bootstrap_token() -> String {
-    use rand::RngCore;
-    let mut bytes = [0_u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    hex::encode(bytes)
-}
-
-fn write_broker_session(
-    child: &mut Child,
-    session: &assistant_protocol::v2::credential::CredentialBrokerSession,
-) -> Result<(), String> {
-    let line = serde_json::to_string(session)
-        .map_err(|_| "broker session bootstrap serialize failed".to_string())?;
-    let stdin = child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "broker session lifeline unavailable".to_string())?;
-    stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())
-        .map_err(|e| format!("broker session bootstrap write failed: {e}"))
-}
-
-#[cfg(test)]
-fn uuid_like() -> String {
-    format!(
-        "{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    )
-}
-
-fn which_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-/// UI / ops: current supervisor health (never leaks bootstrap token).
-#[tauri::command]
-pub fn daemon_supervisor_status() -> SupervisorStatus {
-    global_supervisor().status()
-}
-
-/// Ensure sidecar is running when production requires UDS.
-/// Returns status; on require_uds failure returns Err with explicit fault text.
-#[tauri::command]
-pub fn daemon_supervisor_ensure() -> Result<SupervisorStatus, String> {
-    let sup = global_supervisor();
-    match sup.status().state {
-        SupervisorState::Stopped => sup.ensure_started(),
-        SupervisorState::Faulted { .. } | SupervisorState::Degraded { .. } => {
-            sup.ensure_healthy_or_restart()
-        }
-        _ => Ok(sup.status()),
-    }
-}
-
-/// Poll sidecar liveness (no spawn). UI can show Faulted without auto-restart.
-#[tauri::command]
-pub fn daemon_supervisor_poll() -> SupervisorStatus {
-    global_supervisor().poll_child_health()
-}
-
-/// Graceful sidecar stop (dev / shutdown path).
-#[tauri::command]
-pub fn daemon_supervisor_shutdown() -> Result<(), String> {
-    global_supervisor().shutdown()
-}
-
-/// Validate NATIVES_DB_PATH exists and is a readable file (schema checks later).
-pub fn validate_natives_db_path(path: &Path) -> Result<(), String> {
-    if path.as_os_str().is_empty() {
-        return Err("NATIVES_DB_PATH is empty".into());
-    }
-    if !path.is_absolute() {
-        // Absolute required by remediation plan; relative allowed only for tests.
-        if std::env::var("NATIVES_ALLOW_RELATIVE_DB")
-            .map(|v| v == "1")
-            .unwrap_or(false)
-        {
-            // ok
-        } else if !path.exists() {
-            return Err(format!(
-                "NATIVES_DB_PATH must be absolute or existing: {}",
-                path.display()
-            ));
-        }
-    }
-    if path.exists() {
-        let meta = std::fs::metadata(path).map_err(|e| format!("stat db: {e}"))?;
-        if !meta.is_file() {
-            return Err(format!("NATIVES_DB_PATH is not a file: {}", path.display()));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

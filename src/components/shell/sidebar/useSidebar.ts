@@ -58,6 +58,7 @@ export interface SidebarController {
   setAssistantExpanded: Dispatch<SetStateAction<boolean>>;
   activeNavigationId: string | null;
   enabledTools: Array<{ id: string; driver: string }>;
+  username: string;
   usesNativeTrafficLights: boolean;
   isResizing: boolean;
   draftWidth: number;
@@ -101,6 +102,25 @@ export function useSidebar({
 
   // Builtin tool enabled state (from DB)
   const [enabledTools, setEnabledTools] = useState<Array<{ id: string; driver: string }>>([]);
+
+  // Username for the bottom-left avatar (defaults to a neutral placeholder).
+  const [username, setUsername] = useState('N');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadUsername = async () => {
+      try {
+        const api = window.nativesAPI;
+        if (!api?.db?.get) return;
+        const value = await api.db.get('settings:username');
+        if (cancelled) return;
+        const name = typeof value === 'string' && value.trim() ? value.trim() : 'N';
+        setUsername(name.slice(0, 1).toUpperCase());
+      } catch { /* browser dev mode */ }
+    };
+    void loadUsername();
+    return () => { cancelled = true; };
+  }, []);
 
   const loadEnabledTools = useCallback(async () => {
     try {
@@ -336,6 +356,7 @@ export function useSidebar({
     setAssistantExpanded,
     activeNavigationId,
     enabledTools,
+    username,
     usesNativeTrafficLights,
     isResizing,
     draftWidth,

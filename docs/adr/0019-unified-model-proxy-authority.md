@@ -1,6 +1,6 @@
 # ADR-0019: 统一模型代理（Unified Model Proxy）Authority 边界与实施选型
 
-- **状态**: 已接受（Authority 边界）；**实施选型已冻结：A — Natives-native Rust Model Gateway（P0.5 证据见 §4.1）**
+- **状态**: 部分被 [ADR-0020](./0020-ai-native-personal-workspace-rearchitecture.md) 取代（保留 P0 源码审计；Daemon 完成态 authority 与 SQLite Secret 设计已失效）
 - **日期**: 2026-08-18
 - **决策者**: 技术方（工程归属拍板；产品需求由用户提出）
 - **关联**: [ADR-0011](./0011-native-engine-production-gaps.md)、[ADR-0015](./0015-job-module-ownership-and-dispatch.md)、[ADR-0016](./0016-capability-hub.md)、`docs/architecture/provider-proxy-architecture.md`、`docs/architecture/provider-routing-sub2api.md`、`docs/standards/technical/01-layering.md`、`docs/standards/technical/02-security.md`
@@ -9,6 +9,8 @@
 ---
 
 ## 上下文
+
+> **2026-08-19 修订**：目标实现改为 Tauri Host-owned `ProxyEngine` 与 OS Keychain Secret ownership。本文的源码审计仍可引用，但任何 Daemon-only production 结论只描述迁移前现状。
 
 产品需要 Provider OAuth、多 Credential 管理、统一模型访问（internal）+ 可选本机/LAN 共享（external）。历史尝试曾以「Natives 必须引入 Go proxy-core / CLIProxy SDK」为前提，用户已回滚并要求重审：**实现语言不预选、外部依赖必须过 Reference Necessity Gate、P0.5 后只保留一条 production path**（Plan v4）。
 

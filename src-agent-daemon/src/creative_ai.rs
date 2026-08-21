@@ -7,9 +7,10 @@
 //! sees credentials, secrets, or absolute project paths.
 
 use assistant_protocol::v2::creative::{CreativeLocalAnalyzeRequest, CreativeLocalAnalyzeResponse};
+use provider_adapters::adapter::ProviderAdapter;
 use provider_adapters::capabilities::{
-    Credential, ProviderAdapter, ProviderContentBlock, ProviderMessage, ProviderRequest,
-    ProviderResponse, ProviderResponseBlock,
+    Credential, ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderResponse,
+    ProviderResponseBlock,
 };
 use std::time::Duration;
 
@@ -149,8 +150,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ProviderAdapter for StubAdapter {
-        fn provider_type(&self) -> assistant_protocol::v1::provider::ProviderType {
-            assistant_protocol::v1::provider::ProviderType::OpenaiCompatible
+        fn provider_type(&self) -> provider_adapters::ProviderType {
+            provider_adapters::ProviderType::OpenaiCompatible
         }
 
         fn capabilities(&self) -> ProviderCapabilities {

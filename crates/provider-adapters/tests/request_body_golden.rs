@@ -10,8 +10,8 @@
 
 use provider_adapters::capabilities::{
     ImageSource, ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderTool,
-    ReasoningEffort, ReasoningRequest, RequestControls, ToolChoice,
 };
+use provider_adapters::controls::{ReasoningEffort, ReasoningRequest, RequestControls, ToolChoice};
 use provider_adapters::http_stream::{build_chat_completions_body, build_responses_body};
 use provider_adapters::providers::anthropic::build_messages_body;
 use provider_adapters::providers::gemini::build_generate_body;

@@ -9,7 +9,7 @@ pub mod openai;
 pub mod openai_codex;
 pub mod openai_compatible;
 
-use crate::capabilities::ProviderAdapter;
+use crate::adapter::ProviderAdapter;
 
 /// Register all built-in provider adapters.
 pub fn register_all() -> Vec<Box<dyn ProviderAdapter>> {

@@ -2,7 +2,7 @@
 
 use super::session::{evict_settled, MAX_RETAINED_SESSIONS};
 use super::*;
-use crate::{PermissionClass, SideEffect, ToolError};
+use crate::{PermissionClass, SideEffect};
 use std::collections::HashMap;
 
 #[cfg(test)]

@@ -510,6 +510,17 @@ export class FixtureAssistantAdapter implements AssistantGateway {
       case 'artifact.reveal':
         return { ok: true, path: String(p.path ?? '') } as T;
 
+      case 'project.identity.list':
+        return {
+          items: [
+            {
+              project_id: '/tmp/project',
+              canonical_path: '/tmp/project',
+              name: 'project',
+            },
+          ],
+        } as T;
+
       case 'provider.list':
         return [
           {

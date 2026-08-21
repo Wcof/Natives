@@ -18,20 +18,17 @@ export default function Sidebar(props: SidebarProps) {
   const { locale } = c;
 
   return (
-    <div className={`shell-sidebar-frame h-full ${c.isCollapsed ? 'w-0 overflow-visible' : 'relative'}`}>
+    <div className={`shell-sidebar-frame h-full ${c.isCollapsed ? 'w-16 overflow-visible' : 'relative'}`}>
     <aside
       className={`flex flex-col h-full ${c.isCollapsed ? 'overflow-visible' : 'overflow-hidden'}${c.isResizing ? ' is-resizing' : ''}`}
       style={{
         width: c.sidebarWidth,
-        position: c.isCollapsed ? 'fixed' : 'relative',
-        top: c.isCollapsed ? 0 : undefined,
-        left: c.isCollapsed ? 0 : undefined,
-        zIndex: c.isCollapsed ? 60 : undefined,
-        background: c.isCollapsed ? 'transparent' : 'var(--sidebar)',
+        position: 'relative',
+        background: 'var(--sidebar)',
         border: 'none',
         borderRight: 'none',
         transition: c.isResizing ? 'none' : undefined,
-        pointerEvents: c.isCollapsed ? 'none' : 'auto',
+        pointerEvents: 'auto',
       }}
       role="navigation"
       aria-label={t(locale, 'nav.modules')}

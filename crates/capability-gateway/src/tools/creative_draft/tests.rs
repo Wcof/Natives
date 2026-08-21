@@ -2,7 +2,6 @@
 
 use super::store::*;
 use super::tools::*;
-use super::*;
 use crate::{SideEffect, ToolCallContext, ToolError, ToolHandler, ToolOutput};
 use rusqlite::Connection;
 use std::path::PathBuf;

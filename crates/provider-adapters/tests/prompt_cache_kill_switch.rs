@@ -5,9 +5,8 @@
 //! answer for every other test running in parallel in the same process.
 //! **Keep this file to a single test** for the same reason.
 
-use provider_adapters::capabilities::{
-    ProviderMessage, ProviderRequest, RequestControls, PROMPT_CACHE_ENV,
-};
+use provider_adapters::capabilities::{ProviderMessage, ProviderRequest};
+use provider_adapters::controls::{RequestControls, PROMPT_CACHE_ENV};
 use provider_adapters::providers::anthropic::build_messages_body;
 
 fn request() -> ProviderRequest {

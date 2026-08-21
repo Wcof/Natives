@@ -1,9 +1,10 @@
 //! DeepSeek provider adapter — OpenAI-compatible Chat Completions.
 
+use crate::adapter::{ProviderAdapter, ProviderStreamEvent};
 use crate::capabilities::*;
 use crate::http_stream::stream_chat_completions;
+use crate::provider_identity::{ModelCapabilities, ProviderType};
 use crate::stream::ProviderEvent;
-use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
 use reqwest::Client;
 

@@ -1,11 +1,9 @@
 //! Facade and host-owned routing tests.
 use super::*;
-use std::sync::{Mutex, OnceLock};
 
-/// Serialise tests that mutate NATIVES_DAEMON_MODE / NATIVES_ASSISTANT_DB_PATH.
+/// Serialise tests that mutate NATIVES_DAEMON_MODE / NATIVES_ASSISTANT_DB_PATH / MAIN_DB_POOL.
 fn daemon_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    crate::db::DB_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner())
 }
@@ -222,11 +220,22 @@ fn broker_pool_refresh_persists_reencrypted_tokens() {
         "token_url": "https://auth.example/oauth/token",
         "client_id": "cid-1",
     });
+    let lease = crate::credential_broker::lease_registry().issue(
+        "oauth1",
+        "sub2api-pool",
+        "refresh-test-run",
+        None,
+        chrono::Duration::seconds(120),
+    );
     let result = crate::credential_broker::broker_pool_refresh(
         assistant_protocol::v2::credential::CredentialPoolRefreshRequest {
             account_id: "acc1".into(),
+            provider_id: "oauth1".into(),
+            run_id: "refresh-test-run".into(),
+            lease_id: lease.lease_id,
             credentials: new_credentials.clone(),
             expires_at: Some("2099-01-01T00:00:00Z".into()),
+            reauth_required: false,
         },
     );
     assert!(result.is_ok(), "refresh failed: {:?}", result.err());

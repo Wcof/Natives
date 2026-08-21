@@ -1,6 +1,7 @@
 //! Anthropic adapter request/response tests (extracted from `anthropic.rs`).
 
 use super::*;
+use crate::controls::{ReasoningEffort, ReasoningRequest, RequestControls};
 
 fn tool(name: &str) -> ProviderTool {
     ProviderTool {

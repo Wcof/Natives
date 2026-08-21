@@ -66,7 +66,7 @@ pub struct NativesDbBroker {
 
 /// One decrypted Sub2API account lease. It is constructed per request and must
 /// remain memory-only; the daemon never serializes this value into assistant.db.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Sub2ApiAccountCredential {
     pub id: String,
     pub provider_id: String,
@@ -79,6 +79,8 @@ pub struct Sub2ApiAccountCredential {
     pub expires_at: Option<String>,
     /// Account proxy wins over the global proxy. Both remain daemon-memory only.
     pub proxy_url: Option<String>,
+    pub lease_id: String,
+    pub run_id: String,
 }
 
 /// Small, credential-safe projection of the Host-owned local routing settings.
@@ -133,14 +135,19 @@ impl NativesDbBroker {
     /// socket and the Host re-encrypts and stores them.
     pub fn update_sub2api_credentials(
         &self,
-        account_id: &str,
+        account: &Sub2ApiAccountCredential,
         credentials: &Value,
         expires_at: Option<&str>,
+        reauth_required: bool,
     ) -> Result<(), String> {
         let req = CredentialPoolRefreshRequest {
-            account_id: account_id.to_string(),
+            account_id: account.id.clone(),
+            provider_id: account.provider_id.clone(),
+            run_id: account.run_id.clone(),
+            lease_id: account.lease_id.clone(),
             credentials: credentials.clone(),
             expires_at: expires_at.map(str::to_string),
+            reauth_required,
         };
         let payload = serde_json::to_value(&req)
             .map_err(|e| redact_err(&format!("refresh request serialize failed: {e}")))?;
@@ -189,19 +196,37 @@ impl NativesDbBroker {
     pub fn resolve_sub2api_pool(
         &self,
         provider_id: &str,
+        run_id: &str,
     ) -> Result<Vec<Sub2ApiAccountCredential>, String> {
         if provider_id.trim().is_empty() {
             return Err("provider_id is required".into());
         }
+        if run_id.trim().is_empty() || run_id == "unspecified" {
+            return Err("run_id required for credential pool lease binding".into());
+        }
         let req = CredentialPoolLeaseRequest {
             provider_id: provider_id.to_string(),
-            run_id: "sub2api-pool".into(),
+            run_id: run_id.to_string(),
         };
         let payload = serde_json::to_value(&req)
             .map_err(|e| redact_err(&format!("pool request serialize failed: {e}")))?;
         let data = self.lease_request(names::CREDENTIAL_POOL_ACQUIRE, &payload)?;
         let resp: CredentialPoolLeaseResponse = serde_json::from_value(data)
             .map_err(|e| redact_err(&format!("broker pool response parse failed: {e}")))?;
+        if resp.provider_id != provider_id {
+            return Err("credential pool response provider mismatch".into());
+        }
+        let lease = resp
+            .lease
+            .ok_or_else(|| "credential pool response missing lease".to_string())?;
+        if lease.provider_id != provider_id
+            || lease.run_id != run_id
+            || lease.key_id != "sub2api-pool"
+            || lease.expires_at <= chrono::Utc::now()
+        {
+            return Err("credential pool response lease mismatch or expired".into());
+        }
+        let lease_id = lease.lease_id;
         Ok(resp
             .accounts
             .into_iter()
@@ -216,6 +241,8 @@ impl NativesDbBroker {
                 concurrency: a.concurrency,
                 expires_at: a.expires_at,
                 proxy_url: a.proxy_url,
+                lease_id: lease_id.clone(),
+                run_id: run_id.to_string(),
             })
             .collect())
     }

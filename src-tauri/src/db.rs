@@ -8,7 +8,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "24";
+pub const SCHEMA_VERSION: &str = "26";
 
 /// Database connection pool type alias
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -21,6 +21,8 @@ mod migrations_steps;
 lazy_static! {
     /// 主 natives.db pool（全局持有，供 runtime 等无法 access AppState 的模块使用）
     static ref MAIN_DB_POOL: Mutex<Option<DbPool>> = Mutex::new(None);
+    /// Global test lock to serialize tests that mutate MAIN_DB_POOL
+    pub static ref DB_TEST_LOCK: Mutex<()> = Mutex::new(());
 }
 
 /// 注册主 natives.db pool（lib.rs setup 钩子调用）

@@ -211,6 +211,17 @@ pub(crate) struct PersistedOauthAccount {
     pub has_refresh: bool,
 }
 
+/// Build a stable, secret-safe fallback identity when an OAuth provider does
+/// not return an account id or email. The raw token must never leave the
+/// encrypted credential payload.
+pub(crate) fn token_identity_fingerprint(access_token: &str) -> String {
+    format!("token-fingerprint:{}", digest(access_token))
+}
+
+fn default_account_name(provider_id: &str) -> String {
+    format!("{} OAuth account", provider_id.trim())
+}
+
 /// Envelope-encrypt an OAuth credential and upsert it into `provider_accounts`,
 /// deduping on `(provider_id, identity_fingerprint)`. Shared by the PKCE and
 /// device flows so there is one persistence implementation (R-B3).
@@ -235,8 +246,8 @@ pub(crate) fn persist_oauth_account(
     let name = account_name
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(identity)
-        .to_string();
+        .map(str::to_owned)
+        .unwrap_or_else(|| default_account_name(provider_id));
     let token_url = credentials
         .get("token_url")
         .and_then(|v| v.as_str())
@@ -320,5 +331,22 @@ mod tests {
         assert_eq!(a, b);
         let c = digest("openai:oauth:other@example.com");
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn token_fallback_identity_never_contains_the_token() {
+        let token = "oauth-access-secret";
+        let identity = token_identity_fingerprint(token);
+        assert!(!identity.contains(token));
+        assert!(identity.starts_with("token-fingerprint:"));
+        assert_eq!(identity, token_identity_fingerprint(token));
+    }
+
+    #[test]
+    fn default_account_name_does_not_reuse_identity() {
+        let identity = "oauth-access-secret";
+        let name = default_account_name("codex");
+        assert!(!name.contains(identity));
+        assert_eq!(name, "codex OAuth account");
     }
 }

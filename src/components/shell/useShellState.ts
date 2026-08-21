@@ -93,9 +93,10 @@ export function useShellState(): ShellStateReturn {
     if (typeof window === 'undefined') return 'dashboard';
     const path = window.location.pathname.replace(/\/+$/, '') || '/';
     const routingTable: Record<string, string> = {
-      '/': 'dashboard', '/files': 'files', '/tools': 'tools',
+      '/': 'dashboard', '/files': 'files', '/apps': 'apps', '/tools': 'tools',
       '/ai': 'ai', '/modules': 'modules', '/capabilities': 'capabilities',
       '/jobs': 'jobs', '/library': 'library', '/store': 'modules',
+      '/usage': 'usage',
     };
     return routingTable[path] || 'dashboard';
   });

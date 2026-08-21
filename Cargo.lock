@@ -2897,7 +2897,7 @@ dependencies = [
  "capability-gateway",
  "chrono",
  "chrono-tz",
- "contract-linter",
+ "core-foundation 0.10.1",
  "dirs",
  "encoding_rs",
  "futures-util",
@@ -2917,6 +2917,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
+ "security-framework",
  "semver",
  "serde",
  "serde_json",
@@ -3812,7 +3813,6 @@ dependencies = [
 name = "provider-adapters"
 version = "0.1.0"
 dependencies = [
- "assistant-protocol",
  "async-stream",
  "async-trait",
  "chrono",

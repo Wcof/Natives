@@ -97,8 +97,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl provider_adapters::ProviderAdapter for StaticStreamAdapter {
-        fn provider_type(&self) -> assistant_protocol::v1::provider::ProviderType {
-            assistant_protocol::v1::provider::ProviderType::OpenaiCompatible
+        fn provider_type(&self) -> provider_adapters::ProviderType {
+            provider_adapters::ProviderType::OpenaiCompatible
         }
 
         fn capabilities(&self) -> provider_adapters::capabilities::ProviderCapabilities {

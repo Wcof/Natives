@@ -233,9 +233,6 @@ fn settings_disabled_tools_hidden_and_denied() {
     assert_eq!(norm.native.disabled_tools.len(), 2);
 }
 
-/// Serialise the DB-pool tests: they replace the global main pool.
-static DB_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn temp_main_pool() -> (tempfile::TempDir, db::DbPool) {
     let dir = tempfile::tempdir().expect("tempdir");
     let pool = db::init_db_pool(&dir.path().join("natives-test.db")).expect("init pool");
@@ -245,7 +242,7 @@ fn temp_main_pool() -> (tempfile::TempDir, db::DbPool) {
 
 #[test]
 fn settings_revision_conflict_is_detected() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, _pool) = temp_main_pool();
     let first = save_execution_engine_settings(ExecutionEngineSettingsV2::default())
         .expect("first save succeeds (expected revision 0)");
@@ -266,7 +263,7 @@ fn settings_revision_conflict_is_detected() {
 
 #[test]
 fn settings_corrupt_json_is_not_default_success() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, pool) = temp_main_pool();
     let conn = pool.get().expect("conn");
     db::set_setting(&conn, EXECUTION_ENGINE_KEY, "{ not json !!").expect("seed corrupt");
@@ -281,7 +278,7 @@ fn settings_corrupt_json_is_not_default_success() {
 
 #[test]
 fn legacy_runtime_pref_migrates_once() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, _pool) = temp_main_pool();
     // No pref → no-op, pristine default.
     let noop = migrate_legacy_runtime_pref(None).expect("no-op succeeds");
@@ -310,7 +307,7 @@ fn legacy_runtime_pref_migrates_once() {
 /// diagnostic — the old value is never silently adopted as the default.
 #[test]
 fn legacy_runtime_pref_bad_value_fails_explicitly() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, _pool) = temp_main_pool();
     // Unknown runtime id → explicit error, V2 stays pristine (no fallback).
     let err = migrate_legacy_runtime_pref(Some("garbage_runtime".into()))
@@ -329,7 +326,7 @@ fn legacy_runtime_pref_bad_value_fails_explicitly() {
 /// the safe default without inventing a fallback value.
 #[test]
 fn legacy_runtime_pref_codex_fail_closed_not_adopted() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, _pool) = temp_main_pool();
     let result = migrate_legacy_runtime_pref(Some(RUNTIME_CODEX_CLI.into()))
         .expect("fail-closed refusal is a success no-op");
@@ -339,7 +336,7 @@ fn legacy_runtime_pref_codex_fail_closed_not_adopted() {
 
 #[test]
 fn existing_run_unchanged_after_settings_edit() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, _pool) = temp_main_pool();
     // Run created under settings A.
     let mut settings_a = ExecutionEngineSettingsV2::default().normalized();
@@ -410,7 +407,7 @@ fn runtime_id_and_policy_roundtrip_through_serde() {
 
 #[test]
 fn unknown_enum_value_is_rejected_on_save() {
-    let _guard = DB_TEST_LOCK.lock().unwrap();
+    let _guard = db::DB_TEST_LOCK.lock().unwrap();
     let (_dir, _pool) = temp_main_pool();
     let seeded =
         save_execution_engine_settings(ExecutionEngineSettingsV2::default()).expect("seed");

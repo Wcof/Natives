@@ -1,7 +1,7 @@
 # 技术架构 02 · 五大防线与安全红线
 
-> **版本**: 1.1.0 · **日期**: 2026-06-19
-> **关联 ADR**: [ADR-0001](../../adr/0001-session-token-handshake.md)（Session Token 握手）、[ADR-0002](../../adr/0002-postmessage-origin-verification.md)（来源验证）、[ADR-0003](../../adr/0003-plugin-ipc-main-process-relay.md)（插件 IPC 中转）、[ADR-0006](../../adr/0006-iframe-crash-detection.md)（崩溃检测）、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)（Tauri 迁移）
+> **版本**: 2.0.0 · **日期**: 2026-08-19
+> **关联 ADR**: [ADR-0020](../../adr/0020-ai-native-personal-workspace-rearchitecture.md)（Secret ownership 与 legacy 删除）、[ADR-0001](../../adr/0001-session-token-handshake.md)（Session Token 握手）、[ADR-0002](../../adr/0002-postmessage-origin-verification.md)（来源验证）、[ADR-0006](../../adr/0006-iframe-crash-detection.md)（崩溃检测）、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)（Tauri 迁移）
 > **关联源文件**: `src-tauri/`、`src/lib/iframe-sandbox.ts`、`src/lib/iframe-manager.ts`、`src/lib/token-manager.ts`
 
 ---
@@ -107,14 +107,16 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 
 ## 三、凭证安全红线
 
-#### R-S12 · 凭证必须用 AES-256-GCM 加密
+#### R-S12 · 持久 Secret 必须由 OS Keychain 持有
 - **等级**：MUST
 - **分类**：安全、数据
-- **规则**：所有敏感凭证（API Key、Token）**必须**用 AES-256-GCM 加密后再持久化（存储在 SQLite `env_variables.value_encrypted` 字段）。密钥存储在 SQLite `settings` 表中，格式为 32 字节 hex。加密密文格式为 `v2:<nonce_hex>:<ciphertext_hex>:<tag_hex>`。**禁止**明文落盘、**禁止**打印到日志。
-- **正例**：调用 `env_manager::encrypt(text, key)` 写入，`env_manager::decrypt(encoded, key)` 读取，均在 Rust 后端完成。
-- **反例**：XOR + base64 占位实现（已迁移为 AES-256-GCM）。
-- **为什么**：凭证泄露=用户 AI 账户被盗用的直接路径。AES-256-GCM 提供认证加密，防篡改。
-- **检查方法**：`grep -r "encrypt\|decrypt" src-tauri/src/env_manager.rs` 确认使用 AES-256-GCM；日志中无明文 key。
+- **规则**：API Key、OAuth access/refresh token、client secret、代理口令等持久 Secret **必须**写入 OS Keychain；SQLite 只保存非敏感 metadata 与 opaque `secret_ref`。**禁止**把密文与其解密主密钥共同存放在 SQLite 作为完成态设计；**禁止**明文落盘、进入 Renderer、事件或日志。
+
+  从既有 AES-256-GCM / KEK-DEK 数据迁移时，流程**必须**幂等且可回滚：读取旧密文 → 写 Keychain → 回读验证 → 原子切换 `secret_ref` → 延后清理旧密文。Keychain locked/unavailable、进程崩溃和重复启动都必须保持可恢复；未验证前不得删除旧数据。
+- **正例**：Host 用 scoped `SecretStore` interface 读写 Keychain，DB 只记录 `secret_ref`、masked suffix、revision 与状态。
+- **反例**：`provider_kek` 与 `api_key_encrypted` 同在 `natives.db`，或失败时把 token 写临时文件。
+- **为什么**：同盘主密钥无法抵抗数据库文件泄露；OS Keychain 提供独立访问控制与设备级保护。
+- **检查方法**：migration/rollback/locked tests；扫描 DB、日志、事件、临时目录与 Debug 输出；验证 Keychain 删除只发生在引用切换和回滚窗口结束后。
 
 #### R-S13 · 凭证不进 Renderer 内存明文
 - **等级**：SHOULD
@@ -131,7 +133,7 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 - [ ] postMessage 来源验证用的是 `source` 不是 `origin`（R-S3）。
 - [ ] 新增的 IPC/HTTP 通信都校验了 Session Token（R-S4, R-S8）。
 - [ ] DB 写操作后触发了 `db-state-changed` 广播（R-S9）。
-- [ ] 凭证经过 AES-256-GCM 加密，没有明文落盘或进日志（R-S12）。
+- [ ] 持久 Secret 位于 OS Keychain；DB 只有 opaque reference；迁移可恢复且无明文落盘/日志（R-S12）。
 - [ ] 新增子进程已设进程组并接入后端退出轮询（R-S1）。
 - [ ] 主题/配置经 Zod 校验后才注入（R-S11）。
 - [ ] 若我的改动触及任一防线，已写 ADR 说明影响（变更流程见 `README.md`）。

@@ -1,6 +1,6 @@
 # 技术架构 03 · 数据与持久化
 
-> **版本**: 1.1.0 · **日期**: 2026-06-19
+> **版本**: 2.0.0 · **日期**: 2026-08-19
 > **关联 ADR**: [ADR-0005](../../adr/0005-plugin-state-preservation-strategy.md)（状态分层）、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)（Tauri 迁移）
 > **关联源文件**: `src-tauri/src/db.rs`、`src-tauri/src/env_manager.rs`
 
@@ -14,18 +14,18 @@
 
 ## 二、数据存放位置
 
-#### R-D1 · 用户数据只存在 `~/.natives/`
+#### R-D1 · 非 Secret 用户数据集中在 `~/.natives/`
 - **等级**：MUST
 - **分类**：数据、命名
-- **规则**：所有用户数据（SQLite、模块文件、凭证、日志）**必须**存放在 `~/.natives/` 目录下，结构如下：
+- **规则**：除 OS Keychain 持有的 Secret 外，应用自有用户数据（SQLite、应用文件、日志）**必须**集中在 `~/.natives/` 目录下，结构如下：
   ```
   ~/.natives/
   ├── natives.db        # SQLite（WAL）
   ├── modules/          # 已安装模块
-  ├── env/              # 加密凭证
+  ├── migrations/       # 可恢复迁移 checkpoint（禁止明文 Secret）
   └── logs/             # 运行日志
   ```
-  **禁止**把用户数据散落到系统其它位置（如 `~/Library/`、项目目录）。**禁止**用 env 变量随意覆盖此根目录（除非有受控的测试夹具）。
+  Secret **必须**按 R-S12 进入 OS Keychain；DB 只保存 opaque reference。**禁止**把其它用户数据散落到项目目录或任意路径；**禁止**用 env 变量随意覆盖此根目录（除非有受控测试夹具）。
 - **为什么**：dotfile 目录模式与兄弟项目（CodePilot/Natives2）一致，便于备份、迁移、清理。
 - **检查方法**：新增持久化路径时核对是否在 `~/.natives/` 下。
 
@@ -98,7 +98,7 @@
 
 ## 七、本篇合规自检清单
 
-- [ ] 我的持久化路径在 `~/.natives/` 下（R-D1）。
+- [ ] 非 Secret 数据在 `~/.natives/`；Secret 在 OS Keychain；DB 只有 opaque reference（R-D1/R-S12）。
 - [ ] 插件数据按 module_id 隔离，且 moduleId 来自 Token 反查而非插件自报（R-D2）。
 - [ ] schema 变更走增量 `ALTER`，没有 `DROP TABLE`（R-D3）。
 - [ ] 新表启用了 WAL + 外键级联策略（R-D4）。

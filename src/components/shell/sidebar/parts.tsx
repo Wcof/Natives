@@ -3,21 +3,22 @@
 import type { ComponentType, DragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
   ArrowLeft,
+  BarChart3,
   Bell,
-  Blocks,
-  CalendarClock,
   ChevronDown,
   ChevronRight,
   File,
   Folder,
-  FolderPlus,
+  FolderOpen,
   Layers,
+  LayoutDashboard,
   Maximize2,
   Minus,
   PanelLeft,
   PanelLeftClose,
   Search,
   Settings,
+  Sparkles,
   Square,
   Star,
   X,
@@ -26,7 +27,6 @@ import * as LucideIcons from 'lucide-react';
 import { t } from '@/i18n';
 import { BUILTIN_TOOLS } from '@/lib/builtin-tools';
 import { favoritesNavTarget, type FavoriteItem } from '@/lib/favorites-client';
-import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
 import SidebarDirTree from '../SidebarDirTree';
 import { QUICK_ACCESS_ITEMS, FILE_MANAGER_DIRS, SETTINGS_NAV_ITEMS, type ModuleItem } from './model';
 import type { SidebarController } from './useSidebar';
@@ -407,45 +407,6 @@ function FavoritesSection({ c }: { c: SidebarController }) {
   );
 }
 
-function AssistantSection({ c }: { c: SidebarController }) {
-  const { locale, assistantExpanded } = c;
-  return (
-    // Assistant is a first-level directory, parallel to Quick Access.
-    <div className="mb-1">
-      <div className="flex items-center px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-        <span className="min-w-0 flex-1 truncate">{t(locale, 'nav.assistant')}</span>
-        <button
-          type="button"
-          onClick={() => c.setAssistantExpanded((value: boolean) => !value)}
-          className="rounded p-1 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-          title={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
-          aria-label={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
-        >
-          {assistantExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </button>
-        <button
-          type="button"
-          onClick={() => { c.selectNavigation('assistant', '__assistant__'); c.assistantActions?.addProjectFolder(); }}
-          className="rounded p-1 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-          title={t(locale, 'assistant.chooseProjectDirectory')}
-          aria-label={t(locale, 'assistant.chooseProjectDirectory')}
-        >
-          <FolderPlus size={13} />
-        </button>
-      </div>
-      {assistantExpanded && (
-        <div className="px-3">
-          <AssistantSidebarSection
-            locale={locale}
-            activeNavigationId={c.activeNavigationId}
-            onNavigateAssistant={() => c.selectNavigation('__assistant__', '__assistant__')}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ModulesSection({ c }: { c: SidebarController }) {
   const { locale, modules } = c;
   return (
@@ -557,11 +518,10 @@ export function SidebarBody({ c }: { c: SidebarController }) {
         </button>
       </div>
 
-      {/* Quick Access / File Manager / Favorites / Assistant / Modules / Builtin Tools */}
+      {/* Quick Access / File Manager / Favorites / Modules / Builtin Tools */}
       <QuickAccessSection c={c} />
       <FileManagerSection c={c} />
       <FavoritesSection c={c} />
-      <AssistantSection c={c} />
       <ModulesSection c={c} />
       <BuiltinToolsSection c={c} />
     </div>
@@ -579,32 +539,6 @@ function BottomNav({ c }: { c: SidebarController }) {
       >
         <Bell size={16} />
         <span>{t(locale, 'notifications.title')}</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => c.selectNavigation('__jobs__', '__jobs__')}
-        aria-current={c.activeNavigationId === '__jobs__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
-          c.activeNavigationId === '__jobs__'
-            ? 'sidebar-nav-active'
-            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-        }`}
-      >
-        <CalendarClock size={16} />
-        <span>{t(locale, 'nav.jobs')}</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => c.selectNavigation('__capabilities__', '__capabilities__')}
-        aria-current={c.activeNavigationId === '__capabilities__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
-          c.activeNavigationId === '__capabilities__'
-            ? 'sidebar-nav-active'
-            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-        }`}
-      >
-        <Blocks size={16} />
-        <span>{t(locale, 'nav.capabilities')}</span>
       </button>
       <button
         type="button"
@@ -636,6 +570,82 @@ function BottomNav({ c }: { c: SidebarController }) {
   );
 }
 
+/** 折叠态 64px Icon Rail：一级导航图标 + 左下角头像，均保持可交互（决策 9）。 */
+function IconRail({ c }: { c: SidebarController }) {
+  const { locale } = c;
+  const railItems = [
+    {
+      id: '__dashboard__',
+      label: t(locale, 'nav.dashboard'),
+      icon: <LayoutDashboard size={16} />,
+      target: '__dashboard__',
+    },
+    {
+      id: 'files',
+      label: t(locale, 'nav.fileBrowser'),
+      icon: <FolderOpen size={16} />,
+      target: 'files',
+    },
+    {
+      id: 'apps',
+      label: t(locale, 'nav.apps'),
+      icon: <Layers size={16} />,
+      target: 'apps',
+    },
+    {
+      id: 'ai',
+      label: t(locale, 'nav.aiWorkbench'),
+      icon: <Sparkles size={16} />,
+      target: 'ai',
+    },
+    {
+      id: 'usage',
+      label: t(locale, 'nav.usage'),
+      icon: <BarChart3 size={16} />,
+      target: 'usage',
+    },
+  ];
+  return (
+    <>
+      <nav className="flex-1 flex flex-col items-center gap-1 overflow-y-auto py-2 px-1" aria-label="Primary navigation">
+        {railItems.map((item) => {
+          const isActive =
+            c.activeNavigationId === item.id ||
+            (item.id === 'files' && c.activeNavigationId?.startsWith('__files__:')) ||
+            (item.id === '__dashboard__' && c.activeNavigationId === null && !c.isSettingsMode);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={item.label}
+              title={item.label}
+              onClick={() => c.selectNavigation(item.id, item.target)}
+              className={`flex h-9 w-9 items-center justify-center rounded-lg transition-[color,background-color,border-color,opacity,transform] ${
+                isActive
+                  ? 'sidebar-nav-active'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+              }`}
+            >
+              {item.icon}
+            </button>
+          );
+        })}
+      </nav>
+      {/* 左下角头像/缩写：折叠态只显示缩写（决策 9） */}
+      <div className="shrink-0 flex justify-center px-1 pb-2">
+        <span
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--primary)] text-[0.8125rem] font-semibold text-[var(--primary-foreground)]"
+          title={c.username}
+          aria-label={c.username}
+        >
+          {c.username}
+        </span>
+      </div>
+    </>
+  );
+}
+
 export function SidebarChrome({ c }: { c: SidebarController }) {
   return (
     <>
@@ -647,7 +657,10 @@ export function SidebarChrome({ c }: { c: SidebarController }) {
       {c.isSettingsMode ? (
         /* ── Settings Sidebar Layout ── */
         <SettingsNav c={c} />
-      ) : c.isCollapsed ? null : (
+      ) : c.isCollapsed ? (
+        /* ── Collapsed 64px Icon Rail：图标导航 + 左下头像，全部可交互 ── */
+        <IconRail c={c} />
+      ) : (
         /* ── Normal Sidebar Layout ── */
         <>
           <SidebarBody c={c} />

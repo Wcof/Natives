@@ -22,6 +22,10 @@ export { provider, providerRouting } from './tauri/provider';
 export { executionEngine } from './tauri/execution-engine';
 export { jobs } from './tauri/jobs';
 export { usage } from './tauri/usage';
+export { proxy } from './tauri/proxy';
+export { aiApi } from './tauri/ai';
+export { appsApi } from './tauri/apps';
+export { integrationsApi } from './tauri/integrations';
 export {
   app,
   db,

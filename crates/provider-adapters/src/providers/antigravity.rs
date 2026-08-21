@@ -7,9 +7,10 @@
 //! The request/response body is the same `generateContent` shape, so this
 //! reuses `gemini::build_generate_body` and the shared Gemini SSE parser.
 
+use crate::adapter::{ProviderAdapter, ProviderStreamEvent};
 use crate::capabilities::*;
+use crate::provider_identity::{ModelCapabilities, ProviderType};
 use crate::stream::{parse_gemini_chunk, split_sse_lines, sse_data_payload, ProviderEvent};
-use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -377,26 +378,26 @@ impl ProviderAdapter for AntigravityAdapter {
         let byte_stream = response.bytes_stream();
         let stream = async_stream::stream! {
             let mut buffer = String::new();
-            let mut saw_completed = false;
             tokio::pin!(byte_stream);
             while let Some(chunk) = byte_stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        if let Err(error) = crate::http_stream::append_sse_bytes(&mut buffer, &bytes) {
+                            yield ProviderEvent::Error(error);
+                            return;
+                        }
                         for line in split_sse_lines(&mut buffer) {
                             if let Some(data) = sse_data_payload(&line) {
                                 if data == "[DONE]" {
-                                    saw_completed = true;
-                                    yield ProviderEvent::Completed {
-                                        reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
-                                    };
-                                    continue;
+                                    yield ProviderEvent::Error(crate::http_stream::incomplete_stream_error());
+                                    return;
                                 }
                                 for event in parse_gemini_chunk(data) {
-                                    if matches!(event, ProviderEvent::Completed { .. }) {
-                                        saw_completed = true;
-                                    }
+                                    let terminal = matches!(event, ProviderEvent::Completed { .. } | ProviderEvent::Error(_));
                                     yield event;
+                                    if terminal {
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -407,11 +408,7 @@ impl ProviderAdapter for AntigravityAdapter {
                     }
                 }
             }
-            if !saw_completed {
-                yield ProviderEvent::Completed {
-                    reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
-                };
-            }
+            yield ProviderEvent::Error(crate::http_stream::incomplete_stream_error());
         };
         Ok(Box::pin(stream))
     }
@@ -437,5 +434,120 @@ impl ProviderAdapter for AntigravityAdapter {
             latency_ms: None,
             message: "Antigravity uses OAuth — test via a live stream".into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capabilities::{ProviderContentBlock, ProviderMessage};
+    use futures_util::StreamExt;
+    use serde_json::Value;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn request() -> ProviderRequest {
+        ProviderRequest {
+            model: "gemini-2.5-pro".into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: Default::default(),
+        }
+    }
+
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut chunk = [0_u8; 2048];
+        loop {
+            let read = socket.read(&mut chunk).await.unwrap();
+            assert!(read > 0, "client closed before completing request");
+            bytes.extend_from_slice(&chunk[..read]);
+            let Some(header_end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let header_end = header_end + 4;
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            if bytes.len() >= header_end + content_length {
+                return String::from_utf8(bytes).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_uses_cloud_code_path_bearer_and_project_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut socket).await;
+            let body = concat!(
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},",
+                "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,",
+                "\"candidatesTokenCount\":1}}\n\n"
+            );
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            request
+        });
+
+        let adapter = AntigravityAdapter::new().with_base_url(format!("http://{address}"));
+        let credential = Credential {
+            api_key: "fixture-access-token".into(),
+            base_url: None,
+            proxy_url: None,
+            key_id: Some("fixture-key".into()),
+            provider_type: Some("antigravity".into()),
+            project_id: Some("projects/fixture-project".into()),
+        };
+        let events = adapter
+            .stream(request(), credential)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::TextDelta(text) if text == "ok")));
+        assert!(matches!(
+            events.last(),
+            Some(ProviderEvent::Completed { .. })
+        ));
+
+        let wire = server.await.unwrap();
+        let lower = wire.to_ascii_lowercase();
+        assert!(wire.starts_with("POST /v1internal:streamGenerateContent?alt=sse HTTP/1.1\r\n"));
+        assert!(lower.contains("authorization: bearer fixture-access-token\r\n"));
+        assert!(lower.contains("x-goog-cloud-target-resource: projects/fixture-project\r\n"));
+        let body = wire.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!(
+            serde_json::from_str::<Value>(body).unwrap()["model"],
+            "gemini-2.5-pro"
+        );
+        assert!(!body.contains("fixture-access-token"));
     }
 }

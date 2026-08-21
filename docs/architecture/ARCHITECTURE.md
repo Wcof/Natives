@@ -1,20 +1,22 @@
 # Natives 架构设计文档
 
-> **版本**: v0.3.0  
-> **日期**: 2026-07-23（产品身份对齐 ADR-0012；进程模型含 Daemon）  
-> **状态**: 现状描述（**非**约束权威）  
-> **约束权威**: [`docs/standards/`](../standards/README.md)  
-> **产品身份**: [ADR-0012](../adr/0012-product-identity-workshop-scope.md)  
-> **历史讨论**: [DESIGN_DISCUSSION.md](./DESIGN_DISCUSSION.md)（Q1–Q43；与 ADR 冲突处以 ADR 为准）  
+> **版本**: v0.4.0
+> **日期**: 2026-08-19（Target 见 ADR-0020；正文主要记录迁移前 current production）
+> **状态**: 现状描述（**非**约束权威）
+> **约束权威**: [`docs/standards/`](../standards/README.md)
+> **产品身份**: [ADR-0020](../adr/0020-ai-native-personal-workspace-rearchitecture.md)
+> **历史讨论**: [DESIGN_DISCUSSION.md](./DESIGN_DISCUSSION.md)（Q1–Q43；与 ADR 冲突处以 ADR 为准）
 > **文档索引**: [`docs/README.md`](../README.md)
 
 ---
 
 ## 1. 概述
 
+> **Target / Current 必须分开阅读**：完成态是 AI Native Personal Workspace，Tauri Host 为默认 Native Backend，旧 Assistant/Jobs/Capabilities/Agent Daemon/Plugin Runtime 最终删除。下文大量 Hub/Workshop/Daemon 内容只描述当前源码，不能作为新增能力的目标边界。
+
 ### 1.1 产品定位
 
-**Natives = 本机个人全能 AI 工作台**（历史曾称 AI Steam Base）。
+**AiNative = AI Native Personal Workspace。**
 
 | 面 | 职责 |
 |----|------|

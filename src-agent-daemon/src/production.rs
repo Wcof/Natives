@@ -10,7 +10,7 @@ use agent_core::{
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::CapabilityGateway;
-use provider_adapters::capabilities::RequestControls;
+use provider_adapters::controls::RequestControls;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;

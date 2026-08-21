@@ -86,7 +86,7 @@ export const SETTINGS_NAV_ITEMS = [
 }>;
 
 /** Collapsed rail width — icon-only navigation, still interactive. */
-export const SIDEBAR_COLLAPSED_WIDTH = 0;
+export const SIDEBAR_COLLAPSED_WIDTH = 64;
 /** Expanded sidebar floor — labels still readable. */
 export const SIDEBAR_MIN_WIDTH = 200;
 /** Hard cap; further limited by viewport so main content keeps a floor. */
@@ -123,6 +123,9 @@ export function getModuleId(module: ModuleItem): string {
 export function getNavigationId(activeModuleId?: string): string | null {
   if (!activeModuleId) return null;
   if (activeModuleId === 'dashboard' || activeModuleId === '__dashboard__') return '__dashboard__';
+  if (activeModuleId === 'usage' || activeModuleId === '__usage__') return 'usage';
+  if (activeModuleId === 'apps' || activeModuleId === '__apps__') return 'apps';
+  if (activeModuleId === 'ai' || activeModuleId === '__ai__') return 'ai';
   if (isSettingsView(activeModuleId)) return '__settings__';
   if (activeModuleId === 'workshop' || activeModuleId === '__workshop__' || activeModuleId === 'modules' || activeModuleId === 'store') {
     return '__workshop__';

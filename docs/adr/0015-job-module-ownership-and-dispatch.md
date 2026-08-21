@@ -1,6 +1,6 @@
 # ADR-0015: 任务模块归属与派发接缝
 
-- **状态**: 已接受；P1 收敛已于 2026-07-29 落地
+- **状态**: 已被 [ADR-0020](./0020-ai-native-personal-workspace-rearchitecture.md) 取代（Jobs 只允许迁移与删除工作）
 - **日期**: 2026-07-26
 - **决策者**: 技术方（工程归属拍板；产品需求由用户提出）
 - **关联**: [ADR-0012](./0012-product-identity-workshop-scope.md)、`docs/architecture/NATIVE-DAEMON-CAPABILITY-MAP.md`、`docs/superpowers/specs/2026-07-26-native-harness-control-plane-design.md`

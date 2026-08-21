@@ -4,9 +4,31 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::RngCore;
 use std::sync::Mutex;
 
+use crate::secrets::store::{SecretRef, SecretStore};
 use crate::{db, Error, Result};
 
 const PROVIDER_KEK_SETTING: &str = "provider_kek";
+/// Keychain 中 provider KEK 的 opaque ref（R-S12 完成态）。
+const PROVIDER_KEK_KEYCHAIN_REF: &str = "kek:provider";
+
+/// 返回 provider KEK 使用的 SecretStore（R-S12 完成态 = OS Keychain）。
+/// 测试环境返回进程级共享的 MemorySecretStore，保证密钥跨调用幂等复用
+/// （与生产 Keychain 的持久语义一致），避免污染真实 Keychain。
+fn secrets_store() -> std::sync::Arc<dyn SecretStore> {
+    #[cfg(test)]
+    {
+        use std::sync::OnceLock;
+        static TEST_STORE: OnceLock<std::sync::Arc<crate::secrets::store::MemorySecretStore>> =
+            OnceLock::new();
+        TEST_STORE
+            .get_or_init(|| std::sync::Arc::new(crate::secrets::store::MemorySecretStore::new()))
+            .clone()
+    }
+    #[cfg(not(test))]
+    {
+        std::sync::Arc::new(crate::secrets::keychain::KeychainSecretStore::default())
+    }
+}
 
 /// KEK-DEK envelope encryption for provider API keys.
 ///
@@ -37,15 +59,52 @@ pub(crate) fn reset_kek_cache_for_tests() {
     *cache = None;
 }
 
-/// Initialize the KEK from SQLite.
-/// Called once at app startup. If no KEK exists, generates and stores one.
+/// Initialize the KEK：优先从 OS Keychain 读取（R-S12 完成态），
+/// Keychain 无条目时回退 SQLite（迁移期兼容），并自动补迁到 Keychain。
+/// 迁移后旧路径失效：SQLite 明文被删除，后续只经 Keychain。
 pub fn init_kek(conn: &rusqlite::Connection) -> Result<[u8; 32]> {
+    // 1. Keychain 优先（完成态 SoT）。
+    let keychain = secrets_store();
+    let reference = SecretRef::new(PROVIDER_KEK_KEYCHAIN_REF);
+    if let Ok(bytes) = keychain.read(&reference) {
+        if bytes.len() == 32 {
+            let mut kek = [0u8; 32];
+            kek.copy_from_slice(&bytes);
+            let mut cache = KEK_CACHE.lock().unwrap();
+            *cache = Some(kek);
+            return Ok(kek);
+        }
+    }
+
+    // 2. 迁移期回退：SQLite 明文 → 写 Keychain → 回读验证 → 删除 SQLite 明文。
     let kek = match db::get_setting(conn, PROVIDER_KEK_SETTING)? {
-        Some(value) => decode_kek_hex(&value)?,
+        Some(value) => {
+            let decoded = decode_kek_hex(&value)?;
+            match keychain.write(&reference, &decoded) {
+                Ok(()) => {
+                    // 回读验证；通过后旧路径失效（删除 SQLite 明文）。
+                    let read_back = keychain.read(&reference);
+                    if matches!(read_back, Ok(bytes) if bytes == decoded) {
+                        let _ = db::delete_setting(conn, PROVIDER_KEK_SETTING);
+                    }
+                    decoded
+                }
+                // Keychain locked/unavailable：保持 SQLite 旧数据可恢复（fail-open 迁移期）。
+                Err(_) => decoded,
+            }
+        }
         None => {
             let mut new_kek = [0u8; 32];
             OsRng.fill_bytes(&mut new_kek);
-            db::set_setting(conn, PROVIDER_KEK_SETTING, &hex::encode(new_kek))?;
+            // 新 KEK 直接写 Keychain；失败则回退 SQLite（迁移期兜底）。
+            match keychain.write(&reference, &new_kek) {
+                Ok(()) => {
+                    let _ = db::delete_setting(conn, PROVIDER_KEK_SETTING);
+                }
+                Err(_) => {
+                    db::set_setting(conn, PROVIDER_KEK_SETTING, &hex::encode(new_kek))?;
+                }
+            }
             new_kek
         }
     };
@@ -291,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn test_init_kek_stores_valid_key_in_sqlite() {
+    fn test_init_kek_stores_valid_key_in_keychain() {
         let _guard = TEST_MUTEX.lock().unwrap();
         reset_kek_cache_for_tests();
         let conn = setup_test_db();
@@ -299,10 +358,14 @@ mod tests {
         let kek = init_kek(&conn).unwrap();
         assert_eq!(kek.len(), 32);
 
-        let stored = db::get_setting(&conn, PROVIDER_KEK_SETTING)
-            .unwrap()
-            .unwrap();
-        assert_eq!(hex::decode(stored).unwrap().len(), 32);
+        // R-S12 完成态：KEK 由 SecretStore（测试环境 MemorySecretStore，
+        // 生产 OS Keychain）持有；迁移成功后 SQLite 明文必须已删除（旧路径失效）。
+        assert!(
+            db::get_setting(&conn, PROVIDER_KEK_SETTING)
+                .unwrap()
+                .is_none(),
+            "SQLite 不应再保存 KEK 明文"
+        );
     }
 
     #[test]

@@ -8,25 +8,32 @@ use agent_core::{
     EngineProviderEventStream, ToolSchema,
 };
 use futures_util::StreamExt;
+use provider_adapters::adapter::ProviderAdapter;
 use provider_adapters::capabilities::{
-    history_message_to_provider, Credential, ProviderAdapter, ProviderRequest, ProviderTool,
-    RequestControls,
+    history_message_to_provider, Credential, ProviderRequest, ProviderTool,
 };
+use provider_adapters::controls::RequestControls;
 use provider_adapters::stream::ProviderEvent;
-use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::natives_db_broker::{NativesDbBroker, Sub2ApiAccountCredential};
 use crate::production::RealProvider;
 
-const FAILURE_THRESHOLD: u32 = 3;
-const COOLDOWN: Duration = Duration::from_secs(60);
+mod routing_errors;
+use routing_errors::{error_event, event_to_error, timeout_error};
+
+#[path = "routing_health.rs"]
+mod routing_health;
+use routing_health::{
+    circuit_open, record_failure, record_inflight, record_selected, record_success, route_key,
+};
+
 const MAX_ROUTE_TARGETS: usize = 3;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,9 +56,9 @@ impl RoutingPlan {
     }
 }
 
-static CIRCUIT_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static ACCOUNT_INFLIGHT: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
-static HEALTH_STATE_INITIALIZED: OnceLock<()> = OnceLock::new();
+static OAUTH_REFRESH_LOCKS: OnceLock<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
 fn inflight() -> &'static Mutex<HashMap<String, u32>> {
     ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -88,10 +95,6 @@ fn acquire_account(
         account_id: account.id.clone(),
         route_key,
     })
-}
-
-fn circuit_write_lock() -> &'static Mutex<()> {
-    CIRCUIT_WRITE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 /// Decide the primary route target kind for a run (ADR-0019 P4).
@@ -134,8 +137,11 @@ pub fn load_plan(
         .is_none_or(|key| key.is_empty() || key == "_primary_");
     let pool_available = unselected_key
         && broker.as_ref().is_some_and(|b| {
-            b.resolve_sub2api_pool(&primary_provider)
-                .is_ok_and(|a| !a.is_empty())
+            b.resolve_sub2api_pool(
+                &primary_provider,
+                &format!("routing-probe:{}", uuid::Uuid::new_v4()),
+            )
+            .is_ok_and(|a| !a.is_empty())
         });
     let primary_kind = primary_credential_kind(primary_key.as_deref(), pool_available);
     let primary = RouteTarget {
@@ -206,6 +212,13 @@ impl RoutedProvider {
     }
 }
 
+fn proxy_request_context() -> EngineProviderContext {
+    EngineProviderContext {
+        run_id: format!("proxy-request:{}", uuid::Uuid::new_v4()),
+        attempt: 0,
+    }
+}
+
 #[async_trait::async_trait]
 impl EngineProvider for RoutedProvider {
     async fn stream(
@@ -217,10 +230,7 @@ impl EngineProvider for RoutedProvider {
         cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
         self.stream_with_context(
-            EngineProviderContext {
-                run_id: "legacy-unbound".into(),
-                attempt: 0,
-            },
+            proxy_request_context(),
             model,
             messages,
             tools,
@@ -305,7 +315,11 @@ impl RoutedProvider {
                 let route_model = if target.model_id.trim().is_empty() { base_model.clone() } else { target.model_id.clone() };
                 let result = tokio::time::timeout(Duration::from_secs(60), async {
                     if target.credential_kind == "sub2api_pool" {
-                    Sub2ApiPoolProvider { provider_id: target.provider_id.clone(), controls: controls.clone() }.stream_history(
+                    Sub2ApiPoolProvider {
+                        provider_id: target.provider_id.clone(),
+                        controls: controls.clone(),
+                        run_id: context.run_id.clone(),
+                    }.stream_history(
                         route_model.clone(), messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else if target.credential_kind == "api_key" {
@@ -375,6 +389,7 @@ impl RoutedProvider {
 struct Sub2ApiPoolProvider {
     provider_id: String,
     controls: RequestControls,
+    run_id: String,
 }
 
 #[async_trait::async_trait]
@@ -427,7 +442,7 @@ impl Sub2ApiPoolProvider {
     ) -> Result<EngineProviderEventStream, EngineError> {
         let broker = NativesDbBroker::open_default().map_err(EngineError::Message)?;
         let accounts = broker
-            .resolve_sub2api_pool(&self.provider_id)
+            .resolve_sub2api_pool(&self.provider_id, &self.run_id)
             .map_err(EngineError::Message)?;
         if accounts.is_empty() {
             return Err(EngineError::Message("no active Sub2API accounts".into()));
@@ -523,7 +538,18 @@ async fn account_stream_history(
 ) -> Result<EngineProviderEventStream, EngineError> {
     let mut account = account.clone();
     if account.account_type == "oauth" && oauth_expiring(&account) {
-        refresh_oauth_account(&mut account).await?;
+        let refresh_lock = oauth_refresh_lock(&account.id)?;
+        let _refresh_guard = refresh_lock.lock().await;
+        let broker = NativesDbBroker::open_default().map_err(EngineError::Message)?;
+        account = broker
+            .resolve_sub2api_pool(&account.provider_id, &account.run_id)
+            .map_err(EngineError::Message)?
+            .into_iter()
+            .find(|candidate| candidate.id == account.id)
+            .ok_or_else(|| EngineError::Message("OAuth account is no longer active".into()))?;
+        if oauth_expiring(&account) {
+            refresh_oauth_account(&mut account).await?;
+        }
     }
     let mut request = ProviderRequest {
         model: model.to_string(),
@@ -581,7 +607,7 @@ async fn account_stream_history(
             proxy_url: account.proxy_url.clone(),
             key_id: Some(account.id.clone()),
             provider_type: Some(protocol_for(&account).into()),
-            project_id: None,
+            project_id: optional_credential(&account, "project_id"),
         };
         adapter_for(&account).stream(request, credential).await
     }
@@ -612,6 +638,20 @@ async fn account_stream_history(
         },
     );
     Ok(Box::pin(mapped))
+}
+
+fn oauth_refresh_lock(account_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>, EngineError> {
+    let locks = OAUTH_REFRESH_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks
+        .lock()
+        .map_err(|_| oauth_pool_error("OAuth refresh lock is unavailable"))?;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(account_id).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(account_id.to_string(), Arc::downgrade(&lock));
+    Ok(lock)
 }
 
 pub(crate) fn rectifier_enabled() -> bool {
@@ -670,17 +710,36 @@ async fn refresh_oauth_account(account: &mut Sub2ApiAccountCredential) -> Result
         .unwrap_or_else(|| CODEX_CLIENT_ID.into());
     let client = provider_adapters::http_client::client(account.proxy_url.as_deref())
         .map_err(|_| oauth_pool_error("outbound proxy is unavailable for OAuth refresh"))?;
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token.as_str()),
+        ("client_id", client_id.as_str()),
+    ];
+    let client_secret =
+        optional_credential(account, "client_secret").filter(|value| !value.trim().is_empty());
+    if let Some(client_secret) = client_secret.as_deref() {
+        form.push(("client_secret", client_secret));
+    }
     let response = client
         .post(token_url)
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token.as_str()),
-            ("client_id", client_id.as_str()),
-        ])
+        .form(&form)
         .send()
         .await
         .map_err(|_| oauth_pool_error("OAuth refresh request failed"))?;
-    if !response.status().is_success() {
+    let status = response.status();
+    if !status.is_success() {
+        let error_code = response
+            .bytes()
+            .await
+            .ok()
+            .and_then(|body| oauth_error_code(&body));
+        if error_code.as_deref() == Some("invalid_grant") {
+            let broker = NativesDbBroker::open_default().map_err(EngineError::Message)?;
+            broker
+                .update_sub2api_credentials(account, &account.credentials, None, true)
+                .map_err(EngineError::Message)?;
+            return Err(oauth_reauth_error());
+        }
         return Err(oauth_pool_error("OAuth refresh was rejected"));
     }
     let payload: Value = response
@@ -718,10 +777,24 @@ async fn refresh_oauth_account(account: &mut Sub2ApiAccountCredential) -> Result
     }
     let broker = NativesDbBroker::open_default().map_err(EngineError::Message)?;
     broker
-        .update_sub2api_credentials(&account.id, &account.credentials, expires_at.as_deref())
+        .update_sub2api_credentials(account, &account.credentials, expires_at.as_deref(), false)
         .map_err(EngineError::Message)?;
     account.expires_at = expires_at;
     Ok(())
+}
+
+fn oauth_error_code(body: &[u8]) -> Option<String> {
+    const MAX_OAUTH_ERROR_BODY: usize = 64 * 1024;
+    let body = body.get(..body.len().min(MAX_OAUTH_ERROR_BODY))?;
+    let value: Value = serde_json::from_slice(body).ok()?;
+    value
+        .get("error")
+        .and_then(|error| match error {
+            Value::String(code) => Some(code.as_str()),
+            Value::Object(object) => object.get("code").and_then(Value::as_str),
+            _ => None,
+        })
+        .map(str::to_string)
 }
 
 fn parse_expiry_epoch(value: &str) -> Option<i64> {
@@ -752,14 +825,55 @@ fn oauth_pool_error(message: &str) -> EngineError {
     }
 }
 
+fn oauth_reauth_error() -> EngineError {
+    EngineError::Provider {
+        message: "OAuth authorization is no longer valid; reconnect the account".into(),
+        code: "oauth_reauth_required".into(),
+        retryable: false,
+        category: "Auth".into(),
+        retry_after_ms: None,
+    }
+}
+
 fn adapter_for(account: &Sub2ApiAccountCredential) -> Box<dyn ProviderAdapter> {
-    match account.platform.as_str() {
-        "anthropic" => Box::new(provider_adapters::providers::anthropic::AnthropicAdapter::new()),
-        "gemini" => Box::new(provider_adapters::providers::gemini::GeminiAdapter::new()),
-        "openai" if account.account_type == "upstream" => Box::new(
+    match account_adapter_kind(account) {
+        AccountAdapterKind::Antigravity => {
+            Box::new(provider_adapters::providers::antigravity::AntigravityAdapter::new())
+        }
+        AccountAdapterKind::Anthropic => {
+            Box::new(provider_adapters::providers::anthropic::AnthropicAdapter::new())
+        }
+        AccountAdapterKind::Gemini => {
+            Box::new(provider_adapters::providers::gemini::GeminiAdapter::new())
+        }
+        AccountAdapterKind::OpenAiCompatible => Box::new(
             provider_adapters::providers::openai_compatible::OpenAiCompatibleAdapter::new(),
         ),
-        _ => Box::new(provider_adapters::providers::openai::OpenAiAdapter::new()),
+        AccountAdapterKind::OpenAi => {
+            Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountAdapterKind {
+    Antigravity,
+    Anthropic,
+    Gemini,
+    OpenAiCompatible,
+    OpenAi,
+}
+
+fn account_adapter_kind(account: &Sub2ApiAccountCredential) -> AccountAdapterKind {
+    if account.provider_id.eq_ignore_ascii_case("antigravity") {
+        AccountAdapterKind::Antigravity
+    } else {
+        match account.platform.as_str() {
+            "anthropic" => AccountAdapterKind::Anthropic,
+            "gemini" => AccountAdapterKind::Gemini,
+            "openai" if account.account_type == "upstream" => AccountAdapterKind::OpenAiCompatible,
+            _ => AccountAdapterKind::OpenAi,
+        }
     }
 }
 
@@ -848,317 +962,6 @@ fn provider_event_to_engine(event: ProviderEvent) -> EngineProviderEvent {
     }
 }
 
-fn route_key(target: &RouteTarget) -> String {
-    format!(
-        "{}:{}:{}:{}",
-        target.provider_id,
-        target.credential_kind,
-        target.credential_id.as_deref().unwrap_or(""),
-        target.model_id
-    )
-}
-
-fn route_health_connection() -> Result<Connection, rusqlite::Error> {
-    let conn = Connection::open(crate::natives_db_broker::default_assistant_db_path())?;
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS provider_route_health (route_key TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0, open_until_ms INTEGER, half_open_in_flight INTEGER NOT NULL DEFAULT 0, in_flight INTEGER NOT NULL DEFAULT 0, last_selected_at TEXT, last_error TEXT, updated_at TEXT NOT NULL DEFAULT (datetime('now')))")?;
-    let columns = conn
-        .prepare("PRAGMA table_info(provider_route_health)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?;
-    for (name, sql) in [
-        ("half_open_in_flight", "ALTER TABLE provider_route_health ADD COLUMN half_open_in_flight INTEGER NOT NULL DEFAULT 0"),
-        ("in_flight", "ALTER TABLE provider_route_health ADD COLUMN in_flight INTEGER NOT NULL DEFAULT 0"),
-        ("last_selected_at", "ALTER TABLE provider_route_health ADD COLUMN last_selected_at TEXT"),
-        ("last_error", "ALTER TABLE provider_route_health ADD COLUMN last_error TEXT"),
-    ] {
-        if !columns.iter().any(|column| column == name) {
-            conn.execute(sql, [])?;
-        }
-    }
-    HEALTH_STATE_INITIALIZED.get_or_init(|| {
-        let _ = conn.execute(
-            "UPDATE provider_route_health SET in_flight=0, half_open_in_flight=0",
-            [],
-        );
-    });
-    Ok(conn)
-}
-
-fn epoch_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(i64::MAX as u128) as i64
-}
-
-fn circuit_open(target: &RouteTarget) -> bool {
-    let Ok(conn) = route_health_connection() else {
-        return false;
-    };
-    let open_until = conn
-        .query_row(
-            "SELECT open_until_ms FROM provider_route_health WHERE route_key=?1",
-            [route_key(target)],
-            |row| row.get::<_, Option<i64>>(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .flatten();
-    match open_until {
-        Some(until) if until > epoch_ms() => true,
-        Some(_) => conn.execute("UPDATE provider_route_health SET half_open_in_flight=1, updated_at=datetime('now') WHERE route_key=?1 AND half_open_in_flight=0", [route_key(target)]).map(|changed| changed == 0).unwrap_or(true),
-        None => false,
-    }
-}
-
-fn record_selected(target: &RouteTarget) {
-    if let Ok(conn) = route_health_connection() {
-        let _ = conn.execute("INSERT INTO provider_route_health(route_key, last_selected_at, updated_at) VALUES(?1,datetime('now'),datetime('now')) ON CONFLICT(route_key) DO UPDATE SET last_selected_at=datetime('now'),updated_at=datetime('now')", [route_key(target)]);
-    }
-}
-
-fn record_inflight(key: &str, value: u32) {
-    if let Ok(conn) = route_health_connection() {
-        let _ = conn.execute(
-            "INSERT INTO provider_route_health(route_key, in_flight, updated_at)
-             VALUES(?1,?2,datetime('now'))
-             ON CONFLICT(route_key) DO UPDATE SET in_flight=excluded.in_flight,updated_at=excluded.updated_at",
-            params![key, value],
-        );
-    }
-}
-
-fn record_failure(target: &RouteTarget) {
-    let Ok(_guard) = circuit_write_lock().lock() else {
-        return;
-    };
-    let Ok(conn) = route_health_connection() else {
-        return;
-    };
-    let key = route_key(target);
-    let failures = conn
-        .query_row(
-            "SELECT consecutive_failures FROM provider_route_health WHERE route_key=?1",
-            [&key],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .unwrap_or(0)
-        .saturating_add(1);
-    let open_until = (failures >= i64::from(FAILURE_THRESHOLD))
-        .then(|| epoch_ms().saturating_add(COOLDOWN.as_millis().min(i64::MAX as u128) as i64));
-    let _ = conn.execute("INSERT INTO provider_route_health (route_key, consecutive_failures, open_until_ms, half_open_in_flight, last_error, updated_at) VALUES (?1,?2,?3,0,'request_failed',datetime('now')) ON CONFLICT(route_key) DO UPDATE SET consecutive_failures=excluded.consecutive_failures, open_until_ms=excluded.open_until_ms, half_open_in_flight=0, last_error='request_failed', updated_at=excluded.updated_at", params![key, failures, open_until]);
-}
-
-fn record_success(target: &RouteTarget) {
-    if let Ok(conn) = route_health_connection() {
-        let _ = conn.execute(
-            "INSERT INTO provider_route_health(route_key, consecutive_failures, open_until_ms, half_open_in_flight, last_error, updated_at)
-             VALUES(?1,0,NULL,0,NULL,datetime('now'))
-             ON CONFLICT(route_key) DO UPDATE SET consecutive_failures=0,open_until_ms=NULL,half_open_in_flight=0,last_error=NULL,updated_at=datetime('now')",
-            [route_key(target)],
-        );
-    }
-}
-
-fn event_to_error(event: &EngineProviderEvent) -> EngineError {
-    match event {
-        EngineProviderEvent::Error {
-            message,
-            code,
-            retryable,
-            category,
-            retry_after_ms,
-        } => EngineError::Provider {
-            message: message.clone(),
-            code: code.clone(),
-            retryable: *retryable,
-            category: category.clone(),
-            retry_after_ms: *retry_after_ms,
-        },
-        _ => EngineError::Message("routing stream failed".into()),
-    }
-}
-
-fn error_event(error: EngineError) -> EngineProviderEvent {
-    match error {
-        EngineError::Provider {
-            message,
-            code,
-            retryable,
-            category,
-            retry_after_ms,
-        } => EngineProviderEvent::Error {
-            message,
-            code,
-            retryable,
-            category,
-            retry_after_ms,
-        },
-        other => EngineProviderEvent::Error {
-            message: other.to_string(),
-            code: other.code().into(),
-            retryable: other.retryable(),
-            category: "Unknown".into(),
-            retry_after_ms: None,
-        },
-    }
-}
-
-fn timeout_error(message: &str) -> EngineError {
-    EngineError::Provider {
-        message: message.into(),
-        code: "timeout".into(),
-        retryable: true,
-        category: "Timeout".into(),
-        retry_after_ms: None,
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn circuit_opens_after_three_failures_and_recovers_after_success() {
-        // Hermetic: route health lives in assistant.db, and
-        // default_assistant_db_path() falls back to the real ~/.natives when
-        // NATIVES_ASSISTANT_DB_PATH is unset. Point it at a temp DB so the test
-        // never reads/writes the developer's real data and is deterministic
-        // under parallel execution.
-        let _env_guard = crate::storage::DataStore::env_test_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("route-health.db");
-        let prev_db = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
-        let target = RouteTarget {
-            provider_id: "p".into(),
-            credential_kind: "api_key".into(),
-            credential_id: Some("k".into()),
-            model_id: "m".into(),
-        };
-        record_success(&target);
-        record_failure(&target);
-        record_failure(&target);
-        assert!(!circuit_open(&target));
-        record_failure(&target);
-        assert!(circuit_open(&target));
-        record_success(&target);
-        assert!(!circuit_open(&target));
-        match prev_db {
-            Some(v) => std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v),
-            None => std::env::remove_var("NATIVES_ASSISTANT_DB_PATH"),
-        }
-    }
-
-    #[test]
-    fn primary_credential_kind_falls_back_to_pool_for_oauth_only_provider() {
-        // No key selected + usable pool → OAuth-only provider routes via pool.
-        assert_eq!(primary_credential_kind(None, true), "sub2api_pool");
-        assert_eq!(primary_credential_kind(Some(""), true), "sub2api_pool");
-        // Explicit key id keeps the API-key path even when a pool exists.
-        assert_eq!(primary_credential_kind(Some("k1"), true), "api_key");
-        assert_eq!(primary_credential_kind(Some("k1"), false), "api_key");
-        // No key and no pool → API-key path preserved (fail-closed downstream).
-        assert_eq!(primary_credential_kind(None, false), "api_key");
-        assert_eq!(
-            primary_credential_kind(Some("_primary_"), true),
-            "sub2api_pool"
-        );
-    }
-
-    fn account(id: &str, priority: i64) -> Sub2ApiAccountCredential {
-        Sub2ApiAccountCredential {
-            id: id.into(),
-            provider_id: "p".into(),
-            platform: "openai".into(),
-            account_type: "oauth".into(),
-            credentials: serde_json::json!({}),
-            extra: serde_json::json!({}),
-            priority,
-            concurrency: 1,
-            expires_at: None,
-            proxy_url: None,
-        }
-    }
-
-    #[test]
-    fn order_pool_accounts_prioritizes_lower_priority_first() {
-        let mut accounts = vec![account("a", 5), account("b", 1), account("c", 3)];
-        order_pool_accounts(&mut accounts, 0);
-        let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, vec!["b", "c", "a"]);
-    }
-
-    #[test]
-    fn order_pool_accounts_rotates_equal_priority_tier_by_affinity() {
-        let mut accounts = vec![account("a", 0), account("b", 0), account("c", 0)];
-        order_pool_accounts(&mut accounts, 1);
-        let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, vec!["b", "c", "a"], "affinity=1 rotates the top tier");
-        // A different affinity shifts the same tier without reordering it.
-        let mut accounts = vec![account("a", 0), account("b", 0), account("c", 0)];
-        order_pool_accounts(&mut accounts, 2);
-        let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, vec!["c", "a", "b"]);
-        // Single-account tier stays put regardless of affinity.
-        let mut accounts = vec![account("a", 0)];
-        order_pool_accounts(&mut accounts, 999);
-        assert_eq!(accounts[0].id, "a");
-    }
-
-    #[test]
-    fn configured_plan_retries_primary_then_secondary_and_is_bounded() {
-        let primary = RouteTarget {
-            provider_id: "primary".into(),
-            credential_kind: "api_key".into(),
-            credential_id: Some("k1".into()),
-            model_id: "first".into(),
-        };
-        let secondary = RouteTarget {
-            provider_id: "secondary".into(),
-            credential_kind: "api_key".into(),
-            credential_id: Some("k2".into()),
-            model_id: "second".into(),
-        };
-        let plan = configured_plan(
-            primary.clone(),
-            true,
-            vec![
-                primary,
-                secondary,
-                RouteTarget {
-                    provider_id: "third".into(),
-                    credential_kind: "api_key".into(),
-                    credential_id: None,
-                    model_id: "third".into(),
-                },
-                RouteTarget {
-                    provider_id: "unreachable-fourth".into(),
-                    credential_kind: "api_key".into(),
-                    credential_id: None,
-                    model_id: "fourth".into(),
-                },
-            ],
-        );
-
-        assert_eq!(
-            plan.attempts()
-                .map(|target| target.provider_id.as_str())
-                .collect::<Vec<_>>(),
-            ["primary", "secondary", "third"]
-        );
-    }
-
-    #[test]
-    fn timeout_errors_keep_timeout_taxonomy() {
-        let EngineError::Provider { category, .. } = timeout_error("deadline") else {
-            panic!("routing timeout must be a provider error");
-        };
-        assert_eq!(category, "Timeout");
-    }
-}
+#[path = "routing_tests.rs"]
+mod tests;

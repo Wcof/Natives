@@ -2,10 +2,11 @@
 //!
 //! Every registered adapter must satisfy the same contract suite.
 
-use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
-use provider_adapters::capabilities::contract_tests::run_contract_tests;
+use provider_adapters::adapter::contract_tests::run_contract_tests;
+use provider_adapters::adapter::{ProviderAdapter, ProviderStreamEvent};
 use provider_adapters::capabilities::*;
+use provider_adapters::provider_identity::{ModelCapabilities, ProviderType};
 
 /// Mock adapter for contract testing.
 struct MockAdapter;

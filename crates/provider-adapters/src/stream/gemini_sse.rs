@@ -90,11 +90,10 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
         .unwrap_or_default();
 
     for candidate in candidates {
-        if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
-            events.push(ProviderEvent::Completed {
-                reason: ProviderStopReason::from_raw(reason),
-            });
-        }
+        let finish_reason = candidate
+            .get("finishReason")
+            .and_then(Value::as_str)
+            .map(ProviderStopReason::from_raw);
         let parts = candidate
             .get("content")
             .and_then(|c| c.get("parts"))
@@ -128,6 +127,9 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
                     arguments_delta: args_str,
                 });
             }
+        }
+        if let Some(reason) = finish_reason {
+            events.push(ProviderEvent::Completed { reason });
         }
     }
 

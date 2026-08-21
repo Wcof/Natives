@@ -1,6 +1,6 @@
 # ADR-0016: 能力库（Capability Hub，能力中心统一管理面）
 
-- **状态**: 已接受
+- **状态**: 已被 [ADR-0020](./0020-ai-native-personal-workspace-rearchitecture.md) 取代（可复用资产迁入 AI Resources / AI Tool Integration）
 - **日期**: 2026-07-26
 - **决策者**: 产品方（用户）
 - **关联**: [ADR-0011](./0011-native-engine-production-gaps.md)、[ADR-0012](./0012-product-identity-workshop-scope.md)、[ADR-0014](./0014-creative-app-creator-workbench.md)、`docs/architecture/NATIVE-DAEMON-CAPABILITY-MAP.md`、`docs/superpowers/specs/2026-07-26-native-harness-control-plane-design.md`

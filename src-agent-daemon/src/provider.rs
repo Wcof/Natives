@@ -10,10 +10,11 @@ use agent_core::{
     EngineProviderEventStream, ToolSchema,
 };
 use futures_util::StreamExt;
+use provider_adapters::adapter::ProviderAdapter;
 use provider_adapters::capabilities::{
-    history_message_to_provider, HistoryMessage, ProviderAdapter, ProviderError, ProviderRequest,
-    ProviderTool, RequestControls,
+    history_message_to_provider, HistoryMessage, ProviderError, ProviderRequest, ProviderTool,
 };
+use provider_adapters::controls::RequestControls;
 use provider_adapters::stream::ProviderEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -278,7 +279,7 @@ impl RealProvider {
             // 第一候选沿用显式协议/供应商字符串匹配（兼容 DeepSeek 等特殊供应商）；
             // 回退候选按协议显式构造。
             let adapter: Box<dyn ProviderAdapter> = if candidate == explicit_protocol {
-                resolve_adapter(&protocol)
+                resolve_adapter(preferred_adapter_identity(&self.provider_id, &protocol))
             } else {
                 adapter_for_protocol(candidate)
             };
@@ -547,6 +548,14 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
         )
     } else {
         Box::new(provider_adapters::providers::openai::OpenAiAdapter::new())
+    }
+}
+
+fn preferred_adapter_identity<'a>(provider_id: &'a str, protocol: &'a str) -> &'a str {
+    if provider_id.to_ascii_lowercase().contains("antigravity") {
+        provider_id
+    } else {
+        protocol
     }
 }
 

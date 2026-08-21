@@ -44,7 +44,7 @@ async fn sidecar_binary_routes_engineering_project_identity() {
         .spawn()
         .expect("spawn compiled daemon binary");
 
-    for _ in 0..100 {
+    for _ in 0..250 {
         if socket.exists() {
             break;
         }

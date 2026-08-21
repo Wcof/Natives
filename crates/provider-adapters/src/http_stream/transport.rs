@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use super::body::{build_chat_completions_body, build_responses_body};
 
+const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     if let Some(value) = headers
         .get(reqwest::header::RETRY_AFTER)
@@ -82,23 +84,59 @@ pub fn map_http_status(
 }
 
 pub fn transport_error(code: &str, error: &reqwest::Error) -> ProviderError {
+    let (message, category) = if error.is_timeout() {
+        ("provider request timed out", ProviderErrorCategory::Timeout)
+    } else if error.is_connect() {
+        ("provider connection failed", ProviderErrorCategory::Network)
+    } else if error.is_decode() {
+        (
+            "provider response decode failed",
+            ProviderErrorCategory::ServerError,
+        )
+    } else {
+        (
+            "provider network request failed",
+            ProviderErrorCategory::Network,
+        )
+    };
+
     ProviderError {
         code: code.into(),
-        message: error.to_string(),
-        category: if error.is_timeout() {
-            ProviderErrorCategory::Timeout
-        } else {
-            ProviderErrorCategory::Network
-        },
+        message: message.into(),
+        category,
         retryable: true,
         retry_after_ms: None,
     }
 }
 
+pub(crate) fn incomplete_stream_error() -> ProviderError {
+    ProviderError {
+        code: "incomplete_stream".into(),
+        message: "provider stream ended before a terminal event".into(),
+        category: ProviderErrorCategory::ServerError,
+        retryable: true,
+        retry_after_ms: None,
+    }
+}
+
+pub(crate) fn append_sse_bytes(buffer: &mut String, bytes: &[u8]) -> Result<(), ProviderError> {
+    if buffer.len().saturating_add(bytes.len()) > MAX_SSE_BUFFER_BYTES {
+        return Err(ProviderError {
+            code: "stream_buffer_exceeded".into(),
+            message: "provider stream event exceeded the size limit".into(),
+            category: ProviderErrorCategory::ServerError,
+            retryable: false,
+            retry_after_ms: None,
+        });
+    }
+    buffer.push_str(&String::from_utf8_lossy(bytes));
+    Ok(())
+}
+
 fn redact_http_body(body: &str) -> String {
     // Keep message short and free of credentials.
     let truncated: String = body.chars().take(400).collect();
-    assistant_protocol::v2::redact_secrets(&truncated)
+    crate::redact::redact_secrets(&truncated)
 }
 
 /// Stream chat completions from an OpenAI-compatible endpoint.
@@ -135,19 +173,22 @@ pub async fn stream_chat_completions(
     let stream = async_stream::stream! {
         let mut parser = OpenAiSseParser::new();
         let mut buffer = String::new();
-        let mut saw_completed = false;
         tokio::pin!(byte_stream);
         while let Some(chunk) = byte_stream.next().await {
             match chunk {
                 Ok(bytes) => {
-                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    if let Err(error) = append_sse_bytes(&mut buffer, &bytes) {
+                        yield ProviderEvent::Error(error);
+                        return;
+                    }
                     for line in split_sse_lines(&mut buffer) {
                         if let Some(data) = sse_data_payload(&line) {
                             for event in parser.push_data_line(data) {
-                                if matches!(event, ProviderEvent::Completed { .. }) {
-                                    saw_completed = true;
-                                }
+                                let terminal = matches!(event, ProviderEvent::Completed { .. } | ProviderEvent::Error(_));
                                 yield event;
+                                if terminal {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -158,16 +199,7 @@ pub async fn stream_chat_completions(
                 }
             }
         }
-        if !saw_completed {
-            // Emit completed tool-call assemblies if any, then Completed.
-            for (id, name, args) in parser.finished_tool_calls() {
-                // Final delta with empty args already streamed; nothing extra.
-                let _ = (id, name, args);
-            }
-            yield ProviderEvent::Completed {
-                reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
-            };
-        }
+        yield ProviderEvent::Error(incomplete_stream_error());
     };
 
     Ok(Box::pin(stream))
@@ -211,7 +243,7 @@ pub async fn stream_responses_with_headers(
     mut request: ProviderRequest,
 ) -> Result<std::pin::Pin<Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>>, ProviderError>
 {
-    use crate::stream::openai_responses::parse_responses_event;
+    use crate::stream::openai_responses::OpenAiResponsesParser;
 
     request.stream = true;
     let body = build_responses_body(&request);
@@ -237,19 +269,23 @@ pub async fn stream_responses_with_headers(
     let byte_stream = response.bytes_stream();
     let stream = async_stream::stream! {
         let mut buffer = String::new();
-        let mut saw_completed = false;
+        let mut parser = OpenAiResponsesParser::new();
         tokio::pin!(byte_stream);
         while let Some(chunk) = byte_stream.next().await {
             match chunk {
                 Ok(bytes) => {
-                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    if let Err(error) = append_sse_bytes(&mut buffer, &bytes) {
+                        yield ProviderEvent::Error(error);
+                        return;
+                    }
                     for line in split_sse_lines(&mut buffer) {
                         if let Some(data) = sse_data_payload(&line) {
-                            for event in parse_responses_event(data) {
-                                if matches!(event, ProviderEvent::Completed { .. }) {
-                                    saw_completed = true;
-                                }
+                            for event in parser.push_data_line(data) {
+                                let terminal = matches!(event, ProviderEvent::Completed { .. } | ProviderEvent::Error(_));
                                 yield event;
+                                if terminal {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -260,11 +296,7 @@ pub async fn stream_responses_with_headers(
                 }
             }
         }
-        if !saw_completed {
-            yield ProviderEvent::Completed {
-                reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
-            };
-        }
+        yield ProviderEvent::Error(incomplete_stream_error());
     };
 
     Ok(Box::pin(stream))
@@ -372,5 +404,35 @@ mod tests {
             transport_error("network", &error).category,
             ProviderErrorCategory::Timeout
         );
+    }
+
+    #[tokio::test]
+    async fn transport_errors_never_expose_request_urls_or_query_secrets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let error = Client::new()
+            .get(format!(
+                "http://{address}/models/example?alt=sse&key=query-secret"
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        let provider_error = transport_error("network", &error);
+
+        assert!(!provider_error.message.contains("query-secret"));
+        assert!(!provider_error.message.contains("http://"));
+        assert_eq!(provider_error.message, "provider connection failed");
+    }
+
+    #[test]
+    fn sse_remainder_is_bounded() {
+        let mut buffer = String::new();
+        let oversized = vec![b'a'; MAX_SSE_BUFFER_BYTES + 1];
+        let error = append_sse_bytes(&mut buffer, &oversized).unwrap_err();
+
+        assert_eq!(error.code, "stream_buffer_exceeded");
+        assert!(buffer.is_empty());
     }
 }

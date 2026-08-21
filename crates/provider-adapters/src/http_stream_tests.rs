@@ -3,8 +3,9 @@
 use super::*;
 use crate::capabilities::{
     history_message_to_provider, HistoryMessage, HistoryToolCall, ProviderContentBlock,
-    ProviderErrorCategory, ProviderMessage, ProviderRequest, RequestControls,
+    ProviderErrorCategory, ProviderMessage, ProviderRequest,
 };
+use crate::controls::RequestControls;
 use chrono::Utc;
 
 fn multi_turn_history() -> Vec<ProviderMessage> {
@@ -331,7 +332,7 @@ fn tool_choice_and_parallel_flag_encode_to_the_openai_shape() {
     let forced = build_chat_completions_body_with_controls(
         &request,
         &RequestControls {
-            tool_choice: Some(crate::capabilities::ToolChoice::Tool {
+            tool_choice: Some(crate::controls::ToolChoice::Tool {
                 name: "read_file".into(),
             }),
             parallel_tool_calls: Some(false),
@@ -346,7 +347,7 @@ fn tool_choice_and_parallel_flag_encode_to_the_openai_shape() {
     let required = build_chat_completions_body_with_controls(
         &request,
         &RequestControls {
-            tool_choice: Some(crate::capabilities::ToolChoice::Required),
+            tool_choice: Some(crate::controls::ToolChoice::Required),
             ..Default::default()
         },
     );
@@ -361,8 +362,8 @@ fn tool_choice_and_parallel_flag_encode_to_the_openai_shape() {
 #[test]
 fn reasoning_effort_only_reaches_models_that_accept_it() {
     let controls = RequestControls {
-        reasoning: Some(crate::capabilities::ReasoningRequest::new(
-            crate::capabilities::ReasoningEffort::High,
+        reasoning: Some(crate::controls::ReasoningRequest::new(
+            crate::controls::ReasoningEffort::High,
         )),
         ..Default::default()
     };

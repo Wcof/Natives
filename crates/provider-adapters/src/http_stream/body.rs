@@ -3,9 +3,8 @@
 //! Extracted from `http_stream.rs`: chat-completions and Responses body
 //! builders, provider-message serialisation, and image/tool part shaping.
 
-use crate::capabilities::{
-    ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderTool, RequestControls,
-};
+use crate::capabilities::{ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderTool};
+use crate::controls::RequestControls;
 use crate::model_profile::{self, ReasoningControl};
 
 /// Build the JSON body for OpenAI chat completions using the request's own

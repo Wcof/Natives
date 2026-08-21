@@ -1,9 +1,11 @@
 //! Anthropic Messages API adapter — real HTTP streaming.
 
+use crate::adapter::{ProviderAdapter, ProviderStreamEvent};
 use crate::capabilities::*;
+use crate::controls::{RequestControls, ToolChoice};
 use crate::model_profile::{self, ModelProfile, ReasoningControl};
+use crate::provider_identity::{ModelCapabilities, ProviderType};
 use crate::stream::{split_sse_lines, sse_data_payload, AnthropicSseParser, ProviderEvent};
-use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -532,19 +534,22 @@ impl ProviderAdapter for AnthropicAdapter {
         let stream = async_stream::stream! {
             let mut parser = AnthropicSseParser::new();
             let mut buffer = String::new();
-            let mut saw_completed = false;
             tokio::pin!(byte_stream);
             while let Some(chunk) = byte_stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        if let Err(error) = crate::http_stream::append_sse_bytes(&mut buffer, &bytes) {
+                            yield ProviderEvent::Error(error);
+                            return;
+                        }
                         for line in split_sse_lines(&mut buffer) {
                             if let Some(data) = sse_data_payload(&line) {
                                 for event in parser.push_data_line(data) {
-                                    if matches!(event, ProviderEvent::Completed { .. }) {
-                                        saw_completed = true;
-                                    }
+                                    let terminal = matches!(event, ProviderEvent::Completed { .. } | ProviderEvent::Error(_));
                                     yield event;
+                                    if terminal {
+                                        return;
+                                    }
                                 }
                             }
                         }
@@ -555,11 +560,7 @@ impl ProviderAdapter for AnthropicAdapter {
                     }
                 }
             }
-            if !saw_completed {
-                yield ProviderEvent::Completed {
-                    reason: crate::stream::ProviderStopReason::Unknown("missing_final_event".into()),
-                };
-            }
+            yield ProviderEvent::Error(crate::http_stream::incomplete_stream_error());
         };
         Ok(Box::pin(stream))
     }

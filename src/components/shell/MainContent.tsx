@@ -8,14 +8,10 @@ import { getBuiltinTool } from '@/lib/builtin-tools';
 import { isSettingsView, getSettingsSection } from './settings-navigation';
 
 // Lazy-loaded heavy page components
-const LazyWorkshopPage = lazy(() => import('./WorkshopPage'));
+const LazyAppsPage = lazy(() => import('@/components/apps/AppsPage'));
 const LazyFileBrowser = lazy(() => import('@/components/files/FileBrowser'));
 const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
-const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
-const LazyAssistantWorkbench = lazy(() => import('@/components/assistant/AssistantWorkbench'));
-const LazyJobsPage = lazy(() => import('@/components/jobs/JobsPage'));
-const LazyCapabilitiesPage = lazy(() => import('@/components/capabilities/CapabilitiesPage'));
-const LazyLibraryPage = lazy(() => import('@/components/library/LibraryPage').then((m) => ({ default: m.LibraryPage })));
+const LazyUsageDashboard = lazy(() => import('@/components/dashboard/UsageDashboard').then((m) => ({ default: m.UsageDashboard })));
 const LazySettingsPage = lazy(() => import('./SettingsPage'));
 
 const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<React.ComponentType>> = {};
@@ -100,31 +96,40 @@ export default function MainContent({
   }
 
   switch (activeView) {
+    case 'apps':
     case 'workshop':
     case 'modules':
     case 'store':
-      // Single surface: Personal Creations (install + create + manage)
-      return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage /></Suspense>;
+      return (
+        <Suspense fallback={<LazyFallback />}>
+          <LazyAppsPage />
+        </Suspense>
+      );
     case 'files':
+    case 'library':
       return (
         <Suspense fallback={<LazyFallback />}>
           <LazyFileBrowser onFileSelect={onFileSelect} />
         </Suspense>
       );
     case 'ai':
-      return <Suspense fallback={<LazyFallback />}><LazyAiWorkbench /></Suspense>;
     case 'assistant':
-      return <Suspense fallback={<LazyFallback />}><LazyAssistantWorkbench locale={locale} /></Suspense>;
-    case 'jobs':
-      return <Suspense fallback={<LazyFallback />}><LazyJobsPage /></Suspense>;
     case 'capabilities':
-      return <Suspense fallback={<LazyFallback />}><LazyCapabilitiesPage /></Suspense>;
-    case 'library':
-      return <Suspense fallback={<LazyFallback />}><LazyLibraryPage /></Suspense>;
     case 'tools':
-      return <Suspense fallback={<LazyFallback />}><LazyToolsPage /></Suspense>;
+      return (
+        <Suspense fallback={<LazyFallback />}>
+          <LazyAiWorkbench />
+        </Suspense>
+      );
     case 'dashboard':
       return children;
+    case 'usage':
+    case 'jobs':
+      return (
+        <Suspense fallback={<LazyFallback />}>
+          <LazyUsageDashboard />
+        </Suspense>
+      );
     default:
       if (activeView.startsWith('module:')) {
         return <div ref={iframeContainerRef} style={{ width: '100%', height: '100%' }} />;

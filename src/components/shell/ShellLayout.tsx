@@ -262,7 +262,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView('capabilities');
     } else if (moduleId === '__library__' || moduleId === 'library') {
       setActiveView('library');
-    } else if (moduleId === 'files' || moduleId === 'ai' || moduleId === 'tools' || moduleId === 'assistant' || moduleId === 'dashboard') {
+    } else if (moduleId === 'files' || moduleId === 'ai' || moduleId === 'tools' || moduleId === 'assistant' || moduleId === 'dashboard' || moduleId === 'usage') {
       // 命令面板等处传裸视图 id；此前会掉进兜底分支被当成 `module:<id>` iframe 打开
       setActiveView(moduleId);
     } else if (moduleId === '__notifications__') {

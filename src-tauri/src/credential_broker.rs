@@ -190,7 +190,8 @@ fn resolve_oauth_lease(
              FROM provider_accounts a
              JOIN user_providers p ON a.provider_id = p.id
              WHERE a.provider_id = ?1 AND a.account_type = 'oauth' AND a.status = 'active'
-               AND (a.expires_at IS NULL OR a.expires_at = '' OR a.expires_at > datetime('now'))
+               AND (a.expires_at IS NULL OR a.expires_at = ''
+                    OR datetime(a.expires_at) > datetime('now'))
              ORDER BY a.priority ASC, a.created_at ASC
              LIMIT 1",
             rusqlite::params![req.provider_id],
@@ -382,6 +383,9 @@ pub fn broker_pool_acquire(
     if req.provider_id.trim().is_empty() {
         return Err("provider_id is required".into());
     }
+    if req.run_id.trim().is_empty() || req.run_id == "unspecified" {
+        return Err("run_id required for credential pool lease binding".into());
+    }
     let db = crate::db::get_main_conn()
         .map_err(|e| redact_broker_error(&format!("DB connection failed: {e}")))?;
     let mut stmt = db
@@ -391,7 +395,12 @@ pub fn broker_pool_acquire(
                 p.config_encrypted, p.dek_encrypted
              FROM provider_accounts a LEFT JOIN provider_account_proxies p ON p.id = a.proxy_id
              WHERE a.provider_id = ?1 AND a.status = 'active'
-               AND (a.expires_at IS NULL OR a.expires_at = '' OR a.expires_at > datetime('now'))
+               AND (
+                    a.account_type = 'oauth'
+                    OR a.expires_at IS NULL
+                    OR a.expires_at = ''
+                    OR datetime(a.expires_at) > datetime('now')
+               )
              ORDER BY a.priority ASC, a.id ASC",
         )
         .map_err(|e| redact_broker_error(&format!("prepare Sub2API pool: {e}")))?;
@@ -486,8 +495,43 @@ pub fn broker_pool_refresh(
     if req.account_id.trim().is_empty() {
         return Err("account_id is required".into());
     }
+    if req.provider_id.trim().is_empty() {
+        return Err("provider_id is required".into());
+    }
+    if req.run_id.trim().is_empty() || req.run_id == "unspecified" {
+        return Err("run_id required for credential pool refresh".into());
+    }
+    let lease = lease_registry()
+        .status(&req.lease_id)
+        .map_err(|_| "active credential pool lease required for refresh".to_string())?;
+    if !lease.active
+        || lease.provider_id != req.provider_id
+        || lease.run_id != req.run_id
+        || lease.key_id != "sub2api-pool"
+    {
+        return Err("credential pool refresh lease mismatch".into());
+    }
     let db = crate::db::get_main_conn()
         .map_err(|e| redact_broker_error(&format!("DB connection failed: {e}")))?;
+    if req.reauth_required {
+        let updated = db
+            .execute(
+                "UPDATE provider_accounts
+                 SET status = 'reauth_required', updated_at = ?1
+                 WHERE id = ?2 AND provider_id = ?3 AND account_type = 'oauth'
+                   AND status = 'active'",
+                rusqlite::params![
+                    crate::provider_accounts_parse::now(),
+                    req.account_id,
+                    req.provider_id,
+                ],
+            )
+            .map_err(|e| redact_broker_error(&format!("OAuth reauth state persist failed: {e}")))?;
+        if updated == 0 {
+            return Err("active oauth account not found for reauth transition".into());
+        }
+        return Ok(wire::CredentialPoolRefreshResponse { ok: true });
+    }
     let credentials_json = serde_json::to_string(&req.credentials)
         .map_err(|_| redact_broker_error("OAuth refresh credentials are invalid"))?;
     let (credentials_encrypted, dek_encrypted) = envelope_encrypt(&credentials_json, &db)
@@ -497,13 +541,15 @@ pub fn broker_pool_refresh(
             "UPDATE provider_accounts
              SET credentials_encrypted = ?1, dek_encrypted = ?2, expires_at = ?3,
                  status = 'active', updated_at = ?4
-             WHERE id = ?5 AND account_type = 'oauth'",
+             WHERE id = ?5 AND provider_id = ?6 AND account_type = 'oauth'
+               AND status = 'active'",
             rusqlite::params![
                 credentials_encrypted,
                 dek_encrypted,
                 req.expires_at,
                 crate::provider_accounts_parse::now(),
                 req.account_id,
+                req.provider_id,
             ],
         )
         .map_err(|e| redact_broker_error(&format!("OAuth refresh persist failed: {e}")))?;

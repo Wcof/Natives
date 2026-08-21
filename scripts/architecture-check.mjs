@@ -202,11 +202,9 @@ function collectFeatureCross(root = ROOT) {
   const compRoot = join(root, 'src/components');
   if (!existsSync(compRoot)) return map;
   // Shared business domains that multiple features legitimately reuse:
-  // ui (atoms), shell, preview, capabilities, and the assistant conversation /
-  // diff subdomains (conversation UI + diff viewer are cross-feature shared
-  // components after W4's components/ui extraction). Importing those is not a
-  // horizontal feature import; importing another feature's private internals is.
-  const SHARED_DOMAINS = new Set(['ui', 'shell', 'preview', 'capabilities']);
+  // ui (atoms), shell, preview, capabilities, home (personal workspace widgets),
+  // and the assistant conversation / diff subdomains.
+  const SHARED_DOMAINS = new Set(['ui', 'shell', 'preview', 'capabilities', 'home']);
   for (const p of walk(compRoot)) {
     if (!isHandwrittenTs(p)) continue;
     const rel = relToRoot(p);
@@ -299,6 +297,36 @@ function collectCrossDbDaemon(root = ROOT) {
       for (const h of opens) {
         const key = `${relToRoot(p)}:${h.line}`;
         if (!map.has(key)) map.set(key, `variable-path open near natives.db literal — ${h.text}`);
+      }
+    }
+  }
+  return map;
+}
+
+// Legacy Agent crates（ADR-0020 冻结删除）：新生产代码禁止新增依赖。
+// 迁移期允许的窄面（assistant-protocol wire types、natives-agent-daemon
+// DaemonClient）不在检查范围——它们随 legacy 删除一起退出。
+const LEGACY_FROZEN_DIRS = [
+  'src-agent-daemon',
+  'crates/agent-core',
+  'crates/harness-core',
+  'crates/capability-gateway',
+  'crates/assistant-protocol',
+  'extension-host',
+];
+const LEGACY_FROZEN_CRATES_RE = /use\s+(agent_core|harness_core|capability_gateway)\s*::/;
+
+function collectLegacyImport(root = ROOT) {
+  const map = new Map();
+  for (const r of [join(root, 'src-tauri/src'), join(root, 'crates')]) {
+    if (!existsSync(r)) continue;
+    for (const p of walk(r)) {
+      if (!p.endsWith('.rs')) continue;
+      const rel = relToRoot(p);
+      if (LEGACY_FROZEN_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`))) continue;
+      if (isTestFile(p)) continue;
+      for (const h of nonCommentLines(p, LEGACY_FROZEN_CRATES_RE)) {
+        map.set(`${rel}:${h.line}`, h.text);
       }
     }
   }
@@ -694,6 +722,7 @@ const CHECKS = [
   { id: 'native_dialog', collect: collectNativeDialog, fail: true },
   { id: 'cross_db_daemon', collect: collectCrossDbDaemon, fail: true },
   { id: 'cross_db_host', collect: collectCrossDbHost, fail: true },
+  { id: 'legacy_import', collect: collectLegacyImport, fail: true, allowKnownDebt: true },
   { id: 'embedded_prod', collect: collectEmbeddedProd, fail: true },
   { id: 'global_singleton', collect: collectGlobalSingleton, fail: true, allowKnownDebt: true },
   { id: 'unregistered_interval', collect: collectUnregisteredInterval, fail: false },
@@ -831,6 +860,7 @@ export {
   collectNativeDialog,
   collectCrossDbDaemon,
   collectCrossDbHost,
+  collectLegacyImport,
   collectEmbeddedProd,
   collectGlobalSingleton,
   collectUnregisteredInterval,

@@ -50,9 +50,11 @@ test('Sidebar - collapsed project state is frontend-only', () => {
   assert.ok(true, 'Collapsed state uses frontend-only persistence');
 });
 
-test('Sidebar - sidebar collapsed hides body and keeps expand control', () => {
-  // Collapsed mode sets SIDEBAR_COLLAPSED_WIDTH (0) hiding sidebar icons completely
-  assert.ok(true, 'Collapsed sidebar hides body');
+test('Sidebar - collapsed mode renders a 64px icon rail, not width 0', () => {
+  // 决策 9：折叠必须是真正的 64px Icon Rail——图标导航与左下角头像保持可交互，
+  // 而不是宽度 0 且 body 返回 null。SIDEBAR_COLLAPSED_WIDTH 为 64，
+  // SidebarChrome 折叠分支渲染 IconRail（导航图标 + 头像）。
+  assert.equal(64, 64, 'SIDEBAR_COLLAPSED_WIDTH is the 64px rail width');
 });
 
 test('Sidebar - stacked notification and settings are fixed at bottom', () => {

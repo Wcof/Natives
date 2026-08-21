@@ -42,22 +42,28 @@ fn setup_test_db() -> Connection {
 }
 
 #[test]
-fn test_init_env_encryption_key_stores_key_in_sqlite() {
+fn test_init_env_encryption_key_stores_valid_key() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_env_key_cache_for_tests();
+    crate::env_manager::reset_test_secrets_store();
     let conn = setup_test_db();
     let key = init_env_encryption_key(&conn).unwrap();
     assert_eq!(hex::decode(&key).unwrap().len(), 32);
-    let stored = db::get_setting(&conn, ENCRYPTION_KEY_SETTING)
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored, key);
+    // R-S12 完成态：env 密钥由 SecretStore（测试环境 MemorySecretStore，
+    // 生产 OS Keychain）持有；迁移成功后 SQLite 明文必须已删除（旧路径失效）。
+    assert!(
+        db::get_setting(&conn, ENCRYPTION_KEY_SETTING)
+            .unwrap()
+            .is_none(),
+        "SQLite 不应再保存 env 加密密钥明文"
+    );
 }
 
 #[test]
 fn test_init_env_encryption_key_reuses_sqlite_key() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_env_key_cache_for_tests();
+    crate::env_manager::reset_test_secrets_store();
     let conn = setup_test_db();
     let existing = "aa".repeat(32);
     db::set_setting(&conn, ENCRYPTION_KEY_SETTING, &existing).unwrap();
@@ -68,6 +74,7 @@ fn test_init_env_encryption_key_reuses_sqlite_key() {
 fn test_init_env_encryption_key_rejects_invalid_sqlite_key() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_env_key_cache_for_tests();
+    crate::env_manager::reset_test_secrets_store();
     let conn = setup_test_db();
     db::set_setting(&conn, ENCRYPTION_KEY_SETTING, "not-hex").unwrap();
     let err = init_env_encryption_key(&conn).unwrap_err();
@@ -78,6 +85,7 @@ fn test_init_env_encryption_key_rejects_invalid_sqlite_key() {
 fn metadata_never_contains_secret_or_ciphertext() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_env_key_cache_for_tests();
+    crate::env_manager::reset_test_secrets_store();
     let conn = setup_test_db();
     let key = init_env_encryption_key(&conn).unwrap();
     create_profile(&conn, "local").unwrap();
@@ -109,6 +117,7 @@ fn metadata_never_contains_secret_or_ciphertext() {
 fn injection_is_host_only_and_decryption_errors_are_explicit() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_env_key_cache_for_tests();
+    crate::env_manager::reset_test_secrets_store();
     let conn = setup_test_db();
     let key = init_env_encryption_key(&conn).unwrap();
     create_profile(&conn, "local").unwrap();

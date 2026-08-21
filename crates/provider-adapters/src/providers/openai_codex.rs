@@ -16,11 +16,22 @@ pub const CODEX_CLIENT_VERSION: &str = "0.144.1";
 pub const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color";
 
 /// Memory-only OAuth material. Callers must never persist or log this value.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiCodexCredential {
     pub access_token: String,
     pub chatgpt_account_id: Option<String>,
     pub fedramp: bool,
+}
+
+impl std::fmt::Debug for OpenAiCodexCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenAiCodexCredential")
+            .field("access_token", &"[REDACTED]")
+            .field("chatgpt_account_id", &self.chatgpt_account_id)
+            .field("fedramp", &self.fedramp)
+            .finish()
+    }
 }
 
 pub async fn stream(
@@ -79,5 +90,18 @@ mod tests {
         assert!(CODEX_RESPONSES_URL.starts_with("https://chatgpt.com/"));
         assert!(CODEX_USER_AGENT.starts_with("codex_cli_rs/"));
         assert!(!CODEX_CLIENT_VERSION.is_empty());
+    }
+
+    #[test]
+    fn credential_debug_redacts_access_token() {
+        let credential = OpenAiCodexCredential {
+            access_token: "oauth-access-secret".into(),
+            chatgpt_account_id: Some("account-1".into()),
+            fedramp: false,
+        };
+
+        let debug = format!("{credential:?}");
+        assert!(!debug.contains("oauth-access-secret"));
+        assert!(debug.contains("[REDACTED]"));
     }
 }

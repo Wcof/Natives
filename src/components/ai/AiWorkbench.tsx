@@ -1,63 +1,56 @@
 'use client';
 
 import { useState } from 'react';
-import { t as tr, useLocale } from '@/i18n';
-import AgentDashboard from './AgentDashboard';
-import AgentSessions from './AgentSessions';
-import SkillsPanel from './SkillsPanel';
-import UsagePanel from './UsagePanel';
-import RtkPanel from './RtkPanel';
+import { useLocale, t } from '@/i18n';
+import AiResourcesPanel from './AiResourcesPanel';
+import LocalProxyPanel from './LocalProxyPanel';
+import AiToolIntegrationsPanel from './AiToolIntegrationsPanel';
 import ChangeInbox from './ChangeInbox';
 import AIFileOrganizer from './AIFileOrganizer';
+import { Cpu, Server, Wrench, Inbox, FolderTree } from 'lucide-react';
 
-// 原 'memory'（ProjectMemory）与 'sessions'（SessionReplay）读同一数据源且均为假面板，
-// 已合并为真实数据驱动的 AgentSessions；'files' 页签中冗余的 FollowModeUI（终端跟随开关
-// 已在终端工具栏中有真实实现）一并移除。
-type AiTab = 'agents' | 'sessions' | 'skills' | 'usage' | 'inbox' | 'files';
+type AiTab = 'resources' | 'proxy' | 'tools' | 'inbox' | 'organizer';
 
 export default function AiWorkbench() {
-  const [tab, setTab] = useState<AiTab>('agents');
+  const [tab, setTab] = useState<AiTab>('resources');
   const locale = useLocale();
 
-  const tabs: { id: AiTab; label: string }[] = [
-    { id: 'agents', label: tr(locale, 'aiWorkbench.tabs.agents') },
-    { id: 'sessions', label: tr(locale, 'aiWorkbench.tabs.sessions') },
-    { id: 'skills', label: tr(locale, 'aiWorkbench.tabs.skills') },
-    { id: 'usage', label: tr(locale, 'aiWorkbench.tabs.usage') },
-    { id: 'inbox', label: tr(locale, 'aiWorkbench.tabs.inbox') },
-    { id: 'files', label: tr(locale, 'aiWorkbench.tabs.files') },
+  const tabs: { id: AiTab; labelKey: 'aiWorkbench.tabs.resources' | 'aiWorkbench.tabs.proxy' | 'aiWorkbench.tabs.tools' | 'aiWorkbench.tabs.inbox' | 'aiWorkbench.tabs.organizer'; icon: React.ReactNode }[] = [
+    { id: 'resources', labelKey: 'aiWorkbench.tabs.resources', icon: <Cpu className="w-4 h-4" /> },
+    { id: 'proxy', labelKey: 'aiWorkbench.tabs.proxy', icon: <Server className="w-4 h-4" /> },
+    { id: 'tools', labelKey: 'aiWorkbench.tabs.tools', icon: <Wrench className="w-4 h-4" /> },
+    { id: 'inbox', labelKey: 'aiWorkbench.tabs.inbox', icon: <Inbox className="w-4 h-4" /> },
+    { id: 'organizer', labelKey: 'aiWorkbench.tabs.organizer', icon: <FolderTree className="w-4 h-4" /> },
   ];
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', padding: '0 12px' }}>
-        {tabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            style={{
-              padding: '10px 14px',
-              fontSize: 'var(--fs-sm)',
-              fontWeight: 500,
-              background: 'none',
-              border: 'none',
-              borderBottom: tab === item.id ? '2px solid var(--primary)' : '2px solid transparent',
-              color: tab === item.id ? 'var(--text)' : 'var(--text-secondary)',
-              cursor: 'pointer',
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', padding: '0 16px' }}>
+        {tabs.map((item) => {
+          const isActive = tab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={`flex items-center gap-2 py-3 px-4 text-xs font-medium border-b-2 transition-all ${
+                isActive
+                  ? 'border-[var(--primary)] text-[var(--text)] font-semibold'
+                  : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text)]'
+              }`}
+            >
+              {item.icon}
+              <span>{t(locale, item.labelKey)}</span>
+            </button>
+          );
+        })}
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
-        {tab === 'agents' && <AgentDashboard />}
-        {tab === 'sessions' && <AgentSessions />}
-        {tab === 'skills' && <SkillsPanel />}
-        {tab === 'usage' && <><UsagePanel /><RtkPanel /></>}
+        {tab === 'resources' && <AiResourcesPanel />}
+        {tab === 'proxy' && <LocalProxyPanel />}
+        {tab === 'tools' && <AiToolIntegrationsPanel />}
         {tab === 'inbox' && <ChangeInbox />}
-        {tab === 'files' && <AIFileOrganizer />}
+        {tab === 'organizer' && <AIFileOrganizer />}
       </div>
     </div>
   );

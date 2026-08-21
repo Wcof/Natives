@@ -22,7 +22,8 @@ use crate::{AppState, Error, Result};
 
 use super::mcp_oauth::sanitize_reqwest_error;
 use super::provider_oauth_preset::{
-    ensure_oauth_provider, oauth_preset, persist_oauth_account, OauthFlowKind,
+    ensure_oauth_provider, oauth_preset, persist_oauth_account, token_identity_fingerprint,
+    OauthFlowKind,
 };
 
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -368,12 +369,17 @@ pub async fn provider_oauth_device_poll(
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty());
+    let discovered_identity = extract_identity(&tokens);
     let identity = session
         .identity
         .clone()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| extract_identity(&tokens))
-        .unwrap_or_else(|| tokens.access_token.clone());
+        .or_else(|| discovered_identity.clone())
+        .unwrap_or_else(|| token_identity_fingerprint(&tokens.access_token));
+    let account_name = session
+        .account_name
+        .as_deref()
+        .or(discovered_identity.as_deref());
     let credentials = serde_json::json!({
         "access_token": tokens.access_token,
         "refresh_token": refresh,
@@ -390,7 +396,7 @@ pub async fn provider_oauth_device_poll(
         &session.provider_id,
         &session.platform,
         &identity,
-        session.account_name.as_deref(),
+        account_name,
         &credentials,
         expires_at,
     )?;

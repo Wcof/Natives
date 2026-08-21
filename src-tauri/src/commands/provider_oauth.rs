@@ -28,7 +28,9 @@ use super::mcp_oauth::{
     percent_encode, random_urlsafe_token, sanitize_reqwest_error, validate_endpoint_url,
     wait_for_callback,
 };
-use super::provider_oauth_preset::{ensure_oauth_provider, oauth_preset, persist_oauth_account};
+use super::provider_oauth_preset::{
+    ensure_oauth_provider, oauth_preset, persist_oauth_account, token_identity_fingerprint,
+};
 
 const FLOW_TIMEOUT: Duration = Duration::from_secs(180);
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -56,7 +58,7 @@ pub struct ProviderOauthStartInput {
     pub scopes: Option<Vec<String>>,
     pub redirect_port: Option<u16>,
     /// Optional stable account identity (email / user id) for dedupe.
-    /// When absent, falls back to a fingerprint of the access token.
+    /// When absent, the Host derives a secret-safe opaque fingerprint.
     pub identity: Option<String>,
     pub account_name: Option<String>,
     /// Google Cloud project id for OAuth-backed Cloud Code providers
@@ -289,15 +291,12 @@ pub async fn provider_oauth_start(
         .map(str::trim)
         .filter(|t| !t.is_empty());
 
-    // Identity for dedupe: caller-provided stable id when present; otherwise a
-    // fingerprint of the access token (same fallback as Sub2API imports).
-    let identity = input
+    let provided_identity = input
         .identity
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| token.access_token.clone());
+        .map(str::to_owned);
 
     // Best-effort project_id for Cloud Code providers (antigravity): use the
     // explicit login param when present, otherwise auto-discover from the token.
@@ -321,13 +320,17 @@ pub async fn provider_oauth_start(
             .unwrap_or(None)
     };
     // Called after discovery so `token.access_token` is not moved too early.
-    let userinfo_email = if provider_id == "antigravity" && identity.is_empty() {
+    let userinfo_email = if provider_id == "antigravity" && provided_identity.is_none() {
         fetch_google_userinfo(&token.access_token)
             .await
             .unwrap_or(None)
     } else {
         None
     };
+    let identity = provided_identity
+        .or_else(|| userinfo_email.clone())
+        .unwrap_or_else(|| token_identity_fingerprint(&token.access_token));
+    let account_name = input.account_name.as_deref().or(userinfo_email.as_deref());
 
     // Envelope-encrypt the OAuth credential (never plaintext at rest).
     // client_secret is encrypted here; it never reaches the plaintext extra_json.
@@ -358,7 +361,7 @@ pub async fn provider_oauth_start(
         &provider_id,
         &platform,
         &identity,
-        input.account_name.as_deref(),
+        account_name,
         &credentials,
         expires_at,
     )?;

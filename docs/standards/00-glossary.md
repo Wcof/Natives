@@ -1,7 +1,7 @@
 # 00 · 术语与关键词
 
 > 本篇定义**规范体系内部**使用的术语与关键词语义。  
-> 产品身份与面/轨以 [ADR-0012](../adr/0012-product-identity-workshop-scope.md) 与 [`product/01-positioning.md`](./product/01-positioning.md) 为准。
+> 产品身份与领域术语以 [ADR-0020](../adr/0020-ai-native-personal-workspace-rearchitecture.md) 与 [`product/01-positioning.md`](./product/01-positioning.md) 为准。
 
 ---
 
@@ -41,7 +41,7 @@
 | `主题` | 设计令牌、三皮肤、字体绑定 |
 | `交互` | toast/通知/模态的选用、空/加载态、快捷键 |
 | `反馈` | 动效、声音、聚焦环 |
-| `进程` | Host Main / Agent Daemon / Renderer / 租户（iframe·Embed）边界 |
+| `进程` | Tauri Host / Renderer / 必要 Sidecar / 外部 Surface 边界 |
 | `版本` | SemVer、minNativesVersion、插件更新 |
 
 ---
@@ -59,14 +59,20 @@
 ### 现状描述（Description）
 `docs/architecture/` 等文档的角色。它们陈述「当前系统是如何实现的」，但不构成约束。当描述与规范冲突，规范胜出，描述应被更新。
 
-### 三面 / 双轨（Surface / Track）
-- **Hub / Workshop / Embed**：产品入口与安全模型分面（ADR-0012）。  
-- **web-module / capability**：物理实现双轨；禁止单 manifest 硬揉。
+### Target / Legacy
+- **Target**：ADR-0020 冻结的完成态架构；新能力只能按 Target 设计。
+- **Legacy**：迁移期仍在生产源码中的 Assistant / Agent / Jobs / Capabilities / Daemon / Plugin Runtime；只允许安全、迁移与删除工作。
 
-### 能力库 / 能力中心 / 能力子系统（三名对齐，ADR-0016）
-- **能力库（Capability Hub）**：菜单名与用户可见名称，Skills / 连接器 / 专家 三子域的统一管理面。
-- **能力中心**：ADR-0012 第 4 节为 capability 轨冻结的 UI 归属名。与「能力库」是**同一概念**。
-- **能力子系统**：daemon 侧执行实现（`NATIVE-DAEMON-CAPABILITY-MAP.md`：mcp_runtime / skill_store / subagent_store 等）。能力库是它的配置权威与管理表面。
+### Provider / Connection / Credential
+- **Provider**：厂商身份，如 OpenAI、Anthropic、Google。
+- **Connection**：一个真实 upstream endpoint、protocol 与网络配置。
+- **Credential**：可独立轮换、启停和选择的认证材料引用；持久 Secret 归 OS Keychain。
+
+### App / RuntimeSpec / RuntimeInstance / Surface
+- **App**：用户管理和启动的应用实体。
+- **RuntimeSpec**：如何运行的声明。
+- **RuntimeInstance**：一次受监督运行。
+- **Surface**：如何呈现或进入该运行；与 RuntimeInstance 分离。
 
 ### 决策记录（ADR, Architecture Decision Record）
 记录「**为什么**在某个时间点做了某个架构选择」。ADR 不直接是约束，但规范中的 MUST/SHOULD 常常**源自**某个 ADR。规范篇会在「关联 ADR」处双向链接。
@@ -90,8 +96,7 @@
 | KV | Key-Value | `module_data` 表的存储模型 |
 | WAL | Write-Ahead Logging | SQLite 的并发写入模式 |
 | SemVer | Semantic Versioning | 主.次.修订 版本号规范 |
-| UDS | Unix Domain Socket | Host ↔ Agent Daemon 生产通信 |
-| KI | Kernel Invariant | Workshop 微内核不变量 KI-1…5 |
+| UDS | Unix Domain Socket | 迁移期 Host ↔ legacy Daemon 或必要 Sidecar 通信 |
 
 ---
 

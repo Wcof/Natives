@@ -1,148 +1,88 @@
 # 产品架构 01 · 定位与边界
 
-> **版本**: 2.0.0 · **日期**: 2026-07-23  
-> **关联 ADR**: [ADR-0012](../../adr/0012-product-identity-workshop-scope.md)（产品身份与工坊范围冻结）、[ADR-0013](../../adr/0013-creative-app-dual-source.md)（创意双来源）、[ADR-0007](../../adr/0007-domain-wheel-reinvention-clarification.md)（不造轮子适用范围）  
-> **关联源文件**: 根 `CLAUDE.md`、`docs/architecture/module-workshop-kernel-runtime.md`  
-> **权威说明**: 产品身份与阶段边界以 **ADR-0012** 为准；本篇把 ADR 落成可执行的 MUST/SHOULD。
+> **版本**: 3.0.0 · **日期**: 2026-08-19
+> **关联 ADR**: [ADR-0020](../../adr/0020-ai-native-personal-workspace-rearchitecture.md)（当前产品与架构冻结）、[ADR-0007](../../adr/0007-domain-wheel-reinvention-clarification.md)（复用原则）
+> **取代**: ADR-0012 派生的三面/双轨与 Workshop 优先规则
 
----
-
-## 一、本篇要约束什么
-
-Natives 最大的产品风险是**边界漂移**：把「本机工作台」写成「联网商店」、把 Workshop 沙箱与远程 Embed 混模型、或无限加厚内核。本篇钉死：产品身份、三面/双轨、阶段不做清单、基座内置封闭集合。
-
----
-
-## 二、产品身份（约束陈述）
+## 一、产品身份
 
 #### R-P0 · 产品身份唯一表述
 - **等级**：MUST
+- **分类**：命名、产品
+- **规则**：产品身份**必须**表述为：
+
+  > **AiNative = AI Native Personal Workspace。**
+
+  产品是稳定、长期可维护的个人数字桌面，不是 Agent Runtime、AI Gateway、固定 Dashboard、低代码平台或插件市场。
+- **为什么**：单一身份决定 IA、领域所有权与删除范围，避免历史能力继续反向定义产品。
+
+#### R-P1 · 一级 IA 固定
+- **等级**：MUST
+- **分类**：产品、交互
+- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；V1 只有一个 Home。
+- **为什么**：这是用户任务组织方式，不以内部 runtime/技术名暴露产品结构。
+
+## 二、Home 与 Widget
+
+#### R-P2 · 首页就是 Personal Workspace Home
+- **等级**：MUST
+- **分类**：产品、状态
+- **规则**：根路由 `/` **必须**是可配置 Home。Widget **必须**是内置 React renderer + config + versioned grid layout；**禁止** Widget Plugin Framework、Runtime、Event Bus、Worker、Marketplace、Infinite Canvas 与多 Workspace 数据域。
+- **为什么**：Home 需要可组合，但不应演变成新的运行时平台。
+
+#### R-P3 · Widget 只做轻量投影
+- **等级**：MUST
+- **分类**：分层、性能
+- **规则**：Widget **必须**消费 Files、Apps、AI、Usage 等领域 query/facade；**禁止**直接访问 SQLite、扫描文件、解析工具日志、查询进程、访问 Provider、读取 Secret 或创建重复 timer/poll。
+- **为什么**：数据权威与资源生命周期必须留在领域 module；Widget 数量不能线性放大 IPC/SQL/Timer。
+
+## 三、领域边界
+
+#### R-P4 · 领域语义不可混用
+- **等级**：MUST
 - **分类**：命名、分层
-- **规则**：对内文档与 PR 描述中，产品身份**必须**表述为：
-
-  > **Natives = 本机个人全能 AI 工作台。**
-
-  - 创意工坊是工作台中的**一个域**，不是唯一中心。
-  - 「AI Steam Base / Steam 客户端」仅可作为**历史称呼或远期分发层比喻**；**禁止**再作为当前架构驱动项或完成态产品名。
-  - 联网商店式发现 / 上架 / 订阅为 **P2**，本地工坊跑通前**禁止**写成已交付能力。
-- **为什么**：ADR-0012 为结束多套叙事叠加而冻结；漂移会同时污染安全模型与排期。
-- **检查方法**：新文档/IA/PR 是否仍以「商店冷启动」「薄 Steam 壳」驱动 P0。
-
-#### R-P1 · 立项必须声明三面 + 双轨
-- **等级**：MUST
-- **分类**：分层、命名
-- **规则**：任何新功能在立项/PR 中**必须**声明所属：
-
-| 维度 | 取值 | 含义 |
-|------|------|------|
-| **面（Surface）** | **Hub** | 凭证、环境、终端、Agent/CLI 接入与编排 |
-| | **Workshop** | 本地 web-module：生成/安装/契约/Unique Origin 沙箱 |
-| | **Embed** | 远程或官方 Web / 外部容器 GUI；弱或零 Bridge；**不**进 Workshop 沙箱假设 |
-| **轨（Track）**（若适用） | **web-module** | 本地静态 SPA + manifest + Bridge |
-| | **capability** | MCP / CLI / Agent 等进程化能力；独立权限与生命周期 |
-
-- **禁止**用单一 `modules` manifest 硬揉 SPA 与 MCP/Agent 两种物理模型。
-- **禁止**把远程登录态站点塞进 Workshop Unique Origin 租户模型（见 ADR-0012 第 5 节、ADR-0013）。
-- **为什么**：三面/双轨是安全与数据模型可证明的前提。
-- **检查方法**：PR 描述缺「面/轨」声明即不合规；reviewer 核验实现路径是否匹配。
-
-#### R-P2 · 「不造领域轮子」只适用于租户层
-- **等级**：MUST
-- **分类**：分层
 - **规则**：
-  - **租户层**（web-module / 用户 capability 接入）：**禁止**自行实现已有成熟领域方案（完整 IDE、通用 Git GUI、完整 AI 对话客户端等）；**必须**嵌入或调用现成工具。
-  - **宿主层**（Host / 内置工作台页 / Native Agent Daemon 基础设施）：**禁止**拿「不造轮子」拒绝自建容器、Bridge、环境注入、DB 总线、执行引擎编排。
-- **正例**：租户需要 AI → 经终端 CLI 或 Host 的 capability 编排；Host 需要主题 → 自建 theme-engine。
-- **反例**：Host 要做文件预览却以「不造轮子」拒做 → 错误（预览是基座内置）。
-- **为什么**：ADR-0007；混淆两层是最常见决策错误。
-- **检查方法**：「不做 X」论证**必须**写明 X 属于宿主还是租户。
+  - Files 的资源 CRUD/Trash/Watch/Search 与内容编辑能力分离。
+  - Apps 使用 App / RuntimeSpec / RuntimeInstance / Surface；App 不是 Widget，运行不等于呈现。
+  - Provider = 厂商；Connection = 真实 upstream；Credential = 独立可轮换凭证；API protocol 不是 Provider。
+  - Proxy = 个人本地轻量代理；**禁止**建设企业 AI Gateway、租户计费或通用控制/数据平面。
+  - Claude Code、Codex、Gemini CLI、OpenCode = AI Tool Integration。
+  - Usage/Analytics 复用现有采集与聚合；**禁止**建设统一 Event Platform。
+- **为什么**：稳定术语让数据模型、界面和代码所有权保持一致。
 
----
-
-## 三、阶段与优先级（ADR-0012）
-
-#### R-P3 · 阶段边界
+#### R-P5 · Tauri Host 是默认 Native Backend
 - **等级**：MUST
-- **分类**：分层
-- **规则**：排期与文档**必须**遵守：
+- **分类**：分层、进程
+- **规则**：本机领域能力默认归 Tauri Rust Host。只有真实独立生命周期或隔离需求才允许 Sidecar，并必须由 Host 监督。**禁止**新建 Agent Runtime、Harness、Planner、Subagent Runtime、Capability Gateway、Jobs 自主任务系统或 Plugin Runtime。
+- **为什么**：个人桌面产品不需要为内部逻辑增加进程、协议和第二数据 authority。
 
-| 阶段 | 目标 | **必须不**做 |
-|------|------|--------------|
-| **P0 当前** | 个人工作台可用；本地工坊生成/安装/热上架/沙箱运行；domain 数据长青 | 联网商店、公开评分、订阅计费 |
-| **P1** | 模块打包/导出、本地导入、契约与版本稳定 | 云端账号体系（除非另开 ADR） |
-| **P2 以后** | Steam 式分享与发现 | —（另开排期与 ADR） |
+## 四、复用与诚实能力
 
-- **检查方法**：P0 PR 不得引入商店冷启动指标或联网上架完成态文案。
-
-#### R-P4 · 用户角色优先级
-- **等级**：SHOULD
-- **分类**：交互
-- **规则**：成功标准**应该**优先：
-
-| 优先级 | 角色 | 含义 |
-|--------|------|------|
-| 主 | 意图用户 | 对话/AI 出工具，少写代码 |
-| 副 | 模块开发者 | 手写或 AI 辅助静态模块 |
-| 并存 | 效率用户 | 终端 + Agent + 文件等日常工作台 |
-
-不以安装量 / 商店 GMV 作为当前成功标准。
-
----
-
-## 四、基座内置能力（封闭集合）
-
-#### R-P5 · 内置能力清单
+#### R-P6 · 复用优先且只有一个 Source of Truth
 - **等级**：MUST
-- **分类**：分层
-- **规则**：基座内置功能**必须**限定在下表。新增内置能力需先扩本表并（大改时）补 ADR：
+- **分类**：分层、数据
+- **规则**：实现顺序**必须**为复用 > adapter/wrapper > 职责拆分 > 小改 > 新建。成熟 Files CRUD、App lifecycle、Provider codec、Usage parser、UI tokens **必须**先审计再决定迁移。**禁止**长期保留新旧双 production path 或复制 Source of Truth。
+- **为什么**：重构目标是降低总复杂度，不是把旧系统换名复制。
 
-| 域 | 内置能力 | 默认面 |
-|----|---------|--------|
-| 外壳 | 三栏布局、侧边栏、命令面板、通知中心、设置 | Hub |
-| 工作台 | 文件浏览器与预览、终端、环境/凭证、用量（真实数据源） | Hub |
-| AI 编排 | Native Agent Daemon 会话、Provider 配置、工具/权限编排（capability 轨） | Hub |
-| 能力库 | Skills / MCP 连接器 / 专家（含专家团）统一管理与会话选用（capability 轨，ADR-0016；即 ADR-0012 之「能力中心」） | Hub |
-| 插件运行时 | iframe 容器、Bridge、Session Token、模块安装/热上架、心跳/崩溃检测 | Workshop |
-| 本地创意目录 | 内部 web-module + 外部 GitHub 容器的统一列表投影（运行时分轨，见 ADR-0013） | Workshop + Embed |
-| 工具 | 发布向导、截图、图片标注、Git 只读面板等 | Hub |
-
-- **本地模块目录**可以存在；**禁止**把 `/store` 等入口表述为「已联网可上架」的完成态（P2 前）。
-- **为什么**：封闭集合迫使膨胀显式决策。
-- **检查方法**：新功能不在表内又想内置 → 先 ADR 扩表。
-
-#### R-P6 · 用户主权
-- **等级**：SHOULD
-- **分类**：交互、主题
-- **规则**：主题、侧栏/面板宽度、快捷键等**应该**可配置；基座提供容器与标准，不替用户做最终审美裁决。
-
----
-
-## 五、明确不做（Out of Scope）
-
-#### R-P7 · 当前阶段禁止事项
+#### R-P7 · 不得伪造完成度
 - **等级**：MUST
-- **分类**：分层、安全
-- **规则**：基座与文档**必须不**：
+- **分类**：无假数据、错误处理
+- **规则**：未通过协议、迁移、生命周期或平台 Gate 的能力**必须**标记为 partial/pending/unsupported；**禁止**用静态模型、假延迟、默认零值、伪完成事件或浏览器 Spike 冒充生产可用。
+- **为什么**：个人 Workspace 管理真实文件、进程、凭证与成本，错误状态比缺功能更危险。
 
-1. 将联网创意工坊上架 / 发现 / 订阅 / 评分写成 P0 交付物。  
-2. 把远程官方 Web 或外部容器 GUI 塞进 Workshop Unique Origin + Bridge 一等租户模型。  
-3. 用单一 manifest 同时描述 SPA 与 MCP/Agent。  
-4. 以商店冷启动指标驱动 P0 排期。  
-5. 为「前后端独立部署」拆散契约 / WAL / 身份内核（工坊正确模型是 **宿主内核权威 / 壳 UI 投影 / 沙箱租户**）。  
-6. 成为跨设备云同步服务（数据默认仅本地 `~/.natives/`）。  
-7. 自动联网静默更新已安装租户模块（更新由用户触发，除非另开 ADR）。  
-8. 直接执行租户传来的任意代码（仅经声明权限的 Bridge / Gateway）。  
-9. 在用户可见 UI 使用假数据（见 `product/02-feature-spec.md`）。
+## 五、Legacy 迁移纪律
 
-- **关于「自研 AI 客户端」**：Host 的 AI 工作台是**编排与执行引擎**（协议、会话、工具门禁），不是在租户层重写一个通用 ChatGPT 克隆；禁止的是无引擎边界的第二套对话客户端与假能力广告。
+#### R-P8 · 旧系统只允许迁移与删除工作
+- **等级**：MUST
+- **分类**：版本、分层
+- **规则**：Assistant、Agent、Jobs、Capabilities、Daemon、Plugin Runtime 旧路径只允许安全修复、兼容迁移、引用清理和删除阻断修复。生产切换**必须**有 parity、rollback 与 death proof；迁移完成后删除旧入口、旧调用与旧测试，不保留静默 fallback。
+- **为什么**：继续给 legacy 加功能会让最终删除无限后移。
 
----
+## 六、合规自检
 
-## 六、本篇合规自检清单
-
-- [ ] 产品表述是「本机 AI 工作台」，未把商店/Steam 当分发完成态。
-- [ ] 新功能已声明 Hub / Workshop / Embed，以及（若适用）web-module / capability。
-- [ ] 未混淆 Workshop 沙箱与 Embed 运行时。
-- [ ] 未在租户层重造领域轮子，也未在宿主层拿「不造轮子」偷懒。
-- [ ] 若新增内置能力，已更新 R-P5 表并（如需）开 ADR。
-- [ ] 未触碰 R-P7 列表中的禁止项。
+- [ ] 新入口属于 Home / Files / Apps / AI / Data & Usage / Settings。
+- [ ] 没有新增 Workspace、Widget runtime、Agent/Capability/Job runtime。
+- [ ] Provider / Connection / Credential / Proxy / AI Tool 术语使用正确。
+- [ ] Host 是默认 owner；Sidecar 有真实生命周期理由且被监督。
+- [ ] 用户可见数据有真实来源，未用 partial 冒充 complete。
+- [ ] 新旧生产路径没有双执行、双写或静默 fallback。

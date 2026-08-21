@@ -613,6 +613,10 @@ export const assistant = {
       usage: 'Usage',
       inbox: 'Inbox',
       files: 'Files',
+      resources: 'AI Resources',
+      proxy: 'Local Proxy',
+      tools: 'Tool Integrations',
+      organizer: 'File Organizer',
     },
     // Dashboard labels
     dashboard: {

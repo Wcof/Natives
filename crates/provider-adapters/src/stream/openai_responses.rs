@@ -1,160 +1,289 @@
-//! OpenAI Responses API event parser (subset) → ProviderEvent.
+//! Stateful OpenAI Responses API event parser -> [`ProviderEvent`].
 
 use crate::capabilities::{ProviderError, ProviderErrorCategory, ProviderUsage};
 use crate::stream::{ProviderEvent, ProviderStopReason};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
-/// Parse one Responses API SSE `data:` JSON object.
-pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
-    let data = data.trim();
-    if data.is_empty() {
-        return Vec::new();
+#[derive(Debug, Default)]
+struct ToolState {
+    id: Option<String>,
+    name: Option<String>,
+    saw_arguments: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct OpenAiResponsesParser {
+    tools: BTreeMap<usize, ToolState>,
+    finished: bool,
+}
+
+impl OpenAiResponsesParser {
+    pub fn new() -> Self {
+        Self::default()
     }
-    if data == "[DONE]" {
-        return vec![ProviderEvent::Completed {
-            reason: ProviderStopReason::Unknown("missing_reason".into()),
-        }];
+
+    pub fn push_data_line(&mut self, data: &str) -> Vec<ProviderEvent> {
+        let data = data.trim();
+        if data.is_empty() {
+            return Vec::new();
+        }
+        if data == "[DONE]" {
+            self.finished = true;
+            return vec![ProviderEvent::Completed {
+                reason: ProviderStopReason::Unknown("missing_reason".into()),
+            }];
+        }
+
+        let value: Value = match serde_json::from_str(data) {
+            Ok(value) => value,
+            Err(error) => {
+                return vec![ProviderEvent::Error(ProviderError {
+                    code: "parse_error".into(),
+                    message: format!("Invalid Responses JSON: {error}"),
+                    category: ProviderErrorCategory::ServerError,
+                    retryable: false,
+                    retry_after_ms: None,
+                })];
+            }
+        };
+
+        match value.get("type").and_then(Value::as_str).unwrap_or("") {
+            "response.output_text.delta" => text_delta(&value),
+            "response.reasoning.delta"
+            | "response.reasoning_text.delta"
+            | "response.reasoning_summary_text.delta" => reasoning_delta(&value),
+            "response.output_item.added" => self.output_item_added(&value),
+            "response.function_call_arguments.delta" => self.tool_arguments_delta(&value),
+            "response.function_call_arguments.done" => self.tool_arguments_done(&value),
+            "response.completed" => {
+                self.finished = true;
+                terminal_events(&value, ProviderStopReason::Stop)
+            }
+            "response.incomplete" => {
+                self.finished = true;
+                terminal_events(&value, ProviderStopReason::Length)
+            }
+            "response.cancelled" => {
+                self.finished = true;
+                terminal_events(&value, ProviderStopReason::Cancelled)
+            }
+            "response.failed" | "error" => {
+                self.finished = true;
+                vec![ProviderEvent::Error(response_error(&value))]
+            }
+            _ => Vec::new(),
+        }
     }
-    let value: Value = match serde_json::from_str(data) {
-        Ok(v) => v,
-        Err(err) => {
-            return vec![ProviderEvent::Error(ProviderError {
-                code: "parse_error".into(),
-                message: format!("Invalid Responses JSON: {err}"),
-                category: ProviderErrorCategory::ServerError,
-                retryable: false,
-                retry_after_ms: None,
-            })];
-        }
-    };
 
-    let mut events = Vec::new();
-    let event_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
 
-    match event_type {
-        "response.output_text.delta" => {
-            if let Some(text) = value.get("delta").and_then(|d| d.as_str()) {
-                if !text.is_empty() {
-                    events.push(ProviderEvent::TextDelta(text.to_string()));
-                }
-            }
+    fn output_item_added(&mut self, value: &Value) -> Vec<ProviderEvent> {
+        let Some(item) = value.get("item") else {
+            return Vec::new();
+        };
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            return Vec::new();
         }
-        "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
-            if let Some(text) = value.get("delta").and_then(|d| d.as_str()) {
-                if !text.is_empty() {
-                    events.push(ProviderEvent::ReasoningDelta(text.to_string()));
-                }
-            }
-        }
-        "response.function_call_arguments.delta" => {
-            let args = value
+
+        let index = output_index(value);
+        let id = string_field(item, "call_id").or_else(|| string_field(item, "id"));
+        let name = string_field(item, "name");
+        self.tools.insert(
+            index,
+            ToolState {
+                id: id.clone(),
+                name: name.clone(),
+                saw_arguments: false,
+            },
+        );
+        vec![ProviderEvent::ToolCallDelta {
+            index,
+            id,
+            name,
+            arguments_delta: String::new(),
+        }]
+    }
+
+    fn tool_arguments_delta(&mut self, value: &Value) -> Vec<ProviderEvent> {
+        let index = output_index(value);
+        let state = self.tools.entry(index).or_default();
+        update_tool_identity(state, value);
+        state.saw_arguments = true;
+        vec![ProviderEvent::ToolCallDelta {
+            index,
+            id: state.id.clone(),
+            name: state.name.clone(),
+            arguments_delta: value
                 .get("delta")
-                .and_then(|d| d.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = value
-                .get("name")
-                .and_then(|n| n.as_str())
-                .map(str::to_string);
-            let id = value
-                .get("item_id")
-                .or_else(|| value.get("call_id"))
-                .and_then(|i| i.as_str())
-                .map(str::to_string);
-            events.push(ProviderEvent::ToolCallDelta {
-                index: value
-                    .get("output_index")
-                    .and_then(|i| i.as_u64())
-                    .unwrap_or(0) as usize,
-                id,
-                name,
-                arguments_delta: args,
-            });
-        }
-        "response.completed" => {
-            if let Some(usage) = value.pointer("/response/usage") {
-                let input_tokens = usage
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                // Automatic prefix caching. `input_tokens` includes the cached
-                // span, so subtract it to match the `ProviderUsage` contract.
-                let cache_read = usage
-                    .pointer("/input_tokens_details/cached_tokens")
-                    .and_then(|v| v.as_u64());
-                events.push(ProviderEvent::Usage(ProviderUsage {
-                    input_tokens: match cache_read {
-                        Some(cached) => input_tokens.saturating_sub(cached),
-                        None => input_tokens,
-                    },
-                    output_tokens: usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    reasoning_tokens: usage
-                        .pointer("/output_tokens_details/reasoning_tokens")
-                        .and_then(|v| v.as_u64()),
-                    // The Responses API does not report cache writes separately.
-                    cache_creation_tokens: None,
-                    cache_read_tokens: cache_read,
-                    cost_usd: None,
-                }));
-            }
-            let reason = value
-                .pointer("/response/incomplete_details/reason")
                 .and_then(Value::as_str)
-                .map(ProviderStopReason::from_raw)
-                .unwrap_or_else(|| {
-                    if value.pointer("/response/status").and_then(Value::as_str)
-                        == Some("incomplete")
-                    {
-                        ProviderStopReason::Length
-                    } else if value
-                        .pointer("/response/output")
-                        .and_then(Value::as_array)
-                        .is_some_and(|items| {
-                            items.iter().any(|item| {
-                                item.get("type").and_then(Value::as_str) == Some("function_call")
-                            })
-                        })
-                    {
-                        ProviderStopReason::ToolUse
-                    } else {
-                        ProviderStopReason::Stop
-                    }
-                });
-            events.push(ProviderEvent::Completed { reason });
-        }
-        "error" => {
-            let message = value
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("responses error")
-                .chars()
-                .take(400)
-                .collect::<String>();
-            let rate_limited = message.to_ascii_lowercase().contains("rate")
-                || value
-                    .get("code")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    == "429";
-            events.push(ProviderEvent::Error(ProviderError {
-                code: "responses_error".into(),
-                message,
-                category: if rate_limited {
-                    ProviderErrorCategory::RateLimit
-                } else {
-                    ProviderErrorCategory::ServerError
-                },
-                retryable: true,
-                retry_after_ms: None,
-            }));
-        }
-        _ => {}
+                .unwrap_or("")
+                .to_string(),
+        }]
     }
 
+    fn tool_arguments_done(&mut self, value: &Value) -> Vec<ProviderEvent> {
+        let index = output_index(value);
+        let state = self.tools.entry(index).or_default();
+        update_tool_identity(state, value);
+        if state.saw_arguments {
+            return Vec::new();
+        }
+        let arguments = value.get("arguments").and_then(Value::as_str).unwrap_or("");
+        if arguments.is_empty() {
+            return Vec::new();
+        }
+        state.saw_arguments = true;
+        vec![ProviderEvent::ToolCallDelta {
+            index,
+            id: state.id.clone(),
+            name: state.name.clone(),
+            arguments_delta: arguments.to_string(),
+        }]
+    }
+}
+
+/// Parse one standalone Responses event.
+///
+/// Callers processing a stream must keep one [`OpenAiResponsesParser`] for the
+/// whole response so tool identity survives across event boundaries.
+pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
+    OpenAiResponsesParser::new().push_data_line(data)
+}
+
+fn text_delta(value: &Value) -> Vec<ProviderEvent> {
+    value
+        .get("delta")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(|text| vec![ProviderEvent::TextDelta(text.to_string())])
+        .unwrap_or_default()
+}
+
+fn reasoning_delta(value: &Value) -> Vec<ProviderEvent> {
+    value
+        .get("delta")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(|text| vec![ProviderEvent::ReasoningDelta(text.to_string())])
+        .unwrap_or_default()
+}
+
+fn terminal_events(value: &Value, fallback_reason: ProviderStopReason) -> Vec<ProviderEvent> {
+    let response = value.get("response").unwrap_or(value);
+    let mut events = response
+        .get("usage")
+        .map(provider_usage)
+        .map(ProviderEvent::Usage)
+        .into_iter()
+        .collect::<Vec<_>>();
+    events.push(ProviderEvent::Completed {
+        reason: response_stop_reason(response, fallback_reason),
+    });
     events
+}
+
+fn response_stop_reason(response: &Value, fallback: ProviderStopReason) -> ProviderStopReason {
+    if let Some(reason) = response
+        .pointer("/incomplete_details/reason")
+        .and_then(Value::as_str)
+    {
+        return ProviderStopReason::from_raw(reason);
+    }
+    if response
+        .get("output")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+        })
+    {
+        return ProviderStopReason::ToolUse;
+    }
+    fallback
+}
+
+fn provider_usage(usage: &Value) -> ProviderUsage {
+    let input_tokens = u64_field(usage, "input_tokens");
+    let cache_read_tokens = usage
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(Value::as_u64);
+    ProviderUsage {
+        input_tokens: cache_read_tokens
+            .map(|cached| input_tokens.saturating_sub(cached))
+            .unwrap_or(input_tokens),
+        output_tokens: u64_field(usage, "output_tokens"),
+        reasoning_tokens: usage
+            .pointer("/output_tokens_details/reasoning_tokens")
+            .and_then(Value::as_u64),
+        cache_creation_tokens: None,
+        cache_read_tokens,
+        cost_usd: None,
+    }
+}
+
+fn response_error(value: &Value) -> ProviderError {
+    let error = value
+        .pointer("/response/error")
+        .or_else(|| value.get("error"))
+        .unwrap_or(value);
+    let raw_message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("responses stream failed");
+    let message = crate::redact::redact_secrets(raw_message)
+        .chars()
+        .take(400)
+        .collect::<String>();
+    let code = error
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("responses_error");
+    let rate_limited = code == "429" || message.to_ascii_lowercase().contains("rate limit");
+    ProviderError {
+        code: code.to_string(),
+        message,
+        category: if rate_limited {
+            ProviderErrorCategory::RateLimit
+        } else {
+            ProviderErrorCategory::ServerError
+        },
+        retryable: rate_limited || code.starts_with('5'),
+        retry_after_ms: None,
+    }
+}
+
+fn update_tool_identity(state: &mut ToolState, value: &Value) {
+    if let Some(id) = string_field(value, "call_id") {
+        state.id = Some(id);
+    } else if state.id.is_none() {
+        state.id = string_field(value, "item_id");
+    }
+    if let Some(name) = string_field(value, "name") {
+        state.name = Some(name);
+    }
+}
+
+fn output_index(value: &Value) -> usize {
+    value
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize
+}
+
+fn string_field(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn u64_field(value: &Value, field: &str) -> u64 {
+    value.get(field).and_then(Value::as_u64).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -162,32 +291,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_text_reasoning_and_tool_deltas() {
-        let t = parse_responses_event(r#"{"type":"response.output_text.delta","delta":"Hi"}"#);
-        assert!(matches!(t.as_slice(), [ProviderEvent::TextDelta(s)] if s == "Hi"));
-
-        let r = parse_responses_event(r#"{"type":"response.reasoning.delta","delta":"think"}"#);
-        assert!(matches!(r.as_slice(), [ProviderEvent::ReasoningDelta(s)] if s == "think"));
-
-        let tool = parse_responses_event(
-            r#"{"type":"response.function_call_arguments.delta","delta":"{\"a\":1}","name":"read_file","item_id":"fc_1","output_index":0}"#,
+    fn keeps_tool_identity_across_responses_events() {
+        let mut parser = OpenAiResponsesParser::new();
+        let added = parser.push_data_line(
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":""}}"#,
         );
         assert!(matches!(
-            tool.as_slice(),
-            [ProviderEvent::ToolCallDelta { name: Some(n), id: Some(i), arguments_delta, .. }]
-                if n == "read_file" && i == "fc_1" && arguments_delta.contains("a")
+            added.as_slice(),
+            [ProviderEvent::ToolCallDelta { id: Some(id), name: Some(name), arguments_delta, .. }]
+                if id == "call_1" && name == "read_file" && arguments_delta.is_empty()
+        ));
+
+        let delta = parser.push_data_line(
+            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"path\":"}"#,
+        );
+        assert!(matches!(
+            delta.as_slice(),
+            [ProviderEvent::ToolCallDelta { id: Some(id), name: Some(name), arguments_delta, .. }]
+                if id == "call_1" && name == "read_file" && arguments_delta.contains("path")
         ));
     }
 
     #[test]
-    fn completed_event_splits_cached_input_tokens() {
+    fn terminal_event_splits_cached_input_tokens() {
         let events = parse_responses_event(
             r#"{"type":"response.completed","response":{"usage":{"input_tokens":9000,"output_tokens":200,"input_tokens_details":{"cached_tokens":8192},"output_tokens_details":{"reasoning_tokens":64}}}}"#,
         );
         let usage = events
             .iter()
-            .find_map(|e| match e {
-                ProviderEvent::Usage(u) => Some(u.clone()),
+            .find_map(|event| match event {
+                ProviderEvent::Usage(usage) => Some(usage),
                 _ => None,
             })
             .expect("a Usage event");
@@ -197,6 +330,6 @@ mod tests {
         assert_eq!(usage.reasoning_tokens, Some(64));
         assert!(events
             .iter()
-            .any(|e| matches!(e, ProviderEvent::Completed { .. })));
+            .any(|event| matches!(event, ProviderEvent::Completed { .. })));
     }
 }

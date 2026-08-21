@@ -1,6 +1,6 @@
 # ADR-0012: 产品身份、三面边界与创意工坊范围冻结
 
-- **状态**: 已接受
+- **状态**: 已被 [ADR-0020](./0020-ai-native-personal-workspace-rearchitecture.md) 取代（保留历史背景；Workshop 安全防线在旧代码删除前仍有效）
 - **日期**: 2026-07-19
 - **决策者**: 产品方（用户）
 - **关联**: Q1–Q25、ADR-0007、`module-workshop-kernel-runtime.md`（V3.2）

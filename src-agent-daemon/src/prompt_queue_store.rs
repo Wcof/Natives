@@ -610,12 +610,24 @@ mod tests {
                 .unwrap();
             rt.block_on(async {
                 let cid = format!("pq-sendnow-{}", Uuid::new_v4());
+                // send_now 经 conversation_project_path 校验 project identity：
+                // conversation.project_id 必须是 project_identity 表已注册的
+                // UUID identity（不是字面路径）。先注册 /tmp 再以其 project_id
+                // 创建 conversation stub，否则 verify_for_invocation 报
+                // unknown project_id。
+                let project_id = {
+                    let store = store().expect("store");
+                    let conn = store.conn().expect("conn");
+                    let identity = crate::project_identity::store::register_or_get(&conn, "/tmp")
+                        .expect("register project identity");
+                    identity.project_id
+                };
                 conversation_store::ensure_conversation_stub(
                     &cid,
                     "openai",
                     "gpt-4o",
                     None,
-                    Some("/tmp"),
+                    Some(&project_id),
                 )
                 .unwrap();
                 // Use process-global manager: send_now cancels via global_run_manager().

@@ -613,6 +613,10 @@ export const assistant = {
       usage: '用量与费用',
       inbox: '收件箱',
       files: '文件管理',
+      resources: 'AI 资源',
+      proxy: '本地代理',
+      tools: '工具集成',
+      organizer: '文件整理',
     },
     // Dashboard labels
     dashboard: {

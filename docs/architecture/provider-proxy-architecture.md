@@ -1,11 +1,13 @@
 # Provider OAuth + Unified Proxy / Model Gateway 架构
 
-> **状态**: 已接受；**实施选型已冻结：A — Natives-native Rust Model Gateway**（P0.5 证据见 ADR-0019 §4.1）
-> **日期**: 2026-08-18
+> **状态**: 迁移前源码审计 + P0 Gate 证据；目标 authority 见 ADR-0020
+> **日期**: 2026-08-19
 > **审计基线**: `deploy` @ `e075c1e`（与 Plan v4 baseline 一致，工作树 clean）
-> **权威顺序**: `docs/standards/` > ADR > 本文件 > 其它 architecture 文档
+> **权威顺序**: `docs/standards/` > ADR-0020 > 其它 ADR > 本文件
 > **关联**: [ADR-0019](../adr/0019-unified-model-proxy-authority.md)（Authority 边界 + 选型）；`provider-routing-sub2api.md`（旧路由语义，2026-08-11 冻结，本文件第 4 节收敛）
 > **Plan**: `Natives-Proxy-Minimal-Dependency-Plan-v4`（`00-EXECUTION-OVERRIDES.md` 为最高优先级修订）
+
+> **ADR-0020 delta**：完成态为 Host-native `ProxyEngine`，Provider/Connection/Credential 分离，Secret 进入 OS Keychain；Daemon 路由仅是待迁移 current production。P0 fixture parity、stream lifecycle、OAuth/Key Pool 和 Secret migration Gate 通过前不得切换或宣称完成。
 
 ---
 
@@ -140,8 +142,8 @@ ProxyDataPlane 实现只有一条 production path
 
 | Natives MUST | 适用点 | 当前状态 | 缺口动作 |
 |--------------|--------|----------|----------|
-| R-T1 四类边界、禁止越权 | Proxy/Gateway 必须落在 Host 政策 + Daemon 执行边界内 | 现有 Broker/路由基本符合 | 新契约保持 Renderer→adapter→Host→Daemon |
-| R-S12 凭证 AES-256-GCM、无明文落盘 | OAuth access/refresh token 持久化 | `env_manager` v2 + KEK/DEK 信封 ✓ | OAuth 持久化必须沿用；**B 若强制 plaintext auth file 即不合格** |
+| R-T1 Host-default authority | 旧 Proxy/Gateway 仍是 Host 政策 + Daemon 执行 | current production only | P0 parity 后一次切到 Host `ProxyEngine`，同批删除 Daemon fallback |
+| R-S12 OS Keychain Secret ownership | OAuth access/refresh token 与 API Key | 当前 KEK/DEK + SQLite 不满足完成态 | 按 ADR-0020 迁 Keychain；迁移前仍禁止任何明文落盘 |
 | R-S13 Renderer 无凭证明文 | OAuth 状态仅回 safe session 摘要 | 现有掩码模式 ✓ | 保持：`session_id/provider/state/authorization_url?/safe_error?` |
 | R-B1 命令/RPC 结构化 Result、无 unwrap | 新 OAuth/gateway 命令与 RPC | 现有 error.rs 模式 | 全部新路径走 `Result<T>` + sanitize |
 | R-B2 日志脱敏 | OAuth callback payload / token / raw response | `log_sanitizer.rs` ✓ | 新 pattern 补进 sanitizer |
@@ -215,3 +217,70 @@ C. thin isolated CLIProxy SDK adapter
 - 回滚：破坏性 schema 清理前先确认无引用、可回滚（Plan P10）；旧表 inert 保留一个版本周期。
 - 文档收敛：选型后本文件只记录被选 production path；被拒候选仅留在 ADR 历史（Plan §21）。
 - Docs DoD：ADR current、docs/README current、ARCHITECTURE current、旧 routing 文档不再与代码冲突、无已废弃候选被描述为 active。
+
+---
+
+## 9. 2026-08-19 P0 Gate 复核（baseline `1497cf7`）
+
+本节按 ADR-0020 重新评估现有资产；它取代本文中“Daemon 是完成态执行 authority”的结论。
+
+### 9.1 能力矩阵
+
+| 能力 | 当前状态 | 关键证据 / 缺口 |
+|---|---|---|
+| canonical request/event/usage/error | implemented，可提取 | `provider-adapters/capabilities.rs`、`stream/*.rs` |
+| Anthropic Messages outbound | partial | body/SSE 与完整 stream fixture 已覆盖 text/thinking/tool/usage/terminal；仍缺 non-stream/error fixture 与真实 ingress parity |
+| OpenAI Chat Completions outbound | partial | body/SSE、strict terminal、异常 EOF 与完整 stream fixture 已覆盖；仍缺 non-stream/error fixture 集 |
+| OpenAI Responses outbound | partial | 已改为 stateful parser，保留 `output_item.added` 到 arguments delta 的 `call_id`/name；仍缺完整 failed/incomplete/cancelled fixture 集 |
+| Local `/v1/messages` / chat / responses | partial | `loopback.rs` 丢 tools，history/system/usage/stop reason/framing 不完整 |
+| `model.gateway.stream` | partial/unproven | 协议与 handler 已有，无真实 Host caller；`temperature`/`max_tokens` 未生效，无 reasoning control |
+| Tool / reasoning / usage | partial | outbound normalization 有资产；ingress 与最终 framing 仍丢字段 |
+| cancellation / EOF / backpressure | partial | 四 transport 的无 terminal EOF 返回结构化 Error；drop stream 会关闭 socket；SSE remainder 上限 1 MiB。Host Proxy 下游断连、慢 consumer 与 task 全链回收仍未证明 |
+| OAuth account pool | partial | priority/concurrency/affinity 有基础；refresh/expiry/client secret 与 Antigravity adapter 路由未闭环 |
+| API Key Pool | implemented（P0-A Spike） | `src-tauri/src/key_pool.rs`：priority + round-robin 公平轮转、cooldown（连续失败阈值进入/到期恢复）、disabled、failover 切换、可观测计数（selection/failover/rejection）；10 个纯逻辑测试覆盖公平/并发/冷却/失败切换/可观测 |
+| OS Keychain | implemented（P0-A Spike） | `src-tauri/src/secrets/`：`SecretStore` seam（R-S12）+ `KeychainSecretStore`（macOS security-framework，generic password，service=ai.natives.secrets）+ `MemorySecretStore`（locked/unavailable 模拟）+ `migrate_secret` 状态机（写→回读验证→切换引用→延后清理，幂等/回滚/locked/不可用 8 场景）；`scripts/secret-scan.sh` 全仓明文 Secret 扫描 PASS（122 provider-adapters + 10 key_pool + 17 secrets 测试通过） |
+
+### 9.2 `provider-adapters` 处置矩阵
+
+`ProviderAdapter` 暴露 legacy `chat/chat_stream/stream`、静态模型、发现和测试等多组语义，是浅 module。完成态应由 Host 的深 `ProxyEngine` interface 隐藏 Connection 解析、Credential 选择、协议策略、HTTP、stream lifecycle 与 usage normalization。
+
+| 处置 | 资产 |
+|---|---|
+| **Keep / Extract** | canonical message/content/tool/reasoning/usage/error types；Chat/Responses/Messages/Gemini request builders；OpenAI/Anthropic/Gemini/Responses SSE parsers；retry/status mapping；request golden tests |
+| **Rewrite** | Responses stateful parser、strict EOF/cancellation transport、typed protocol resolver、model profile Source of Truth、Antigravity/Codex/Ollama 专用 Connection adapters |
+| **Move to Host private implementation** | reqwest client、auth header、Credential material、Connection health/model discovery、routing/failover/Key Pool policy |
+| **Delete after cutover** | Agent history bridge、legacy `ProviderStreamEvent`、static registry、DeepSeek/OpenAI-compatible pass-through wrappers、mock trait contract、Daemon provider callers/fallback |
+
+关键 Source of Truth 冲突：旧 `ProviderType` 把 `OpenaiCompatible` 当厂商；Antigravity 自报 Gemini；Claude/Gemini model profile 与 adapter 静态列表的 output limits 不一致；`structured_output` 字段被 body builder 静默忽略。
+
+### 9.3 已完成的 P0 安全修复
+
+- `Credential` 与 `OpenAiCodexCredential` 的 `Debug` 明确脱敏。
+- transport error 不再直接回传含 URL 的 `reqwest::Error` 文本。
+- Gemini API key 从 query string 移到 `x-goog-api-key` header，并有本地 TCP request-target 测试。
+- OAuth 无 identity 时使用 secret-safe fingerprint，账户显示名不再回退为 token/identity。
+- in-memory credential lease 在 issue/revoke/status 前清理过期项。
+- Proxy 请求使用唯一 request/run identity，避免共享固定 lease identity。
+- Chat Completions、Responses、Messages、Gemini/Antigravity 的异常 EOF 统一返回 `incomplete_stream`，parser Error 后不再伪造 Completed。
+- Responses parser 改为 stateful，跨事件保留 function `call_id` / name / argument delta。
+- 四协议真实 wire fixture 固化 tool、reasoning、usage 与 stop reason；Gemini terminal 保证位于同 chunk payload 末尾。
+- SSE 未完成 remainder 限制为 1 MiB；本地 TCP 测试证明取消/drop 会关闭 upstream socket。
+
+以上是安全基线修复，不代表 Proxy P0 Gate 已完成。
+
+### 9.4 最小实施顺序
+
+1. 固化 Messages / Chat Completions / Responses 的真实 request、stream、non-stream、error fixtures。
+2. 将异常 EOF 改为结构化 Error，补取消、断连、慢 consumer 与 socket/task 回收测试。
+3. 用 canonical request/event 贯通一个 ingress vertical slice，保留 tools/history/reasoning/usage/stop reason。
+4. 修复 Antigravity 专用 adapter/project header 与 OAuth refresh/expiry/client secret。
+5. 在 Host 建私有 `ProxyEngine`，先复用 pure codecs/parsers，再迁 HTTP、Connection 与 Key Pool policy。
+6. 通过 fixture parity 后一次切换 production path，同批删除 Daemon provider caller/fallback。
+7. 按 ADR-0020 / R-S12 引入 Host-private `SecretStore` seam，完成 Keychain read/write/verify/rollback/locked migration；不得形成第二 Credential authority。
+
+### 9.5 Gate 验证基线
+
+- `provider-adapters`: 初始 106 passed / 4 ignored；安全与 strict-stream 修复后 121 passed / 4 ignored。
+- `assistant-protocol`: 初始因新增 `project_id` fixture 缺字段无法编译；补齐 fixture 后 63 passed。
+- `protocol:check`: 通过，165 个 Rust methods 已登记。
+- 全局方案路径 `/Users/ldh/Downloads/AiNative-Rearchitecture-Plan-2026-08-19` 在当前文件系统不存在；本节以真实源码、Standards、ADR-0020、用户冻结目标与 Home Patch 为依据。

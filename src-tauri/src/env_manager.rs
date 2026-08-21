@@ -1,3 +1,4 @@
+use crate::secrets::store::{SecretRef, SecretStore};
 use crate::{db, Error, Result};
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -9,6 +10,46 @@ use serde::Serialize;
 use std::sync::Mutex;
 
 const ENCRYPTION_KEY_SETTING: &str = "env_encryption_key";
+/// Keychain 中 env 加密密钥的 opaque ref（R-S12 完成态）。
+const ENV_KEY_KEYCHAIN_REF: &str = "kek:env";
+
+#[cfg(test)]
+mod test_secrets {
+    use crate::secrets::store::MemorySecretStore;
+    use std::sync::OnceLock;
+
+    static TEST_STORE: OnceLock<std::sync::Arc<MemorySecretStore>> = OnceLock::new();
+
+    pub fn store() -> std::sync::Arc<MemorySecretStore> {
+        TEST_STORE
+            .get_or_init(|| std::sync::Arc::new(MemorySecretStore::new()))
+            .clone()
+    }
+
+    pub fn clear() {
+        store().clear();
+    }
+}
+
+/// 返回 env 加密密钥使用的 SecretStore（R-S12 完成态 = OS Keychain）。
+/// 测试环境返回进程级共享的 MemorySecretStore，保证密钥跨调用幂等复用
+/// （与生产 Keychain 的持久语义一致），避免污染真实 Keychain。
+fn secrets_store() -> std::sync::Arc<dyn SecretStore> {
+    #[cfg(test)]
+    {
+        test_secrets::store()
+    }
+    #[cfg(not(test))]
+    {
+        std::sync::Arc::new(crate::secrets::keychain::KeychainSecretStore::default())
+    }
+}
+
+/// 测试隔离：清空共享 MemorySecretStore，使每个测试从空 store 起步。
+#[cfg(test)]
+pub(crate) fn reset_test_secrets_store() {
+    test_secrets::clear();
+}
 
 /// Ciphertext format prefix — identifies AES-256-GCM v2 payloads
 const V2_PREFIX: &str = "v2:";
@@ -69,18 +110,52 @@ pub fn get_encryption_key(conn: &Connection) -> Result<String> {
     init_env_encryption_key(conn)
 }
 
-/// Initialize the env encryption key from SQLite and cache it.
-/// Called once at app startup (or lazily by `get_encryption_key` on first
-/// access). Generates and stores a new key if none exists.
+/// Initialize the env encryption key：优先从 OS Keychain 读取（R-S12 完成态），
+/// Keychain 无条目时回退 SQLite（迁移期兼容），并自动补迁到 Keychain。
+/// 迁移后旧路径失效：SQLite 明文被删除，后续只经 Keychain。
 pub fn init_env_encryption_key(conn: &Connection) -> Result<String> {
+    // 1. Keychain 优先（完成态 SoT）。
+    let keychain = secrets_store();
+    let reference = SecretRef::new(ENV_KEY_KEYCHAIN_REF);
+    if let Ok(bytes) = keychain.read(&reference) {
+        if let Ok(key) = String::from_utf8(bytes) {
+            if key.len() == 64 {
+                validate_hex_key(&key)?;
+                let mut cache = ENV_KEY_CACHE.lock().unwrap();
+                *cache = Some(key.clone());
+                return Ok(key);
+            }
+        }
+    }
+
+    // 2. 迁移期回退：SQLite 明文 → 写 Keychain → 回读验证 → 删除 SQLite 明文。
     let key = match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
         Some(key) => {
             validate_hex_key(&key)?;
-            key
+            match keychain.write(&reference, key.as_bytes()) {
+                Ok(()) => {
+                    // 回读验证；通过后旧路径失效（删除 SQLite 明文）。
+                    let read_back = keychain.read(&reference);
+                    if matches!(read_back, Ok(bytes) if bytes == key.as_bytes()) {
+                        let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                    }
+                    key
+                }
+                // Keychain locked/unavailable：保持 SQLite 旧数据可恢复（fail-open 迁移期）。
+                Err(_) => key,
+            }
         }
         None => {
             let new_key = generate_random_hex(32);
-            db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
+            // 新密钥直接写 Keychain；失败则回退 SQLite（迁移期兜底）。
+            match keychain.write(&reference, new_key.as_bytes()) {
+                Ok(()) => {
+                    let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                }
+                Err(_) => {
+                    db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
+                }
+            }
             new_key
         }
     };

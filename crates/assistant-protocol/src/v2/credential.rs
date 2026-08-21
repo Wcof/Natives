@@ -261,9 +261,16 @@ pub struct CredentialPoolLeaseResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialPoolRefreshRequest {
     pub account_id: String,
+    pub provider_id: String,
+    pub run_id: String,
+    pub lease_id: String,
     pub credentials: serde_json::Value,
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// Terminal OAuth refresh rejection. The Host marks the account for
+    /// reauthentication without replacing its last verified secret envelope.
+    #[serde(default)]
+    pub reauth_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -513,6 +520,7 @@ mod tests {
             base_url: Some("https://example.test".into()),
             provider_type: Some("anthropic_messages".into()),
             proxy_url: Some("http://127.0.0.1:8080".into()),
+            project_id: None,
             lease: Some(CredentialLeaseMeta::new(
                 "openai",
                 "k1",
