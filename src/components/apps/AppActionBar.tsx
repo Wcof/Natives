@@ -10,9 +10,7 @@ import {
   Trash2,
   Bookmark,
   BookmarkCheck,
-  Zap,
   Eraser,
-  FileText,
 } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import type { AppView } from '@/lib/tauri/apps';
@@ -24,12 +22,10 @@ interface AppActionBarProps {
   onStart: () => void;
   onStop: () => void;
   onRestart: () => void;
-  onForceStop: () => void;
   onEdit: () => void;
   onRemove: () => void;
   onToggleSidebar: () => void;
   onClearData?: () => void;
-  onViewLogs?: () => void;
 }
 
 export function AppActionBar({
@@ -39,12 +35,10 @@ export function AppActionBar({
   onStart,
   onStop,
   onRestart,
-  onForceStop,
   onEdit,
   onRemove,
   onToggleSidebar,
   onClearData,
-  onViewLogs,
 }: AppActionBarProps) {
   const locale = useLocale();
   const { capabilities: caps, runtimeState } = app;
@@ -104,31 +98,6 @@ export function AppActionBar({
         </button>
       )}
 
-      {/* Force Stop (Level 2) */}
-      {isRunning && (
-        <button
-          type="button"
-          onClick={onForceStop}
-          disabled={loading}
-          title={t(locale, 'appsPage.forceStop')}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-[var(--danger)]/30 text-[var(--danger)] hover:bg-[var(--danger-soft)] text-xs font-medium transition-colors"
-        >
-          <Zap className="h-3.5 w-3.5" />
-        </button>
-      )}
-
-      {/* Logs (Local Project) */}
-      {app.kind === 'local_project' && onViewLogs && (
-        <button
-          type="button"
-          onClick={onViewLogs}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-medium transition-colors"
-        >
-          <FileText className="h-3.5 w-3.5" />
-          {t(locale, 'appsPage.logs')}
-        </button>
-      )}
 
       {/* Clear Web Data (Web App) */}
       {app.kind === 'web_application' && onClearData && (

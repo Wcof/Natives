@@ -27,9 +27,13 @@ export interface SurfacePolicy {
   allowGlow?: boolean;
 }
 
+/** Workspace-level time range for time-aware widgets. */
+export type TimeRange = 'today' | '7d' | '30d' | '90d';
+
 /** DataBroker 上下文：loader 从现有 Domain query/facade 取数据。 */
 export interface WidgetDataContext {
   signal: AbortSignal;
+  timeRange?: TimeRange;
 }
 
 /** Widget 内容组件收到的 props。 */
@@ -74,6 +78,8 @@ export interface WidgetDefinition<TData = unknown, TSettings extends Record<stri
   /** RGL 最小尺寸。 */
   minSize?: { w: number; h: number };
   defaultEnabled?: boolean;
+  /** true → broker key 包含 timeRange，切换时段触发独立 fetch。 */
+  timeAware?: boolean;
   /** DataBroker adapter key：同 key 的 Widget 共享一次查询/订阅（B-016）。 */
   adapterKeyBuilder?: (config: WidgetConfig<TSettings>) => string;
   /** DataBroker loader：返回 widget 所需 ViewModel。Renderer 不直连 IPC。 */

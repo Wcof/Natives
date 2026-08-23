@@ -26,7 +26,7 @@ export async function loadAppLauncher(ctx: WidgetDataContext): Promise<AppLaunch
   try {
     const list = await appsApi.listViews();
     if (ctx.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    const items: AppLauncherItem[] = list.slice(0, LIMIT).map((a) => ({
+    const items: AppLauncherItem[] = list.filter((a) => a.kind !== 'local_project').slice(0, LIMIT).map((a) => ({
       id: a.appId,
       title: a.title,
       kind: a.kind,

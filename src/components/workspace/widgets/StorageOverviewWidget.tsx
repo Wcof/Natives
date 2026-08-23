@@ -6,7 +6,6 @@
  */
 
 import { z } from 'zod';
-import { HardDrive } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
 import type { WidgetDefinition, WidgetProps } from '@/lib/workspace/widgets';
@@ -40,29 +39,13 @@ function StorageOverviewView({ data }: WidgetProps<StorageOverviewData, StorageO
       style={{
         display: 'flex',
         flexDirection: 'column',
-        justifyContent: 'space-between',
-        gap: SPACING.sm,
+        justifyContent: 'center',
+        gap: SPACING.xs,
         height: '100%',
-        padding: 8,
+        padding: '0 4px',
         minWidth: 0,
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontSize: FONT_SIZE.xs,
-          fontWeight: 600,
-          color: 'var(--text)',
-        }}
-      >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <HardDrive size={14} style={{ color: 'var(--primary)' }} />
-          {t(locale, 'settings.overviewStorage')}
-        </span>
-      </div>
-
       {info && percent !== null ? (
         <div
           style={{

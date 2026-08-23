@@ -8,8 +8,8 @@
 //! enough for local single-user operation: `<prefix>_<monotonic_nanos>_<seq>`.
 
 use super::types::{
-    normalize_theme, WorkspaceContextItem, WorkspaceContextItemInput, WorkspaceContextItemPatch,
-    WorkspaceLayout, WorkspaceSummary, WorkspaceTab, WorkspaceTabInput, WorkspaceTabUpdate,
+    normalize_layout_mode, normalize_theme, WorkspaceContextItem, WorkspaceContextItemInput,
+    WorkspaceContextItemPatch, WorkspaceLayout, WorkspaceOpenTab, WorkspaceSummary,
     WorkspaceToolProfile, WorkspaceUpdateRequest, WorkspaceViewState, WorkspaceWidget,
     WorkspaceWidgetInput,
 };
@@ -47,24 +47,12 @@ fn row_to_workspace(row: &rusqlite::Row) -> rusqlite::Result<WorkspaceSummary> {
         theme: row.get(5)?,
         is_active: row.get::<_, i64>(6)? != 0,
         position: row.get(7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
-    })
-}
-
-fn row_to_tab(row: &rusqlite::Row) -> rusqlite::Result<WorkspaceTab> {
-    Ok(WorkspaceTab {
-        id: row.get(0)?,
-        workspace_id: row.get(1)?,
-        tab_type: row.get(2)?,
-        title: row.get(3)?,
-        ref_id: row.get(4)?,
-        url: row.get(5)?,
-        position: row.get(6)?,
-        is_active: row.get::<_, i64>(7)? != 0,
-        pinned: row.get::<_, i64>(8)? != 0,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        default_layout_mode: row.get(8)?,
+        appearance: parse_json(row.get::<_, String>(9)?),
+        template_source_id: row.get(10)?,
+        template_version: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -86,11 +74,14 @@ fn row_to_widget(row: &rusqlite::Row) -> rusqlite::Result<WorkspaceWidget> {
         id: row.get(0)?,
         workspace_id: row.get(1)?,
         widget_type: row.get(2)?,
-        config: parse_json(row.get::<_, String>(3)?),
-        hidden: row.get::<_, i64>(4)? != 0,
-        position: row.get(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        config_version: row.get(3)?,
+        config: parse_json(row.get::<_, String>(4)?),
+        appearance: parse_json(row.get::<_, String>(5)?),
+        enabled: row.get::<_, i64>(6)? != 0,
+        z_index: row.get(7)?,
+        position: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -98,11 +89,13 @@ fn row_to_layout(row: &rusqlite::Row) -> rusqlite::Result<WorkspaceLayout> {
     Ok(WorkspaceLayout {
         id: row.get(0)?,
         workspace_id: row.get(1)?,
-        breakpoint: row.get(2)?,
-        layout: parse_json(row.get::<_, String>(3)?),
-        is_active: row.get::<_, i64>(4)? != 0,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        layout_mode: row.get(2)?,
+        breakpoint: row.get(3)?,
+        layout_version: row.get(4)?,
+        layout: parse_json(row.get::<_, String>(5)?),
+        is_active: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -111,8 +104,9 @@ fn row_to_view_state(row: &rusqlite::Row) -> rusqlite::Result<WorkspaceViewState
         id: row.get(0)?,
         workspace_id: row.get(1)?,
         view_key: row.get(2)?,
-        state: parse_json(row.get::<_, String>(3)?),
-        updated_at: row.get(4)?,
+        state_version: row.get(3)?,
+        state: parse_json(row.get::<_, String>(4)?),
+        updated_at: row.get(5)?,
     })
 }
 
@@ -135,17 +129,63 @@ fn parse_json(raw: String) -> serde_json::Value {
     serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+fn validate_appearance(value: &serde_json::Value) -> Result<()> {
+    let Some(object) = value.as_object() else {
+        return Err(Error::InvalidInput("appearance must be an object".into()));
+    };
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "surfaceVariant" | "header" | "opacity"))
+    {
+        return Err(Error::InvalidInput(
+            "appearance contains unsupported fields".into(),
+        ));
+    }
+    if object.values().any(|value| {
+        value
+            .as_str()
+            .is_some_and(|text| text.contains('#') || text.contains("url(") || text.contains('<'))
+    }) {
+        return Err(Error::InvalidInput(
+            "appearance cannot contain CSS, HTML, or custom colors".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_widget_config(value: &serde_json::Value) -> Result<()> {
+    fn contains_forbidden(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+                matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "secret" | "password" | "token" | "apikey" | "api_key" | "credential"
+                ) || contains_forbidden(value)
+            }),
+            serde_json::Value::Array(values) => values.iter().any(contains_forbidden),
+            serde_json::Value::String(text) => {
+                text.contains("<script") || text.contains("javascript:")
+            }
+            _ => false,
+        }
+    }
+    if contains_forbidden(value) {
+        return Err(Error::InvalidInput(
+            "widget config cannot contain secrets, scripts, or credentials".into(),
+        ));
+    }
+    Ok(())
+}
+
 const WORKSPACE_COLS: &str =
-    "id, name, kind, icon, description, theme, is_active, position, created_at, updated_at";
-const TAB_COLS: &str =
-    "id, workspace_id, tab_type, title, ref_id, url, position, is_active, pinned, created_at, updated_at";
+    "id, name, kind, icon, description, theme, is_active, position, default_layout_mode, appearance_json, template_source_id, template_version, created_at, updated_at";
 const CONTEXT_COLS: &str =
     "id, workspace_id, item_kind, ref_id, title, meta_json, position, created_at";
 const WIDGET_COLS: &str =
-    "id, workspace_id, widget_type, config_json, hidden, position, created_at, updated_at";
+    "id, workspace_id, widget_type, config_version, config_json, appearance_json, enabled, z_index, position, created_at, updated_at";
 const LAYOUT_COLS: &str =
-    "id, workspace_id, breakpoint, layout_json, is_active, created_at, updated_at";
-const VIEW_STATE_COLS: &str = "id, workspace_id, view_key, state_json, updated_at";
+    "id, workspace_id, layout_mode, breakpoint, layout_version, layout_json, is_active, created_at, updated_at";
+const VIEW_STATE_COLS: &str = "id, workspace_id, view_key, state_version, state_json, updated_at";
 const TOOL_PROFILE_COLS: &str =
     "id, workspace_id, profile_id, tool_key, config_json, enabled, created_at, updated_at";
 
@@ -159,7 +199,7 @@ pub fn list_workspaces(conn: &Connection) -> Result<Vec<WorkspaceSummary>> {
     // same second are disambiguated by the nanosecond-bearing id).
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {WORKSPACE_COLS} FROM workspaces ORDER BY position ASC, created_at ASC, id ASC"
+            "SELECT {WORKSPACE_COLS} FROM workspaces WHERE deleted_at IS NULL ORDER BY position ASC, created_at ASC, id ASC"
         ))
         .map_err(Error::Database)?;
     let rows = stmt
@@ -171,7 +211,7 @@ pub fn list_workspaces(conn: &Connection) -> Result<Vec<WorkspaceSummary>> {
 
 pub fn get_workspace(conn: &Connection, id: &str) -> Result<Option<WorkspaceSummary>> {
     conn.query_row(
-        &format!("SELECT {WORKSPACE_COLS} FROM workspaces WHERE id = ?1"),
+        &format!("SELECT {WORKSPACE_COLS} FROM workspaces WHERE id = ?1 AND deleted_at IS NULL"),
         [id],
         row_to_workspace,
     )
@@ -186,6 +226,7 @@ pub fn create_workspace(
     icon: Option<&str>,
     description: Option<&str>,
     theme: &str,
+    default_layout_mode: &str,
 ) -> Result<WorkspaceSummary> {
     let id = new_id("ws");
     let now = now_rfc3339();
@@ -201,9 +242,9 @@ pub fn create_workspace(
     };
     conn.execute(
         "INSERT INTO workspaces
-            (id, name, kind, icon, description, theme, is_active, position, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?8)",
-        rusqlite::params![id, name, kind, icon, description, theme, position, now],
+            (id, name, kind, icon, description, theme, is_active, position, default_layout_mode, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?9)",
+        rusqlite::params![id, name, kind, icon, description, theme, position, normalize_layout_mode(default_layout_mode), now],
     )
     .map_err(Error::Database)?;
     get_workspace(conn, &id)?
@@ -237,20 +278,42 @@ pub fn update_workspace(
         .unwrap_or(&existing.theme)
         .to_string();
     let position = patch.position.unwrap_or(existing.position);
+    let layout_mode = patch
+        .default_layout_mode
+        .as_deref()
+        .map(normalize_layout_mode)
+        .unwrap_or(&existing.default_layout_mode);
+    let appearance = patch.appearance.as_ref().unwrap_or(&existing.appearance);
+    validate_appearance(appearance)?;
     let now = now_rfc3339();
     conn.execute(
         "UPDATE workspaces
-            SET name = ?1, icon = ?2, description = ?3, theme = ?4, position = ?5, updated_at = ?6
-          WHERE id = ?7",
-        rusqlite::params![name, icon, description, theme, position, now, id],
+            SET name = ?1, icon = ?2, description = ?3, theme = ?4, position = ?5,
+                default_layout_mode = ?6, appearance_json = ?7, updated_at = ?8
+          WHERE id = ?9 AND deleted_at IS NULL",
+        rusqlite::params![
+            name,
+            icon,
+            description,
+            theme,
+            position,
+            layout_mode,
+            appearance.to_string(),
+            now,
+            id
+        ],
     )
     .map_err(Error::Database)?;
     get_workspace(conn, id)
 }
 
 pub fn delete_workspace(conn: &Connection, id: &str) -> Result<bool> {
+    let now = now_rfc3339();
     let changed = conn
-        .execute("DELETE FROM workspaces WHERE id = ?1", [id])
+        .execute(
+            "UPDATE workspaces SET deleted_at = ?1, is_active = 0, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            rusqlite::params![now, id],
+        )
         .map_err(Error::Database)?;
     Ok(changed > 0)
 }
@@ -273,147 +336,101 @@ pub fn set_active_workspace(conn: &Connection, id: &str) -> Result<Option<Worksp
     get_workspace(conn, id)
 }
 
-// ──────────────────────────────────────────────
-// Tabs
-// ──────────────────────────────────────────────
-
-pub fn list_tabs(conn: &Connection, workspace_id: &str) -> Result<Vec<WorkspaceTab>> {
+pub fn list_open_tabs(conn: &Connection) -> Result<Vec<WorkspaceOpenTab>> {
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {TAB_COLS} FROM workspace_tabs WHERE workspace_id = ?1 ORDER BY position ASC, created_at ASC"
-        ))
+        .prepare(
+            "SELECT t.workspace_id, t.sort_order, t.is_pinned, t.opened_at, t.last_active_at
+             FROM workspace_open_tabs t JOIN workspaces w ON w.id = t.workspace_id
+             WHERE w.deleted_at IS NULL ORDER BY t.is_pinned DESC, t.sort_order ASC, t.opened_at ASC",
+        )
         .map_err(Error::Database)?;
     let rows = stmt
-        .query_map([workspace_id], row_to_tab)
+        .query_map([], |row| {
+            Ok(WorkspaceOpenTab {
+                workspace_id: row.get(0)?,
+                sort_order: row.get(1)?,
+                is_pinned: row.get::<_, i64>(2)? != 0,
+                opened_at: row.get(3)?,
+                last_active_at: row.get(4)?,
+            })
+        })
         .map_err(Error::Database)?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::Database)
 }
 
-pub fn get_tab(conn: &Connection, id: &str) -> Result<Option<WorkspaceTab>> {
-    conn.query_row(
-        &format!("SELECT {TAB_COLS} FROM workspace_tabs WHERE id = ?1"),
-        [id],
-        row_to_tab,
-    )
-    .optional()
-    .map_err(Error::Database)
+pub fn open_workspace_tab(conn: &Connection, workspace_id: &str) -> Result<bool> {
+    if get_workspace(conn, workspace_id)?.is_none() {
+        return Ok(false);
+    }
+    let now = now_rfc3339();
+    let next: f64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workspace_open_tabs",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(Error::Database)?;
+    conn.execute(
+        "INSERT INTO workspace_open_tabs (workspace_id, sort_order, is_pinned, opened_at, last_active_at)
+         VALUES (?1, ?2, 0, ?3, ?3)
+         ON CONFLICT(workspace_id) DO UPDATE SET last_active_at = excluded.last_active_at",
+        rusqlite::params![workspace_id, next, now],
+    ).map_err(Error::Database)?;
+    Ok(true)
 }
 
-pub fn create_tab(
-    conn: &Connection,
-    workspace_id: &str,
-    input: &WorkspaceTabInput,
-) -> Result<Option<WorkspaceTab>> {
-    if get_workspace(conn, workspace_id)?.is_none() {
-        return Ok(None);
-    }
-    let id = new_id("tab");
-    let now = now_rfc3339();
-    let position = {
-        let max_pos: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(position) FROM workspace_tabs WHERE workspace_id = ?1",
-                [workspace_id],
-                |r| r.get::<_, Option<i64>>(0),
+pub fn close_workspace_tab(conn: &Connection, workspace_id: &str) -> Result<bool> {
+    let tx = conn.unchecked_transaction().map_err(Error::Database)?;
+    let changed = tx
+        .execute(
+            "DELETE FROM workspace_open_tabs WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .map_err(Error::Database)?;
+    let was_active: bool = tx
+        .query_row(
+            "SELECT is_active FROM workspaces WHERE id=?1",
+            [workspace_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(Error::Database)?
+        .unwrap_or(0)
+        != 0;
+    if was_active {
+        tx.execute(
+            "UPDATE workspaces SET is_active=0 WHERE id=?1",
+            [workspace_id],
+        )
+        .map_err(Error::Database)?;
+        let fallback: Option<String> = tx.query_row("SELECT workspace_id FROM workspace_open_tabs ORDER BY is_pinned DESC,sort_order ASC LIMIT 1", [], |row| row.get(0)).optional().map_err(Error::Database)?;
+        if let Some(id) = fallback {
+            tx.execute(
+                "UPDATE workspaces SET is_active=1,updated_at=?1 WHERE id=?2",
+                rusqlite::params![now_rfc3339(), id],
             )
             .map_err(Error::Database)?;
-        max_pos.map(|p| p + 1).unwrap_or(0)
-    };
-    let title = input.title.clone().unwrap_or_default();
-    let tab_type = input.tab_type.clone();
-    conn.execute(
-        "INSERT INTO workspace_tabs
-            (id, workspace_id, tab_type, title, ref_id, url, position, is_active, pinned, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8, ?8)",
-        rusqlite::params![
-            id,
-            workspace_id,
-            tab_type,
-            title,
-            input.ref_id.clone(),
-            input.url.clone(),
-            position,
-            now
-        ],
-    )
-    .map_err(Error::Database)?;
-    get_tab(conn, &id)
-}
-
-pub fn update_tab(
-    conn: &Connection,
-    id: &str,
-    patch: &WorkspaceTabUpdate,
-) -> Result<Option<WorkspaceTab>> {
-    let Some(existing) = get_tab(conn, id)? else {
-        return Ok(None);
-    };
-    let title = match patch.title.as_deref() {
-        Some(v) if !v.is_empty() => v.to_string(),
-        _ => existing.title,
-    };
-    // Empty string clears nullable columns.
-    let ref_id = match patch.ref_id.as_deref() {
-        Some("") => None,
-        Some(v) => Some(v.to_string()),
-        None => existing.ref_id,
-    };
-    let url = match patch.url.as_deref() {
-        Some("") => None,
-        Some(v) => Some(v.to_string()),
-        None => existing.url,
-    };
-    let is_active = patch.is_active.unwrap_or(existing.is_active);
-    let pinned = patch.pinned.unwrap_or(existing.pinned);
-    let position = patch.position.unwrap_or(existing.position);
-    let now = now_rfc3339();
-    conn.execute(
-        "UPDATE workspace_tabs
-            SET title = ?1, ref_id = ?2, url = ?3, is_active = ?4, pinned = ?5,
-                position = ?6, updated_at = ?7
-          WHERE id = ?8",
-        rusqlite::params![
-            title,
-            ref_id,
-            url,
-            i64::from(is_active),
-            i64::from(pinned),
-            position,
-            now,
-            id
-        ],
-    )
-    .map_err(Error::Database)?;
-    get_tab(conn, id)
-}
-
-pub fn close_tab(conn: &Connection, id: &str) -> Result<bool> {
-    let changed = conn
-        .execute("DELETE FROM workspace_tabs WHERE id = ?1", [id])
-        .map_err(Error::Database)?;
+        }
+    }
+    tx.commit().map_err(Error::Database)?;
     Ok(changed > 0)
 }
 
-/// Reorder tabs in a workspace by writing `position = idx` for each id.
-/// Missing ids are ignored (they may belong to another workspace). The whole
-/// reorder runs in one transaction (A-032: large batch updates are atomic).
-pub fn reorder_tabs(
+pub fn reorder_workspace_tabs(
     conn: &Connection,
-    workspace_id: &str,
     ordered_ids: &[String],
-) -> Result<Vec<WorkspaceTab>> {
+) -> Result<Vec<WorkspaceOpenTab>> {
     let tx = conn.unchecked_transaction().map_err(Error::Database)?;
-    for (idx, tab_id) in ordered_ids.iter().enumerate() {
+    for (index, id) in ordered_ids.iter().enumerate() {
         tx.execute(
-            "UPDATE workspace_tabs SET position = ?1, updated_at = ?2
-              WHERE id = ?3 AND workspace_id = ?4",
-            rusqlite::params![idx as i64, now_rfc3339(), tab_id, workspace_id],
+            "UPDATE workspace_open_tabs SET sort_order = ?1 WHERE workspace_id = ?2",
+            rusqlite::params![index as f64, id],
         )
         .map_err(Error::Database)?;
     }
     tx.commit().map_err(Error::Database)?;
-    list_tabs(conn, workspace_id)
+    list_open_tabs(conn)
 }
 
 // ──────────────────────────────────────────────
@@ -441,6 +458,23 @@ pub fn add_context_item(
     workspace_id: &str,
     input: &WorkspaceContextItemInput,
 ) -> Result<Option<WorkspaceContextItem>> {
+    const KINDS: [&str; 9] = [
+        "file",
+        "folder",
+        "url",
+        "app",
+        "document",
+        "project",
+        "conversation",
+        "tool",
+        "resource",
+    ];
+    if !KINDS.contains(&input.item_kind.as_str()) {
+        return Err(Error::InvalidInput(format!(
+            "unsupported workspace context kind: {}",
+            input.item_kind
+        )));
+    }
     if get_workspace(conn, workspace_id)?.is_none() {
         return Ok(None);
     }
@@ -605,25 +639,37 @@ pub fn upsert_widget(
         return Ok(None);
     }
     let now = now_rfc3339();
+    let appearance_value = input
+        .appearance
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    validate_appearance(&appearance_value)?;
+    if let Some(config) = input.config.as_ref() {
+        validate_widget_config(config)?;
+    }
     match input.id.as_deref() {
         Some(widget_id) => {
-            if get_widget(conn, widget_id)?.is_none() {
+            let Some(existing) = get_widget(conn, widget_id)? else {
                 return Ok(None);
-            }
-            let config = input
-                .config
+            };
+            let config = input.config.clone().unwrap_or(existing.config).to_string();
+            let appearance = input
+                .appearance
                 .clone()
-                .unwrap_or_else(|| serde_json::json!({}))
+                .unwrap_or(existing.appearance)
                 .to_string();
-            let hidden = i64::from(input.hidden.unwrap_or(false));
             conn.execute(
                 "UPDATE workspace_widgets
-                    SET widget_type = ?1, config_json = ?2, hidden = ?3, updated_at = ?4
-                  WHERE id = ?5 AND workspace_id = ?6",
+                    SET widget_type = ?1, config_version = ?2, config_json = ?3,
+                        appearance_json = ?4, enabled = ?5, z_index = ?6, updated_at = ?7
+                  WHERE id = ?8 AND workspace_id = ?9",
                 rusqlite::params![
                     input.widget_type.clone(),
+                    input.config_version.unwrap_or(existing.config_version),
                     config,
-                    hidden,
+                    appearance,
+                    i64::from(input.enabled.unwrap_or(existing.enabled)),
+                    input.z_index.unwrap_or(existing.z_index),
                     now,
                     widget_id,
                     workspace_id
@@ -639,7 +685,7 @@ pub fn upsert_widget(
                 .clone()
                 .unwrap_or_else(|| serde_json::json!({}))
                 .to_string();
-            let hidden = i64::from(input.hidden.unwrap_or(false));
+            let appearance = appearance_value.to_string();
             let position = {
                 let max_pos: Option<i64> = conn
                     .query_row(
@@ -652,14 +698,18 @@ pub fn upsert_widget(
             };
             conn.execute(
                 "INSERT INTO workspace_widgets
-                    (id, workspace_id, widget_type, config_json, hidden, position, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                    (id, workspace_id, widget_type, config_version, config_json, appearance_json,
+                     enabled, z_index, position, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
                 rusqlite::params![
                     id,
                     workspace_id,
                     input.widget_type.clone(),
+                    input.config_version.unwrap_or(1),
                     config,
-                    hidden,
+                    appearance,
+                    i64::from(input.enabled.unwrap_or(true)),
+                    input.z_index.unwrap_or(0),
                     position,
                     now
                 ],
@@ -713,21 +763,31 @@ pub fn get_layout(conn: &Connection, id: &str) -> Result<Option<WorkspaceLayout>
 pub fn save_layout(
     conn: &Connection,
     workspace_id: &str,
+    layout_mode: &str,
     breakpoint: &str,
+    layout_version: i64,
     layout_json: &str,
 ) -> Result<Option<WorkspaceLayout>> {
     if get_workspace(conn, workspace_id)?.is_none() {
         return Ok(None);
     }
     let now = now_rfc3339();
+    let layout_mode = normalize_layout_mode(layout_mode);
+    let breakpoint = if layout_mode == "free" {
+        "free"
+    } else {
+        breakpoint
+    };
     conn.execute(
         "INSERT INTO workspace_layouts
-            (id, workspace_id, breakpoint, layout_json, is_active, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+            (id, workspace_id, layout_mode, breakpoint, layout_version, layout_json, is_active, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)
          ON CONFLICT(workspace_id, breakpoint) DO UPDATE SET
+            layout_mode = excluded.layout_mode,
+            layout_version = excluded.layout_version,
             layout_json = excluded.layout_json,
             updated_at = excluded.updated_at",
-        rusqlite::params![new_id("lay"), workspace_id, breakpoint, layout_json, now],
+        rusqlite::params![new_id("lay"), workspace_id, layout_mode, breakpoint, layout_version, layout_json, now],
     )
     .map_err(Error::Database)?;
     conn.query_row(
@@ -777,6 +837,7 @@ pub fn save_view_state(
     conn: &Connection,
     workspace_id: &str,
     view_key: &str,
+    state_version: i64,
     state_json: &str,
 ) -> Result<Option<WorkspaceViewState>> {
     if get_workspace(conn, workspace_id)?.is_none() {
@@ -785,12 +846,20 @@ pub fn save_view_state(
     let now = now_rfc3339();
     conn.execute(
         "INSERT INTO workspace_view_states
-            (id, workspace_id, view_key, state_json, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+            (id, workspace_id, view_key, state_version, state_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(workspace_id, view_key) DO UPDATE SET
+            state_version = excluded.state_version,
             state_json = excluded.state_json,
             updated_at = excluded.updated_at",
-        rusqlite::params![new_id("vs"), workspace_id, view_key, state_json, now],
+        rusqlite::params![
+            new_id("vs"),
+            workspace_id,
+            view_key,
+            state_version,
+            state_json,
+            now
+        ],
     )
     .map_err(Error::Database)?;
     get_view_state(conn, workspace_id, view_key)
@@ -880,114 +949,5 @@ pub fn unbind_tool_profile(
 }
 
 #[cfg(test)]
-mod store_tests {
-    use super::*;
-    use crate::db::{apply_migrations, create_tables};
-
-    /// Fresh in-memory DB at schema v27. With an empty `settings` table the
-    /// v27 migration seeds no legacy home workspace, so `workspaces` starts
-    /// EMPTY — exactly the case that broke `create_workspace` (A-002).
-    /// The defensive DELETE keeps this true even if a future migration seeds
-    /// a default row.
-    fn empty_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        create_tables(&conn).unwrap();
-        apply_migrations(&conn).unwrap();
-        let _ = conn.execute("DELETE FROM workspaces", []);
-        conn
-    }
-
-    fn workspace_count(conn: &Connection) -> i64 {
-        conn.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))
-            .unwrap()
-    }
-
-    #[test]
-    fn create_on_empty_db() {
-        let conn = empty_db();
-        assert_eq!(workspace_count(&conn), 0, "fixture must be an empty DB");
-
-        // First create on the empty table used to fail with
-        // InvalidColumnType (MAX(position) is NULL, not a missing row).
-        let a = create_workspace(&conn, "alpha", "workspace", None, None, "dark").unwrap();
-        assert!(!a.id.is_empty());
-        assert_eq!(a.name, "alpha");
-        assert_eq!(a.kind, "workspace");
-        assert_eq!(a.theme, "dark");
-        assert_eq!(a.position, 0, "first workspace takes position 0");
-        assert!(!a.is_active, "new workspaces start inactive");
-
-        // Unknown themes normalize to the two-value contract.
-        let b =
-            create_workspace(&conn, "beta", "workspace", None, None, "frosted-jasmine").unwrap();
-        assert_eq!(b.theme, "light");
-
-        // Positions are monotonic: MAX(position)+1.
-        assert_eq!(b.position, 1);
-        let c = create_workspace(&conn, "gamma", "workspace", None, None, "light").unwrap();
-        assert_eq!(c.position, 2);
-    }
-
-    #[test]
-    fn list_stable_order() {
-        let conn = empty_db();
-        let a = create_workspace(&conn, "alpha", "workspace", None, None, "dark").unwrap();
-        let b = create_workspace(&conn, "beta", "workspace", None, None, "dark").unwrap();
-        let c = create_workspace(&conn, "gamma", "workspace", None, None, "dark").unwrap();
-
-        // Shuffle: A->2, B->0, C->1 (expected list order: B, C, A).
-        for (id, pos) in [(a.id.as_str(), 2), (b.id.as_str(), 0), (c.id.as_str(), 1)] {
-            conn.execute(
-                "UPDATE workspaces SET position = ?1 WHERE id = ?2",
-                rusqlite::params![pos, id],
-            )
-            .unwrap();
-        }
-
-        let first = list_workspaces(&conn).unwrap();
-        let second = list_workspaces(&conn).unwrap();
-        assert_eq!(
-            first.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
-            vec!["beta", "gamma", "alpha"],
-            "list must be ordered by position ascending"
-        );
-        assert_eq!(
-            first.iter().map(|w| w.position).collect::<Vec<_>>(),
-            vec![0, 1, 2]
-        );
-        assert_eq!(first, second, "order must be stable across calls");
-
-        // Tiebreak: two workspaces sharing a position must still come back
-        // in a deterministic (created_at, then id) order on both calls.
-        // alpha was created before gamma, so it sorts first among the tied pair.
-        conn.execute(
-            "UPDATE workspaces SET position = 3 WHERE id IN (?1, ?2)",
-            rusqlite::params![a.id, c.id],
-        )
-        .unwrap();
-        let tie1 = list_workspaces(&conn).unwrap();
-        let tie2 = list_workspaces(&conn).unwrap();
-        assert_eq!(
-            tie1.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
-            vec!["beta", "alpha", "gamma"],
-            "tied positions must be disambiguated by (created_at, id)"
-        );
-        assert_eq!(tie1, tie2, "order must be stable across calls");
-    }
-
-    #[test]
-    fn get_workspace_empty_and_existing() {
-        let conn = empty_db();
-        // Missing id → Ok(None) (documented Option behavior).
-        assert!(super::get_workspace(&conn, "ws_missing").unwrap().is_none());
-
-        let a = create_workspace(&conn, "alpha", "workspace", Some("star"), None, "dark").unwrap();
-        let got = super::get_workspace(&conn, &a.id)
-            .unwrap()
-            .expect("existing id must be found");
-        assert_eq!(got.name, "alpha");
-        assert_eq!(got.icon.as_deref(), Some("star"));
-        assert_eq!(got.kind, a.kind);
-        assert_eq!(got.position, a.position);
-    }
-}
+#[path = "store_tests.rs"]
+mod store_tests;

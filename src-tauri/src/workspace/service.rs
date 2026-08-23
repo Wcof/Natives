@@ -5,14 +5,14 @@
 //! lines, architecture budget) and multi-row workflows get one transaction.
 
 use super::store::{
-    get_workspace, list_context_items, list_layouts, list_tabs, list_tool_profiles,
-    list_view_states, list_widgets, new_id, now_rfc3339,
+    get_workspace, list_context_items, list_layouts, list_tool_profiles, list_view_states,
+    list_widgets, new_id, now_rfc3339,
 };
 use super::types::{WorkspaceSummary, WorkspaceWidgetConfigPatch};
 use crate::{Error, Result};
 use rusqlite::Connection;
 
-/// A-022: duplicate a workspace and all of its child rows (tabs, context
+/// A-022: duplicate a workspace and all of its child rows (context
 /// items, widgets, layouts, view states, tool profiles) under fresh ids.
 ///
 /// Runs in a single transaction so a partial copy can never be observed.
@@ -42,8 +42,10 @@ pub fn duplicate_workspace(
     };
     tx.execute(
         "INSERT INTO workspaces
-            (id, name, kind, icon, description, theme, is_active, position, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?8)",
+            (id, name, kind, icon, description, theme, is_active, position,
+             default_layout_mode, appearance_json, template_source_id, template_version,
+             created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
         rusqlite::params![
             new_ws_id,
             new_name,
@@ -52,31 +54,14 @@ pub fn duplicate_workspace(
             source.description,
             source.theme,
             position,
+            source.default_layout_mode,
+            source.appearance.to_string(),
+            source.template_source_id,
+            source.template_version,
             now
         ],
     )
     .map_err(Error::Database)?;
-
-    // Tabs — copied as views (is_active reset so the copy has no live session).
-    for tab in list_tabs(conn, id)? {
-        tx.execute(
-            "INSERT INTO workspace_tabs
-                (id, workspace_id, tab_type, title, ref_id, url, position, is_active, pinned, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?9)",
-            rusqlite::params![
-                new_id("tab"),
-                new_ws_id,
-                tab.tab_type,
-                tab.title,
-                tab.ref_id,
-                tab.url,
-                tab.position,
-                i64::from(tab.pinned),
-                now
-            ],
-        )
-        .map_err(Error::Database)?;
-    }
 
     // Context items.
     for item in list_context_items(conn, id)? {
@@ -102,14 +87,18 @@ pub fn duplicate_workspace(
     for widget in list_widgets(conn, id)? {
         tx.execute(
             "INSERT INTO workspace_widgets
-                (id, workspace_id, widget_type, config_json, hidden, position, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                (id, workspace_id, widget_type, config_version, config_json, appearance_json,
+                 enabled, z_index, position, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
             rusqlite::params![
                 new_id("wgt"),
                 new_ws_id,
                 widget.widget_type,
+                widget.config_version,
                 widget.config.to_string(),
-                i64::from(widget.hidden),
+                widget.appearance.to_string(),
+                i64::from(widget.enabled),
+                widget.z_index,
                 widget.position,
                 now
             ],
@@ -121,12 +110,15 @@ pub fn duplicate_workspace(
     for layout in list_layouts(conn, id)? {
         tx.execute(
             "INSERT INTO workspace_layouts
-                (id, workspace_id, breakpoint, layout_json, is_active, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                (id, workspace_id, layout_mode, breakpoint, layout_version, layout_json,
+                 is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
             rusqlite::params![
                 new_id("lay"),
                 new_ws_id,
+                layout.layout_mode,
                 layout.breakpoint,
+                layout.layout_version,
                 layout.layout.to_string(),
                 i64::from(layout.is_active),
                 now
@@ -139,12 +131,13 @@ pub fn duplicate_workspace(
     for view_state in list_view_states(conn, id)? {
         tx.execute(
             "INSERT INTO workspace_view_states
-                (id, workspace_id, view_key, state_json, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                (id, workspace_id, view_key, state_version, state_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 new_id("vs"),
                 new_ws_id,
                 view_state.view_key,
+                view_state.state_version,
                 view_state.state.to_string(),
                 now
             ],

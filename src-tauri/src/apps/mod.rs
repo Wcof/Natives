@@ -24,6 +24,7 @@ pub mod repository;
 pub mod service;
 pub mod system;
 pub mod web;
+pub mod web_url;
 
 #[cfg(test)]
 mod tests;

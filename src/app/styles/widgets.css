@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════
-   Widget Shell / Chrome（B-018/B-019）
-   只消费语义 token；drag handle 只做 hover chrome，
+   Widget Shell / Chrome（B-018/B-019 + WSW-2/3）
+   只消费语义 token；header 整体作为 drag zone，
    不接管 RGL 的 transform（motion 约束 §8）。
    ═══════════════════════════════════════════ */
 
@@ -13,14 +13,13 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  /* RGL 拖拽期间由 host 设置 .ws-shell--dragging 以锁定交互 */
 }
 
-/* ── Header ── */
+/* ── Header（整体作为 drag handle；编辑态 cursor:grab） ── */
 .ws-shell-header {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 6px 10px;
   min-height: 30px;
   flex-shrink: 0;
@@ -28,9 +27,18 @@
   user-select: none;
 }
 
+.ws-shell--editing .ws-shell-header {
+  cursor: grab;
+}
+
+.ws-shell--editing .ws-shell-header:active {
+  cursor: grabbing;
+}
+
 .ws-shell-header-title {
-  font-size: 12px;
+  font-size: 0.6875rem;
   font-weight: 600;
+  line-height: 1.2;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -54,41 +62,10 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 6px 8px;
 }
 
-/* ── Drag handle（hover chrome；不接管 transform） ── */
-.ws-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  color: var(--text-tertiary);
-  cursor: grab;
-  background: transparent;
-  border: none;
-  opacity: 0.35;
-  transition: opacity var(--transition-fast, 120ms), background-color var(--transition-fast, 120ms);
-}
-
-.ws-drag-handle:hover,
-.ws-drag-handle:focus-visible {
-  opacity: 1;
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.ws-drag-handle:active {
-  cursor: grabbing;
-}
-
-/* 编辑态：拖拽把手常显，便于点击 */
-.ws-shell--editing .ws-drag-handle {
-  opacity: 0.9;
-}
-
-/* ── 编辑 chrome 按钮 ── */
+/* ── 编辑 chrome 按钮（cancel zone → ws-drag-cancel） ── */
 .ws-icon-button {
   display: inline-flex;
   align-items: center;
@@ -135,8 +112,43 @@
   padding: 8px;
 }
 
-/* reduced-motion：hover 过渡直接禁用（全局规则也会兜底） */
-html[data-reduced-motion='true'] .ws-drag-handle,
+/* reduced-motion */
 html[data-reduced-motion='true'] .ws-icon-button {
   transition: none;
+}
+.ws-dashboard-action {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  color: var(--text-secondary);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.ws-dashboard-action:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.ws-dashboard-action:disabled {
+  opacity: 0.35;
+}
+
+[data-workspace-v2][data-mode="browse"] .react-grid-item {
+  transition: transform 180ms ease, width 180ms ease, height 180ms ease;
+}
+
+@media (max-width: 1024px) {
+  .workspace-dashboard-header { padding-inline: 1rem; }
+  .workspace-session-tabs { overflow-x: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-workspace-v2] *, [data-workspace-v2] *::before, [data-workspace-v2] *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

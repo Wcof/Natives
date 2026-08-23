@@ -69,6 +69,7 @@ export const workTimeWidgetDefinition: WidgetDefinition<UsageSummaryData, WorkTi
   configSchema: z.record(z.string(), z.unknown()),
   size: 'small',
   surfacePolicy: { surfaces: ['crystal', 'material', 'plain'], allowBlur: true, allowGlow: false },
+  timeAware: true,
   adapterKeyBuilder: usageAdapterKey,
   load: loadUsageSummary,
   Component: WorkTimeView,

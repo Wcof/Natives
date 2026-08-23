@@ -108,7 +108,7 @@
 
 ## 附录：当前表清单
 
-> 新增表请在此登记，并补 `ALTER` 迁移逻辑。schema 版本见 `settings._schema_version`（当前 v8）。
+> 新增表请在此登记，并补 `ALTER` 迁移逻辑。schema 版本见 `settings._schema_version`（v8 起增量演进，当前 head v28；PWSV2 追加 v29，见 ADR-0021 修订 §PWSV2）。
 
 | 表 | 用途 |
 |----|------|
@@ -127,3 +127,7 @@
 | `module_order` | 侧边栏排序 |
 | `permission_audit_log` | 权限审计日志 |
 | `usage_dashboard_snapshots` | 用量看板快照缓存（按 time_zone 主键，v6） |
+| `workspaces` / `workspace_open_tabs`* / `workspace_context_items` / `workspace_widgets` / `workspace_layouts` / `workspace_view_states` / `workspace_tool_profiles` | Workspace V2 七表（v27 建表） |
+| `workspace_templates` | Workspace 内置/个人模板 manifest（PWSV2，v29） |
+
+\* 旧内容 tab 表 `workspace_tabs`（v27）PWSV2 起降为 legacy（无 production 读/写）；Workspace 会话由新表 `workspace_open_tabs`（v29）承载，death proof 后删除旧表。

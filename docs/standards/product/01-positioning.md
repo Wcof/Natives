@@ -20,7 +20,7 @@
 #### R-P1 · 一级 IA 固定
 - **等级**：MUST
 - **分类**：产品、交互
-- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；V1 只有一个 Home。
+- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；Home 是唯一 Workspace 一级入口，其下可打开多个 Workspace（ADR-0021）。
 - **为什么**：这是用户任务组织方式，不以内部 runtime/技术名暴露产品结构。
 
 ## 二、Home 与 Widget
@@ -28,7 +28,7 @@
 #### R-P2 · 首页就是 Personal Workspace Home
 - **等级**：MUST
 - **分类**：产品、状态
-- **规则**：根路由 `/` **必须**是可配置 Home。Widget **必须**是内置 React renderer + config + versioned grid layout；**禁止** Widget Plugin Framework、Runtime、Event Bus、Worker、Marketplace、Infinite Canvas 与多 Workspace 数据域。
+- **规则**：根路由 `/` **必须**是可配置 Home。Widget **必须**是内置 React renderer + config + versioned grid layout；**禁止** Widget Plugin Framework、Runtime、Event Bus、Worker、Marketplace 与 Infinite Canvas（多 Workspace 数据域合法，见 R-P0 与 ADR-0021）。
 - **为什么**：Home 需要可组合，但不应演变成新的运行时平台。
 
 #### R-P3 · Widget 只做轻量投影

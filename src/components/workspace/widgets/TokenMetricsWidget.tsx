@@ -101,6 +101,7 @@ export const tokenMetricsWidgetDefinition: WidgetDefinition<UsageSummaryData, To
   configSchema: z.record(z.string(), z.unknown()),
   size: 'medium',
   surfacePolicy: { surfaces: ['crystal', 'material', 'plain'], allowBlur: true, allowGlow: false },
+  timeAware: true,
   adapterKeyBuilder: usageAdapterKey,
   load: loadUsageSummary,
   Component: TokenMetricsView,

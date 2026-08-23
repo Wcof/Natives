@@ -7,11 +7,12 @@
 //! - Mutate：`apps_update_metadata`, `apps_update_system_spec`, `apps_update_web_spec`,
 //!           `apps_remove`, `apps_set_sidebar_visibility`, `apps_set_sidebar_order`
 //! - Lifecycle：`apps_open`, `apps_start`, `apps_stop`, `apps_restart`, `apps_force_stop`, `apps_resolve_orphan`
+//! - System Control（APPV2-T06）：`apps_system_hide`, `apps_system_unhide`
 //! - Web Surface：`apps_web_close`, `apps_web_hide`, `apps_web_reload`, `apps_web_back`, `apps_web_forward`, `apps_web_clear_data`
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::apps::model::{
     App, AppKind, AppView, RegisterLocalProjectInput, RegisterSystemApplicationInput,
@@ -26,6 +27,7 @@ use crate::apps::{local, system, web};
 use crate::creative_app::browser::BrowserStateHandle;
 use crate::creative_app::local::LocalRuntimeHandle;
 use crate::creative_app::model::LocalProjectScanResult;
+use crate::creative_app::model_runtime::BrowserBounds;
 use crate::AppState;
 use crate::{Error, Result};
 
@@ -275,9 +277,29 @@ pub async fn apps_open(
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
     id: String,
+    // APPV2-T03：Renderer 实测内容区矩形（Web 目标「先 bounds 后 show」；其它 kind 忽略）。
+    bounds: Option<BrowserBounds>,
 ) -> Result<bool> {
     let svc = service(&state, &app_handle, &locks, &local_runtime);
-    svc.open(&id).await
+    svc.open(&id, bounds).await
+}
+
+/// APPV2-T03：Web Surface 动态内容区 bounds。
+///
+/// Host 端验证（finite / 正宽高 / 最小尺寸 / 主窗口内容范围 clamp）后下发
+/// `browser_set_bounds`；返回实际生效 bounds。仅对已存在 label 生效
+/// （未打开的 surface 在 open 时携带 bounds）。
+#[tauri::command]
+pub async fn apps_web_set_bounds(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    bounds: BrowserBounds,
+) -> Result<BrowserBounds> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.web_set_bounds(&id, bounds).await
 }
 
 #[tauri::command]
@@ -302,7 +324,91 @@ pub async fn apps_stop(
     risk_level: Option<u8>,
 ) -> Result<bool> {
     let svc = service(&state, &app_handle, &locks, &local_runtime);
+    // APPV2-T06：system kind 走验证后的 graceful terminate（超时返回 typed Err）。
     svc.stop(&id, risk_level.unwrap_or(1)).await
+}
+
+/// APPV2-T06：隐藏系统应用（AppKit hide 语义）。
+///
+/// 返回是否真实执行（目标未运行 = `false`，不算错误）。仅 system kind 可用，
+/// 其它 kind 返回 typed `InvalidInput`。
+#[tauri::command]
+pub async fn apps_system_hide(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.hide_system(&id).await
+}
+
+/// APPV2-T06：恢复（取消隐藏）系统应用。口径同 [`apps_system_hide`]。
+#[tauri::command]
+pub async fn apps_system_unhide(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.unhide_system(&id).await
+}
+
+/// Read the live macOS process/window state without changing it.
+#[tauri::command]
+pub async fn apps_system_observe(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<system::SystemRunningState> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.observe_system(&id).await
+}
+
+/// Move/resize one standard macOS window once; no persistent tracking.
+#[tauri::command]
+pub async fn apps_system_dock(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    bounds: BrowserBounds,
+) -> Result<system::DockResult> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.dock_system(&id, bounds).await
+}
+
+#[tauri::command]
+pub fn apps_system_open_accessibility_settings() -> Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        open::that("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        Ok(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(system::unsupported(
+            "Accessibility settings are only available on macOS",
+        ))
+    }
+}
+
+#[tauri::command]
+pub fn apps_activate_host(app_handle: AppHandle) -> Result<bool> {
+    let main = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| Error::NotFound("main window".into()))?;
+    main.show().map_err(|e| Error::Internal(e.to_string()))?;
+    main.set_focus()
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    Ok(true)
 }
 
 #[tauri::command]

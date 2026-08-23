@@ -12,8 +12,8 @@
 
 use super::store;
 use super::types::{
-    WorkspaceContextItem, WorkspaceLayout, WorkspaceSessionSnapshot, WorkspaceSnapshot,
-    WorkspaceSummary, WorkspaceTab, WorkspaceToolProfile, WorkspaceViewState, WorkspaceWidget,
+    WorkspaceContextItem, WorkspaceLayout, WorkspaceOpenTab, WorkspaceSessionSnapshot,
+    WorkspaceSnapshot, WorkspaceSummary, WorkspaceToolProfile, WorkspaceViewState, WorkspaceWidget,
 };
 use crate::Result;
 use rusqlite::Connection;
@@ -28,7 +28,6 @@ pub fn load_workspace_snapshot(
     let Some(workspace) = store::get_workspace(conn, workspace_id)? else {
         return Ok(None);
     };
-    let tabs = store::list_tabs(conn, workspace_id)?;
     let context_items = store::list_context_items(conn, workspace_id)?;
     let widgets = store::list_widgets(conn, workspace_id)?;
     let layouts = store::list_layouts(conn, workspace_id)?;
@@ -36,7 +35,6 @@ pub fn load_workspace_snapshot(
     let tool_profiles = store::list_tool_profiles(conn, workspace_id)?;
     let revision = compute_revision(
         &workspace,
-        &tabs,
         &context_items,
         &widgets,
         &layouts,
@@ -45,7 +43,6 @@ pub fn load_workspace_snapshot(
     );
     Ok(Some(WorkspaceSnapshot {
         workspace,
-        tabs,
         context_items,
         widgets,
         layouts,
@@ -55,42 +52,21 @@ pub fn load_workspace_snapshot(
     }))
 }
 
-/// Load the runtime session snapshot for a workspace, or `None` when the
-/// workspace does not exist.
-pub fn load_session_snapshot(
-    conn: &Connection,
-    workspace_id: &str,
-) -> Result<Option<WorkspaceSessionSnapshot>> {
-    let Some(workspace) = store::get_workspace(conn, workspace_id)? else {
-        return Ok(None);
-    };
-    let tabs = store::list_tabs(conn, workspace_id)?;
-    let active_tab_id = tabs.iter().find(|t| t.is_active).map(|t| t.id.clone());
-    let context_items = store::list_context_items(conn, workspace_id)?;
-    let widgets = store::list_widgets(conn, workspace_id)?;
-    let layouts = store::list_layouts(conn, workspace_id)?;
-    let view_states = store::list_view_states(conn, workspace_id)?;
-    let tool_profiles = store::list_tool_profiles(conn, workspace_id)?;
-    let revision = compute_revision(
-        &workspace,
-        &tabs,
-        &context_items,
-        &widgets,
-        &layouts,
-        &view_states,
-        &tool_profiles,
-    );
-    Ok(Some(WorkspaceSessionSnapshot {
-        workspace_id: workspace.id,
-        active_tab_id,
-        tabs,
-        context_items,
-        widgets,
-        layouts,
-        view_states,
-        tool_profiles,
+/// Lightweight global session snapshot; child payloads are loaded on demand.
+pub fn load_session_snapshot(conn: &Connection) -> Result<WorkspaceSessionSnapshot> {
+    let opened_tabs = store::list_open_tabs(conn)?;
+    let workspaces = store::list_workspaces(conn)?;
+    let active_workspace_id = workspaces
+        .iter()
+        .find(|w| w.is_active)
+        .map(|w| w.id.clone());
+    let revision = compute_session_revision(&opened_tabs, &workspaces, &active_workspace_id);
+    Ok(WorkspaceSessionSnapshot {
+        opened_tabs,
+        active_workspace_id,
+        workspaces,
         revision,
-    }))
+    })
 }
 
 // ──────────────────────────────────────────────
@@ -123,7 +99,6 @@ fn hash_component(state: &mut u64, value: &impl Serialize) {
 /// for stale-snapshot detection.
 fn compute_revision(
     workspace: &WorkspaceSummary,
-    tabs: &[WorkspaceTab],
     context_items: &[WorkspaceContextItem],
     widgets: &[WorkspaceWidget],
     layouts: &[WorkspaceLayout],
@@ -132,9 +107,6 @@ fn compute_revision(
 ) -> i64 {
     let mut state = FNV1A_OFFSET;
     hash_component(&mut state, workspace);
-    for tab in tabs {
-        hash_component(&mut state, tab);
-    }
     for item in context_items {
         hash_component(&mut state, item);
     }
@@ -149,6 +121,22 @@ fn compute_revision(
     }
     for profile in tool_profiles {
         hash_component(&mut state, profile);
+    }
+    (state & 0x0000_FFFF_FFFF_FFFF) as i64
+}
+
+fn compute_session_revision(
+    tabs: &[WorkspaceOpenTab],
+    workspaces: &[WorkspaceSummary],
+    active: &Option<String>,
+) -> i64 {
+    let mut state = FNV1A_OFFSET;
+    hash_component(&mut state, active);
+    for tab in tabs {
+        hash_component(&mut state, tab);
+    }
+    for workspace in workspaces {
+        hash_component(&mut state, workspace);
     }
     (state & 0x0000_FFFF_FFFF_FFFF) as i64
 }

@@ -328,12 +328,9 @@ function FileManagerSection({ c }: { c: SidebarController }) {
 
 function AppsSection({ c }: { c: SidebarController }) {
   const { locale, sidebarApps, appsExpanded, setAppsExpanded } = c;
-  const isAppsActive = c.activeNavigationId === 'apps';
 
   const getKindIcon = (kind: string) => {
     switch (kind) {
-      case 'local_project':
-        return <Folder size={14} className="text-[var(--success)] shrink-0" />;
       case 'system_application':
         return <Laptop size={14} className="text-[var(--interactive-accent)] shrink-0" />;
       case 'web_application':
@@ -350,6 +347,7 @@ function AppsSection({ c }: { c: SidebarController }) {
           type="button"
           onClick={() => setAppsExpanded((prev) => !prev)}
           className="flex items-center gap-1 hover:text-[var(--text-secondary)] transition-colors"
+          aria-expanded={appsExpanded}
         >
           {appsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <span>{t(locale, 'nav.apps')}</span>
@@ -361,25 +359,11 @@ function AppsSection({ c }: { c: SidebarController }) {
         )}
       </div>
 
-      {/* Main Apps View Button */}
-      <div className="flex flex-col gap-0.5 px-3">
-        <button
-          type="button"
-          onClick={() => c.selectNavigation('apps', 'apps')}
-          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-[color,background-color,border-color,opacity,transform] ${
-            isAppsActive
-              ? 'sidebar-nav-active'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-          }`}
-        >
-          <Layers size={15} className="shrink-0" />
-          <span className="truncate text-sm">{t(locale, 'appsPage.title')}</span>
-        </button>
-
-        {/* Projected Sidebar Apps */}
-        {appsExpanded && sidebarApps.length > 0 && (
-          <div className="flex flex-col gap-0.5 pl-3 pt-0.5 border-l border-[var(--border-subtle)] ml-4">
-            {sidebarApps.map((app) => {
+      {/* Projected Sidebar Apps list directly below the section header */}
+      {appsExpanded && (
+        <div className="flex flex-col gap-0.5 px-3">
+          {sidebarApps.length > 0 ? (
+            sidebarApps.map((app) => {
               const itemTarget = `apps:item:${app.appId}`;
               const isItemActive = c.activeNavigationId === itemTarget;
               return (
@@ -387,7 +371,7 @@ function AppsSection({ c }: { c: SidebarController }) {
                   key={app.appId}
                   type="button"
                   onClick={() => c.handleAppClick(app)}
-                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-xs transition-[color,background-color,border-color,opacity,transform] ${
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-[color,background-color,border-color,opacity,transform] ${
                     isItemActive
                       ? 'sidebar-nav-active font-medium'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
@@ -401,10 +385,14 @@ function AppsSection({ c }: { c: SidebarController }) {
                   )}
                 </button>
               );
-            })}
-          </div>
-        )}
-      </div>
+            })
+          ) : (
+            <div className="px-2 py-1 text-xs italic text-[var(--text-disabled)]">
+              {t(locale, 'home.noApps')}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -616,8 +604,10 @@ export function SidebarBody({ c }: { c: SidebarController }) {
 
 function BottomNav({ c }: { c: SidebarController }) {
   const { locale } = c;
+  const isAppsActive = c.activeNavigationId === 'apps';
   return (
-    <div className="shrink-0 px-3 py-2 border-t border-[var(--border-subtle)]">
+    <div className="shrink-0 px-3 py-2 border-t border-[var(--border-subtle)] flex flex-col gap-0.5">
+      {/* 1. 通知 */}
       <button
         type="button"
         onClick={c.onNotificationClick}
@@ -626,6 +616,23 @@ function BottomNav({ c }: { c: SidebarController }) {
         <Bell size={16} />
         <span>{t(locale, 'notifications.title')}</span>
       </button>
+
+      {/* 2. 应用中心（置于通知与设置之间） */}
+      <button
+        type="button"
+        onClick={() => c.selectNavigation('apps', 'apps')}
+        aria-current={isAppsActive ? 'page' : undefined}
+        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
+          isAppsActive
+            ? 'sidebar-nav-active'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+        }`}
+      >
+        <Layers size={16} />
+        <span>{t(locale, 'nav.apps')}</span>
+      </button>
+
+      {/* 3. 设置 */}
       <button
         type="button"
         onClick={() => c.selectNavigation('__settings__', 'settings:personal')}
@@ -643,9 +650,10 @@ function BottomNav({ c }: { c: SidebarController }) {
   );
 }
 
-/** 折叠态 64px Icon Rail：一级导航图标 + 左下角头像，均保持可交互（决策 9）。 */
+/** 折叠态 64px Icon Rail：一级导航图标 + 底部通知/应用中心/设置 + 左下角头像，均保持可交互（决策 9）。 */
 function IconRail({ c }: { c: SidebarController }) {
   const { locale } = c;
+  const isAppsActive = c.activeNavigationId === 'apps';
   const railItems = [
     {
       id: '__dashboard__',
@@ -658,12 +666,6 @@ function IconRail({ c }: { c: SidebarController }) {
       label: t(locale, 'nav.fileBrowser'),
       icon: <FolderOpen size={16} />,
       target: 'files',
-    },
-    {
-      id: 'apps',
-      label: t(locale, 'nav.apps'),
-      icon: <Layers size={16} />,
-      target: 'apps',
     },
     {
       id: 'ai',
@@ -705,10 +707,47 @@ function IconRail({ c }: { c: SidebarController }) {
           );
         })}
       </nav>
-      {/* 左下角头像/缩写：折叠态只显示缩写（决策 9） */}
-      <div className="shrink-0 flex justify-center px-1 pb-2">
+      {/* 底部功能区：通知 → 应用中心 → 设置 → 用户头像 */}
+      <div className="shrink-0 flex flex-col items-center gap-1 px-1 pb-2 border-t border-[var(--border-subtle)] pt-1">
+        <button
+          type="button"
+          onClick={c.onNotificationClick}
+          aria-label={t(locale, 'notifications.title')}
+          title={t(locale, 'notifications.title')}
+          className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-colors"
+        >
+          <Bell size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => c.selectNavigation('apps', 'apps')}
+          aria-current={isAppsActive ? 'page' : undefined}
+          aria-label={t(locale, 'nav.apps')}
+          title={t(locale, 'nav.apps')}
+          className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+            isAppsActive
+              ? 'sidebar-nav-active'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+          }`}
+        >
+          <Layers size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => c.selectNavigation('__settings__', 'settings:personal')}
+          aria-current={c.activeNavigationId === '__settings__' ? 'page' : undefined}
+          aria-label={t(locale, 'nav.settings')}
+          title={t(locale, 'nav.settings')}
+          className={`flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+            c.activeNavigationId === '__settings__'
+              ? 'sidebar-nav-active'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+          }`}
+        >
+          <Settings size={16} />
+        </button>
         <span
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--primary)] text-[0.8125rem] font-semibold text-[var(--primary-foreground)]"
+          className="mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-[var(--primary)] text-[0.8125rem] font-semibold text-[var(--primary-foreground)]"
           title={c.username}
           aria-label={c.username}
         >

@@ -1,7 +1,7 @@
 // Natives i18n (zh) — dashboard
 export const dashboard = {
   dashboard: {
-    title: '个人主页',
+    title: '个人空间',
     greeting: '欢迎回来',
     subtitle: '你的个人桌面',
     installedModules: '已安装模块',

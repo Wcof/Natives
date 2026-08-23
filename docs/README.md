@@ -34,6 +34,7 @@ AiNative
 
 - Workspace V2 目标架构 ADR-0021（Multi-Workspace + Grid/Canvas 双布局 + Design System V2）已接受，取代 ADR-0020 §1/§3 冲突范围（其余 ADR-0020 决策继续有效）；冻结契约见 `contracts/workspace-v2-contract.md`，Host SQLite 为 Workspace 唯一权威（v27 迁移 7 表已注册），旧 localStorage 权威判定为 delete（`development/g009-localstorage-conclusion.md`）。
 
+- PWSV2 Personal Workspace V2 完整重设计裁决（2026-08-23）：布局模式词表 `structured | free`（structured 为默认，历史词 `compact` 废弃）；旧 `workspace_tabs` 内容 tab 表降为 legacy，新增 `workspace_open_tabs`（Workspace 会话）与 `workspace_templates`（内置/个人模板）；workspaces 软删 `deleted_at` + `default_layout_mode` + `template_source_id/template_version`；widget `enabled`/`config_version`/`appearance`/`z_index`（`enabled = NOT hidden` 映射）；layout `layout_mode`/`layout_version` + `UNIQUE(workspace_id, layout_mode, breakpoint)`；Browse/Edit 双态 + `Classic Personal Dashboard` 内置模板；增量迁移 **v29**（v28 为应用中心迁移）。见 ADR-0021 修订 §PWSV2 与契约修订头。
 - 新 IA 目标边界已落地：`src-tauri/src/apps/`（App/RuntimeSpec/RuntimeInstance/Surface）、`src-tauri/src/ai/`（Provider/Connection/Credential/Model + secret_ref）、`src-tauri/src/proxy/`（Listener/Route/可替换 ProxyEngine trait）、`src-tauri/src/integrations/`（AI Tool 七步契约）、`src-tauri/src/secrets/`（OS Keychain SecretStore + 迁移状态机）、`src-tauri/src/key_pool.rs`（Key Pool/Failover）。
 - 首页 `/` 已是 PersonalWorkspace Home（Grid Widget + 5 个默认 Widget 接真实 Domain）；完整 Usage Dashboard 已迁至数据/用量页（`/usage`）；设置个人概览只保留摘要；Sidebar 折叠为 64px Icon Rail（含数据/用量入口）。
 - P0-A 已通过：三协议 fixture/transport、Key Pool、SecretStore、secret scan（PASS）；P0-B 逐文件审计已落档（`provider-adapters-p0b-audit.md`）。
@@ -53,7 +54,7 @@ AiNative
 | Legacy 删除 | `architecture/legacy-death-list.md`（死亡证明 + 待 cutover 路径） |
 | Home/Grid/Widget/Sidebar | Home Workspace Patch 的 00/08/13/16/20/24/31/33 + frontend/performance/ui-ux standards |
 | Files | `architecture/FILE_MANAGER_AUDIT.md` + data/backend/performance standards |
-| Apps | `creative-app-*` 现状文档 + layering/security/backend standards |
+| Apps / 应用中心 V2 | `pm-context/apps-center-ai-requirements.md` + `creative-app-*` 现状文档 + layering/security/backend standards |
 | Usage/Data | `application-performance-remediation.md` + product/02 + performance standard |
 | 旧 Daemon/Agent 删除 | `NATIVE-DAEMON-CAPABILITY-MAP.md`、`NATIVE_ENGINE_FULL_REMEDIATION.md` 仅作引用清单 + ADR-0020 death proof |
 | Release Gate | `development/natives-agent-t12-release-gate-report.md`（旧基线）+ ADR-0020 新 Gate；不得把旧绿灯当新架构完成 |

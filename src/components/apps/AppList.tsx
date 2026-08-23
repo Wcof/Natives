@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import {
-  Folder,
   Laptop,
   Globe,
   Search,
@@ -12,12 +11,13 @@ import {
   Layers,
 } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
-import type { AppView, AppKind, AppRuntimeState } from '@/lib/tauri/apps';
+import type { AppView, AppKind, AppRuntimeState, SystemRunningState } from '@/lib/tauri/apps';
 
 interface AppListProps {
   apps: AppView[];
   selectedId: string | null;
   loading: boolean;
+  systemStates: Record<string, SystemRunningState>;
   onSelect: (app: AppView) => void;
   onAdd: () => void;
   onRefresh: () => void;
@@ -27,16 +27,31 @@ export function AppList({
   apps,
   selectedId,
   loading,
+  systemStates,
   onSelect,
   onAdd,
   onRefresh,
 }: AppListProps) {
   const locale = useLocale();
-  const [filterKind, setFilterKind] = useState<AppKind | 'all'>('all');
+  const [filterKind, setFilterKind] = useState<Exclude<AppKind, 'local_project'> | 'all'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'running' | 'stopped' | 'attention'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredApps = apps.filter((app) => {
     if (filterKind !== 'all' && app.kind !== filterKind) return false;
+    const systemState = systemStates[app.appId];
+    const status = systemState
+      ? !systemState.installed || systemState.unobservable
+        ? 'attention'
+        : systemState.running
+          ? 'running'
+          : 'stopped'
+      : app.runtimeState === 'failed' || app.runtimeState === 'orphaned'
+        ? 'attention'
+        : app.runtimeState === 'running'
+          ? 'running'
+          : 'stopped';
+    if (filterStatus !== 'all' && status !== filterStatus) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = app.title.toLowerCase().includes(q);
@@ -48,13 +63,19 @@ export function AppList({
 
   const getKindIcon = (kind: AppKind) => {
     switch (kind) {
-      case 'local_project':
-        return <Folder className="h-4 w-4 text-[var(--success)]" />;
       case 'system_application':
         return <Laptop className="h-4 w-4 text-[var(--interactive-accent)]" />;
       case 'web_application':
         return <Globe className="h-4 w-4 text-[var(--primary)]" />;
     }
+  };
+
+  const getSystemStatusBadge = (state: SystemRunningState) => {
+    if (!state.installed) return getStatusBadge('failed');
+    if (state.unobservable) return <span className="text-[10px] text-[var(--warning)]">{t(locale, 'appsPage.stateUnobservable')}</span>;
+    if (state.active) return <span className="text-[10px] text-[var(--success)]">{t(locale, 'appsPage.stateActive')}</span>;
+    if (state.hidden) return <span className="text-[10px] text-[var(--text-tertiary)]">{t(locale, 'appsPage.stateHidden')}</span>;
+    return getStatusBadge(state.running ? 'running' : 'stopped');
   };
 
   const getStatusBadge = (state: AppRuntimeState) => {
@@ -145,7 +166,7 @@ export function AppList({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search registered apps..."
+            placeholder={t(locale, 'appsPage.searchPlaceholder')}
             className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] pl-8 pr-3 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
           />
         </div>
@@ -161,18 +182,7 @@ export function AppList({
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            All
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterKind('local_project')}
-            className={`flex-1 py-1 rounded-md font-medium transition-all ${
-              filterKind === 'local_project'
-                ? 'bg-[var(--surface-overlay)] text-[var(--text-primary)] shadow-sm'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Local
+            {t(locale, 'appsPage.filterAll')}
           </button>
           <button
             type="button"
@@ -183,7 +193,7 @@ export function AppList({
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            System
+            {t(locale, 'appsPage.filterMac')}
           </button>
           <button
             type="button"
@@ -194,9 +204,15 @@ export function AppList({
                 : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            Web
+            {t(locale, 'appsPage.filterWeb')}
           </button>
         </div>
+        <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value as typeof filterStatus)} className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--text-secondary)]">
+          <option value="all">{t(locale, 'appsPage.filterStatusAll')}</option>
+          <option value="running">{t(locale, 'appsPage.filterStatusRunning')}</option>
+          <option value="stopped">{t(locale, 'appsPage.filterStatusStopped')}</option>
+          <option value="attention">{t(locale, 'appsPage.filterStatusAttention')}</option>
+        </select>
       </div>
 
       {/* List Content */}
@@ -240,7 +256,12 @@ export function AppList({
                     {app.description}
                   </p>
                 )}
-                <div className="pt-0.5">{getStatusBadge(app.runtimeState)}</div>
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  {app.kind === 'system_application' && systemStates[app.appId]
+                    ? getSystemStatusBadge(systemStates[app.appId]!)
+                    : getStatusBadge(app.runtimeState)}
+                  {app.updatedAt && <time className="text-[9px] text-[var(--text-disabled)]">{new Date(app.updatedAt).toLocaleDateString(locale)}</time>}
+                </div>
               </div>
             </button>
           ))

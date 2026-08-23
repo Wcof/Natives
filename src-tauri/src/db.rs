@@ -8,7 +8,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "28";
+pub const SCHEMA_VERSION: &str = "29";
 
 /// Database connection pool type alias
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -97,6 +97,7 @@ mod catalog;
 mod kv;
 mod migration_v27;
 mod migration_v28;
+mod migration_v29;
 mod schema;
 mod settings;
 

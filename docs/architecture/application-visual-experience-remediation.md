@@ -347,3 +347,75 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 ## 11. Goal 启动指令
 
 新版完整提示词已迁移到 `/Users/ldh/Downloads/project/uitask/GOAL.md`。启动 Agent 时必须复制该文件全文，不能继续使用本文旧版简化提示词。
+
+## 12. Workspace 画布与组件深度整改（WSW 专项交付）
+
+### 12.1 目标与架构契约
+
+承接 ADR-0021 Multi-Workspace V2 架构与 frozen contract（`docs/contracts/workspace-v2-contract.md`），本专项聚焦工作区画布、组件容器、数据同步与交互手势的统一整改。
+
+### 12.2 WSW-0：统一数据同步与状态呈现
+
+- **WorkspaceDataBroker 扩展**：
+  - 新增 `syncAll()` 统一入口，对所有有活跃订阅者的 adapter key 触发并发去重刷新（共享在途 Promise，不产生重复 fetch）。
+  - 维护 `lastSyncedAt`、`syncing` 状态与 `subscribeSyncStatus()` 广播订阅。
+  - 顶部工作区工具栏提供同步按钮与即时状态（“刚刚同步” / “X 分钟前同步” / “同步中…”），点击后无闪烁、无整页刷新、无布局重置。
+
+### 12.3 WSW-1：工作区时段选择器与适配器流转
+
+- **TimeRangeContext 与 AdapterKey 联动**：
+  - 提供 `TimeRangeContext`（`today` / `7d` / `30d` / `90d`，默认 `7d`），通过 `useWorkspaceTimeRange()` 向下传递。
+  - `buildWidgetBrokerKey` 与 `WidgetDataContext` 接入 `timeRange`；`TokenMetricsWidget`、`CostMetricsWidget`、`WorkTimeWidget` 声明 `timeAware: true`，切换时段时自动按新 key 隔离缓存并向 Host 检索对应预设。
+  - 非时间维度组件（Notes、QuickLinks、Storage、ToolStatus 等）及网格/画布布局状态完全解耦，不因时段切换受影响。
+
+### 12.4 WSW-2 & WSW-3：组件视觉语言与网格参数统一
+
+- **视觉层级与排版规范**：
+  - Header 统一：高度 30px，字号 `0.6875rem`（11px，font-weight 600），消费 `--text-secondary` 语义颜色。
+  - 移除各组件内部冗余的双重标题栏（Notes、PromptSnippets、QuickLinks、StorageOverview、ToolStatus、ProxyStatus），统一由 `WidgetShell` 提供规范 header。
+  - Body 区域统一自适应铺满（`padding: 6px 8px`，`flex: 1`），卡片与容器无多余魔法边距。
+- **网格规范参数（WSW-3）**：
+  - `GRID_MARGIN` 统一收敛为 `[8, 8]`（8px widget gap）。
+  - `GRID_PADDING` 统一收敛为 `[12, 12]`（12px workspace outer margin）。
+
+### 12.5 WSW-4：Grid & Free Canvas 手势与拖拽交互修复
+
+- **CompactGrid 拖拽与取消区域**：
+  - 拖拽手柄绑定为 `.ws-shell-header`（卡片标题栏非控件区域全域可拖拽，编辑态呈现 `cursor: grab` / `cursor: grabbing`）。
+  - 取消区域绑定为 `.grid-content, .ws-drag-cancel`，按钮、链接、输入框与主体内容点击不会触发误拖拽。
+  - 严格遵守 R-U14：拖拽期间指针移动仅更新 RGL 内存态，写库仅在 `onDragStop` / `onResizeStop` 触发。
+- **FreeCanvasView 手势健全性与编组位移修复**：
+  - 修复编组节点拖拽 Y 轴位移 bug：`nextDraft[memberId]` 中的 Y 坐标计算从 `snap(member.y + dxWorld)` 修复为 `snap(member.y + dyWorld)`。
+  - Pointer Capture 统一在 `stageRef` 容器上捕获与释放，避免子节点卸载或跨节点移动造成手势失焦。
+  - 指针移动全程仅写 `draft` 内存态，Pointer Up / Cancel 时一次性提交并防抖持久化。
+
+### 12.6 交付清单与验证证据（WSW-5）
+
+- **修改文件列表**：
+  - `src/lib/workspace/widgets/types.ts`: TimeRange 类型与 WidgetDataContext/WidgetDefinition 扩展
+  - `src/lib/workspace/widgets/time-range-context.ts`: 纯轻量 TimeRangeContext 与 hook
+  - `src/lib/workspace/widgets/data-broker.ts`: syncAll / lastSyncedAt / syncing / timeRange 扩展
+  - `src/lib/workspace/widgets/index.ts`: Barrel 导出
+  - `src/lib/workspace/widgets/adapters/usage.ts`: 时段预设流转
+  - `src/components/workspace/widgets/TokenMetricsWidget.tsx`: timeAware 声明
+  - `src/components/workspace/widgets/CostMetricsWidget.tsx`: timeAware 声明
+  - `src/components/workspace/widgets/WorkTimeWidget.tsx`: timeAware 声明
+  - `src/components/workspace/widgets/WidgetShell.tsx`: Header 拖拽区与取消类名收敛
+  - `src/components/workspace/widgets/WidgetRenderer.tsx`: 时段注入与 broker key 绑定
+  - `src/components/workspace/widgets/NotesWidget.tsx`: 消除冗余 header
+  - `src/components/workspace/widgets/PromptSnippetsWidget.tsx`: 消除冗余 header
+  - `src/components/workspace/widgets/QuickLinksWidget.tsx`: 消除冗余 header
+  - `src/components/workspace/widgets/StorageOverviewWidget.tsx`: 消除冗余 header
+  - `src/components/workspace/widgets/ToolStatusWidget.tsx`: 消除冗余 header
+  - `src/components/workspace/widgets/ProxyStatusWidget.tsx`: 消除冗余 header
+  - `src/lib/workspace/views/types.ts`: GRID_MARGIN [8,8] 与 GRID_PADDING [12,12]
+  - `src/components/workspace/layout/CompactGrid.tsx`: 拖拽/取消选择器对齐
+  - `src/components/workspace/views/GridWorkspaceView.tsx`: .ws-shell-header 拖拽接线
+  - `src/components/workspace/views/FreeCanvasView.tsx`: 编组 Y 位移修复与 Pointer Capture 规范化
+  - `src/components/workspace/WorkspaceCompositionPage.tsx`: 同步入口、时段选择器、TimeRange 提供者
+  - `src/app/styles/widgets.css`: 统一 Header 样式、拖拽光标与取消类
+  - `src/i18n/zh/app.ts` / `src/i18n/en/app.ts`: 同步与时段双语词条
+- **新增测试**：
+  - `src/lib/workspace/widgets/data-broker.test.ts`: DataBroker 订阅、去重、syncAll、时段隔离与失效验证
+  - `src/lib/workspace/canvas/canvas-gesture.test.ts`: Free Canvas 几何吸附、编组位移计算、视口约束测试
+  - `src/components/workspace/layout/grid-layout.test.ts`: 网格 8px gap / 12px padding 契约测试

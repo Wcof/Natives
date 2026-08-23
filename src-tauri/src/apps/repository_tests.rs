@@ -118,6 +118,85 @@ fn register_web_writes_spec_and_validates_url() {
     assert_eq!(AppRepository::list(&conn).unwrap().len(), 1);
 }
 
+/// APPV2-T01 回归（根因复现）：无 scheme 的用户输入（如 `chatgpt.com`）
+/// 必须被规范化为 https 后成功持久化，而不是被注册校验直接拒绝。
+#[test]
+fn register_web_normalizes_schemeless_input_to_https() {
+    let conn = v28();
+    let a = AppRepository::register_web(
+        &conn,
+        "ChatGPT",
+        "chatgpt.com",
+        &["chatgpt.com".into()],
+        None,
+        false,
+    )
+    .expect("schemeless input must be normalized, not rejected");
+    let spec = AppRepository::load_web_spec(&conn, &a).unwrap();
+    assert_eq!(spec.url, "https://chatgpt.com");
+
+    // 带路径/查询串的无 scheme 输入同样规范化。
+    let b = AppRepository::register_web(
+        &conn,
+        "DingTalk",
+        "alidocs.dingtalk.com/i/spaces/demo",
+        &["alidocs.dingtalk.com".into()],
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        AppRepository::load_web_spec(&conn, &b).unwrap().url,
+        "https://alidocs.dingtalk.com/i/spaces/demo"
+    );
+
+    // 显式 http 的 loopback 开发地址允许；公网 http 必须拒绝（要求 https）。
+    let c = AppRepository::register_web(
+        &conn,
+        "Local Dev",
+        "http://127.0.0.1:8080",
+        &["127.0.0.1".into()],
+        None,
+        false,
+    )
+    .expect("explicit loopback http must be allowed");
+    assert_eq!(
+        AppRepository::load_web_spec(&conn, &c).unwrap().url,
+        "http://127.0.0.1:8080"
+    );
+    // 无 scheme 一律补 https（包括 loopback 输入）。
+    let d = AppRepository::register_web(
+        &conn,
+        "Local Dev https",
+        "localhost:5173",
+        &["localhost".into()],
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        AppRepository::load_web_spec(&conn, &d).unwrap().url,
+        "https://localhost:5173"
+    );
+    assert!(
+        AppRepository::register_web(
+            &conn,
+            "Insecure",
+            "http://example.com",
+            &["example.com".into()],
+            None,
+            false,
+        )
+        .is_err(),
+        "public http must be rejected in favor of https"
+    );
+    assert!(
+        AppRepository::register_web(&conn, "NoHost", "https://", &["x".into()], None, false,)
+            .is_err(),
+        "missing host must be rejected"
+    );
+}
+
 #[test]
 fn update_metadata_and_sidebar_are_typed() {
     let conn = v28();

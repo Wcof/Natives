@@ -13,7 +13,8 @@
 
 export type WorkspaceKind = 'home' | 'workspace';
 export type WorkspaceTheme = 'dark' | 'light';
-export type WorkspaceBreakpoint = 'lg' | 'md' | 'sm';
+export type WorkspaceBreakpoint = 'lg' | 'md' | 'sm' | 'free';
+export type WorkspaceLayoutMode = 'structured' | 'free';
 
 /** Workspace root entity (summary shape, embedded in snapshots). */
 export interface WorkspaceSummary {
@@ -26,21 +27,10 @@ export interface WorkspaceSummary {
   theme: WorkspaceTheme;
   isActive: boolean;
   position: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** A tab inside a workspace. `refId` is an opaque host reference — never a secret. */
-export interface WorkspaceTab {
-  id: string;
-  workspaceId: string;
-  tabType: string;
-  title: string;
-  refId: string | null;
-  url: string | null;
-  position: number;
-  isActive: boolean;
-  pinned: boolean;
+  defaultLayoutMode: WorkspaceLayoutMode;
+  appearance: Record<string, unknown>;
+  templateSourceId: string | null;
+  templateVersion: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -62,8 +52,11 @@ export interface WorkspaceWidget {
   id: string;
   workspaceId: string;
   widgetType: string;
+  configVersion: number;
   config: Record<string, unknown>;
-  hidden: boolean;
+  appearance: Record<string, unknown>;
+  enabled: boolean;
+  zIndex: number;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -79,8 +72,10 @@ export interface WorkspaceWidgetConfigPatch {
 export interface WorkspaceLayout {
   id: string;
   workspaceId: string;
+  layoutMode: WorkspaceLayoutMode;
   breakpoint: WorkspaceBreakpoint;
-  layout: unknown[];
+  layoutVersion: number;
+  layout: unknown;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -91,6 +86,7 @@ export interface WorkspaceViewState {
   id: string;
   workspaceId: string;
   viewKey: string;
+  stateVersion: number;
   state: Record<string, unknown>;
   updatedAt: string;
 }
@@ -110,7 +106,6 @@ export interface WorkspaceToolProfile {
 /** Complete read model of one workspace. */
 export interface WorkspaceSnapshot {
   workspace: WorkspaceSummary;
-  tabs: WorkspaceTab[];
   contextItems: WorkspaceContextItem[];
   widgets: WorkspaceWidget[];
   layouts: WorkspaceLayout[];
@@ -124,15 +119,18 @@ export interface WorkspaceSnapshot {
  * Runtime session read model of the currently open workspace. Backend has no
  * dedicated session table — a session is the open workspace's live state.
  */
-export interface WorkspaceSessionSnapshot {
+export interface WorkspaceOpenTab {
   workspaceId: string;
-  activeTabId: string | null;
-  tabs: WorkspaceTab[];
-  contextItems: WorkspaceContextItem[];
-  widgets: WorkspaceWidget[];
-  layouts: WorkspaceLayout[];
-  viewStates: WorkspaceViewState[];
-  toolProfiles: WorkspaceToolProfile[];
+  sortOrder: number;
+  isPinned: boolean;
+  openedAt: string;
+  lastActiveAt: string;
+}
+
+export interface WorkspaceSessionSnapshot {
+  openedTabs: WorkspaceOpenTab[];
+  activeWorkspaceId: string | null;
+  workspaces: WorkspaceSummary[];
   /** A-033: 48-bit content fingerprint; pass back as `expectedRevision` (G-008). */
   revision: number;
 }
@@ -158,6 +156,8 @@ export interface WorkspaceCreateInput {
   icon?: string | null;
   description?: string | null;
   theme?: WorkspaceTheme;
+  defaultLayoutMode?: WorkspaceLayoutMode;
+  templateId?: string | null;
 }
 
 /** Workspace patch; empty string clears the nullable column. */
@@ -167,23 +167,8 @@ export interface WorkspaceUpdateInput {
   description?: string;
   theme?: WorkspaceTheme;
   position?: number;
-}
-
-export interface WorkspaceTabInput {
-  tabType: string;
-  title?: string;
-  refId?: string | null;
-  url?: string | null;
-}
-
-/** Tab patch; empty string clears the nullable column. */
-export interface WorkspaceTabUpdateInput {
-  title?: string;
-  refId?: string;
-  url?: string;
-  isActive?: boolean;
-  pinned?: boolean;
-  position?: number;
+  defaultLayoutMode?: WorkspaceLayoutMode;
+  appearance?: Record<string, unknown>;
 }
 
 export interface WorkspaceContextItemInput {
@@ -198,7 +183,10 @@ export interface WorkspaceWidgetInput {
   id?: string;
   widgetType: string;
   config?: Record<string, unknown>;
-  hidden?: boolean;
+  configVersion?: number;
+  appearance?: Record<string, unknown>;
+  enabled?: boolean;
+  zIndex?: number;
 }
 
 /** A-032: single patch inside batchUpdateContextItems. */
@@ -224,4 +212,35 @@ export interface WorkspaceMcpExposure {
   toolProfiles: McpToolProfileExposure[];
   layoutBreakpoints: string[];
   generatedAt: string;
+}
+
+export interface TemplateWidgetSpec {
+  key: string;
+  widgetType: string;
+  configVersion: number;
+  config: Record<string, unknown>;
+  appearance: Record<string, unknown>;
+}
+
+export interface WorkspaceTemplateManifestV1 {
+  schemaVersion: 1;
+  templateVersion: number;
+  nameKey: string | null;
+  appearance: Record<string, unknown>;
+  defaultLayoutMode: WorkspaceLayoutMode;
+  widgets: TemplateWidgetSpec[];
+  layouts: Record<string, unknown>;
+}
+
+export interface WorkspaceTemplate {
+  id: string;
+  name: string;
+  origin: 'builtin' | 'personal';
+  schemaVersion: number;
+  templateVersion: number;
+  nameKey: string | null;
+  previewKey: string | null;
+  manifest: WorkspaceTemplateManifestV1;
+  createdAt: string;
+  updatedAt: string;
 }

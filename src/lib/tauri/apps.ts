@@ -46,6 +46,7 @@ export interface AppView {
   sidebarOrder?: number;
   capabilities: AppCapabilities;
   runtimeState: AppRuntimeState;
+  updatedAt?: string;
 }
 
 export interface App {
@@ -96,21 +97,29 @@ export interface SystemAppCandidate {
   iconPath?: string;
 }
 
-export interface LocalProjectScanResult {
-  projectRoot: string;
-  projectKind: string;
-  entryFile?: string;
-  scripts: string[];
-  candidatePlans: unknown[];
-  rulePlan?: unknown;
-  aiSuggestedPlan?: unknown;
+export interface SystemRunningState {
+  installed: boolean;
+  running: boolean;
+  pid?: number;
+  hidden: boolean;
+  active: boolean;
+  bundlePath?: string;
+  bundleId?: string;
+  unobservable: boolean;
 }
 
-export interface RegisterLocalProjectInput {
-  title: string;
-  projectRoot: string;
-  description?: string;
-  icon?: string;
+export type DockStatus = 'docked' | 'permission_required' | 'unsupported' | 'failed';
+export type DockCapability =
+  | 'available'
+  | 'permission_required'
+  | 'no_standard_window'
+  | 'not_movable'
+  | 'not_resizable'
+  | 'fullscreen_unsupported';
+export interface DockResult {
+  status: DockStatus;
+  capability: DockCapability;
+  message?: string;
 }
 
 export interface RegisterSystemApplicationInput {
@@ -160,9 +169,16 @@ export interface AppHealthResult {
   port: number | null;
 }
 
+/** APPV2-T03：内容区矩形（与 Rust `BrowserBounds` camelCase 对齐）。 */
+export interface WebBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export const appsApi = {
   // ── Query ───────────────────────────────────────────────────────────────
-  list: () => cmd<App[]>('apps_list'),
   listViews: () => cmd<AppView[]>('apps_list_views'),
   get: (id: string) => cmd<App | null>('apps_get', { id }),
   getView: (id: string) => cmd<AppView | null>('apps_get_view', { id }),
@@ -170,12 +186,8 @@ export const appsApi = {
   listSurfaces: (applicationId: string) => cmd<Surface[]>('apps_list_surfaces', { applicationId }),
   activeSpec: (applicationId: string) => cmd<unknown | null>('apps_active_spec', { applicationId }),
   systemDiscover: () => cmd<SystemAppCandidate[]>('apps_system_discover'),
-  localInspect: (projectRoot: string) => cmd<LocalProjectScanResult>('apps_local_inspect', { projectRoot }),
-  localLogs: (id: string, limit?: number) =>
-    cmd<Array<{ seq: number; tsMs: number; stream: string; text: string }>>('apps_local_logs', { id, limit }),
 
   // ── Register ────────────────────────────────────────────────────────────
-  registerLocal: (input: RegisterLocalProjectInput) => cmd<AppView>('apps_register_local', { input }),
   registerSystem: (input: RegisterSystemApplicationInput) => cmd<AppView>('apps_register_system', { input }),
   registerWeb: (input: RegisterWebApplicationInput) => cmd<AppView>('apps_register_web', { input }),
 
@@ -188,12 +200,16 @@ export const appsApi = {
   remove: (id: string, riskLevel?: number) => cmd<boolean>('apps_remove', { id, riskLevel }),
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
-  open: (id: string) => cmd<boolean>('apps_open', { id }),
+  open: (id: string, bounds?: WebBounds) => cmd<boolean>('apps_open', { id, bounds }),
   start: (id: string) => cmd<boolean>('apps_start', { id }),
   stop: (id: string, riskLevel?: number) => cmd<boolean>('apps_stop', { id, riskLevel }),
   restart: (id: string) => cmd<boolean>('apps_restart', { id }),
-  forceStop: (id: string) => cmd<boolean>('apps_force_stop', { id }),
-  resolveOrphan: (id: string, action: 'stop' | 'restart') => cmd<boolean>('apps_resolve_orphan', { id, action }),
+  systemObserve: (id: string) => cmd<SystemRunningState>('apps_system_observe', { id }),
+  systemHide: (id: string) => cmd<boolean>('apps_system_hide', { id }),
+  systemUnhide: (id: string) => cmd<boolean>('apps_system_unhide', { id }),
+  systemDock: (id: string, bounds: WebBounds) => cmd<DockResult>('apps_system_dock', { id, bounds }),
+  systemOpenAccessibilitySettings: () => cmd<boolean>('apps_system_open_accessibility_settings'),
+  activateHost: () => cmd<boolean>('apps_activate_host'),
 
   // ── Web Surface ─────────────────────────────────────────────────────────
   webClose: (id: string) => cmd<boolean>('apps_web_close', { id }),
@@ -201,12 +217,8 @@ export const appsApi = {
   webReload: (id: string) => cmd<boolean>('apps_web_reload', { id }),
   webBack: (id: string) => cmd<boolean>('apps_web_back', { id }),
   webForward: (id: string) => cmd<boolean>('apps_web_forward', { id }),
+  /** APPV2-T03：Web Surface 动态内容区 bounds（Host 验证/clamp 后返回实际生效值）。 */
+  webSetBounds: (id: string, bounds: WebBounds) => cmd<WebBounds>('apps_web_set_bounds', { id, bounds }),
   webClearData: (id: string) => cmd<boolean>('apps_web_clear_data', { id }),
 
-  // ── Legacy Compat ───────────────────────────────────────────────────────
-  create: (input: { title: string; source: string; sourceId: string; description?: string; icon?: string }) =>
-    cmd<App>('apps_create', { input }),
-  delete: (id: string) => cmd<boolean>('apps_delete', { id }),
-  kill: (id: string) => cmd<boolean>('apps_kill', { id }),
-  health: (applicationId: string) => cmd<AppHealthResult>('apps_health', { applicationId }),
 };

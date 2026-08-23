@@ -17,4 +17,4 @@ kind: string,
  * snake_case：`manual` / `local_scan` / `system_discovery` /
  * `legacy_internal` / `legacy_github` / `migration`。
  */
-registration_origin: string, description: string | null, show_in_sidebar: boolean, sidebar_order: bigint | null, capabilities: AppCapabilities, runtime_state: AppRuntimeState, };
+registration_origin: string, description: string | null, show_in_sidebar: boolean, sidebar_order: bigint | null, capabilities: AppCapabilities, runtime_state: AppRuntimeState, updated_at: string, };

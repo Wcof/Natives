@@ -2,13 +2,11 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Folder,
   Laptop,
   Globe,
   Layers,
   Activity,
   Monitor,
-  FileText,
 } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import {
@@ -26,7 +24,6 @@ interface AppDetailProps {
   onStart: () => void;
   onStop: () => void;
   onRestart: () => void;
-  onForceStop: () => void;
   onEdit: () => void;
   onRemove: () => void;
   onToggleSidebar: () => void;
@@ -40,7 +37,6 @@ export function AppDetail({
   onStart,
   onStop,
   onRestart,
-  onForceStop,
   onEdit,
   onRemove,
   onToggleSidebar,
@@ -49,8 +45,6 @@ export function AppDetail({
   const locale = useLocale();
   const [instances, setInstances] = useState<RuntimeInstance[]>([]);
   const [surfaces, setSurfaces] = useState<Surface[]>([]);
-  const [logs, setLogs] = useState<Array<{ seq: number; text: string; stream: string }>>([]);
-  const [showLogs, setShowLogs] = useState(false);
   const [_loadingDetails, setLoadingDetails] = useState(false);
 
   const loadDetails = useCallback(async (targetApp: AppView) => {
@@ -62,10 +56,6 @@ export function AppDetail({
       ]);
       setInstances(insts);
       setSurfaces(surfs);
-      if (targetApp.kind === 'local_project') {
-        const logLines = await appsApi.localLogs(targetApp.appId, 100);
-        setLogs(logLines);
-      }
     } catch (err) {
       console.warn('Failed to load app details:', err);
     } finally {
@@ -92,8 +82,6 @@ export function AppDetail({
 
   const getKindLabel = (kind: string) => {
     switch (kind) {
-      case 'local_project':
-        return t(locale, 'appsPage.sourceLocal');
       case 'system_application':
         return t(locale, 'appsPage.sourceNative');
       case 'web_application':
@@ -105,8 +93,6 @@ export function AppDetail({
 
   const getKindIcon = (kind: string) => {
     switch (kind) {
-      case 'local_project':
-        return <Folder className="h-5 w-5 text-[var(--success)]" />;
       case 'system_application':
         return <Laptop className="h-5 w-5 text-[var(--interactive-accent)]" />;
       case 'web_application':
@@ -150,49 +136,16 @@ export function AppDetail({
             onStart={onStart}
             onStop={onStop}
             onRestart={onRestart}
-            onForceStop={onForceStop}
             onEdit={onEdit}
             onRemove={onRemove}
             onToggleSidebar={onToggleSidebar}
             onClearData={onClearData}
-            onViewLogs={() => setShowLogs(!showLogs)}
           />
         </div>
       </div>
 
       {/* Main Details Body */}
       <div className="p-6 space-y-6 flex-1">
-        {/* Logs Panel (toggleable for local projects) */}
-        {showLogs && app.kind === 'local_project' && (
-          <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--surface-base)] p-4 font-mono text-xs text-[var(--success)] space-y-2">
-            <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)] text-[var(--text-secondary)] font-sans">
-              <span className="flex items-center gap-1.5 font-medium">
-                <FileText className="h-4 w-4" />
-                {t(locale, 'appsPage.logs')}
-              </span>
-              <button
-                type="button"
-                onClick={() => void loadDetails(app)}
-                className="hover:text-[var(--text-primary)] transition-colors"
-              >
-                {t(locale, 'common.refresh')}
-              </button>
-            </div>
-            <div className="max-h-56 overflow-y-auto space-y-0.5">
-              {logs.length === 0 ? (
-                <p className="text-[var(--text-tertiary)]">No logs captured yet.</p>
-              ) : (
-                logs.map((l, i) => (
-                  <div key={i} className="leading-tight">
-                    <span className="text-[var(--text-tertiary)] mr-2">[{l.stream}]</span>
-                    <span>{l.text}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Runtime Instances */}
         {app.kind !== 'web_application' && (
           <div className="space-y-3">

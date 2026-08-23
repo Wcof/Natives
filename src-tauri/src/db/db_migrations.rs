@@ -359,6 +359,16 @@ pub fn apply(conn: &Connection) -> Result<(), Error> {
         migrate_v28(conn)?;
     }
 
+    // Migration v28→v29 (PWSV2 — Personal Workspace V2, ADR-0021 §PWSV2):
+    // additive workspace columns (default_layout_mode / appearance / template
+    // provenance / soft delete; widget config_version/appearance/enabled/z_index;
+    // layout mode/version; view state_version; context updated_at), the
+    // workspace_open_tabs session table and workspace_templates manifest table,
+    // plus the deterministic enabled/open-tab backfills.
+    if current_version < 29 {
+        migrate_v29(conn)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "

@@ -26,9 +26,7 @@ import type {
   WorkspaceSessionSnapshot,
   WorkspaceSnapshot,
   WorkspaceSummary,
-  WorkspaceTab,
-  WorkspaceTabInput,
-  WorkspaceTabUpdateInput,
+  WorkspaceTemplate,
   WorkspaceToolProfile,
   WorkspaceUpdateInput,
   WorkspaceViewState,
@@ -99,38 +97,6 @@ export function duplicateWorkspace(
   name: string,
 ): Promise<WorkspaceSummary | null> {
   return call('workspace_duplicate', { workspaceId, name });
-}
-
-// ──────────────────────────────────────────────
-// Tabs
-// ──────────────────────────────────────────────
-
-export function createTab(
-  workspaceId: string,
-  input: WorkspaceTabInput,
-  expectedRevision?: ExpectedRevision,
-): Promise<WorkspaceTab | null> {
-  return call('workspace_tab_create', { workspaceId, input, expectedRevision });
-}
-
-export function updateTab(
-  tabId: string,
-  patch: WorkspaceTabUpdateInput,
-  expectedRevision?: ExpectedRevision,
-): Promise<WorkspaceTab | null> {
-  return call('workspace_tab_update', { tabId, patch, expectedRevision });
-}
-
-export function closeTab(tabId: string, expectedRevision?: ExpectedRevision): Promise<boolean> {
-  return call('workspace_tab_close', { tabId, expectedRevision });
-}
-
-export function reorderTabs(
-  workspaceId: string,
-  orderedIds: string[],
-  expectedRevision?: ExpectedRevision,
-): Promise<WorkspaceTab[]> {
-  return call('workspace_tab_reorder', { workspaceId, orderedIds, expectedRevision });
 }
 
 // ──────────────────────────────────────────────
@@ -210,11 +176,12 @@ export function batchUpdateWidgetConfigs(
 
 export function saveLayout(
   workspaceId: string,
+  layoutMode: 'structured' | 'free',
   breakpoint: string,
-  layoutJson: string,
+  layout: unknown,
   expectedRevision?: ExpectedRevision,
 ): Promise<WorkspaceLayout | null> {
-  return call('workspace_layout_save', { workspaceId, breakpoint, layoutJson, expectedRevision });
+  return call('workspace_layout_save', { workspaceId, layoutMode, breakpoint, layoutVersion: 1, layoutJson: JSON.stringify(layout), expectedRevision });
 }
 
 // ──────────────────────────────────────────────
@@ -224,10 +191,10 @@ export function saveLayout(
 export function saveViewState(
   workspaceId: string,
   viewKey: string,
-  stateJson: string,
+  state: Record<string, unknown>,
   expectedRevision?: ExpectedRevision,
 ): Promise<WorkspaceViewState | null> {
-  return call('workspace_view_state_save', { workspaceId, viewKey, stateJson, expectedRevision });
+  return call('workspace_view_state_save', { workspaceId, viewKey, stateVersion: 1, stateJson: JSON.stringify(state), expectedRevision });
 }
 
 // ──────────────────────────────────────────────
@@ -266,10 +233,34 @@ export function openSession(workspaceId: string): Promise<WorkspaceSessionSnapsh
   return call('workspace_session_open', { workspaceId });
 }
 
-export function closeSession(): Promise<void> {
-  return call('workspace_session_close');
+export function closeSession(workspaceId: string): Promise<WorkspaceSessionSnapshot> {
+  return call('workspace_session_close', { workspaceId });
 }
 
-export function getSessionSnapshot(workspaceId: string): Promise<WorkspaceSessionSnapshot | null> {
-  return call('workspace_session_snapshot', { workspaceId });
+export function getSessionSnapshot(): Promise<WorkspaceSessionSnapshot> {
+  return call('workspace_session_snapshot');
+}
+
+export function reorderSessions(orderedWorkspaceIds: string[]): Promise<WorkspaceSessionSnapshot> {
+  return call('workspace_session_reorder', { orderedWorkspaceIds });
+}
+
+export function listTemplates(): Promise<WorkspaceTemplate[]> {
+  return call('workspace_template_list');
+}
+
+export function savePersonalTemplate(workspaceId: string, name: string, id?: string): Promise<WorkspaceTemplate | null> {
+  return call('workspace_template_save', { workspaceId, req: { name, id } });
+}
+
+export function deletePersonalTemplate(templateId: string): Promise<boolean> {
+  return call('workspace_template_delete', { templateId });
+}
+
+export function restoreTemplate(workspaceId: string, templateId: string, expectedRevision?: number): Promise<WorkspaceSnapshot | null> {
+  return call('workspace_restore_template', { workspaceId, templateId, expectedRevision });
+}
+
+export function resetWidget(workspaceId: string, widgetId: string, templateId: string | undefined, expectedRevision?: number): Promise<WorkspaceSnapshot | null> {
+  return call('workspace_widget_reset', { workspaceId, widgetId, templateId, expectedRevision });
 }

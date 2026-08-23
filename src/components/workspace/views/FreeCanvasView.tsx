@@ -29,7 +29,6 @@ import {
   forwardRef,
 } from 'react';
 import {
-  Focus,
   Frame,
   Hand,
   MousePointer2,
@@ -42,6 +41,7 @@ import {
   StickyNote,
   Trash2,
   Ungroup,
+  LayoutGrid,
 } from 'lucide-react';
 import {
   CANVAS_GRID,
@@ -66,6 +66,13 @@ import {
   snap,
 } from '@/lib/workspace/canvas/geometry';
 import { clampCamera, fitCameraToWorld, screenToWorld, zoomStep } from '@/lib/workspace/canvas/camera';
+import { AddWidgetMenu } from '../widgets/AddWidgetMenu';
+import { WidgetRenderer } from '../widgets/WidgetRenderer';
+import {
+  getWidget,
+  normalizeWidgetConfig,
+  createDefaultConfig,
+} from '@/lib/workspace/widgets';
 
 type Tool = 'select' | 'hand';
 type HandleKey =
@@ -122,6 +129,8 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
   const [tool, setTool] = useState<Tool>('select');
   const [marquee, setMarquee] = useState<CanvasRect | null>(null);
   const [viewport, setViewport] = useState({ w: 800, h: 600 });
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addWidgetButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
@@ -206,7 +215,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
       if (!editable) return;
       if (e.button !== 0) return;
       try {
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        stageRef.current?.setPointerCapture(e.pointerId);
       } catch {
         // capture unsupported — continue with window-level move tracking
       }
@@ -317,7 +326,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
               if (member) {
                 nextDraft[memberId] = {
                   x: snap(member.x + dxWorld),
-                  y: snap(member.y + dxWorld),
+                  y: snap(member.y + dyWorld),
                 };
               }
             }
@@ -354,10 +363,13 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
     [worldAt],
   );
 
-  const endGesture = useCallback(() => {
+  const endGesture = useCallback((e?: React.PointerEvent) => {
     const gesture = gestureRef.current;
     gestureRef.current = null;
     setMarquee(null);
+    if (e && stageRef.current) {
+      try { stageRef.current.releasePointerCapture(e.pointerId); } catch { /* ok */ }
+    }
     if (gesture?.mode === 'drag' || gesture?.mode === 'resize') {
       const overrides = draftRef.current;
       const next = nodesRef.current.map((node) =>
@@ -367,7 +379,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
       setNodes(next);
       onCommitRef.current(next);
     }
-      }, [resetDraft]);
+  }, [resetDraft]);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -418,7 +430,31 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
       commitSoon([...nodesRef.current, node]);
       updateSelection({ ids: [node.id], mode: 'single' });
     },
-    [commitSoon, locale],
+    [commitSoon, locale, updateSelection],
+  );
+
+  const handleAddWidget = useCallback(
+    (widgetType: string) => {
+      const def = getWidget(widgetType);
+      const count = nodesRef.current.length;
+      const label = def?.titleKey ? t(locale, def.titleKey) : widgetType;
+      const minW = def?.size === 'large' ? 360 : def?.size === 'medium' ? 300 : 260;
+      const minH = def?.size === 'large' ? 240 : def?.size === 'medium' ? 180 : 160;
+      const node = createCanvasNode({
+        id: `widget-${Date.now().toString(36)}-${count}`,
+        kind: 'card',
+        widgetType,
+        label,
+        w: minW,
+        h: minH,
+        x: 60 + (count % 5) * 40,
+        y: 60 + (count % 4) * 40,
+        z: nextZ(nodesRef.current),
+      });
+      commitSoon([...nodesRef.current, node]);
+      updateSelection({ ids: [node.id], mode: 'single' });
+    },
+    [commitSoon, locale, updateSelection],
   );
 
   const groupSelected = useCallback(() => {
@@ -542,13 +578,22 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
     const override = draft[node.id] ?? {};
     const rect = { ...node, ...override } as CanvasRect & CanvasNode;
     const selected = selection.ids.includes(node.id);
+    const widgetDef = node.widgetType ? getWidget(node.widgetType) : null;
+    const widgetConfig = widgetDef
+      ? normalizeWidgetConfig(widgetDef, {
+          ...createDefaultConfig(widgetDef),
+          ...(node.widgetConfig ?? {}),
+          order: 0,
+        })
+      : null;
+
     return (
       <div
         key={node.id}
         data-node-id={node.id}
         data-testid={`canvas-node-${node.kind}`}
         onPointerDown={(e) => beginGesture(e)}
-        className={`absolute touch-none select-none rounded-lg border ${
+        className={`absolute touch-none select-none rounded-xl border ${
           node.kind === 'frame'
             ? 'border-dashed border-[var(--border)] bg-[var(--surface-hover)]/40'
             : node.kind === 'group'
@@ -564,18 +609,29 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
           cursor: tool === 'hand' ? 'grab' : selected ? 'move' : 'default',
         }}
       >
-        <div className="flex h-6 items-center gap-1 border-b border-[var(--border-subtle)] px-2">
-          <span className="min-w-0 flex-1 truncate text-[0.625rem] text-[var(--text-secondary)]">
-            {node.label}
-          </span>
-          {node.locked && <span className="text-[0.625rem] text-[var(--text-disabled)]">🔒</span>}
-        </div>
-        <div className="min-h-0 flex-1 px-2 py-1.5 text-[0.6875rem] leading-relaxed text-[var(--text-secondary)]">
-          {node.kind === 'frame' || node.kind === 'group'
-            ? t(locale, 'workspace.canvasNodeItems', { count: node.members?.length ?? 0 })
-            : t(locale, 'workspace.canvasDoubleClickHint')}
-        </div>
-        {selected && !node.locked && (
+        {widgetDef && widgetConfig ? (
+          <div className="flex h-full w-full flex-col overflow-hidden rounded-xl">
+            <WidgetRenderer
+              instance={{ def: widgetDef, config: widgetConfig }}
+              editing={editable}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="flex h-6 items-center gap-1 border-b border-[var(--border-subtle)] px-2">
+              <span className="min-w-0 flex-1 truncate text-[0.625rem] text-[var(--text-secondary)]">
+                {node.label}
+              </span>
+              {node.locked && <span className="text-[0.625rem] text-[var(--text-disabled)]">🔒</span>}
+            </div>
+            <div className="min-h-0 flex-1 px-2 py-1.5 text-[0.6875rem] leading-relaxed text-[var(--text-secondary)]">
+              {node.kind === 'frame' || node.kind === 'group'
+                ? t(locale, 'workspace.canvasNodeItems', { count: node.members?.length ?? 0 })
+                : t(locale, 'workspace.canvasDoubleClickHint')}
+            </div>
+          </>
+        )}
+        {editable && selected && !node.locked && (
           <>
             {HANDLES.map((handle) => {
               const pos = handlePosition(rect, handle);
@@ -604,12 +660,36 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-2">
+      {editable && <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-2">
         <ToolButton active={activeTool === 'select'} onClick={() => setTool('select')} title={t(locale, 'workspace.canvasSelect')} icon={<MousePointer2 size={14} />} />
         <ToolButton active={activeTool === 'hand'} onClick={() => setTool('hand')} title={t(locale, 'workspace.canvasPan')} icon={<Hand size={14} />} />
         <span className="mx-1 h-4 w-px bg-[var(--border-subtle)]" />
-        <ToolButton onClick={() => addNode('card')} title={t(locale, 'workspace.canvasAddCard')} icon={<StickyNote size={14} />} />
-        <ToolButton onClick={() => addNode('note')} title={t(locale, 'workspace.canvasAddNote')} icon={<Focus size={14} />} />
+        <div className="relative">
+          <button
+            ref={addWidgetButtonRef}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={addMenuOpen}
+            onClick={() => setAddMenuOpen((open) => !open)}
+            title={t(locale, 'workspace.addCard')}
+            aria-label={t(locale, 'workspace.addCard')}
+            className={`flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors ${
+              addMenuOpen
+                ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
+            }`}
+          >
+            <LayoutGrid size={13} />
+            <span className="text-[0.6875rem] font-medium">{t(locale, 'workspace.addCard')}</span>
+          </button>
+          <AddWidgetMenu
+            open={addMenuOpen}
+            onOpenChange={setAddMenuOpen}
+            triggerRef={addWidgetButtonRef}
+            onSelect={handleAddWidget}
+          />
+        </div>
+        <ToolButton onClick={() => addNode('note')} title={t(locale, 'workspace.canvasAddNote')} icon={<StickyNote size={14} />} />
         <ToolButton onClick={() => addNode('frame')} title={t(locale, 'workspace.canvasAddFrame')} icon={<Frame size={14} />} />
         {selection.ids.length > 0 && (
           <>
@@ -629,7 +709,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
           <ToolButton onClick={zoomIn} title={t(locale, 'workspace.canvasZoomIn')} icon={<Plus size={14} />} />
           <ToolButton onClick={zoomFit} title={t(locale, 'workspace.canvasFit')} icon={<Maximize size={14} />} />
         </div>
-      </div>
+      </div>}
 
       <div
         ref={stageRef}
@@ -650,7 +730,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
             width: CANVAS_WORLD.w,
             height: CANVAS_WORLD.h,
             transform: `scale(${camera.zoom})`,
-            backgroundImage: 'repeating-linear-gradient(0deg, var(--border-subtle) 0 1px, transparent 1px 16px), repeating-linear-gradient(90deg, var(--border-subtle) 0 1px, transparent 1px 16px)',
+            backgroundImage: editable ? 'repeating-linear-gradient(0deg, var(--border-subtle) 0 1px, transparent 1px 16px), repeating-linear-gradient(90deg, var(--border-subtle) 0 1px, transparent 1px 16px)' : 'none',
           }}
         >
           {nodes.map(renderNode)}

@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 import { useLocale, t } from '@/i18n';
-import { Network, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { ShieldCheck, ShieldAlert } from 'lucide-react';
 import type { WidgetDefinition, WidgetProps } from '@/lib/workspace/widgets';
 import {
   loadAiStatus,
@@ -22,12 +22,8 @@ function ProxyStatusView({ data }: WidgetProps<AiStatusData, ProxyStatusSettings
   const proxyOnline = data?.proxyEnabled ?? false;
 
   return (
-    <div className="flex h-full flex-col justify-between p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-          <Network size={14} className="text-[var(--primary)]" />
-          <span className="font-medium">{t(locale, 'workspace.proxyTitle')}</span>
-        </div>
+    <div className="flex h-full w-full flex-col justify-between">
+      <div className="flex items-center justify-end">
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${
             proxyOnline

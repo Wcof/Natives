@@ -1,6 +1,7 @@
 # Workspace / Widget / Layout / Theme V2 —— 冻结契约（M-004 + M-006）
 
 > 状态：**已冻结**（2026-08-21）。A/B/C 三方必须以本文类型名与字段为准开发；任何核心字段变更需经 Main Agent 批准并升版。
+> **PWSV2 升版（2026-08-23，Main Agent 裁决，见 ADR-0021 修订 §PWSV2 与 plan2 方案）**：布局模式词表统一 `structured | free`（历史词 `compact` 废弃，`structured` 为默认）；旧 `workspace_tabs`（内容 tab 表）降为 legacy，新增 `workspace_open_tabs`（Workspace 会话）与 `workspace_templates`（内置/个人模板）两张表；`workspaces` 软删 `deleted_at` + `default_layout_mode` + `appearance_json` + `template_source_id/template_version`；`workspace_widgets` 增 `config_version/appearance_json/enabled/z_index`（生产读写切 `enabled`，v29 映射 `enabled = NOT hidden`）；`workspace_layouts` 增 `layout_mode/layout_version`，唯一键 `UNIQUE(workspace_id, layout_mode, breakpoint)`，free 模式 breakpoint 取保留值 `'free'`；`workspace_view_states` 增 `state_version`；`workspace_session_snapshot` 为全局轻量模型。matrix §10 的 12 项「A 组 schema 迁移」由增量迁移 **v29**（v28 已被应用中心占用）完成，本文 §3/§4/§5/§7 文本已同步修订。
 > **Wave2 冻结确认（I-008，2026-08-21）**：核心字段不再变更；A/B/C Wave2 并行开发。新增能力只做加法：
 > A-032 context reorder/batch、A-033 snapshot revision/version、A-034 MCP exposure DTO（不实现 Agent runtime）、
 > B-030..B-036 新 metrics/distribution widgets、C-033..C-038 Frame/Group/z-order/canvas keyboard/picker 集成。
@@ -26,15 +27,16 @@ SQLite / Local Files -> Domain Service -> Typed IPC -> Renderer Snapshot/UI
 
 | 表 | 关键字段 | 语义 |
 |---|---|---|
-| `workspaces` | id TEXT PK, name, icon, appearance_json DEFAULT '{}', default_layout_mode CHECK(compact\|free), template_source_id NULL, created_at, updated_at, deleted_at NULL | soft delete；Close 不写这里 |
-| `workspace_tabs` | workspace_id TEXT PK FK ON DELETE CASCADE, sort_order REAL, is_pinned INT, opened_at, last_active_at | row 存在=打开；Close=删 row；Reopen=插 row |
+| `workspaces` | id TEXT PK, name, kind, icon, description, theme CHECK(dark\|light) DEFAULT 'dark', position INT, appearance_json DEFAULT '{}', default_layout_mode CHECK(structured\|free) DEFAULT 'structured', template_source_id NULL, template_version NULL, created_at, updated_at, deleted_at NULL | 软删（list/snapshot 过滤 `deleted_at`）；Close 不写这里 |
+| `workspace_open_tabs`（v29 新表） | workspace_id TEXT PK FK ON DELETE CASCADE, sort_order REAL, is_pinned INT, opened_at, last_active_at | row 存在=打开；Close=删 row；Reopen=插 row。实现中同名的旧 `workspace_tabs`（tab_type/title/ref_id/url 内容 tab 表）PWSV2 起降为 legacy 表，v29 后无 production 读/写，death proof 后删除 |
 | `workspace_context_items` | id TEXT PK, workspace_id FK, kind CHECK(project_root\|pinned_file\|pinned_folder\|link\|note\|prompt_snippet\|usage_scope\|provider_profile\|proxy_profile), payload_json, sort_order, created_at, updated_at | 只存路径/引用/文本/非敏感配置；Credential 只存 opaque ref |
-| `workspace_widgets` | id TEXT PK, workspace_id FK, widget_type, config_version INT, config_json, appearance_json, enabled INT, z_index INT, created_at, updated_at | appearance_json 只允许 surfaceVariant/header/opacity 等实例级外观（V-003 白名单），禁止颜色 token 入库 |
-| `workspace_layouts` | workspace_id FK, layout_mode CHECK(compact\|free), breakpoint NULL, layout_version INT, layout_json, updated_at, PRIMARY KEY(workspace_id, layout_mode, breakpoint) | compact: lg/md/sm 各一份；free: breakpoint NULL，layout_json 存 world rect/parent frame/z-index |
-| `workspace_view_states` | workspace_id FK, view_key, state_version INT, state_json, updated_at, PRIMARY KEY(workspace_id, view_key) | filter/sort/group/board/calendar/hidden fields/canvas camera 等 UI state，非业务数据 |
+| `workspace_widgets` | id TEXT PK, workspace_id FK, widget_type, config_version INT DEFAULT 1, config_json, appearance_json DEFAULT '{}'（V-003 白名单：surfaceVariant/header/opacity）, enabled INT DEFAULT 1, z_index INT DEFAULT 0, position INT, created_at, updated_at | 生产读写用 `enabled`（v29 迁移映射 `enabled = NOT hidden`，切换后不再读写 `hidden`，该列保留至 death proof）；appearance 只允许实例级外观，禁止颜色 token 入库 |
+| `workspace_layouts` | id TEXT PK, workspace_id FK, layout_mode CHECK(structured\|free) NOT NULL DEFAULT 'structured', breakpoint TEXT NOT NULL（free 模式取保留值 `'free'`）, layout_version INT DEFAULT 1, layout_json DEFAULT '[]', UNIQUE(workspace_id, layout_mode, breakpoint), updated_at | structured: lg/md/sm 各一份；free: breakpoint='free'，layout_json 存 world rect/camera/parent frame/z-index |
+| `workspace_view_states` | id TEXT PK, workspace_id FK, view_key, state_version INT DEFAULT 1, state_json DEFAULT '{}', updated_at, UNIQUE(workspace_id, view_key) | filter/sort/group/board/calendar/hidden fields/canvas camera 等 UI state，非业务数据；Data View 模式（list|table|board|calendar）是 Data View Widget 的展示模式，按 view_key 作用域持久化于此 |
 | `workspace_tool_profiles` | id TEXT PK, workspace_id FK, tool_kind, tool_ref, profile_json, enabled INT, sort_order REAL, created_at, updated_at | 无 secret 明文 |
+| `workspace_templates`（v29 新表） | id TEXT PK, name, origin CHECK(builtin\|personal), schema_version INT, template_version INT, manifest_json TEXT NOT NULL, preview_key TEXT, created_at, updated_at, deleted_at TEXT | Built-in manifest 由代码提供（Classic Personal Dashboard 默认 / Blank / Focus）；表存 personal 模板与 built-in metadata override，Host 对两者暴露统一 read model；Manifest 禁止 Secret、用户绝对路径、历史数据与实时指标 |
 
-- schema version 26→27；迁移单向、幂等；批量 layout 更新单事务提交。
+- schema version 26→27（已落地）；PWSV2 增量 27→29（v28 为应用中心迁移）：只增列/增表、幂等、`PRAGMA table_info` guard，禁止 DROP/重建；批量 layout 更新单事务提交；旧读路径（`workspace_tabs`、`hidden`）在新 Snapshot 验证通过后同一切片删除，不保留静默 fallback。
 - 旧 `settings:home_workspace`（schemaVersion 1）迁移为 Default Workspace：instance→workspace_widgets、lg/md/sm layouts→workspace_layouts(compact)、hidden 仅审计、建 tabs row 并设 active、写 `settings:home_workspace_migrated_at` + 来源 hash；旧 key 在 Final Gate 通过后才清理。幂等：已迁移标记存在时不得重复创建。
 
 ## 4. Rust 模块与 Tauri Command 契约（A 实现）
@@ -44,36 +46,40 @@ SQLite / Local Files -> Domain Service -> Typed IPC -> Renderer Snapshot/UI
 必须提供的 Host Service（command 只调用 service，不直连 DB）：
 
 ```
-list_workspaces / get_workspace / create_workspace / update_workspace / delete_workspace
-duplicate_workspace / open_workspace / close_workspace / pin_workspace
+list_workspaces / get_workspace / create_workspace / update_workspace / delete_workspace（软删）
+duplicate_workspace / open_workspace / close_workspace / reopen_workspace / pin_workspace
 reorder_workspace_tabs / set_active_workspace
-get_session_snapshot / get_workspace_snapshot
+get_session_snapshot（全局轻量：openedTabs + workspaces metadata + revision）/ get_workspace_snapshot（单 Workspace 全量读模型，不含内容 tab）
 upsert_context_item / remove_context_item / batch_update_context_items（Wave2 A-032）
 upsert_widget / remove_widget / batch_update_widget_configs
 save_layout / get_layouts
 save_view_state / get_view_state
 upsert_tool_profile / remove_tool_profile
+list_templates / get_template / instantiate_template / save_template_from_workspace /
+update_template / delete_template / restore_workspace_from_template / reset_widget_from_template
 ```
+
+所有 mutation 接受 `expectedRevision`（A-033 内容指纹），事务内校验后写入，成功返回新 snapshot/revision；stale 值在写入前以结构化 `Conflict` 失败。`workspace_tab_create/update/close/reorder` 命令族随旧 View Tab Strip 同一切片删除（PWSV2）。
 
 ## 5. 前端 TS 契约（A-028 导出；C 消费）
 
 `src/lib/workspace/contracts.ts`（前端唯一契约源，字段与 Rust serde 对齐）：
 
 ```ts
-// 核心快照 —— 单 workspace 一次读取组成（A-020）
+// 核心快照 —— 单 Workspace 全量读模型（A-020；PWSV2：不含内容 tab）
 interface WorkspaceSnapshot {
-  workspace: WorkspaceRecord;
+  workspace: WorkspaceRecord;       // 含 defaultLayoutMode / appearance / templateSourceId / templateVersion
   contextItems: WorkspaceContextItem[];
-  widgets: WorkspaceWidgetRecord[];
-  layouts: WorkspaceLayoutRecord[];
-  viewStates: WorkspaceViewState[];
+  widgets: WorkspaceWidgetRecord[]; // configVersion / appearance（V-003 白名单）/ enabled / zIndex
+  layouts: WorkspaceLayoutRecord[]; // layoutMode (structured|free) + layoutVersion；free breakpoint='free'
+  viewStates: WorkspaceViewState[]; // stateVersion；Data View 模式与 canvas camera
   toolProfiles: WorkspaceToolProfile[];
-  revision: number;            // Wave2 A-033：stale reconcile
+  revision: number;            // A-033：48-bit 内容指纹，回传为 expectedRevision
 }
 
-// Session 快照 —— inactive 不带完整 widgets（A-021）
+// Session 快照 —— 全局轻量模型（A-021 / M-026 裁决）：inactive Workspace 不携带完整 widgets/layouts
 interface WorkspaceSessionSnapshot {
-  openedTabs: WorkspaceTabRecord[];
+  openedTabs: WorkspaceOpenTabRecord[];  // workspaceId(PK) / sortOrder / isPinned / openedAt / lastActiveAt
   activeWorkspaceId: string | null;
   workspaces: WorkspaceRecord[];   // 仅 metadata
   revision: number;
@@ -180,8 +186,8 @@ motion-easing / transition-fast / transition-normal / transition-slow
 
 > 本契约与所有后续实现中，以下三概念必须严格区分，禁止互相借用：
 
-1. **Workspace Tab = 打开的 Workspace 会话**。Tab row 存在 ⇔ 该 Workspace 处于打开状态；Close = 删除 row；Reopen = 插入 row。Tab 类型只承载会话字段（tabType/title/refId/url/position/isActive/pinned），**永不表示布局模式或数据视图模式**。
-2. **布局模式（Grid/Canvas）= Workspace 级互斥状态**：`compact`（12 列磁吸 Compact Grid）与 `free`（bounded DOM Free Canvas）。持久化于 `workspaces.default_layout_mode`（A 组补列）与 `workspace_layouts.layout_mode`（A 组迁移）。同一时刻一个 Workspace 只有一种激活布局模式，可持久化切换。
+1. **Workspace Tab = 打开的 Workspace 会话**（v29 起由 `workspace_open_tabs` 承载）。Tab row 存在 ⇔ 该 Workspace 处于打开状态；Close = 删除 row；Reopen = 插入 row。会话 tab 只承载会话字段（workspaceId PK / sortOrder / isPinned / openedAt / lastActiveAt），**永不表示布局模式或数据视图模式**。旧 `workspace_tabs` 的 tabType/title/refId/url 是内容 tab 字段，v29 起不再是 Workspace 会话语义。
+2. **布局模式（Structured/Free）= Workspace 级互斥状态**：`structured`（12 列磁吸 Structured Grid，默认）与 `free`（bounded DOM Free Canvas）。词表 PWSV2（2026-08-23）统一为 `structured | free`，历史词 `compact` 废弃。持久化于 `workspaces.default_layout_mode` 与 `workspace_layouts.layout_mode`（v29 迁移落地）。同一时刻一个 Workspace 只有一种激活布局模式，可持久化切换。
 3. **DataView 模式 = Data View Widget 的展示模式**：`list | table | board | calendar`。经 `workspace_view_states`（按 view_key 作用域）持久化，与布局模式正交——同一 Workspace 可同时为 free 画布布局 + board 模式 Data View。
 
 类型化时机（无消费方不预置）：`WorkspaceTab` 已满足定义 1；`WorkspaceLayoutMode` 随 Compact Grid 切片（C-015..020）引入；`DataViewMode` 随 Data View 切片（C-021..025）引入。

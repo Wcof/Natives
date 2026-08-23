@@ -14,6 +14,7 @@ import { getWorkspace } from './client';
 type Listener = (snapshot: WorkspaceSnapshot | null) => void;
 
 const cache = new Map<string, WorkspaceSnapshot>();
+const MAX_SNAPSHOTS = 8;
 const listeners = new Map<string, Set<Listener>>();
 
 function emit(workspaceId: string, snapshot: WorkspaceSnapshot | null): void {
@@ -29,7 +30,9 @@ export function setSnapshot(workspaceId: string, snapshot: WorkspaceSnapshot | n
   if (snapshot === null) {
     cache.delete(workspaceId);
   } else {
+    cache.delete(workspaceId);
     cache.set(workspaceId, snapshot);
+    while (cache.size > MAX_SNAPSHOTS) cache.delete(cache.keys().next().value as string);
   }
   emit(workspaceId, snapshot);
 }
@@ -58,11 +61,7 @@ export function subscribeSnapshot(workspaceId: string, listener: Listener): () =
 
 /** Fetch (and cache) the complete snapshot from the host. */
 export async function loadSnapshot(workspaceId: string): Promise<WorkspaceSnapshot | null> {
-  try {
-    const snapshot = await getWorkspace(workspaceId);
-    setSnapshot(workspaceId, snapshot);
-    return snapshot;
-  } catch {
-    return cache.get(workspaceId) ?? null;
-  }
+  const snapshot = await getWorkspace(workspaceId);
+  setSnapshot(workspaceId, snapshot);
+  return snapshot;
 }

@@ -7,7 +7,7 @@
  * borrows *concepts* common to every infinite-canvas tool.
  */
 
-export type CanvasNodeKind = 'card' | 'note' | 'frame' | 'group';
+export type CanvasNodeKind = 'card' | 'note' | 'frame' | 'group' | 'widget';
 
 export interface CanvasNode {
   id: string;
@@ -26,6 +26,9 @@ export interface CanvasNode {
   members?: string[];
   /** Frame membership (top-level frame id) for grouping/z-order scoping. */
   frameId?: string;
+  /** Widget type key from registry (e.g. 'notes', 'today_usage', 'token_metrics'). */
+  widgetType?: string;
+  widgetConfig?: Record<string, unknown>;
 }
 
 export interface CanvasCamera {

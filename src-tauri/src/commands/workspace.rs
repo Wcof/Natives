@@ -9,8 +9,8 @@
 
 use crate::workspace::{
     self, WorkspaceContextItem, WorkspaceContextItemInput, WorkspaceCreateRequest, WorkspaceLayout,
-    WorkspaceSessionSnapshot, WorkspaceSnapshot, WorkspaceSummary, WorkspaceTab, WorkspaceTabInput,
-    WorkspaceTabUpdate, WorkspaceToolProfile, WorkspaceUpdateRequest, WorkspaceViewState,
+    WorkspaceSessionSnapshot, WorkspaceSnapshot, WorkspaceSummary, WorkspaceTemplate,
+    WorkspaceTemplateSaveRequest, WorkspaceToolProfile, WorkspaceUpdateRequest, WorkspaceViewState,
     WorkspaceWidget, WorkspaceWidgetConfigPatch, WorkspaceWidgetInput,
 };
 use crate::{emit_db_state_changed, Error, Result};
@@ -84,7 +84,15 @@ pub fn workspace_create(
             req.icon.as_deref(),
             req.description.as_deref(),
             req.theme.as_deref().unwrap_or("dark"),
+            req.default_layout_mode.as_deref().unwrap_or("structured"),
         )
+    })?;
+    let template_id = req
+        .template_id
+        .as_deref()
+        .unwrap_or(workspace::templates::classic_template_id());
+    with_conn(&state, |conn| {
+        workspace::templates::apply_template(conn, &summary.id, template_id)
     })?;
     emit_workspace(&app, &summary.id, "created");
     with_conn(&state, |conn| {
@@ -179,89 +187,6 @@ pub fn workspace_snapshot(
     with_conn(&state, |conn| {
         workspace::load_workspace_snapshot(conn, &workspace_id)
     })
-}
-
-// ──────────────────────────────────────────────
-// Tabs
-// ──────────────────────────────────────────────
-
-#[tauri::command]
-pub fn workspace_tab_create(
-    workspace_id: String,
-    input: WorkspaceTabInput,
-    expected_revision: Option<i64>,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<WorkspaceTab>> {
-    with_conn(&state, |conn| {
-        crate::workspace::service::check_revision(conn, &workspace_id, expected_revision)
-    })?;
-    let created = with_conn(&state, |conn| {
-        workspace::create_tab(conn, &workspace_id, &input)
-    })?;
-    if created.is_some() {
-        emit_workspace(&app, &workspace_id, "tabChanged");
-    }
-    Ok(created)
-}
-
-#[tauri::command]
-pub fn workspace_tab_update(
-    tab_id: String,
-    patch: WorkspaceTabUpdate,
-    expected_revision: Option<i64>,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<WorkspaceTab>> {
-    let workspace_id = with_conn(&state, |conn| workspace::get_tab(conn, &tab_id))?
-        .map(|t| t.workspace_id)
-        .unwrap_or_default();
-    with_conn(&state, |conn| {
-        crate::workspace::service::check_revision(conn, &workspace_id, expected_revision)
-    })?;
-    let updated = with_conn(&state, |conn| workspace::update_tab(conn, &tab_id, &patch))?;
-    if let Some(tab) = updated.as_ref() {
-        emit_workspace(&app, &tab.workspace_id, "tabChanged");
-    }
-    Ok(updated)
-}
-
-#[tauri::command]
-pub fn workspace_tab_close(
-    tab_id: String,
-    expected_revision: Option<i64>,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<bool> {
-    let workspace_id = with_conn(&state, |conn| workspace::get_tab(conn, &tab_id))?
-        .map(|t| t.workspace_id)
-        .unwrap_or_default();
-    with_conn(&state, |conn| {
-        crate::workspace::service::check_revision(conn, &workspace_id, expected_revision)
-    })?;
-    let removed = with_conn(&state, |conn| workspace::close_tab(conn, &tab_id))?;
-    if removed && !workspace_id.is_empty() {
-        emit_workspace(&app, &workspace_id, "tabChanged");
-    }
-    Ok(removed)
-}
-
-#[tauri::command]
-pub fn workspace_tab_reorder(
-    workspace_id: String,
-    ordered_ids: Vec<String>,
-    expected_revision: Option<i64>,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<WorkspaceTab>> {
-    with_conn(&state, |conn| {
-        crate::workspace::service::check_revision(conn, &workspace_id, expected_revision)
-    })?;
-    let tabs = with_conn(&state, |conn| {
-        workspace::reorder_tabs(conn, &workspace_id, &ordered_ids)
-    })?;
-    emit_workspace(&app, &workspace_id, "tabChanged");
-    Ok(tabs)
 }
 
 // ──────────────────────────────────────────────
@@ -427,7 +352,9 @@ pub fn workspace_widget_batch_update(
 #[tauri::command]
 pub fn workspace_layout_save(
     workspace_id: String,
+    layout_mode: String,
     breakpoint: String,
+    layout_version: Option<i64>,
     layout_json: String,
     expected_revision: Option<i64>,
     app: AppHandle,
@@ -437,7 +364,14 @@ pub fn workspace_layout_save(
         crate::workspace::service::check_revision(conn, &workspace_id, expected_revision)
     })?;
     let saved = with_conn(&state, |conn| {
-        workspace::save_layout(conn, &workspace_id, &breakpoint, &layout_json)
+        workspace::save_layout(
+            conn,
+            &workspace_id,
+            &layout_mode,
+            &breakpoint,
+            layout_version.unwrap_or(1),
+            &layout_json,
+        )
     })?;
     if saved.is_some() {
         emit_workspace(&app, &workspace_id, "layoutChanged");
@@ -453,6 +387,7 @@ pub fn workspace_layout_save(
 pub fn workspace_view_state_save(
     workspace_id: String,
     view_key: String,
+    state_version: Option<i64>,
     state_json: String,
     expected_revision: Option<i64>,
     app: AppHandle,
@@ -462,7 +397,13 @@ pub fn workspace_view_state_save(
         crate::workspace::service::check_revision(conn, &workspace_id, expected_revision)
     })?;
     let saved = with_conn(&state, |conn| {
-        workspace::save_view_state(conn, &workspace_id, &view_key, &state_json)
+        workspace::save_view_state(
+            conn,
+            &workspace_id,
+            &view_key,
+            state_version.unwrap_or(1),
+            &state_json,
+        )
     })?;
     if saved.is_some() {
         emit_workspace(&app, &workspace_id, "viewStateChanged");
@@ -526,45 +467,140 @@ pub fn workspace_tool_profile_unbind(
 // Sessions
 // ──────────────────────────────────────────────
 
-/// Open (activate + assemble) a workspace session. Backend keeps no dedicated
-/// session table — the session is the open workspace's live state assembled
-/// from the seven tables; "open" also marks the workspace active.
+/// Open a Workspace session tab and make it active.
 #[tauri::command]
 pub fn workspace_session_open(
     workspace_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<WorkspaceSessionSnapshot>> {
-    let summary = with_conn(&state, |conn| {
+    let opened = with_conn(&state, |conn| {
+        workspace::open_workspace_tab(conn, &workspace_id)?;
         workspace::set_active_workspace(conn, &workspace_id)
     })?;
-    if summary.is_none() {
+    if opened.is_none() {
         return Ok(None);
     }
     emit_workspace(&app, &workspace_id, "sessionOpened");
-    with_conn(&state, |conn| {
-        workspace::load_session_snapshot(conn, &workspace_id)
-    })
+    with_conn(&state, workspace::load_session_snapshot).map(Some)
 }
 
-/// Close the current workspace session (renderer clears its store; the
-/// workspace rows are preserved).
 #[tauri::command]
-pub fn workspace_session_close(app: AppHandle) -> Result<()> {
+pub fn workspace_session_close(
+    workspace_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<WorkspaceSessionSnapshot> {
+    with_conn(&state, |conn| {
+        workspace::close_workspace_tab(conn, &workspace_id)
+    })?;
+    emit_workspace(&app, &workspace_id, "sessionClosed");
+    with_conn(&state, workspace::load_session_snapshot)
+}
+
+#[tauri::command]
+pub fn workspace_session_snapshot(state: State<'_, AppState>) -> Result<WorkspaceSessionSnapshot> {
+    with_conn(&state, workspace::load_session_snapshot)
+}
+
+#[tauri::command]
+pub fn workspace_session_reorder(
+    ordered_workspace_ids: Vec<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<WorkspaceSessionSnapshot> {
+    with_conn(&state, |conn| {
+        workspace::reorder_workspace_tabs(conn, &ordered_workspace_ids)
+    })?;
     emit_db_state_changed(
         &app,
         "workspace",
-        serde_json::json!({ "event": "sessionClosed" }),
+        serde_json::json!({"event":"sessionReordered"}),
     );
-    Ok(())
+    with_conn(&state, workspace::load_session_snapshot)
 }
 
 #[tauri::command]
-pub fn workspace_session_snapshot(
+pub fn workspace_template_list(state: State<'_, AppState>) -> Result<Vec<WorkspaceTemplate>> {
+    with_conn(&state, workspace::templates::list_templates)
+}
+
+#[tauri::command]
+pub fn workspace_template_save(
     workspace_id: String,
+    req: WorkspaceTemplateSaveRequest,
+    app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<Option<WorkspaceSessionSnapshot>> {
+) -> Result<Option<WorkspaceTemplate>> {
+    let saved = with_conn(&state, |conn| {
+        workspace::templates::capture_workspace(conn, &workspace_id, &req)
+    })?;
+    if saved.is_some() {
+        emit_workspace(&app, &workspace_id, "templateSaved");
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+pub fn workspace_template_delete(
+    template_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool> {
+    let deleted = with_conn(&state, |conn| {
+        workspace::templates::delete_personal_template(conn, &template_id)
+    })?;
+    if deleted {
+        emit_db_state_changed(
+            &app,
+            "workspace",
+            serde_json::json!({"event":"templateDeleted"}),
+        );
+    }
+    Ok(deleted)
+}
+
+#[tauri::command]
+pub fn workspace_restore_template(
+    workspace_id: String,
+    template_id: String,
+    expected_revision: Option<i64>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<WorkspaceSnapshot>> {
     with_conn(&state, |conn| {
-        workspace::load_session_snapshot(conn, &workspace_id)
+        workspace::service::check_revision(conn, &workspace_id, expected_revision)
+    })?;
+    if !with_conn(&state, |conn| {
+        workspace::templates::apply_template(conn, &workspace_id, &template_id)
+    })? {
+        return Ok(None);
+    }
+    emit_workspace(&app, &workspace_id, "templateRestored");
+    with_conn(&state, |conn| {
+        workspace::load_workspace_snapshot(conn, &workspace_id)
+    })
+}
+
+#[tauri::command]
+pub fn workspace_widget_reset(
+    workspace_id: String,
+    widget_id: String,
+    template_id: Option<String>,
+    expected_revision: Option<i64>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<WorkspaceSnapshot>> {
+    with_conn(&state, |conn| {
+        workspace::service::check_revision(conn, &workspace_id, expected_revision)
+    })?;
+    if !with_conn(&state, |conn| {
+        workspace::templates::reset_widget(conn, &workspace_id, &widget_id, template_id.as_deref())
+    })? {
+        return Ok(None);
+    }
+    emit_workspace(&app, &workspace_id, "widgetReset");
+    with_conn(&state, |conn| {
+        workspace::load_workspace_snapshot(conn, &workspace_id)
     })
 }

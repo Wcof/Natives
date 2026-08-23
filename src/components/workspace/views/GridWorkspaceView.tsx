@@ -115,7 +115,7 @@ interface ResolvedGridWidget {
  */
 function resolveGridWidgets(locale: string, widgets: WorkspaceWidget[]): ResolvedGridWidget[] {
   return widgets.flatMap((widget, index) => {
-    if (widget.hidden) return [];
+    if (!widget.enabled) return [];
     const def = getWidget(widget.widgetType);
     if (!def) return [];
     const config = normalizeWidgetConfig(def, {
@@ -280,7 +280,8 @@ export default function GridWorkspaceView({
             onBreakpointChange={onBreakpointChange}
             onRemoveItem={handleRemoveWidget}
             onActivateItem={onActivateItem}
-            dragHandleClass=".ws-drag-handle"
+            dragHandleClass=".ws-shell-header"
+            contentCancelClass=".grid-content, .ws-drag-cancel"
             emptyText={t(locale, 'workspace.gridEmpty')}
           />
         )}

@@ -29,6 +29,7 @@ import { proxyStatusWidgetDefinition } from './ProxyStatusWidget';
 import { notesWidgetDefinition } from './NotesWidget';
 import { promptSnippetsWidgetDefinition } from './PromptSnippetsWidget';
 import { quickLinksWidgetDefinition } from './QuickLinksWidget';
+import { dataViewWidgetDefinition } from './DataViewWidget';
 
 // ── 注册全部 15 个内置 Widget ──
 registerWidgets([
@@ -47,6 +48,7 @@ registerWidgets([
   notesWidgetDefinition,
   promptSnippetsWidgetDefinition,
   quickLinksWidgetDefinition,
+  dataViewWidgetDefinition,
 ] as const);
 
 export { WidgetRenderer } from './WidgetRenderer';
@@ -70,6 +72,7 @@ export {
   notesWidgetDefinition,
   promptSnippetsWidgetDefinition,
   quickLinksWidgetDefinition,
+  dataViewWidgetDefinition,
 };
 
 /** 已注册内置 Widget 定义（registry 只读视图）。 */

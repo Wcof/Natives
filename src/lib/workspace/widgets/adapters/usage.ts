@@ -57,11 +57,12 @@ interface OverviewSummaryLike {
 
 export async function loadUsageSummary(ctx: WidgetDataContext): Promise<UsageSummaryData> {
   let usage: unknown = null;
+  const preset = ctx.timeRange ?? "30d";
   try {
     const mod = await import("@/hooks/useUsageData");
     const fn = pickImperative(mod, IMPERATIVE_CANDIDATES);
     if (typeof fn === "function") {
-      const raw = await fn({ preset: "30d", timeZone: timeZone(), projectPath: null });
+      const raw = await fn({ preset, timeZone: timeZone(), projectPath: null });
       if (ctx.signal.aborted) throw new DOMException("Aborted", "AbortError");
       usage = raw;
     }

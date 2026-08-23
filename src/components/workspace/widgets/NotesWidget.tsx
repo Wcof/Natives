@@ -8,7 +8,6 @@
 import { useState } from 'react';
 import { useLocale, t } from '@/i18n';
 import { z } from 'zod';
-import { StickyNote } from 'lucide-react';
 import type { WidgetDefinition, WidgetProps } from '@/lib/workspace/widgets';
 
 interface NotesData {
@@ -25,11 +24,7 @@ function NotesView(_props: WidgetProps<NotesData, NotesSettings>) {
   const [text, setText] = useState(() => t('zh', 'workspace.notesInitialContent'));
 
   return (
-    <div className="flex h-full flex-col p-2.5">
-      <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] mb-1.5">
-        <StickyNote size={14} className="text-[var(--primary)]" />
-        <span className="font-medium">{t(locale, 'workspace.notesTitle')}</span>
-      </div>
+    <div className="flex h-full w-full flex-col">
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}

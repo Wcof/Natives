@@ -106,7 +106,7 @@
 
 ## 五-2、Workspace Free Canvas 交互规范
 
-承接 ADR-0021 双布局决策：Home 同时提供 Compact Grid 与 Free Canvas，Free Canvas 是自研轻量 DOM 画布，只服务 Workspace 自由布局。
+承接 ADR-0021 双布局决策：Home 同时提供 Structured Canvas（历史名 Compact Grid；PWSV2 2026-08-23 词表统一为 `structured | free`，structured 为默认）与 Free Canvas，Free Canvas 是自研轻量 DOM 画布，只服务 Workspace 自由布局。
 
 #### R-U13 · Free Canvas 是 bounded DOM 画布，禁止无限画布与协同类实现
 - **等级**：MUST

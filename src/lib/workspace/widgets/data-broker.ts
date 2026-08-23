@@ -5,7 +5,7 @@
 //   · 事件驱动刷新（DB change / domain event）只 invalidate + refetch，不重建。
 // Renderer 不直连 IPC —— 数据一律来自 broker loader（domain query/facade）。
 
-import type { WidgetDataContext, WidgetDefinition, WidgetConfig } from './types';
+import type { WidgetDataContext, WidgetDefinition, WidgetConfig, TimeRange } from './types';
 
 export type BrokerLoader<T> = (ctx: WidgetDataContext) => Promise<T>;
 
@@ -33,6 +33,7 @@ interface BrokerEntry {
   lastUpdated: number | null;
   refetching: boolean;
   eventUnsub: (() => void) | null;
+  lastAccessed: number;
 }
 
 export interface BrokerSubscribeOptions<T> {
@@ -46,10 +47,74 @@ export interface BrokerSubscribeOptions<T> {
 
 /** 默认 staleTime：15s（同一布局内快速重挂载不重复请求）。 */
 const DEFAULT_STALE_MS = 15_000;
+const MAX_CACHE_ENTRIES = 64;
+const MAX_LISTENERS_PER_KEY = 32;
+const MAX_CONCURRENT_LOADS = 6;
 
 export class WorkspaceDataBroker {
   private entries = new Map<string, BrokerEntry>();
   private listeners = new Map<string, Set<Listener>>();
+  private _lastSyncedAt: number | null = null;
+  private _syncing = false;
+  private _syncListeners = new Set<() => void>();
+  private _timeRange: TimeRange = '7d';
+  private activeLoads = 0;
+  private queuedLoads = new Set<string>();
+
+  get lastSyncedAt(): number | null { return this._lastSyncedAt; }
+  get syncing(): boolean { return this._syncing; }
+  get timeRange(): TimeRange { return this._timeRange; }
+
+  setTimeRange(range: TimeRange): void {
+    this._timeRange = range;
+  }
+
+  subscribeSyncStatus(fn: () => void): () => void {
+    this._syncListeners.add(fn);
+    return () => this._syncListeners.delete(fn);
+  }
+
+  private notifySyncStatus(): void {
+    for (const fn of this._syncListeners) {
+      try { fn(); } catch { /* listener threw */ }
+    }
+  }
+
+  /** 触发所有有订阅者的 entry 同步刷新（去重，不重复发请求）。 */
+  async syncAll(): Promise<void> {
+    if (this._syncing) return;
+    this._syncing = true;
+    this.notifySyncStatus();
+
+    const activeKeys = [...this.listeners.keys()].filter((key) => {
+      const entry = this.entries.get(key);
+      return entry?.loader != null;
+    });
+
+    if (activeKeys.length === 0) {
+      this._syncing = false;
+      this._lastSyncedAt = Date.now();
+      this.notifySyncStatus();
+      return;
+    }
+
+    for (const key of activeKeys) {
+      this.refetch(key);
+    }
+
+    const promises = activeKeys.map((key) => {
+      const entry = this.entries.get(key);
+      return entry?.promise
+        ? entry.promise.then(() => {}, () => {})
+        : Promise.resolve();
+    });
+
+    await Promise.allSettled(promises);
+
+    this._syncing = false;
+    this._lastSyncedAt = Date.now();
+    this.notifySyncStatus();
+  }
 
   /** 同步读取当前快照（用于 hook 初始 state）。 */
   getSnapshot<T>(key: string): BrokerSnapshot<T> {
@@ -57,6 +122,7 @@ export class WorkspaceDataBroker {
     if (!entry) {
       return { key, status: 'idle', data: null, error: null, refetching: false, lastUpdated: null };
     }
+    entry.lastAccessed = Date.now();
     return {
       key,
       status: entry.status,
@@ -94,6 +160,7 @@ export class WorkspaceDataBroker {
     // 无 onSnapshot 的订阅者（例如仅预热 cache）仍需要一个占位回调，
     // 避免 notify 遍历时抛空。
     const activeListener = (listener ?? (() => {})) as Listener<unknown>;
+    if (set.size >= MAX_LISTENERS_PER_KEY) throw new Error(`[data-broker] listener limit exceeded for '${key}'`);
     set.add(activeListener);
 
     // 首次订阅立即同步当前快照。
@@ -127,9 +194,11 @@ export class WorkspaceDataBroker {
         // 保留缓存；中止 in-flight（避免孤儿请求占资源）。
         if (entry.status === 'loading') {
           entry.controller?.abort();
+          this.activeLoads = Math.max(0, this.activeLoads - 1);
           entry.controller = null;
           entry.promise = null;
           entry.status = entry.data != null ? 'ready' : 'idle';
+          this.drainLoadQueue();
         }
       }
     };
@@ -178,10 +247,23 @@ export class WorkspaceDataBroker {
         lastUpdated: null,
         refetching: false,
         eventUnsub: null,
+        lastAccessed: Date.now(),
       };
       this.entries.set(key, entry);
+      this.evictInactiveEntries();
     }
     return entry;
+  }
+
+  private evictInactiveEntries(): void {
+    if (this.entries.size <= MAX_CACHE_ENTRIES) return;
+    const candidates = [...this.entries.entries()]
+      .filter(([key, entry]) => !this.listeners.has(key) && !entry.promise)
+      .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+    for (const [key] of candidates) {
+      this.entries.delete(key);
+      if (this.entries.size <= MAX_CACHE_ENTRIES) break;
+    }
   }
 
   private notify(key: string): void {
@@ -216,12 +298,18 @@ export class WorkspaceDataBroker {
       return;
     }
 
+    if (this.activeLoads >= MAX_CONCURRENT_LOADS) {
+      this.queuedLoads.add(key);
+      return;
+    }
+
+    this.activeLoads += 1;
     entry.controller = new AbortController();
     entry.status = 'loading';
     entry.refetching = entry.lastUpdated != null;
     this.notify(key);
 
-    const ctx: WidgetDataContext = { signal: entry.controller.signal };
+    const ctx: WidgetDataContext = { signal: entry.controller.signal, timeRange: this._timeRange };
     const promise = Promise.resolve().then(() => entry.loader!(ctx));
     entry.promise = promise;
 
@@ -236,6 +324,7 @@ export class WorkspaceDataBroker {
         current.refetching = false;
         current.promise = null;
         this.notify(key);
+        this.finishLoad();
       },
       (err: unknown) => {
         const current = this.entries.get(key);
@@ -249,8 +338,23 @@ export class WorkspaceDataBroker {
         current.refetching = false;
         current.promise = null;
         this.notify(key);
+        this.finishLoad();
       },
     );
+  }
+
+  private finishLoad(): void {
+    this.activeLoads = Math.max(0, this.activeLoads - 1);
+    this.drainLoadQueue();
+  }
+
+  private drainLoadQueue(): void {
+    while (this.activeLoads < MAX_CONCURRENT_LOADS) {
+      const key = this.queuedLoads.values().next().value as string | undefined;
+      if (!key) return;
+      this.queuedLoads.delete(key);
+      if (this.listeners.has(key)) this.load(key);
+    }
   }
 }
 
@@ -263,8 +367,10 @@ export const workspaceDataBroker = new WorkspaceDataBroker();
  * 否则退回 def.type。
  */
 export function buildWidgetBrokerKey<TSettings extends Record<string, unknown>>(
-  def: Pick<WidgetDefinition<unknown, TSettings>, 'adapterKeyBuilder' | 'type'>,
+  def: Pick<WidgetDefinition<unknown, TSettings>, 'adapterKeyBuilder' | 'type' | 'timeAware'>,
   config: WidgetConfig<TSettings>,
+  timeRange?: TimeRange,
 ): string {
-  return def.adapterKeyBuilder ? def.adapterKeyBuilder(config) : def.type;
+  const base = def.adapterKeyBuilder ? def.adapterKeyBuilder(config) : def.type;
+  return def.timeAware && timeRange ? `${base}:${timeRange}` : base;
 }

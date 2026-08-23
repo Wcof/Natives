@@ -230,8 +230,13 @@ pub fn validate_remote_url(url: &str, approved_origins: &[String]) -> Result<()>
 /// The child WebView that opens a Remote app must never navigate outside the
 /// app's approved origins — same contract as the loopback-only filter for
 /// managed apps, but against the explicit approved-origin set.
+///
+/// APPV2-T01：策略收敛到 `apps::web_url::navigation_within_origins`（http/https
+/// 均放行、host 匹配 approved origins）。修复前本函数只放行 `http://` 前缀，
+/// 已注册的 https 公网应用打开必被拒绝。方向说明：legacy 模块临时引用新域共享
+/// helper（cutover 方向，见 `creative-app-local-remediation.md` §6.4 CUTOVER）。
 pub fn remote_navigation_allowed(url: &str, approved_origins: &[String]) -> bool {
-    url.trim().starts_with("http://") && validate_remote_url(url, approved_origins).is_ok()
+    crate::apps::web_url::navigation_within_origins(url, approved_origins)
 }
 
 /// Honest delete for a non-owned app: only removes the record, never stops or
@@ -431,6 +436,30 @@ mod tests {
         assert!(validate_remote_url("https://evil.com/x", &approved).is_err());
         // No approved origins → all navigation blocked
         assert!(validate_remote_url("https://example.com/", &[]).is_err());
+    }
+
+    /// APPV2-T01 回归：https 公网 URL 必须不被 http-only 过滤拒绝。
+    /// 修复前 `remote_navigation_allowed` 只放行 `http://` 前缀，导致已注册的
+    /// https 公网应用（如 chatgpt.com）打开必失败。
+    #[test]
+    fn remote_navigation_allows_https_within_approved_origins() {
+        let approved = vec!["chatgpt.com".to_string()];
+        assert!(
+            remote_navigation_allowed("https://chatgpt.com/", &approved),
+            "https within approved origins must be allowed"
+        );
+        assert!(
+            remote_navigation_allowed("http://127.0.0.1:8080/login", &["127.0.0.1".to_string()]),
+            "loopback http within approved origins must be allowed"
+        );
+        assert!(!remote_navigation_allowed("https://evil.com/x", &approved));
+        assert!(!remote_navigation_allowed("ftp://chatgpt.com/", &approved));
+        assert!(!remote_navigation_allowed("https://chatgpt.com/", &[]));
+        // 带 scheme 的 approved origin 写法也应匹配。
+        assert!(remote_navigation_allowed(
+            "https://github.com/repo",
+            &["https://github.com".to_string()]
+        ));
     }
 
     #[test]

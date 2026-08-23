@@ -268,3 +268,13 @@
 - **A 组 schema 迁移（补列/约束）**：M-03/04/09/12/14/15/16/17/18/19/20/22（12 项，其中 M-17/18/19 最高优先——解除 Grid/Canvas 双布局结构性阻断）
 - **G-008**：M-25（1 项）
 - **C 组**：M-26（1 项）
+
+### 10.5 PWSV2 附注（2026-08-23，Main Agent 裁决，见 ADR-0021 修订 §PWSV2 与 plan2）
+
+- §10.4「A 组 schema 迁移」12 项由增量迁移 **v29** 执行（v28 已被应用中心迁移占用——并发事实）；本文 §3/§4/§5/§7 契约文本已同步修订。
+- **术语**：布局模式词表 `compact` → `structured`（`structured | free`，structured 为默认）。
+- **M-05 反转**：workspaces 采用软删 `deleted_at`（以冻结契约 §3 与 plan2 为准，覆盖本矩阵「硬删」裁决）；list/snapshot 过滤软删行，物理清理仅在 Final Gate 显式 hard delete。
+- **M-13 执行细节**：v29 映射 `enabled = NOT hidden`；生产读写切 `enabled`，`hidden` 列保留至 death proof。
+- **M-06/M-26 执行**：新表 `workspace_open_tabs` 承载 Workspace 会话（row 存在=打开）；`workspace_session_snapshot` 为全局轻量模型 `{openedTabs, activeWorkspaceId, workspaces(metadata), revision}`；单 Workspace 全量读模型为 `workspace_snapshot`（不含内容 tab）。旧内容 tab 表 `workspace_tabs` 降为 legacy，v29 后无 production 读/写。
+- **模板系统**：新表 `workspace_templates`（origin builtin|personal）；built-in manifest 由代码提供（Classic Personal Dashboard 默认 / Blank / Focus）；实例化 Host 单事务 + template-key → instance-id 重写；`workspaces.template_source_id/template_version` 仅溯源，不自动覆盖实例。
+- **M-09/M-12**：context item 的 9 值 CHECK 与 `updated_at` 列同批在 v29 补齐（幂等 guard）。

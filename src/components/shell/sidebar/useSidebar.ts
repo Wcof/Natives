@@ -109,7 +109,7 @@ export function useSidebar({
   const loadSidebarApps = useCallback(async () => {
     try {
       const all = await appsApi.listViews();
-      const visible = all.filter((a) => a.showInSidebar);
+      const visible = all.filter((a) => a.showInSidebar && a.kind !== 'local_project');
       visible.sort((a, b) => (a.sidebarOrder ?? 0) - (b.sidebarOrder ?? 0));
       setSidebarApps(visible);
     } catch {

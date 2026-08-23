@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import { appsApi, type AppView } from '@/lib/tauri/apps';
+import { checkWebUrl } from '@/lib/apps-web-url';
 
 interface WebApplicationEditProps {
   app: AppView;
@@ -21,8 +22,25 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // APPV2-T01：与注册表单同一共享规范化策略（空值 = 保持不变）。
+  const urlCheck = useMemo(() => (url.trim() ? checkWebUrl(url) : null), [url]);
+  const urlErrorKey =
+    urlCheck && !urlCheck.ok
+      ? urlCheck.reason === 'empty'
+        ? 'appsPage.webUrlErrorEmpty'
+        : urlCheck.reason === 'scheme'
+          ? 'appsPage.webUrlErrorScheme'
+          : urlCheck.reason === 'public-http'
+            ? 'appsPage.webUrlErrorPublicHttp'
+            : 'appsPage.webUrlErrorInvalidHost'
+      : null;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (urlCheck && !urlCheck.ok) {
+      setError(urlErrorKey ? t(locale, urlErrorKey) : 'Invalid URL');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -34,7 +52,7 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
       });
 
       let updated = app;
-      if (url.trim() || approvedOrigins.trim()) {
+      if (urlCheck?.normalized || approvedOrigins.trim()) {
         const origins = approvedOrigins
           .split(',')
           .map((s) => s.trim())
@@ -42,7 +60,7 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
 
         updated = await appsApi.updateWebSpec({
           appId: app.appId,
-          url: url.trim() || undefined,
+          url: urlCheck?.normalized ?? undefined,
           approvedOrigins: origins.length > 0 ? origins : undefined,
           keepAlive,
         });

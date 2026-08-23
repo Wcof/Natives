@@ -10,7 +10,7 @@
 
 use rusqlite::Connection;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::capabilities::CapabilityResolver;
 use super::local;
@@ -96,6 +96,7 @@ impl AppsService {
             sidebar_order: order,
             capabilities,
             runtime_state,
+            updated_at: app.updated_at,
         })
     }
 
@@ -140,6 +141,66 @@ impl AppsService {
     pub fn active_spec(&self, application_id: &str) -> Result<Option<RuntimeSpec>> {
         let conn = self.conn()?;
         AppRepository::active_spec(&conn, application_id)
+    }
+
+    pub async fn observe_system(&self, id: &str) -> Result<system::SystemRunningState> {
+        let spec = {
+            let conn = self.conn()?;
+            let (kind, _, _, _) = AppRepository::identity(&conn, id)?;
+            if kind != Some(AppKind::SystemApplication) {
+                return Err(Error::InvalidInput(format!(
+                    "observe is only available for system applications (app {id})"
+                )));
+            }
+            AppRepository::load_system_spec(&conn, id)?
+        };
+        system::driver()
+            .ok_or_else(|| system::unsupported("SystemDriver not available on this platform"))?
+            .observe(&spec.application_path, spec.bundle_identifier.as_deref())
+            .await
+    }
+
+    pub async fn dock_system(
+        &self,
+        id: &str,
+        bounds: crate::creative_app::model_runtime::BrowserBounds,
+    ) -> Result<system::DockResult> {
+        const SAFE_INSET: f64 = 8.0;
+        let spec = {
+            let conn = self.conn()?;
+            let (kind, _, _, _) = AppRepository::identity(&conn, id)?;
+            if kind != Some(AppKind::SystemApplication) {
+                return Err(Error::InvalidInput(format!(
+                    "dock is only available for system applications (app {id})"
+                )));
+            }
+            AppRepository::load_system_spec(&conn, id)?
+        };
+        let window = self
+            .deps
+            .app_handle
+            .get_webview_window("main")
+            .ok_or_else(|| Error::NotFound("main window".into()))?;
+        let scale = window
+            .scale_factor()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let origin = window
+            .inner_position()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let rect = system::SystemDockRect {
+            x: origin.x as f64 / scale + bounds.x + SAFE_INSET,
+            y: origin.y as f64 / scale + bounds.y + SAFE_INSET,
+            width: bounds.width - SAFE_INSET * 2.0,
+            height: bounds.height - SAFE_INSET * 2.0,
+        };
+        system::driver()
+            .ok_or_else(|| system::unsupported("SystemDriver not available on this platform"))?
+            .dock(
+                &spec.application_path,
+                spec.bundle_identifier.as_deref(),
+                rect,
+            )
+            .await
     }
 
     // ── 注册与元数据更新 ──────────────────────────────────────────────────
@@ -273,8 +334,13 @@ impl AppsService {
     /// 统一打开入口：
     /// - Local: 若正在运行则打开 open_url，若停止则启动后打开；
     /// - System: 激活或启动原生应用；
-    /// - Web: 打开受控 Child WebView 窗口。
-    pub async fn open(&self, id: &str) -> Result<bool> {
+    /// - Web: 打开受控 Child WebView 窗口（`bounds` = Renderer 实测内容区矩形，
+    ///   APPV2-T03「先 bounds 后 show」）。
+    pub async fn open(
+        &self,
+        id: &str,
+        bounds: Option<crate::creative_app::model_runtime::BrowserBounds>,
+    ) -> Result<bool> {
         let kind = {
             let conn = self.conn()?;
             let (kind_opt, _, _, _) = AppRepository::identity(&conn, id)?;
@@ -315,22 +381,37 @@ impl AppsService {
                 let driver = system::driver().ok_or_else(|| {
                     system::unsupported("SystemDriver not available on this platform")
                 })?;
-                let identity = driver
-                    .launch_or_activate(&self.deps.app_handle, id, &spec.application_path)
+                let result = driver
+                    .launch_or_activate(
+                        &self.deps.app_handle,
+                        id,
+                        &spec.application_path,
+                        spec.bundle_identifier.as_deref(),
+                    )
                     .await?;
 
                 {
                     let conn = self.conn()?;
-                    crate::creative_app::runtime_store::upsert_system_instance(
-                        &conn,
-                        id,
-                        identity.pid.map(|p| p as i32),
-                        Some(&identity.ownership),
-                        identity.bundle_id.as_deref(),
-                    )?;
+                    if result.confirmed {
+                        crate::creative_app::runtime_store::upsert_system_instance(
+                            &conn,
+                            id,
+                            result.identity.pid.map(|p| p as i32),
+                            Some(&result.identity.ownership),
+                            result.identity.bundle_id.as_deref(),
+                        )?;
+                    }
                 }
 
-                self.emit("started", id, AppKind::SystemApplication);
+                self.emit(
+                    if result.confirmed {
+                        "started"
+                    } else {
+                        "starting"
+                    },
+                    id,
+                    AppKind::SystemApplication,
+                );
                 Ok(true)
             }
             AppKind::WebApplication => {
@@ -347,12 +428,30 @@ impl AppsService {
                         id,
                         &spec.url,
                         &spec.approved_origins,
+                        bounds,
                     )?;
                 }
                 self.emit("web_opened", id, AppKind::WebApplication);
                 Ok(true)
             }
         }
+    }
+
+    pub async fn web_set_bounds(
+        &self,
+        id: &str,
+        bounds: crate::creative_app::model_runtime::BrowserBounds,
+    ) -> Result<crate::creative_app::model_runtime::BrowserBounds> {
+        let window_size = self
+            .deps
+            .app_handle
+            .get_webview_window("main")
+            .and_then(|w| {
+                let size = w.inner_size().ok()?;
+                let scale = w.scale_factor().ok()?;
+                Some((size.width as f64 / scale, size.height as f64 / scale))
+            });
+        web::set_bounds(&self.deps.app_handle, id, bounds, window_size)
     }
 
     /// 启动应用（仅限 Local 与 System；Web 返回 typed unsupported）。
@@ -433,22 +532,37 @@ impl AppsService {
                 let driver = system::driver().ok_or_else(|| {
                     system::unsupported("SystemDriver not available on this platform")
                 })?;
-                let identity = driver
-                    .launch_or_activate(&self.deps.app_handle, id, &spec.application_path)
+                let result = driver
+                    .launch_or_activate(
+                        &self.deps.app_handle,
+                        id,
+                        &spec.application_path,
+                        spec.bundle_identifier.as_deref(),
+                    )
                     .await?;
 
                 {
                     let conn = self.conn()?;
-                    crate::creative_app::runtime_store::upsert_system_instance(
-                        &conn,
-                        id,
-                        identity.pid.map(|p| p as i32),
-                        Some(&identity.ownership),
-                        identity.bundle_id.as_deref(),
-                    )?;
+                    if result.confirmed {
+                        crate::creative_app::runtime_store::upsert_system_instance(
+                            &conn,
+                            id,
+                            result.identity.pid.map(|p| p as i32),
+                            Some(&result.identity.ownership),
+                            result.identity.bundle_id.as_deref(),
+                        )?;
+                    }
                 }
 
-                self.emit("started", id, AppKind::SystemApplication);
+                self.emit(
+                    if result.confirmed {
+                        "started"
+                    } else {
+                        "starting"
+                    },
+                    id,
+                    AppKind::SystemApplication,
+                );
                 Ok(true)
             }
             AppKind::WebApplication => Err(web::unsupported("start")),
@@ -509,20 +623,76 @@ impl AppsService {
                 let driver = system::driver().ok_or_else(|| {
                     system::unsupported("SystemDriver not available on this platform")
                 })?;
-                driver
-                    .terminate(&self.deps.app_handle, id, &spec.application_path)
-                    .await?;
-
+                self.emit("stopping", id, AppKind::SystemApplication);
+                match driver
+                    .terminate(
+                        &self.deps.app_handle,
+                        id,
+                        &spec.application_path,
+                        spec.bundle_identifier.as_deref(),
+                    )
+                    .await
                 {
-                    let conn = self.conn()?;
-                    crate::creative_app::runtime_store::settle_system_instance_stopped(&conn, id)?;
+                    Ok(()) => {
+                        let conn = self.conn()?;
+                        crate::creative_app::runtime_store::settle_system_instance_stopped(
+                            &conn, id,
+                        )?;
+                        self.emit("stopped", id, AppKind::SystemApplication);
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        self.emit("stop_failed", id, AppKind::SystemApplication);
+                        Err(e)
+                    }
                 }
-
-                self.emit("stopped", id, AppKind::SystemApplication);
-                Ok(true)
             }
             AppKind::WebApplication => Err(web::unsupported("stop")),
         }
+    }
+
+    pub async fn hide_system(&self, id: &str) -> Result<bool> {
+        let _guard = self.deps.locks.acquire_app(id).await;
+        self.system_hide_action(id, true).await
+    }
+
+    pub async fn unhide_system(&self, id: &str) -> Result<bool> {
+        let _guard = self.deps.locks.acquire_app(id).await;
+        self.system_hide_action(id, false).await
+    }
+
+    async fn system_hide_action(&self, id: &str, hide: bool) -> Result<bool> {
+        let (kind, spec) = {
+            let conn = self.conn()?;
+            let app = AppRepository::get(&conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
+            let (kind_opt, _, _, _) = AppRepository::identity(&conn, id)?;
+            let kind = kind_opt.unwrap_or(AppKind::LocalProject);
+            if kind != AppKind::SystemApplication {
+                return Err(Error::InvalidInput(format!(
+                    "hide/unhide is only available for system applications (app {id} is {})",
+                    app.source
+                )));
+            }
+            (kind, AppRepository::load_system_spec(&conn, id)?)
+        };
+
+        let driver = system::driver()
+            .ok_or_else(|| system::unsupported("SystemDriver not available on this platform"))?;
+        let action = if hide { "hidden" } else { "unhidden" };
+        let executed = if hide {
+            driver
+                .hide(&spec.application_path, spec.bundle_identifier.as_deref())
+                .await?
+        } else {
+            driver
+                .unhide(&spec.application_path, spec.bundle_identifier.as_deref())
+                .await?
+        };
+        // 未真实执行（目标未运行）时不 emit 事件，避免 UI 误刷新。
+        if executed {
+            self.emit(action, id, kind);
+        }
+        Ok(executed)
     }
 
     /// 强制停止应用（capability 门控 + 严格 identity 匹配）。
@@ -575,7 +745,7 @@ impl AppsService {
                     system::unsupported("SystemDriver not available on this platform")
                 })?;
                 let identity = driver
-                    .observe(&spec.application_path)
+                    .active_identity(&spec.application_path, spec.bundle_identifier.as_deref())
                     .await?
                     .ok_or_else(|| {
                         Error::InvalidInput("no live process identity found to force stop".into())
@@ -653,25 +823,46 @@ impl AppsService {
                 let driver = system::driver().ok_or_else(|| {
                     system::unsupported("SystemDriver not available on this platform")
                 })?;
+                // APPV2-T06：terminate 验证后 launch（有上限 observe 重试确认）。
                 driver
-                    .terminate(&self.deps.app_handle, id, &spec.application_path)
+                    .terminate(
+                        &self.deps.app_handle,
+                        id,
+                        &spec.application_path,
+                        spec.bundle_identifier.as_deref(),
+                    )
                     .await?;
-                let identity = driver
-                    .launch_or_activate(&self.deps.app_handle, id, &spec.application_path)
+                let result = driver
+                    .launch_or_activate(
+                        &self.deps.app_handle,
+                        id,
+                        &spec.application_path,
+                        spec.bundle_identifier.as_deref(),
+                    )
                     .await?;
 
                 {
                     let conn = self.conn()?;
-                    crate::creative_app::runtime_store::upsert_system_instance(
-                        &conn,
-                        id,
-                        identity.pid.map(|p| p as i32),
-                        Some(&identity.ownership),
-                        identity.bundle_id.as_deref(),
-                    )?;
+                    if result.confirmed {
+                        crate::creative_app::runtime_store::upsert_system_instance(
+                            &conn,
+                            id,
+                            result.identity.pid.map(|p| p as i32),
+                            Some(&result.identity.ownership),
+                            result.identity.bundle_id.as_deref(),
+                        )?;
+                    }
                 }
 
-                self.emit("restarted", id, AppKind::SystemApplication);
+                self.emit(
+                    if result.confirmed {
+                        "restarted"
+                    } else {
+                        "starting"
+                    },
+                    id,
+                    AppKind::SystemApplication,
+                );
                 Ok(true)
             }
             AppKind::WebApplication => Err(web::unsupported("restart")),
@@ -718,8 +909,14 @@ impl AppsService {
                 };
                 if let Some(spec) = spec_opt {
                     if let Some(driver) = system::driver() {
+                        // best-effort：remove 只清注册元数据，terminate 失败不阻塞删除。
                         let _ = driver
-                            .terminate(&self.deps.app_handle, id, &spec.application_path)
+                            .terminate(
+                                &self.deps.app_handle,
+                                id,
+                                &spec.application_path,
+                                spec.bundle_identifier.as_deref(),
+                            )
                             .await;
                     }
                 }

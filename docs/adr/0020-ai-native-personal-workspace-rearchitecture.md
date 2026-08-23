@@ -1,6 +1,7 @@
 # ADR-0020: AI Native Personal Workspace 产品与 Native Backend 重构
 
 - **状态**: 已接受（目标与迁移约束）；生产切换按 Gate 逐项验收
+- **取代范围注记**: §1「首页就是 V1 唯一 Personal Workspace Home；不新增 Workspace 一级菜单、Workspace CRUD 或多工作台数据域」与 §3「Home 布局复用 settings K/V 单份版本化 JSON」及「禁止 Infinite Canvas 与嵌套容器」中与 [ADR-0021](./0021-multi-workspace-design-system-v2.md)（含 2026-08-23 PWSV2 修订）冲突的部分由后者取代；其余决策（产品身份、停止建设、领域边界、Host authority、Secret、迁移纪律）继续有效。
 - **日期**: 2026-08-19
 - **决策者**: 产品方（用户）
 - **取代**: ADR-0012 的产品面/双轨与 Workshop 优先级、ADR-0015 的 Jobs 生产目标、ADR-0016 的 Capability Hub 产品目标、ADR-0019 的 Daemon Provider 执行归属

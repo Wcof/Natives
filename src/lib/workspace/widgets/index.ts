@@ -18,6 +18,7 @@ export {
   workspaceDataBroker,
   buildWidgetBrokerKey,
 } from './data-broker';
+export { TimeRangeContext, useWorkspaceTimeRange } from './time-range-context';
 export type { BrokerSnapshot, BrokerLoader, BrokerSubscribeOptions } from './data-broker';
 export { buildInspectorSections } from './inspector';
 export type { InspectorSection, InspectorField } from './inspector';

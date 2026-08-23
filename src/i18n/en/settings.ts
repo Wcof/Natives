@@ -2,7 +2,7 @@
 export const settings = {
   settings: {
     title: 'Settings',
-    backHome: 'Back to Home',
+    backHome: 'Back to Space',
     tabPersonalOverview: 'Personal Overview',
     tabOverview: 'Personal Overview',
     overviewDesc: 'View real local usage, project activity, and system storage.',

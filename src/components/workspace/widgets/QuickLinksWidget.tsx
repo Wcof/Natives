@@ -14,23 +14,11 @@ interface QuickLinksData {
   links: Array<{ id: string; label: string; url: string; icon: 'docs' | 'git' | 'web' }>;
 }
 
-type QuickLinksSettings = Record<string, unknown>;
+interface QuickLinksSettings extends Record<string, unknown> { links: QuickLinksData['links'] }
 
-/** 默认链接（label 文案走 i18n：workspace.link* 键；url 不变）。 */
-const DEFAULT_LINKS: Array<{ id: string; labelKey: string; url: string; icon: QuickLinksData['links'][number]['icon'] }> = [
-  { id: '1', labelKey: 'workspace.linkLocalDocs', url: 'http://localhost:3000', icon: 'docs' },
-  { id: '2', labelKey: 'workspace.linkRepoTree', url: 'https://github.com', icon: 'git' },
-  { id: '3', labelKey: 'workspace.linkReferenceMatrix', url: 'docs/README.md', icon: 'web' },
-];
-
-function buildDefaultLinks(locale: string): QuickLinksData['links'] {
-  return DEFAULT_LINKS.map((link) => ({ id: link.id, label: t(locale, link.labelKey), url: link.url, icon: link.icon }));
-}
-
-function QuickLinksView(_props: WidgetProps<QuickLinksData, QuickLinksSettings>) {
+function QuickLinksView({ config }: WidgetProps<QuickLinksData, QuickLinksSettings>) {
   const locale = useLocale();
-  // 默认链接列表随 locale 渲染（组件级默认值，不写回持久化结构）。
-  const links = buildDefaultLinks(locale);
+  const links = config.settings?.links ?? [];
   const getIcon = (type: string) => {
     switch (type) {
       case 'docs':
@@ -43,12 +31,9 @@ function QuickLinksView(_props: WidgetProps<QuickLinksData, QuickLinksSettings>)
   };
 
   return (
-    <div className="flex h-full flex-col justify-between p-2.5">
-      <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] mb-1">
-        <ExternalLink size={14} className="text-[var(--primary)]" />
-        <span className="font-medium">{t(locale, 'workspace.linksTitle')}</span>
-      </div>
+    <div className="flex h-full w-full flex-col justify-between">
       <div className="space-y-1 overflow-y-auto min-h-0 flex-1">
+        {links.length === 0 && <div className="ws-shell-state text-xs text-[var(--text-tertiary)]">{t(locale, 'workspace.quickLinksEmpty')}</div>}
         {links.map((link) => (
           <a
             key={link.id}
@@ -74,16 +59,10 @@ export const quickLinksWidgetDefinition: WidgetDefinition<QuickLinksData, QuickL
   titleKey: 'common.links',
   descriptionKey: 'common.links',
   configVersion: 1,
-  defaultConfig: {},
-  configSchema: z.record(z.string(), z.unknown()),
+  defaultConfig: { links: [] },
+  configSchema: z.object({ links: z.array(z.object({ id: z.string(), label: z.string(), url: z.string().url(), icon: z.enum(['docs','git','web']) })).max(20) }),
   size: 'small',
   surfacePolicy: { surfaces: ['crystal', 'material', 'plain'], allowBlur: true, allowGlow: false },
-  adapterKeyBuilder: () => 'workspace.links:local',
-  // 本地数据源：按当前持久化 locale 提供默认链接列表（默认 zh，R-I5）。
-  load: async () => {
-    const saved = typeof window !== 'undefined' ? await window.nativesAPI?.getLocale?.().catch(() => null) : null;
-    return { links: buildDefaultLinks(saved === 'en' ? 'en' : 'zh') };
-  },
   Component: QuickLinksView,
 };
 

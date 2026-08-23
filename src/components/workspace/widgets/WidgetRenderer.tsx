@@ -15,6 +15,7 @@ import {
   buildWidgetBrokerKey,
 } from '@/lib/workspace/widgets/data-broker';
 import type { BrokerSnapshot } from '@/lib/workspace/widgets/data-broker';
+import { useWorkspaceTimeRange } from '@/lib/workspace/widgets/time-range-context';
 import type { WidgetConfig, WidgetDefinition, WidgetInstance } from '@/lib/workspace/widgets';
 import { WidgetShell } from './WidgetShell';
 
@@ -93,9 +94,11 @@ export function WidgetRenderer<TData, TSettings extends Record<string, unknown>>
   onRemove,
 }: WidgetRendererProps<TData, TSettings>) {
   const locale = useLocale();
+  const timeRange = useWorkspaceTimeRange();
   const { def, config } = instance;
-  const key = adapterKey ?? buildWidgetBrokerKey(def, config);
-  const { status, data, error, retry } = useWidgetData(def, config, key);
+  const key = adapterKey ?? buildWidgetBrokerKey(def, config, timeRange);
+  const { status, data, error, retry, refetching } = useWidgetData(def, config, key);
+  const unsupported = data != null && typeof data === 'object' && 'unavailable' in data && data.unavailable === true;
 
   let body: ReactNode;
   if (status === 'error' && error) {
@@ -116,9 +119,13 @@ export function WidgetRenderer<TData, TSettings extends Record<string, unknown>>
         </div>
       </div>
     );
+  } else if (unsupported) {
+    body = <div className="ws-shell-state text-xs text-[var(--text-tertiary)]">{t(locale, 'workspace.dataUnavailable')}</div>;
   } else {
     const Component = def.Component;
     body = (
+      <div className="relative h-full">
+      {refetching && <span className="absolute right-2 top-1 z-10 rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[0.625rem] text-[var(--text-disabled)]">{t(locale, 'workspace.staleData')}</span>}
       <Component
         data={data}
         loading={status === 'loading' || status === 'idle'}
@@ -126,6 +133,7 @@ export function WidgetRenderer<TData, TSettings extends Record<string, unknown>>
         retry={retry}
         config={config}
       />
+      </div>
     );
   }
 

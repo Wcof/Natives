@@ -4,7 +4,6 @@ import React from 'react';
 import { X } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import type { AppView } from '@/lib/tauri/apps';
-import { LocalProjectEdit } from './edit/LocalProjectEdit';
 import { SystemApplicationEdit } from './edit/SystemApplicationEdit';
 import { WebApplicationEdit } from './edit/WebApplicationEdit';
 
@@ -40,9 +39,6 @@ export function EditAppDialog({ isOpen, app, onSuccess, onClose }: EditAppDialog
           </button>
         </div>
 
-        {app.kind === 'local_project' && (
-          <LocalProjectEdit app={app} onSuccess={onSuccess} onCancel={onClose} />
-        )}
         {app.kind === 'system_application' && (
           <SystemApplicationEdit app={app} onSuccess={onSuccess} onCancel={onClose} />
         )}

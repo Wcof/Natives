@@ -1,10 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Folder, Laptop, Globe } from 'lucide-react';
+import { X, Laptop, Globe } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import type { AppView, AppKind } from '@/lib/tauri/apps';
-import { LocalProjectForm } from './add/LocalProjectForm';
 import { SystemApplicationForm } from './add/SystemApplicationForm';
 import { WebApplicationForm } from './add/WebApplicationForm';
 
@@ -17,7 +16,7 @@ interface AddAppDialogProps {
 
 export function AddAppDialog({
   isOpen,
-  initialKind = 'local_project',
+  initialKind = 'web_application',
   onSuccess,
   onClose,
 }: AddAppDialogProps) {
@@ -47,21 +46,8 @@ export function AddAppDialog({
           </button>
         </div>
 
-        {/* 3-Kind Tab Switcher */}
+        {/* V2 supports only Web and macOS applications. */}
         <div className="flex rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab('local_project')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg transition-all ${
-              activeTab === 'local_project'
-                ? 'bg-[var(--surface-overlay)] text-[var(--text-primary)] shadow-sm font-semibold'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <Folder className="h-3.5 w-3.5" />
-            {t(locale, 'appsPage.addLocal')}
-          </button>
-
           <button
             type="button"
             onClick={() => setActiveTab('system_application')}
@@ -90,9 +76,6 @@ export function AddAppDialog({
         </div>
 
         {/* Form Body */}
-        {activeTab === 'local_project' && (
-          <LocalProjectForm onSuccess={onSuccess} onCancel={onClose} />
-        )}
         {activeTab === 'system_application' && (
           <SystemApplicationForm onSuccess={onSuccess} onCancel={onClose} />
         )}

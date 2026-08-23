@@ -338,3 +338,69 @@
 
 > 原则（APP-074 复核口径）：正式 Apps 产品路径**不得**再依赖
 > `CreativeAppSummary / CreativeAppSource / creative lifecycle commands / 旧 Personal Creation 导航`。
+
+---
+
+## 七、应用中心 V2（APPV2）current/target delta 与 Local 处置判定
+
+> 来源：`docs/pm-context/apps-center-ai-requirements.md`（2026-08-23 用户确认基线）+
+> `/Users/ldh/Downloads/project/plan/apps-center-v2-solution.md`。本节约束本域 current →
+> target 事实，不新建重复进度快照；任务证据回填到 `APPV2-T00…T11` 对应切片。
+
+### 7.1 Current（2026-08-23 代码事实）
+
+| 链路 | 事实 | 证据 |
+|---|---|---|
+| 侧边栏点击 | `apps:item:<appId>` → `ShellLayout.handleModuleSelect` 只 `void appsApi.open(appId)`；`activeView` 保持控制页，无呈现态切换、失败被吞 | `src/components/shell/ShellLayout.tsx` L271-273 |
+| Web 注册保存 | 前端 `WebApplicationForm` 原样提交 URL（无 scheme 不补 `https://`）；后端 `repository::validate_web_url` 对无 `://` 的输入直接 `InvalidInput` → **`chatgpt.com` 这类输入无法保存的根因** | `src/components/apps/add/WebApplicationForm.tsx`、`src-tauri/src/apps/repository.rs` L833-849 |
+| Web 打开 | `browser_show_non_owned` 的 remote 导航过滤 `remote_navigation_allowed` 要求 `starts_with("http://")` → **已注册的 https 公网 URL 打开必被拒**（与注册校验的 http/https 双允许不一致，第二根因） | `src-tauri/src/creative_app/non_owned.rs` L233-235 |
+| Web WebView bounds | `web::open` 恒用固定 `DEFAULT_WEB_BOUNDS = 160,120,960,720`，不绑定 Shell 实际内容区 | `src-tauri/src/apps/web.rs` L24-31 |
+| Web 预算 | soft 6 / hard 10 + LRU 休眠已存在（`window.rs::SOFT_LIVE_WINDOWS/MAX_LIVE_WINDOWS`、`surface_store::list_lru_hibernation_candidates`），但只被 `creative_app::window` 的 old open 路径消费，`apps::web::open` 尚未接入预算门禁 | `src-tauri/src/creative_app/window.rs` L24-31 |
+| macOS driver | discover（/Applications 枚举）/ launch_or_activate（NSWorkspace）/ observe（路径精确匹配 bundleURL）/ terminate / force_terminate 已落地；缺陷：启动后固定 300ms 假就绪、`observe` 只按路径匹配（App 移动/升级后失效）、无 isHidden/isActive 真实状态、terminate 验证循环后仍恒 `Ok(())`、无 hide/unhide、无主窗口归位 | `src-tauri/src/apps/system/macos.rs` |
+| Local Project | `AddAppDialog` 默认 tab 为 `local_project` 且三 tab 并存；`AppsPage` 保留 local 文案分支；`useSidebar` 侧边栏投影未过滤 kind；Home `AppLauncherWidget` 走 `appsApi.list` 未过滤 | `src/components/apps/AddAppDialog.tsx`、`src/components/apps/AppsPage.tsx` L163-169 |
+| 状态投影 | `AppView.runtimeState` 为粗粒度 7 态（web 由 window 行派生）；macOS hidden/active/not_installed/unobservable、dock 状态均未表达 | `src-tauri/src/apps/model.rs`、`capabilities.rs` |
+
+### 7.2 Target（APPV2 切片交付后）
+
+| 链路 | Target | 约束 |
+|---|---|---|
+| 侧边栏点击 | `ShellLayout` 持有唯一 `ActiveAppTarget { appId, kind, phase }`：先 `apps_get_view` 解析 → switching → 按 kind 走 Web（bounds → open → show）/ System（observe → launch/activate → 首次 dock）；点击「应用中心」清除目标回控制页；失败保留上一目标或显式 error，禁止假选中 | 不引入全局 store/新 Event Bus；复用 `activeView` 与 `apps:item:` identity |
+| Web 注册 | 共享 URL 校验层（Rust 新模块）：无 scheme 补 `https://`、公网 https / loopback http、origin 自动推导（`approvedOrigins` 缺省从 URL 推导）；前端表单展示规范化结果，保存只负责 Registry 并返回 `appId` | 保存成功与打开成功是分离状态；打开失败不删除记录 |
+| Web 打开 | remote 导航过滤改为 http/https + approved origins（host 匹配），`https` 回归测试入列 | 不放宽 trust domain：child label 永不获得 main capability |
+| WebView bounds | Renderer `ResizeObserver + getBoundingClientRect()` → debounce → `apps_web_set_bounds`（Host 验证 finite/正宽高/最小尺寸/窗口内容范围 clamp）→ `browser_set_bounds`（既有 helper）；切换先 bounds 后 show，切走只 hide | 复用 soft 6 / hard 10 + LRU，不新建预算管理器；每 appId 最多一个 live label |
+| macOS 观察/控制 | `observe` 改 bundleIdentifier 优先 + 路径回退（含重定位）；launch 用有上限的 observe retry 替代固定 300ms；新增 isHidden/isActive 真实状态、hide/unhide、graceful terminate 结果验证（超时 = failed）；force terminate 保留底层能力但新 UI 不暴露 | typed 状态：not_installed/stopped/launching/running/hidden/active/unobservable |
+| macOS 归位 | `AXWindowDriver`（macos 模块内）：AXIsProcessTrustedWithOptions 检测 → PID→AXUIElement → focused/main/first standard window 选择 → 排除全屏/sheet/popover/不可移动/不可缩放 → 一次性 set position/size（Host 完成屏幕坐标换算/Retina/侧栏避让）→ 读回容差验证 → `DockResult { status, capability, message }` | capability-gated：PermissionRequired/NoStandardWindow/NotMovable/NotResizable/FullscreenUnsupported 全部 typed；`never_docked → docked → needs_redock`，无持续 AX 监听纠正；无权限仍保留 launch/activate |
+| 切换闭环 | Web→Web / Web→Mac / Mac→Web / Mac→Mac 四组合 + request token 竞态保护；切走只 hide 受管目标，永不自动 terminate | 侧边栏选中态只在真实切换成功后建立 |
+| 应用中心 UI | 首屏 = 真实列表（图标/名称/类型/真实状态/侧边栏开关/最后活跃/菜单）；搜索 + 类型/状态筛选；添加只有 Web/macOS 两入口；Remove 只删注册，clear data 与 terminate 分离确认；loading/empty/error/unsupported 分支独立，错误进 UI 不进 console | 列表/详情/侧边栏同一 `db-state-changed` apps channel 刷新（既有机制，不新建） |
+| Local Project | 产品入口切割（Add 弹窗/列表/侧边栏/Launcher Widget 不再展示 local_project）→ 数据审计（applications/spec/instance/surface 引用统计）→ 有数据走只读迁移提示，无数据按 death proof 删除生产入口；**删除注册永不删除用户项目目录**（现有 `remove_application` 语义保持） | 不放宽 MUST：standards 无「必须保留 local_project 产品入口」条款；收敛依据 = 需求基线 D-01（用户确认）+ ADR-0020 §7 迁移纪律（引用清单/回滚/death proof）；历史 ADR-0013/0014 的「导入本地项目」语义由本 delta 取代（产品面），运行时分轨安全模型不变 |
+
+### 7.3 Local 数据处置判定（T00 审计结论）
+
+- **keep（本轮不删数据）**：`applications(kind=local_project)` 行、`local_creative_apps` 记录、
+  用户项目目录、运行实例记录。`remove_application` 级联只删 Natives 元数据，绝不碰目录
+  （现有语义，保持）。
+- **migrate（T10 执行）**：统计现有 local_project 注册/instance/surface 数量；有数据 → 一次性
+  只读提示（应用中心列表内只读展示 + 迁移说明），无数据 → 按 death proof 删除
+  `apps_register_local` 生产入口与 Renderer 调用（`registerLocal/localInspect/localLogs`）。
+- **delete（T10，仅生产入口）**：`AddAppDialog` local tab、`LocalProjectForm/Edit`、侧边栏
+  local 投影、Launcher Widget local 项、`AppsPage` local 文案分支。底层
+  `creative_app/local/**` 进程监督能力按 ADR-0020 纪律保留至 legacy death-list 批次，
+  不在本切片删除。
+- **ADR/Standards 审计**：`standards/`（product 02、technical 01/02/05）与 ADR-0020 无
+  「必须提供 local_project 产品入口」的 MUST；product/02 对 Apps 域只约束四元模型与
+  「禁止把 App 当 Widget 或裸 spawn」。收敛为 Web/System 两类的产品决策来源是需求基线
+  D-01（用户确认），以本 delta 落档，不放宽既有 MUST；若 T10 审计发现删除生产入口触碰
+  其他文档 MUST，先补 ADR 再实现。
+
+### 7.4 APPV2-T10 Local 数据审计与切割证据（2026-08-23）
+
+- 真实 Host 数据库：`/Users/ldh/.natives/natives.db`（只读查询，26.6 MiB）。
+- 审计结果：`applications(kind=local_project)=0`、关联 `runtime_instances=0`、
+  `application_surfaces=0`、`window_instances=0`、`local_creative_apps=0`。
+- 判定：满足“无用户数据”death proof。应用中心 Renderer、Sidebar、Launcher 与
+  Tauri handler 注册均移除 Local 新增/检查/日志/运行入口；历史 schema、migration
+  reader 与底层 supervised local helper 暂留，供旧版本数据库兼容和后续 legacy
+  death-list 批次，不再构成生产入口。
+- 数据安全：未执行任何 `DELETE`，未修改数据库，未读取或删除用户项目目录。
+- 回滚：恢复被移除的 handler/Renderer 投影即可重新暴露旧入口；schema 与用户目录
+  均未变更，因此无需数据回滚。

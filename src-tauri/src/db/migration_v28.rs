@@ -167,7 +167,6 @@ mod migration_v28_validation {
         create_tables(&conn).unwrap();
         apply_migrations(&conn).unwrap();
         assert_eq!(schema_version(&conn), SCHEMA_VERSION);
-        assert_eq!(schema_version(&conn), "28");
     }
 
     /// APP-006/007/008/009/010: v28 alters add the exact expected columns.
@@ -246,7 +245,7 @@ mod migration_v28_validation {
         apply_migrations(&conn).unwrap();
         apply_migrations(&conn).unwrap();
         apply_migrations(&conn).unwrap();
-        assert_eq!(schema_version(&conn), "28");
+        assert_eq!(schema_version(&conn), SCHEMA_VERSION);
     }
 
     /// APP-011: the v28 backfill mapping (kind/origin + remote non-owned
@@ -261,7 +260,7 @@ mod migration_v28_validation {
         let conn = Connection::open_in_memory().unwrap();
         create_tables(&conn).unwrap();
         apply_migrations(&conn).unwrap();
-        assert_eq!(schema_version(&conn), "28");
+        assert_eq!(schema_version(&conn), SCHEMA_VERSION);
 
         let now = "2026-01-01T00:00:00Z";
 

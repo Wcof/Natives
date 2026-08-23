@@ -306,7 +306,9 @@ impl AppRepository {
         open_behavior: Option<&str>,
         keep_alive: bool,
     ) -> Result<String> {
-        validate_web_url(url)?;
+        // APPV2-T01：共享校验层统一入口 —— 无 scheme 输入规范化为 https 后持久化，
+        // 公网必须 https、显式 http 仅 loopback（见 `web_url` 模块）。
+        let normalized = crate::apps::web_url::normalize_web_url(url)?;
         let open_behavior = open_behavior
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -315,7 +317,7 @@ impl AppRepository {
             conn,
             AppKind::WebApplication,
             "web_application",
-            url,
+            &normalized,
             title,
             None,
             None,
@@ -335,7 +337,7 @@ impl AppRepository {
                 updated_at = excluded.updated_at",
             params![
                 app_id,
-                url,
+                normalized,
                 serde_json::to_string(approved_origins).map_err(|e| Error::Json(e))?,
                 open_behavior,
                 keep_alive as i64,
@@ -571,15 +573,17 @@ impl AppRepository {
         open_behavior: Option<&str>,
         keep_alive: Option<bool>,
     ) -> Result<WebApplicationSpec> {
-        if let Some(u) = url {
-            validate_web_url(u)?;
-        }
+        // APPV2-T01：与 register 同一共享校验层（规范化 + 策略）。
+        let normalized_url = match url {
+            Some(u) => Some(crate::apps::web_url::normalize_web_url(u)?),
+            None => None,
+        };
         let t = now();
         let mut sets: Vec<&str> = vec![];
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![];
-        if let Some(u) = url {
+        if let Some(u) = &normalized_url {
             sets.push("url = ?");
-            args.push(Box::new(u.to_string()));
+            args.push(Box::new(u.clone()));
         }
         if let Some(o) = approved_origins {
             sets.push("approved_origins_json = ?");
@@ -794,6 +798,7 @@ impl AppRepository {
             sidebar_order: order,
             capabilities: Default::default(),
             runtime_state: crate::apps::model::AppRuntimeState::Stopped,
+            updated_at: app.updated_at,
         })
     }
 }
@@ -830,22 +835,10 @@ fn map_surface_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Surface> {
 }
 
 /// Web URL 校验（APP-013 step 5 / 06：后端先验 URL）。
+/// APPV2-T01：实现收敛到 [`crate::apps::web_url`]（注册/编辑/导航共用单一策略，
+/// 修复此前「注册允许 https、导航只放行 http」的规则不一致）。
 pub fn validate_web_url(url: &str) -> Result<()> {
-    let u = url.trim();
-    let (scheme, rest) = u
-        .split_once("://")
-        .ok_or_else(|| Error::InvalidInput(format!("web url must be http/https: {url}")))?;
-    if scheme != "http" && scheme != "https" {
-        return Err(Error::InvalidInput(format!(
-            "web url must be http/https: {url}"
-        )));
-    }
-    let hostport = rest.split('/').next().unwrap_or("");
-    let host = hostport.split(':').next().unwrap_or("");
-    if host.is_empty() {
-        return Err(Error::InvalidInput(format!("web url missing host: {url}")));
-    }
-    Ok(())
+    crate::apps::web_url::validate_web_url(url)
 }
 
 #[cfg(test)]

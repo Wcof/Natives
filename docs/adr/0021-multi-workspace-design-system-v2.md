@@ -23,7 +23,7 @@ ADR-0020 将首页固定为「唯一 Personal Workspace Home」，Widget 固定�
 
 ### 2. 双布局（取代 ADR-0020 §3「禁止 Infinite Canvas 与嵌套容器」）
 
-- **Compact Grid**: 继续使用 `react-grid-layout`，lg/md/sm = 12/8/4 断点；stop/debounce/flush 才持久化，指针移动只写内存。
+- **Structured Canvas**（历史名 Compact Grid，PWSV2 词表见修订 §10）: 继续使用 `react-grid-layout`，lg/md/sm = 12/8/4 断点；stop/debounce/flush 才持久化，指针移动只写内存。
 - **Free Canvas**: 自研轻量 DOM Canvas，只实现 Workspace 需要的自由布局：Drag / Resize / Pan / Zoom / Snap / Multi-select / Group / Frame / Z-order。
 - **明确不做**：绘图工具、Connector、CRDT、BlockSuite/Yjs、多人协同、通用任意实体建模器。
 - 布局数据仍是普通 `workspace_layouts` 记录，不引入新 runtime。
@@ -64,3 +64,15 @@ ADR-0020 将首页固定为「唯一 Personal Workspace Home」，Widget 固定�
 ## 修订
 
 - ADR-0020 §1、§3 中与本文冲突的范围由本文取代；其余决策（产品身份、停止建设、领域边界、Host authority、Secret、迁移纪律）继续有效。
+- **PWSV2（2026-08-23，Personal Workspace V2 完整重设计裁决，对应 plan2 方案）**：
+  1. **布局模式词表**：统一为 `structured | free`（冻结契约历史词 `compact` 废弃；DB CHECK 与 wire 值一律 `structured`/`free`）。Structured Canvas 是默认布局模式——默认首页是内容优先 Dashboard，由内置模板 `Classic Personal Dashboard` 实例化，不是硬编码固定页面。
+  2. **Tab 语义收敛**：旧 `workspace_tabs`（内容 tab：tab_type/title/ref_id/url）降为 legacy 表，v29 后无 production 读/写；"打开的 Workspace 会话"由新表 `workspace_open_tabs` 承载（`workspace_id` PK + sort_order/is_pinned/opened_at/last_active_at）。Close = 删 row（不删 Workspace），Reopen = 插 row。`workspace_tab_create/update/close/reorder` 命令族与旧 View Tab Strip 在同一切片删除，不保留 fallback。
+  3. **Session 快照模型（M-26 裁决）**：`workspace_session_snapshot` 是**全局轻量**读模型 `{openedTabs, activeWorkspaceId, workspaces(仅 metadata), revision}`；`workspace_snapshot` 是单 Workspace 全量读模型（不含内容 tab）。Inactive Workspace 不携带 widgets/layouts。
+  4. **Template 系统**：新表 `workspace_templates`（origin ∈ builtin|personal）。Built-in manifest 由代码提供：`Classic Personal Dashboard`（默认）/ `Blank` / `Focus`。实例化在 Host 单事务完成并 template-key → instance-id 重写；`workspaces.template_source_id`/`template_version` 仅溯源，模板升级**不覆盖**已实例化 Workspace；支持恢复整个模板与单 Widget 重置。Manifest 禁止 Secret、用户绝对路径与实时数据。
+  5. **Delete 语义（M-05 反转，2026-08-23）**：workspaces 采用软删 `deleted_at`（以冻结契约 §3 与 plan2 为准，覆盖 G-007"硬删"裁决）；list/snapshot 过滤软删行；子行随 workspace 软删一并失效（查询侧级联过滤），物理清理仅发生在 Final Gate 的显式 hard delete。
+  6. **Widget 实例字段（M-13..16）**：`workspace_widgets` 增 `config_version INT`、`appearance_json TEXT`（V-003 白名单：surfaceVariant/header/opacity，禁止颜色 token 入库）、`enabled INT`、`z_index INT`。生产读写由 `hidden` 切换为 `enabled`：v29 迁移映射 `enabled = NOT hidden`，切换后代码不再读写 `hidden`；`hidden` 列保留至 death proof。
+  7. **Layout 存储（M-17..20）**：`workspace_layouts` 增 `layout_mode TEXT CHECK(structured|free)`、`layout_version INT`，唯一键收敛为 `UNIQUE(workspace_id, layout_mode, breakpoint)`（以保数据增量迁移改表，禁止破坏式重建）；free 模式 breakpoint 取保留值 `'free'`。
+  8. **View State 版本化（M-22）**：`workspace_view_states` 增 `state_version INT`。Data View 模式（`list|table|board|calendar`）是 **Data View Widget 的展示模式**，经 `workspace_view_states`（view_key 作用域）持久化，与布局模式正交。
+  9. **Browse/Edit 双态（产品硬约束）**：Browse 默认安静——不显示 Inspector、拖拽手柄、网格线、删除按钮、技术 Badge 与底部状态栏；Edit 由"自定义工作空间"显式进入（floating toolbar：添加 / Undo-Redo / Structured-Free 切换 / 模板与恢复 / Workspace 外观 / 完成）。指针移动期间 IPC/DB write = 0，仅 drag/resize stop 或显式 commit 持久化（R-B11 延续）。
+  10. **权威收敛与迁移号**：localStorage/IndexedDB 不得成为 Workspace 权威（R-B10）；Renderer 只保留有界、可丢弃的内存 read model。本批 schema 迁移号 **v29**（v28 已被应用中心迁移占用）；迁移增量、幂等、PRAGMA table_info guard，回滚版本忽略新增列/表。
+  11. **Widget 边界不变**：仍是内置代码注册 React renderer + versioned config + layout capability + surface policy；**不是** Plugin Runtime / Worker / Event Bus / Marketplace / 第二 Event Bus。

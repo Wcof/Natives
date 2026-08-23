@@ -429,6 +429,43 @@ pub fn mark_window_hibernated(conn: &Connection, window_id: &str) -> Result<()> 
     Ok(())
 }
 
+/// T04: 把窗口行推进 open 态并刷新真实 child label。
+///
+/// Apps 域 web 窗口的真实 WebView label 由 app_id 派生
+/// （`creative-nonowned-{app_id}`），而 `create_window` 存的是 uuid 派生投影
+/// （`creative-window-{id}`）—— 两者不一致时以真实 label 为准覆盖，避免
+/// 预算门禁 / reconcile 按 stored label 误判。同时清 `hibernated_at`、
+/// 刷新 `last_active_at`（LRU 候选排序输入）。
+pub fn set_window_live(conn: &Connection, window_id: &str, label: &str) -> Result<()> {
+    let t = now();
+    conn.execute(
+        "UPDATE window_instances
+         SET state = 'open', label = ?2, hibernated_at = NULL, last_active_at = ?3, updated_at = ?3
+         WHERE id = ?1",
+        params![window_id, label, t],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// T04: 把窗口行推进 closed 态（释放 live 预算槽，[`set_window_live`] 的逆操作）。
+///
+/// 用于 web surface close：真实 WebView 已销毁后把行落 closed 并清 `hibernated_at`
+///（休眠标记随关闭失效）、刷新 `updated_at`，避免 `count_open_windows` 高估把
+/// 预算门禁卡死。web 域无 runtime preview bind，无需事务；调用方以吞错处理 DB
+/// 失败（WebView 是权威呈现状态），故不做 0 行检查 —— 幂等、可重复调用。
+pub fn set_window_closed(conn: &Connection, window_id: &str) -> Result<()> {
+    let t = now();
+    conn.execute(
+        "UPDATE window_instances
+         SET state = 'closed', hibernated_at = NULL, updated_at = ?2
+         WHERE id = ?1",
+        params![window_id, t],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 /// List candidates for LRU hibernation (open windows for web apps with keep_alive=0).
 pub fn list_lru_hibernation_candidates(conn: &Connection) -> Result<Vec<(String, String, String)>> {
     let mut stmt = conn

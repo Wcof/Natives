@@ -3,9 +3,7 @@
 /**
  * Workspace V2 — session store.
  *
- * Holds the runtime `WorkspaceSessionSnapshot` of the currently open workspace
- * (no dedicated backend session table — the session is the open workspace's
- * live state assembled from the seven v27 tables).
+ * Disposable renderer cache of the Host-owned open Workspace sessions.
  */
 
 import type { WorkspaceSessionSnapshot } from './contracts';
@@ -35,12 +33,8 @@ export function subscribeSession(listener: Listener): () => void {
 }
 
 /** Re-fetch the session snapshot from the host and publish it. */
-export async function refreshSession(workspaceId: string): Promise<WorkspaceSessionSnapshot | null> {
-  try {
-    const session = await getSessionSnapshot(workspaceId);
-    setSession(session);
-    return session;
-  } catch {
-    return current;
-  }
+export async function refreshSession(): Promise<WorkspaceSessionSnapshot> {
+  const session = await getSessionSnapshot();
+  setSession(session);
+  return session;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
+import { startTransition, useState, useEffect, useCallback, useRef, memo, lazy, Suspense } from 'react';
 import { t, type Locale } from '@/i18n';
 import Sidebar, { SIDEBAR_COLLAPSED_WIDTH, clampSidebarWidth } from './Sidebar';
 import RightPanel, { clampRightPanelWidth } from './RightPanel';
@@ -27,7 +27,9 @@ import type { FileEntry } from '@/types/file';
 import type { PreviewSubMode } from '@/lib/preview/contracts';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
-import { appsApi } from '@/lib/tauri/apps';
+import { appsApi, type AppView, type DockResult, type SystemRunningState, type WebBounds } from '@/lib/tauri/apps';
+import { reduceAppTarget, isWebTargetPresented, type ActiveAppTarget } from '@/lib/app-target';
+import AppPresentationHost, { type AppPresentationBounds, type AppSystemCommand, type AppWebCommand } from './AppPresentationHost';
 
 // Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
@@ -87,6 +89,57 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     toggleRightPanel,
     setRightPanelMode,
   } = useShellState();
+
+  // ── APPV2-T02：当前应用呈现目标（应用中心 V2；Shell 局部状态，不建全局 store） ──
+  const [activeAppTarget, setActiveAppTarget] = useState<ActiveAppTarget | null>(null);
+  const activeAppTargetRef = useRef<ActiveAppTarget | null>(null);
+  const [systemRunningState, setSystemRunningState] = useState<SystemRunningState | null>(null);
+  const [systemDockResult, setSystemDockResult] = useState<DockResult | null>(null);
+  const [systemNeedsRedock, setSystemNeedsRedock] = useState(false);
+  const dockAttemptedRef = useRef(new Set<string>());
+  const dockResultRef = useRef<DockResult | null>(null);
+  const appSwitchSeqRef = useRef(0);
+  useEffect(() => {
+    activeAppTargetRef.current = activeAppTarget;
+  }, [activeAppTarget]);
+  useEffect(() => {
+    dockResultRef.current = systemDockResult;
+  }, [systemDockResult]);
+
+  // APPV2-T03：内容区矩形缓存（Host ResizeObserver 测量）；open 时携带，resize 时下发
+  const webBoundsRef = useRef<WebBounds | null>(null);
+  const handleAppBoundsChange = useCallback((bounds: AppPresentationBounds | null) => {
+    webBoundsRef.current = bounds;
+    if (!bounds) return;
+    const target = activeAppTargetRef.current;
+    // 仅 web 目标下发动态 bounds；label 不存在时 Host 端静默 no-op，open 会携带 bounds。
+    if (target && target.kind === 'web_application') {
+      void appsApi
+        .webSetBounds(target.appId, {
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+        })
+        .catch(() => {});
+    } else if (target?.kind === 'system_application' && target.phase === 'presented') {
+      if (!dockAttemptedRef.current.has(target.appId)) {
+        dockAttemptedRef.current.add(target.appId);
+        void appsApi.systemDock(target.appId, bounds).then((result) => {
+          if (activeAppTargetRef.current?.appId === target.appId) {
+            setSystemDockResult(result);
+            setSystemNeedsRedock(false);
+          }
+        }).catch((error) => {
+          if (activeAppTargetRef.current?.appId === target.appId) {
+            setSystemDockResult({ status: 'failed', capability: 'available', message: String(error) });
+          }
+        });
+      } else if (dockResultRef.current?.status === 'docked') {
+        setSystemNeedsRedock(true);
+      }
+    }
+  }, []);
 
   const handleSidebarResize = useCallback((width: number) => {
     setState((prev) => ({ ...prev, sidebarWidth: clampSidebarWidth(width) }));
@@ -236,7 +289,124 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setState((prev) => ({ ...prev, previewSubMode: mode }));
   }, []);
 
+  // APPV2-T02：点击侧边栏应用 = 解析 AppView → switching → open → presented / 可恢复 error。
+  // 选中态（activeView = apps:item:<id>）只在真实切换成功后建立；失败保留错误态可重试。
+  const openAppTarget = useCallback(
+    async (appId: string) => {
+      const requestSeq = ++appSwitchSeqRef.current;
+      // APPV2-T04：Web→Web 切换时先 hide 旧目标（永不 terminate）；同 appId 重试不 hide。
+      const prevTarget = activeAppTargetRef.current;
+      if (prevTarget && isWebTargetPresented(prevTarget) && prevTarget.appId !== appId) {
+        void appsApi.webHide(prevTarget.appId).catch(() => {});
+      }
+      if (prevTarget?.kind === 'system_application' && prevTarget.appId !== appId) {
+        void appsApi.systemHide(prevTarget.appId).catch(() => {});
+      }
+      setSystemRunningState(null);
+      setSystemDockResult(null);
+      setSystemNeedsRedock(false);
+      setActiveAppTarget((prev) => reduceAppTarget(prev, { type: 'request', appId }));
+      let view: AppView | null = null;
+      try {
+        view = await appsApi.getView(appId);
+      } catch {
+        view = null;
+      }
+      if (requestSeq !== appSwitchSeqRef.current) return;
+      if (!view) {
+        setActiveAppTarget((prev) =>
+          reduceAppTarget(prev, { type: 'failed', appId, error: t(locale, 'appsPage.presentNotFound') }),
+        );
+        return;
+      }
+      setActiveAppTarget((prev) => reduceAppTarget(prev, { type: 'viewResolved', appId, view }));
+      if (view.kind === 'local_project') return; // reducer 标记 unsupported（UI 层切割，数据保留）
+      try {
+        if (view.kind === 'web_application' && prevTarget?.kind === 'system_application') {
+          await appsApi.activateHost();
+        }
+        // APPV2-T03：Web 目标「先 bounds 后 show」——携带 Host 实测内容区矩形。
+        await appsApi.open(appId, webBoundsRef.current ?? undefined);
+        if (requestSeq !== appSwitchSeqRef.current) {
+          if (view.kind === 'web_application') await appsApi.webHide(appId).catch(() => false);
+          else await appsApi.systemHide(appId).catch(() => false);
+          return;
+        }
+        if (view.kind === 'system_application') {
+          setSystemRunningState(await appsApi.systemObserve(appId));
+        }
+        setActiveAppTarget((prev) => reduceAppTarget(prev, { type: 'presented', appId }));
+        setActiveView(`apps:item:${appId}`);
+      } catch (err) {
+        setActiveAppTarget((prev) =>
+          reduceAppTarget(prev, { type: 'failed', appId, error: classifyError(err, { locale }).userMessage }),
+        );
+      }
+    },
+    [locale, setActiveView],
+  );
+
+  // 切离呈现：只 hide 受管 Web Surface（永不 terminate）；清空目标。
+  const clearAppTarget = useCallback(() => {
+    appSwitchSeqRef.current += 1;
+    const prev = activeAppTargetRef.current;
+    if (prev && isWebTargetPresented(prev)) {
+      void appsApi.webHide(prev.appId).catch(() => {});
+    } else if (prev?.kind === 'system_application' && prev.phase === 'presented') {
+      void appsApi.systemHide(prev.appId).catch(() => {});
+    }
+    setActiveAppTarget(null);
+  }, []);
+
+  const handleAppSystemCommand = useCallback(
+    async (appId: string, command: AppSystemCommand) => {
+      try {
+        if (command === 'settings') {
+          await appsApi.systemOpenAccessibilitySettings();
+          return;
+        }
+        if (command === 'redock') {
+          const bounds = webBoundsRef.current;
+          if (!bounds) return;
+          const result = await appsApi.systemDock(appId, bounds);
+          dockAttemptedRef.current.add(appId);
+          setSystemDockResult(result);
+          setSystemNeedsRedock(false);
+        } else if (command === 'hide') {
+          await appsApi.systemHide(appId);
+        } else if (command === 'terminate') {
+          await appsApi.stop(appId, 1);
+        } else if (command === 'activate') {
+          await appsApi.open(appId, webBoundsRef.current ?? undefined);
+        }
+        setSystemRunningState(await appsApi.systemObserve(appId));
+      } catch (error) {
+        toast(classifyError(error, { locale }).userMessage, 'error');
+      }
+    },
+    [locale, toast],
+  );
+
+  const handleAppWebCommand = useCallback(
+    (appId: string, command: AppWebCommand) => {
+      if (command === 'close') {
+        clearAppTarget();
+        return;
+      }
+      const promise =
+        command === 'reload'
+          ? appsApi.webReload(appId)
+          : command === 'back'
+            ? appsApi.webBack(appId)
+            : appsApi.webForward(appId);
+      void promise.catch(() => {});
+    },
+    [clearAppTarget],
+  );
+
   const handleModuleSelect = useCallback((moduleId: string) => {
+    // APPV2-T02：任何非应用呈现的选中先清除当前目标（web surface 只 hide 不终止）
+    if (!moduleId.startsWith('apps:item:')) clearAppTarget();
     // Check settings navigation first — catches __settings__, settings, settings:*
     const settingsTarget = normalizeSettingsTarget(moduleId);
     if (settingsTarget) {
@@ -270,7 +440,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       toggleRightPanel('notifications');
     } else if (moduleId.startsWith('apps:item:')) {
       const appId = moduleId.slice('apps:item:'.length);
-      void appsApi.open(appId);
+      void openAppTarget(appId);
     } else if (moduleId.startsWith('__files__:')) {
       // Navigate file browser to a specific path
       const path = moduleId.slice(10);
@@ -304,7 +474,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView(`module:${moduleId}`);
       setRightPanelMode('module-details');
     }
-  }, [toggleRightPanel, setRightPanelMode, setActiveView, setState]);
+  }, [toggleRightPanel, setRightPanelMode, setActiveView, setState, clearAppTarget, openAppTarget]);
 
   // File selection handler — opens preview in right panel
   const handleFileSelect = useCallback((entry: FileEntry) => {
@@ -386,24 +556,43 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           )}
 
           <div ref={contentRef} id="main-content" tabIndex={-1} style={{ width: '100%', height: '100%', outline: 'none' }} className="flex-1 min-h-0">
-            <ErrorBoundary>
-              <MainContent
-                activeView={activeView}
-                locale={locale}
-                httpPort={httpPort}
-                selectedFile={selectedFile}
-                setSelectedFile={setSelectedFile}
-                editMode={editMode}
-                setEditMode={setEditMode}
-                iframeReloadKey={0}
-                terminalSessionId={terminalSessionIdRef.current}
-                onFileSelect={handleFileSelect}
-                onNavigate={setActiveView}
-                iframeContainerRef={iframeContainerRef}
-              >
-                {children}
-              </MainContent>
-            </ErrorBoundary>
+            {activeAppTarget ? (
+              // APPV2-T02：应用呈现态（Web 工具条/状态层；macOS 承载状态；child WebView 覆盖内容矩形）
+              <ErrorBoundary>
+                <AppPresentationHost
+                  target={activeAppTarget}
+                  locale={locale}
+                  onRetry={(appId) => void openAppTarget(appId)}
+                  onBackToApps={clearAppTarget}
+                  onWebCommand={handleAppWebCommand}
+                  onSystemCommand={(appId, command) => void handleAppSystemCommand(appId, command)}
+                  systemState={systemRunningState}
+                  dockResult={systemDockResult}
+                  needsRedock={systemNeedsRedock}
+                  onBoundsChange={handleAppBoundsChange}
+                />
+              </ErrorBoundary>
+            ) : (
+              <ErrorBoundary>
+                <MainContent
+                  activeView={activeView}
+                  locale={locale}
+                  httpPort={httpPort}
+                  selectedFile={selectedFile}
+                  setSelectedFile={setSelectedFile}
+                  editMode={editMode}
+                  setEditMode={setEditMode}
+                  iframeReloadKey={0}
+                  terminalSessionId={terminalSessionIdRef.current}
+                  onFileSelect={handleFileSelect}
+                  onNavigate={setActiveView}
+                  onOpenApp={(appId) => void openAppTarget(appId)}
+                  iframeContainerRef={iframeContainerRef}
+                >
+                  {children}
+                </MainContent>
+              </ErrorBoundary>
+            )}
           </div>
           {/* Portal target for content-area overlays — covers only the content panel */}
           <div id="content-overlay-root" style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none' }} />

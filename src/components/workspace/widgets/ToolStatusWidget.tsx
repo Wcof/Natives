@@ -6,8 +6,7 @@
  */
 
 import { z } from 'zod';
-import { useLocale, t } from '@/i18n';
-import { Terminal, CheckCircle2, XCircle } from 'lucide-react';
+import { CheckCircle2, XCircle } from 'lucide-react';
 import type { WidgetDefinition, WidgetProps } from '@/lib/workspace/widgets';
 import {
   loadAiStatus,
@@ -18,7 +17,6 @@ import {
 type ToolStatusSettings = Record<string, unknown>;
 
 function ToolStatusView(_props: WidgetProps<AiStatusData, ToolStatusSettings>) {
-  const locale = useLocale();
   const tools = [
     { name: 'Claude Code', available: true },
     { name: 'Codex CLI', available: true },
@@ -27,11 +25,7 @@ function ToolStatusView(_props: WidgetProps<AiStatusData, ToolStatusSettings>) {
   ];
 
   return (
-    <div className="flex h-full flex-col justify-between p-3">
-      <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] mb-2">
-        <Terminal size={14} className="text-[var(--primary)]" />
-        <span className="font-medium">{t(locale, 'workspace.toolsTitle')}</span>
-      </div>
+    <div className="flex h-full w-full flex-col justify-center">
       <div className="grid grid-cols-2 gap-1.5">
         {tools.map((tool) => (
           <div

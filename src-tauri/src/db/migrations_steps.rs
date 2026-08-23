@@ -877,3 +877,12 @@ pub(super) fn migrate_v27(conn: &Connection) -> Result<(), Error> {
 pub(super) fn migrate_v28(conn: &Connection) -> Result<(), Error> {
     super::migration_v28::migrate_v28(conn)
 }
+
+/// Migration v28→v29 (PWSV2 — Personal Workspace V2, ADR-0021 §PWSV2).
+///
+/// Delegates to the standalone v29 module (additive columns, the
+/// `workspace_open_tabs` / `workspace_templates` tables, `enabled` backfill,
+/// version marker). This file stays the ordering registry.
+pub(super) fn migrate_v29(conn: &Connection) -> Result<(), Error> {
+    super::migration_v29::migrate_v29(conn)
+}

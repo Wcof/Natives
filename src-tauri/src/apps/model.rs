@@ -167,6 +167,7 @@ pub struct AppView {
     pub sidebar_order: Option<i64>,
     pub capabilities: AppCapabilities,
     pub runtime_state: AppRuntimeState,
+    pub updated_at: String,
 }
 
 /// 应用定义 —— `applications` 表行（read-through，不做第二套 CRUD）。
@@ -405,6 +406,7 @@ mod model_tests {
                 risk_level: 0,
             },
             runtime_state: AppRuntimeState::Hibernated,
+            updated_at: "2026-08-23T00:00:00Z".into(),
         };
         let json = to_string(&view).unwrap();
         // kind 是 snake_case（03 规格）。

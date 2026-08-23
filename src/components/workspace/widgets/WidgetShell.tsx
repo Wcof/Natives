@@ -10,7 +10,7 @@
  */
 
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
-import { GripVertical, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import { SPACING, type ElevationLevel } from '@/lib/design-tokens';
 import {
@@ -68,27 +68,13 @@ export function WidgetShell<TData, TSettings extends Record<string, unknown>>({
 
   // ── header + edit chrome ──
   const headerActions: ReactNode[] = [];
-  if (editing || Boolean(onRemove)) {
-    headerActions.push(
-      <button
-        key="drag-handle"
-        type="button"
-        className="ws-drag-handle"
-        data-widget-drag-handle
-        title={t(locale, 'home.editHint')}
-        aria-label={t(locale, 'home.edit')}
-      >
-        <GripVertical size={13} />
-      </button>,
-    );
-  }
   if (actions) headerActions.push(<div key="actions">{actions}</div>);
   if (onRemove) {
     headerActions.push(
       <button
         key="remove"
         type="button"
-        className="ws-icon-button ws-icon-button--danger"
+        className="ws-icon-button ws-icon-button--danger ws-drag-cancel"
         onClick={onRemove}
         title={t(locale, 'home.removeWidget')}
         aria-label={t(locale, 'home.removeWidget')}

@@ -50,6 +50,7 @@ export interface MainContentProps {
   terminalSessionId: string | null;
   onFileSelect: (file: FileEntry) => void;
   onNavigate: (view: string) => void;
+  onOpenApp: (appId: string) => void;
   children: React.ReactNode;
   iframeContainerRef: React.RefObject<HTMLDivElement | null>;
 }
@@ -59,6 +60,7 @@ export default function MainContent({
   locale,
   onFileSelect,
   onNavigate,
+  onOpenApp,
   children,
   iframeContainerRef,
 }: MainContentProps) {
@@ -102,7 +104,7 @@ export default function MainContent({
     case 'store':
       return (
         <Suspense fallback={<LazyFallback />}>
-          <LazyAppsPage />
+          <LazyAppsPage onOpenApp={onOpenApp} />
         </Suspense>
       );
     case 'files':

@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import { appsApi, type AppView } from '@/lib/tauri/apps';
+import { checkWebUrl, deriveOriginFromUrl } from '@/lib/apps-web-url';
 
 interface WebApplicationFormProps {
   onSuccess: (app: AppView) => void;
@@ -19,27 +20,39 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // APPV2-T01：提交前规范化（无 scheme 补 https；公网必须 https；loopback 可 http）。
+  const urlCheck = useMemo(() => checkWebUrl(url), [url]);
+  const urlErrorKey =
+    urlCheck.reason === 'empty'
+      ? 'appsPage.webUrlErrorEmpty'
+      : urlCheck.reason === 'scheme'
+        ? 'appsPage.webUrlErrorScheme'
+        : urlCheck.reason === 'public-http'
+          ? 'appsPage.webUrlErrorPublicHttp'
+          : urlCheck.reason === 'invalid-host'
+            ? 'appsPage.webUrlErrorInvalidHost'
+            : null;
+
   const handleUrlChange = (val: string) => {
     setUrl(val);
-    try {
-      if (val.startsWith('http://') || val.startsWith('https://')) {
-        const parsed = new URL(val);
-        if (!approvedOrigins && parsed.hostname) {
-          setApprovedOrigins(parsed.hostname);
+    const check = checkWebUrl(val);
+    if (check.ok && check.normalized) {
+      const origin = deriveOriginFromUrl(check.normalized);
+      if (origin) {
+        if (!approvedOrigins.trim()) {
+          setApprovedOrigins(origin);
         }
-        if (!title.trim() && parsed.hostname) {
-          setTitle(parsed.hostname);
+        if (!title.trim()) {
+          setTitle(origin);
         }
       }
-    } catch {
-      // ignore parse err while typing
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !url.trim()) {
-      setError('Please fill in required fields');
+    if (!title.trim() || !urlCheck.ok || !urlCheck.normalized) {
+      setError(urlErrorKey ? t(locale, urlErrorKey) : 'Please fill in required fields');
       return;
     }
 
@@ -47,14 +60,16 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+    const withDefault =
+      origins.length > 0 ? origins : [deriveOriginFromUrl(urlCheck.normalized)].filter((s): s is string => !!s);
 
     setSubmitting(true);
     setError(null);
     try {
       const app = await appsApi.registerWeb({
         title: title.trim(),
-        url: url.trim(),
-        approvedOrigins: origins,
+        url: urlCheck.normalized,
+        approvedOrigins: withDefault,
         keepAlive,
       });
       onSuccess(app);

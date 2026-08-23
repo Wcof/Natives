@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { useLocale, t } from '@/i18n';
 import { z } from 'zod';
-import { Sparkles, Copy, Check } from 'lucide-react';
+import { Copy, Check } from 'lucide-react';
 import type { WidgetDefinition, WidgetProps } from '@/lib/workspace/widgets';
 
 interface PromptSnippetsData {
@@ -46,11 +46,7 @@ function PromptSnippetsView(_props: WidgetProps<PromptSnippetsData, PromptSnippe
   };
 
   return (
-    <div className="flex h-full flex-col justify-between p-2.5">
-      <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] mb-1">
-        <Sparkles size={14} className="text-[var(--primary)]" />
-        <span className="font-medium">{t(locale, 'workspace.promptsTitle')}</span>
-      </div>
+    <div className="flex h-full w-full flex-col justify-between">
       <div className="space-y-1 overflow-y-auto min-h-0 flex-1">
         {snippets.map((snip) => (
           <button

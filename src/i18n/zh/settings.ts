@@ -2,7 +2,7 @@
 export const settings = {
   settings: {
     title: '设置',
-    backHome: '返回主页',
+    backHome: '返回个人空间',
     tabPersonalOverview: '个人概览',
     tabOverview: '个人概览',
     overviewDesc: '查看本机账户下的真实用量、项目活跃度与系统存储。',

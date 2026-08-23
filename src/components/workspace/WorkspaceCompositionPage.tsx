@@ -1,422 +1,146 @@
 'use client';
 
-/**
- * WorkspaceCompositionPage (C-001..C-006) — the V2 personal workspace surface.
- *
- *  - snapshot-first: session state hydrates synchronously from the cache, so
- *    the first paint is never blank.
- *  - tab strip: open / close / pin / reorder; Close != Delete (recently closed
- *    list can reopen a tab; the view config stays in the snapshot).
- *  - inactive tabs carry only metadata + snapshot cache; only the active view
- *    is mounted.
- *  - inspector host (ResizableRightPanel-based) on the right.
- *
- * Shared-surface wiring (mounting this inside ShellLayout/MainContent) is
- * described as a patch intent in docs/development/handoff-c.md — the shared
- * files themselves are out of scope here.
- */
-
-import { useCallback, useRef, useState, lazy, Suspense } from 'react';
-import { useLocale, t } from '@/i18n';
-import { Eye, EyeOff, PanelRight, X } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, LayoutDashboard, PanelRight, Plus, Redo2, RotateCcw, Save, Settings2, Undo2, X } from 'lucide-react';
 import { ErrorPrimitive, Skeleton } from '@/components/ui/design-system';
-import {
-  WorkspaceSessionProvider,
-  useWorkspaceSession,
-} from './session/WorkspaceSessionProvider';
-import WorkspaceTabStrip from './tabs/WorkspaceTabStrip';
-import { kindLabel } from './tabs/tabStripModel';
-import type { CanvasInspectorAction } from './inspector/WorkspaceInspector';
-import type { FreeCanvasViewHandle } from './views/FreeCanvasView';
-import { createWorkspaceViewConfig, emptyGridLayouts } from './views/WorkspaceViewRegistry';
+import { t, useLocale } from '@/i18n';
 import type { CanvasNode } from '@/lib/workspace/canvas/types';
-import type { DataViewState, WorkspaceViewKind } from '@/lib/workspace/views/types';
+import type { WorkspaceLayoutMode } from '@/lib/workspace/contracts';
+import type { GridLayouts } from '@/lib/workspace/views/types';
+import { TimeRangeContext } from '@/lib/workspace/widgets/time-range-context';
+import type { TimeRange } from '@/lib/workspace/widgets/types';
+import { AddWidgetMenu } from './widgets/AddWidgetMenu';
+import { WorkspaceSessionProvider, useWorkspaceSession } from './session/WorkspaceSessionProvider';
+import '@/app/styles/widgets.css';
 
 const GridWorkspaceView = lazy(() => import('./views/GridWorkspaceView'));
 const FreeCanvasView = lazy(() => import('./views/FreeCanvasView'));
-const DataView = lazy(() => import('./views/DataView'));
-const WorkspaceInspector = lazy(() => import('./inspector/WorkspaceInspector'));
+
+const EMPTY_LAYOUTS: GridLayouts = { lg: [], md: [], sm: [] };
 
 export default function WorkspaceCompositionPage() {
-  return (
-    <WorkspaceSessionProvider>
-      <WorkspaceCompositionInner />
-    </WorkspaceSessionProvider>
-  );
+  return <WorkspaceSessionProvider><WorkspaceDashboard /></WorkspaceSessionProvider>;
 }
 
-function WorkspaceCompositionInner() {
+function WorkspaceDashboard() {
   const locale = useLocale();
-  const { snapshot, api, workspaceId, hostStatus, hostError, reloadHost } = useWorkspaceSession();
-  const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [inspectorWidth, setInspectorWidth] = useState(300);
-  const [gridEditing, setGridEditing] = useState(false);
-  const [canvasSelectionIds, setCanvasSelectionIds] = useState<string[]>([]);
-  /** Real error text from a failed grid host write (Slice 14) — never silently dropped. */
-  const [gridWriteError, setGridWriteError] = useState<string | null>(null);
-  const canvasRef = useRef<FreeCanvasViewHandle | null>(null);
+  const { session, snapshot, templates, status, error, editing, api } = useWorkspaceSession();
+  const [timeRange, setTimeRange] = useState<TimeRange>('7d');
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const [undo, setUndo] = useState<GridLayouts[]>([]);
+  const [redo, setRedo] = useState<GridLayouts[]>([]);
+  const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const { tabs, session, views } = snapshot;
-  const activeTabId = session.activeTabId;
-  const activeView = activeTabId ? views[activeTabId] ?? null : null;
+  const layouts = useMemo<GridLayouts>(() => {
+    if (!snapshot) return EMPTY_LAYOUTS;
+    const next: GridLayouts = { lg: [], md: [], sm: [] };
+    for (const row of snapshot.layouts) {
+      if (row.layoutMode === 'structured' && row.breakpoint !== 'free' && Array.isArray(row.layout)) next[row.breakpoint] = row.layout as GridLayouts['lg'];
+    }
+    return next;
+  }, [snapshot]);
 
-  const handleNewView = useCallback(
-    (kind: WorkspaceViewKind) => {
-      api.addView(createWorkspaceViewConfig(kind, tabs.length));
-      setGridEditing(false);
-    },
-    [api, tabs.length],
-  );
+  const freeNodes = useMemo<CanvasNode[]>(() => {
+    if (!snapshot) return [];
+    const stored = snapshot.layouts.find((row) => row.layoutMode === 'free' || row.breakpoint === 'free')?.layout;
+    if (Array.isArray(stored)) return stored as CanvasNode[];
+    if (stored && typeof stored === 'object' && Array.isArray((stored as { nodes?: unknown }).nodes)) return (stored as { nodes: CanvasNode[] }).nodes;
+    return snapshot.widgets.filter((widget) => widget.enabled).map((widget, index) => ({ id: widget.id, kind: 'widget', label: widget.widgetType, widgetType: widget.widgetType, widgetConfig: widget.config, x: 40 + (index % 3) * 280, y: 40 + Math.floor(index / 3) * 210, w: 256, h: 184, z: widget.zIndex }));
+  }, [snapshot]);
 
-  const handleCanvasAction = useCallback(
-    (action: CanvasInspectorAction) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      switch (action.type) {
-        case 'delete':
-          canvas.deleteSelection();
-          break;
-        case 'group':
-          canvas.groupSelection();
-          break;
-        case 'ungroup':
-          canvas.ungroupSelection();
-          break;
-        case 'front':
-          canvas.bringToFront();
-          break;
-        case 'back':
-          canvas.sendToBack();
-          break;
+  const commitGrid = useCallback(async (next: GridLayouts, breakpoint: 'lg' | 'md' | 'sm') => {
+    setUndo((history) => [...history.slice(-29), layouts]); setRedo([]);
+    try { await api.saveStructuredLayout(next, breakpoint); } catch (cause) { setWriteError(String(cause)); }
+  }, [api, layouts]);
+
+  const applyHistory = useCallback(async (direction: 'undo' | 'redo') => {
+    const source = direction === 'undo' ? undo : redo;
+    const target = source[source.length - 1];
+    if (!target) return;
+    if (direction === 'undo') { setUndo(source.slice(0, -1)); setRedo((items) => [...items, layouts]); }
+    else { setRedo(source.slice(0, -1)); setUndo((items) => [...items, layouts]); }
+    for (const breakpoint of ['lg', 'md', 'sm'] as const) await api.saveStructuredLayout(target, breakpoint);
+  }, [api, layouts, redo, undo]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input,textarea,[contenteditable=true]')) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault(); void applyHistory(event.shiftKey ? 'redo' : 'undo');
       }
-    },
-    [],
-  );
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedWidgetId) {
+        event.preventDefault(); void api.removeWidget(selectedWidgetId).then(() => setSelectedWidgetId(null));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [api, applyHistory, editing, selectedWidgetId]);
 
-  /**
-   * Terminal layout STOP → host persistence (Slice 14 pointer rule).
-   * The grid invokes this ONLY from RGL onDragStop/onResizeStop — never from
-   * pointer move. The provider's saveLayout writes the host layout rows
-   * (per breakpoint) and re-fetches the snapshot so the grid re-renders from
-   * the Host. The promise is returned so a real write error (e.g. G-008
-   * `Conflict`) surfaces instead of being silently dropped.
-   */
-  const handleGridLayoutChange = useCallback(
-    (
-      layouts: import('@/lib/workspace/views/types').GridLayouts,
-      breakpoint: 'lg' | 'md' | 'sm',
-    ) => api.saveLayout(layouts, breakpoint),
-    [api],
-  );
+  if (status === 'error') return <div className="flex h-full items-center justify-center"><ErrorPrimitive message={error ?? t(locale, 'common.error')} onRetry={api.reload} retryLabel={t(locale, 'common.retry')} /></div>;
+  if (status === 'pending' || !snapshot) return <DashboardSkeleton />;
 
-  const handleGridWriteError = useCallback((message: string) => {
-    setGridWriteError(message);
-  }, []);
-
-  const dataState: DataViewState = activeView?.kind === 'data' && activeView.data
-    ? activeView.data
-    : { mode: 'list', columns: [], hiddenColumns: [], filters: [], sort: null, groupBy: null, calendarField: undefined };
+  const mode = snapshot.workspace.defaultLayoutMode;
+  const openTabs = session?.openedTabs ?? [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-subtle)]" data-workspace-v2>
-      <WorkspaceHeader
-        name={snapshot.name}
-        activeKind={activeView?.kind ?? null}
-        gridEditing={gridEditing}
-        onToggleGridEditing={activeView?.kind === 'grid' ? setGridEditing : undefined}
-        inspectorOpen={inspectorOpen}
-        onToggleInspector={() => setInspectorOpen((open) => !open)}
-      />
+    <TimeRangeContext.Provider value={timeRange}>
+      <main className="workspace-dashboard flex h-full min-h-0 flex-col overflow-hidden bg-[var(--surface-subtle)]" data-mode={editing ? 'edit' : 'browse'} data-layout={mode}>
+        <nav className="workspace-session-tabs flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-3" aria-label="Workspace sessions">
+          {openTabs.map((tab) => {
+            const item = session?.workspaces.find((workspace) => workspace.id === tab.workspaceId);
+            const active = tab.workspaceId === snapshot.workspace.id;
+            return <button key={tab.workspaceId} type="button" draggable onDragStart={() => setDraggedWorkspaceId(tab.workspaceId)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (!draggedWorkspaceId || draggedWorkspaceId === tab.workspaceId) return; const ids = openTabs.map((entry) => entry.workspaceId); const from = ids.indexOf(draggedWorkspaceId); const to = ids.indexOf(tab.workspaceId); ids.splice(to, 0, ids.splice(from, 1)[0]!); void api.reorderWorkspaces(ids); setDraggedWorkspaceId(null); }} onClick={() => void api.openWorkspace(tab.workspaceId)} className={`group inline-flex h-8 max-w-52 items-center gap-2 rounded-lg px-3 text-xs ${active ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'}`} aria-current={active ? 'page' : undefined}><span className="truncate">{item?.name ?? tab.workspaceId}</span>{openTabs.length > 1 && <X size={12} className="opacity-0 group-hover:opacity-70" onClick={(event) => { event.stopPropagation(); void api.closeWorkspace(tab.workspaceId); }} />}</button>;
+          })}
+          <button type="button" className="ws-dashboard-action shrink-0" onClick={() => void api.createWorkspace()} aria-label="New workspace"><Plus size={14} /></button>
+        </nav>
 
-      <WorkspaceTabStrip
-        tabs={tabs}
-        activeTabId={activeTabId}
-        closedTabs={session.closedTabs}
-        onActivate={api.activate}
-        onClose={api.closeTab}
-        onReopen={api.reopenTab}
-        onPin={api.pinTab}
-        onReorder={api.reorderTab}
-        onNewView={handleNewView}
-      />
+        <header className="workspace-dashboard-header flex shrink-0 items-center gap-3 px-6 pb-3 pt-5">
+          <div className="min-w-0">
+            <p className="text-[0.6875rem] uppercase tracking-[0.16em] text-[var(--text-disabled)]">Personal workspace</p>
+            <h1 className="truncate text-xl font-semibold text-[var(--text)]">{snapshot.workspace.name}</h1>
+          </div>
+          <div className="ml-auto flex items-center gap-1.5">
+            {!editing && <TimeRangePicker value={timeRange} onChange={setTimeRange} />}
+            {editing && <>
+              <button className="ws-dashboard-action" disabled={!undo.length} onClick={() => void applyHistory('undo')} aria-label="Undo"><Undo2 size={15} /></button>
+              <button className="ws-dashboard-action" disabled={!redo.length} onClick={() => void applyHistory('redo')} aria-label="Redo"><Redo2 size={15} /></button>
+              <div className="relative"><button ref={addButtonRef} className="ws-dashboard-action" onClick={() => setCatalogOpen((open) => !open)} aria-label="Add widget"><Plus size={15} /></button><AddWidgetMenu open={catalogOpen} onOpenChange={setCatalogOpen} triggerRef={addButtonRef} onSelect={(type) => void api.addWidget(type).catch((cause) => setWriteError(String(cause)))} /></div>
+              <button className="ws-dashboard-action" onClick={() => setInspectorOpen((open) => !open)} aria-pressed={inspectorOpen}><PanelRight size={15} /></button>
+            </>}
+            <button type="button" className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium ${editing ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--surface)] text-[var(--text-secondary)] shadow-sm hover:text-[var(--text)]'}`} onClick={() => { api.setEditing(!editing); if (editing) setInspectorOpen(false); }}>{editing ? <><Check size={14} />Done</> : <><Settings2 size={14} />Edit</>}</button>
+          </div>
+        </header>
 
-      {gridWriteError && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--danger)]/30 bg-[var(--danger-soft)] px-3 py-1.5 text-xs text-[var(--danger)]">
-          <span className="min-w-0 flex-1 truncate">{gridWriteError}</span>
-          <button
-            type="button"
-            onClick={() => setGridWriteError(null)}
-            title={t(locale, 'common.close')}
-            aria-label={t(locale, 'common.close')}
-            className="shrink-0 rounded p-0.5 transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:outline-[var(--primary)]"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      )}
+        {writeError && <div role="alert" className="mx-6 mb-2 flex items-center rounded-lg bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]"><span className="flex-1">{writeError}</span><button onClick={() => setWriteError(null)}><X size={13} /></button></div>}
 
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
-          {hostStatus === 'error' ? (
-            <div className="flex h-full items-center justify-center overflow-auto">
-              <ErrorPrimitive
-                message={hostError ?? t(locale, 'common.error')}
-                onRetry={reloadHost}
-                retryLabel={t(locale, 'common.retry')}
-              />
-            </div>
-          ) : hostStatus === 'pending' ? (
-            <div className="flex h-full flex-col gap-3 p-4">
-              <Skeleton variant="text" lines={1} width="30%" />
-              <div className="grid grid-cols-2 gap-3">
-                <Skeleton variant="card" lines={3} />
-                <Skeleton variant="card" lines={3} />
-                <Skeleton variant="card" lines={3} />
-                <Skeleton variant="card" lines={3} />
-              </div>
-            </div>
-          ) : activeView ? (
-            <Suspense fallback={<div className="flex h-full items-center justify-center p-8"><Skeleton variant="card" lines={3} /></div>}>
-              <ViewBody
-                view={activeView}
-                workspaceId={workspaceId}
-                gridEditing={gridEditing}
-                onGridLayoutChange={handleGridLayoutChange}
-                onGridBreakpointChange={(bp) => api.setBreakpoint(bp)}
-                onGridAddWidget={api.addWidget}
-                onGridRemoveWidget={api.removeWidget}
-                onGridWriteError={handleGridWriteError}
-                onDataStateChange={(patch) =>
-                  api.updateView(activeView.id, {
-                    data: { ...dataState, ...patch },
-                  })
-                }
-                canvasRef={canvasRef}
-                onCanvasCommit={(nodes) => api.updateView(activeView.id, { canvasNodes: nodes })}
-                onCanvasSelectionChange={setCanvasSelectionIds}
-              />
+        <div className="flex min-h-0 flex-1">
+          <section className="min-w-0 flex-1 overflow-hidden px-4 pb-4" aria-label="Workspace canvas">
+            <Suspense fallback={<DashboardSkeleton compact />}>
+              {mode === 'structured' ? <GridWorkspaceView workspaceId={snapshot.workspace.id} viewId="dashboard" layouts={layouts} editable={editing} onLayoutChange={commitGrid} onAddWidget={api.addWidget} onRemoveWidget={api.removeWidget} onActivateItem={setSelectedWidgetId} onWriteError={setWriteError} /> : <FreeCanvasView key={`${snapshot.workspace.id}:${snapshot.revision}`} initialNodes={freeNodes} editable={editing} onCommit={(nodes) => void api.saveFreeLayout({ nodes }).catch((cause) => setWriteError(String(cause)))} onSelectionChange={(ids) => setSelectedWidgetId(ids[0] ?? null)} />}
             </Suspense>
-          ) : (
-            <EmptyWorkspace onNewView={handleNewView} />
-          )}
+          </section>
+          {editing && inspectorOpen && <Inspector mode={mode} theme={snapshot.workspace.theme} selectedWidget={snapshot.widgets.find((widget) => widget.id === selectedWidgetId) ?? null} templates={templates} onMode={(next) => void api.setLayoutMode(next)} onTheme={(theme) => void api.setTheme(theme)} onWidgetConfig={(id, config) => void api.updateWidgetConfig(id, config)} onResetWidget={(id) => void api.resetWidget(id)} onRestore={(id) => void api.restoreTemplate(id)} onSaveTemplate={(name) => void api.saveTemplate(name)} onClose={() => setInspectorOpen(false)} />}
         </div>
-
-        <Suspense fallback={null}>
-          <WorkspaceInspector
-            open={inspectorOpen}
-            width={inspectorWidth}
-            onResize={setInspectorWidth}
-            onClose={() => setInspectorOpen(false)}
-            activeView={activeView}
-            canvasSelectionIds={canvasSelectionIds}
-            onCanvasAction={handleCanvasAction}
-            onEditGrid={setGridEditing}
-            gridEditing={gridEditing}
-            onDataStateChange={
-              activeView?.kind === 'data'
-                ? (patch) =>
-                    api.updateView(activeView.id, {
-                      data: { ...dataState, ...patch },
-                    })
-                : undefined
-            }
-            onRenameView={
-              activeView
-                ? (title) => api.updateView(activeView.id, { title })
-                : undefined
-            }
-          />
-        </Suspense>
-      </div>
-
-      <StatusBar
-        viewCount={tabs.length}
-        activeKind={activeView?.kind ?? '—'}
-      />
-    </div>
+      </main>
+    </TimeRangeContext.Provider>
   );
 }
 
-function WorkspaceHeader({
-  name,
-  activeKind,
-  gridEditing,
-  onToggleGridEditing,
-  inspectorOpen,
-  onToggleInspector,
-}: {
-
-  name: string;
-  activeKind: WorkspaceViewKind | null;
-  gridEditing: boolean;
-  onToggleGridEditing?: (editing: boolean) => void;
-  inspectorOpen: boolean;
-  onToggleInspector: () => void;
-}) {
-  const locale = useLocale();
-  return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3">
-      <span className="truncate text-sm font-medium text-[var(--text)]">{name === "Workspace" || name === "Default Workspace" ? t(locale, "workspace.defaultWorkspaceName") : name}</span>
-      {activeKind && (
-        <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[0.625rem] uppercase tracking-wide text-[var(--text-disabled)]">
-          {kindLabel(activeKind, locale)}
-        </span>
-      )}
-      <div className="ml-auto flex items-center gap-1">
-        {onToggleGridEditing && (
-          <button
-            type="button"
-            onClick={() => onToggleGridEditing(!gridEditing)}
-            aria-pressed={gridEditing}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
-              gridEditing
-                ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
-            }`}
-          >
-            {gridEditing ? <EyeOff size={13} /> : <Eye size={13} />}
-            {gridEditing ? t(locale, 'workspace.doneEditing') : t(locale, 'workspace.editLayout')}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={onToggleInspector}
-          aria-pressed={inspectorOpen}
-          title={t(locale, 'workspace.toggleInspector')}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
-            inspectorOpen
-              ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
-          }`}
-        >
-          <PanelRight size={13} />
-          {t(locale, 'workspace.inspector')}
-        </button>
-      </div>
-    </div>
-  );
+function TimeRangePicker({ value, onChange }: { value: TimeRange; onChange: (value: TimeRange) => void }) {
+  return <div className="flex rounded-lg bg-[var(--surface-hover)] p-0.5" role="group" aria-label="Time range">{(['today','7d','30d','90d'] as TimeRange[]).map((range) => <button key={range} onClick={() => onChange(range)} className={`rounded-md px-2 py-1 text-[0.6875rem] ${value === range ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm' : 'text-[var(--text-secondary)]'}`}>{range}</button>)}</div>;
 }
 
-function ViewBody({
-  view,
-  workspaceId,
-  gridEditing,
-  onGridLayoutChange,
-  onGridBreakpointChange,
-  onGridAddWidget,
-  onGridRemoveWidget,
-  onGridWriteError,
-  onDataStateChange,
-  canvasRef,
-  onCanvasCommit,
-  onCanvasSelectionChange,
-}: {
-  view: { id: string; kind: WorkspaceViewKind; title: string; gridLayouts?: unknown; canvasNodes?: unknown; data?: DataViewState };
-  workspaceId: string | null;
-  gridEditing: boolean;
-  /** Terminal drag/resize STOP only (never pointer move) → host saveLayout. */
-  onGridLayoutChange: (
-    layouts: import('@/lib/workspace/views/types').GridLayouts,
-    breakpoint: 'lg' | 'md' | 'sm',
-  ) => Promise<void>;
-  onGridBreakpointChange: (bp: 'lg' | 'md' | 'sm') => void;
-  /** Host write surface (Slice 14): upsert / remove widget rows via the provider. */
-  onGridAddWidget: (widgetType: string) => Promise<void>;
-  onGridRemoveWidget: (widgetId: string) => Promise<void>;
-  onGridWriteError: (message: string) => void;
-  onDataStateChange: (patch: Partial<DataViewState>) => void;
-  canvasRef: React.Ref<FreeCanvasViewHandle>;
-  onCanvasCommit: (nodes: CanvasNode[]) => void;
-  onCanvasSelectionChange: (ids: string[]) => void;
-}) {
-  switch (view.kind) {
-    case 'grid':
-      return (
-        <GridWorkspaceView
-          key={view.id}
-          workspaceId={workspaceId}
-          viewId={view.id}
-          layouts={(view.gridLayouts as import('@/lib/workspace/views/types').GridLayouts) ?? emptyGridLayouts()}
-          editable={gridEditing}
-          onLayoutChange={onGridLayoutChange}
-          onBreakpointChange={onGridBreakpointChange}
-          onAddWidget={onGridAddWidget}
-          onRemoveWidget={onGridRemoveWidget}
-          onWriteError={onGridWriteError}
-        />
-      );
-    case 'canvas':
-      return (
-        <FreeCanvasView
-          key={view.id}
-          ref={canvasRef}
-          initialNodes={(view.canvasNodes as CanvasNode[]) ?? []}
-          onCommit={onCanvasCommit}
-          onSelectionChange={onCanvasSelectionChange}
-          editable
-        />
-      );
-    case 'data':
-      return (
-        <DataView
-          key={view.id}
-          viewId={view.id}
-          state={view.data ?? { mode: 'list', columns: [], hiddenColumns: [], filters: [], sort: null, groupBy: null, calendarField: undefined }}
-          onStateChange={onDataStateChange}
-        />
-      );
-    default:
-      return null;
-  }
+function Inspector({ mode, theme, selectedWidget, templates, onMode, onTheme, onWidgetConfig, onResetWidget, onRestore, onSaveTemplate, onClose }: { mode: WorkspaceLayoutMode; theme: 'dark' | 'light'; selectedWidget: NonNullable<ReturnType<typeof useWorkspaceSession>['snapshot']>['widgets'][number] | null; templates: ReturnType<typeof useWorkspaceSession>['templates']; onMode: (mode: WorkspaceLayoutMode) => void; onTheme: (theme: 'dark' | 'light') => void; onWidgetConfig: (id: string, config: Record<string, unknown>) => void; onResetWidget: (id: string) => void; onRestore: (id: string) => void; onSaveTemplate: (name: string) => void; onClose: () => void }) {
+  const [name, setName] = useState('');
+  return <aside className="w-80 shrink-0 overflow-auto border-l border-[var(--border-subtle)] bg-[var(--surface)] p-4" aria-label="Contextual inspector"><div className="mb-5 flex items-center"><h2 className="text-sm font-semibold">Inspector</h2><button className="ml-auto ws-dashboard-action" onClick={onClose}><X size={14} /></button></div><section className="space-y-2"><label className="text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--text-disabled)]">Layout</label><div className="grid grid-cols-2 gap-1 rounded-lg bg-[var(--surface-hover)] p-1">{(['structured','free'] as WorkspaceLayoutMode[]).map((item) => <button key={item} onClick={() => onMode(item)} className={`rounded-md px-2 py-1.5 text-xs ${mode === item ? 'bg-[var(--surface)] shadow-sm' : ''}`}>{item === 'structured' ? 'Grid' : 'Free'}</button>)}</div><label className="block pt-2 text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--text-disabled)]">Theme</label><div className="grid grid-cols-2 gap-1">{(['dark','light'] as const).map((item) => <button key={item} onClick={() => onTheme(item)} className={`rounded-md px-2 py-1.5 text-xs ${theme === item ? 'bg-[var(--surface)] shadow-sm' : ''}`}>{item}</button>)}</div></section>{selectedWidget && <section className="mt-5 rounded-lg bg-[var(--surface-subtle)] p-3"><p className="text-[0.6875rem] uppercase text-[var(--text-disabled)]">Selected widget</p><p className="mt-1 truncate text-xs">{selectedWidget.widgetType}</p>{selectedWidget.widgetType === 'data_view' && <div className="mt-3 grid grid-cols-2 gap-1">{(['list','table','board','calendar'] as const).map((viewMode) => <button key={viewMode} className="rounded-md bg-[var(--surface)] px-2 py-1 text-[0.6875rem]" onClick={() => onWidgetConfig(selectedWidget.id, { ...selectedWidget.config, settings: { ...((selectedWidget.config.settings as Record<string, unknown>) ?? {}), mode: viewMode } })}>{viewMode}</button>)}</div>}<button className="mt-3 flex w-full items-center justify-center gap-1 rounded-md bg-[var(--surface)] px-2 py-1.5 text-[0.6875rem]" onClick={() => onResetWidget(selectedWidget.id)}><RotateCcw size={12} />Reset widget</button></section>}<section className="mt-6 space-y-2"><label className="text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--text-disabled)]">Templates</label>{templates.map((template) => <button key={template.id} onClick={() => onRestore(template.id)} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-[var(--surface-hover)]"><LayoutDashboard size={14} /><span className="min-w-0 flex-1 truncate">{template.name}</span><RotateCcw size={12} /></button>)}<div className="flex gap-1 pt-2"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Template name" className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-transparent px-2 text-xs" /><button className="ws-dashboard-action" disabled={!name.trim()} onClick={() => { onSaveTemplate(name.trim()); setName(''); }}><Save size={14} /></button></div></section></aside>;
 }
 
-function EmptyWorkspace({ onNewView }: { onNewView: (kind: WorkspaceViewKind) => void }) {
-  const locale = useLocale();
-  const newViewKey: Record<WorkspaceViewKind, string> = {
-    grid: 'workspace.newGridView',
-    canvas: 'workspace.newCanvasView',
-    data: 'workspace.newDataView',
-  };
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-      <div className="text-sm font-medium text-[var(--text)]">{t(locale, 'workspace.noOpenViews')}</div>
-      <p className="max-w-80 text-xs leading-relaxed text-[var(--text-secondary)]">
-        {t(locale, 'workspace.createViewHint')}
-      </p>
-      <div className="flex gap-2">
-        {(['grid', 'canvas', 'data'] as WorkspaceViewKind[]).map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            onClick={() => onNewView(kind)}
-            className="rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90"
-          >
-            {t(locale, newViewKey[kind])}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+function DashboardSkeleton({ compact = false }: { compact?: boolean }) {
+  return <div className={`grid h-full gap-4 p-6 ${compact ? 'grid-cols-2' : 'grid-cols-3'}`}>{Array.from({ length: compact ? 4 : 6 }, (_, index) => <Skeleton key={index} variant="card" lines={3} />)}</div>;
 }
-
-function StatusBar({
-  viewCount,
-  activeKind,
-}: {
-
-  viewCount: number;
-  activeKind: string;
-}) {
-  const locale = useLocale();
-  return (
-    <div className="flex h-6 shrink-0 items-center gap-3 border-t border-[var(--border)] bg-[var(--surface)] px-3 text-[0.625rem] text-[var(--text-disabled)]">
-      <span className="tabular-nums">{t(locale, 'workspace.viewCount', { count: viewCount })}</span>
-      <span className="ml-auto uppercase tracking-wide">
-        {activeKind === '—' ? '—' : kindLabel(activeKind as WorkspaceViewKind, locale)}
-      </span>
-    </div>
-  );
-}
-
-/** Sample rows for the Data view (Wave1 demo; rows move to the real source in Wave2). */
-
