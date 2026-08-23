@@ -16,7 +16,7 @@ import { summarizeOverviewUsage } from '@/lib/personal-overview-data';
 import { fmtCount } from '@/lib/format';
 import { ErrorState, EmptyState } from '@/components/ui/EmptyState';
 import StorageOverview from '@/components/settings/StorageOverview';
-import HomeWorkspacePage from '@/components/home/HomeWorkspacePage';
+
 import type { UsageViewRequest } from '@/types/usage';
 
 function localDateKey(date = new Date()): string {
@@ -150,15 +150,15 @@ export default function PersonalOverviewSummary() {
 
       {body}
 
-      <section className="flex flex-col rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4 min-h-[580px]">
+      <section className="flex flex-col rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
         <div className="mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-[var(--text)]">
             <LayoutGrid size={15} className="text-[var(--primary)]" />
             <span>{t(locale, 'settings.tabPersonalOverview')}</span>
           </div>
         </div>
-        <div className="flex-1 min-h-[520px]">
-          <HomeWorkspacePage />
+        <div className="text-xs text-[var(--text-secondary)]">
+          {t(locale, 'settings.overviewDesc')}
         </div>
       </section>
 

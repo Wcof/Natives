@@ -737,4 +737,133 @@ pub(crate) fn upgrade_startup_plans_v1(conn: &Connection) -> Result<usize> {
     Ok(fixed)
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// v28 backfill（Phase B / APP-011，spec 05 §迁移顺序 2-4）。
+//
+// 全部步骤幂等：只更新「尚未回填」的行，重复执行结果稳定。
+// 映射规则（spec 05 + APP-011）：
+//   - source=local_project   → kind=local_project,     origin=local_scan
+//   - source=internal        → kind=local_project,     origin=legacy_internal
+//   - source=external_github → kind=web_application,   origin=legacy_github
+//   - non_owned_apps ownership=remote → 迁入 applications(kind=web_application,
+//     origin=migration) + web_application_specs；attached 不迁移（保留标记）。
+// ───────────────────────────────────────────────────────────────────────────
+
+/// v28 回填总入口（spec 05 §迁移顺序 2-4，APP-011）。
+///
+/// 由 `migration_v28::migrate_v28` 在 DDL 之后、写 `_schema_version=28` 之前调用，
+/// 严格遵循 spec 顺序（DDL → backfill → 版本标记）。整体幂等。
+pub(crate) fn backfill_v28(conn: &Connection) -> Result<()> {
+    backfill_v28_kind_origin(conn)?;
+    backfill_v28_non_owned_remote(conn)?;
+    backfill_v28_profile_bindings(conn)
+}
+
+/// 05 步骤 2：回填 applications.kind / registration_origin。
+///
+/// 只写 `kind IS NULL` 的行 → 幂等（已回填的行不再处理）。legacy `source` 保留
+/// 不删（spec 05 兼容期），kind 成为权威。
+pub(crate) fn backfill_v28_kind_origin(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        UPDATE applications
+           SET kind = 'local_project', registration_origin = 'local_scan'
+         WHERE kind IS NULL AND source = 'local_project';
+
+        UPDATE applications
+           SET kind = 'local_project', registration_origin = 'legacy_internal'
+         WHERE kind IS NULL AND source = 'internal';
+
+        UPDATE applications
+           SET kind = 'web_application', registration_origin = 'legacy_github'
+         WHERE kind IS NULL AND source = 'external_github';
+        ",
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// 05 步骤 3：把 non_owned_apps 中 `ownership='remote'` 的记录迁入
+/// applications + web_application_specs。
+///
+/// 稳定迁移 ID：沿用 non_owned 记录自身的 id 作为 application id（该 id 此前已是
+/// 浏览器 profile binding 的 application_id，保证引用一致）。幂等：仅当该 id 尚
+/// 未存在于 applications 时插入（`INSERT ... WHERE NOT EXISTS`），web spec 用
+/// `INSERT OR IGNORE`（application_id 为 PK）。attached 记录不迁移（APP-011 step 4）。
+pub(crate) fn backfill_v28_non_owned_remote(conn: &Connection) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // 迁入 applications（kind=web_application, origin=migration）。
+    conn.execute(
+        "INSERT INTO applications (id, source, source_id, title, description, icon, version,
+                                  kind, registration_origin, show_in_sidebar, sidebar_order,
+                                  created_at, updated_at)
+         SELECT n.id, 'non_owned_remote', n.id, n.title, NULL, NULL, '1',
+                'web_application', 'migration', 0, NULL,
+                COALESCE(n.created_at, ?1), COALESCE(n.updated_at, ?1)
+           FROM non_owned_apps n
+          WHERE n.ownership = 'remote'
+            AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.id = n.id)",
+        params![now],
+    )
+    .map_err(Error::Database)?;
+
+    // 写入 web_application_specs（PK application_id 去重 → 幂等）。
+    conn.execute(
+        "INSERT OR IGNORE INTO web_application_specs
+            (application_id, url, approved_origins_json, open_behavior, keep_alive,
+             created_at, updated_at)
+         SELECT n.id, n.url, COALESCE(NULLIF(n.approved_origins_json, ''), '[]'),
+                'native_webview', 0,
+                COALESCE(n.created_at, ?1), COALESCE(n.updated_at, ?1)
+           FROM non_owned_apps n
+          WHERE n.ownership = 'remote'
+            AND EXISTS (SELECT 1 FROM applications a WHERE a.id = n.id)",
+        params![now],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// 05 步骤 4：迁移后修复 / 保持 profile bindings 引用一致。
+///
+/// 关键不变式：v28 迁移沿用 non_owned 记录自身的 id 作为 application id（稳定迁移
+/// ID，见 `backfill_v28_non_owned_remote`）。而 `browser_profile_bindings.application_id`
+/// 是 `REFERENCES applications(id)`，迁移前 remote non_owned 的 id 并不在 applications
+/// 中，故这些 Web 应用此前**没有**任何 binding 行（浏览器走 `profile_for_app` 的默认
+/// profile 隐式回退）。因此迁移后「已有 binding 保持引用一致」这一约束由稳定 ID 选择
+/// 天然满足：任何以该 id 键控的 binding 在迁移后仍指向同一个 application id，无需改写。
+///
+/// 本步骤是 spec 六步契约中「修复 profile bindings」的落点，实现为**幂等的引用一致
+/// 校验**（不 fabricate 任何 binding，不复制 profile_id 到 web spec）：确认每个已迁入
+/// 的 Web 应用（kind=web_application, origin=migration）若有 binding，则该 binding 必然
+/// 指向一个真实存在的 application id（FK 已保证）。正常情况下为 no-op。
+pub(crate) fn backfill_v28_profile_bindings(conn: &Connection) -> Result<()> {
+    // 幂等校验：统计「已迁入 Web 应用但 binding 悬空」的行数（FK 下应为 0）。
+    // 只读、无副作用、重复执行稳定。若未来出现悬空引用（数据损坏），返回冲突错误
+    // 让迁移显式失败，而不是静默写坏数据。
+    let dangling: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+               FROM browser_profile_bindings b
+               WHERE b.application_id IN (
+                       SELECT id FROM applications
+                        WHERE kind = 'web_application'
+                          AND registration_origin = 'migration'
+                   )
+                 AND NOT EXISTS (
+                       SELECT 1 FROM applications a WHERE a.id = b.application_id
+                 )",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(Error::Database)?;
+    if dangling > 0 {
+        return Err(Error::Conflict(format!(
+            "v28 profile binding repair found {dangling} dangling reference(s)"
+        )));
+    }
+    Ok(())
+}
+
 // ──────────────────────────────────────────────

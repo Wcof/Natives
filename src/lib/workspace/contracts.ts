@@ -69,6 +69,12 @@ export interface WorkspaceWidget {
   updatedAt: string;
 }
 
+/** Single config patch inside `batchUpdateWidgetConfigs`. */
+export interface WorkspaceWidgetConfigPatch {
+  id: string;
+  config: Record<string, unknown>;
+}
+
 /** One responsive layout per breakpoint; `layout` is the react-grid-layout item array. */
 export interface WorkspaceLayout {
   id: string;
@@ -110,6 +116,8 @@ export interface WorkspaceSnapshot {
   layouts: WorkspaceLayout[];
   viewStates: WorkspaceViewState[];
   toolProfiles: WorkspaceToolProfile[];
+  /** A-033: 48-bit content fingerprint; pass back as `expectedRevision` (G-008). */
+  revision: number;
 }
 
 /**
@@ -125,11 +133,24 @@ export interface WorkspaceSessionSnapshot {
   layouts: WorkspaceLayout[];
   viewStates: WorkspaceViewState[];
   toolProfiles: WorkspaceToolProfile[];
+  /** A-033: 48-bit content fingerprint; pass back as `expectedRevision` (G-008). */
+  revision: number;
 }
 
 // ──────────────────────────────────────────────
 // Command inputs (typed IPC)
 // ──────────────────────────────────────────────
+
+/**
+ * G-008: every workspace content-mutation command also accepts an optional
+ * `expectedRevision: number` wire arg (the A-033 snapshot `revision` the
+ * client last saw). `undefined`/omitted = no check (backward-compatible); a
+ * stale value makes the command fail with `Conflict` before writing.
+ * Commands: update / delete / tab create·update·close·reorder / context
+ * add·remove·batch update·reorder / widget upsert·remove·batch update /
+ * layout save / view state save / tool profile bind·unbind.
+ */
+export type ExpectedRevision = number;
 
 export interface WorkspaceCreateInput {
   name: string;
@@ -178,4 +199,29 @@ export interface WorkspaceWidgetInput {
   widgetType: string;
   config?: Record<string, unknown>;
   hidden?: boolean;
+}
+
+/** A-032: single patch inside batchUpdateContextItems. */
+export interface WorkspaceContextItemPatch {
+  id: string;
+  title?: string;
+  meta?: Record<string, unknown>;
+  position?: number;
+}
+
+/** One enabled tool-profile reference eligible for MCP exposure (A-034). */
+export interface McpToolProfileExposure {
+  profileId: string;
+  toolKey: string | null;
+  enabled: boolean;
+}
+
+/** A-034: read-only MCP exposure allowlist for a workspace. */
+export interface WorkspaceMcpExposure {
+  workspaceId: string;
+  contextItemKinds: string[];
+  widgetTypes: string[];
+  toolProfiles: McpToolProfileExposure[];
+  layoutBreakpoints: string[];
+  generatedAt: string;
 }

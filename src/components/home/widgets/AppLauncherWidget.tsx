@@ -2,34 +2,35 @@
 
 /**
  * 常用应用 Widget（默认 5 Widget 之一）。
- * 复用 `creativeApp.list()`（现有 facade），不直接查 SQLite / 进程。
+ * 使用 `appsApi.listViews()`（统一 applications 注册表），不直接查 SQLite / 进程。
  */
 
 import { useEffect, useState } from 'react';
 import { Box } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
-import { creativeApp } from '@/lib/tauri/creative';
-import type { CreativeAppSummary } from '@/lib/tauri/types-creative-app';
+import { appsApi, type AppView } from '@/lib/tauri/apps';
 
 const LIMIT = 8;
 
 export function AppLauncherWidget() {
   const locale = useLocale();
-  const [apps, setApps] = useState<CreativeAppSummary[] | null>(null);
+  const [apps, setApps] = useState<AppView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const list = await creativeApp.list();
+        const list = await appsApi.listViews();
         if (!cancelled) setApps(list.slice(0, LIMIT));
       } catch {
         if (!cancelled) setError('unavailable');
       }
     };
     void load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (error) {
@@ -59,14 +60,14 @@ export function AppLauncherWidget() {
   return (
     <ul className="flex h-full flex-col gap-1 overflow-y-auto px-1">
       {apps.map((app) => (
-        <li key={app.id}>
+        <li key={app.appId}>
           <div
             title={app.title}
             className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-xs text-[var(--text-secondary)]"
           >
             <Box size={13} className="shrink-0 text-[var(--text-disabled)]" />
             <span className="min-w-0 flex-1 truncate">{app.title}</span>
-            {app.state === 'running' ? (
+            {app.runtimeState === 'running' ? (
               <span className="shrink-0 rounded bg-[var(--primary-soft)] px-1.5 py-0.5 text-[0.625rem] text-[var(--primary)]">
                 {t(locale, 'home.running')}
               </span>

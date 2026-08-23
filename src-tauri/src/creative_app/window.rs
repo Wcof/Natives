@@ -21,6 +21,9 @@ pub const OP_WINDOW_CLOSE: &str = "window_close";
 pub const OP_WINDOW_MINIMIZE: &str = "window_minimize";
 pub const OP_WINDOW_RESTORE: &str = "window_restore";
 
+/// Soft max for concurrently-open child WebView windows (triggers LRU background hibernation).
+pub const SOFT_LIVE_WINDOWS: usize = 6;
+
 /// Maximum concurrently-open child WebView windows. Every open window holds a
 /// live WKWebView (renderer process + surface); beyond this documented support
 /// ceiling a new `open` is refused with a typed error (R-P9 / T11). Re-opening
@@ -143,7 +146,22 @@ impl WindowController {
                 .map(|w| w.state == WindowInstance::STATE_OPEN)
                 .unwrap_or(false);
         if !reuses_open_window {
-            let open = surface_store::count_open_windows(conn)?;
+            let mut open = surface_store::count_open_windows(conn)?;
+            if open >= SOFT_LIVE_WINDOWS {
+                // Try LRU hibernation on background candidates
+                if let Ok(candidates) = surface_store::list_lru_hibernation_candidates(conn) {
+                    for (cand_id, _cand_app_id, cand_label) in candidates {
+                        if cand_label != browser::window_label(surface_id) {
+                            let _ = gw.close(&cand_label);
+                            let _ = surface_store::mark_window_hibernated(conn, &cand_id);
+                            open = surface_store::count_open_windows(conn)?;
+                            if open < SOFT_LIVE_WINDOWS {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             if open >= MAX_LIVE_WINDOWS {
                 return Err(Error::Internal(format!(
                     "window limit reached ({open}/{MAX_LIVE_WINDOWS} open): \
@@ -207,6 +225,7 @@ impl WindowController {
             return Err(e);
         }
 
+        let _ = surface_store::update_window_activity(conn, &window.id);
         let _ = op::finish_success(conn, op_id);
         surface_store::find_window(conn, &window.id)?
             .ok_or_else(|| Error::Internal("window vanished after commit".into()))

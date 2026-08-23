@@ -12,6 +12,7 @@
 - **规则**：产品身份**必须**表述为：
 
   > **AiNative = AI Native Personal Workspace。**
+> 首页（Home）必须支持**多个 Workspace**：创建、打开、切换、关闭、重新打开、置顶、排序、重命名、复制、模板创建与删除；Workspace Tab 只代表**当前打开的 Workspace**，Grid/Canvas 是该 Workspace 的布局模式（MUST，ADR-0021）。
 
   产品是稳定、长期可维护的个人数字桌面，不是 Agent Runtime、AI Gateway、固定 Dashboard、低代码平台或插件市场。
 - **为什么**：单一身份决定 IA、领域所有权与删除范围，避免历史能力继续反向定义产品。

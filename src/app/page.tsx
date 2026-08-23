@@ -1,16 +1,17 @@
 'use client';
 
-import HomeWorkspacePage from '@/components/home/HomeWorkspacePage';
+import WorkspaceCompositionPage from '@/components/workspace/WorkspaceCompositionPage';
 import '@/types';
 
 /**
- * `/` —— 唯一 Personal Workspace Home（ADR-0020 §3 / 决策 1/10）。
- * 完整 Usage Dashboard 已迁至数据/用量页（/usage），首页不再承载完整用量。
+ * `/` —— Personal Workspace Home (V2).
+ * Local-First Multi-Workspace composition surface supporting compact grid,
+ * free canvas, data views, and inspector.
  */
 export default function DashboardPage() {
   return (
     <div className="w-full h-full flex flex-col overflow-hidden">
-      <HomeWorkspacePage />
+      <WorkspaceCompositionPage />
     </div>
   );
 }

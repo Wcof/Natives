@@ -108,18 +108,42 @@ fn resolve_bundled_daemon_bin() -> PathBuf {
     } else {
         "natives-agent-daemon"
     };
+
+    // 1. Search relative to current executable (packaged app / dev runner)
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for candidate in [
-                dir.join(name),
-                dir.parent().map(|p| p.join(name)).unwrap_or_default(),
-            ] {
+        let mut curr = exe.parent();
+        for _ in 0..5 {
+            if let Some(dir) = curr {
+                let candidate = dir.join(name);
                 if candidate.is_file() {
                     return candidate;
                 }
+                curr = dir.parent();
+            } else {
+                break;
             }
         }
     }
+
+    // 2. Search relative to current working directory (dev mode)
+    if let Ok(cwd) = std::env::current_dir() {
+        for candidate in [
+            cwd.join("target/debug").join(name),
+            cwd.join("target/release").join(name),
+            cwd.join("../target/debug").join(name),
+            cwd.join("../target/release").join(name),
+            cwd.join(".cargo-target-local/debug").join(name),
+            cwd.join("../.cargo-target-local/debug").join(name),
+            cwd.join("src-tauri/binaries").join(name),
+            cwd.join("binaries").join(name),
+        ] {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    // 3. Fallback to binary name for PATH resolution
     PathBuf::from(name)
 }
 

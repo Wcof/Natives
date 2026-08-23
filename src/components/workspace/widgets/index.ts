@@ -1,11 +1,8 @@
 'use client';
 
 /**
- * Workspace V2 Widgets barrel（B-021..B-028）。
- * 注册 7 个内置 Widget 到 lib registry（code-registered）。
- * 说明：registry.ts 是注册框架（type 唯一校验）；把 7 个内置定义的注册
- * 收敛在这里，避免 lib → components 的循环依赖（lib 不 import components）。
- * 任何模块 import 本 barrel 即完成注册；注册冲突会显式 throw。
+ * Workspace V2 Widgets barrel (B-021..B-034).
+ * Code-registered built-in widgets for the Workspace Framework.
  */
 
 import {
@@ -23,7 +20,17 @@ import { tokenMetricsWidgetDefinition } from './TokenMetricsWidget';
 import { aiStatusWidgetDefinition } from './AiStatusWidget';
 import { storageOverviewWidgetDefinition } from './StorageOverviewWidget';
 
-// ── 注册全部 7 个内置 Widget（重复 type 在此显式失败） ──
+// Wave 2 widgets
+import { costMetricsWidgetDefinition } from './CostMetricsWidget';
+import { workTimeWidgetDefinition } from './WorkTimeWidget';
+import { distributionChartWidgetDefinition } from './DistributionChartWidget';
+import { toolStatusWidgetDefinition } from './ToolStatusWidget';
+import { proxyStatusWidgetDefinition } from './ProxyStatusWidget';
+import { notesWidgetDefinition } from './NotesWidget';
+import { promptSnippetsWidgetDefinition } from './PromptSnippetsWidget';
+import { quickLinksWidgetDefinition } from './QuickLinksWidget';
+
+// ── 注册全部 15 个内置 Widget ──
 registerWidgets([
   greetingWidgetDefinition,
   recentFilesWidgetDefinition,
@@ -32,6 +39,14 @@ registerWidgets([
   tokenMetricsWidgetDefinition,
   aiStatusWidgetDefinition,
   storageOverviewWidgetDefinition,
+  costMetricsWidgetDefinition,
+  workTimeWidgetDefinition,
+  distributionChartWidgetDefinition,
+  toolStatusWidgetDefinition,
+  proxyStatusWidgetDefinition,
+  notesWidgetDefinition,
+  promptSnippetsWidgetDefinition,
+  quickLinksWidgetDefinition,
 ] as const);
 
 export { WidgetRenderer } from './WidgetRenderer';
@@ -47,6 +62,14 @@ export {
   tokenMetricsWidgetDefinition,
   aiStatusWidgetDefinition,
   storageOverviewWidgetDefinition,
+  costMetricsWidgetDefinition,
+  workTimeWidgetDefinition,
+  distributionChartWidgetDefinition,
+  toolStatusWidgetDefinition,
+  proxyStatusWidgetDefinition,
+  notesWidgetDefinition,
+  promptSnippetsWidgetDefinition,
+  quickLinksWidgetDefinition,
 };
 
 /** 已注册内置 Widget 定义（registry 只读视图）。 */

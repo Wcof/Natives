@@ -760,6 +760,46 @@ pub fn external_instance_hint(
     Ok((port.map(|p| p as u16), None, None))
 }
 
+/// Upsert runtime instance for system application.
+pub fn upsert_system_instance(
+    conn: &Connection,
+    application_id: &str,
+    pid: Option<i32>,
+    ownership_mode: Option<&str>,
+    bundle_id: Option<&str>,
+) -> Result<String> {
+    let t = now();
+    if let Some(inst_id) = active_instance_id(conn, application_id)? {
+        conn.execute(
+            "UPDATE runtime_instances
+             SET pid = ?2, owner_pid = ?2, status = 'running', ownership_mode = ?3,
+                 external_identity = ?4, updated_at = ?5
+             WHERE id = ?1",
+            params![inst_id, pid, ownership_mode, bundle_id, t],
+        )
+        .map_err(Error::Database)?;
+        return Ok(inst_id);
+    }
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO runtime_instances
+            (id, application_id, plan_id, status, owner_kind, pid, owner_pid,
+             ownership_mode, external_identity, created_at, updated_at)
+         VALUES (?1, ?2, NULL, 'running', 'system_application', ?3, ?3, ?4, ?5, ?6, ?6)",
+        params![id, application_id, pid, ownership_mode, bundle_id, t],
+    )
+    .map_err(Error::Database)?;
+    Ok(id)
+}
+
+/// Settle active system instance to stopped status.
+pub fn settle_system_instance_stopped(conn: &Connection, application_id: &str) -> Result<()> {
+    if let Some(inst_id) = active_instance_id(conn, application_id)? {
+        mark_stopped(conn, &inst_id)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "runtime_store_tests.rs"]
 mod runtime_store_tests;

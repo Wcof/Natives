@@ -8,17 +8,19 @@
 //! enough for local single-user operation: `<prefix>_<monotonic_nanos>_<seq>`.
 
 use super::types::{
-    WorkspaceContextItem, WorkspaceContextItemInput, WorkspaceLayout, WorkspaceSummary,
-    WorkspaceTab, WorkspaceTabInput, WorkspaceTabUpdate, WorkspaceToolProfile, WorkspaceUpdateRequest,
-    WorkspaceViewState, WorkspaceWidget, WorkspaceWidgetInput, normalize_theme,
+    normalize_theme, WorkspaceContextItem, WorkspaceContextItemInput, WorkspaceContextItemPatch,
+    WorkspaceLayout, WorkspaceSummary, WorkspaceTab, WorkspaceTabInput, WorkspaceTabUpdate,
+    WorkspaceToolProfile, WorkspaceUpdateRequest, WorkspaceViewState, WorkspaceWidget,
+    WorkspaceWidgetInput,
 };
 use crate::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn new_id(prefix: &str) -> String {
+pub(crate) fn new_id(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -27,7 +29,7 @@ fn new_id(prefix: &str) -> String {
     format!("{prefix}_{nanos:x}_{seq:x}")
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
@@ -152,9 +154,12 @@ const TOOL_PROFILE_COLS: &str =
 // ──────────────────────────────────────────────
 
 pub fn list_workspaces(conn: &Connection) -> Result<Vec<WorkspaceSummary>> {
+    // Deterministic order: position first, then creation time, then id as a
+    // tiebreak (created_at is second-resolution, so equal positions within the
+    // same second are disambiguated by the nanosecond-bearing id).
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {WORKSPACE_COLS} FROM workspaces ORDER BY position ASC, created_at ASC"
+            "SELECT {WORKSPACE_COLS} FROM workspaces ORDER BY position ASC, created_at ASC, id ASC"
         ))
         .map_err(Error::Database)?;
     let rows = stmt
@@ -186,9 +191,11 @@ pub fn create_workspace(
     let now = now_rfc3339();
     let theme = normalize_theme(theme).to_string();
     let position = {
+        // MAX() on an empty table is a single NULL row — bind as Option<i64>.
         let max_pos: Option<i64> = conn
-            .query_row("SELECT MAX(position) FROM workspaces", [], |r| r.get(0))
-            .optional()
+            .query_row("SELECT MAX(position) FROM workspaces", [], |r| {
+                r.get::<_, Option<i64>>(0)
+            })
             .map_err(Error::Database)?;
         max_pos.map(|p| p + 1).unwrap_or(0)
     };
@@ -199,9 +206,8 @@ pub fn create_workspace(
         rusqlite::params![id, name, kind, icon, description, theme, position, now],
     )
     .map_err(Error::Database)?;
-    get_workspace(conn, &id)?.ok_or_else(|| {
-        Error::Internal(format!("workspace {id} was created but not readable"))
-    })
+    get_workspace(conn, &id)?
+        .ok_or_else(|| Error::Internal(format!("workspace {id} was created but not readable")))
 }
 
 pub fn update_workspace(
@@ -309,9 +315,8 @@ pub fn create_tab(
             .query_row(
                 "SELECT MAX(position) FROM workspace_tabs WHERE workspace_id = ?1",
                 [workspace_id],
-                |r| r.get(0),
+                |r| r.get::<_, Option<i64>>(0),
             )
-            .optional()
             .map_err(Error::Database)?;
         max_pos.map(|p| p + 1).unwrap_or(0)
     };
@@ -391,25 +396,23 @@ pub fn close_tab(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// Reorder tabs in a workspace by writing `position = idx` for each id.
-/// Missing ids are ignored (they may belong to another workspace).
+/// Missing ids are ignored (they may belong to another workspace). The whole
+/// reorder runs in one transaction (A-032: large batch updates are atomic).
 pub fn reorder_tabs(
     conn: &Connection,
     workspace_id: &str,
     ordered_ids: &[String],
 ) -> Result<Vec<WorkspaceTab>> {
+    let tx = conn.unchecked_transaction().map_err(Error::Database)?;
     for (idx, tab_id) in ordered_ids.iter().enumerate() {
-        conn.execute(
+        tx.execute(
             "UPDATE workspace_tabs SET position = ?1, updated_at = ?2
               WHERE id = ?3 AND workspace_id = ?4",
-            rusqlite::params![
-                idx as i64,
-                now_rfc3339(),
-                tab_id,
-                workspace_id
-            ],
+            rusqlite::params![idx as i64, now_rfc3339(), tab_id, workspace_id],
         )
         .map_err(Error::Database)?;
     }
+    tx.commit().map_err(Error::Database)?;
     list_tabs(conn, workspace_id)
 }
 
@@ -448,9 +451,8 @@ pub fn add_context_item(
             .query_row(
                 "SELECT MAX(position) FROM workspace_context_items WHERE workspace_id = ?1",
                 [workspace_id],
-                |r| r.get(0),
+                |r| r.get::<_, Option<i64>>(0),
             )
-            .optional()
             .map_err(Error::Database)?;
         max_pos.map(|p| p + 1).unwrap_or(0)
     };
@@ -497,6 +499,73 @@ pub fn remove_context_item(conn: &Connection, workspace_id: &str, item_id: &str)
         )
         .map_err(Error::Database)?;
     Ok(changed > 0)
+}
+
+/// A-032: reorder context items by writing `position = idx` for each id.
+/// Missing ids are ignored (they may belong to another workspace). Runs in one
+/// transaction so a large drag/reorder commit is atomic.
+pub fn reorder_context_items(
+    conn: &Connection,
+    workspace_id: &str,
+    ordered_ids: &[String],
+) -> Result<Vec<WorkspaceContextItem>> {
+    if get_workspace(conn, workspace_id)?.is_none() {
+        return Ok(Vec::new());
+    }
+    let tx = conn.unchecked_transaction().map_err(Error::Database)?;
+    for (idx, item_id) in ordered_ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE workspace_context_items SET position = ?1
+              WHERE id = ?2 AND workspace_id = ?3",
+            rusqlite::params![idx as i64, item_id, workspace_id],
+        )
+        .map_err(Error::Database)?;
+    }
+    tx.commit().map_err(Error::Database)?;
+    list_context_items(conn, workspace_id)
+}
+
+/// A-032: apply a batch of context-item patches to one workspace in a single
+/// transaction. Only present patch fields are written; rows not present in the
+/// batch (or not belonging to the workspace) are left untouched.
+pub fn batch_update_context_items(
+    conn: &Connection,
+    workspace_id: &str,
+    patches: &[WorkspaceContextItemPatch],
+) -> Result<Vec<WorkspaceContextItem>> {
+    if get_workspace(conn, workspace_id)?.is_none() {
+        return Ok(Vec::new());
+    }
+    if patches.is_empty() {
+        return list_context_items(conn, workspace_id);
+    }
+    let existing = list_context_items(conn, workspace_id)?;
+    let by_id: HashMap<&str, &WorkspaceContextItem> = existing
+        .iter()
+        .map(|item| (item.id.as_str(), item))
+        .collect();
+    let tx = conn.unchecked_transaction().map_err(Error::Database)?;
+    for patch in patches {
+        let Some(item) = by_id.get(patch.id.as_str()) else {
+            continue;
+        };
+        let title = patch.title.clone().unwrap_or_else(|| item.title.clone());
+        let meta = patch
+            .meta
+            .clone()
+            .unwrap_or_else(|| item.meta.clone())
+            .to_string();
+        let position = patch.position.unwrap_or(item.position);
+        tx.execute(
+            "UPDATE workspace_context_items
+                SET title = ?1, meta_json = ?2, position = ?3
+              WHERE id = ?4 AND workspace_id = ?5",
+            rusqlite::params![title, meta, position, patch.id, workspace_id],
+        )
+        .map_err(Error::Database)?;
+    }
+    tx.commit().map_err(Error::Database)?;
+    list_context_items(conn, workspace_id)
 }
 
 // ──────────────────────────────────────────────
@@ -576,9 +645,8 @@ pub fn upsert_widget(
                     .query_row(
                         "SELECT MAX(position) FROM workspace_widgets WHERE workspace_id = ?1",
                         [workspace_id],
-                        |r| r.get(0),
+                        |r| r.get::<_, Option<i64>>(0),
                     )
-                    .optional()
                     .map_err(Error::Database)?;
                 max_pos.map(|p| p + 1).unwrap_or(0)
             };
@@ -675,10 +743,7 @@ pub fn save_layout(
 // View states
 // ──────────────────────────────────────────────
 
-pub fn list_view_states(
-    conn: &Connection,
-    workspace_id: &str,
-) -> Result<Vec<WorkspaceViewState>> {
+pub fn list_view_states(conn: &Connection, workspace_id: &str) -> Result<Vec<WorkspaceViewState>> {
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {VIEW_STATE_COLS} FROM workspace_view_states WHERE workspace_id = ?1 ORDER BY view_key ASC"
@@ -787,13 +852,24 @@ pub fn bind_tool_profile(
             tool_key = excluded.tool_key,
             config_json = excluded.config_json,
             updated_at = excluded.updated_at",
-        rusqlite::params![new_id("tpf"), workspace_id, profile_id, tool_key, config_json, now],
+        rusqlite::params![
+            new_id("tpf"),
+            workspace_id,
+            profile_id,
+            tool_key,
+            config_json,
+            now
+        ],
     )
     .map_err(Error::Database)?;
     get_tool_profile(conn, workspace_id, profile_id)
 }
 
-pub fn unbind_tool_profile(conn: &Connection, workspace_id: &str, profile_id: &str) -> Result<bool> {
+pub fn unbind_tool_profile(
+    conn: &Connection,
+    workspace_id: &str,
+    profile_id: &str,
+) -> Result<bool> {
     let changed = conn
         .execute(
             "DELETE FROM workspace_tool_profiles WHERE workspace_id = ?1 AND profile_id = ?2",
@@ -801,4 +877,117 @@ pub fn unbind_tool_profile(conn: &Connection, workspace_id: &str, profile_id: &s
         )
         .map_err(Error::Database)?;
     Ok(changed > 0)
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use crate::db::{apply_migrations, create_tables};
+
+    /// Fresh in-memory DB at schema v27. With an empty `settings` table the
+    /// v27 migration seeds no legacy home workspace, so `workspaces` starts
+    /// EMPTY — exactly the case that broke `create_workspace` (A-002).
+    /// The defensive DELETE keeps this true even if a future migration seeds
+    /// a default row.
+    fn empty_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_tables(&conn).unwrap();
+        apply_migrations(&conn).unwrap();
+        let _ = conn.execute("DELETE FROM workspaces", []);
+        conn
+    }
+
+    fn workspace_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn create_on_empty_db() {
+        let conn = empty_db();
+        assert_eq!(workspace_count(&conn), 0, "fixture must be an empty DB");
+
+        // First create on the empty table used to fail with
+        // InvalidColumnType (MAX(position) is NULL, not a missing row).
+        let a = create_workspace(&conn, "alpha", "workspace", None, None, "dark").unwrap();
+        assert!(!a.id.is_empty());
+        assert_eq!(a.name, "alpha");
+        assert_eq!(a.kind, "workspace");
+        assert_eq!(a.theme, "dark");
+        assert_eq!(a.position, 0, "first workspace takes position 0");
+        assert!(!a.is_active, "new workspaces start inactive");
+
+        // Unknown themes normalize to the two-value contract.
+        let b =
+            create_workspace(&conn, "beta", "workspace", None, None, "frosted-jasmine").unwrap();
+        assert_eq!(b.theme, "light");
+
+        // Positions are monotonic: MAX(position)+1.
+        assert_eq!(b.position, 1);
+        let c = create_workspace(&conn, "gamma", "workspace", None, None, "light").unwrap();
+        assert_eq!(c.position, 2);
+    }
+
+    #[test]
+    fn list_stable_order() {
+        let conn = empty_db();
+        let a = create_workspace(&conn, "alpha", "workspace", None, None, "dark").unwrap();
+        let b = create_workspace(&conn, "beta", "workspace", None, None, "dark").unwrap();
+        let c = create_workspace(&conn, "gamma", "workspace", None, None, "dark").unwrap();
+
+        // Shuffle: A->2, B->0, C->1 (expected list order: B, C, A).
+        for (id, pos) in [(a.id.as_str(), 2), (b.id.as_str(), 0), (c.id.as_str(), 1)] {
+            conn.execute(
+                "UPDATE workspaces SET position = ?1 WHERE id = ?2",
+                rusqlite::params![pos, id],
+            )
+            .unwrap();
+        }
+
+        let first = list_workspaces(&conn).unwrap();
+        let second = list_workspaces(&conn).unwrap();
+        assert_eq!(
+            first.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
+            vec!["beta", "gamma", "alpha"],
+            "list must be ordered by position ascending"
+        );
+        assert_eq!(
+            first.iter().map(|w| w.position).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(first, second, "order must be stable across calls");
+
+        // Tiebreak: two workspaces sharing a position must still come back
+        // in a deterministic (created_at, then id) order on both calls.
+        // alpha was created before gamma, so it sorts first among the tied pair.
+        conn.execute(
+            "UPDATE workspaces SET position = 3 WHERE id IN (?1, ?2)",
+            rusqlite::params![a.id, c.id],
+        )
+        .unwrap();
+        let tie1 = list_workspaces(&conn).unwrap();
+        let tie2 = list_workspaces(&conn).unwrap();
+        assert_eq!(
+            tie1.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(),
+            vec!["beta", "alpha", "gamma"],
+            "tied positions must be disambiguated by (created_at, id)"
+        );
+        assert_eq!(tie1, tie2, "order must be stable across calls");
+    }
+
+    #[test]
+    fn get_workspace_empty_and_existing() {
+        let conn = empty_db();
+        // Missing id → Ok(None) (documented Option behavior).
+        assert!(super::get_workspace(&conn, "ws_missing").unwrap().is_none());
+
+        let a = create_workspace(&conn, "alpha", "workspace", Some("star"), None, "dark").unwrap();
+        let got = super::get_workspace(&conn, &a.id)
+            .unwrap()
+            .expect("existing id must be found");
+        assert_eq!(got.name, "alpha");
+        assert_eq!(got.icon.as_deref(), Some("star"));
+        assert_eq!(got.kind, a.kind);
+        assert_eq!(got.position, a.position);
+    }
 }

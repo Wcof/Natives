@@ -7,7 +7,7 @@
  */
 
 import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
-import { Surface, type SurfaceProps, type SurfaceRadius } from './Surface';
+import { Surface, type SurfaceRadius } from './Surface';
 import type { ElevationLevel } from '@/lib/design-tokens';
 
 export type GlowTone = 'none' | 'focus' | 'selected' | 'success' | 'danger';

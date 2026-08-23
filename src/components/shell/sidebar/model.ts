@@ -134,6 +134,7 @@ export function getNavigationId(activeModuleId?: string): string | null {
   if (activeModuleId === 'jobs' || activeModuleId === '__jobs__') return '__jobs__';
   if (activeModuleId === 'capabilities' || activeModuleId === '__capabilities__') return '__capabilities__';
   if (activeModuleId === 'library' || activeModuleId === '__library__') return '__library__';
+  if (activeModuleId.startsWith('apps:item:')) return activeModuleId;
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
   if (activeModuleId.startsWith('builtin:')) return activeModuleId;

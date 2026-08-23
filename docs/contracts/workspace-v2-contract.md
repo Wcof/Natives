@@ -1,6 +1,9 @@
 # Workspace / Widget / Layout / Theme V2 —— 冻结契约（M-004 + M-006）
 
 > 状态：**已冻结**（2026-08-21）。A/B/C 三方必须以本文类型名与字段为准开发；任何核心字段变更需经 Main Agent 批准并升版。
+> **Wave2 冻结确认（I-008，2026-08-21）**：核心字段不再变更；A/B/C Wave2 并行开发。新增能力只做加法：
+> A-032 context reorder/batch、A-033 snapshot revision/version、A-034 MCP exposure DTO（不实现 Agent runtime）、
+> B-030..B-036 新 metrics/distribution widgets、C-033..C-038 Frame/Group/z-order/canvas keyboard/picker 集成。
 > 关联：ADR-0021、`docs/contracts/file-ownership.md`、`docs/contracts/reference-provenance.md`、方案 04/04A/06/07。
 
 ## 1. 总体权威链
@@ -171,5 +174,17 @@ motion-easing / transition-fast / transition-normal / transition-slow
 ## 9. 性能与可访问性
 
 - 无全屏高成本 blur / WebGL；drag 可降级。
-- `prefers-reduced-motion` / `prefers-reduced-transparency` 有确定性退化路径（V-005/V-035）。
+- `prefers-reduced-motion` / `prefers-reduced-transparency` 有确定性退化路径（V-005/V-035
+
+## 7. 三概念严格区分（G-007 术语裁决，2026-08-22）
+
+> 本契约与所有后续实现中，以下三概念必须严格区分，禁止互相借用：
+
+1. **Workspace Tab = 打开的 Workspace 会话**。Tab row 存在 ⇔ 该 Workspace 处于打开状态；Close = 删除 row；Reopen = 插入 row。Tab 类型只承载会话字段（tabType/title/refId/url/position/isActive/pinned），**永不表示布局模式或数据视图模式**。
+2. **布局模式（Grid/Canvas）= Workspace 级互斥状态**：`compact`（12 列磁吸 Compact Grid）与 `free`（bounded DOM Free Canvas）。持久化于 `workspaces.default_layout_mode`（A 组补列）与 `workspace_layouts.layout_mode`（A 组迁移）。同一时刻一个 Workspace 只有一种激活布局模式，可持久化切换。
+3. **DataView 模式 = Data View Widget 的展示模式**：`list | table | board | calendar`。经 `workspace_view_states`（按 view_key 作用域）持久化，与布局模式正交——同一 Workspace 可同时为 free 画布布局 + board 模式 Data View。
+
+类型化时机（无消费方不预置）：`WorkspaceTab` 已满足定义 1；`WorkspaceLayoutMode` 随 Compact Grid 切片（C-015..020）引入；`DataViewMode` 随 Data View 切片（C-021..025）引入。
+
+**schema 裁决**：本文件 §3 表结构与实现的偏离（TS/Rust/SQLite/frozen 四源矩阵 M-01..M-26）按 `workspace-v2-contract-matrix.md` §10 裁决执行：以实现为准的 12 项由 A 组同步修订本文档文本；A 组 schema 迁移的 12 项（含 M-17/18/19 layout_mode——解除 Grid/Canvas 双布局结构性阻断，最高优先）在迁移完成后同步修订本文档。）。
 - 125%/150% 缩放与窄窗口下材质、阴影、高光不破裂（V-055）。

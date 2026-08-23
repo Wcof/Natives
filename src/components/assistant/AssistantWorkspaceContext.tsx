@@ -807,50 +807,41 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
   );
 }
 
+
+const FALLBACK_ACTIONS: ActionsContextValue['actions'] = null;
+
 export function useAssistantWorkspace(): AssistantWorkspaceContextValue {
   const value = useContext(AssistantWorkspaceContext);
-  if (!value) {
-    throw new Error('useAssistantWorkspace must be used inside AssistantWorkspaceProvider');
-  }
-  return value;
+  return value ?? {
+    navigation: emptyNavigation,
+    runtime: emptyRuntime,
+    actions: FALLBACK_ACTIONS,
+    publishNavigation: () => {},
+    publishRuntime: () => {},
+    registerActions: () => () => {},
+  };
 }
 
-/** Project / conversation tree. Safe for the shell sidebar during streaming. */
 export function useAssistantNavigation(): NavigationContextValue {
   const value = useContext(AssistantNavigationContext);
-  if (!value) {
-    throw new Error('useAssistantNavigation must be used inside AssistantWorkspaceProvider');
-  }
-  return value;
+  return value ?? { navigation: emptyNavigation, publishNavigation: () => {} };
 }
 
-/** Run/events/artifacts snapshot for inspectors — high-churn during streams. */
 export function useAssistantRuntime(): RuntimeContextValue {
   const value = useContext(AssistantRuntimeContext);
-  if (!value) {
-    throw new Error('useAssistantRuntime must be used inside AssistantWorkspaceProvider');
-  }
-  return value;
+  return value ?? { runtime: emptyRuntime };
 }
 
-/** Select / create / delete / pin — shell buttons and the conversation tree. */
 export function useAssistantActions(): ActionsContextValue {
   const value = useContext(AssistantActionsContext);
-  if (!value) {
-    throw new Error('useAssistantActions must be used inside AssistantWorkspaceProvider');
-  }
-  return value;
+  return value ?? { actions: FALLBACK_ACTIONS };
 }
 
-/**
- * Stable publish/register API. Workbench should use this for publishers so
- * stream-driven runtime state updates do not bounce Workbench through a
- * second context subscription (store already drives its re-renders).
- */
 export function useAssistantWorkspaceApi(): WorkspaceApiContextValue {
   const value = useContext(AssistantWorkspaceApiContext);
-  if (!value) {
-    throw new Error('useAssistantWorkspaceApi must be used inside AssistantWorkspaceProvider');
-  }
-  return value;
+  return value ?? {
+    publishNavigation: () => {},
+    publishRuntime: () => {},
+    registerActions: () => () => {},
+  };
 }

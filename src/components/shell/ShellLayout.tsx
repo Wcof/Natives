@@ -27,6 +27,7 @@ import type { FileEntry } from '@/types/file';
 import type { PreviewSubMode } from '@/lib/preview/contracts';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
+import { appsApi } from '@/lib/tauri/apps';
 
 // Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
@@ -251,9 +252,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
     if (moduleId === '__dashboard__') {
       setActiveView('dashboard');
-    } else if (moduleId === '__workshop__' || moduleId === 'modules' || moduleId === 'store') {
-      // Personal Creations — canonical view key remains `modules` for main menu / deep links
-      setActiveView('modules');
+    } else if (moduleId === 'apps' || moduleId === '__apps__' || moduleId === '__workshop__' || moduleId === 'modules' || moduleId === 'store') {
+      // Canonical entry is apps; legacy workshop/modules/store redirect to apps
+      setActiveView('apps');
     } else if (moduleId === '__assistant__') {
       setActiveView('assistant');
     } else if (moduleId === '__jobs__' || moduleId === 'jobs') {
@@ -267,6 +268,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView(moduleId);
     } else if (moduleId === '__notifications__') {
       toggleRightPanel('notifications');
+    } else if (moduleId.startsWith('apps:item:')) {
+      const appId = moduleId.slice('apps:item:'.length);
+      void appsApi.open(appId);
     } else if (moduleId.startsWith('__files__:')) {
       // Navigate file browser to a specific path
       const path = moduleId.slice(10);

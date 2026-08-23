@@ -22,7 +22,6 @@ import {
   GRID_MARGIN,
   GRID_PADDING,
   GRID_ROW_HEIGHT,
-  type GridLayoutItem,
   type GridLayouts,
 } from '@/lib/workspace/views/types';
 

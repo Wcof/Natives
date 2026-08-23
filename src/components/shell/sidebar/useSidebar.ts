@@ -11,6 +11,8 @@ import {
   FAVORITES_SIDEBAR_PREVIEW,
   type FavoriteItem,
 } from '@/lib/favorites-client';
+import { appsApi, type AppView } from '@/lib/tauri/apps';
+import { subscribe } from '@/lib/tauri/core';
 import { useAssistantActions } from '@/components/assistant/AssistantWorkspaceContext';
 import { getSettingsSection, isSettingsView } from '../settings-navigation';
 import {
@@ -66,6 +68,10 @@ export interface SidebarController {
   normalizedLocale: 'zh' | 'en';
   isSettingsMode: boolean;
   activeSettingsSection: string | null;
+  sidebarApps: AppView[];
+  appsExpanded: boolean;
+  setAppsExpanded: Dispatch<SetStateAction<boolean>>;
+  handleAppClick: (app: AppView) => void;
   assistantActions: ReturnType<typeof useAssistantActions>['actions'];
   selectNavigation: (navigationId: string, target: string) => void;
   handleFavoriteClick: (item: FavoriteItem) => void;
@@ -94,8 +100,41 @@ export function useSidebar({
   const [favoritesExpanded, setFavoritesExpanded] = useState(false);
   const [fileManagerExpanded, setFileManagerExpanded] = useState(true);
   const [assistantExpanded, setAssistantExpanded] = useState(true);
+  const [appsExpanded, setAppsExpanded] = useState(true);
+  const [sidebarApps, setSidebarApps] = useState<AppView[]>([]);
   const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
     () => getNavigationId(activeModuleId),
+  );
+
+  const loadSidebarApps = useCallback(async () => {
+    try {
+      const all = await appsApi.listViews();
+      const visible = all.filter((a) => a.showInSidebar);
+      visible.sort((a, b) => (a.sidebarOrder ?? 0) - (b.sidebarOrder ?? 0));
+      setSidebarApps(visible);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSidebarApps();
+    const unsub = subscribe<{ channel: string; data?: unknown }>('db-state-changed', (payload) => {
+      if (payload.channel === 'apps') {
+        void loadSidebarApps();
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, [loadSidebarApps]);
+
+  const handleAppClick = useCallback(
+    (app: AppView) => {
+      setActiveNavigationId(`apps:item:${app.appId}`);
+      onModuleSelect(`apps:item:${app.appId}`);
+    },
+    [onModuleSelect],
   );
   // Actions only — stream runtime ticks must not re-render the whole shell rail.
   const { actions: assistantActions } = useAssistantActions();
@@ -364,6 +403,10 @@ export function useSidebar({
     normalizedLocale,
     isSettingsMode,
     activeSettingsSection,
+    sidebarApps,
+    appsExpanded,
+    setAppsExpanded,
+    handleAppClick,
     assistantActions,
     selectNavigation,
     handleFavoriteClick,

@@ -25,7 +25,7 @@
 
 | 域 | P0/P1 目标 | 禁止扩展 |
 |---|---|---|
-| Home | 单工作台、版本化 Grid、增删移缩配隐重置、默认 5 Widget | 多 Workspace、Widget Runtime/市场 |
+| Home | 多 Workspace（创建/打开/切换/关闭/重开/置顶/排序/重命名/复制/模板/删除，Close 只关会话、Delete 才删资源）、Grid/Canvas 双布局、增删移缩复制配隐重置、Widget Catalog（搜索/分类/添加/选择/配置）、Data View 四模式（List/Table/Board/Calendar） | Widget Runtime/市场、Plugin 平台、无限画布 |
 | Files | CRUD、Trash、Watch、Search、Recent/Favorite、预览入口 | 为 Home 重写文件系统 authority |
 | Apps | App / RuntimeSpec / RuntimeInstance / Surface、受监督启动/停止/探测 | 把 App 当 Widget 或裸 spawn |
 | AI Resources | Provider / Connection / Credential、多 Key、OAuth、模型目录与健康 | 把 protocol 当 Provider、明文 Secret |

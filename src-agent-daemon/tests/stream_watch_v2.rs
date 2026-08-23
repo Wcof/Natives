@@ -203,6 +203,7 @@ async fn rpc_create_run(
 }
 
 fn start_run_params(run_id: &str) -> Value {
+    let _ = std::fs::create_dir_all("/tmp/natives-v2-project");
     json!({
         "run_id": run_id,
         "provider_id": "openai",

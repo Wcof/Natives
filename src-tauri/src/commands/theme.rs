@@ -43,7 +43,11 @@ pub fn set_theme(
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &pool_conn;
     db::set_setting(conn, THEME_KEY, normalized)?;
-    emit_db_state_changed(&app_handle, "theme", serde_json::json!({ "theme": normalized }));
+    emit_db_state_changed(
+        &app_handle,
+        "theme",
+        serde_json::json!({ "theme": normalized }),
+    );
 
     // ── 同步 Ghostty 主题配置（下次启动生效） ──
     let _ = crate::ghostty_config::write_config(normalized);

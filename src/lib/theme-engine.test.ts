@@ -21,9 +21,9 @@ test('should have exactly two themes (light / dark)', () => {
 
 test('should validate a valid theme', () => {
   const theme = validateTheme(THEMES.light!);
-  // V1.1 uses NEUTRAL_PALETTE values
+  // V2 Jasmine Liquid Crystal: 画布 #F5F6F8，primary 沿用中性色板。
   assert.equal(theme.primary, '#18181A');
-  assert.equal(theme.background, '#FAFAFC');
+  assert.equal(theme.background, '#F5F6F8');
 });
 
 test('should reject invalid hex color', () => {
@@ -40,14 +40,14 @@ test('light and dark use distinct grayscale brand colors', () => {
 });
 
 test('dark theme uses dark surfaces', () => {
-  // V1.1: dark background = #010101 (neutral-0), dark surface = #18181A (neutral-150)
-  assert.equal(THEMES.dark!.background, '#010101');
-  assert.equal(THEMES.dark!.surface, '#18181A');
+  // V2 Jasmine Dark Glow: 画布 #0D1117，磨砂卡片 #121820。
+  assert.equal(THEMES.dark!.background, '#0D1117');
+  assert.equal(THEMES.dark!.surface, '#121820');
 });
 
 test('light theme uses light surfaces', () => {
-  // V1.1: light background = #FAFAFC (neutral-950), light surface = #FFFFFF (neutral-1000)
-  assert.equal(THEMES.light!.background, '#FAFAFC');
+  // V2 Jasmine Liquid Crystal: 画布 #F5F6F8，纯白卡片 #FFFFFF。
+  assert.equal(THEMES.light!.background, '#F5F6F8');
   assert.equal(THEMES.light!.surface, '#FFFFFF');
 });
 

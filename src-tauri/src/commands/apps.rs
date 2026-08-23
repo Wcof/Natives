@@ -1,14 +1,408 @@
-//! Apps 命令（APP-001 ~ APP-018）。
+//! Apps 域 Tauri IPC 命令（APP-020）。
+//!
+//! 提供应用中心唯一公共 IPC 契约：
+//! - Query：`apps_list`, `apps_list_views`, `apps_get`, `apps_get_view`, `apps_list_instances`,
+//!          `apps_list_surfaces`, `apps_active_spec`, `apps_system_discover`, `apps_local_inspect`, `apps_local_logs`
+//! - Register：`apps_register_local`, `apps_register_system`, `apps_register_web`
+//! - Mutate：`apps_update_metadata`, `apps_update_system_spec`, `apps_update_web_spec`,
+//!           `apps_remove`, `apps_set_sidebar_visibility`, `apps_set_sidebar_order`
+//! - Lifecycle：`apps_open`, `apps_start`, `apps_stop`, `apps_restart`, `apps_force_stop`, `apps_resolve_orphan`
+//! - Web Surface：`apps_web_close`, `apps_web_hide`, `apps_web_reload`, `apps_web_back`, `apps_web_forward`, `apps_web_clear_data`
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, State};
 
-use crate::apps::facade;
-use crate::apps::model::{App, RuntimeInstance, RuntimeSpec, Surface};
+use crate::apps::model::{
+    App, AppCapabilities, AppKind, AppRuntimeState, AppView, RegisterLocalProjectInput,
+    RegisterSystemApplicationInput, RegisterWebApplicationInput, RegistrationOrigin,
+    RuntimeInstance, RuntimeSpec, Surface, UpdateAppMetadataInput,
+    UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput,
+};
+use crate::apps::mutation_lock::MutationLock;
+use crate::apps::repository::AppRepository;
+use crate::apps::service::{AppsService, AppsServiceDeps};
+use crate::apps::system::SystemAppCandidate;
+use crate::apps::{local, system, web};
+use crate::creative_app::browser::BrowserStateHandle;
 use crate::creative_app::local::LocalRuntimeHandle;
-use crate::creative_app::service::MutationLock;
+use crate::creative_app::model::LocalProjectScanResult;
 use crate::AppState;
 use crate::{Error, Result};
+
+fn service(
+    state: &AppState,
+    app_handle: &AppHandle,
+    locks: &MutationLock,
+    local_runtime: &LocalRuntimeHandle,
+) -> AppsService {
+    let browser = app_handle
+        .try_state::<BrowserStateHandle>()
+        .map(|s| {
+            Arc::new(std::sync::Mutex::new(
+                crate::creative_app::browser::BrowserState::default(),
+            ))
+        })
+        .unwrap_or_else(|| {
+            Arc::new(std::sync::Mutex::new(
+                crate::creative_app::browser::BrowserState::default(),
+            ))
+        });
+
+    AppsService::new(AppsServiceDeps {
+        db: state.db.clone(),
+        locks: locks.clone(),
+        local_runtime: local_runtime.clone(),
+        browser,
+        app_handle: app_handle.clone(),
+        host_http_port: 0,
+    })
+}
+
+// ── Query ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn apps_list(state: State<'_, AppState>) -> Result<Vec<App>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    AppRepository::list(&conn)
+}
+
+#[tauri::command]
+pub fn apps_list_views(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+) -> Result<Vec<AppView>> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.list_views()
+}
+
+#[tauri::command]
+pub fn apps_get(state: State<'_, AppState>, id: String) -> Result<Option<App>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    AppRepository::get(&conn, &id)
+}
+
+#[tauri::command]
+pub fn apps_get_view(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<Option<AppView>> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.get_view(&id)
+}
+
+#[tauri::command]
+pub fn apps_list_instances(
+    state: State<'_, AppState>,
+    application_id: String,
+) -> Result<Vec<RuntimeInstance>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    AppRepository::list_instances(&conn, &application_id)
+}
+
+#[tauri::command]
+pub fn apps_list_surfaces(
+    state: State<'_, AppState>,
+    application_id: String,
+) -> Result<Vec<Surface>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    AppRepository::list_surfaces(&conn, &application_id)
+}
+
+#[tauri::command]
+pub fn apps_active_spec(
+    state: State<'_, AppState>,
+    application_id: String,
+) -> Result<Option<RuntimeSpec>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    AppRepository::active_spec(&conn, &application_id)
+}
+
+#[tauri::command]
+pub async fn apps_system_discover(state: State<'_, AppState>) -> Result<Vec<SystemAppCandidate>> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = db.get().map_err(|e| Error::Internal(e.to_string()))?;
+        if let Some(driver) = system::driver() {
+            driver.discover(&conn)
+        } else {
+            Ok(Vec::new())
+        }
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))?
+}
+
+#[tauri::command]
+pub fn apps_local_inspect(
+    state: State<'_, AppState>,
+    project_root: String,
+) -> Result<LocalProjectScanResult> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    local::inspect(&conn, &project_root)
+}
+
+#[tauri::command]
+pub fn apps_local_logs(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.local_logs(&id, limit.unwrap_or(100))
+}
+
+// ── Register ──────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn apps_register_local(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    input: RegisterLocalProjectInput,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.register_local(input)
+}
+
+#[tauri::command]
+pub fn apps_register_system(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    input: RegisterSystemApplicationInput,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.register_system(input)
+}
+
+#[tauri::command]
+pub fn apps_register_web(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    input: RegisterWebApplicationInput,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.register_web(input)
+}
+
+// ── Mutate ────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn apps_update_metadata(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    input: UpdateAppMetadataInput,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.update_metadata(input)
+}
+
+#[tauri::command]
+pub fn apps_update_system_spec(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    input: UpdateSystemApplicationSpecInput,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.update_system_spec(input)
+}
+
+#[tauri::command]
+pub fn apps_update_web_spec(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    input: UpdateWebApplicationSpecInput,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.update_web_spec(input)
+}
+
+#[tauri::command]
+pub fn apps_set_sidebar_visibility(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    show: bool,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.set_sidebar(&id, Some(show), None)
+}
+
+#[tauri::command]
+pub fn apps_set_sidebar_order(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    order: Option<i64>,
+) -> Result<AppView> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.set_sidebar(&id, None, order)
+}
+
+#[tauri::command]
+pub async fn apps_remove(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    risk_level: Option<u8>,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.remove(&id, risk_level.unwrap_or(1)).await?;
+    Ok(true)
+}
+
+// ── Lifecycle ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn apps_open(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.open(&id).await
+}
+
+#[tauri::command]
+pub async fn apps_start(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.start(&id).await
+}
+
+#[tauri::command]
+pub async fn apps_stop(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    risk_level: Option<u8>,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.stop(&id, risk_level.unwrap_or(1)).await
+}
+
+#[tauri::command]
+pub async fn apps_restart(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.restart(&id).await
+}
+
+#[tauri::command]
+pub async fn apps_force_stop(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.force_stop(&id).await
+}
+
+#[tauri::command]
+pub async fn apps_resolve_orphan(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+    action: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.local_resolve_orphan(&id, &action).await?;
+    Ok(true)
+}
+
+// ── Web Surface ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn apps_web_close(
+    app_handle: AppHandle,
+    browser: State<'_, BrowserStateHandle>,
+    id: String,
+) -> Result<bool> {
+    web::close(&app_handle, &browser, &id)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn apps_web_hide(app_handle: AppHandle, id: String) -> Result<bool> {
+    web::hide(&app_handle, &id)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn apps_web_reload(app_handle: AppHandle, id: String) -> Result<bool> {
+    web::reload(&app_handle, &id)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn apps_web_back(app_handle: AppHandle, id: String) -> Result<bool> {
+    web::back(&app_handle, &id)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn apps_web_forward(app_handle: AppHandle, id: String) -> Result<bool> {
+    web::forward(&app_handle, &id)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn apps_web_clear_data(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    id: String,
+) -> Result<bool> {
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.web_clear_data(&id)?;
+    Ok(true)
+}
+
+// ── Legacy Compat ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,138 +425,67 @@ pub struct AppHealthResult {
 }
 
 #[tauri::command]
-pub fn apps_list(state: State<'_, AppState>) -> Result<Vec<App>> {
-    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::list_apps(&conn)
-}
-
-#[tauri::command]
-pub fn apps_get(state: State<'_, AppState>, id: String) -> Result<Option<App>> {
-    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::get_app(&conn, &id)
-}
-
-#[tauri::command]
 pub fn apps_create(state: State<'_, AppState>, input: CreateAppInput) -> Result<App> {
     let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::create_app(
-        &conn,
-        &input.title,
-        &input.source,
-        &input.source_id,
-        input.description.as_deref(),
-        input.icon.as_deref(),
-    )
+    let kind = match input.source.as_str() {
+        "remote" | "web" => AppKind::WebApplication,
+        "native" | "system" => AppKind::SystemApplication,
+        _ => AppKind::LocalProject,
+    };
+    let app_id = match kind {
+        AppKind::LocalProject => AppRepository::register_local(
+            &conn,
+            &input.title,
+            &input.source_id,
+            input.description.as_deref(),
+            input.icon.as_deref(),
+            RegistrationOrigin::Manual,
+        )?,
+        AppKind::SystemApplication => AppRepository::register_system(
+            &conn,
+            &input.title,
+            &input.source_id,
+            None,
+            "macos",
+            None,
+            RegistrationOrigin::Manual,
+        )?,
+        AppKind::WebApplication => {
+            AppRepository::register_web(&conn, &input.title, &input.source_id, &[], None, false)?
+        }
+    };
+    AppRepository::get(&conn, &app_id)?.ok_or_else(|| Error::NotFound(app_id))
 }
 
 #[tauri::command]
-pub fn apps_delete(state: State<'_, AppState>, id: String) -> Result<bool> {
-    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::delete_app(&conn, &id)
-}
-
-#[tauri::command]
-pub fn apps_list_instances(
+pub async fn apps_delete(
     state: State<'_, AppState>,
-    application_id: String,
-) -> Result<Vec<RuntimeInstance>> {
-    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::list_runtime_instances(&conn, &application_id)
-}
-
-#[tauri::command]
-pub fn apps_list_surfaces(
-    state: State<'_, AppState>,
-    application_id: String,
-) -> Result<Vec<Surface>> {
-    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::list_surfaces(&conn, &application_id)
-}
-
-#[tauri::command]
-pub fn apps_active_spec(
-    state: State<'_, AppState>,
-    application_id: String,
-) -> Result<Option<RuntimeSpec>> {
-    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    facade::active_runtime_spec(&conn, &application_id)
-}
-
-#[tauri::command]
-pub async fn apps_start(
-    id: String,
-    app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
-    lock: State<'_, MutationLock>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<bool> {
-    let _ = crate::commands::creative_app::creative_app_start(
-        id,
-        app_handle,
-        state,
-        lock,
-        local_runtime,
-    )
-    .await?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn apps_stop(
     id: String,
-    app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
-    lock: State<'_, MutationLock>,
-    local_runtime: State<'_, LocalRuntimeHandle>,
-    browser: State<'_, crate::creative_app::browser::BrowserStateHandle>,
 ) -> Result<bool> {
-    let _ = crate::commands::creative_app::creative_app_stop(
-        id,
-        app_handle,
-        state,
-        lock,
-        local_runtime,
-        browser,
-    )
-    .await?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn apps_restart(
-    id: String,
-    app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
-    lock: State<'_, MutationLock>,
-    local_runtime: State<'_, LocalRuntimeHandle>,
-) -> Result<bool> {
-    let _ = crate::commands::creative_app::creative_app_restart(
-        id,
-        app_handle,
-        state,
-        lock,
-        local_runtime,
-    )
-    .await?;
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.remove(&id, 0).await?;
     Ok(true)
 }
 
 #[tauri::command]
 pub async fn apps_kill(
-    id: String,
-    app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
-    lock: State<'_, MutationLock>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
-    browser: State<'_, crate::creative_app::browser::BrowserStateHandle>,
+    id: String,
 ) -> Result<bool> {
-    apps_stop(id, app_handle, state, lock, local_runtime, browser).await
+    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    svc.force_stop(&id).await
 }
 
 #[tauri::command]
 pub fn apps_health(state: State<'_, AppState>, application_id: String) -> Result<AppHealthResult> {
     let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    let instances = facade::list_runtime_instances(&conn, &application_id)?;
+    let instances = AppRepository::list_instances(&conn, &application_id)?;
     if let Some(inst) = instances.first() {
         let healthy = inst.status == "running";
         let port = inst.current_port.map(|p| p as u16);

@@ -1,12 +1,18 @@
-// ── App Launcher Adapter（B-023） ──
-// 复用 creativeApp.list()（现有 facade），不复制 Apps domain，不直接查进程。
+// ── App Launcher Adapter（APP-062） ──
+// 使用 appsApi.listViews() 从统一 applications 注册表获取，不直接查进程。
 
-import { creativeApp } from '@/lib/tauri/creative';
-import type { CreativeAppSummary } from '@/lib/tauri/types-creative-app';
+import { appsApi } from '@/lib/tauri/apps';
 import type { WidgetConfig, WidgetDataContext } from '../types';
 
+export interface AppLauncherItem {
+  id: string;
+  title: string;
+  kind: string;
+  state: string;
+}
+
 export interface AppLauncherData {
-  apps: CreativeAppSummary[];
+  apps: AppLauncherItem[];
   unavailable: boolean;
 }
 
@@ -18,9 +24,15 @@ export function appLauncherAdapterKey(_config: WidgetConfig): string {
 
 export async function loadAppLauncher(ctx: WidgetDataContext): Promise<AppLauncherData> {
   try {
-    const list = await creativeApp.list();
+    const list = await appsApi.listViews();
     if (ctx.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    return { apps: list.slice(0, LIMIT), unavailable: false };
+    const items: AppLauncherItem[] = list.slice(0, LIMIT).map((a) => ({
+      id: a.appId,
+      title: a.title,
+      kind: a.kind,
+      state: a.runtimeState,
+    }));
+    return { apps: items, unavailable: false };
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
     console.warn('[widget] app-launcher loader unavailable:', err);

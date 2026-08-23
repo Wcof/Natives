@@ -104,6 +104,25 @@
 
 ---
 
+## 五-2、Workspace Free Canvas 交互规范
+
+承接 ADR-0021 双布局决策：Home 同时提供 Compact Grid 与 Free Canvas，Free Canvas 是自研轻量 DOM 画布，只服务 Workspace 自由布局。
+
+#### R-U13 · Free Canvas 是 bounded DOM 画布，禁止无限画布与协同类实现
+- **等级**：MUST
+- **分类**：交互、Workspace 双布局
+- **规则**：Free Canvas **必须**是 bounded DOM 画布：固定视口、zoom 有 clamp 上下限、空画布 fit 有确定结果（确定性收敛的初始视口）。只实现 Workspace 所需能力：Drag / Resize / Pan / Zoom / Snap / Multi-select / Group / Frame / Z-order。**禁止**无限画布、Yjs/CRDT、AFFiNE 式画布、多人实时协作、Plugin Runtime。
+- **反例**：zoom 无上限、拖到边界外可无限平移的画布；为协同引入 CRDT 同步层。
+- **为什么**：ADR-0021 §2 明确不做绘图工具、Connector、CRDT、BlockSuite/Yjs、多人协同与通用建模器；任何「扩展成绘图/协同/建模平台」的诉求需新 ADR。
+
+#### R-U14 · 画布指针手势的持久化只在停止/flush 时发生
+- **等级**：MUST
+- **分类**：交互、性能
+- **规则**：Free Canvas 的 drag / resize / pan / zoom 期间指针移动**必须**只更新内存态；持久化**必须**在 Pointer Stop、Resize Stop 或 debounce/flush 时执行，move 过程中对布局数据的写库次数必须为 0。
+- **为什么**：与 product/02 R-F6、ADR-0021 §2（stop/debounce/flush 才持久化，指针移动只写内存）一致，避免拖拽期间写库放大 IO。
+
+---
+
 ## 六、本篇合规自检清单
 
 - [ ] 我的反馈选对了渠道，没有用 `alert/prompt/confirm`（R-U6）。
@@ -113,3 +132,4 @@
 - [ ] 加载态有视觉指示，不与空态混淆（R-U10）。
 - [ ] 快捷键跨平台兼容，全局入口走命令面板（R-U11, R-U12）。
 - [ ] 无边框窗口的主体卡片支持 `-webkit-app-region: drag`，且所有内部交互按键排斥拖拽（`-webkit-app-region: no-drag`）（R-U12.1）。
+- [ ] Free Canvas 是 bounded DOM 画布，无无限画布/CRDT/AFFiNE 式画布/多人协作/Plugin Runtime（R-U13）；拖拽/缩放期间只写内存，停止或 debounce/flush 才持久化（R-U14）。

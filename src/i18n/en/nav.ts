@@ -17,8 +17,8 @@ export const nav = {
     usage: 'Data & Usage',
     terminalToggle: 'Toggle Terminal',
     terminal: 'Terminal',
-    themeFrostedJasmine: 'Theme: Frosted Jasmine',
-    themeTerminalVolt: 'Theme: Terminal Volt',
+    themeFrostedJasmine: 'Theme: Liquid Crystal',
+    themeTerminalVolt: 'Theme: Dark Glow',
     builtinTools: 'Builtin Tools',
   },
   sidebar: {

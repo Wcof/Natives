@@ -10,7 +10,7 @@
 import type { ReactNode } from 'react';
 import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 import { Panel, type PanelProps } from './Panel';
-import { Skeleton } from './Skeleton';
+
 
 export interface ChartFrameProps extends Omit<PanelProps, 'children' | 'title'> {
   title?: ReactNode;

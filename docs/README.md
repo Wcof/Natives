@@ -19,7 +19,7 @@
 
 ```text
 AiNative
-├── 首页                 Personal Workspace Home
+├── 首页                 多 Workspace Personal Home（ADR-0021：Workspace 生命周期 + Grid/Canvas 双布局 + Widget Catalog）
 ├── 文件                 CRUD / Trash / Watch / Search
 ├── 应用                 App / RuntimeSpec / RuntimeInstance / Surface
 ├── AI
@@ -30,7 +30,9 @@ AiNative
 └── 设置                 General / Appearance / AI / Personal summary
 ```
 
-## 当前迁移事实（2026-08-20 更新）
+## 当前迁移事实（2026-08-22 更新）
+
+- Workspace V2 目标架构 ADR-0021（Multi-Workspace + Grid/Canvas 双布局 + Design System V2）已接受，取代 ADR-0020 §1/§3 冲突范围（其余 ADR-0020 决策继续有效）；冻结契约见 `contracts/workspace-v2-contract.md`，Host SQLite 为 Workspace 唯一权威（v27 迁移 7 表已注册），旧 localStorage 权威判定为 delete（`development/g009-localstorage-conclusion.md`）。
 
 - 新 IA 目标边界已落地：`src-tauri/src/apps/`（App/RuntimeSpec/RuntimeInstance/Surface）、`src-tauri/src/ai/`（Provider/Connection/Credential/Model + secret_ref）、`src-tauri/src/proxy/`（Listener/Route/可替换 ProxyEngine trait）、`src-tauri/src/integrations/`（AI Tool 七步契约）、`src-tauri/src/secrets/`（OS Keychain SecretStore + 迁移状态机）、`src-tauri/src/key_pool.rs`（Key Pool/Failover）。
 - 首页 `/` 已是 PersonalWorkspace Home（Grid Widget + 5 个默认 Widget 接真实 Domain）；完整 Usage Dashboard 已迁至数据/用量页（`/usage`）；设置个人概览只保留摘要；Sidebar 折叠为 64px Icon Rail（含数据/用量入口）。
@@ -45,6 +47,7 @@ AiNative
 |---|---|
 | 任何编码 | `standards/README.md` + 相关 1–3 篇 |
 | 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |
+| 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021**（取代 ADR-0020 §1/§3 冲突部分）+ `contracts/workspace-v2-contract.md` + `standards/product/01-02` + `standards/ui-ux/02`（五-2 节）+ `standards/technical/05`（R-B10） |
 | P0 Proxy/OAuth/Secret | `architecture/provider-proxy-architecture.md` + technical 01/02/03/05 |
 | P0 provider-adapters 逐文件处置 | `architecture/provider-adapters-p0b-audit.md`（Keep/Extract/Rewrite/Delete 矩阵） |
 | Legacy 删除 | `architecture/legacy-death-list.md`（死亡证明 + 待 cutover 路径） |

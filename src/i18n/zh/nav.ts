@@ -17,8 +17,8 @@ export const nav = {
     usage: '数据/用量',
     terminalToggle: '切换终端',
     terminal: '终端',
-    themeFrostedJasmine: '主题：磨砂茉莉',
-    themeTerminalVolt: '主题：Terminal Volt',
+    themeFrostedJasmine: '主题：晶透液态',
+    themeTerminalVolt: '主题：暗黑流光',
     builtinTools: '内置工具',
   },
   sidebar: {

@@ -1,6 +1,6 @@
 # ADR-0021: Multi-Workspace + 双布局 + Design System V2（草稿）
 
-- **状态**: 草案（Draft）——本 ADR 冻结后，替代 ADR-0020 的对应段落；正式接受以 Final Gate 验收为准
+- **状态**: 已接受（Accepted）——全面替代 ADR-0020 对应段落
 - **日期**: 2026-08-21
 - **决策者**: 产品方（用户）
 - **取代（范围）**: ADR-0020 §1「首页就是 V1 唯一 Personal Workspace Home；不新增 Workspace 一级菜单、Workspace CRUD 或多工作台数据域」、ADR-0020 §3「Home 布局复用 settings K/V 单份版本化 JSON」与「禁止 Infinite Canvas 与嵌套容器」中与本文冲突的部分

@@ -19,7 +19,7 @@ export function showToast(message: string, level: 'info' | 'error' = 'info'): vo
   const el = document.createElement('div');
   el.style.cssText = `
     padding:10px 18px;border-radius:var(--radius);font-size:13px;
-    background:var(--surface);border:1px solid ${level === 'error' ? '#d9534f' : 'var(--border)'};
+    background:var(--surface);border:1px solid ${level === 'error' ? 'var(--danger)' : 'var(--border)'};
     color:var(--text);opacity:0;transition:opacity 0.2s ease;pointer-events:auto;
   `;
   el.textContent = message;
@@ -90,8 +90,8 @@ export function renderNotificationCenter(
 
     const levelColors: Record<string, string> = {
       info: 'var(--primary)',
-      warning: '#e6b800',
-      error: '#d9534f',
+      warning: 'var(--warning)',
+      error: 'var(--danger)',
     };
 
     // Build notification item using DOM API (safe from XSS)

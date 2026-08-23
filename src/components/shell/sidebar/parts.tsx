@@ -10,6 +10,8 @@ import {
   File,
   Folder,
   FolderOpen,
+  Globe,
+  Laptop,
   Layers,
   LayoutDashboard,
   Maximize2,
@@ -324,6 +326,89 @@ function FileManagerSection({ c }: { c: SidebarController }) {
   );
 }
 
+function AppsSection({ c }: { c: SidebarController }) {
+  const { locale, sidebarApps, appsExpanded, setAppsExpanded } = c;
+  const isAppsActive = c.activeNavigationId === 'apps';
+
+  const getKindIcon = (kind: string) => {
+    switch (kind) {
+      case 'local_project':
+        return <Folder size={14} className="text-[var(--success)] shrink-0" />;
+      case 'system_application':
+        return <Laptop size={14} className="text-[var(--interactive-accent)] shrink-0" />;
+      case 'web_application':
+        return <Globe size={14} className="text-[var(--primary)] shrink-0" />;
+      default:
+        return <Layers size={14} className="text-[var(--interactive-accent)] shrink-0" />;
+    }
+  };
+
+  return (
+    <div className="mb-3">
+      <div className="flex items-center justify-between px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+        <button
+          type="button"
+          onClick={() => setAppsExpanded((prev) => !prev)}
+          className="flex items-center gap-1 hover:text-[var(--text-secondary)] transition-colors"
+        >
+          {appsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <span>{t(locale, 'nav.apps')}</span>
+        </button>
+        {sidebarApps.length > 0 && (
+          <span className="text-[10px] text-[var(--text-disabled)] font-normal">
+            {sidebarApps.length}
+          </span>
+        )}
+      </div>
+
+      {/* Main Apps View Button */}
+      <div className="flex flex-col gap-0.5 px-3">
+        <button
+          type="button"
+          onClick={() => c.selectNavigation('apps', 'apps')}
+          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-[color,background-color,border-color,opacity,transform] ${
+            isAppsActive
+              ? 'sidebar-nav-active'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+          }`}
+        >
+          <Layers size={15} className="shrink-0" />
+          <span className="truncate text-sm">{t(locale, 'appsPage.title')}</span>
+        </button>
+
+        {/* Projected Sidebar Apps */}
+        {appsExpanded && sidebarApps.length > 0 && (
+          <div className="flex flex-col gap-0.5 pl-3 pt-0.5 border-l border-[var(--border-subtle)] ml-4">
+            {sidebarApps.map((app) => {
+              const itemTarget = `apps:item:${app.appId}`;
+              const isItemActive = c.activeNavigationId === itemTarget;
+              return (
+                <button
+                  key={app.appId}
+                  type="button"
+                  onClick={() => c.handleAppClick(app)}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-xs transition-[color,background-color,border-color,opacity,transform] ${
+                    isItemActive
+                      ? 'sidebar-nav-active font-medium'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+                  }`}
+                  title={app.title}
+                >
+                  {getKindIcon(app.kind)}
+                  <span className="truncate flex-1">{app.title}</span>
+                  {app.runtimeState === 'running' && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)] shrink-0" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FavoritesSection({ c }: { c: SidebarController }) {
   const { locale, favorites, visibleFavorites, hiddenFavoriteCount } = c;
   return (
@@ -518,9 +603,10 @@ export function SidebarBody({ c }: { c: SidebarController }) {
         </button>
       </div>
 
-      {/* Quick Access / File Manager / Favorites / Modules / Builtin Tools */}
+      {/* Quick Access / File Manager / Apps / Favorites / Modules / Builtin Tools */}
       <QuickAccessSection c={c} />
       <FileManagerSection c={c} />
+      <AppsSection c={c} />
       <FavoritesSection c={c} />
       <ModulesSection c={c} />
       <BuiltinToolsSection c={c} />

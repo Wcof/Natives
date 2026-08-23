@@ -8,7 +8,7 @@ use std::path::Path;
 /// Current host schema version after all incremental migrations. Kept in sync
 /// with the last `_schema_version` write in `apply_migrations`; tests assert
 /// against it so a future migration does not leave a stale literal behind.
-pub const SCHEMA_VERSION: &str = "27";
+pub const SCHEMA_VERSION: &str = "28";
 
 /// Database connection pool type alias
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -17,7 +17,6 @@ use lazy_static::lazy_static;
 use std::sync::Mutex;
 mod db_migrations;
 mod migrations_steps;
-
 lazy_static! {
     /// 主 natives.db pool（全局持有，供 runtime 等无法 access AppState 的模块使用）
     static ref MAIN_DB_POOL: Mutex<Option<DbPool>> = Mutex::new(None);
@@ -96,6 +95,8 @@ pub fn init_db_pool(path: &Path) -> Result<DbPool> {
 mod backfill;
 mod catalog;
 mod kv;
+mod migration_v27;
+mod migration_v28;
 mod schema;
 mod settings;
 

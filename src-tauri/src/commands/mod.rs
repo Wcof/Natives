@@ -51,5 +51,5 @@ pub mod usage;
 pub mod watch_preview;
 pub mod wechat;
 pub mod widget;
-pub mod workspace;
 pub mod window;
+pub mod workspace;

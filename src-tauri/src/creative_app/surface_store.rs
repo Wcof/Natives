@@ -407,6 +407,49 @@ pub fn commit_window_closed(
     tx.commit().map_err(Error::Database)
 }
 
+/// Update window's last_active_at timestamp.
+pub fn update_window_activity(conn: &Connection, window_id: &str) -> Result<()> {
+    let t = now();
+    conn.execute(
+        "UPDATE window_instances SET last_active_at = ?1, updated_at = ?1 WHERE id = ?2",
+        params![t, window_id],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Mark window as hibernated.
+pub fn mark_window_hibernated(conn: &Connection, window_id: &str) -> Result<()> {
+    let t = now();
+    conn.execute(
+        "UPDATE window_instances SET state = 'hibernated', hibernated_at = ?1, updated_at = ?1 WHERE id = ?2",
+        params![t, window_id],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// List candidates for LRU hibernation (open windows for web apps with keep_alive=0).
+pub fn list_lru_hibernation_candidates(conn: &Connection) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT w.id, w.application_id, w.label
+             FROM window_instances w
+             JOIN web_application_specs s ON s.application_id = w.application_id
+             WHERE w.state = 'open' AND s.keep_alive = 0
+             ORDER BY COALESCE(w.last_active_at, w.created_at) ASC",
+        )
+        .map_err(Error::Database)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(Error::Database)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(Error::Database)?);
+    }
+    Ok(out)
+}
+
 /// Reconcile: a DB window whose real WebView is gone is marked CLOSED with the
 /// reconcile outcome recorded. Lenient — a vanished row is nothing to fix.
 pub fn reconcile_window_missing(conn: &Connection, window_id: &str, reason: &str) -> Result<()> {

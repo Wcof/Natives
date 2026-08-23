@@ -7,7 +7,7 @@ const LazyShellLayout = lazy(() => import('@/components/shell/ShellLayout'));
 const LazyMenubarSurface = lazy(() => import('@/components/menubar/MenubarSurface'));
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ToastProvider } from '@/components/ui/Toast';
-import { AssistantWorkspaceProvider } from '@/components/assistant/AssistantWorkspaceContext';
+
 
 /* ═══════════════════════════════════════════════
    RootClient — Client Component
@@ -60,11 +60,9 @@ export default function RootClient({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <AssistantWorkspaceProvider>
-          <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_[data-shell-content]]:h-full">
-            <Suspense fallback={null}><LazyShellLayout>{children}</LazyShellLayout></Suspense>
-          </div>
-        </AssistantWorkspaceProvider>
+        <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_[data-shell-content]]:h-full">
+          <Suspense fallback={null}><LazyShellLayout>{children}</LazyShellLayout></Suspense>
+        </div>
       </ToastProvider>
     </ThemeProvider>
   );

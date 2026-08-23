@@ -227,6 +227,50 @@ export interface V2ThemeTokens {
   'chart-axis': string;
   'chart-area-fill': string;
 
+  // ── Jasmine Brand Accent（浅色=珊瑚橙 / 深色=金橙流光） ──
+  accent: string;
+  'accent-hover': string;
+  'accent-soft': string;
+  'accent-ink': string;
+
+  // ── 语义补充（V2 工作区整改：被组件引用但此前缺失的角色令牌） ──
+  'surface-subtle': string;
+  'text-muted': string;
+  'primary-foreground': string;
+  'primary-subtle': string;
+  'chart-line': string;
+  'accent-subtle': string;
+  'on-accent': string;
+  'bg-soft': string;
+  'border-soft': string;
+  'border-hover': string;
+  'provider-color': string;
+  'sidebar-border': string;
+
+  // ── Module badge 多色徽标（蓝色/绿色/青色/暖橙/紫色） ──
+  'badge-blue': string;
+  'badge-blue-soft': string;
+  'badge-green': string;
+  'badge-green-soft': string;
+  'badge-cyan': string;
+  'badge-cyan-soft': string;
+  'badge-orange': string;
+  'badge-orange-soft': string;
+  'badge-purple': string;
+  'badge-purple-soft': string;
+
+  // ── 状态呼吸圆点（运行/停止/预警/故障） ──
+  'status-running': string;
+  'status-stopped': string;
+  'status-warning': string;
+  'status-danger': string;
+
+  // ── 图表数据流（Token 紫 / 请求蓝；深色发光节点） ──
+  'chart-token-line': string;
+  'chart-requests-line': string;
+  'chart-token-fill': string;
+  'chart-requests-fill': string;
+
   // ── Terminal ANSI 联动 ──
   'terminal-bg': string;
   'terminal-fg': string;
@@ -237,11 +281,11 @@ export interface V2ThemeTokens {
 export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
   // ── Dark Glow 暗黑流光：低对比深色、克制 glow、中性色板光度分层 ──
   dark: {
-    background: NEUTRAL_PALETTE[0],
-    surface: NEUTRAL_PALETTE[150],
-    'surface-hover': NEUTRAL_PALETTE[200],
+    background: '#0D1117', // Jasmine 暗黑流光画布（深邃黑曜灰带暗蓝沉浸感）
+    surface: '#121820', // 暗黑磨砂玻璃卡片底色
+    'surface-hover': '#18202B', // 深暗蓝灰内嵌区/次级控件
     'surface-active': NEUTRAL_PALETTE[250],
-    sidebar: NEUTRAL_PALETTE[100],
+    sidebar: '#0B0F14',
     canvas: 'var(--background)',
     raised: NEUTRAL_PALETTE[200],
     inset: NEUTRAL_PALETTE[100],
@@ -256,11 +300,11 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     'elev-shadow-floating': '0 8px 24px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2)',
     'elev-shadow-inset': 'inset 0 1px 3px rgba(0, 0, 0, 0.3)',
 
-    text: NEUTRAL_PALETTE[950],
+    text: '#F8FAFC', // 高亮白字
     'text-body': NEUTRAL_PALETTE[850],
-    'text-secondary': NEUTRAL_PALETTE[700],
+    'text-secondary': '#94A3B8', // 中阶冷灰
     'text-tertiary': NEUTRAL_PALETTE[600],
-    'text-disabled': NEUTRAL_PALETTE[500],
+    'text-disabled': '#64748B', // 弱化文字/占位符
     'text-ghost': 'var(--text-disabled)',
     selection: 'color-mix(in srgb, var(--neutral-950) 24%, transparent)',
 
@@ -321,6 +365,52 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     // Dark: 克制 fill，8% → 0%
     'chart-area-fill': 'linear-gradient(180deg, rgba(250, 250, 252, 0.08) 0%, rgba(250, 250, 252, 0) 100%)',
 
+    // ── Jasmine Dark Glow：金橙流光 accent（侧边栏活动项/激活时间胶囊） ──
+    accent: '#F59E0B',
+    'accent-hover': '#FB923C',
+    'accent-soft': 'rgba(245, 158, 11, 0.12)',
+    'accent-ink': '#0B0F14',
+
+    // ── 语义补充（V2 工作区整改） ──
+    'surface-subtle': '#18202B',
+    'text-muted': '#64748B',
+    'primary-foreground': '#111827',
+    'primary-subtle': 'rgba(250, 250, 252, 0.06)',
+    'chart-line': '#C084FC',
+    'accent-subtle': 'rgba(245, 158, 11, 0.12)',
+    'on-accent': '#F59E0B',
+    'bg-soft': '#0D1117',
+    'border-soft': 'rgba(255, 255, 255, 0.05)',
+    'border-hover': 'rgba(255, 255, 255, 0.16)',
+    'provider-color': '#F59E0B',
+    'sidebar-border': 'rgba(255, 255, 255, 0.06)',
+
+    // ── 发光模块徽标（蓝/绿/青/橙/紫，20% alpha 底） ──
+    'badge-blue': '#3B82F6',
+    'badge-blue-soft': 'rgba(59, 130, 246, 0.20)',
+    'badge-green': '#10B981',
+    'badge-green-soft': 'rgba(16, 185, 129, 0.20)',
+    'badge-cyan': '#06B6D4',
+    'badge-cyan-soft': 'rgba(6, 182, 212, 0.20)',
+    'badge-orange': '#F97316',
+    'badge-orange-soft': 'rgba(249, 115, 22, 0.20)',
+    'badge-purple': '#A855F7',
+    'badge-purple-soft': 'rgba(168, 85, 247, 0.20)',
+
+    // ── 状态呼吸圆点（荧光绿/停止灰/警示黄/故障红） ──
+    'status-running': '#22C55E',
+    'status-stopped': '#64748B',
+    'status-warning': '#FBBF24',
+    'status-danger': '#F87171',
+
+    // ── 图表数据流（发光霓虹紫 Token / 发光冰蓝请求） ──
+    'chart-token-line': '#C084FC',
+    'chart-requests-line': '#38BDF8',
+    'chart-token-fill':
+      'linear-gradient(180deg, rgba(192, 132, 252, 0.30) 0%, rgba(192, 132, 252, 0) 100%)',
+    'chart-requests-fill':
+      'linear-gradient(180deg, rgba(56, 189, 248, 0.30) 0%, rgba(56, 189, 248, 0) 100%)',
+
     'terminal-bg': NEUTRAL_PALETTE[150],
     'terminal-fg': NEUTRAL_PALETTE[950],
     'terminal-cursor': NEUTRAL_PALETTE[950],
@@ -333,9 +423,9 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
   // 法则 3: 深石墨灰/中性灰文字层级（text=graphite, body/secondary=neutral gray）
   // 法则 4: 浅色图表 area fill 约 15% → 0% 渐变
   light: {
-    background: NEUTRAL_PALETTE[950],
-    surface: NEUTRAL_PALETTE[1000],
-    'surface-hover': NEUTRAL_PALETTE[900],
+    background: '#F5F6F8', // Jasmine 浅色茉莉画布（高质感暖灰雾白）
+    surface: NEUTRAL_PALETTE[1000], // 纯白卡片
+    'surface-hover': '#F1F3F5', // 次级底色/搜索框/未激活块
     'surface-active': NEUTRAL_PALETTE[850],
     sidebar: NEUTRAL_PALETTE[900],
     canvas: 'var(--background)',
@@ -352,11 +442,11 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     'elev-shadow-floating': '0 4px 16px rgba(18, 18, 22, 0.07), 0 1px 2px rgba(18, 18, 22, 0.04)',
     'elev-shadow-inset': 'inset 0 1px 3px rgba(18, 18, 22, 0.06)',
 
-    text: NEUTRAL_PALETTE[150], // 深石墨灰
-    'text-body': NEUTRAL_PALETTE[400],
-    'text-secondary': NEUTRAL_PALETTE[500],
+    text: '#111827', // 深冷炭黑主文字
+    'text-body': '#4B5563', // 正文中性冷灰
+    'text-secondary': '#6B7280', // 次级文字
     'text-tertiary': NEUTRAL_PALETTE[600],
-    'text-disabled': NEUTRAL_PALETTE[700],
+    'text-disabled': '#9CA3AF', // 弱化/占位符
     'text-ghost': 'var(--text-disabled)',
     selection: 'color-mix(in srgb, var(--neutral-150) 18%, transparent)',
 
@@ -419,6 +509,52 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     'chart-axis': 'rgba(24, 24, 26, 0.12)',
     // 法则 4: 浅色图表 area fill ≈ 15% → 0%
     'chart-area-fill': 'linear-gradient(180deg, rgba(24, 24, 26, 0.15) 0%, rgba(24, 24, 26, 0) 100%)',
+
+    // ── Jasmine Liquid Crystal：珊瑚橙 accent（侧边栏活动项/激活时间胶囊） ──
+    accent: '#F97316',
+    'accent-hover': '#EA580C',
+    'accent-soft': 'rgba(249, 115, 22, 0.08)',
+    'accent-ink': '#FFFFFF',
+
+    // ── 语义补充（V2 工作区整改） ──
+    'surface-subtle': '#F1F3F5',
+    'text-muted': '#9CA3AF',
+    'primary-foreground': '#FFFFFF',
+    'primary-subtle': 'rgba(24, 24, 26, 0.06)',
+    'chart-line': '#8B5CF6',
+    'accent-subtle': '#FFF1EB',
+    'on-accent': '#EA580C',
+    'bg-soft': '#EDEFF2',
+    'border-soft': 'rgba(0, 0, 0, 0.05)',
+    'border-hover': 'rgba(0, 0, 0, 0.12)',
+    'provider-color': '#EA580C',
+    'sidebar-border': 'rgba(0, 0, 0, 0.06)',
+
+    // ── 模块徽标（蓝/绿/青/橙/紫） ──
+    'badge-blue': '#3B82F6',
+    'badge-blue-soft': 'rgba(59, 130, 246, 0.10)',
+    'badge-green': '#10B981',
+    'badge-green-soft': 'rgba(16, 185, 129, 0.10)',
+    'badge-cyan': '#06B6D4',
+    'badge-cyan-soft': 'rgba(6, 182, 212, 0.10)',
+    'badge-orange': '#F97316',
+    'badge-orange-soft': 'rgba(249, 115, 22, 0.10)',
+    'badge-purple': '#8B5CF6',
+    'badge-purple-soft': 'rgba(139, 92, 246, 0.10)',
+
+    // ── 状态呼吸圆点（运行绿/停止灰/预警黄） ──
+    'status-running': '#10B981',
+    'status-stopped': '#9CA3AF',
+    'status-warning': '#F59E0B',
+    'status-danger': '#EF4444',
+
+    // ── 图表数据流（Token 鲜明紫罗兰 / 请求天蓝，15%→0% 水彩填充） ──
+    'chart-token-line': '#8B5CF6',
+    'chart-requests-line': '#3B82F6',
+    'chart-token-fill':
+      'linear-gradient(180deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0) 100%)',
+    'chart-requests-fill':
+      'linear-gradient(180deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0) 100%)',
 
     'terminal-bg': NEUTRAL_PALETTE[1000],
     'terminal-fg': NEUTRAL_PALETTE[150],
@@ -503,6 +639,20 @@ export const THEME_TOKENS = {
   chartGrid: 'var(--chart-grid)',
   chartAxis: 'var(--chart-axis)',
   chartAreaFill: 'var(--chart-area-fill)',
+  chartTokenLine: 'var(--chart-token-line)',
+  chartRequestsLine: 'var(--chart-requests-line)',
+  chartTokenFill: 'var(--chart-token-fill)',
+  chartRequestsFill: 'var(--chart-requests-fill)',
+
+  // Jasmine accent & status
+  accent: 'var(--accent)',
+  accentHover: 'var(--accent-hover)',
+  accentSoft: 'var(--accent-soft)',
+  accentInk: 'var(--accent-ink)',
+  statusRunning: 'var(--status-running)',
+  statusStopped: 'var(--status-stopped)',
+  statusWarning: 'var(--status-warning)',
+  statusDanger: 'var(--status-danger)',
 
   // Grayscale steps
   gray50: 'var(--gray-50)',
@@ -582,12 +732,9 @@ const V2_THEME_CORE = {
 export type Theme = (typeof V2_THEME_CORE)['dark'];
 
 // ── THEMES（兼容旧引用；值派生自 V2_TOKENS 单一真值） ──
-export const THEMES: Record<string, Theme> = {
+export const THEMES: Record<V2ThemeId, Theme> = {
   dark: { ...V2_THEME_CORE.dark },
   light: { ...V2_THEME_CORE.light },
-  // 只读兼容旧名 —— 不参与写入，仅防旧代码读取 undefined
-  'terminal-volt': { ...V2_THEME_CORE.dark },
-  'frosted-jasmine': { ...V2_THEME_CORE.light },
 };
 
 // ── Terminal ANSI 配色（派生自 V2_TOKENS，随皮肤联动） ──

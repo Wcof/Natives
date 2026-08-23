@@ -350,6 +350,15 @@ pub fn apply(conn: &Connection) -> Result<(), Error> {
         migrate_v27(conn)?;
     }
 
+    // Migration v27→v28 (personal-creative → application-center, Phase B):
+    // strong-typed applications (kind/registration_origin + sidebar + metadata),
+    // system_application_specs + web_application_specs, runtime_instances
+    // ownership columns, window_instances hibernation columns, and the v28
+    // backfill (kind/origin + remote non-owned → web apps + profile bindings).
+    if current_version < 28 {
+        migrate_v28(conn)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "

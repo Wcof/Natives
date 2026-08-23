@@ -47,11 +47,11 @@
   --chart-volume-8: #FAFAFC;
 
   /* ── Surfaces ── */
-  --background: #010101;
-  --surface: #18181A;
-  --surface-hover: #202024;
+  --background: #0D1117; /* Jasmine 暗黑流光画布（深邃黑曜灰带暗蓝沉浸感） */
+  --surface: #121820; /* 暗黑磨砂玻璃卡片底色 */
+  --surface-hover: #18202B; /* 深暗蓝灰内嵌区/次级控件 */
   --surface-active: #27262B;
-  --sidebar: #111113;
+  --sidebar: #0B0F14;
   --canvas: var(--background);
   --raised: var(--surface-hover);
   --inset: var(--neutral-100);
@@ -69,6 +69,7 @@
 
   /* ── Brand (grayscale) ── */
   --primary: #FAFAFC;
+  --primary-subtle: rgba(250, 250, 252, 0.06); /* 主色极淡衬底（选中卡片/次级高亮） */
   --primary-hover: #D4D3D7;
   --primary-soft: #27262B;
   --primary-dark: #010101;
@@ -94,11 +95,11 @@
   --border-strong: #48474D;
 
   /* ── Text ── */
-  --text: #FAFAFC;
+  --text: #F8FAFC; /* 高亮白字 */
   --text-body: #D4D3D7;
-  --text-secondary: #9B999E;
+  --text-secondary: #94A3B8; /* 中阶冷灰 */
   --text-tertiary: #7F7D83;
-  --text-disabled: #646268;
+  --text-disabled: #64748B; /* 弱化文字/占位符 */
   --text-ghost: var(--text-disabled);
   --selection: color-mix(in srgb, var(--neutral-950) 24%, transparent);
 
@@ -161,6 +162,48 @@
   --chart-grid: rgba(250, 250, 252, 0.06);
   --chart-axis: rgba(250, 250, 252, 0.14);
   --chart-area-fill: linear-gradient(180deg, rgba(250, 250, 252, 0.08) 0%, rgba(250, 250, 252, 0) 100%);
+
+  /* ── Jasmine Dark Glow：金橙流光 accent ── */
+  --accent: #F59E0B;
+  --accent-hover: #FB923C;
+  --accent-soft: rgba(245, 158, 11, 0.12);
+  --accent-ink: #0B0F14;
+  /* 语义补充（V2 工作区整改：补齐被引用但缺失的角色令牌） */
+  --surface-subtle: #18202B;
+  --text-muted: #64748B;
+  --primary-foreground: #111827;
+  --chart-line: #C084FC;
+  --accent-subtle: rgba(245, 158, 11, 0.12);
+  --on-accent: #F59E0B;
+  --bg-soft: #0D1117;
+  --border-soft: rgba(255, 255, 255, 0.05);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --provider-color: #F59E0B;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+
+  /* ── 发光模块徽标（蓝/绿/青/橙/紫，20% alpha 底） ── */
+  --badge-blue: #3B82F6;
+  --badge-blue-soft: rgba(59, 130, 246, 0.20);
+  --badge-green: #10B981;
+  --badge-green-soft: rgba(16, 185, 129, 0.20);
+  --badge-cyan: #06B6D4;
+  --badge-cyan-soft: rgba(6, 182, 212, 0.20);
+  --badge-orange: #F97316;
+  --badge-orange-soft: rgba(249, 115, 22, 0.20);
+  --badge-purple: #A855F7;
+  --badge-purple-soft: rgba(168, 85, 247, 0.20);
+
+  /* ── 状态呼吸圆点 ── */
+  --status-running: #22C55E;
+  --status-stopped: #64748B;
+  --status-warning: #FBBF24;
+  --status-danger: #F87171;
+
+  /* ── 图表数据流（发光霓虹紫 Token / 发光冰蓝请求） ── */
+  --chart-token-line: #C084FC;
+  --chart-requests-line: #38BDF8;
+  --chart-token-fill: linear-gradient(180deg, rgba(192, 132, 252, 0.30) 0%, rgba(192, 132, 252, 0) 100%);
+  --chart-requests-fill: linear-gradient(180deg, rgba(56, 189, 248, 0.30) 0%, rgba(56, 189, 248, 0) 100%);
 
   /* ── Diff (代码变更) ── */
   --diff-add: #34D399;
@@ -303,9 +346,9 @@
   --chart-volume-8: #18181A;
 
   /* ── Surfaces ── */
-  --background: #FAFAFC;
-  --surface: #FFFFFF;
-  --surface-hover: #E8E7EA;
+  --background: #F5F6F8; /* Jasmine 浅色茉莉画布（高质感暖灰雾白） */
+  --surface: #FFFFFF; /* 纯白卡片 */
+  --surface-hover: #F1F3F5; /* 次级底色/搜索框/未激活块 */
   --surface-active: #D4D3D7;
   --sidebar: #E8E7EA;
   --canvas: var(--background);
@@ -325,6 +368,7 @@
 
   /* ── Brand (grayscale / graphite) ── */
   --primary: #18181A;
+  --primary-subtle: rgba(24, 24, 26, 0.06); /* 主色极淡衬底（选中卡片/次级高亮） */
   --primary-hover: #323137;
   --primary-soft: #E8E7EA;
   --primary-dark: #010101;
@@ -350,11 +394,11 @@
   --border-strong: #B7B5BA;
 
   /* ── Text（法则 3：深石墨灰 + 中性灰层级） ── */
-  --text: #18181A;
-  --text-body: #48474D;
-  --text-secondary: #646268;
+  --text: #111827; /* 深冷炭黑主文字 */
+  --text-body: #4B5563; /* 正文中性冷灰 */
+  --text-secondary: #6B7280; /* 次级文字 */
   --text-tertiary: #7F7D83;
-  --text-disabled: #9B999E;
+  --text-disabled: #9CA3AF; /* 弱化/占位符 */
   --text-ghost: var(--text-disabled);
   --selection: color-mix(in srgb, var(--neutral-150) 18%, transparent);
 
@@ -418,6 +462,48 @@
   --chart-axis: rgba(24, 24, 26, 0.12);
   --chart-area-fill: linear-gradient(180deg, rgba(24, 24, 26, 0.15) 0%, rgba(24, 24, 26, 0) 100%);
 
+  /* ── Jasmine Liquid Crystal：珊瑚橙 accent ── */
+  --accent: #F97316;
+  --accent-hover: #EA580C;
+  --accent-soft: rgba(249, 115, 22, 0.08);
+  --accent-ink: #FFFFFF;
+  /* 语义补充（V2 工作区整改：补齐被引用但缺失的角色令牌） */
+  --surface-subtle: #F1F3F5;
+  --text-muted: #9CA3AF;
+  --primary-foreground: #FFFFFF;
+  --chart-line: #8B5CF6;
+  --accent-subtle: #FFF1EB;
+  --on-accent: #EA580C;
+  --bg-soft: #EDEFF2;
+  --border-soft: rgba(0, 0, 0, 0.05);
+  --border-hover: rgba(0, 0, 0, 0.12);
+  --provider-color: #EA580C;
+  --sidebar-border: rgba(0, 0, 0, 0.06);
+
+  /* ── 模块徽标（蓝/绿/青/橙/紫） ── */
+  --badge-blue: #3B82F6;
+  --badge-blue-soft: rgba(59, 130, 246, 0.10);
+  --badge-green: #10B981;
+  --badge-green-soft: rgba(16, 185, 129, 0.10);
+  --badge-cyan: #06B6D4;
+  --badge-cyan-soft: rgba(6, 182, 212, 0.10);
+  --badge-orange: #F97316;
+  --badge-orange-soft: rgba(249, 115, 22, 0.10);
+  --badge-purple: #8B5CF6;
+  --badge-purple-soft: rgba(139, 92, 246, 0.10);
+
+  /* ── 状态呼吸圆点 ── */
+  --status-running: #10B981;
+  --status-stopped: #9CA3AF;
+  --status-warning: #F59E0B;
+  --status-danger: #EF4444;
+
+  /* ── 图表数据流（Token 鲜明紫罗兰 / 请求天蓝，15%→0% 水彩填充） ── */
+  --chart-token-line: #8B5CF6;
+  --chart-requests-line: #3B82F6;
+  --chart-token-fill: linear-gradient(180deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0) 100%);
+  --chart-requests-fill: linear-gradient(180deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0) 100%);
+
   /* ── Diff ── */
   --diff-add: #059669;
   --diff-del: #DC2626;
@@ -460,6 +546,18 @@
 
   /* 其余主题不变量（motion / typography / layout / z-index / accents）
      与 :root 共享，无需重复。 */
+}
+
+/* ═══════════════════════════════════════════
+   主题不变量补充：结构性 spacing / 字号别名
+   （非颜色，双主题同值；随 :root 共享，无需在浅色块重复）
+   ═══════════════════════════════════════════ */
+
+:root {
+  --space-sm: 8px;
+  --fs-sm: 0.75rem;
+  --fs-md: 0.875rem;
+  --font-size-sm: 0.75rem;
 }
 
 /* ═══════════════════════════════════════════

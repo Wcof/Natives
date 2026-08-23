@@ -101,6 +101,19 @@
 - **为什么**：超大文件与超级管理器是后端可维护性的主要退化路径；该指南已给出可操作阈值，规范侧只需引用。
 - **检查方法**：新增/膨胀明显的 `.rs` 文件对照指南第 1 节的拆分依据自查。
 
+#### R-B10 · Workspace 数据权威在 Host SQLite，链路不得引入第二权威
+- **等级**：MUST
+- **分类**：数据
+- **规则**：Workspace（含布局）权威数据**必须**在 Host SQLite（见 ADR-0021 与 `docs/contracts/workspace-v2-contract.md`），数据流保持 `SQLite / Local Files -> Domain Service -> Typed IPC -> Renderer Snapshot/UI`；Renderer **禁止**直接访问 SQLite，**禁止**以 IndexedDB / localStorage 作为 Workspace 权威源。
+- **反例**：Renderer 把布局写进 localStorage 并以其为恢复来源；Workspace 命令绕过 Domain Service 直连数据库连接池。
+- **检查方法**：Workspace 相关命令与 IPC handler 中不出现 Renderer 侧 DB/IndexedDB/localStorage 权威路径。
+
+#### R-B11 · 布局持久化在停止/flush 时发生，指针移动零写库
+- **等级**：MUST
+- **分类**：性能、数据
+- **规则**：Home Grid/Free Canvas 的 Pointer Move（drag/resize/pan/zoom 手势期间）**必须**只更新内存；**必须**在 Pointer Stop、Resize Stop 或 debounce/flush 时才持久化布局，move 路径对布局数据的写库次数必须为 0。
+- **检查方法**：布局 move 路径 `grep` 不得出现 DB 写入；持久化只出现在 stop/debounce/flush 处理器。
+
 ---
 
 ## 七、本篇合规自检清单
@@ -114,6 +127,8 @@
 - [ ] 子进程全部纳入 `sidecar_supervisor` 或有显式回收，无裸 spawn（R-B7）。
 - [ ] DB 访问符合 `technical/03` 与 R-T2 分权威（R-B8）。
 - [ ] 文件规模与拆分符合 CODE_MODULE_GUIDELINES（R-B9）。
+- [ ] Workspace 数据权威在 Host SQLite；Renderer 不直接访问 SQLite、不以 IndexedDB/localStorage 为权威（R-B10）。
+- [ ] 布局 Pointer Move 零写库，Pointer Stop/Resize Stop 或 debounce/flush 才持久化（R-B11）。
 
 ---
 

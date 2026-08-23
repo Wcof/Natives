@@ -332,3 +332,23 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
 - [ ] Widget / Control Hub 模式隐藏应用 Chrome，并只保留高质量单卡玻璃容器（R-U5.1-R-U5.3）。
 - [ ] 展示性文字消费 `--font-display`（R-U5）。
 - [ ] 所有的 UI 图标均使用 `lucide-react` 的 SVG 图标，无任何 Emoji 字符用作 UI 图标（R-U5.5）。
+
+---
+
+## 十、Design System V2 · Dark Glow × Liquid Crystal (V-063)
+
+### 10.1 Dark Glow（暗黑流光）
+- **画布**：低反射深色 canvas，允许极轻微环境亮度变化。
+- **材质分层**：`canvas` / `base` / `raised` / `floating` / `inset` 四级表面，不依靠粗高亮框界定边界。
+- **流光聚焦**：glow 仅属于 focus / selected / active data / status 状态，禁止全局大面积霓虹污染。
+- **边缘**：低对比度微光边缘 + 纯白顶层 Specular Highlight 语义。
+
+### 10.2 Liquid Crystal（晶透液态 / 极净霜白）
+绝非 Dark Theme 简单反色。强制执行四项法则：
+1. **顶层高光 (Specular Highlight)**：浅色晶透卡片/浮层顶部使用独立纯白高光线（`--specular-highlight`）。
+2. **分层微阴影**：使用 2–3 层低 alpha 扩散阴影塑造自然悬浮感，替代粗黑实线边框。
+3. **文字层级**：Primary/Body 使用深石墨灰，Secondary/Tertiary 使用中性灰，避免大面积纯黑墙。
+4. **图表透气感**：浅色 area fill 使用单色/同色系水彩渐变，透明度约 15% → 0%。
+
+### 10.3 Surface Policy
+组件由 Definition 声明表面策略（`bare` / `surface` / `raised` / `crystal` / `floating`），禁止所有 Widget 强制同一种玻璃卡。

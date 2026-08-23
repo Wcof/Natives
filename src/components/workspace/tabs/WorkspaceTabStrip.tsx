@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { useLocale, t, type Locale } from '@/i18n';
 import {
   History,
   LayoutGrid,
@@ -50,10 +51,11 @@ export default function WorkspaceTabStrip({
   onActivate,
   onClose,
   onReopen,
-  onPin,
+  onPin: _onPin,
   onReorder,
   onNewView,
 }: WorkspaceTabStripProps) {
+  const locale = useLocale();
   const [focusIndex, setFocusIndex] = useState(-1);
   const [menuOpen, setMenuOpen] = useState<'recent' | 'new' | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -148,7 +150,7 @@ export default function WorkspaceTabStrip({
           className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
         >
           {workspaceKindIcon(kind)}
-          {kindLabel(kind)}
+          {kindLabel(kind, locale)}
         </button>
       ))}
     </div>
@@ -159,7 +161,7 @@ export default function WorkspaceTabStrip({
       ref={tabListRef}
       className="relative flex h-10 shrink-0 items-stretch gap-0.5 overflow-x-auto border-b border-[var(--border)] bg-[var(--surface)] px-2"
       role="tablist"
-      aria-label="Workspace views"
+      aria-label={t(locale, 'workspace.workspaceViewsLabel')}
     >
       {tabs.map((tab, index) => {
         const active = tab.id === activeTabId;
@@ -183,15 +185,15 @@ export default function WorkspaceTabStrip({
                 ? 'border-[var(--border)] bg-[var(--surface-hover)] text-[var(--text)]'
                 : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
             }`}
-            title={`${tab.title}${tab.pinned ? ' · pinned' : ''}`}
+            title={`${localizeTabTitle(tab.title, locale)}${tab.pinned ? t(locale, 'workspace.tabPinned') : ''}`}
           >
             {workspaceKindIcon(tab.kind)}
-            <span className="max-w-32 truncate">{tab.title}</span>
+            <span className="max-w-32 truncate">{localizeTabTitle(tab.title, locale)}</span>
             {tab.pinned && <Pin size={11} className="shrink-0 text-[var(--text-disabled)]" />}
             <span
               role="button"
               tabIndex={-1}
-              aria-label={`Close ${tab.title}`}
+              aria-label={t(locale, 'workspace.closeTab', { title: localizeTabTitle(tab.title, locale) })}
               className="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--danger)]"
               onClick={(e) => {
                 e.stopPropagation();
@@ -209,8 +211,8 @@ export default function WorkspaceTabStrip({
           <div className="relative">
             <button
               type="button"
-              aria-label="Recently closed views"
-              title="Recently closed (Close ≠ Delete)"
+              aria-label={t(locale, 'workspace.recentlyClosed')}
+              title={t(locale, 'workspace.recentlyClosedHint')}
               onClick={() => setMenuOpen(menuOpen === 'recent' ? null : 'recent')}
               className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
             >
@@ -226,7 +228,7 @@ export default function WorkspaceTabStrip({
                     className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                   >
                     {workspaceKindIcon(tab.kind)}
-                    {tab.title}
+                    {localizeTabTitle(tab.title, locale)}
                   </button>
                 ))}
               </div>
@@ -236,8 +238,8 @@ export default function WorkspaceTabStrip({
         <div className="relative">
           <button
             type="button"
-            aria-label="New view"
-            title="New view"
+            aria-label={t(locale, 'workspace.newView')}
+            title={t(locale, 'workspace.newView')}
             onClick={() => setMenuOpen(menuOpen === 'new' ? null : 'new')}
             className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
           >
@@ -261,3 +263,16 @@ export function tabFromView(view: {
 
 /** Re-export moveTabTo for tests / inspector tools. */
 export { moveTabTo };
+
+export function localizeTabTitle(title: string, locale: Locale): string {
+  if (title === 'Start Here' || title.toLowerCase().includes('start')) {
+    return t(locale, 'workspace.viewStartHere');
+  }
+  if (title === 'Idea Board' || title.toLowerCase().includes('idea')) {
+    return t(locale, 'workspace.viewIdeaBoard');
+  }
+  if (title === 'Tasks' || title.toLowerCase().includes('task')) {
+    return t(locale, 'workspace.viewTasks');
+  }
+  return title;
+}

@@ -18,6 +18,7 @@
  * Yjs / CRDT / BlockSuite source is copied.
  */
 
+import { useLocale, t } from '@/i18n';
 import {
   useCallback,
   useEffect,
@@ -113,6 +114,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
   { initialNodes, onCommit, editable = true, onSelectionChange }: FreeCanvasViewProps,
   ref,
 ) {
+  const locale = useLocale();
   const [nodes, setNodes] = useState<CanvasNode[]>(() => initialNodes);
   const [draft, setDraft] = useState<Record<string, Partial<CanvasNode>>>({});
   const [camera, setCamera] = useState<CanvasCamera>({ x: 300, y: 200, zoom: 1 });
@@ -365,8 +367,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
       setNodes(next);
       onCommitRef.current(next);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetDraft]);
+      }, [resetDraft]);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -387,8 +388,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
     [],
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const zoomAtCursor = (camera: CanvasCamera, screen: { x: number; y: number }, factor: number): CanvasCamera => {
+    const zoomAtCursor = (camera: CanvasCamera, screen: { x: number; y: number }, factor: number): CanvasCamera => {
     const before = screenToWorld(screen, camera, { x: viewport.w, y: viewport.h });
     const zoom = clamp(camera.zoom * factor, CANVAS_MIN_ZOOM, CANVAS_MAX_ZOOM);
     const next = { ...camera, zoom };
@@ -400,10 +400,16 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
   const addNode = useCallback(
     (kind: CanvasNodeKind) => {
       const count = nodesRef.current.length;
+      const label =
+        kind === 'frame'
+          ? t(locale, 'workspace.canvasNodeFrameLabel')
+          : kind === 'note'
+            ? t(locale, 'workspace.canvasNodeNoteLabel')
+            : t(locale, 'workspace.canvasNodeLabel', { n: count + 1 });
       const node = createCanvasNode({
         id: `node-${Date.now().toString(36)}-${count}`,
         kind,
-        label: kind === 'frame' ? 'Frame' : kind === 'note' ? 'Note' : `Card ${count + 1}`,
+        label,
         x: 60 + (count % 5) * 40,
         y: 60 + (count % 4) * 40,
         z: nextZ(nodesRef.current),
@@ -412,7 +418,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
       commitSoon([...nodesRef.current, node]);
       updateSelection({ ids: [node.id], mode: 'single' });
     },
-    [commitSoon],
+    [commitSoon, locale],
   );
 
   const groupSelected = useCallback(() => {
@@ -426,7 +432,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
     const group = createCanvasNode({
       id: `group-${Date.now().toString(36)}`,
       kind: 'group',
-      label: `Group ${nodesRef.current.length + 1}`,
+      label: t(locale, 'workspace.canvasGroupLabel', { n: nodesRef.current.length + 1 }),
       x: minX - 8,
       y: minY - 24,
       w: maxX - minX + 16,
@@ -437,7 +443,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
     });
     commitSoon([...nodesRef.current, group]);
     updateSelection({ ids: [group.id], mode: 'single' });
-  }, [commitSoon]);
+  }, [commitSoon, locale]);
 
   const ungroupSelected = useCallback(() => {
     const group = nodesRef.current.find(
@@ -527,7 +533,7 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
     setCamera((c) => zoomStep(clampCamera(c), -1, { x: viewport.w, y: viewport.h }, { x: viewport.w / 2, y: viewport.h / 2 }));
   const zoomFit = () => setCamera(fitCameraToWorld(CANVAS_WORLD.w, CANVAS_WORLD.h, { x: viewport.w, y: viewport.h }));
 
-  const selectedNodes = useMemo(
+  const _selectedNodes = useMemo(
     () => nodes.filter((node) => selection.ids.includes(node.id)),
     [nodes, selection.ids],
   );
@@ -566,8 +572,8 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
         </div>
         <div className="min-h-0 flex-1 px-2 py-1.5 text-[0.6875rem] leading-relaxed text-[var(--text-secondary)]">
           {node.kind === 'frame' || node.kind === 'group'
-            ? `${node.members?.length ?? 0} items`
-            : 'Double-click to edit (coming in Wave2).'}
+            ? t(locale, 'workspace.canvasNodeItems', { count: node.members?.length ?? 0 })
+            : t(locale, 'workspace.canvasDoubleClickHint')}
         </div>
         {selected && !node.locked && (
           <>
@@ -599,29 +605,29 @@ export default forwardRef<FreeCanvasViewHandle, FreeCanvasViewProps>(function Fr
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-2">
-        <ToolButton active={activeTool === 'select'} onClick={() => setTool('select')} title="Select (V)" icon={<MousePointer2 size={14} />} />
-        <ToolButton active={activeTool === 'hand'} onClick={() => setTool('hand')} title="Pan / hand (H · space to hold)" icon={<Hand size={14} />} />
+        <ToolButton active={activeTool === 'select'} onClick={() => setTool('select')} title={t(locale, 'workspace.canvasSelect')} icon={<MousePointer2 size={14} />} />
+        <ToolButton active={activeTool === 'hand'} onClick={() => setTool('hand')} title={t(locale, 'workspace.canvasPan')} icon={<Hand size={14} />} />
         <span className="mx-1 h-4 w-px bg-[var(--border-subtle)]" />
-        <ToolButton onClick={() => addNode('card')} title="Add card" icon={<StickyNote size={14} />} />
-        <ToolButton onClick={() => addNode('note')} title="Add note" icon={<Focus size={14} />} />
-        <ToolButton onClick={() => addNode('frame')} title="Add frame" icon={<Frame size={14} />} />
+        <ToolButton onClick={() => addNode('card')} title={t(locale, 'workspace.canvasAddCard')} icon={<StickyNote size={14} />} />
+        <ToolButton onClick={() => addNode('note')} title={t(locale, 'workspace.canvasAddNote')} icon={<Focus size={14} />} />
+        <ToolButton onClick={() => addNode('frame')} title={t(locale, 'workspace.canvasAddFrame')} icon={<Frame size={14} />} />
         {selection.ids.length > 0 && (
           <>
             <span className="mx-1 h-4 w-px bg-[var(--border-subtle)]" />
-            <ToolButton onClick={groupSelected} title="Group (⌘G)" icon={<Layers size={14} />} />
-            <ToolButton onClick={ungroupSelected} title="Ungroup (⌘⇧G)" icon={<Ungroup size={14} />} />
-            <ToolButton onClick={() => commitSoon(bringToFront(nodesRef.current, selection.ids))} title="Bring to front (⌘])" icon={<BringToFront size={14} />} />
-            <ToolButton onClick={() => commitSoon(sendToBack(nodesRef.current, selection.ids))} title="Send to back (⌘[)" icon={<SendToBack size={14} />} />
-            <ToolButton onClick={deleteSelected} title="Delete" danger icon={<Trash2 size={14} />} />
+            <ToolButton onClick={groupSelected} title={t(locale, 'workspace.canvasGroup')} icon={<Layers size={14} />} />
+            <ToolButton onClick={ungroupSelected} title={t(locale, 'workspace.canvasUngroup')} icon={<Ungroup size={14} />} />
+            <ToolButton onClick={() => commitSoon(bringToFront(nodesRef.current, selection.ids))} title={t(locale, 'workspace.canvasFront')} icon={<BringToFront size={14} />} />
+            <ToolButton onClick={() => commitSoon(sendToBack(nodesRef.current, selection.ids))} title={t(locale, 'workspace.canvasBack')} icon={<SendToBack size={14} />} />
+            <ToolButton onClick={deleteSelected} title={t(locale, 'workspace.canvasDelete')} danger icon={<Trash2 size={14} />} />
           </>
         )}
         <div className="ml-auto flex items-center gap-0.5">
-          <ToolButton onClick={zoomOut} title="Zoom out" icon={<Minus size={14} />} />
+          <ToolButton onClick={zoomOut} title={t(locale, 'workspace.canvasZoomOut')} icon={<Minus size={14} />} />
           <span className="min-w-9 text-center text-[0.625rem] tabular-nums text-[var(--text-disabled)]">
             {Math.round(camera.zoom * 100)}%
           </span>
-          <ToolButton onClick={zoomIn} title="Zoom in" icon={<Plus size={14} />} />
-          <ToolButton onClick={zoomFit} title="Fit canvas" icon={<Maximize size={14} />} />
+          <ToolButton onClick={zoomIn} title={t(locale, 'workspace.canvasZoomIn')} icon={<Plus size={14} />} />
+          <ToolButton onClick={zoomFit} title={t(locale, 'workspace.canvasFit')} icon={<Maximize size={14} />} />
         </div>
       </div>
 

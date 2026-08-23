@@ -2,6 +2,7 @@
  * Tab strip pure model (C-003 close/pin/reorder; Close != Delete).
  */
 
+import { t, type Locale } from '@/i18n';
 import type { WorkspaceTab, WorkspaceViewKind } from '@/lib/workspace/views/types';
 
 /** Neighbour index for keyboard focus navigation (wraps around). */
@@ -29,13 +30,13 @@ export function moveTabTo(tabs: WorkspaceTab[], tabId: string, toIndex: number):
 }
 
 /** Human-readable kind label for menus/aria (temp English; i18n keys deferred). */
-export function kindLabel(kind: WorkspaceViewKind): string {
+export function kindLabel(kind: WorkspaceViewKind, locale: Locale = 'zh'): string {
   switch (kind) {
     case 'grid':
-      return 'Grid';
+      return t(locale, 'workspace.kindGrid');
     case 'canvas':
-      return 'Canvas';
+      return t(locale, 'workspace.kindCanvas');
     case 'data':
-      return 'Data';
+      return t(locale, 'workspace.kindData');
   }
 }
