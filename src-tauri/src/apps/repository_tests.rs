@@ -107,15 +107,33 @@ fn register_web_writes_spec_and_validates_url() {
     assert_eq!(spec.open_behavior, "native_webview");
     assert!(spec.keep_alive);
 
+    // 自动解析协议：github.com -> https://github.com, localhost:3000 -> http://localhost:3000
+    let g = AppRepository::register_web(&conn, "GH", "github.com", &[], None, false).unwrap();
+    assert_eq!(
+        AppRepository::load_web_spec(&conn, &g).unwrap().url,
+        "https://github.com"
+    );
+    assert_eq!(
+        a, g,
+        "github.com normalized to https://github.com matches existing app"
+    );
+
+    let loc =
+        AppRepository::register_web(&conn, "Local", "localhost:3000", &[], None, false).unwrap();
+    assert_eq!(
+        AppRepository::load_web_spec(&conn, &loc).unwrap().url,
+        "http://localhost:3000"
+    );
+
     // 非法 URL 拒绝。
-    assert!(AppRepository::register_web(&conn, "Bad", "ftp://x.com", &[], None, false,).is_err());
-    assert!(AppRepository::register_web(&conn, "Bad2", "notaurl", &[], None, false,).is_err());
+    assert!(AppRepository::register_web(&conn, "Bad", "ftp://x.com", &[], None, false).is_err());
+    assert!(AppRepository::register_web(&conn, "Empty", "   ", &[], None, false).is_err());
 
     // 幂等。
     let b = AppRepository::register_web(&conn, "GitHub", "https://github.com", &[], None, false)
         .unwrap();
     assert_eq!(a, b);
-    assert_eq!(AppRepository::list(&conn).unwrap().len(), 1);
+    assert_eq!(AppRepository::list(&conn).unwrap().len(), 2);
 }
 
 #[test]

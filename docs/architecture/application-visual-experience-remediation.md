@@ -4,7 +4,7 @@
 > Natives 审计基线：`60107ab2d21e`；首批集成 HEAD：`1943c57`（2026-08-12）。
 > Waku 参考：`/Volumes/UNTITLED/本人材料/project/waku`；审阅时仓库报告 HEAD `925c7533cd88744cd76531f8a938e07cbb1b0213`，工作树非干净，因此本方案只引用已核对的源码行为，不把该 commit 当作可复现截图基线。  
 > 产品面：Hub 主工作台为主，覆盖 Workshop 管理面、Embed 宿主 Chrome 与 Menubar Widget；不改变 web-module / capability 双轨。  
-> **执行包**：本文保留设计总纲与首批集成基线；后续细化后的唯一实施入口为 `/Users/ldh/Downloads/project/uitask/README.md`，其工作包、验收编号、证据规范和进度台账不得再复制为第三套来源。
+> **执行包**：本文保留设计总纲与首批集成基线；通用历史整改仍以 `/Users/ldh/Downloads/project/uitask/README.md` 为入口。2026-08-23 新增的 Workspace 画布组件专项以本文 §12 为仓库内唯一实施入口，避免把 Git 外路径当作该专项规范来源。
 > **存储约束**：本任务严格禁止创建或使用 Git Worktree、临时 clone 或完整仓库副本；所有 Agent 必须复用 Natives 当前工作目录与当前分支，通过文件所有权与 Wave 顺序隔离并行改动。
 
 ## 0. 权威、范围与完成定义
@@ -347,3 +347,147 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 ## 11. Goal 启动指令
 
 新版完整提示词已迁移到 `/Users/ldh/Downloads/project/uitask/GOAL.md`。启动 Agent 时必须复制该文件全文，不能继续使用本文旧版简化提示词。
+
+## 12. Workspace 画布组件专项整改（2026-08-23）
+
+> 状态：ready for implementation。交互规范以 [`../standards/ui-ux/02-interaction.md`](../standards/ui-ux/02-interaction.md) §6 R-U15–R-U20 为准；本文只记录当前源码差距、实施顺序、文件边界和验收证据，不另建规范。
+> 审计基线：`5ee9a7917deb`。审计时工作树已有 Apps/Rust/i18n 未提交改动，本专项 Agent 不得触碰或覆盖这些用户改动。
+> 产品面：Hub / Personal Workspace；布局轨：Compact Grid + bounded DOM Free Canvas；Widget 仍为内置 React renderer，不是 Plugin Runtime。
+
+### 12.1 当前问题与源码证据
+
+| 用户问题 | 当前证据 | 根因方向 | 目标规则 |
+|---|---|---|---|
+| 缺少同步按钮 | `WorkspaceSessionProvider` 有 `reloadHost`/`refreshHostSnapshot`，`WorkspaceDataBroker` 有 `invalidate`，但正常态 Workspace Header/WidgetShell 没有同步入口、更新时间或 syncing 状态 | 已有数据能力未形成共享交互合同 | R-U15 |
+| 缺少时间组件 | `DistributionChartWidget` 在组件内自管 7/30/90 天；usage adapter key 固定 `30d`；其他时间类 Widget 没有统一范围 | 时间范围被局部实现，未进入 Workspace 上下文和 adapter key | R-U16 |
+| 样式不统一 | `WorkspaceCompositionPage`、Inspector、DataView、FreeCanvasView 大量使用局部 `gap/p/text-[…]`；`WidgetShell` 又混用 inline token 与独立 CSS 数值 | Header/Body/状态/控件没有统一 anatomy 与密度基线 | R-U17 |
+| 编辑态无法稳定拖动 | Grid 仅 `.ws-drag-handle` 22×22px 可拖，Body 全部 cancel；Free Canvas node 与 stage 同时绑定 `beginGesture`，需验证冒泡/Pointer Capture；group member 的 y 位移当前误用 `dxWorld` | 命中区过小，手势所有权和事件互斥存在缺陷 | R-U19/R-U20 |
+| 组件间距过大 | `GRID_MARGIN=[12,12]`、`GRID_PADDING=[16,16]`，外层还可能叠加 Widget/容器 padding | 多层 gutter 叠加，未共享 4px spacing rhythm | R-U18 |
+
+以上是静态审计结论；“无法拖动”的最终根因必须先用真实 Grid 与 Canvas 路径复现并由最小交互测试锁定，禁止只扩大 CSS 把手后宣称修复。
+
+### 12.2 目标交互模型
+
+```text
+Workspace Header
+├─ Workspace identity
+├─ TimeRangeControl（存在时间敏感 Widget 时）
+├─ Sync（存在数据 Widget 时）+ last successful sync
+└─ Edit layout / Done
+
+Workspace Body
+├─ Compact Grid：8px item gap / 12px outer gutter
+└─ Free Canvas：8px snap / node header drag / body interaction cancel
+
+WidgetShell
+├─ 32px shared header：title / inherited range / status / local actions
+├─ shared body density：12px；dense=8px
+└─ shared loading / empty / error / stale / ready states
+```
+
+同步和时间范围属于数据上下文，不属于布局状态；进入编辑态、移动卡片、切换 Grid/Canvas 都不得触发数据刷新或重置时间范围。布局 pointer move 只写内存，时间范围切换与同步只影响 DataBroker key/cache，不写布局表。
+
+### 12.3 实施切片与依赖
+
+#### WSW-0 · 基线、复现与最小测试（P0）
+
+**Owner 文件**：只新增/修改 Workspace 现有同目录测试；不改生产实现。
+
+1. 记录 dark/light × 1440×900/960×600 的 Grid、Canvas 截图；测量当前 card gap、outer gutter、Header/Body padding。
+2. 为 Grid 写一个最小交互测试：编辑态 Header 空白区域可启动拖拽，Header button 与 Body 不启动拖拽，stop 只持久化一次。
+3. 为 Free Canvas 写一个最小交互测试：node drag 的 x/y 正确、group member 同步 x/y、Pointer Cancel 不留下 draft；锁定节点不移动。
+4. 为 DataBroker 写计数测试：两个相同 key Widget 手动同步只调用一次 loader；失败保留 last good data。
+
+**退出条件**：至少一个测试稳定复现当前拖拽问题；before 证据与测量值写入本节 12.6，不用截图主观判断代替失败测试。
+
+#### WSW-1 · 数据上下文：同步与时间范围（P0，依赖 WSW-0）
+
+**Owner 文件**：`src/lib/workspace/widgets/{types,data-broker}.ts`、`src/components/workspace/widgets/WidgetRenderer.tsx`、Workspace 数据上下文的一个现有模块及对应测试。
+
+1. 在现有 DataBroker 上补最小的“按可见 key invalidate + refetch”入口和同步状态；不创建第二个 store/event bus。
+2. 建立一个 Workspace 级 `TimeRange` 值（today/7d/30d/90d；Host 支持任意起止日期时再加 custom），进入 time-aware adapter key；非时间 Widget 不订阅。
+3. 去掉“adapter 固定 30d、组件只做前端裁切”的权威路径；查询必须使用实际范围、时区和作用域。Host 只支持有限预设时只显示真实支持的预设，不伪造 custom 查询结果。
+4. stale/error 继续使用现有 last-good cache；分类错误后提供重试。
+
+**退出条件**：同 key 去重测试通过；时间范围变更只刷新 time-aware key；同步不改变 Workspace snapshot 的 layout/view state。
+
+#### WSW-2 · 共享控制条与 Widget anatomy（P0，依赖 WSW-1）
+
+**Owner 文件**：`WorkspaceCompositionPage.tsx`、`WidgetShell.tsx`、`widgets.css`、必要的现有 UI primitive 与定向测试。i18n 由集成 Agent 集中修改 `src/i18n/zh/app.ts` 与 `src/i18n/en/app.ts`，并先保留审计基线中已有的未提交内容。
+
+1. 在现有 Workspace Header 中加入 TimeRangeControl、Sync、最近同步时间、Edit/Done；不新建第二条工具栏。
+2. TimeRangeControl 复用现有 Button/Popover/Segmented control；自定义日期用原生 date input，不新增依赖。
+3. WidgetShell 统一 32px Header、标题/范围/状态/action slots、Body density 和 state region；删除各 Widget 重复 shell/padding。
+4. 窄窗口把时间预设收敛为单一 Popover；同步状态和 Edit/Done 永不被隐藏到不可达位置。
+
+**退出条件**：仅键盘可完成同步、改范围、进入/退出编辑；zh/en 长文案不挤掉主操作；sync pending 不引发布局跳动。
+
+#### WSW-3 · 拖拽根因修复（P0，可与 WSW-2 在文件不重叠时并行）
+
+**Owner 文件**：`layout/CompactGrid.tsx`、`views/FreeCanvasView.tsx`、`canvas/**` 与对应测试；不得改 Widget 数据层。
+
+1. Grid 继续复用 `react-grid-layout`；把完整 Widget Header 空白区域设为 handle，Header 控件和 Body 设为 cancel，不换拖拽库。
+2. 扩大 Resize 实际命中区但不扩大视觉噪声；dragging 时只使用现有 elevation/edge token。
+3. Free Canvas 明确 stage/node/resize handle 的手势优先级，修复事件冒泡、Pointer Capture/Cancel 和 group y 轴位移；禁止在 pointer move 写 Host。
+4. 补方向键移动、Escape 取消/退出、焦点归还；键盘和指针走同一个 commit 函数。
+
+**退出条件**：测试覆盖单节点、group、locked、resize、cancel；连续拖拽 30 次无丢失/跳回；pointer move Host 写入为 0，stop 为 1。
+
+#### WSW-4 · 密度与首批 Widget 迁移（P1，依赖 WSW-2/3）
+
+**Owner 文件**：`src/lib/workspace/views/types.ts`、`src/app/styles/widgets.css`、`src/components/workspace/widgets/**`；共享文件由集成 Agent串行落地。
+
+1. 将 Grid margin 改为 8px、outer padding 改为 12px；最小窗口为 8px；Canvas snap 对齐 8px。
+2. 按“数据/列表/图表”三类审计现有 Widget，只迁移实际存在的差异，不增加新 wrapper：
+   - 数据指标：Today Usage、Token/Cost/Work Time；
+   - 图表：Distribution；
+   - 列表/状态：Recent Files、Apps、AI/Proxy/Tool、Storage；
+   - 非数据：Greeting、Notes、Quick Links、Prompt Snippets。
+3. 时间敏感类继承 Workspace range；确需局部覆盖的只在 Inspector 暴露。非数据类不显示同步/范围。
+4. 删除 10px 正文、重复卡片边框、重复 padding 和无消费方的样式；保留 Surface Policy 差异。
+
+**退出条件**：相邻卡片边缘 8px、工作区 gutter 12px；所有 Widget 的标题/正文/辅助信息和 loading/empty/error/stale 对齐；无新增视觉魔法数字。
+
+#### WSW-5 · 集成与发布证据（P0，依赖全部）
+
+**Owner**：集成 Agent；集中处理共享 i18n、冲突和最终提交。
+
+1. 更新 12.6 台账，附 before/after、测试命令、实测请求数和失败场景。
+2. 执行 dark/light × 1440×900/960×600 × ready/loading/empty/error/stale；验证 125%/150% 缩放和 reduced motion。
+3. 性能对比：同步反馈 p95 ≤100ms；drag ≥55 FPS；pointer move 无 Host 写；一次全局同步请求数等于唯一可见 adapter key 数。
+4. 运行 `rtk npm run typecheck`、`rtk npm run lint`、`rtk npm run test`、`rtk npm run perf:check`；触及 Host/协议时再跑对应专项门禁。
+
+**退出条件**：五个用户问题全部有自动化或可复现证据；任何失败门禁与既有失败必须区分，不得用“视觉完成”代替工程完成。
+
+### 12.4 Agent 文件所有权与合并顺序
+
+| 工作包 | 可并行 | 独占范围 | 禁止事项 |
+|---|---|---|---|
+| WSW-1 Data Context | 与 WSW-0 结束后的基线文档工作 | `lib/workspace/widgets/data-*`、WidgetRenderer 数据状态 | 不改 layout/canvas CSS |
+| WSW-2 Chrome | 与 WSW-3 | WorkspaceCompositionPage、WidgetShell、共享控件 | 不改 canvas engine |
+| WSW-3 Interaction | 与 WSW-2 | CompactGrid、FreeCanvas、canvas math/tests | 不改 data broker/i18n |
+| WSW-4 Widgets | WSW-2/3 合并后再分 Widget 文件并行 | 各具体 Widget；同一 Widget 只允许一个 owner | 不复制 WidgetShell/TimeRangeControl |
+| WSW-5 Integration | 不并行写共享文件 | i18n、`views/types.ts`、`widgets.css`、本文与最终门禁 | 不顺手合入无关格式化/重命名 |
+
+合并顺序固定为 WSW-0 → WSW-1 → WSW-2/WSW-3 → WSW-4 → WSW-5。每个切片保持可独立回滚；Agent 不提交用户当前 Apps/Rust/i18n 未提交文件。
+
+### 12.5 明确非目标
+
+- 不引入新状态库、日期库、拖拽库、图表库或 Canvas runtime。
+- 不新增自动轮询；事件更新 + 手动同步已经覆盖数据新鲜度。
+- 不做无限画布、Connector、CRDT、多人协作、Widget Plugin/Marketplace。
+- 不以“全卡玻璃化”、大 glow 或更大卡片制造高级感。
+- 不借本专项修改 Workspace SQLite 模型、Apps 域或 Legacy Agent/Daemon。
+
+### 12.6 验收台账
+
+| ID | 验收 | 状态 | 证据 |
+|---|---|---|---|
+| UX-WS-01 | 正常态有同步入口、最近同步时间；同 key 去重；失败保留旧数据 | pending | — |
+| UX-WS-02 | today/7d/30d/90d 可选；支持 custom 时边界真实；时区/局部覆盖明确 | pending | — |
+| UX-WS-03 | Header/Body/字体/padding/状态区域统一，dark/light 均清晰 | pending | — |
+| UX-WS-04 | Grid 与 Canvas 指针/键盘可移动、缩放、取消；无 move 写库 | pending | — |
+| UX-WS-05 | card gap=8px、outer gutter=12px，960×600 无双倍间距 | pending | — |
+| UX-WS-06 | typecheck/lint/test/perf 与截图、性能、a11y 矩阵通过 | pending | — |
+
+只有集成 Agent 可以更新状态；`completed` 必须附同一 HEAD 下的可复现证据路径或命令输出。

@@ -388,9 +388,9 @@ pub fn run() {
                 daemon::watch_bridge::WatchBridgeState::default(),
             )));
 
-            // Creative App: global mutation lock + child browser state (ADR-0013)
+            // Apps / Creative App: global mutation lock + child browser state (ADR-0013)
             // + local project runtime supervisor (process tree / logs)
-            app.manage(creative_app::service::new_mutation_lock());
+            app.manage(apps::mutation_lock::new_mutation_lock());
             app.manage(std::sync::Mutex::new(
                 creative_app::browser::BrowserState::new(),
             ));

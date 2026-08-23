@@ -7,114 +7,8 @@ use super::adapters;
 use super::model::*;
 use crate::Result;
 use rusqlite::Connection;
-use std::collections::HashMap;
-use std::sync::{Arc, Weak};
-use tokio::sync::Mutex as TokioMutex;
 
-/// Application-keyed mutation lock registry (batch 2, CR-202).
-///
-/// Replaces the batch-1 global `Mutex<()>` with:
-/// - a per-application async mutex (different apps run in parallel; the same
-///   app stays exclusive), and
-/// - a bounded install/Docker semaphore (heavy installs are resource-limited
-///   but never serialize lifecycle work on unrelated apps).
-///
-/// The lock key is the source id of the app (`commands` pass the `id` they
-/// already have). Source ids are unique across the three sources by
-/// construction (`adapters::resolve`), so per-source-id == per-application.
-///
-/// Entries are held as `Weak` so an unused app's lock is collected when the
-/// last guard drops; the check-or-create runs under a `std::sync::Mutex` so two
-/// concurrent acquires for the same key always upgrade the same underlying
-/// mutex (exclusivity is never split into two mutexes).
-pub struct MutationLockRegistry {
-    inner: std::sync::Mutex<HashMap<String, Weak<TokioMutex<()>>>>,
-    install: Arc<tokio::sync::Semaphore>,
-}
-
-/// Installs (GitHub container, dependency installs) share one bounded semaphore.
-const INSTALL_SEMAPHORE_PERMITS: usize = 2;
-
-impl MutationLockRegistry {
-    pub fn new() -> Self {
-        Self {
-            inner: std::sync::Mutex::new(HashMap::new()),
-            install: Arc::new(tokio::sync::Semaphore::new(INSTALL_SEMAPHORE_PERMITS)),
-        }
-    }
-
-    /// Acquire the per-application lock. Blocks only for other mutations on the
-    /// SAME application — unrelated apps proceed in parallel.
-    pub async fn acquire_app(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
-        let arc = {
-            let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            match map.get(key) {
-                Some(weak) => match weak.upgrade() {
-                    Some(a) => a,
-                    None => {
-                        let a = Arc::new(TokioMutex::new(()));
-                        map.insert(key.to_string(), Arc::downgrade(&a));
-                        a
-                    }
-                },
-                None => {
-                    let a = Arc::new(TokioMutex::new(()));
-                    map.insert(key.to_string(), Arc::downgrade(&a));
-                    a
-                }
-            }
-        };
-        arc.lock_owned().await
-    }
-
-    /// Non-blocking variant for the 2s watchdog: skips apps currently under a
-    /// lifecycle mutation instead of stalling the reconcile loop on a long op.
-    pub fn try_acquire_app(&self, key: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-        let arc = {
-            let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            match map.get(key) {
-                Some(weak) => match weak.upgrade() {
-                    Some(a) => a,
-                    None => {
-                        let a = Arc::new(TokioMutex::new(()));
-                        map.insert(key.to_string(), Arc::downgrade(&a));
-                        a
-                    }
-                },
-                None => {
-                    let a = Arc::new(TokioMutex::new(()));
-                    map.insert(key.to_string(), Arc::downgrade(&a));
-                    a
-                }
-            }
-        };
-        arc.try_lock_owned().ok()
-    }
-
-    /// Bounded permit for install/Docker-heavy mutations.
-    pub async fn acquire_install(&self) -> tokio::sync::OwnedSemaphorePermit {
-        // The semaphore is never closed, so acquire_owned can only fail if the
-        // registry is being torn down; treat that as a closed install gate.
-        self.install
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("install semaphore is never closed")
-    }
-}
-
-impl Default for MutationLockRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Tauri-managed shared handle.
-pub type MutationLock = Arc<MutationLockRegistry>;
-
-pub fn new_mutation_lock() -> MutationLock {
-    Arc::new(MutationLockRegistry::new())
-}
+pub use crate::apps::mutation_lock::{new_mutation_lock, MutationLock, MutationLockRegistry};
 
 pub struct CreativeAppService;
 
@@ -205,6 +99,7 @@ mod tests {
 mod lock_tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn rt() -> tokio::runtime::Runtime {

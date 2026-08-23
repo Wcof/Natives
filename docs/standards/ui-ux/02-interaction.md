@@ -1,8 +1,8 @@
 # UI/UE 02 · 交互模式
 
-> **版本**: 1.0.1 · **日期**: 2026-08-12
-> **关联 ADR**: 无
-> **关联源文件**: `src/lib/notification-ui.ts`（toast / 通知中心 / 错误页）、`src/components/shell/CommandPalette.tsx`、`src/components/ui/EmptyState.tsx`
+> **版本**: 1.1.0 · **日期**: 2026-08-23
+> **关联 ADR**: [ADR-0021](../../adr/0021-multi-workspace-design-system-v2.md)
+> **关联源文件**: `src/lib/notification-ui.ts`（toast / 通知中心 / 错误页）、`src/components/shell/CommandPalette.tsx`、`src/components/ui/EmptyState.tsx`、`src/components/workspace/`、`src/lib/workspace/widgets/`
 
 ---
 
@@ -123,7 +123,88 @@
 
 ---
 
-## 六、本篇合规自检清单
+## 六、Workspace 画布组件交互合同
+
+本节约束个人空间中 Compact Grid 与 Free Canvas 共用的 Widget 体验。目标是让刷新、时间范围、编辑、拖拽和视觉密度在两种布局中保持同一语义；实现必须复用 WidgetShell、WorkspaceDataBroker、现有设计令牌和已安装的 `react-grid-layout`，不得再造第二套组件外壳、数据总线或拖拽引擎。
+
+### 6.1 组件结构与操作层级
+
+一个数据 Widget 只允许以下四层，缺少对应内容时整层不渲染，不保留空占位：
+
+```text
+WidgetShell
+├─ Header：标题 / 范围摘要 / 状态 / 组件级动作
+├─ Summary（可选）：主指标与单位
+├─ Body：图表、列表或真实状态
+└─ Footer（可选）：更新时间、来源或下一步
+```
+
+- Workspace 工具栏承载影响多个 Widget 的动作：刷新全部、共享时间范围、布局编辑。
+- Widget Header 只承载当前 Widget 独有的动作；同一动作不得同时常驻在 Workspace 工具栏和每张卡片。
+- 删除、拖拽、调整大小仅在编辑态出现；查看态不得用编辑 Chrome 挤压内容。
+- Header、Body、空态、错误态必须通过同一个 `WidgetShell` 呈现；禁止各 Widget 自己复制标题栏、卡片 padding 或状态容器。
+
+#### R-U15 · Workspace 必须提供可见、可解释的同步入口
+- **等级**：MUST
+- **分类**：交互、状态、无假数据
+- **规则**：只要当前视图存在远端或 Host 数据 Widget，Workspace 工具栏必须显示一个带 `aria-label`/Tooltip 的“同步数据”按钮，并显示最近一次成功更新时间或“尚未同步”。触发后必须按当前可见 Widget 的 adapter key 去重失效并重新取数；禁止刷新页面、重置布局、重建 Workspace 或并发重复请求。
+- **状态**：`idle → syncing → success | error`。同步中按钮保持原尺寸、禁用重复触发并显示进度；成功更新“最近同步”；失败保留旧的真实数据并显示内联 stale/error 状态与重试，不能清空成假零值。事件推送仍是默认更新路径，手动同步是用户兜底，不得演变为高频轮询。
+- **组件级例外**：只有当某 Widget 独立失败或使用独立数据源时，Header 才可以显示组件级重试/同步；它必须只刷新自己的 adapter key。
+- **检查方法**：同一 adapter key 被多个 Widget 使用时，点击一次只产生一次 loader 请求；同步不得改变 Widget 坐标、尺寸、选择或滚动位置。
+
+#### R-U16 · 时间范围必须是共享上下文，局部覆盖必须显式
+- **等级**：MUST
+- **分类**：交互、数据、可访问性
+- **规则**：当前视图只要存在时间敏感 Widget，Workspace 工具栏必须显示统一 `TimeRangeControl`，预设至少包含“今天 / 7 天 / 30 天 / 90 天”。真实查询 API 支持任意起止日期时可以提供“自定义”，并优先使用原生 `<input type="date">`；不得为日期选择新增依赖，也不得展示后端不支持的伪自定义范围。
+- **语义**：默认范围为 30 天；按用户本地时区计算并显示时区提示。结束日期包含当日；未来日期、开始晚于结束和超出真实数据保留期必须在控件边界阻止或给出可执行错误。切换范围必须更新 adapter key，由 DataBroker 去重取数；不能只在图表前端裁切后假装已查询该周期。
+- **继承**：时间敏感 Widget 默认继承 Workspace 范围。确有独立分析需要时可以在 Inspector 设置局部覆盖，Header 必须显示“自定义范围”摘要与“恢复跟随”；非时间敏感 Widget 必须忽略该上下文，不显示无效控件。
+- **响应式**：空间足够时显示分段预设；窄窗口收敛为一个带当前值的按钮/Popover，主操作仍可见。键盘可完成打开、选择、确认与取消。
+
+#### R-U17 · Widget 排版和内边距必须使用统一密度
+- **等级**：MUST
+- **分类**：布局、排版、组件
+- **规则**：结构值必须引用 `SPACING` / `FONT_SIZE` / `BORDER_RADIUS` / `LAYOUT`，并遵守以下基线，不得在单个 Widget 中用任意 Tailwind 数值另起节奏：
+
+| 项目 | 基线 | 说明 |
+|---|---:|---|
+| Header 高度 | `LAYOUT.controlCompact`（32px） | 横向 padding `SPACING.md`（12px），操作间距 `SPACING.xs`（4px） |
+| Body padding | `SPACING.md`（12px） | 密集表格/热力图可用 `SPACING.sm`（8px），必须由 Widget 类型声明 |
+| 区块垂直间距 | `SPACING.sm`（8px） | 大段说明才可用 `SPACING.md`（12px） |
+| 标题 | `FONT_SIZE.micro`（12px）/ 600 | 单行省略，使用 UI/Display 字体角色 |
+| 正文/标签 | `FONT_SIZE.xs`（13px）/ 400–500 | 行高 1.4–1.5，禁止用 10px 正文换密度 |
+| 辅助信息 | `FONT_SIZE.micro`（12px） | 使用 `--text-secondary/tertiary`，必要信息不得用 disabled 色 |
+| 主指标 | 20–24px / 600 | 数值使用 mono/tabular-nums，单位与数值分层 |
+| 卡片圆角 | `BORDER_RADIUS.md`（12px） | Widget 内部禁止再套同等强度完整卡片 |
+
+- 标题、图标和正文基线必须对齐；图标按钮视觉图标 14–16px、命中区至少 32×32px。
+- Surface 由 Widget Definition 的 Surface Policy 决定；普通列表、正文和图表不得每层都加边框、阴影或玻璃。
+- loading / empty / error 必须占用与 ready 内容相同的 Body 区域，避免同步时卡片跳高。
+
+#### R-U18 · Grid 与 Canvas 必须使用紧凑且可预期的空间节奏
+- **等级**：MUST
+- **分类**：布局、Workspace 双布局
+- **规则**：Compact Grid 默认卡片间距为 `SPACING.sm`（8px），画布/网格内容外边距为 `SPACING.md`（12px）；最小窗口可收敛为 8px。WidgetShell 自身不得再添加外边距。Free Canvas 的默认 snap 步长为 8px，组件新建或自动排列也必须落在该节奏上。
+- **禁止**：同时叠加容器 padding、grid margin、article margin 与 WidgetShell margin；用透明占位项制造间距；通过扩大卡片最小尺寸掩盖内容布局问题。
+- **检查方法**：相邻卡片可见边缘间距为 8px；首张卡片到工作区边缘为 12px；1440×900 与 960×600 下均无双倍 gutter。
+
+#### R-U19 · 编辑态必须提供可靠的拖拽、缩放与键盘替代
+- **等级**：MUST
+- **分类**：交互、可访问性、性能
+- **规则**：进入编辑态后，Widget 完整 Header 的非控件空白区域必须成为拖拽命中区，并显示 Grip 与 `grab/grabbing` 光标；不得只提供一个小于 32×32px 的孤立把手。Header 内 button/input/a/menu 以及 Widget Body 必须是拖拽 cancel 区，确保点击、选择文本和滚动不触发移动。
+- **Grid**：继续由 `react-grid-layout` 独占 item transform；拖拽阈值为 3px；边界、碰撞与响应式布局必须可预测。Resize handle 只在编辑态显示，视觉命中区至少 16×16px、实际命中区至少 24×24px。
+- **Free Canvas**：Pointer Down 必须从实际命中的 node 建立手势并 capture pointer；移动中只写 draft，Pointer Up/Cancel 统一提交或回滚。选中、拖拽、缩放、Pan 的事件必须互斥；交互子元素必须停止冒泡或登记为 cancel 区。锁定节点不得移动，并必须以 SVG 图标 + 文案/Tooltip 表达。
+- **反馈**：拖拽开始时提升 dragging elevation/边界，移动中保持 55 FPS，停止后在 120ms 内稳定到落点；写入失败必须恢复最后成功布局并显示可重试错误。
+- **键盘**：编辑态中聚焦 Widget 后，Grid 方向键移动一个网格单位、Shift+方向键移动两个网格单位；Free Canvas 方向键移动 8px、Shift+方向键细调 1px。Delete/Backspace 删除前遵循破坏性操作规则；所有操作只在 stop/flush 持久化。
+
+#### R-U20 · 查看态与编辑态必须可辨、可退出且不破坏数据操作
+- **等级**：MUST
+- **分类**：交互、状态
+- **规则**：Workspace 工具栏必须提供单一“编辑布局/完成”切换。编辑态用选中边界、Grip、Resize handle 和轻量提示表达，不给所有卡片铺强 glow；Escape 取消当前手势/选择，第二次 Escape 退出编辑态。退出时必须 flush 已停止的布局更改，并将焦点归还切换按钮。
+- **规则补充**：同步、时间范围、图表 Tooltip、链接和表单在查看态可用；编辑态下仍可通过明确控件操作，但 Widget Body 不作为拖拽起点。切换模式不得重新取数、重置时间范围或丢失滚动位置。
+
+---
+
+## 七、本篇合规自检清单
 
 - [ ] 我的反馈选对了渠道，没有用 `alert/prompt/confirm`（R-U6）。
 - [ ] toast 自动消失、不抢焦点（R-U7）。
@@ -133,3 +214,8 @@
 - [ ] 快捷键跨平台兼容，全局入口走命令面板（R-U11, R-U12）。
 - [ ] 无边框窗口的主体卡片支持 `-webkit-app-region: drag`，且所有内部交互按键排斥拖拽（`-webkit-app-region: no-drag`）（R-U12.1）。
 - [ ] Free Canvas 是 bounded DOM 画布，无无限画布/CRDT/AFFiNE 式画布/多人协作/Plugin Runtime（R-U13）；拖拽/缩放期间只写内存，停止或 debounce/flush 才持久化（R-U14）。
+- [ ] 数据 Workspace 有去重同步入口、最近同步时间与 stale/error 反馈，刷新不改变布局（R-U15）。
+- [ ] 时间敏感 Widget 继承共享时间范围，局部覆盖可见且可恢复，边界与时区明确（R-U16）。
+- [ ] Widget 结构、字体、内边距、图标命中区与 Surface Policy 统一（R-U17）。
+- [ ] Grid 间距 8px、外边距 12px，无双倍 gutter；Canvas snap 使用同一节奏（R-U18）。
+- [ ] 编辑态 Header 可可靠拖拽，交互控件与 Body 不误触，键盘路径和失败回滚完整（R-U19/R-U20）。

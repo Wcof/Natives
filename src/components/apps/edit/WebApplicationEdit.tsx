@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import { appsApi, type AppView } from '@/lib/tauri/apps';
+import { normalizeWebUrl } from '../add/WebApplicationForm';
 
 interface WebApplicationEditProps {
   app: AppView;
@@ -34,15 +35,28 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
       });
 
       let updated = app;
-      if (url.trim() || approvedOrigins.trim()) {
-        const origins = approvedOrigins
+      const rawUrl = url.trim();
+      const normalizedUrl = rawUrl ? normalizeWebUrl(rawUrl) : undefined;
+      const rawOrigins = approvedOrigins.trim();
+
+      if (normalizedUrl || rawOrigins) {
+        let origins = rawOrigins
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
 
+        if (origins.length === 0 && normalizedUrl) {
+          try {
+            const parsed = new URL(normalizedUrl);
+            if (parsed.origin) origins = [parsed.origin];
+          } catch {
+            // fallback
+          }
+        }
+
         updated = await appsApi.updateWebSpec({
           appId: app.appId,
-          url: url.trim() || undefined,
+          url: normalizedUrl,
           approvedOrigins: origins.length > 0 ? origins : undefined,
           keepAlive,
         });
@@ -85,10 +99,10 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           {t(locale, 'appsPage.webUrlLabel')}
         </label>
         <input
-          type="url"
+          type="text"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="Leave blank to keep unchanged"
+          placeholder={t(locale, 'appsPage.webUrlEditPlaceholder')}
           className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
         />
       </div>

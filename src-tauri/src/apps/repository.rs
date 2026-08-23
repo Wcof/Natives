@@ -306,7 +306,16 @@ impl AppRepository {
         open_behavior: Option<&str>,
         keep_alive: bool,
     ) -> Result<String> {
-        validate_web_url(url)?;
+        let normalized_url = normalize_and_validate_web_url(url)?;
+        let mut origins = approved_origins.to_vec();
+        if origins.is_empty() {
+            if let Some((scheme, rest)) = normalized_url.split_once("://") {
+                let hostport = rest.split('/').next().unwrap_or("");
+                if !hostport.is_empty() {
+                    origins.push(format!("{scheme}://{hostport}"));
+                }
+            }
+        }
         let open_behavior = open_behavior
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -315,7 +324,7 @@ impl AppRepository {
             conn,
             AppKind::WebApplication,
             "web_application",
-            url,
+            &normalized_url,
             title,
             None,
             None,
@@ -335,8 +344,8 @@ impl AppRepository {
                 updated_at = excluded.updated_at",
             params![
                 app_id,
-                url,
-                serde_json::to_string(approved_origins).map_err(|e| Error::Json(e))?,
+                normalized_url,
+                serde_json::to_string(&origins).map_err(|e| Error::Json(e))?,
                 open_behavior,
                 keep_alive as i64,
                 t
@@ -571,13 +580,15 @@ impl AppRepository {
         open_behavior: Option<&str>,
         keep_alive: Option<bool>,
     ) -> Result<WebApplicationSpec> {
-        if let Some(u) = url {
-            validate_web_url(u)?;
-        }
+        let normalized_url = if let Some(u) = url {
+            Some(normalize_and_validate_web_url(u)?)
+        } else {
+            None
+        };
         let t = now();
         let mut sets: Vec<&str> = vec![];
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![];
-        if let Some(u) = url {
+        if let Some(ref u) = normalized_url {
             sets.push("url = ?");
             args.push(Box::new(u.to_string()));
         }
@@ -829,10 +840,28 @@ fn map_surface_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Surface> {
     })
 }
 
-/// Web URL 校验（APP-013 step 5 / 06：后端先验 URL）。
-pub fn validate_web_url(url: &str) -> Result<()> {
-    let u = url.trim();
-    let (scheme, rest) = u
+/// Web URL 自动解析与规范化（支持自动补全 http/https，验证 scheme 和 host）。
+pub fn normalize_and_validate_web_url(url: &str) -> Result<String> {
+    let raw = url.trim();
+    if raw.is_empty() {
+        return Err(Error::InvalidInput("web url cannot be empty".into()));
+    }
+    let normalized = if !raw.contains("://") {
+        let is_local = raw.starts_with("localhost")
+            || raw.starts_with("127.0.0.1")
+            || raw.starts_with("0.0.0.0")
+            || raw.starts_with("192.168.")
+            || raw.starts_with("10.");
+        if is_local {
+            format!("http://{raw}")
+        } else {
+            format!("https://{raw}")
+        }
+    } else {
+        raw.to_string()
+    };
+
+    let (scheme, rest) = normalized
         .split_once("://")
         .ok_or_else(|| Error::InvalidInput(format!("web url must be http/https: {url}")))?;
     if scheme != "http" && scheme != "https" {
@@ -845,7 +874,12 @@ pub fn validate_web_url(url: &str) -> Result<()> {
     if host.is_empty() {
         return Err(Error::InvalidInput(format!("web url missing host: {url}")));
     }
-    Ok(())
+    Ok(normalized)
+}
+
+/// Web URL 校验（APP-013 step 5 / 06：后端先验 URL）。
+pub fn validate_web_url(url: &str) -> Result<()> {
+    normalize_and_validate_web_url(url).map(|_| ())
 }
 
 #[cfg(test)]
