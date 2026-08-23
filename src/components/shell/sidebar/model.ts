@@ -124,12 +124,18 @@ export function getNavigationId(activeModuleId?: string): string | null {
   if (!activeModuleId) return null;
   if (activeModuleId === 'dashboard' || activeModuleId === '__dashboard__') return '__dashboard__';
   if (activeModuleId === 'usage' || activeModuleId === '__usage__') return 'usage';
-  if (activeModuleId === 'apps' || activeModuleId === '__apps__') return 'apps';
+  if (
+    activeModuleId === 'apps' ||
+    activeModuleId === '__apps__' ||
+    activeModuleId === 'workshop' ||
+    activeModuleId === '__workshop__' ||
+    activeModuleId === 'modules' ||
+    activeModuleId === 'store'
+  ) {
+    return 'apps';
+  }
   if (activeModuleId === 'ai' || activeModuleId === '__ai__') return 'ai';
   if (isSettingsView(activeModuleId)) return '__settings__';
-  if (activeModuleId === 'workshop' || activeModuleId === '__workshop__' || activeModuleId === 'modules' || activeModuleId === 'store') {
-    return '__workshop__';
-  }
   if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
   if (activeModuleId === 'jobs' || activeModuleId === '__jobs__') return '__jobs__';
   if (activeModuleId === 'capabilities' || activeModuleId === '__capabilities__') return '__capabilities__';

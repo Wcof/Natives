@@ -13,7 +13,7 @@ export const creative = {
     draftCreatedTitle: 'App draft created',
     draftCreatedName: 'Name',
     draftCreatedId: 'Draft ID',
-    draftCreatedHint: 'Continue in Personal Creations; publishing is your action',
+    draftCreatedHint: 'Continue in App Center; publishing is your action',
     session: {
       noModel: 'No model configured — add a provider in settings first',
     },
@@ -25,8 +25,8 @@ export const creative = {
       deleteMessage: 'Delete draft "{name}"? Its revision history will be removed too.',
     },
     publish: {
-      action: 'Save as personal creation',
-      title: 'Save as personal creation',
+      action: 'Save as app',
+      title: 'Save as app',
       name: 'Name',
       moduleId: 'Module ID',
       moduleIdHint: 'Lowercase letters, digits and hyphens only (2-40 chars, starts with a letter or digit)',

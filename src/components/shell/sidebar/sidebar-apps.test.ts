@@ -12,6 +12,10 @@ describe('Sidebar Apps Projection (APP-060 / APP-061 / APP-071)', () => {
   it('maps apps top-level entry', () => {
     assert.equal(getNavigationId('apps'), 'apps');
     assert.equal(getNavigationId('__apps__'), 'apps');
+    assert.equal(getNavigationId('workshop'), 'apps');
+    assert.equal(getNavigationId('__workshop__'), 'apps');
+    assert.equal(getNavigationId('modules'), 'apps');
+    assert.equal(getNavigationId('store'), 'apps');
   });
 
   it('filters and sorts sidebar apps by sidebarOrder', () => {
