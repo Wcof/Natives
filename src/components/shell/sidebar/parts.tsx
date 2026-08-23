@@ -639,19 +639,6 @@ function BottomNav({ c }: { c: SidebarController }) {
         <Settings size={16} />
         <span>{t(locale, 'nav.settings')}</span>
       </button>
-      <button
-        type="button"
-        onClick={() => c.selectNavigation('__workshop__', 'modules')}
-        aria-current={c.activeNavigationId === '__workshop__' ? 'page' : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,border-color,opacity,transform] ${
-          c.activeNavigationId === '__workshop__'
-            ? 'sidebar-nav-active'
-            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-        }`}
-      >
-        <Layers size={16} />
-        <span>{t(locale, 'nav.modules')}</span>
-      </button>
     </div>
   );
 }

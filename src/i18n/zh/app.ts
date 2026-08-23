@@ -209,7 +209,7 @@ export const app = {
     moduleInstall: '安装模块',
     moduleInstallDesc: '安装推荐模块以扩展 Natives 的功能。',
     installRecommended: '安装推荐',
-    openWorkshop: '打开个人创意',
+    openWorkshop: '打开应用中心',
     allSet: '全部就绪！',
     allSetDesc: '你已准备好开始使用 Natives。享受吧！',
     finish: '完成',

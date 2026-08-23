@@ -13,7 +13,7 @@ export const creative = {
     draftCreatedTitle: '创作草稿已创建',
     draftCreatedName: '名称',
     draftCreatedId: '草稿 ID',
-    draftCreatedHint: '到「个人创意」继续创作；正式发布由你点击完成',
+    draftCreatedHint: '到「应用中心」继续创作；正式发布由你点击完成',
     session: {
       noModel: '尚未配置可用模型，请先在设置中添加供应商',
     },
@@ -25,8 +25,8 @@ export const creative = {
       deleteMessage: '确定要删除草稿「{name}」吗？其修订记录将一并删除。',
     },
     publish: {
-      action: '保存为个人创作',
-      title: '保存为个人创作',
+      action: '保存为应用',
+      title: '保存为应用',
       name: '名称',
       moduleId: '模块 ID',
       moduleIdHint: '仅限小写字母、数字与连字符（2-40 位，字母或数字开头）',

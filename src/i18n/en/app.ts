@@ -208,7 +208,7 @@ export const app = {
     moduleInstall: 'Install Modules',
     moduleInstallDesc: 'Install recommended modules to extend Natives functionality.',
     installRecommended: 'Install Recommended',
-    openWorkshop: 'Open Personal Creations',
+    openWorkshop: 'Open App Center',
     allSet: 'All Set!',
     allSetDesc: 'You\'re ready to start using Natives. Enjoy!',
     finish: 'Finish',
