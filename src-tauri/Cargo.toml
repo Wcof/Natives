@@ -5,6 +5,9 @@ description = "Natives — Personal All-in-One AI Workbench Desktop Application"
 authors = ["Natives"]
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [features]
 default = ["ghostty-vt"]
 ghostty-vt = []

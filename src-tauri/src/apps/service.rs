@@ -275,11 +275,11 @@ impl AppsService {
     /// - System: 激活或启动原生应用；
     /// - Web: 打开受控 Child WebView 窗口。
     pub async fn open(&self, id: &str) -> Result<bool> {
-        let (kind, source_id) = {
+        let kind = {
             let conn = self.conn()?;
             let (kind_opt, _, _, _) = AppRepository::identity(&conn, id)?;
-            let app = AppRepository::get(&conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
-            (kind_opt.unwrap_or(AppKind::LocalProject), app.source_id)
+            let _app = AppRepository::get(&conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
+            kind_opt.unwrap_or(AppKind::LocalProject)
         };
 
         match kind {

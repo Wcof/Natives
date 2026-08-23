@@ -11,13 +11,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::apps::model::{
-    App, AppCapabilities, AppKind, AppRuntimeState, AppView, RegisterLocalProjectInput,
-    RegisterSystemApplicationInput, RegisterWebApplicationInput, RegistrationOrigin,
-    RuntimeInstance, RuntimeSpec, Surface, UpdateAppMetadataInput,
-    UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput,
+    App, AppKind, AppView, RegisterLocalProjectInput, RegisterSystemApplicationInput,
+    RegisterWebApplicationInput, RegistrationOrigin, RuntimeInstance, RuntimeSpec, Surface,
+    UpdateAppMetadataInput, UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput,
 };
 use crate::apps::mutation_lock::MutationLock;
 use crate::apps::repository::AppRepository;
@@ -36,18 +35,9 @@ fn service(
     locks: &MutationLock,
     local_runtime: &LocalRuntimeHandle,
 ) -> AppsService {
-    let browser = app_handle
-        .try_state::<BrowserStateHandle>()
-        .map(|s| {
-            Arc::new(std::sync::Mutex::new(
-                crate::creative_app::browser::BrowserState::default(),
-            ))
-        })
-        .unwrap_or_else(|| {
-            Arc::new(std::sync::Mutex::new(
-                crate::creative_app::browser::BrowserState::default(),
-            ))
-        });
+    let browser = Arc::new(std::sync::Mutex::new(
+        crate::creative_app::browser::BrowserState::default(),
+    ));
 
     AppsService::new(AppsServiceDeps {
         db: state.db.clone(),

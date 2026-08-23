@@ -7,6 +7,7 @@
 //! - 遵循 R-P2，系统应用目录扫描运行在 `spawn_blocking` 中。
 
 #![cfg(target_os = "macos")]
+#![allow(unexpected_cfgs)]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
