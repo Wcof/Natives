@@ -18,6 +18,7 @@ interface WorkspaceSessionApi {
   createWorkspace: (templateId?: string) => Promise<void>;
   closeWorkspace: (id: string) => Promise<void>;
   reorderWorkspaces: (ids: string[]) => Promise<void>;
+  renameWorkspace: (name: string) => Promise<void>;
   setEditing: (editing: boolean) => void;
   setLayoutMode: (mode: WorkspaceLayoutMode) => Promise<void>;
   setTheme: (theme: 'dark' | 'light') => Promise<void>;
@@ -153,6 +154,16 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
     },
     reorderWorkspaces: async (ids) => {
       const next = await reorderSessions(ids);
+      setSession(next); setSessionState(next);
+    },
+    // WS-04: rename the active workspace via the existing updateWorkspace +
+    // revision mechanism. Host validates trim/non-empty/≤80 chars; a stale
+    // revision rejects with a Conflict before writing.
+    renameWorkspace: async (name) => {
+      const current = requireSnapshot();
+      const trimmed = name.trim();
+      applySnapshot(await updateWorkspace(current.workspace.id, { name: trimmed }, current.revision));
+      const next = await getSessionSnapshot();
       setSession(next); setSessionState(next);
     },
     setEditing,

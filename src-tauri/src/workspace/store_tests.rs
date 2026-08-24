@@ -171,3 +171,69 @@ fn widget_boundary_rejects_secrets_and_css_appearance() {
         Err(Error::InvalidInput(_))
     ));
 }
+
+#[test]
+fn rename_workspace_validates_trim_nonempty_and_length() {
+    let conn = empty_db();
+    let workspace = create_workspace(
+        &conn,
+        "alpha",
+        "workspace",
+        None,
+        None,
+        "dark",
+        "structured",
+    )
+    .unwrap();
+
+    // Trim is applied: surrounding whitespace is stripped and the name persists trimmed.
+    let trimmed = WorkspaceUpdateRequest {
+        name: Some("  Beta  ".into()),
+        ..Default::default()
+    };
+    let updated = update_workspace(&conn, &workspace.id, &trimmed)
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.name, "Beta");
+
+    // Empty / whitespace-only is rejected.
+    let empty = WorkspaceUpdateRequest {
+        name: Some("   ".into()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        update_workspace(&conn, &workspace.id, &empty),
+        Err(Error::InvalidInput(_))
+    ));
+
+    // Over-length (>80 chars) is rejected.
+    let too_long = WorkspaceUpdateRequest {
+        name: Some("x".repeat(MAX_WORKSPACE_NAME_CHARS + 1)),
+        ..Default::default()
+    };
+    assert!(matches!(
+        update_workspace(&conn, &workspace.id, &too_long),
+        Err(Error::InvalidInput(_))
+    ));
+
+    // Exactly 80 chars is allowed.
+    let exact = WorkspaceUpdateRequest {
+        name: Some("x".repeat(MAX_WORKSPACE_NAME_CHARS)),
+        ..Default::default()
+    };
+    let updated = update_workspace(&conn, &workspace.id, &exact)
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.name.chars().count(), MAX_WORKSPACE_NAME_CHARS);
+
+    // Unrelated patch (no name) must not trigger name validation.
+    let theme_only = WorkspaceUpdateRequest {
+        name: None,
+        theme: Some("light".into()),
+        ..Default::default()
+    };
+    let updated = update_workspace(&conn, &workspace.id, &theme_only)
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.name, "x".repeat(MAX_WORKSPACE_NAME_CHARS));
+}

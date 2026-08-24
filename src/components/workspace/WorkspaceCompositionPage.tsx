@@ -1,7 +1,7 @@
 'use client';
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, LayoutDashboard, PanelRight, Plus, Redo2, RotateCcw, Save, Settings2, Undo2, X } from 'lucide-react';
+import { Check, LayoutDashboard, PanelRight, Pencil, Plus, Redo2, RotateCcw, Save, Settings2, Undo2, X } from 'lucide-react';
 import { ErrorPrimitive, Skeleton } from '@/components/ui/design-system';
 import { t, useLocale } from '@/i18n';
 import type { CanvasNode } from '@/lib/workspace/canvas/types';
@@ -35,6 +35,9 @@ function WorkspaceDashboard() {
   const [redo, setRedo] = useState<GridLayouts[]>([]);
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const layouts = useMemo<GridLayouts>(() => {
     if (!snapshot) return EMPTY_LAYOUTS;
@@ -102,10 +105,35 @@ function WorkspaceDashboard() {
         </nav>
 
         <header className="workspace-dashboard-header flex shrink-0 items-center gap-3 px-6 pb-3 pt-5">
-          <div className="min-w-0">
-            <p className="text-[0.6875rem] uppercase tracking-[0.16em] text-[var(--text-disabled)]">{t(locale, 'workspace.dashboardSubtitle')}</p>
-            <h1 className="truncate text-xl font-semibold text-[var(--text)]">{snapshot.workspace.name}</h1>
-          </div>
+          <WorkspaceNameEditable
+            locale={locale}
+            name={snapshot.workspace.name}
+            renaming={renaming}
+            saving={renameSaving}
+            error={renameError}
+            onStart={() => { setRenaming(true); setRenameError(null); }}
+            onCancel={() => { setRenaming(false); setRenameError(null); }}
+            onSave={async (next) => {
+              const trimmed = next.trim();
+              if (!trimmed) { setRenameError(t(locale, 'workspace.renameErrorRequired')); return; }
+              if (trimmed.length > 80) { setRenameError(t(locale, 'workspace.renameErrorTooLong')); return; }
+              if (trimmed === snapshot.workspace.name) { setRenaming(false); setRenameError(null); return; }
+              setRenameSaving(true); setRenameError(null);
+              try {
+                await api.renameWorkspace(trimmed);
+                setRenaming(false);
+              } catch (cause) {
+                const message = cause instanceof Error ? cause.message : String(cause);
+                // Host Error serializes to a plain string; detect conflict vs invalid.
+                if (/conflict/i.test(message)) setRenameError(t(locale, 'workspace.renameErrorConflict'));
+                else if (/empty/i.test(message)) setRenameError(t(locale, 'workspace.renameErrorRequired'));
+                else if (/80|characters|length/i.test(message)) setRenameError(t(locale, 'workspace.renameErrorTooLong'));
+                else setRenameError(message);
+              } finally {
+                setRenameSaving(false);
+              }
+            }}
+          />
           <div className="ml-auto flex items-center gap-1.5">
             {!editing && <TimeRangePicker value={timeRange} onChange={setTimeRange} />}
             {editing && <>
@@ -130,6 +158,85 @@ function WorkspaceDashboard() {
         </div>
       </main>
     </TimeRangeContext.Provider>
+  );
+}
+
+/**
+ * WorkspaceNameEditable (WS-04) — in-place workspace rename.
+ * Click the name or pencil to edit; Enter saves, Esc cancels, blur cancels.
+ * Save is disabled while a request is in-flight; failure keeps the input and
+ * shows an inline error so the user never loses what they typed.
+ */
+function WorkspaceNameEditable({ locale, name, renaming, saving, error, onStart, onCancel, onSave }: {
+  locale: string;
+  name: string;
+  renaming: boolean;
+  saving: boolean;
+  error: string | null;
+  onStart: () => void;
+  onCancel: () => void;
+  onSave: (next: string) => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (renaming) {
+      setDraft(name);
+      // Focus + select on the next paint so the input is mounted.
+      const id = requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el) { el.focus(); el.select(); }
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [renaming, name]);
+
+  // Keep the draft in sync with the persisted name while not editing.
+  useEffect(() => { if (!renaming) setDraft(name); }, [name, renaming]);
+
+  if (renaming) {
+    return (
+      <div className="min-w-0">
+        <p className="text-[0.6875rem] uppercase tracking-[0.16em] text-[var(--text-disabled)]">{t(locale, 'workspace.dashboardSubtitle')}</p>
+        <div className="flex items-center gap-1.5">
+          <input
+            ref={inputRef}
+            value={draft}
+            disabled={saving}
+            maxLength={80}
+            onChange={(e) => { setDraft(e.target.value); if (error) { /* keep error until next save */ } }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); onSave(draft); }
+              else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+            }}
+            onBlur={() => { if (!saving) onCancel(); }}
+            placeholder={t(locale, 'workspace.renamePlaceholder')}
+            aria-label={t(locale, 'workspace.renamePlaceholder')}
+            className="min-w-0 truncate rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xl font-semibold text-[var(--text)] outline-none focus-visible:border-[var(--primary)]"
+          />
+        </div>
+        {error && <p role="alert" className="mt-1 text-xs text-[var(--danger)]">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="group min-w-0">
+      <p className="text-[0.6875rem] uppercase tracking-[0.16em] text-[var(--text-disabled)]">{t(locale, 'workspace.dashboardSubtitle')}</p>
+      <div className="flex items-center gap-1.5">
+        <h1 className="truncate text-xl font-semibold text-[var(--text)]">{name}</h1>
+        <button
+          type="button"
+          className="ws-dashboard-action opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          onClick={onStart}
+          aria-label={t(locale, 'common.rename')}
+          title={t(locale, 'common.rename')}
+        >
+          <Pencil size={13} />
+        </button>
+      </div>
+    </div>
   );
 }
 

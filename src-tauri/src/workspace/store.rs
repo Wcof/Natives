@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// WS-04: maximum workspace name length (characters, after trim).
+pub const MAX_WORKSPACE_NAME_CHARS: usize = 80;
+
 pub(crate) fn new_id(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -258,7 +261,22 @@ pub fn update_workspace(
     let Some(existing) = get_workspace(conn, id)? else {
         return Ok(None);
     };
-    let name = patch.name.as_deref().unwrap_or(&existing.name);
+    // WS-04: workspace name validation when patched — trim, non-empty, ≤80 chars.
+    // Empty/whitespace-only and over-length names are rejected before any write.
+    // Duplicate names remain allowed (revision/conflict handling is the caller's
+    // responsibility via check_revision).
+    let owned_name: Option<String> = patch.name.as_deref().map(str::trim).map(str::to_string);
+    if let Some(ref trimmed) = owned_name {
+        if trimmed.is_empty() {
+            return Err(Error::InvalidInput("workspace name cannot be empty".into()));
+        }
+        if trimmed.chars().count() > MAX_WORKSPACE_NAME_CHARS {
+            return Err(Error::InvalidInput(format!(
+                "workspace name must be {MAX_WORKSPACE_NAME_CHARS} characters or fewer"
+            )));
+        }
+    }
+    let name = owned_name.as_deref().unwrap_or(&existing.name);
     // Empty string clears nullable columns.
     let icon = match patch.icon.as_deref() {
         Some("") => None,
