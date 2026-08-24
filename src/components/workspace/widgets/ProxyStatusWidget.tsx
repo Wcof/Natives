@@ -25,7 +25,7 @@ function ProxyStatusView({ data }: WidgetProps<AiStatusData, ProxyStatusSettings
     <div className="flex h-full w-full flex-col justify-between">
       <div className="flex items-center justify-end">
         <span
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
             proxyOnline
               ? 'bg-[var(--success)]/10 text-[var(--success)]'
               : 'bg-[var(--surface-hover)] text-[var(--text-disabled)]'

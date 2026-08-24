@@ -97,10 +97,10 @@ function DistributionChartView({ data, config }: WidgetProps<UsageTrendData, Ana
   const unavailable = !data?.available || activeSeries.length === 0;
 
   return (
-    <div className="flex h-full w-full flex-col p-2">
+    <div className="flex h-full w-full flex-col">
       {/* 范围 + 视图切换 */}
-      <div className="mb-1.5 flex items-center justify-between px-1">
-        <div className="text-[0.6875rem] font-medium text-[var(--text-secondary)]">
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="text-xs font-medium text-[var(--text-secondary)]">
           {t(locale, 'workspace.weeklyTokens')}
         </div>
         <div className="flex items-center gap-1">
@@ -110,7 +110,7 @@ function DistributionChartView({ data, config }: WidgetProps<UsageTrendData, Ana
                 key={r}
                 type="button"
                 onClick={() => setLocalRange(r)}
-                className={`rounded px-1.5 py-0.5 text-[0.625rem] font-medium transition-colors ${
+                className={`rounded px-1.5 py-0.5 text-xs font-medium transition-colors ${
                   activeRange === r
                     ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                     : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
@@ -124,24 +124,24 @@ function DistributionChartView({ data, config }: WidgetProps<UsageTrendData, Ana
             <button
               type="button"
               onClick={() => setLocalView('area')}
-              className={`rounded px-1.5 py-0.5 text-[0.625rem] font-medium transition-colors ${
+              className={`rounded px-1.5 py-0.5 text-xs font-medium transition-colors ${
                 activeView === 'area'
                   ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
               }`}
             >
-              Area
+              {t(locale, 'workspace.chartViewArea')}
             </button>
             <button
               type="button"
               onClick={() => setLocalView('bar')}
-              className={`rounded px-1.5 py-0.5 text-[0.625rem] font-medium transition-colors ${
+              className={`rounded px-1.5 py-0.5 text-xs font-medium transition-colors ${
                 activeView === 'bar'
                   ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
               }`}
             >
-              Bar
+              {t(locale, 'workspace.chartViewBar')}
             </button>
           </div>
         </div>

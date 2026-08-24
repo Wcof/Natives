@@ -62,7 +62,7 @@ function StorageOverviewView({ data }: WidgetProps<StorageOverviewData, StorageO
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              fontSize: 11,
+              fontSize: FONT_SIZE.micro,
             }}
           >
             <span>{Math.round(percent)}%</span>
@@ -88,7 +88,7 @@ function StorageOverviewView({ data }: WidgetProps<StorageOverviewData, StorageO
               }}
             />
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+          <div style={{ fontSize: FONT_SIZE.micro, color: 'var(--text-tertiary)' }}>
             {t(locale, 'settings.overviewStorageAvailable', { size: formatBytes(info.availableBytes) })}
           </div>
         </div>

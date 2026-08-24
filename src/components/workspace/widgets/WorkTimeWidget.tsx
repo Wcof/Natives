@@ -25,7 +25,7 @@ function WorkTimeView({ data }: WidgetProps<UsageSummaryData, WorkTimeSettings>)
   const activeProjects = data?.activeProjects ?? 0;
 
   return (
-    <div className="flex h-full flex-col justify-between p-3">
+    <div className="flex h-full flex-col justify-between">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
           <Clock size={15} className="text-[var(--primary)]" />
@@ -38,20 +38,20 @@ function WorkTimeView({ data }: WidgetProps<UsageSummaryData, WorkTimeSettings>)
 
       <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[var(--border-subtle)]">
         <div>
-          <div className="flex items-center gap-1 text-[0.6875rem] text-[var(--text-secondary)]">
+          <div className="flex items-center gap-1 text-xs text-[var(--text-secondary)]">
             <MessageSquare size={12} />
             <span>{t(locale, 'settings.overviewMessages')}</span>
           </div>
-          <div className="text-xs font-medium tabular-nums text-[var(--text)]">
+          <div className="text-sm font-medium tabular-nums text-[var(--text)]">
             {fmtCount(messages, locale)}
           </div>
         </div>
         <div className="text-right">
-          <div className="flex items-center justify-end gap-1 text-[0.6875rem] text-[var(--text-secondary)]">
+          <div className="flex items-center justify-end gap-1 text-xs text-[var(--text-secondary)]">
             <span>{t(locale, 'settings.overviewActiveProjects')}</span>
             <FolderGit2 size={12} />
           </div>
-          <div className="text-xs font-medium tabular-nums text-[var(--text)]">
+          <div className="text-sm font-medium tabular-nums text-[var(--text)]">
             {fmtCount(activeProjects, locale)}
           </div>
         </div>

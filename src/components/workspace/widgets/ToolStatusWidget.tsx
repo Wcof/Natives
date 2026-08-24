@@ -2,45 +2,28 @@
 
 /**
  * AI Tool Status Widget (B-033).
- * Read-only status for external AI tool integrations (Claude Code, Codex, Gemini CLI, OpenCode).
+ * 外部 AI 工具（Claude Code / Codex / Gemini CLI 等）接入状态。
+ * 当前尚无真实的 CLI 可用性探测数据源；遵循 R-F2 无假数据红线，
+ * 不展示写死的可用/不可用勾选，而是诚实地呈现「未接入」空态。
+ * 待真实工具探测能力上线后再接 adapter（见 WS-03 备注）。
  */
 
 import { z } from 'zod';
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { useLocale, t } from '@/i18n';
 import type { WidgetDefinition, WidgetProps } from '@/lib/workspace/widgets';
 import {
-  loadAiStatus,
   aiStatusAdapterKey,
+  loadAiStatus,
   type AiStatusData,
 } from '@/lib/workspace/widgets/adapters/ai-status';
 
 type ToolStatusSettings = Record<string, unknown>;
 
 function ToolStatusView(_props: WidgetProps<AiStatusData, ToolStatusSettings>) {
-  const tools = [
-    { name: 'Claude Code', available: true },
-    { name: 'Codex CLI', available: true },
-    { name: 'Gemini CLI', available: false },
-    { name: 'OpenCode', available: true },
-  ];
-
+  const locale = useLocale();
   return (
-    <div className="flex h-full w-full flex-col justify-center">
-      <div className="grid grid-cols-2 gap-1.5">
-        {tools.map((tool) => (
-          <div
-            key={tool.name}
-            className="flex items-center justify-between rounded-lg bg-[var(--surface-hover)] px-2 py-1 text-xs"
-          >
-            <span className="truncate text-[var(--text)]">{tool.name}</span>
-            {tool.available ? (
-              <CheckCircle2 size={12} className="text-[var(--success)] shrink-0" />
-            ) : (
-              <XCircle size={12} className="text-[var(--text-disabled)] shrink-0" />
-            )}
-          </div>
-        ))}
-      </div>
+    <div className="ws-shell-state text-xs text-[var(--text-tertiary)]">
+      {t(locale, 'workspace.toolStatusUnavailable')}
     </div>
   );
 }

@@ -125,7 +125,7 @@ export function WidgetRenderer<TData, TSettings extends Record<string, unknown>>
     const Component = def.Component;
     body = (
       <div className="relative h-full">
-      {refetching && <span className="absolute right-2 top-1 z-10 rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[0.625rem] text-[var(--text-disabled)]">{t(locale, 'workspace.staleData')}</span>}
+      {refetching && <span className="absolute right-2 top-1 z-10 rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-xs text-[var(--text-disabled)]">{t(locale, 'workspace.staleData')}</span>}
       <Component
         data={data}
         loading={status === 'loading' || status === 'idle'}
