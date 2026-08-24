@@ -165,9 +165,12 @@ export default function CompactGrid({
               tabIndex={index === focusIndex ? 0 : -1}
               onKeyDown={(e) => handleKeyDown(e, index)}
               aria-label={item.title || item.id}
-              className={`relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border ${
-                editable ? 'border-[var(--primary)]/30' : 'border-[var(--border-subtle)]'
-              } bg-[var(--surface)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--primary)]`}
+              // WS-02: CompactGrid owns ONLY layout/size/drag/selection — no
+              // resident surface. The visual card (background/border/radius/
+              // padding) is the single responsibility of WidgetShell inside.
+              className={`compact-grid-item relative flex h-full min-h-0 flex-col overflow-hidden transition-colors focus-visible:outline-2 focus-visible:outline-[var(--primary)] ${
+                editable ? 'compact-grid-item--editable' : ''
+              } ${index === focusIndex ? 'compact-grid-item--focused' : ''}`}
             >
               {item.render({ editing: editable, active: index === focusIndex })}
             </article>

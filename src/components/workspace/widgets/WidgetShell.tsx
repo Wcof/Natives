@@ -12,7 +12,7 @@
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
-import { SPACING, type ElevationLevel } from '@/lib/design-tokens';
+import { type ElevationLevel } from '@/lib/design-tokens';
 import {
   MaterialSurface,
   CrystalSurface,
@@ -89,10 +89,7 @@ export function WidgetShell<TData, TSettings extends Record<string, unknown>>({
   const content = (
     <>
       {showHeader && (
-        <div
-          className="ws-shell-header"
-          style={{ padding: `${SPACING.xs}px ${SPACING.sm}px`, gap: SPACING.xs }}
-        >
+        <div className="ws-shell-header">
           {title && <span className="ws-shell-header-title">{title}</span>}
           <span className="ws-shell-header-actions">{headerActions}</span>
         </div>
@@ -101,14 +98,15 @@ export function WidgetShell<TData, TSettings extends Record<string, unknown>>({
     </>
   );
 
-  // ── 表面 wrapper（按 surfacePolicy；不默认 card/glass） ──
+  // ── 表面 wrapper（按 surfacePolicy；唯一 Surface 来源）──
+  // WS-02：组件唯一外圆角 12px（BORDER_RADIUS.md），统一使用 md。
   let surface: ReactElement;
   if (kind === 'crystal') {
     surface = (
       <CrystalSurface
         backdrop={Boolean(policy.allowBlur) && !reducedTransparency}
         shadowDepth={2}
-        radius="lg"
+        radius="md"
         className={shellClassName}
         style={shellStyle}
       >
@@ -119,7 +117,7 @@ export function WidgetShell<TData, TSettings extends Record<string, unknown>>({
     surface = (
       <MaterialSurface
         elevation={elevation ?? elevationForSize(config.size ?? def.size)}
-        radius="lg"
+        radius="md"
         tone="selected"
         active={editing && Boolean(policy.allowGlow)}
         className={shellClassName}
@@ -133,7 +131,7 @@ export function WidgetShell<TData, TSettings extends Record<string, unknown>>({
     surface = (
       <Surface
         elevation={elevation ?? 'base'}
-        radius="lg"
+        radius="md"
         className={shellClassName}
         style={shellStyle}
       >
