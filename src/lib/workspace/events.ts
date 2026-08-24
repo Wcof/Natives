@@ -80,21 +80,57 @@ export async function onWorkspaceChanged(cb: Listener): Promise<Unlisten> {
   const eventApi = (window as unknown as { nativesAPI?: { event?: NativesEventAPI } })
     .nativesAPI?.event;
   if (eventApi?.listen) {
-    const unlistens = await Promise.all([
-      eventApi.listen(WORKSPACE_EVENT, (raw) => handle(normalizePayload(raw))),
-      eventApi.listen(DB_STATE_CHANGED_EVENT, (raw) => handle(normalizePayload(raw))),
-    ]);
-    return () => unlistens.forEach((fn) => fn());
+    try {
+      const unlistens = await Promise.all([
+        eventApi.listen(WORKSPACE_EVENT, (raw) => handle(normalizePayload(raw))),
+        eventApi.listen(DB_STATE_CHANGED_EVENT, (raw) => handle(normalizePayload(raw))),
+      ]);
+      let called = false;
+      return () => {
+        if (called) return;
+        called = true;
+        unlistens.forEach((fn) => {
+          if (typeof fn === 'function') {
+            try {
+              const res: unknown = fn();
+              if (res && typeof (res as Promise<void>).catch === 'function') {
+                (res as Promise<void>).catch(() => {});
+              }
+            } catch {
+              // ignore
+            }
+          }
+        });
+      };
+    } catch {
+      return () => {};
+    }
   }
 
-  // 2. Tauri v2 event API (lazy import; absent in plain browser dev).
+  // 2. Tauri v2 event API (via safe core subscribe facade).
   try {
-    const { listen } = await import('@tauri-apps/api/event');
-    const unlistens = await Promise.all([
-      listen<unknown>(WORKSPACE_EVENT, (e) => handle(normalizePayload(e.payload))),
-      listen<unknown>(DB_STATE_CHANGED_EVENT, (e) => handle(normalizePayload(e.payload))),
-    ]);
-    return () => unlistens.forEach((fn) => fn());
+    const { subscribe } = await import('@/lib/tauri/core');
+    const unsubWorkspace = subscribe<unknown>(WORKSPACE_EVENT, (payload) =>
+      handle(normalizePayload(payload)),
+    );
+    const unsubDb = subscribe<unknown>(DB_STATE_CHANGED_EVENT, (payload) =>
+      handle(normalizePayload(payload)),
+    );
+    let called = false;
+    return () => {
+      if (called) return;
+      called = true;
+      try {
+        unsubWorkspace();
+      } catch {
+        // ignore
+      }
+      try {
+        unsubDb();
+      } catch {
+        // ignore
+      }
+    };
   } catch {
     // No event bridge available (browser dev) — no-op subscription.
     return () => {};

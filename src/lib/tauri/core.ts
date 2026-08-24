@@ -20,11 +20,42 @@ export async function cmd<T>(command: string, args?: Record<string, unknown>): P
   }
 }
 
-/** Tauri 事件订阅（listen 的轻封装，统一清理语义）。 */
+/** Tauri 事件订阅（listen 的轻封装，统一清理语义，幂等防御）。 */
 export function subscribe<T>(event: string, handler: (payload: T) => void): () => void {
-  const unlisten = listen<T>(event, (event) => handler(event.payload));
+  let unsubscribed = false;
+  let unlistenFn: (() => void | Promise<void>) | null = null;
+
+  listen<T>(event, (event) => handler(event.payload))
+    .then((fn) => {
+      if (unsubscribed) {
+        try {
+          const res: unknown = fn();
+          if (res && typeof (res as Promise<void>).catch === 'function') {
+            (res as Promise<void>).catch(() => {});
+          }
+        } catch {
+          // ignore already-unregistered / unlisten errors
+        }
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch(() => {});
+
   return () => {
-    unlisten.then((fn) => fn()).catch(() => {});
+    if (unsubscribed) return;
+    unsubscribed = true;
+    if (unlistenFn) {
+      try {
+        const res: unknown = unlistenFn();
+        if (res && typeof (res as Promise<void>).catch === 'function') {
+          (res as Promise<void>).catch(() => {});
+        }
+      } catch {
+        // ignore already-unregistered / unlisten errors
+      }
+      unlistenFn = null;
+    }
   };
 }
 

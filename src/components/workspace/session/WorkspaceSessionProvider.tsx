@@ -100,8 +100,32 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
       if (disposed) return;
       clearTimeout(timer);
       timer = setTimeout(() => { void refresh(payload.workspaceId ?? snapshotRef.current?.workspace.id); }, 60);
-    }).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; });
-    return () => { disposed = true; clearTimeout(timer); unlisten?.(); };
+    })
+      .then((cleanup) => {
+        if (disposed) {
+          try {
+            cleanup();
+          } catch {
+            // ignore cleanup errors on disposed component
+          }
+        } else {
+          unlisten = cleanup;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+      if (unlisten) {
+        try {
+          unlisten();
+        } catch {
+          // ignore cleanup errors on unmount
+        }
+        unlisten = undefined;
+      }
+    };
   }, [refresh]);
 
   const requireSnapshot = useCallback(() => {
