@@ -112,6 +112,7 @@
     "src-tauri/src/runtime/registry.rs:13": "lazy_static::lazy_static! {",
     "src-tauri/src/sequence_id.rs:5": "lazy_static! {",
     "src-tauri/src/sidecar_supervisor.rs:746": "static GLOBAL_SUPERVISOR: std::sync::OnceLock<SidecarSupervisor> = std::sync::OnceLock::new();",
+    "src-tauri/src/startup_timing.rs:30": "static STATE: OnceLock<TimingState> = OnceLock::new();",
     "src-agent-daemon/src/artifact_store.rs:186": "static GLOBAL_ART: std::sync::OnceLock<ArtifactStore> = std::sync::OnceLock::new();",
     "src-agent-daemon/src/checkpoint.rs:906": "static M: OnceLock<CheckpointManager> = OnceLock::new();",
     "src-agent-daemon/src/checkpoint.rs:931": "static M: OnceLock<Mutex<&'static CheckpointManager>> = OnceLock::new();",

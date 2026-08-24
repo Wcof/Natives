@@ -356,10 +356,13 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 
 ### 12.2 WSW-0：统一数据同步与状态呈现
 
+> 状态订正（QA-01）：早期版本把同步描述为已完成；实际 `syncAll()` 的诚实结果语义（ok/partial/failed/noop）与“仅全成功才推进 lastSyncedAt”是在 WS-05 才落地的。下面以代码现状为准。
+
 - **WorkspaceDataBroker 扩展**：
-  - 新增 `syncAll()` 统一入口，对所有有活跃订阅者的 adapter key 触发并发去重刷新（共享在途 Promise，不产生重复 fetch）。
+  - `syncAll()` 统一入口对所有有活跃订阅者的 adapter key 触发并发去重刷新（共享在途 Promise，不产生重复 fetch），返回结构化 `SyncResult { outcome, succeeded, failed, detail }`。
+  - `outcome` 诚实四态：`ok`（全成功）/ `partial`（部分失败，旧数据保留）/ `failed`（全失败）/ `noop`（无挂载组件）。只有 `ok` 才推进 `lastSyncedAt`，禁止伪装成功。
   - 维护 `lastSyncedAt`、`syncing` 状态与 `subscribeSyncStatus()` 广播订阅。
-  - 顶部工作区工具栏提供同步按钮与即时状态（“刚刚同步” / “X 分钟前同步” / “同步中…”），点击后无闪烁、无整页刷新、无布局重置。
+  - 顶部工作区工具栏提供同步按钮与即时状态（“X 秒前同步” / “同步中…” / 部分失败内联计数 + 重试 / 全失败重试），点击后无闪烁、无整页刷新、无布局重置；并发点击幂等（第二次返回 noop）。
 
 ### 12.3 WSW-1：工作区时段选择器与适配器流转
 
@@ -370,10 +373,11 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 
 ### 12.4 WSW-2 & WSW-3：组件视觉语言与网格参数统一
 
-- **视觉层级与排版规范**：
-  - Header 统一：高度 30px，字号 `0.6875rem`（11px，font-weight 600），消费 `--text-secondary` 语义颜色。
-  - 移除各组件内部冗余的双重标题栏（Notes、PromptSnippets、QuickLinks、StorageOverview、ToolStatus、ProxyStatus），统一由 `WidgetShell` 提供规范 header。
-  - Body 区域统一自适应铺满（`padding: 6px 8px`，`flex: 1`），卡片与容器无多余魔法边距。
+- **视觉层级与排版规范**（以 `src/app/styles/widgets.css` 为单一来源，WS-02 整改后参数）：
+  - Header 统一：高度 36px，标题字号 13px（`FONT_SIZE.xs`，font-weight 600），消费 `--text-secondary` 语义颜色。
+  - 移除各组件内部冗余的双重标题栏与重复 padding（CostMetrics、WorkTime、DistributionChart、DataView、ProxyStatus、Storage 等），统一由 `WidgetShell` 提供规范 header 与正文内边距。
+  - Body 区域统一自适应铺满：默认正文内边距 12px（`--compact` 收紧到 8px），`flex: 1`，卡片与容器无多余魔法边距。
+  - 辅助字号下限 12px（`FONT_SIZE.micro`）：WS-03 移除了组件内低于 12px 的魔法字号（10/11px）。
 - **网格规范参数（WSW-3）**：
   - `GRID_MARGIN` 统一收敛为 `[8, 8]`（8px widget gap）。
   - `GRID_PADDING` 统一收敛为 `[12, 12]`（12px workspace outer margin）。
@@ -419,3 +423,35 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
   - `src/lib/workspace/widgets/data-broker.test.ts`: DataBroker 订阅、去重、syncAll、时段隔离与失效验证
   - `src/lib/workspace/canvas/canvas-gesture.test.ts`: Free Canvas 几何吸附、编组位移计算、视口约束测试
   - `src/components/workspace/layout/grid-layout.test.ts`: 网格 8px gap / 12px padding 契约测试
+
+### 12.7 状态订正：Workspace Remediation（WS-01..05 + PERF）
+
+> 本节由 QA-01 订正，解决“文档声称同步/周期本地化已完成，与实际代码不符”的问题。
+> 权威需求与验收以 `plan/workspace-remediation-plan.md` 为准（本仓库外）；以下为本轮实际落地的交付与证据。
+
+- **WS-01 i18n 根因**：补齐缺失的 workspace / ai / common 命名空间键（note/prompts/links、ai.tools/ai.proxy、重命名/同步/时段全套），双语键完全一致；新增 `src/i18n/widget-keys.test.ts` 断言全部 ≥16 个组件的 titleKey/descriptionKey 在 zh/en 解析且非裸键。
+- **WS-02 单一组件壳**：`WidgetShell` 成为唯一的 surface/padding/圆角来源；CompactGrid 不再画常驻卡片；header 36px/标题 13px、body 12px（紧凑 8px）、图标按钮 32×32、同步按钮旋转动画统一收敛到 `src/app/styles/widgets.css`。
+- **WS-04 原位重命名**：Host `workspace/store.rs` 校验 trim 非空 + ≤80 字符（`MAX_WORKSPACE_NAME_CHARS`），`WorkspaceSessionProvider` 暴露 `renameWorkspace`，UI Enter 保存 / Esc 取消 / blur 取消；新增 Rust 校验测试。
+- **WS-05 手动同步**：见 12.2 的诚实四态语义；新增 `data-broker.test.ts` 的 ok/partial/failed/noop 用例。
+- **WS-03 逐类组件规范**：移除组件内部与 shell 重复的 `p-2/p-3`，统一低于 12px 的魔法字号到 `FONT_SIZE.micro`（12px），硬编码 Area/Bar 与空态走 i18n；ToolStatusWidget 删除写死的工具可用性勾选，遵循 R-F2 无假数据红线改为真实空态。
+- **PERF-01..04**：启动阶段计时（`src-tauri/src/startup_timing.rs`，`NATIVES_STARTUP_TIMING=1` 可复现）、本地 HTTP 服务延迟绑定（`lazy_http_port.rs`）、builtin tool seed / runtime registry 后台化、DataBroker 可见性门控（R-P3）；可复现测量脚本 `scripts/perf/cold-start.mjs` 与 `scripts/perf/resource-soak.mjs`，资源 owner→释放点映射见 `docs/architecture/resource-lifecycle-audit.md`。
+
+回归测试：
+- `src/components/workspace/workspace-helpers.test.ts`（relativeTime / 重命名校验 / 时段与同步键双语完整性，8 用例）。
+- `src/components/workspace/widgets/widget-visual.test.tsx`（WS-03 规范后组件的固定数据结构回归：断言 CostMetrics / WorkTime 不再残留 `p-3`、不再有低于 12px 的魔法字号，且渲染真实 token / 会话 / 消息 / 项目计数而非假数据，zh/en 双语各覆盖一遍）。
+
+### 12.8 QA-01 验证门控与截图回归说明
+
+> QA-01 的截图回归要求（固定 viewport 下 Workspace 浏览态与编辑态各一张）受「不新增依赖」约束限制：仓库未引入 Playwright/Puppeteer，新增浏览器依赖会违反 remediation plan 的依赖冻结红线。
+> 替代方案：以既有 `renderToStaticMarkup` + `node:test` 模式做确定性的「结构回归基线」（`widget-visual.test.tsx`），在固定数据形态下断言规范化后的类名、字号令牌与真实数据字段，任何布局 / 令牌 / i18n 偏移都会以断言失败形式暴露。这是不引入新依赖前提下可复现的浏览器外视觉基线。
+
+验证门控（提交前全部通过）：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| TypeScript | `npm run typecheck` | ✅ |
+| Lint（eslint + i18n + 硬编码色 + architecture-check） | `npm run lint` | ✅ exit 0 |
+| 前端单测 | `npm run test` | ✅ 868/868 |
+| 性能门禁 | `npm run perf:check` | ✅ |
+| Rust 格式 | `cargo fmt --check` | ✅ |
+| Rust 工作区测试 | `cargo test --workspace` | ✅（`src-agent-daemon` 的 `stream_watch` 为既有 flaky 时序用例，重跑即过，本轮未触碰 daemon 代码） |

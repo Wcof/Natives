@@ -12,6 +12,7 @@ import type { TimeRange } from '@/lib/workspace/widgets/types';
 import { workspaceDataBroker, type SyncResult } from '@/lib/workspace/widgets/data-broker';
 import { AddWidgetMenu } from './widgets/AddWidgetMenu';
 import { getWidget } from '@/lib/workspace/widgets';
+import { relativeTime } from './workspace-helpers';
 import { WorkspaceSessionProvider, useWorkspaceSession } from './session/WorkspaceSessionProvider';
 import '@/app/styles/widgets.css';
 
@@ -249,17 +250,6 @@ function SyncControl({ locale, syncing, syncTick, nowMs, lastResult, onSync }: {
       )}
     </div>
   );
-}
-
-function relativeTime(locale: string, ms: number): string {
-  const sec = Math.max(0, Math.round(ms / 1000));
-  if (sec < 60) return locale.startsWith('zh') ? `${sec} 秒` : `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return locale.startsWith('zh') ? `${min} 分钟` : `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return locale.startsWith('zh') ? `${hr} 小时` : `${hr}h`;
-  const day = Math.floor(hr / 24);
-  return locale.startsWith('zh') ? `${day} 天` : `${day}d`;
 }
 
 /**
