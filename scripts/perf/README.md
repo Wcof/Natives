@@ -11,8 +11,10 @@ none may be run here** (Coordinator owns `package.json`).
 | --- | --- |
 | `generate-fixtures.ts` | deterministic seeded fixtures: 1k/5k/10k/50k dir entries, 500 images, 1k/5k deep watch-`modify` streams in a 1 s window |
 | `file-browser-perf.ts` | benchmark harness; emits `results/baseline.json` |
+| `cold-start.mjs` | PERF-01 Release cold-start phase timing harness; emits `results/cold-start.json` |
 | `virtualizer-spike.md` | internal row virtualizer vs @tanstack/react-virtual — recommendation for T01 |
 | `results/baseline.json` | latest committed baseline run (evidence, R-P1) |
+| `results/cold-start.json` | latest cold-start phase-timing run (evidence, R-P1) |
 | `fixtures/` | optional on-disk JSON dumps (gitignored; harness never depends on them) |
 
 ## Run
@@ -58,3 +60,18 @@ Fixtures come from a seeded PRNG (mulberry32, seed `20260808`), so every run
 sees the identical dataset. Only compare runs on the **same machine + build**
 (R-P1); machine fingerprint (`hostname/platform/arch/cpu/totalmem`) is recorded
 in `baseline.json`.
+
+## PERF-01 — Cold-start phase timing
+
+```sh
+# from the repo root. Builds nothing; run after `npm run tauri:build`.
+node scripts/perf/cold-start.mjs                 # 5 runs, budget p75 ≤ 2500 ms
+node scripts/perf/cold-start.mjs --runs 8 --bin ./path/to/release/natives
+```
+
+Captures the `[natives.startup]` phase table each run (gated behind
+`NATIVES_STARTUP_TIMING=1`, silent in production) and reports p50/p75/max of the
+`window_ready` total plus a per-phase p75 ranking. Exit code 0 when observed
+p75 ≤ budget, 1 otherwise (CI gate). Output is written to
+`results/cold-start.json`. Only compare runs on the same machine + build
+(R-P1); the machine fingerprint is recorded in the output.

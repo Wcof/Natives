@@ -43,6 +43,7 @@ pub mod integrations;
 pub mod jobs;
 pub mod key_lease;
 pub mod key_pool;
+mod lazy_http_port;
 mod lid_guard;
 mod locate;
 pub mod log_sanitizer;
@@ -59,6 +60,7 @@ mod search;
 pub mod secrets;
 pub mod sequence_id;
 pub mod sidecar_supervisor;
+mod startup_timing;
 mod terminal;
 mod terminal_ghostty;
 mod terminal_process;
@@ -96,7 +98,7 @@ pub fn emit_db_state_changed<R: tauri::Runtime>(
 pub struct AppState {
     pub db: db::DbPool,
     pub token_manager: std::sync::Arc<token_manager::TokenManager>,
-    pub http_port: Mutex<u16>,
+    pub http_port: lazy_http_port::LazyHttpPort,
     pub terminal_manager: terminal::TerminalManager,
     pub ghostty_manager: terminal::GhosttyManager,
     pub terminal_recorder: std::sync::Arc<terminal_recorder::Recorder>,
@@ -185,29 +187,39 @@ pub fn run() {
             let _ = commands::menubar::open_main_window(app);
         }))
         .setup(|app| {
+            // PERF-01: 初始化启动阶段计时（仅在 NATIVES_STARTUP_TIMING=1 时输出）。
+            startup_timing::init();
             // Initialize SQLite database at ~/.natives/natives.db
-            let data_dir = app
-                .path()
-                .home_dir()
-                .map_err(|e| format!("failed to get home dir: {e}"))?
-                .join(".natives");
-            std::fs::create_dir_all(&data_dir)
-                .map_err(|e| format!("failed to create .natives dir: {e}"))?;
-            let db_path = data_dir.join("natives.db");
-            // Production credential path contract (must be absolute).
-            std::env::set_var("NATIVES_DB_PATH", &db_path);
-            let runtime_dir = data_dir.join("runtime");
-            let _ = std::fs::create_dir_all(&runtime_dir);
-            std::env::set_var("NATIVES_RUNTIME_DIR", &runtime_dir);
-            // Phase 0: daemon authority store is assistant.db (credentials stay natives.db).
-            let assistant_db_path = data_dir.join("assistant.db");
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &assistant_db_path);
-            // Production default: UDS. Tests/dev may override with embedded/auto.
-            if std::env::var("NATIVES_DAEMON_MODE").is_err() {
-                std::env::set_var("NATIVES_DAEMON_MODE", "uds");
-            }
-            let pool = db::init_db_pool(&db_path)
-                .map_err(|e| format!("failed to init database pool: {e}"))?;
+            let (data_dir, db_path, runtime_dir) = startup_timing::measure("paths_env", || {
+                let data_dir = app
+                    .path()
+                    .home_dir()
+                    .map_err(|e| format!("failed to get home dir: {e}"))?
+                    .join(".natives");
+                std::fs::create_dir_all(&data_dir)
+                    .map_err(|e| format!("failed to create .natives dir: {e}"))?;
+                let db_path = data_dir.join("natives.db");
+                // Production credential path contract (must be absolute).
+                std::env::set_var("NATIVES_DB_PATH", &db_path);
+                let runtime_dir = data_dir.join("runtime");
+                let _ = std::fs::create_dir_all(&runtime_dir);
+                std::env::set_var("NATIVES_RUNTIME_DIR", &runtime_dir);
+                // Phase 0: daemon authority store is assistant.db (credentials stay natives.db).
+                let assistant_db_path = data_dir.join("assistant.db");
+                std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &assistant_db_path);
+                // Production default: UDS. Tests/dev may override with embedded/auto.
+                if std::env::var("NATIVES_DAEMON_MODE").is_err() {
+                    std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+                }
+                Ok::<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String>((
+                    data_dir,
+                    db_path,
+                    runtime_dir,
+                ))
+            })?;
+            let pool = startup_timing::measure("db_init", || {
+                db::init_db_pool(&db_path).map_err(|e| format!("failed to init database pool: {e}"))
+            })?;
             {
                 let conn = pool
                     .get()
@@ -221,15 +233,15 @@ pub fn run() {
             // UDS listener BEFORE spawning the daemon so the sidecar's lease
             // client can reach it. Production UDS mode always starts it;
             // Embedded only exists under test/diagnostic (architecture #6).
-            {
+            startup_timing::measure("credential_broker", || {
                 let broker_path =
                     crate::credential_broker::credential_broker_uds::broker_socket_path()
                         .map_err(|e| format!("broker socket path: {e}"))?;
                 crate::credential_broker::credential_broker_uds::spawn_broker_uds_listener(
                     &broker_path,
                 )
-                .map_err(|e| format!("broker listener: {e}"))?;
-            }
+                .map_err(|e| format!("broker listener: {e}"))
+            })?;
             // Embedded credential inject (when mode falls back to embedded for tests).
             // Embedded 仅存在于 test/diagnostic（架构目标 #6），随 cfg 隔离。
             #[cfg(any(test, feature = "diagnostic"))]
@@ -255,7 +267,9 @@ pub fn run() {
                     "uds" | "sidecar" | "remote"
                 );
                 if require {
-                    match sidecar_supervisor::global_supervisor().ensure_started() {
+                    match startup_timing::measure("daemon_sidecar", || {
+                        sidecar_supervisor::global_supervisor().ensure_started()
+                    }) {
                         Ok(s) => {
                             eprintln!(
                                 "[natives] sidecar supervisor state={:?} production_ready={}",
@@ -311,7 +325,7 @@ pub fn run() {
             // Scheduler 双权威收敛：Host Job runner 启动前，一次性把旧 Daemon
             // scheduler/jobs.json 事务性导入 scheduled_tasks。源文件保留，成功后
             // 另存只读备份与完成 marker；冲突 fail-closed，禁止两份定义并跑。
-            {
+            startup_timing::measure("jobs_migrate", || {
                 let mut assistant_conn = db::get_main_conn()
                     .map_err(|e| format!("failed to open main database for jobs: {e}"))?;
                 let legacy_jobs = runtime_dir.join("scheduler").join("jobs.json");
@@ -328,7 +342,8 @@ pub fn run() {
                         report.marker_path.display()
                     );
                 }
-            }
+                Ok::<(), String>(())
+            })?;
 
             // Job 任务模块：常驻 30s tick 循环（Once 幂等；列迁移已在
             // natives.db 初始化内经 jobs::store::ensure_schema 补齐）
@@ -344,21 +359,26 @@ pub fn run() {
                     .map_err(|e| format!("failed to init env encryption key: {e}"))?;
             }
 
-            // Start local HTTP server for module assets and bridge API
-            let mut server = http_server::HttpServer::new(modules_dir, tm.clone(), db_path.clone());
-            let port = server.start(0).unwrap_or_else(|e| {
-                eprintln!("failed to start HTTP server: {e}");
-                0
-            });
+            // PERF-02: 本地 HTTP 服务延迟到首次读取端口（首次 Workshop/Embed
+            // 使用）时绑定，不再阻塞首屏启动关键路径。服务句柄构造无副作用。
+            let server = http_server::HttpServer::new(modules_dir, tm.clone(), db_path.clone());
+            let lazy_http_port = lazy_http_port::LazyHttpPort::new(server);
 
-            // Ensure builtin tools have DB rows (INSERT OR IGNORE — idempotent)
+            // PERF-02: builtin tool seed is idempotent (INSERT OR IGNORE) and not
+            // on the first-paint critical path — run it off the startup thread so
+            // it does not block window ready. The rows are ready by the time any
+            // tool capability is queried.
             {
-                let seed_conn = pool
-                    .get()
-                    .map_err(|e| format!("failed to get DB connection: {e}"))?;
-                let _ = db::seed_builtin_tool(&seed_conn, "terminal", "native");
-                let _ = db::seed_builtin_tool(&seed_conn, "editor", "native");
-                let _ = db::seed_builtin_tool(&seed_conn, "browser", "native");
+                let pool_clone = pool.clone();
+                std::thread::spawn(move || {
+                    startup_timing::measure("seed_builtin_tools", || {
+                        if let Ok(seed_conn) = pool_clone.get() {
+                            let _ = db::seed_builtin_tool(&seed_conn, "terminal", "native");
+                            let _ = db::seed_builtin_tool(&seed_conn, "editor", "native");
+                            let _ = db::seed_builtin_tool(&seed_conn, "browser", "native");
+                        }
+                    });
+                });
             }
 
             let terminal_recorder = std::sync::Arc::new(terminal_recorder::Recorder::new());
@@ -368,7 +388,7 @@ pub fn run() {
             app.manage(AppState {
                 db: pool,
                 token_manager: tm,
-                http_port: Mutex::new(port),
+                http_port: lazy_http_port,
                 terminal_manager,
                 ghostty_manager: terminal::GhosttyManager::new(),
                 terminal_recorder,
@@ -483,17 +503,25 @@ pub fn run() {
             // ── P1 Runtime 抽象层：仅注册独立 CLI runtime ──
             // Native Assistant 的生产执行入口是 Protocol v2 Agent Daemon；
             // 不再把已退役的协调器注册为第二个执行权威。
-            {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
-                // 注册 Claude CLI + Codex CLI runtime（独立产品能力，不承载 Native Assistant）。
-                rt.block_on(runtime::registry::register(std::sync::Arc::new(
-                    runtime::claude_cli::ClaudeCliRuntime::new(),
-                )));
-                rt.block_on(runtime::registry::register(std::sync::Arc::new(
-                    runtime::codex_cli::CodexCliRuntime::new(),
-                )));
-            }
+            // PERF-02: 注册独立 CLI runtime 不在首屏关键路径上，移出启动线程
+            // 后台执行；窗口就绪前用户不会触及 CLI 能力。
+            std::thread::spawn(|| {
+                startup_timing::measure("runtime_registry", || {
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            eprintln!("failed to create tokio runtime: {e}");
+                            return;
+                        }
+                    };
+                    rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                        runtime::claude_cli::ClaudeCliRuntime::new(),
+                    )));
+                    rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                        runtime::codex_cli::CodexCliRuntime::new(),
+                    )));
+                });
+            });
 
             // ── macOS menubar: single Tray (Tauri 2 core, no new plugin) ──
             // icons/ has no dedicated `Template`-suffixed asset, so the existing

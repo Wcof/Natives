@@ -54,6 +54,10 @@ function WorkspaceDashboard() {
     setNowMs(Date.now());
   }), []);
 
+  // PERF-03 / R-P3: pause broker loads while the Workspace tab is hidden and
+  // resume on return, so background sessions do not accumulate requests.
+  useEffect(() => workspaceDataBroker.bindVisibility(), []);
+
   // WS-05: manual sync refreshes ONLY the currently-mounted data components via
   // the broker; it never reloads the layout/page. The broker dedupes concurrent
   // calls and reports a real ok/partial/failed outcome.

@@ -282,10 +282,7 @@ pub async fn html_preview_prepare(
     state: State<'_, crate::AppState>,
 ) -> Result<JsonValue> {
     let _permit = acquire_io_slot().await?;
-    let port = *state
-        .http_port
-        .lock()
-        .map_err(|e| Error::Internal(e.to_string()))?;
+    let port = state.http_port.port();
     tokio::task::spawn_blocking(move || {
         let result = html_preview::prepare_html_preview(&html_path, port)?;
         serde_json::to_value(result).map_err(|e| Error::Internal(e.to_string()))

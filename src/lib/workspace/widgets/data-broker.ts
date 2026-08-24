@@ -73,6 +73,11 @@ export class WorkspaceDataBroker {
   private _timeRange: TimeRange = '7d';
   private activeLoads = 0;
   private queuedLoads = new Set<string>();
+  // PERF-03 / R-P3: when the document is hidden, new broker loads are deferred
+  // (parked in the queue) so background tabs do not pile up requests. In-flight
+  // loads are already aborted on unsubscribe. Becoming visible drains the queue.
+  private _paused = false;
+  private _visibilityBound = false;
 
   get lastSyncedAt(): number | null { return this._lastSyncedAt; }
   get syncing(): boolean { return this._syncing; }
@@ -80,6 +85,32 @@ export class WorkspaceDataBroker {
 
   setTimeRange(range: TimeRange): void {
     this._timeRange = range;
+  }
+
+  /**
+   * PERF-03 / R-P3: bind document visibility so broker loads pause while the
+   * tab is hidden and resume when it returns. Idempotent; safe to call from a
+   * top-level Renderer mount. No-op outside a browser (SSR/tests).
+   */
+  bindVisibility(): () => void {
+    if (this._visibilityBound || typeof document === 'undefined') return () => {};
+    this._visibilityBound = true;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        this._paused = true;
+      } else if (this._paused) {
+        this._paused = false;
+        // Drain any loads that were deferred while hidden.
+        this.drainLoadQueue();
+      }
+    };
+    this._paused = document.visibilityState === 'hidden';
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      this._visibilityBound = false;
+      this._paused = false;
+    };
   }
 
   subscribeSyncStatus(fn: () => void): () => void {
@@ -347,7 +378,7 @@ export class WorkspaceDataBroker {
       return;
     }
 
-    if (this.activeLoads >= MAX_CONCURRENT_LOADS) {
+    if (this.activeLoads >= MAX_CONCURRENT_LOADS || this._paused) {
       this.queuedLoads.add(key);
       return;
     }

@@ -43,7 +43,7 @@ pub use remote::*;
 pub use windows::*;
 
 fn host_http_port(state: &AppState) -> u16 {
-    *state.http_port.lock().unwrap_or_else(|e| e.into_inner())
+    state.http_port.port()
 }
 
 fn modules_dir() -> std::path::PathBuf {

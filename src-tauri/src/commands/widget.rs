@@ -24,6 +24,9 @@ pub fn theme_ready_signal(window: tauri::Window) -> Result<()> {
             window
                 .set_focus()
                 .map_err(|e| Error::Internal(e.to_string()))?;
+            // PERF-01: window visible = 用户感知的冷启动结束；输出阶段耗时表。
+            crate::startup_timing::record("window_ready", 0);
+            crate::startup_timing::report();
         }
         MENUBAR_LABEL => {
             crate::commands::menubar::mark_theme_ready();

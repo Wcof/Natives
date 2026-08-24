@@ -181,6 +181,45 @@ describe('WorkspaceDataBroker', () => {
     unsub();
   });
 
+  it('pauses new loads while the document is hidden and drains on return', async () => {
+    // Minimal in-test document stub (the Node test runner has no DOM).
+    type VisHandler = () => void;
+    let visible = false;
+    const handlers: VisHandler[] = [];
+    const fakeDoc = {
+      get visibilityState() { return visible ? 'visible' : 'hidden'; },
+      addEventListener: (_e: string, fn: VisHandler) => { handlers.push(fn); },
+      removeEventListener: (_e: string, fn: VisHandler) => {
+        const i = handlers.indexOf(fn);
+        if (i >= 0) handlers.splice(i, 1);
+      },
+    };
+    const origDoc = (globalThis as { document?: unknown }).document;
+    (globalThis as { document?: unknown }).document = fakeDoc;
+    try {
+      const unsub = broker.bindVisibility();
+      assert.equal(broker['_paused'], true);
+
+      let loadCount = 0;
+      const loader = async () => { loadCount += 1; await new Promise((r) => setTimeout(r, 10)); return { v: 1 }; };
+      broker.subscribe('paused.key', loader, { onSnapshot: () => {} });
+      await new Promise((r) => setTimeout(r, 30));
+      // Hidden: load is parked, not started.
+      assert.equal(loadCount, 0);
+
+      // Become visible → queued load drains and runs.
+      visible = true;
+      for (const fn of handlers) fn();
+      await new Promise((r) => setTimeout(r, 30));
+      assert.equal(loadCount, 1);
+
+      unsub();
+    } finally {
+      if (origDoc === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = origDoc;
+    }
+  });
+
   it('invalidates cache properly', async () => {
     let fetchCount = 0;
     const loader = async () => {
