@@ -106,6 +106,8 @@ pub struct AppState {
     pub lid_guard: lid_guard::LidGuard,
     pub wechat_bridge: Mutex<Option<wechat::bridge::Bridge>>,
     pub skills_trash_slots: tokio::sync::Semaphore,
+    pub proxy_runtime: std::sync::Arc<proxy::ProxyRuntime>,
+    pub oauth_sessions: std::sync::Arc<ai::oauth::session::OauthSessionManager>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -378,6 +380,8 @@ pub fn run() {
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
                 skills_trash_slots: tokio::sync::Semaphore::new(2),
+                proxy_runtime: std::sync::Arc::new(proxy::ProxyRuntime::new()),
+                oauth_sessions: std::sync::Arc::new(ai::oauth::session::OauthSessionManager::new()),
             });
 
             // RunWatchStreamV2 host watch bridge (persistent run.watch —

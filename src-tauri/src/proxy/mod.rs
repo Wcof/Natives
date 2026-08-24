@@ -1,15 +1,26 @@
-//! Local Proxy 目标域（ADR-0020 §4 / 05-MODULE-REMEDIATION-PLAN §5）
+//! Local Proxy 模块（ADR-0020 §4 / plan3）。
 //!
-//! 个人轻量本地代理：listener policy + route definitions + credential pool +
-//! failover/cooldown + 三协议转换（可替换 `ProxyEngine`）+ usage 归一化。
-//! 不建设企业 AI Gateway。配置 SoT 在 AiNative；Engine 运行态 health 可 ephemeral。
+//! 提供 Listener, Route, CredentialPool, ProxyEngine, Usage 与 HTTP Server 运行时。
 
+pub mod codec;
 pub mod engine;
+pub mod listener;
 pub mod model;
 pub mod native;
+pub mod routing;
+pub mod store;
 
+pub use codec::{
+    decode_inbound_request, encode_upstream_request, CanonicalEvent, CanonicalMessage,
+    CanonicalRequest, CanonicalTool, CanonicalUsage, InboundCompletionEncoder,
+    InboundStreamEncoder, ProtocolKind,
+};
 pub use engine::{EngineCall, EngineError, EngineOutcome, ProxyEngine};
+pub use listener::ProxyRuntime;
 pub use model::{
-    CredentialSelector, ListenerConfig, PoolPolicy, ProxyStatus, RouteDefinition, RouteTarget,
+    CredentialHealthInfo, CredentialSelector, PoolPolicy, PortMode, ProxyEndpointInfo,
+    ProxyRuntimeStatus, ProxySettings, ProxyStatus, ProxyStatusDTO, ProxyUsageRecord, Route,
+    RouteDefinition, RouteTarget,
 };
 pub use native::NativeProxyEngine;
+pub use routing::{ResolvedRouteTarget, RouteResolver};

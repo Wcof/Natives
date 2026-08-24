@@ -17,8 +17,10 @@ pub const LAYOUT_MODE_STRUCTURED: &str = "structured";
 pub const LAYOUT_MODE_FREE: &str = "free";
 /// Reserved breakpoint value for the Free Canvas layout row (keeps the v27
 /// `UNIQUE(workspace_id, breakpoint)` valid across both modes).
+#[allow(dead_code)]
 pub const FREE_BREAKPOINT: &str = "free";
 /// Structured responsive breakpoints (lg/md/sm = 12/8/4 columns).
+#[allow(dead_code)]
 pub const STRUCTURED_BREAKPOINTS: [&str; 3] = ["lg", "md", "sm"];
 
 /// Normalize a layout-mode string to the two-value PWSV2 contract. Unknown

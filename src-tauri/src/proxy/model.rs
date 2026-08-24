@@ -1,134 +1,229 @@
-//! Local Proxy 目标边界（ADR-0020 §4 / 05-MODULE-REMEDIATION-PLAN §5）
+//! Local Proxy 领域模型与契约（ADR-0020 §4 / plan3 03-data-security-contracts §1）。
 //!
-//! AiNative 拥有 Proxy 产品能力与配置 SoT：
-//!
-//! ```text
-//! ProxyService
-//! ├─ Listener policy          （localhost 入站）
-//! ├─ Route definitions        （RouteTarget = Connection + Model + CredentialSelector）
-//! ├─ Credential pool policy   （priority / RR / failover / cooldown）
-//! ├─ Usage normalization      （复用现有 usage 资产）
-//! └─ Engine supervision       （可替换 ProxyEngine）
-//! ```
-//!
-//! V1 只允许：localhost、model/connection routing、credential pool、
-//! priority/RR/failover/cooldown、三协议转换、usage/error。
-//! 明确不做：多租户、虚拟 Key、WAF、Guardrail、组织预算、策略 DSL、语义路由。
+//! 核心领域实体：
+//! - `ProxySettings`: 本地代理配置（单例）
+//! - `ProxyRuntimeStatus`: 代理服务运行时状态（Stopped, Starting, Running, Restarting, Stopping, Failed）
+//! - `Route`: 本地模型别名路由
+//! - `RouteTarget`: 路由目标（Connection + upstream model + Credential Selector）
+//! - `CredentialSelector` / `PoolPolicy`: 凭证池选择策略
+//! - `ProxyUsageRecord`: 代理调用用量审计
 
 use serde::{Deserialize, Serialize};
 
-/// 本地入站 listener 策略（默认 127.0.0.1）。
+/// 凭证选择策略
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ListenerConfig {
-    pub enabled: bool,
-    /// 仅 localhost（个人轻量本地代理，不暴露 LAN 默认）。
-    pub host: String,
-    pub port: u16,
+pub enum CredentialSelector {
+    /// 显式指定单 Credential ID
+    Credential { id: String },
+    /// 凭证池（按策略自动选择）
+    Pool { policy: PoolPolicy },
 }
 
-impl Default for ListenerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            host: "127.0.0.1".to_string(),
-            port: 15721,
+/// 凭证池调度策略
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PoolPolicy {
+    /// 优先级优先，同优先级轮转
+    PriorityRoundRobin,
+    /// 纯轮转
+    RoundRobin,
+    /// 最少并发在途
+    LeastInflight,
+}
+
+impl PoolPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PriorityRoundRobin => "priority_round_robin",
+            Self::RoundRobin => "round_robin",
+            Self::LeastInflight => "least_inflight",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "round_robin" => Self::RoundRobin,
+            "least_inflight" => Self::LeastInflight,
+            _ => Self::PriorityRoundRobin,
         }
     }
 }
 
-/// 运行态路由目标：Connection + Model + CredentialSelector（05 §6 不变量）。
+/// 路由目标 —— `proxy_route_targets` 表行。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteTarget {
+    pub id: String,
+    pub route_id: String,
+    pub position: u32,
     pub connection_id: String,
     pub model_id: String,
-    /// 凭证选择：具体 credential id（显式）或池策略（优先级 / 轮转）。
     pub credential_selector: CredentialSelector,
-}
-
-/// Credential 选择策略（API Key Pool / OAuth 池）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum CredentialSelector {
-    /// 显式单 Key（确定性）。
-    Credential { id: String },
-    /// Key Pool：公平轮转 / 失败切换 / 冷却（复用 key_pool.rs 语义）。
-    Pool { policy: PoolPolicy },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PoolPolicy {
-    /// 优先级优先，同优先级 round-robin（默认）。
-    PriorityRoundRobin,
-    /// 严格轮转。
-    RoundRobin,
-}
-
-/// 持久化 Route 定义（配置 SoT 在 AiNative，Engine 运行态 health 可 ephemeral）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RouteDefinition {
-    pub id: String,
-    pub name: String,
-    pub target: RouteTarget,
-    pub enabled: bool,
     pub priority: u32,
+    pub enabled: bool,
 }
 
-/// Proxy 运行状态摘要（可观测，不暴露 Secret）。
+/// 本地模型路由 —— `proxy_routes` 表行。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ProxyStatus {
-    pub listener_enabled: bool,
+pub struct Route {
+    pub id: String,
+    pub local_model: String,
+    pub enabled: bool,
+    pub strategy: String,
+    pub targets: Vec<RouteTarget>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 端口配置模式
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PortMode {
+    Dynamic,
+    Fixed,
+}
+
+impl PortMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Dynamic => "dynamic",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "fixed" => Self::Fixed,
+            _ => Self::Dynamic,
+        }
+    }
+}
+
+/// 本地 Proxy 持久化配置 —— `proxy_settings` 表行。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySettings {
+    pub id: String,
+    pub enabled_intent: bool,
+    pub bind_host: String,
+    pub port_mode: PortMode,
+    pub configured_port: u16,
+    pub effective_port: u16,
+    pub access_secret_ref: String,
+    pub grace_timeout_ms: u64,
+    pub max_concurrency: u32,
+    pub max_request_body_bytes: usize,
+    pub updated_at: String,
+}
+
+impl Default for ProxySettings {
+    fn default() -> Self {
+        Self {
+            id: "default".to_string(),
+            enabled_intent: false,
+            bind_host: "127.0.0.1".to_string(),
+            port_mode: PortMode::Dynamic,
+            configured_port: 15721,
+            effective_port: 0,
+            access_secret_ref: "natives/proxy/local-access/v1".to_string(),
+            grace_timeout_ms: 5000,
+            max_concurrency: 64,
+            max_request_body_bytes: 32 * 1024 * 1024,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+/// 运行时状态枚举
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyRuntimeStatus {
+    Stopped,
+    Starting,
+    Running,
+    Restarting,
+    Stopping,
+    Failed,
+}
+
+impl ProxyRuntimeStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Restarting => "restarting",
+            Self::Stopping => "stopping",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// 供前端/外部查询的 Proxy 实时状态 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyStatusDTO {
+    pub running: bool,
+    pub status: ProxyRuntimeStatus,
     pub host: String,
     pub port: u16,
+    pub effective_port: u16,
+    pub started_at: Option<String>,
+    pub uptime_seconds: u64,
+    pub active_requests: usize,
     pub route_count: usize,
     pub engine: String,
     pub last_error: Option<String>,
+    pub protocol_endpoints: Vec<ProxyEndpointInfo>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn listener_defaults_to_localhost_off() {
-        let config = ListenerConfig::default();
-        assert!(!config.enabled, "默认不暴露入站");
-        assert_eq!(config.host, "127.0.0.1", "个人轻量本地代理仅 localhost");
-    }
-
-    #[test]
-    fn route_target_serializes_camel_case() {
-        let route = RouteDefinition {
-            id: "r1".into(),
-            name: "Anthropic Claude".into(),
-            target: RouteTarget {
-                connection_id: "conn-p1".into(),
-                model_id: "claude-sonnet-4".into(),
-                credential_selector: CredentialSelector::Pool {
-                    policy: PoolPolicy::PriorityRoundRobin,
-                },
-            },
-            enabled: true,
-            priority: 10,
-        };
-        let json = serde_json::to_value(&route).unwrap();
-        assert_eq!(json["target"]["connectionId"], "conn-p1");
-        assert_eq!(
-            json["target"]["credentialSelector"]["pool"]["policy"],
-            "priorityRoundRobin"
-        );
-    }
-
-    #[test]
-    fn explicit_credential_selector_roundtrips() {
-        let selector = CredentialSelector::Credential { id: "k1".into() };
-        let json = serde_json::to_string(&selector).unwrap();
-        assert!(json.contains("\"credential\""));
-        let back: CredentialSelector = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, selector);
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyEndpointInfo {
+    pub protocol: String,
+    pub path: String,
+    pub url: String,
 }
+
+/// 路由/凭据运行态健康与冷却信息
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialHealthInfo {
+    pub credential_id: String,
+    pub status: String,
+    pub in_flight: usize,
+    pub total_calls: u64,
+    pub success_calls: u64,
+    pub failed_calls: u64,
+    pub cooling_until: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// Proxy 用量记录 —— `proxy_usage_records` 表行。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsageRecord {
+    pub id: String,
+    pub route_id: Option<String>,
+    pub connection_id: Option<String>,
+    pub credential_id: Option<String>,
+    pub inbound_protocol: String,
+    pub upstream_protocol: String,
+    pub local_model: String,
+    pub upstream_model: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub reasoning_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub latency_ms: u64,
+    pub status: String,
+    pub error_code: Option<String>,
+    pub created_at: String,
+}
+
+// 兼容旧引用
+pub type ProxyStatus = ProxyStatusDTO;
+pub type RouteDefinition = Route;

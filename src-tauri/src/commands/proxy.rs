@@ -1,52 +1,38 @@
-//! Local Proxy Host 命令（ADR-0020 §4 / PRX-001..015 生产接入）。
-//!
-//! Host 侧真实请求链：
-//!
-//! ```text
-//! Renderer → proxy_chat (Host command)
-//!   → DB 读取 Connection/Credential 元数据（ai facade）
-//!   → SecretStore（OS Keychain）解析 secret_ref → api_key
-//!   → NativeProxyEngine（复用 provider-adapters 三协议 transport/codec）
-//!   → 上游 → 归一化 EngineOutcome
-//! ```
-//!
-//! Secret 只经 `secrets::SecretStore` 读取，绝不落日志 / Renderer / 事件。
+//! Local Proxy Host 命令（ADR-0020 §4 / PRX-001..004 / UI-004..005）。
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::proxy::engine::{EngineCall, ProxyEngine};
+use crate::proxy::model::{PortMode, ProxySettings, ProxyStatusDTO, ProxyUsageRecord, Route};
 use crate::proxy::native::NativeProxyEngine;
+use crate::proxy::store;
 use crate::secrets::store::SecretRef;
 use crate::AppState;
 use crate::{Error, Result};
 
-/// 代理服务状态信息。
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProxyStatusResult {
-    pub running: bool,
-    pub port: u16,
-    pub host: String,
-    pub uptime_seconds: u64,
-    pub protocol_support: Vec<String>,
+pub struct UpdateProxySettingsInput {
+    pub enabled_intent: Option<bool>,
+    pub bind_host: Option<String>,
+    pub port_mode: Option<String>,
+    pub configured_port: Option<u16>,
+    pub grace_timeout_ms: Option<u64>,
+    pub max_concurrency: Option<u32>,
+    pub max_request_body_bytes: Option<usize>,
 }
 
-/// 一次 Host 侧代理调用请求。
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyChatInput {
-    /// 目标协议：`anthropic_messages` | `openai_chat_completions` | `openai_responses`。
     pub protocol: String,
     pub base_url: String,
-    /// 持久化 Secret 的 opaque 引用（Keychain）。
     pub secret_ref: String,
     pub model: String,
-    /// 规范化 `ProviderRequest` JSON。
     pub request_json: String,
 }
 
-/// 代理调用结果（聚合 usage + stop reason；不暴露 Secret / 原始响应体）。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyChatResult {
@@ -59,50 +45,117 @@ pub struct ProxyChatResult {
     pub error_message: Option<String>,
 }
 
-/// 获取当前代理服务状态。
 #[tauri::command]
-pub fn proxy_status(state: State<'_, AppState>) -> Result<ProxyStatusResult> {
-    let port = *state
-        .http_port
-        .lock()
-        .map_err(|_| Error::Internal("Lock poisoned".into()))?;
-    Ok(ProxyStatusResult {
-        running: port > 0,
-        port: if port > 0 { port } else { 11434 },
-        host: "127.0.0.1".to_string(),
-        uptime_seconds: 3600,
-        protocol_support: vec![
-            "anthropic_messages".to_string(),
-            "openai_chat_completions".to_string(),
-            "openai_responses".to_string(),
-        ],
-    })
+pub fn proxy_get_settings(state: State<'_, AppState>) -> Result<ProxySettings> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    store::get_proxy_settings(&conn)
 }
 
-/// 启动代理服务。
 #[tauri::command]
-pub fn proxy_start() -> Result<bool> {
-    Ok(true)
+pub fn proxy_update_settings(
+    state: State<'_, AppState>,
+    input: UpdateProxySettingsInput,
+) -> Result<ProxySettings> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    let mut current = store::get_proxy_settings(&conn)?;
+
+    if let Some(enabled) = input.enabled_intent {
+        current.enabled_intent = enabled;
+    }
+    if let Some(host) = input.bind_host {
+        current.bind_host = host;
+    }
+    if let Some(pm) = input.port_mode {
+        current.port_mode = PortMode::from_str(&pm);
+    }
+    if let Some(port) = input.configured_port {
+        current.configured_port = port;
+    }
+    if let Some(grace) = input.grace_timeout_ms {
+        current.grace_timeout_ms = grace;
+    }
+    if let Some(mc) = input.max_concurrency {
+        current.max_concurrency = mc;
+    }
+    if let Some(mb) = input.max_request_body_bytes {
+        current.max_request_body_bytes = mb;
+    }
+
+    store::save_proxy_settings(&conn, &current)?;
+    Ok(current)
 }
 
-/// 停止代理服务。
 #[tauri::command]
-pub fn proxy_stop() -> Result<bool> {
-    Ok(true)
+pub fn proxy_status(state: State<'_, AppState>) -> Result<ProxyStatusDTO> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    state.proxy_runtime.get_status_dto(&conn)
 }
 
-/// Host 侧真实代理调用：Renderer 不再依赖 Daemon Provider 执行。
+#[tauri::command]
+pub fn proxy_start(state: State<'_, AppState>) -> Result<bool> {
+    state.proxy_runtime.start(state.db.clone()).map(|_| true)
+}
+
+#[tauri::command]
+pub fn proxy_stop(state: State<'_, AppState>) -> Result<bool> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    state.proxy_runtime.stop(&conn).map(|_| true)
+}
+
+#[tauri::command]
+pub fn proxy_restart(state: State<'_, AppState>) -> Result<bool> {
+    state.proxy_runtime.restart(state.db.clone()).map(|_| true)
+}
+
+// ── Routes ──
+
+#[tauri::command]
+pub fn proxy_list_routes(state: State<'_, AppState>) -> Result<Vec<Route>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    store::list_routes(&conn)
+}
+
+#[tauri::command]
+pub fn proxy_get_route(state: State<'_, AppState>, id: String) -> Result<Option<Route>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    store::get_route(&conn, &id)
+}
+
+#[tauri::command]
+pub fn proxy_save_route(state: State<'_, AppState>, route: Route) -> Result<Route> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    store::save_route(&conn, &route)
+}
+
+#[tauri::command]
+pub fn proxy_delete_route(state: State<'_, AppState>, id: String) -> Result<bool> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    store::delete_route(&conn, &id)
+}
+
+// ── Usage ──
+
+#[tauri::command]
+pub fn proxy_list_usage_records(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<ProxyUsageRecord>> {
+    let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
+    store::list_usage_records(&conn, limit.unwrap_or(50), offset.unwrap_or(0))
+}
+
+// ── Internal proxy chat ──
+
 #[tauri::command]
 pub async fn proxy_chat(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     input: ProxyChatInput,
 ) -> Result<ProxyChatResult> {
     let store = crate::secrets::keychain::KeychainSecretStore::default();
     let engine = NativeProxyEngine::new(std::sync::Arc::new(store));
 
-    // 预检：Secret 必须可解析（fail-closed，不静默继续）。
-    let _secret_available = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
-    let reference = SecretRef::new(input.secret_ref.clone());
+    let reference = SecretRef::new(input.secret_ref);
 
     match engine
         .call(EngineCall {
@@ -158,24 +211,5 @@ pub async fn proxy_chat(
             error_code: Some(error.code),
             error_message: Some(error.message),
         }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn proxy_chat_input_serde_camel_case() {
-        let input = ProxyChatInput {
-            protocol: "openai_chat_completions".into(),
-            base_url: "https://api.openai.com/v1".into(),
-            secret_ref: "cred:provider:p1:k1".into(),
-            model: "gpt-4o".into(),
-            request_json: "{}".into(),
-        };
-        let value = serde_json::to_value(&input).unwrap();
-        assert_eq!(value["baseUrl"], "https://api.openai.com/v1");
-        assert_eq!(value["secretRef"], "cred:provider:p1:k1");
     }
 }

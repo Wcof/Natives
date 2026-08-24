@@ -100,6 +100,28 @@ fn backfill_open_tabs(conn: &Connection) -> Result<(), Error> {
 }
 
 pub(super) fn migrate_v29(conn: &Connection) -> Result<(), Error> {
+    complete_pws2_schema(conn)?;
+    // ── 8. version marker (never downgrade a newer marker — see apply()) ──
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '29')",
+        [],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Complete the PWSV2 schema: every v29 additive column, the
+/// `workspace_open_tabs` session table, the `workspace_templates` manifest
+/// table, their indexes, and the two deterministic backfills.
+///
+/// Every statement is idempotent (guarded `ALTER TABLE`, `CREATE ... IF NOT
+/// EXISTS`, one-shot backfills), so this is the single source of the PWSV2
+/// DDL: `migrate_v29` applies it on the v28→v29 path, and `migrate_v30`
+/// re-asserts it as a failure-recoverable completion step for databases whose
+/// marker advanced past v29 with a partially-applied schema. No `DROP TABLE`,
+/// no rebuild (R-D3). `pub(crate)` so the v30 completion step and the
+/// `crate::db::complete_pws2_schema` test fixture can invoke it.
+pub(crate) fn complete_pws2_schema(conn: &Connection) -> Result<(), Error> {
     // ── 1. workspaces: layout mode / appearance / template provenance / soft delete
     add_column_if_missing(
         conn,
@@ -221,12 +243,6 @@ pub(super) fn migrate_v29(conn: &Connection) -> Result<(), Error> {
     )
     .map_err(Error::Database)?;
 
-    // ── 8. version marker (never downgrade a newer marker — see apply()) ──
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '29')",
-        [],
-    )
-    .map_err(Error::Database)?;
     Ok(())
 }
 
@@ -297,7 +313,6 @@ mod migration_v29_validation {
         create_tables(&conn).unwrap();
         apply_migrations(&conn).unwrap();
         assert_eq!(schema_version(&conn), SCHEMA_VERSION);
-        assert_eq!(schema_version(&conn), "29");
     }
 
     /// PWSV2-T02: every PWSV2 column lands on the right table.

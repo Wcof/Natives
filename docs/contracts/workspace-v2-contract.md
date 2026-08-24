@@ -6,6 +6,10 @@
 > A-032 context reorder/batch、A-033 snapshot revision/version、A-034 MCP exposure DTO（不实现 Agent runtime）、
 > B-030..B-036 新 metrics/distribution widgets、C-033..C-038 Frame/Group/z-order/canvas keyboard/picker 集成。
 > 关联：ADR-0021、`docs/contracts/file-ownership.md`、`docs/contracts/reference-provenance.md`、方案 04/04A/06/07。
+> **PWSV2-T01 一致性修订（2026-08-23，T01 文档裁决；仅文本一致性、无字段语义变更、加法性，保留全部既有冻结规则）**：
+> - 清除 §6 `WidgetDefinition.supportedLayouts` 与 §3 legacy-home 迁移描述中残留的历史词 `compact`，统一为 `structured | free`（与本文件 PWSV2 升版 §0 词表裁决一致）。
+> - 事件命名澄清：Host 事件经 `db-state-changed`（channel `workspace`）/ `workspace` 广播（standards technical/02 R-S9）；plan2 的 `workspace:snapshot-changed` 等自造名**不**作为独立 transport，仅为语义别名。
+> - 旧版冻结文本（M-004/M-006、Wave2 I-008、G-007 三概念、V-005 token taxonomy）全部保留，未删除。
 
 ## 1. 总体权威链
 
@@ -37,7 +41,7 @@ SQLite / Local Files -> Domain Service -> Typed IPC -> Renderer Snapshot/UI
 | `workspace_templates`（v29 新表） | id TEXT PK, name, origin CHECK(builtin\|personal), schema_version INT, template_version INT, manifest_json TEXT NOT NULL, preview_key TEXT, created_at, updated_at, deleted_at TEXT | Built-in manifest 由代码提供（Classic Personal Dashboard 默认 / Blank / Focus）；表存 personal 模板与 built-in metadata override，Host 对两者暴露统一 read model；Manifest 禁止 Secret、用户绝对路径、历史数据与实时指标 |
 
 - schema version 26→27（已落地）；PWSV2 增量 27→29（v28 为应用中心迁移）：只增列/增表、幂等、`PRAGMA table_info` guard，禁止 DROP/重建；批量 layout 更新单事务提交；旧读路径（`workspace_tabs`、`hidden`）在新 Snapshot 验证通过后同一切片删除，不保留静默 fallback。
-- 旧 `settings:home_workspace`（schemaVersion 1）迁移为 Default Workspace：instance→workspace_widgets、lg/md/sm layouts→workspace_layouts(compact)、hidden 仅审计、建 tabs row 并设 active、写 `settings:home_workspace_migrated_at` + 来源 hash；旧 key 在 Final Gate 通过后才清理。幂等：已迁移标记存在时不得重复创建。
+- 旧 `settings:home_workspace`（schemaVersion 1）迁移为 Default Workspace：instance→workspace_widgets、lg/md/sm layouts→workspace_layouts（layout_mode='structured'）、hidden 仅审计、建 tabs row 并设 active、写 `settings:home_workspace_migrated_at` + 来源 hash；旧 key 在 Final Gate 通过后才清理。幂等：已迁移标记存在时不得重复创建。
 
 ## 4. Rust 模块与 Tauri Command 契约（A 实现）
 
@@ -104,7 +108,7 @@ interface WidgetDefinition<TConfig, TData> {
   configSchema: ZodSchema<TConfig>;
   migrateConfig?: (version: number, raw: unknown) => TConfig;
   size: { default: Size; min: Size; max: Size };
-  supportedLayouts: ('compact' | 'free')[];
+  supportedLayouts: ('structured' | 'free')[];
   surfacePolicy: SurfacePolicy[];
   Renderer: ComponentType<WidgetRenderProps<TConfig, TData>>;
   Inspector?: ComponentType<WidgetInspectorProps<TConfig>>;

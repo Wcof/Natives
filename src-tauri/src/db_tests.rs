@@ -567,3 +567,45 @@ fn migration_creates_operations_journal() {
         .expect("delete operation row");
     assert_eq!(orphaned_app, None, "FK SET NULL keeps the delete audit row");
 }
+
+#[test]
+fn migration_v31_creates_ai_and_proxy_tables() {
+    let conn = Connection::open_in_memory().expect("open in-memory database");
+    create_tables(&conn).expect("create base tables");
+    apply_migrations(&conn).expect("apply migrations");
+
+    let version: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = '_schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("schema version");
+    assert_eq!(version, "31", "schema version must be 31");
+
+    for table in [
+        "ai_providers",
+        "ai_connections",
+        "ai_credentials",
+        "ai_credential_connections",
+        "ai_models",
+        "ai_quota_snapshots",
+        "ai_quota_windows",
+        "proxy_settings",
+        "proxy_routes",
+        "proxy_route_targets",
+        "proxy_usage_records",
+    ] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |r| r.get(0),
+            )
+            .expect("check table exists");
+        assert_eq!(count, 1, "table {table} must exist");
+    }
+
+    // Test idempotency
+    apply_migrations(&conn).expect("re-apply migration v31 must be idempotent");
+}

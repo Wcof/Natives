@@ -199,10 +199,41 @@ pub fn batch_update_widget_configs(
 /// `revision` field of `WorkspaceSnapshot` / `WorkspaceSessionSnapshot`).
 /// `None` skips the check (backward-compatible). Otherwise the current
 /// snapshot revision is loaded (pure read — no writes here) and a mismatch
-/// is rejected with `Error::Conflict` before the caller performs any store
-/// write. A missing workspace is not a conflict: the subsequent command
-/// write would simply report not-found (e.g. return `None`/`false`).
+/// is rejected with `Error::Conflict` **before** the caller performs any store
+/// write, so a stale client can never produce a half-written state. A missing
+/// workspace is not a conflict: the subsequent command write would simply
+/// report not-found (e.g. return `None`/`false`).
+///
+/// Two entry points share one implementation:
+/// - [`check_revision`] reads through a pooled `&Connection` (used by tests and
+///   read-only pre-checks).
+/// - [`check_revision_in_txn`] reads through the caller's in-flight
+///   `&rusqlite::Transaction`, so a command that wraps its mutation in a
+///   transaction validates and writes against the *same* snapshot (no TOCTOU
+///   between check and write, and the guard's read is part of the committed
+///   unit).
 pub fn check_revision(conn: &Connection, workspace_id: &str, expected: Option<i64>) -> Result<()> {
+    check_revision_internal(conn, workspace_id, expected)
+}
+
+/// Transactional form of [`check_revision`] (see its docs for the contract).
+/// Reads the current snapshot through `tx` so it sees the transaction's own
+/// writes — a stale client is rejected with `Error::Conflict` before any
+/// further statement in the same transaction runs.
+#[allow(dead_code)]
+pub fn check_revision_in_txn(
+    tx: &rusqlite::Transaction,
+    workspace_id: &str,
+    expected: Option<i64>,
+) -> Result<()> {
+    check_revision_internal(tx, workspace_id, expected)
+}
+
+fn check_revision_internal(
+    conn: &Connection,
+    workspace_id: &str,
+    expected: Option<i64>,
+) -> Result<()> {
     let Some(expected) = expected else {
         return Ok(());
     };

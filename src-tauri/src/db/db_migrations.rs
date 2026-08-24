@@ -369,6 +369,20 @@ pub fn apply(conn: &Connection) -> Result<(), Error> {
         migrate_v29(conn)?;
     }
 
+    // Migration v29→v30 (PWSV2 completion/marker): idempotently re-assert the
+    // full PWSV2 schema (guards are no-ops when objects already exist) so a
+    // database whose marker advanced past v29 with a partially-applied schema
+    // is completed, then advance the marker. Healthy v29/v30 DBs see only the
+    // marker write.
+    if current_version < 30 {
+        migrate_v30(conn)?;
+    }
+
+    // Migration v30→v31 (AI Resources & Local Proxy schema, ADR-0020 / plan3)
+    if current_version < 31 {
+        migrate_v31(conn)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "

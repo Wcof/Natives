@@ -886,3 +886,16 @@ pub(super) fn migrate_v28(conn: &Connection) -> Result<(), Error> {
 pub(super) fn migrate_v29(conn: &Connection) -> Result<(), Error> {
     super::migration_v29::migrate_v29(conn)
 }
+
+/// Migration v29→v30 (PWSV2 completion/marker).
+///
+/// Delegates to the standalone v30 module (idempotent PWSV2 completion +
+/// version marker). This file stays the ordering registry.
+pub(super) fn migrate_v30(conn: &Connection) -> Result<(), Error> {
+    super::migration_v30::migrate_v30(conn)
+}
+
+/// Migration v30→v31 (AI Resources & Local Proxy schema, ADR-0020 / plan3).
+pub(super) fn migrate_v31(conn: &Connection) -> Result<(), Error> {
+    super::migration_v31::migrate_v31(conn)
+}

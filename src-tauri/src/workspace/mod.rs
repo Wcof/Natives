@@ -16,6 +16,7 @@
 pub mod service;
 pub mod snapshot;
 pub mod store;
+pub mod store_tabs;
 pub mod templates;
 pub mod types;
 
