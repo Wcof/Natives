@@ -43,6 +43,15 @@ export const app = {
     askName: 'What should we call you?',
     namePlaceholder: 'Enter your name',
     untitled: 'Untitled',
+    // Registered widget titles (WS-01: resolve bare keys; namespace-safe)
+    note: 'Notes',
+    prompts: 'Prompt snippets',
+    links: 'Quick links',
+  },
+  // AI-domain registered status widgets (own namespace; avoids common/tools clash)
+  ai: {
+    tools: 'AI tool status',
+    proxy: 'AI proxy status',
   },
   errors: {
     pluginCrash: 'Plugin crashed. Click to reload.',
@@ -741,5 +750,35 @@ export const app = {
     tabPinned: ' · pinned',
     closeTab: 'Close {title}',
     workspaceViewsLabel: 'Workspace views',
+    // Workspace remediation (WS-01/04/05): toolbar / inspector / rename / sync
+    dashboardSubtitle: 'Personal workspace',
+    newWorkspace: 'New workspace',
+    editLayoutBtn: 'Edit layout',
+    doneEditingBtn: 'Done',
+    addWidget: 'Add widget',
+    undo: 'Undo',
+    redo: 'Redo',
+    inspectorLayoutLabel: 'Layout',
+    inspectorLayoutGrid: 'Grid',
+    inspectorLayoutFree: 'Free',
+    inspectorThemeLabel: 'Theme',
+    inspectorThemeDark: 'Dark',
+    inspectorThemeLight: 'Light',
+    inspectorSelectedWidget: 'Selected widget',
+    inspectorResetWidget: 'Reset widget',
+    inspectorTemplatesLabel: 'Templates',
+    inspectorTemplateNamePlaceholder: 'Template name',
+    // Rename
+    renamePlaceholder: 'Workspace name',
+    renameErrorRequired: 'Name cannot be empty',
+    renameErrorTooLong: 'Name must be 80 characters or fewer',
+    renameErrorConflict: 'Workspace was modified elsewhere — refresh and try again',
+    // Sync
+    syncBtn: 'Sync',
+    syncBtnRunning: 'Syncing…',
+    syncResultOk: 'Sync complete',
+    syncResultPartial: '{count} widgets failed to sync',
+    syncResultFailed: 'Sync failed',
+    syncRetry: 'Retry sync',
   },
 };

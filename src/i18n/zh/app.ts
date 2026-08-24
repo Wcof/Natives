@@ -43,6 +43,15 @@ export const app = {
     askName: '我们该怎么称呼你？',
     namePlaceholder: '输入你的名字',
     untitled: '未命名',
+    // ── 注册组件名称（WS-01：消除裸 key；命名空间安全） ──
+    note: '便签',
+    prompts: '提示词片段',
+    links: '快捷链接',
+  },
+  // ── AI 域注册组件状态名称（独立命名空间，避免与 common/tools 冲突） ──
+  ai: {
+    tools: 'AI 工具状态',
+    proxy: 'AI 代理状态',
   },
   errors: {
     pluginCrash: '插件运行异常，点击重新加载',
@@ -742,5 +751,35 @@ export const app = {
     tabPinned: ' · 已固定',
     closeTab: '关闭 {title}',
     workspaceViewsLabel: '工作区视图',
+    // ── 工作区整改（WS-01/04/05）：工具栏 / 检查器 / 重命名 / 同步 ──
+    dashboardSubtitle: '个人工作区',
+    newWorkspace: '新建工作区',
+    editLayoutBtn: '编辑布局',
+    doneEditingBtn: '完成',
+    addWidget: '添加组件',
+    undo: '撤销',
+    redo: '重做',
+    inspectorLayoutLabel: '布局',
+    inspectorLayoutGrid: '网格',
+    inspectorLayoutFree: '自由',
+    inspectorThemeLabel: '主题',
+    inspectorThemeDark: '深色',
+    inspectorThemeLight: '浅色',
+    inspectorSelectedWidget: '选中组件',
+    inspectorResetWidget: '重置组件',
+    inspectorTemplatesLabel: '模板',
+    inspectorTemplateNamePlaceholder: '模板名称',
+    // 重命名
+    renamePlaceholder: '工作区名称',
+    renameErrorRequired: '名称不能为空',
+    renameErrorTooLong: '名称最长 80 个字符',
+    renameErrorConflict: '工作区已被修改，请刷新后重试',
+    // 同步
+    syncBtn: '同步',
+    syncBtnRunning: '同步中…',
+    syncResultOk: '同步完成',
+    syncResultPartial: '{count} 个组件同步失败',
+    syncResultFailed: '同步失败',
+    syncRetry: '重试同步',
   },
 };
