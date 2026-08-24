@@ -193,3 +193,20 @@ html[data-reduced-motion='true'] .ws-icon-button {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ── WS-05：同步按钮旋转动画（reduced-motion 下静止）── */
+.ws-sync-spin {
+  animation: ws-sync-rotate 0.9s linear infinite;
+}
+
+@keyframes ws-sync-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+html[data-reduced-motion='true'] .ws-sync-spin,
+@media (prefers-reduced-motion: reduce) {
+  .ws-sync-spin {
+    animation: none;
+  }
+}

@@ -92,6 +92,60 @@ describe('WorkspaceDataBroker', () => {
     unsubSync();
   });
 
+  it('syncAll reports ok/partial/failed and only advances lastSyncedAt on full success', async () => {
+    let shouldFail = false;
+    const okLoader = async () => ({ ok: true });
+    const flakyLoader = async () => {
+      if (shouldFail) throw new Error('boom');
+      return { ok: true };
+    };
+
+    const unsubOk = broker.subscribe('ok.key', okLoader, { onSnapshot: () => {} });
+    broker.subscribe('flaky.key', flakyLoader, { onSnapshot: () => {} });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Full success → outcome ok, lastSyncedAt advances.
+    const okResult = await broker.syncAll();
+    assert.equal(okResult.outcome, 'ok');
+    assert.equal(okResult.failed, 0);
+    const firstSyncedAt = broker.lastSyncedAt;
+    assert.notEqual(firstSyncedAt, null);
+
+    // Partial failure → outcome partial, lastSyncedAt must NOT advance.
+    shouldFail = true;
+    const partial = await broker.syncAll();
+    assert.equal(partial.outcome, 'partial');
+    assert.ok(partial.failed >= 1);
+    assert.ok(partial.succeeded >= 1);
+    assert.equal(broker.lastSyncedAt, firstSyncedAt, 'partial failure must not update last-synced time');
+
+    // Total failure → outcome failed (both mounted components fail),
+    // lastSyncedAt still frozen at last success.
+    broker.subscribe('fail2.key', flakyLoader, { onSnapshot: () => {} });
+    unsubOk();
+    await new Promise((r) => setTimeout(r, 20));
+    const failed = await broker.syncAll();
+    assert.equal(failed.outcome, 'failed');
+    assert.equal(failed.succeeded, 0);
+    assert.equal(broker.lastSyncedAt, firstSyncedAt, 'total failure must not update last-synced time');
+  });
+
+  it('syncAll returns noop and does not advance lastSyncedAt when no data components are mounted', async () => {
+    const before = broker.lastSyncedAt;
+    const result = await broker.syncAll();
+    assert.equal(result.outcome, 'noop');
+    assert.equal(broker.lastSyncedAt, before);
+  });
+
+  it('syncAll is idempotent under concurrent calls', async () => {
+    const loader = async () => { await new Promise((r) => setTimeout(r, 10)); return { v: 1 }; };
+    broker.subscribe('c.key', loader, { onSnapshot: () => {} });
+    await new Promise((r) => setTimeout(r, 20));
+    const [a, b] = await Promise.all([broker.syncAll(), broker.syncAll()]);
+    assert.equal(a.outcome, 'ok');
+    assert.equal(b.outcome, 'noop');
+  });
+
   it('handles timeRange properly in buildWidgetBrokerKey and context', async () => {
     const timeAwareDef: Pick<WidgetDefinition<unknown>, 'type' | 'timeAware' | 'adapterKeyBuilder'> = {
       type: 'token_metrics',

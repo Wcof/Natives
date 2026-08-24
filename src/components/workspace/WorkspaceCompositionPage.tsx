@@ -1,7 +1,7 @@
 'use client';
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, LayoutDashboard, PanelRight, Pencil, Plus, Redo2, RotateCcw, Save, Settings2, Undo2, X } from 'lucide-react';
+import { Check, LayoutDashboard, PanelRight, Pencil, Plus, RefreshCw, Redo2, RotateCcw, Save, Settings2, Undo2, X } from 'lucide-react';
 import { ErrorPrimitive, Skeleton } from '@/components/ui/design-system';
 import { t, useLocale } from '@/i18n';
 import type { CanvasNode } from '@/lib/workspace/canvas/types';
@@ -9,6 +9,7 @@ import type { WorkspaceLayoutMode } from '@/lib/workspace/contracts';
 import type { GridLayouts } from '@/lib/workspace/views/types';
 import { TimeRangeContext } from '@/lib/workspace/widgets/time-range-context';
 import type { TimeRange } from '@/lib/workspace/widgets/types';
+import { workspaceDataBroker, type SyncResult } from '@/lib/workspace/widgets/data-broker';
 import { AddWidgetMenu } from './widgets/AddWidgetMenu';
 import { getWidget } from '@/lib/workspace/widgets';
 import { WorkspaceSessionProvider, useWorkspaceSession } from './session/WorkspaceSessionProvider';
@@ -38,6 +39,31 @@ function WorkspaceDashboard() {
   const [renaming, setRenaming] = useState(false);
   const [renameSaving, setRenameSaving] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  // WS-05: sync state mirrors the DataBroker singleton.
+  const [syncing, setSyncing] = useState(workspaceDataBroker.syncing);
+  const [syncTick, setSyncTick] = useState(0); // bump to re-read lastSyncedAt
+  const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
+  // Captured at mount/sync-rounds to render a stable "X ago" label without
+  // calling Date.now() during render (react-hooks/purity).
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  // Subscribe to broker sync status (mounted/unmount cleanup only — no polling).
+  useEffect(() => workspaceDataBroker.subscribeSyncStatus(() => {
+    setSyncing(workspaceDataBroker.syncing);
+    setSyncTick((tick) => tick + 1);
+    setNowMs(Date.now());
+  }), []);
+
+  // WS-05: manual sync refreshes ONLY the currently-mounted data components via
+  // the broker; it never reloads the layout/page. The broker dedupes concurrent
+  // calls and reports a real ok/partial/failed outcome.
+  const handleSync = useCallback(async () => {
+    setLastSyncResult(null);
+    const result = await workspaceDataBroker.syncAll();
+    setLastSyncResult(result);
+    setSyncTick((tick) => tick + 1);
+    setNowMs(Date.now());
+  }, []);
 
   const layouts = useMemo<GridLayouts>(() => {
     if (!snapshot) return EMPTY_LAYOUTS;
@@ -136,6 +162,16 @@ function WorkspaceDashboard() {
           />
           <div className="ml-auto flex items-center gap-1.5">
             {!editing && <TimeRangePicker value={timeRange} onChange={setTimeRange} />}
+            {!editing && (
+              <SyncControl
+                locale={locale}
+                syncing={syncing}
+                syncTick={syncTick}
+                nowMs={nowMs}
+                lastResult={lastSyncResult}
+                onSync={() => void handleSync()}
+              />
+            )}
             {editing && <>
               <button className="ws-dashboard-action" disabled={!undo.length} onClick={() => void applyHistory('undo')} aria-label={t(locale, 'workspace.undo')}><Undo2 size={15} /></button>
               <button className="ws-dashboard-action" disabled={!redo.length} onClick={() => void applyHistory('redo')} aria-label={t(locale, 'workspace.redo')}><Redo2 size={15} /></button>
@@ -159,6 +195,67 @@ function WorkspaceDashboard() {
       </main>
     </TimeRangeContext.Provider>
   );
+}
+
+/**
+ * SyncControl (WS-05) — toolbar manual-sync button + status.
+ * Only fully-successful syncs advance "last synced"; partial/failed show an
+ * honest inline hint and a retry, never masking failure as success.
+ */
+function SyncControl({ locale, syncing, syncTick, nowMs, lastResult, onSync }: {
+  locale: string;
+  syncing: boolean;
+  syncTick: number;
+  nowMs: number;
+  lastResult: SyncResult | null;
+  onSync: () => void;
+}) {
+  const lastSyncedAt = workspaceDataBroker.lastSyncedAt;
+  // syncTick keeps lastSyncedAt re-read after each sync round.
+  void syncTick;
+  const statusText = (() => {
+    if (syncing) return t(locale, 'workspace.syncBtnRunning');
+    if (lastResult?.outcome === 'partial') return t(locale, 'workspace.syncResultPartial', { count: lastResult.failed });
+    if (lastResult?.outcome === 'failed') return t(locale, 'workspace.syncResultFailed');
+    if (lastSyncedAt) {
+      const ago = relativeTime(locale, nowMs - lastSyncedAt);
+      return t(locale, 'workspace.lastSynced', { time: ago });
+    }
+    return t(locale, 'workspace.neverSynced');
+  })();
+  const showRetry = lastResult?.outcome === 'partial' || lastResult?.outcome === 'failed';
+  const failedTone = lastResult?.outcome === 'partial' || lastResult?.outcome === 'failed';
+  return (
+    <div className="flex items-center gap-1.5" role="group" aria-label={t(locale, 'workspace.syncBtn')}>
+      <button
+        type="button"
+        className="ws-dashboard-action"
+        onClick={onSync}
+        disabled={syncing}
+        aria-label={t(locale, 'workspace.syncBtn')}
+        title={t(locale, 'workspace.syncBtn')}
+      >
+        <RefreshCw size={15} className={syncing ? 'ws-sync-spin' : ''} />
+      </button>
+      <span className={`text-xs ${failedTone ? 'text-[var(--danger)]' : 'text-[var(--text-disabled)]'}`}>{statusText}</span>
+      {showRetry && (
+        <button type="button" className="rounded-md px-1.5 py-0.5 text-xs text-[var(--primary)] hover:bg-[var(--surface-hover)]" onClick={onSync} disabled={syncing}>
+          {t(locale, 'workspace.syncRetry')}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function relativeTime(locale: string, ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return locale.startsWith('zh') ? `${sec} 秒` : `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return locale.startsWith('zh') ? `${min} 分钟` : `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return locale.startsWith('zh') ? `${hr} 小时` : `${hr}h`;
+  const day = Math.floor(hr / 24);
+  return locale.startsWith('zh') ? `${day} 天` : `${day}d`;
 }
 
 /**

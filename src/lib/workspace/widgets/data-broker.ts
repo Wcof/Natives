@@ -11,6 +11,19 @@ export type BrokerLoader<T> = (ctx: WidgetDataContext) => Promise<T>;
 
 export type BrokerStatus = 'idle' | 'loading' | 'ready' | 'error';
 
+/** WS-05: manual sync outcome. `lastSyncedAt` only advances on `ok`. */
+export type SyncOutcome = 'ok' | 'partial' | 'failed' | 'noop';
+
+export interface SyncResult {
+  outcome: SyncOutcome;
+  /** Number of data components that refreshed successfully. */
+  succeeded: number;
+  /** Number of data components whose refresh failed (kept their old data). */
+  failed: number;
+  /** Human-facing failure detail (first error message), if any. */
+  detail?: string;
+}
+
 export interface BrokerSnapshot<T = unknown> {
   key: string;
   status: BrokerStatus;
@@ -80,9 +93,14 @@ export class WorkspaceDataBroker {
     }
   }
 
-  /** 触发所有有订阅者的 entry 同步刷新（去重，不重复发请求）。 */
-  async syncAll(): Promise<void> {
-    if (this._syncing) return;
+  /**
+   * 触发所有有订阅者的 entry 同步刷新（去重，不重复发请求）。
+   * WS-05：返回真实结果摘要——只有全部成功(outcome=ok)才推进 lastSyncedAt；
+   * 部分失败(partial)或全部失败(failed)保留旧数据并如实回报，禁止伪装成功。
+   * 并发调用直接返回（owner 自行去重，避免重复刷新）。
+   */
+  async syncAll(): Promise<SyncResult> {
+    if (this._syncing) return { outcome: 'noop', succeeded: 0, failed: 0 };
     this._syncing = true;
     this.notifySyncStatus();
 
@@ -92,28 +110,59 @@ export class WorkspaceDataBroker {
     });
 
     if (activeKeys.length === 0) {
+      // No mounted data components: nothing to sync. Do not advance the
+      // "last synced" clock for a no-op.
       this._syncing = false;
-      this._lastSyncedAt = Date.now();
       this.notifySyncStatus();
-      return;
+      return { outcome: 'noop', succeeded: 0, failed: 0 };
     }
 
+    // Snapshot each entry's promise BEFORE refetch so settle results map to
+    // exactly this sync round (not a later in-flight request replacing it).
     for (const key of activeKeys) {
       this.refetch(key);
     }
 
-    const promises = activeKeys.map((key) => {
-      const entry = this.entries.get(key);
-      return entry?.promise
-        ? entry.promise.then(() => {}, () => {})
-        : Promise.resolve();
-    });
+    const entryByKey = (key: string) => this.entries.get(key);
+    const settled = await Promise.allSettled(
+      activeKeys.map((key) => {
+        const entry = entryByKey(key);
+        return entry?.promise
+          ? entry.promise.then(() => ({ key, ok: true }), () => ({ key, ok: false }))
+          : Promise.resolve({ key, ok: true });
+      }),
+    );
 
-    await Promise.allSettled(promises);
+    // Resolve settle outcomes against the CURRENT status of each key: an entry
+    // still in 'error' after settle counts as failed (its old data is kept).
+    let succeeded = 0;
+    let failed = 0;
+    let firstDetail: string | undefined;
+    for (const result of settled) {
+      const payload = result.status === 'fulfilled' ? result.value : null;
+      const key = payload?.key;
+      const entry = key ? entryByKey(key) : undefined;
+      const failedNow = !payload?.ok || entry?.status === 'error';
+      if (failedNow) {
+        failed += 1;
+        if (!firstDetail) {
+          const msg = entry?.error?.message;
+          if (msg) firstDetail = msg;
+        }
+      } else {
+        succeeded += 1;
+      }
+    }
 
     this._syncing = false;
-    this._lastSyncedAt = Date.now();
+    // Only a fully successful sync advances the "last synced" timestamp.
+    if (failed === 0) {
+      this._lastSyncedAt = Date.now();
+    }
     this.notifySyncStatus();
+
+    const outcome: SyncOutcome = failed === 0 ? 'ok' : succeeded === 0 ? 'failed' : 'partial';
+    return { outcome, succeeded, failed, detail: firstDetail };
   }
 
   /** 同步读取当前快照（用于 hook 初始 state）。 */
