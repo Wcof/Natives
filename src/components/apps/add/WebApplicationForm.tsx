@@ -11,6 +11,16 @@ interface WebApplicationFormProps {
   onCancel: () => void;
 }
 
+export function normalizeWebUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.|10\.)/i.test(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  return `https://${trimmed}`;
+}
+
 export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormProps) {
   const locale = useLocale();
   const [title, setTitle] = useState('');
@@ -46,6 +56,23 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
           setTitle(origin);
         }
       }
+    }
+  };
+
+  const handleUrlBlur = () => {
+    if (!url.trim()) return;
+    const normalized = normalizeWebUrl(url);
+    setUrl(normalized);
+    try {
+      const parsed = new URL(normalized);
+      if (!approvedOrigins && parsed.origin) {
+        setApprovedOrigins(parsed.origin);
+      }
+      if (!title.trim() && parsed.hostname) {
+        setTitle(parsed.hostname);
+      }
+    } catch {
+      // ignore
     }
   };
 
@@ -94,13 +121,17 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
           {t(locale, 'appsPage.webUrlLabel')} *
         </label>
         <input
-          type="url"
+          type="text"
           value={url}
           onChange={(e) => handleUrlChange(e.target.value)}
-          placeholder="https://chatgpt.com"
+          onBlur={handleUrlBlur}
+          placeholder="https://chatgpt.com, example.com"
           className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
           required
         />
+        <p className="mt-1 text-[0.6875rem] text-[var(--text-tertiary)]">
+          {t(locale, 'appsPage.webUrlHint')}
+        </p>
       </div>
 
       <div>
@@ -125,9 +156,12 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
           type="text"
           value={approvedOrigins}
           onChange={(e) => setApprovedOrigins(e.target.value)}
-          placeholder="example.com, auth.example.com"
+          placeholder="https://chatgpt.com, https://auth0.openai.com"
           className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
         />
+        <p className="mt-1 text-[0.6875rem] text-[var(--text-tertiary)]">
+          {t(locale, 'appsPage.approvedOriginsHint')}
+        </p>
       </div>
 
       <div className="flex items-center gap-2 pt-1">

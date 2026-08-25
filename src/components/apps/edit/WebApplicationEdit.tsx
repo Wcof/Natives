@@ -53,10 +53,20 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
 
       let updated = app;
       if (urlCheck?.normalized || approvedOrigins.trim()) {
-        const origins = approvedOrigins
+        let origins = approvedOrigins
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
+        const normalizedUrl = urlCheck?.normalized;
+
+        if (origins.length === 0 && normalizedUrl) {
+          try {
+            const parsed = new URL(normalizedUrl);
+            if (parsed.origin) origins = [parsed.origin];
+          } catch {
+            // fallback
+          }
+        }
 
         updated = await appsApi.updateWebSpec({
           appId: app.appId,
@@ -103,10 +113,10 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           {t(locale, 'appsPage.webUrlLabel')}
         </label>
         <input
-          type="url"
+          type="text"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="Leave blank to keep unchanged"
+          placeholder={t(locale, 'appsPage.webUrlEditPlaceholder')}
           className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
         />
       </div>

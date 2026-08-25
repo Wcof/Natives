@@ -1,15 +1,9 @@
 //! Apps 域综合集成测试（APP-070 / 最终 Gate）。
 
 use super::capabilities::CapabilityResolver;
-use super::model::{
-    AppCapabilities, AppKind, AppRuntimeState, RegisterLocalProjectInput,
-    RegisterSystemApplicationInput, RegisterWebApplicationInput, RegistrationOrigin,
-};
+use super::model::{AppRuntimeState, RegistrationOrigin};
 use super::mutation_lock::MutationLockRegistry;
 use super::repository::AppRepository;
-use super::system;
-use super::web;
-use crate::Error;
 use rusqlite::Connection;
 use std::sync::Arc;
 
@@ -22,7 +16,7 @@ fn v28_db() -> Connection {
 
 #[test]
 fn test_three_app_kinds_registration_and_views() {
-    let mut conn = v28_db();
+    let conn = v28_db();
 
     // 1. Local Project
     let local_id = AppRepository::register_local(

@@ -48,7 +48,7 @@ AiNative
 |---|---|
 | 任何编码 | `standards/README.md` + 相关 1–3 篇 |
 | 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |
-| 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021**（取代 ADR-0020 §1/§3 冲突部分）+ `contracts/workspace-v2-contract.md` + `standards/product/01-02` + `standards/ui-ux/02`（五-2 节）+ `standards/technical/05`（R-B10） |
+| 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021**（取代 ADR-0020 §1/§3 冲突部分）+ `contracts/workspace-v2-contract.md` + `standards/product/01-02` + `standards/ui-ux/02`（§5-2、§6）+ `architecture/application-visual-experience-remediation.md`（§12 Workspace 画布组件整改）+ `standards/technical/05`（R-B10） |
 | P0 Proxy/OAuth/Secret | `architecture/provider-proxy-architecture.md` + technical 01/02/03/05 |
 | P0 provider-adapters 逐文件处置 | `architecture/provider-adapters-p0b-audit.md`（Keep/Extract/Rewrite/Delete 矩阵） |
 | Legacy 删除 | `architecture/legacy-death-list.md`（死亡证明 + 待 cutover 路径） |

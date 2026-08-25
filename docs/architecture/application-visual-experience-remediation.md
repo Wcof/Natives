@@ -4,7 +4,7 @@
 > Natives 审计基线：`60107ab2d21e`；首批集成 HEAD：`1943c57`（2026-08-12）。
 > Waku 参考：`/Volumes/UNTITLED/本人材料/project/waku`；审阅时仓库报告 HEAD `925c7533cd88744cd76531f8a938e07cbb1b0213`，工作树非干净，因此本方案只引用已核对的源码行为，不把该 commit 当作可复现截图基线。  
 > 产品面：Hub 主工作台为主，覆盖 Workshop 管理面、Embed 宿主 Chrome 与 Menubar Widget；不改变 web-module / capability 双轨。  
-> **执行包**：本文保留设计总纲与首批集成基线；后续细化后的唯一实施入口为 `/Users/ldh/Downloads/project/uitask/README.md`，其工作包、验收编号、证据规范和进度台账不得再复制为第三套来源。
+> **执行包**：本文保留设计总纲与首批集成基线；通用历史整改仍以 `/Users/ldh/Downloads/project/uitask/README.md` 为入口。2026-08-23 新增的 Workspace 画布组件专项以本文 §12 为仓库内唯一实施入口，避免把 Git 外路径当作该专项规范来源。
 > **存储约束**：本任务严格禁止创建或使用 Git Worktree、临时 clone 或完整仓库副本；所有 Agent 必须复用 Natives 当前工作目录与当前分支，通过文件所有权与 Wave 顺序隔离并行改动。
 
 ## 0. 权威、范围与完成定义
