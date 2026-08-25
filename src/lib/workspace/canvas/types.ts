@@ -51,7 +51,8 @@ export interface CanvasSelection {
   mode: CanvasSelectionMode;
 }
 
-export const CANVAS_GRID = 16;
+/** Free Canvas grid step (WS-04). ADR-0022 §3: 8px grid snap + arrow steps. */
+export const CANVAS_GRID = 8;
 export const CANVAS_MIN_ZOOM = 0.25;
 export const CANVAS_MAX_ZOOM = 2.5;
 export const CANVAS_ZOOM_STEP = 0.15;

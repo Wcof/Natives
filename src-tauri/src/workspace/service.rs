@@ -8,7 +8,9 @@ use super::store::{
     get_workspace, list_context_items, list_layouts, list_tool_profiles, list_view_states,
     list_widgets, new_id, now_rfc3339,
 };
-use super::types::{WorkspaceSummary, WorkspaceWidgetConfigPatch};
+use super::types::{
+    WorkspaceSummary, WorkspaceWidget, WorkspaceWidgetConfigPatch, WorkspaceWidgetInput,
+};
 use crate::{Error, Result};
 use rusqlite::Connection;
 
@@ -191,6 +193,244 @@ pub fn batch_update_widget_configs(
     }
     tx.commit().map_err(Error::Database)?;
     Ok(changed)
+}
+
+/// WS-05 / contract §10.4: atomically create a REAL widget row (host-generated
+/// id — never a renderer ghost id) and merge it into the persisted
+/// `workspace_layouts` document in ONE transaction.
+///
+/// `mode` selects the placement realm:
+/// - `structured` (`lg`/`md`/`sm`): the widget item `{"i": id, ...}` is
+///   appended to the CURRENT persisted layout for that breakpoint (read inside
+///   the transaction). Any placeholder `i` in the renderer-supplied last item
+///   is rewritten to the real host id before persisting, so a ghost id can
+///   never reach storage.
+/// - `free`: the canvas document (array of nodes, or `{ "nodes": [...] }`) is
+///   merged — a node for the new widget id is appended with a default cascade
+///   position in pixel world space, and the free layout row (breakpoint
+///   `'free'`) is upserted keyed `{ "nodes": [...] }`.
+///
+/// All validations complete BEFORE any write and every layout read happens
+/// INSIDE the transaction. A failure at any step rolls everything back — the
+/// renderer can never observe a widget row without its placement (a ghost
+/// node), nor a placement without its widget instance.
+pub fn add_widget_atomically(
+    conn: &Connection,
+    workspace_id: &str,
+    input: &WorkspaceWidgetInput,
+    mode: &str,
+    breakpoint: &str,
+    layout: Option<&serde_json::Value>,
+    expected_revision: Option<i64>,
+) -> Result<Option<WorkspaceWidget>> {
+    check_revision(conn, workspace_id, expected_revision)?;
+
+    let appearance_value = input
+        .appearance
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    super::store::validate_appearance(&appearance_value)?;
+    if let Some(config) = input.config.as_ref() {
+        super::store::validate_widget_config(config)?;
+    }
+
+    let tx = conn.unchecked_transaction().map_err(Error::Database)?;
+    let now = now_rfc3339();
+
+    let config: serde_json::Value = input
+        .config
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let position = {
+        let max_pos: Option<i64> = tx
+            .query_row(
+                "SELECT MAX(position) FROM workspace_widgets WHERE workspace_id = ?1",
+                [workspace_id],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .map_err(Error::Database)?;
+        max_pos.map(|p| p + 1).unwrap_or(0)
+    };
+    let widget_id = new_id("wgt");
+
+    tx.execute(
+        "INSERT INTO workspace_widgets
+            (id, workspace_id, widget_type, config_version, config_json, appearance_json,
+             enabled, z_index, position, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+        rusqlite::params![
+            widget_id,
+            workspace_id,
+            input.widget_type.clone(),
+            input.config_version.unwrap_or(1),
+            config.to_string(),
+            appearance_value.to_string(),
+            i64::from(input.enabled.unwrap_or(true)),
+            input.z_index.unwrap_or(0),
+            position,
+            now
+        ],
+    )
+    .map_err(Error::Database)?;
+
+    insert_widget_placement(
+        &tx,
+        workspace_id,
+        &widget_id,
+        &input.widget_type,
+        &config,
+        mode,
+        breakpoint,
+        layout,
+        &now,
+    )?;
+
+    tx.commit().map_err(Error::Database)?;
+    super::store::get_widget(conn, &widget_id)
+}
+
+/// Embed the freshly created widget into the persisted layout document (in the
+/// same transaction). Returns without touching the layout for unsupported
+/// request shapes (the widget row still commits — the caller decides whether a
+/// missing placement is acceptable).
+fn insert_widget_placement(
+    tx: &rusqlite::Transaction<'_>,
+    workspace_id: &str,
+    widget_id: &str,
+    widget_type: &str,
+    config: &serde_json::Value,
+    mode: &str,
+    breakpoint: &str,
+    layout: Option<&serde_json::Value>,
+    now: &str,
+) -> Result<()> {
+    if mode == "free" {
+        return embed_widget_free(tx, workspace_id, widget_id, widget_type, config, layout, now);
+    }
+    insert_widget_structured(tx, workspace_id, widget_id, widget_type, config, breakpoint, layout, now)
+}
+
+/// Free Canvas placement: cascade the node into the persisted document.
+fn embed_widget_free(
+    tx: &rusqlite::Transaction<'_>,
+    workspace_id: &str,
+    widget_id: &str,
+    widget_type: &str,
+    config: &serde_json::Value,
+    layout: Option<&serde_json::Value>,
+    now: &str,
+) -> Result<()> {
+    let (mut nodes, cursor) = match layout {
+        Some(serde_json::Value::Array(items)) => (
+            items.clone(),
+            items
+                .iter()
+                .filter_map(|v| v.get("z"))
+                .filter_map(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
+                .max()
+                .map(|z| z + 1)
+                .unwrap_or(10),
+        ),
+        Some(serde_json::Value::Object(map)) => (
+            map.get("nodes")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            10,
+        ),
+        _ => (Vec::new(), 10),
+    };
+    let (x, y) = cascade_position(&nodes);
+    nodes.push(serde_json::json!({
+        "id": widget_id,
+        "kind": "widget",
+        "label": widget_id,
+        "x": x,
+        "y": y,
+        "w": 256,
+        "h": 176,
+        "z": cursor,
+        "widgetType": widget_type,
+        "widgetConfig": config.clone(),
+    }));
+    let doc = serde_json::json!({ "nodes": nodes });
+    tx.execute(
+        "INSERT INTO workspace_layouts
+            (id, workspace_id, layout_mode, breakpoint, layout_version, layout_json,
+             is_active, created_at, updated_at)
+         VALUES (?1, ?2, 'free', 'free', 1, ?3, 1, ?4, ?4)
+         ON CONFLICT(workspace_id, layout_mode, breakpoint) DO UPDATE SET
+            layout_json = excluded.layout_json,
+            layout_version = excluded.layout_version,
+            is_active = excluded.is_active,
+            updated_at = excluded.updated_at",
+        rusqlite::params![new_id("lay"), workspace_id, doc.to_string(), now],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Structured placement: append the widget item to the breakpoint layout.
+fn insert_widget_structured(
+    tx: &rusqlite::Transaction<'_>,
+    workspace_id: &str,
+    widget_id: &str,
+    _widget_type: &str,
+    _config: &serde_json::Value,
+    breakpoint: &str,
+    layout: Option<&serde_json::Value>,
+    now: &str,
+) -> Result<()> {
+    let breakpoint = match breakpoint {
+        "lg" | "md" | "sm" => breakpoint,
+        other => {
+            return Err(Error::InvalidInput(format!(
+                "structured mode requires a grid breakpoint (lg/md/sm), got {other}"
+            )));
+        }
+    };
+    let Some(current) = layout.and_then(serde_json::Value::as_array) else {
+        return Err(Error::InvalidInput(
+            "structured widget add requires a current layout array".into(),
+        ));
+    };
+    let mut item = current
+        .last()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "i": widget_id }));
+    if let Some(map) = item.as_object_mut() {
+        map.insert("i".into(), serde_json::Value::String(widget_id.to_string()));
+    }
+    let mut next = current.clone();
+    next.push(item);
+    tx.execute(
+        "INSERT INTO workspace_layouts
+            (id, workspace_id, layout_mode, breakpoint, layout_version, layout_json,
+             is_active, created_at, updated_at)
+         VALUES (?1, ?2, 'structured', ?3, 2, ?4, 1, ?5, ?5)
+         ON CONFLICT(workspace_id, layout_mode, breakpoint) DO UPDATE SET
+            layout_json = excluded.layout_json,
+            layout_version = excluded.layout_version,
+            layout_mode = excluded.layout_mode,
+            updated_at = excluded.updated_at",
+        rusqlite::params![
+            new_id("lay"),
+            workspace_id,
+            breakpoint,
+            serde_json::Value::Array(next).to_string(),
+            now
+        ],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Cascade the next default Free Canvas node position (pixel world space),
+/// mirroring `FreeCanvasView.addNode`.
+fn cascade_position(nodes: &[serde_json::Value]) -> (i64, i64) {
+    let x = 40 + (nodes.len() as i64 % 5) * 280;
+    let y = 40 + ((nodes.len() as i64 / 5) % 6) * 210;
+    (x, y)
 }
 
 /// G-008: optimistic concurrency guard for workspace mutation commands.

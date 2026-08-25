@@ -9,13 +9,15 @@ import { clampCamera } from './camera';
 import { createCanvasNode, type CanvasCamera, type CanvasNode } from './types';
 
 describe('Free Canvas Geometry & Gestures', () => {
-  it('snaps coordinates to grid intervals correctly', () => {
+  it('snaps coordinates to 8px grid intervals (WS-04)', () => {
     assert.equal(snap(0), 0);
-    assert.equal(snap(7), 0);
-    assert.equal(snap(8), 16);
+    assert.equal(snap(3), 0);
+    assert.equal(snap(8), 8);
+    assert.equal(snap(10), 8);
+    assert.equal(snap(12), 16);
     assert.equal(snap(15), 16);
-    assert.equal(snap(24), 32);
-    assert.equal(snap(-7), -0);
+    assert.equal(snap(23), 24);
+    assert.equal(snap(-7), -8);
   });
 
   it('normalizes bounding rectangles in any drag direction', () => {
@@ -42,8 +44,8 @@ describe('Free Canvas Geometry & Gestures', () => {
     const nextMemberX = snap(member1.x + dxWorld);
     const nextMemberY = snap(member1.y + dyWorld);
 
-    assert.equal(nextMemberX, 128);
-    assert.equal(nextMemberY, 256);
+    assert.equal(nextMemberX, 136);
+    assert.equal(nextMemberY, 248);
   });
 
   it('clamps camera zoom within bounded limits', () => {

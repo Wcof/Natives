@@ -749,6 +749,8 @@ export const app = {
     canvasNodeFrameLabel: 'Frame',
     canvasGroupLabel: 'Group {n}',
     canvasNodeItems: '{count} item(s)',
+    canvasLockedHint: 'Locked',
+    canvasToolbar: 'Canvas toolbar',
     canvasDoubleClickHint: 'Double-click to edit (coming in Wave2).',
     inspectorSelection: 'Selection',
     targetSurface: 'Target Surface',

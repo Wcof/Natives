@@ -131,7 +131,7 @@ fn parse_json(raw: String) -> serde_json::Value {
     serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
 }
 
-fn validate_appearance(value: &serde_json::Value) -> Result<()> {
+pub(crate) fn validate_appearance(value: &serde_json::Value) -> Result<()> {
     let Some(object) = value.as_object() else {
         return Err(Error::InvalidInput("appearance must be an object".into()));
     };
@@ -155,7 +155,7 @@ fn validate_appearance(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn validate_widget_config(value: &serde_json::Value) -> Result<()> {
+pub(crate) fn validate_widget_config(value: &serde_json::Value) -> Result<()> {
     fn contains_forbidden(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Object(object) => object.iter().any(|(key, value)| {

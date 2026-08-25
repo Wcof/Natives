@@ -750,6 +750,8 @@ export const app = {
     canvasNodeFrameLabel: '框架',
     canvasGroupLabel: '编组 {n}',
     canvasNodeItems: '{count} 个项目',
+    canvasLockedHint: '已锁定',
+    canvasToolbar: '画布工具栏',
     canvasDoubleClickHint: '双击编辑（Wave2 支持）',
     inspectorSelection: '选中',
     targetSurface: '目标表面',
