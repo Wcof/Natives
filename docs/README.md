@@ -30,7 +30,12 @@ AiNative
 └── 设置                 General / Appearance / AI / Personal summary
 ```
 
-## 当前迁移事实（2026-08-22 更新）
+## 当前迁移事实（2026-08-25 更新）
+
+- **ADR-0022（Appearance Preference、Workspace 交互与 Apps Web Surface 统一权威）**已接受：
+  - 主题持久权威收敛为 Host `settings:theme`（词表 `dark | light`），由 `AppearanceCoordinator` 单一协调；`workspaces.theme` 降为 v30 迁移存根；
+  - Workspace 布局手势严格遵循 `idle → draft → commit | rollback`，移动期间写库为 0，有效 stop 单次原子写入；恢复 Structured Grid 标题栏拖拽与八向缩放，Free Canvas 采用屏幕空间恒定缩放手柄；
+  - Apps `AppView` 统一 camelCase 序列化契约，`appId` 保持真实唯一身份；Web Surface 运行时由单例 `BrowserStateHandle` 托管生命周期与 LRU 预算。
 
 - Workspace V2 目标架构 ADR-0021（Multi-Workspace + Grid/Canvas 双布局 + Design System V2）已接受，取代 ADR-0020 §1/§3 冲突范围（其余 ADR-0020 决策继续有效）；冻结契约见 `contracts/workspace-v2-contract.md`，Host SQLite 为 Workspace 唯一权威（v27 迁移 7 表已注册），旧 localStorage 权威判定为 delete（`development/g009-localstorage-conclusion.md`）。
 
@@ -48,7 +53,9 @@ AiNative
 |---|---|
 | 任何编码 | `standards/README.md` + 相关 1–3 篇 |
 | 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |
-| 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021**（取代 ADR-0020 §1/§3 冲突部分）+ `contracts/workspace-v2-contract.md` + `standards/product/01-02` + `standards/ui-ux/02`（§5-2、§6）+ `architecture/application-visual-experience-remediation.md`（§12 Workspace 画布组件整改）+ `standards/technical/05`（R-B10） |
+| 主题偏好与外观协调 | **ADR-0022** + `contracts/appearance-preference-contract.md` + `standards/ui-ux/01` + `standards/frontend/02` (R-E7.1) |
+| 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021** + **ADR-0022** + `contracts/workspace-v2-contract.md` + `standards/ui-ux/02` + `standards/technical/04` (R-P11) |
+| Apps / Web Surface 运行时 | **ADR-0022** + `contracts/apps-web-surface-contract.md` + `standards/technical/01` (R-T5) + `standards/technical/05` (R-B12) |
 | P0 Proxy/OAuth/Secret | `architecture/provider-proxy-architecture.md` + technical 01/02/03/05 |
 | P0 provider-adapters 逐文件处置 | `architecture/provider-adapters-p0b-audit.md`（Keep/Extract/Rewrite/Delete 矩阵） |
 | Legacy 删除 | `architecture/legacy-death-list.md`（死亡证明 + 待 cutover 路径） |

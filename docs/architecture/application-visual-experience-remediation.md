@@ -384,9 +384,15 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 
 ### 12.5 WSW-4：Grid & Free Canvas 手势与拖拽交互修复
 
+> **2026-08-25 审计订正**：本节原先把接线存在写成完成。当前源码中
+> `.grid-content` 包裹整张卡片，却又被传给 RGL `cancel`；其内部
+> `.ws-shell-header` 即使声明为 `handle` 仍会命中祖先 cancel，Grid 移动不可用。
+> 现有 resize 只开放 `se` 且没有满足命中区合同。以下目标尚未完成，执行入口改为
+> §13 的 `WS-01/WS-02`，不得再以本节旧描述声明完成。
+
 - **CompactGrid 拖拽与取消区域**：
   - 拖拽手柄绑定为 `.ws-shell-header`（卡片标题栏非控件区域全域可拖拽，编辑态呈现 `cursor: grab` / `cursor: grabbing`）。
-  - 取消区域绑定为 `.grid-content, .ws-drag-cancel`，按钮、链接、输入框与主体内容点击不会触发误拖拽。
+  - 取消区域只能命中 Widget Body 与交互控件；禁止把同时包含 Header 的祖先容器登记为 cancel。
   - 严格遵守 R-U14：拖拽期间指针移动仅更新 RGL 内存态，写库仅在 `onDragStop` / `onResizeStop` 触发。
 - **FreeCanvasView 手势健全性与编组位移修复**：
   - 修复编组节点拖拽 Y 轴位移 bug：`nextDraft[memberId]` 中的 Y 坐标计算从 `snap(member.y + dxWorld)` 修复为 `snap(member.y + dyWorld)`。
@@ -455,3 +461,55 @@ Menubar 必须执行：dark/light × missing/partial/stale/error/success；每�
 | 性能门禁 | `npm run perf:check` | ✅ |
 | Rust 格式 | `cargo fmt --check` | ✅ |
 | Rust 工作区测试 | `cargo test --workspace` | ✅（`src-agent-daemon` 的 `stream_watch` 为既有 flaky 时序用例，重跑即过，本轮未触碰 daemon 代码） |
+
+## 13. 2026-08-25 严重问题整改执行方案
+
+### 13.1 范围、顺序与分支
+
+- 当前开发分支：`deploy`。全部任务在该分支串行完成，不创建 Worktree、不拆并行分支。
+- 固定顺序：`PLAN → THEME → FUNCTION → UI/UE → GATE`。前一阶段验收未通过，不进入后一阶段。
+- 所属域：主题与 Workspace 属 Home/Settings；Web 应用预览属 Apps/Embed Surface。不得改变 Host authority、WebView trust domain、Secret 或 Legacy 边界。
+- 只复用现有 `theme-engine`、Workspace client、`react-grid-layout@2.2.4`、Free Canvas、Apps Service 与 child WebView；不新增依赖、状态库、拖拽引擎、第二主题系统或第二应用 Registry。
+- 用户提供的 `docs/img/首页-深色主题.png`、`docs/img/首页-浅色主题.png` 只作视觉基准，不覆盖或格式化这两个用户资产。
+
+### 13.2 已确认根因
+
+| ID | 根因 | 证据与影响 |
+|---|---|---|
+| C-01 | 主题存在双权威 | 设置页写 `settings:theme`，Workspace 挂载/刷新又执行 `applyTheme(workspace.theme)`；旧 Workspace 的 `dark` 覆盖刚保存的 `light`。 |
+| C-02 | Grid handle 被 cancel 祖先吞掉 | `GridWorkspaceView` 用 `.grid-content` 包裹 Header+Body，同时把它传入 RGL cancel；移动无法开始。 |
+| C-03 | Resize 合同未完成 | RGL 只启用 `se`，缺少可见边框/足够命中区；Free Canvas handle 仅 8×8px，低于 R-U19。 |
+| C-04 | `AppView` wire 命名不一致 | Rust `AppView` 缺少 camelCase 序列化，前端却读取 `appId/showInSidebar/...`；`key={app.appId}` 实际可为 `undefined`，同时打开命令收到无效 id。 |
+| C-05 | Apps WebView 状态不是共享实例 | `commands/apps.rs::service()` 每次命令新建 `BrowserState`，但 close 等命令使用 Tauri managed state；打开、预算、关闭不在同一状态权威。 |
+| C-06 | 色值大体已进入 token，消费层仍漂移 | `V2_TOKENS` 已含目标背景、accent、状态和图表色；页面仍混用 `primary`、`interactive-accent`、旧 neutral 与局部 surface，导致截图观感不一致。 |
+
+### 13.3 Task 清单（严格按表执行）
+
+| Task | 优先级 / 依赖 | 最小修改面 | 完成定义 |
+|---|---|---|---|
+| PLAN-01 · 决策与规范对齐 | P0 / 无 | ADR-0022、Workspace contract、`ui-ux/01`、本节 | 明确全局单一主题权威（`AppearancePreference`，Host `settings:theme` 唯一持久源；Workspace 不再驱动主题）与两套色彩映射；先用 ADR-0022 记录对历史固定中性映射的取代范围，再同步 Standards，消除冲突。 |
+| TH-01 · 主题单一写入路径 | P0 / PLAN-01 | `SettingsPage`、AppearanceCoordinator、theme engine、双语文案 | Host `settings:theme` 为全应用唯一持久权威；Renderer 经 AppearanceCoordinator 统一管理，Workspace 不再读写 `theme`；v30 迁移将旧主题收敛到全局偏好；设置页与命令面板切换主题后原子生效，失败回滚并展示分类错误。 |
+| TH-02 · 返回文案与主题回归 | P0 / TH-01 | Settings sidebar、zh/en、主题测试 | “返回个人空间”改为“返回”/“Back”；`dark→light→返回→刷新/重启` 保持 light；不同 Workspace 切换保持全局主题不变；终端与 Monaco 配色同步，无 FOUC。 |
+| TH-03 · 双主题 token 校准 | P0 / PLAN-01 | `design-tokens.ts` 权威值、`tokens.css` 首帧镜像、theme tests | Light：`#F5F6F8` 画布、白/72% 白表面、`#F1F3F5` inset、珊瑚橙、轻阴影/高光；Dark：`#0D1117` 画布、`#121820` 表面、`#18202B` inset、金橙、8% 边界/克制 glow。两套语义键完全一致并通过 Zod/WCAG 检查。 |
+| WS-01 · Structured Grid 移动 | P0 / TH-03 | `GridWorkspaceView`、`CompactGrid`、`WidgetShell`、`widgets.css` | Header 非控件空白区可稳定拖动；Body/button/input/a 是 cancel；3px 阈值、边界/碰撞可预测；pointer move IPC/DB write=0，stop 仅写一次，失败恢复最后成功布局并可重试。 |
+| WS-02 · Structured Grid 改尺寸 | P0 / WS-01 | 同上 + grid tests | 编辑态提供边/角 resize；至少宽、高与对角线方向可调；可见区≥16×16、命中区≥24×24；遵守 Widget min/max，1440×900、960×600 不裁切 handle；stop 仅写一次。 |
+| WS-03 · Free Canvas 手势一致性 | P0 / WS-02 | `FreeCanvasView`、canvas tests | Header/明确拖拽区启动移动，交互 Body 不误拖；8 个 resize handle 满足命中区；Pointer Up/Cancel 提交或回滚；方向键 8px、Shift+方向键 1px；move 写库=0。 |
+| APP-01 · AppView wire 契约修复 | P0 / TH-03 | Rust `AppView`、生成绑定源、Apps contract tests | Rust/TS 字段统一 camelCase；每条 `appId` 非空且唯一；AppList 不再出现 key 告警；不以 index 或拼接标题掩盖无效主键。生成文件只通过既有生成流程更新。 |
+| APP-02 · WebView 共享状态与预览 | P0 / APP-01 | Apps command/service、managed BrowserState、Shell presentation、Rust/TS tests | Apps open/close/budget 使用同一 managed BrowserState；注册与打开状态分离；有效 appId 打开/复用一个 child WebView，实际内容区 bounds 生效，切换隐藏、关闭不删注册，错误可重试且不放宽 trust domain。 |
+| UI-01 · Widget Surface 重设计 | P1 / WS-03+APP-02 | `WidgetShell`、Surface primitives、`widgets.css` | 只在共享壳调整，逐 Widget 不复制卡片 CSS。Light 使用白玉玻璃+顶边高光+双层软阴影；Dark 使用黑晶表面+8% 边界+顶部微流光。Header/Body 密度、圆角、状态、图表完全消费语义 token。 |
+| UI-02 · 页面 UI/UE 收口 | P1 / UI-01 | Workspace toolbar/Inspector、Apps list/presentation、双语 | 查看/编辑态清晰；拖拽、resize、返回、重试均有 focus-visible、Tooltip/ARIA、键盘路径；reduced-motion/transparency 有确定退化；不新增装饰性永久动画。 |
+| GATE-01 · 集成验收 | P0 / 全部 | 测试与证据 | 完成 §13.4 全矩阵；所有证据来自同一 `deploy` HEAD。失败项修复后再进入 UI 校准，禁止用基线豁免或“浏览器正常”替代 packaged Tauri/WebKit。 |
+
+### 13.4 验收矩阵与门禁
+
+1. **主题**：两主题 × 设置页切换/返回/刷新/重启/Workspace 切换 × 1440×900、960×600；记录 `data-theme`、Host 持久值、Workspace 持久值一致性。
+2. **Workspace**：Structured/Free × move/横向 resize/纵向 resize/对角 resize/取消/写入失败/键盘；用计数断言 pointer move IPC=0、每次 stop 写入≤1；交互保持≥55 FPS。
+3. **Apps**：空列表/单 Web/多 Web/重复标题/注册成功但打开失败/重试/切换/隐藏/关闭/预算休眠；控制台无 key warning，WebView 不获得 Tauri command、文件、Shell、Secret 或 Host IPC 权限。
+4. **视觉**：参考两张首页图做 dark/light 对照；检查 canvas/surface/inset/文字/accent/status/chart 七类角色，不以逐像素复刻替代真实数据、可读性和响应式。
+5. **自动门禁**：`rtk npm run typecheck`、`rtk npm run lint`、`rtk npm run test`、`rtk npm run perf:check`；触及 Rust 时追加 `rtk cargo fmt --check`、`rtk cargo test --workspace`；触及生成协议/绑定时追加 `rtk npm run protocol:check`。
+
+### 13.5 原子提交与停止条件
+
+- 建议提交顺序：`docs(plan)` → `fix(theme-authority)` → `style(theme-tokens)` → `fix(workspace-grid)` → `fix(workspace-canvas)` → `fix(app-view-contract)` → `fix(webview-state)` → `style(workspace-apps)` → `test(gates)`。
+- 每个提交只含对应 Task；不得顺带格式化、改名、清理 Legacy 或修改用户的两张参考图。
+- 任一 Task 若要求新增依赖、改变 Workspace schema、放宽 WebView 安全策略或建立第二数据权威，立即停止并先修订 ADR；本方案默认这些都不需要。
