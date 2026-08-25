@@ -475,5 +475,8 @@ pub fn apply(conn: &Connection) -> Result<(), Error> {
     )
     .map_err(Error::Database)?;
 
+    // ADR-0022 / TH-01: Guarantee settings:theme authority is normalized and locked.
+    super::migration_v27::resolve_theme_authority(conn)?;
+
     Ok(())
 }

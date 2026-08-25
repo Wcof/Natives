@@ -287,9 +287,9 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     'surface-active': NEUTRAL_PALETTE[250],
     sidebar: '#0B0F14',
     canvas: 'var(--background)',
-    raised: NEUTRAL_PALETTE[200],
-    inset: NEUTRAL_PALETTE[100],
-    composer: NEUTRAL_PALETTE[150],
+    raised: '#18202B', // R-U2.6: raised→surface-hover（与 CSS mirror var(--surface-hover) 对齐）
+    inset: '#18202B', // ADR-0022 暗色 inset = #18202B（与 surface-hover 同值）
+    composer: '#18202B', // R-U2.6: 深色 composer→surface-hover（与 mirror 对齐）
 
     'elevation-base': NEUTRAL_PALETTE[0],
     'elevation-raised': NEUTRAL_PALETTE[150],
@@ -411,8 +411,8 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     'chart-requests-fill':
       'linear-gradient(180deg, rgba(56, 189, 248, 0.30) 0%, rgba(56, 189, 248, 0) 100%)',
 
-    'terminal-bg': NEUTRAL_PALETTE[150],
-    'terminal-fg': NEUTRAL_PALETTE[950],
+    'terminal-bg': '#121820', // 与 CSS mirror var(--surface)（暗黑磨砂表面）对齐
+    'terminal-fg': '#F8FAFC', // 与 CSS mirror var(--text) 对齐
     'terminal-cursor': NEUTRAL_PALETTE[950],
     'terminal-selection': NEUTRAL_PALETTE[950] + '33',
   },
@@ -430,7 +430,7 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
     sidebar: NEUTRAL_PALETTE[900],
     canvas: 'var(--background)',
     raised: NEUTRAL_PALETTE[1000],
-    inset: NEUTRAL_PALETTE[900],
+    inset: '#F1F3F5', // ADR-0022 浅色 inset = #F1F3F5（= surface-hover，与 mirror 对齐）
     composer: NEUTRAL_PALETTE[1000],
 
     'elevation-base': NEUTRAL_PALETTE[950],
@@ -557,7 +557,7 @@ export const V2_TOKENS: Record<V2ThemeId, V2ThemeTokens> = {
       'linear-gradient(180deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0) 100%)',
 
     'terminal-bg': NEUTRAL_PALETTE[1000],
-    'terminal-fg': NEUTRAL_PALETTE[150],
+    'terminal-fg': '#111827', // 与 CSS mirror var(--text) 对齐
     'terminal-cursor': NEUTRAL_PALETTE[150],
     'terminal-selection': NEUTRAL_PALETTE[150] + '33',
   },

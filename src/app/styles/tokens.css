@@ -54,8 +54,8 @@
   --sidebar: #0B0F14;
   --canvas: var(--background);
   --raised: var(--surface-hover);
-  --inset: var(--neutral-100);
-  --composer: var(--surface);
+  --inset: var(--surface-hover); /* ADR-0022 暗色 inset = #18202B = surface-hover */
+  --composer: var(--surface-hover); /* R-U2.6: 深色 composer→surface-hover，与 TS mirror 对齐 */
 
   /* ── Elevation (base/raised/floating/inset 四级) ── */
   --elevation-base: var(--neutral-0);

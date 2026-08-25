@@ -9,7 +9,6 @@ import Header from './Header';
 import TerminalPanel from './Terminal';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import MainContent from './MainContent';
-import { applyTheme } from '@/lib/theme-engine';
 
 const MemoizedSidebar = memo(Sidebar);
 const MemoizedHeader = memo(Header);
@@ -201,35 +200,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   }, [followMode]);
 
-  // FOUC guard + locale/theme init + state persistence LOAD（只执行一次）
+  // Locale init + state persistence LOAD（只执行一次；主题由 ThemeProvider / AppearanceCoordinator 统管）
   useEffect(() => {
-    // ── CRITICAL: Signal theme readiness IMMEDIATELY ──
-    // The Tauri window starts with visible:false. The theme_ready_signal
-    // command calls window.show(). If this is delayed or blocked by any
-    // async operation (getHttpPort, db.get, etc.), the window stays
-    // hidden → appears as white screen.
-    //
-    // Solution: Fire themeReady() FIRST, before any async work. Even if
-    // subsequent init fails, the window is already visible.
     startTransition(() => { setThemeReady(true); });
-    try {
-      window.nativesAPI?.themeReady();
-    } catch {
-      // Browser dev mode — no Tauri window to show
-    }
 
     async function initSettings() {
       const api = window.nativesAPI;
       if (!api) return;
-
-      try {
-        const savedTheme = await api.getTheme();
-        if (savedTheme) applyTheme(savedTheme);
-      } catch (err) {
-        console.error('[Shell] Failed to load saved theme:', err);
-        // 与主题引擎既定一致（dark）；原来落到 light 与引擎兜底反向
-        applyTheme('dark');
-      }
 
       try {
         const savedLocale = await api.getLocale();

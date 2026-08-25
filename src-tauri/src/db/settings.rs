@@ -1,6 +1,33 @@
 use crate::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
 
+/// Single persisted theme authority key (ADR-0022 §2.1). The only theme
+/// source both the renderer and the migration chain read/write through.
+pub const THEME_KEY: &str = "settings:theme";
+/// Contract theme vocabulary (V-002): exactly `dark` | `light`.
+pub const THEME_DARK: &str = "dark";
+pub const THEME_LIGHT: &str = "light";
+/// Default before any user preference exists. Never a legacy alias.
+pub const DEFAULT_THEME: &str = THEME_DARK;
+
+/// Canonicalize any theme value into the two-value contract (`dark` | `light`).
+///
+/// Legacy aliases (`terminal-volt` → `dark`, `frosted-jasmine` → `light`) and
+/// unknown/empty values fall back to the default (V-002 / V-004). This is the
+/// *only* theme-normalization authority for commands and the migration chain
+/// so persisted values never carry a non-canonical token across IPC.
+pub fn normalize_theme(theme: &str) -> &'static str {
+    match theme {
+        "light" | "frosted-jasmine" => THEME_LIGHT,
+        _ => THEME_DARK,
+    }
+}
+
+/// True when `value` is already a canonical theme token.
+pub fn is_canonical_theme(value: &str) -> bool {
+    matches!(value, "dark" | "light")
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     let mut stmt = conn
         .prepare("SELECT value FROM settings WHERE key = ?1")

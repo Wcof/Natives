@@ -2,7 +2,7 @@
 export const settings = {
   settings: {
     title: 'Settings',
-    backHome: 'Back to Space',
+    backHome: 'Back',
     tabPersonalOverview: 'Personal Overview',
     tabOverview: 'Personal Overview',
     overviewDesc: 'View real local usage, project activity, and system storage.',
@@ -631,6 +631,10 @@ export const settings = {
     about: 'About',
     themeTerminal: 'Dark Glow',
     themeJasmine: 'Liquid Crystal',
+    themeDarkGlow: 'Dark Glow',
+    themeLiquidCrystal: 'Liquid Crystal',
+    themeDescDarkGlow: 'Focused dark canvas with 4-level materials and restrained luminous focus',
+    themeDescLiquidCrystal: 'Clean frosted specular highlights, layered micro-shadows and subtle watercolor gradients',
     version: 'Natives Version',
     providers: 'Providers',
     tabProviders: 'Providers',

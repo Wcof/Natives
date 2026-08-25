@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { normalizeThemeId, applyTheme } from '@/lib/theme-engine';
+import { normalizeThemeId } from '@/lib/theme-engine';
+import { useTheme } from '@/context/ThemeContext';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/Toast';
@@ -120,6 +121,7 @@ export default function SettingsPage({
   onNavigate?: (view: string) => void;
 }) {
   const { toast: globalToast } = useToast();
+  const { themeId: currentTheme, setTheme } = useTheme();
   const [locale, setLocaleState] = useState<Locale>(externalLocale ?? 'zh');
 
   // Sync with external locale prop when it changes
@@ -130,8 +132,6 @@ export default function SettingsPage({
   }, [externalLocale]);
 
   // ── Theme / locale state ──
-  // 默认值与主题引擎统一为 dark（theme-engine.ts normalizeThemeId 的兜底）
-  const [currentTheme, setCurrentTheme] = useState('dark');
   const [currentLocale, setCurrentLocale] = useState('zh');
 
   // ── Plugin state ──
@@ -173,30 +173,19 @@ export default function SettingsPage({
     })();
   }, []);
 
-  // ── Theme ──
+  // ── Theme / Locale loading ──
   async function loadTheme() {
     try {
       const api = window.nativesAPI;
-      // 单一真实源 settings:theme（get_theme）；旧 theme_id 键回退已废除
-      const saved = await api?.getTheme?.().catch(() => null);
-      if (saved && typeof saved === 'string') {
-        setCurrentTheme(normalizeThemeId(saved));
-      }
       const loc = await api?.getLocale?.().catch(() => null);
       if (loc) setCurrentLocale(loc);
     } catch { /* ignore */ }
   }
 
   async function handleSelectTheme(themeId: string) {
-    const normalized = normalizeThemeId(themeId);
-    setCurrentTheme(normalized);
-    applyTheme(normalized);
     try {
-      const api = window.nativesAPI;
-      if (!api?.setTheme) throw new Error('theme API unavailable');
-      await api.setTheme(normalized);
+      setTheme(themeId);
     } catch (e) {
-      // 持久化失败必须可见：UI 已即时换肤，静默失败会在重启后「谜之回退」
       globalToast(classifyError(e).userMessage, 'error');
     }
   }

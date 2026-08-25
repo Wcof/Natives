@@ -2,7 +2,7 @@
 
 import { startTransition, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { applyTheme } from '@/lib/theme-engine';
+import { useTheme } from '@/context/ThemeContext';
 import { t, type Locale } from '@/i18n';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 import {
@@ -116,6 +116,7 @@ function getStaticCommands(locale: Locale): CommandItem[] {
 }
 
 export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerminal }: CommandPaletteProps) {
+  const { setTheme } = useTheme();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [locale, setLocale] = useState<Locale>('zh');
@@ -323,8 +324,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const handleSelect = (cmd: CommandItem) => {
     if (cmd.id.startsWith('theme:')) {
       const themeId = cmd.id.slice(6);
-      applyTheme(themeId);
-      window.nativesAPI?.setTheme?.(themeId);
+      setTheme(themeId);
     } else if (cmd.id === 'terminal:toggle') {
       onToggleTerminal?.();
     } else if (cmd.id.startsWith('module:')) {

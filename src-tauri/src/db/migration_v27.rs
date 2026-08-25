@@ -105,7 +105,7 @@ pub(super) fn migrate_v27(conn: &Connection) -> Result<(), Error> {
     .map_err(Error::Database)?;
 
     import_legacy_home_workspace(conn)?;
-    normalize_legacy_theme(conn)?;
+    resolve_theme_authority(conn)?;
     Ok(())
 }
 
@@ -226,24 +226,61 @@ fn import_legacy_home_workspace(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-/// V-002/V-004: normalize `settings:theme` to the two-value contract
-/// (`dark` | `light`). Legacy aliases (`terminal-volt`, `frosted-jasmine`)
-/// and any unknown values are rewritten to the canonical form.
-fn normalize_legacy_theme(conn: &Connection) -> Result<(), Error> {
-    let Some(theme) = super::get_setting(conn, "settings:theme")? else {
-        return Ok(());
-    };
-    let normalized = match theme.as_str() {
-        "dark" | "light" => theme.as_str(),
-        "terminal-volt" => "dark",
-        "frosted-jasmine" => "light",
-        // Unknown values are not persisted noise — fall back to the default.
-        _ => "dark",
-    };
-    if normalized != theme {
-        super::set_setting(conn, "settings:theme", normalized)?;
+/// V-002/ADR-0022 §2.1: make `settings:theme` the single persisted theme
+/// authority, locking it in an idempotent, one-way chain.
+///
+/// Precedence (contract §4 / ADR-0022 §2.1-2):
+///
+/// 1. An existing `settings:theme` value — canonical tokens (`dark`/`light`)
+///    are left untouched (no-op on re-run); legacy aliases (`terminal-volt`,
+///    `frosted-jasmine`) and unknown values are normalized once and written
+///    back, so the persisted key never holds a non-canonical value.
+/// 2. When the setting is **absent**, the active workspace's legacy
+///    `workspaces.theme` column is lifted into `settings:theme` (normalized).
+/// 3. No active workspace → the contract default `dark`.
+///
+/// Once `settings:theme` holds a canonical value, later loads or workspace
+/// switches must never overwrite it. The `workspaces.theme` physical column is
+/// retained as migration audit evidence and no longer drives runtime theme.
+///
+/// `pub(super)` so the completion step v30 can re-assert the lock on the
+/// v29→v30 recovery path without duplicating the chain.
+pub(super) fn resolve_theme_authority(conn: &Connection) -> Result<(), Error> {
+    match super::get_setting(conn, super::THEME_KEY)? {
+        Some(stored) => {
+            let canonical = super::normalize_theme(&stored);
+            if canonical != stored {
+                super::set_setting(conn, super::THEME_KEY, canonical)?;
+            }
+            Ok(())
+        }
+        None => {
+            let locked = active_workspace_theme(conn)?
+                .as_deref()
+                .map(super::normalize_theme)
+                .unwrap_or(super::THEME_DARK);
+            super::set_setting(conn, super::THEME_KEY, locked)?;
+            Ok(())
+        }
     }
-    Ok(())
+}
+
+/// Legacy fallback source: the currently active (on-screen) workspace's
+/// `theme` column. No `deleted_at` guard here on purpose — an active workspace
+/// is by construction never soft-deleted (`delete_workspace` clears
+/// `is_active`), and the column only exists from v29 onward while this step
+/// must run as early as v27.
+fn active_workspace_theme(conn: &Connection) -> Result<Option<String>, Error> {
+    conn.query_row(
+        "SELECT theme FROM workspaces
+          WHERE is_active = 1
+          ORDER BY position ASC, id ASC
+          LIMIT 1",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(Error::Database)
 }
 
 #[cfg(test)]
@@ -568,6 +605,95 @@ mod migration_v27_validation {
                 .unwrap();
             assert_eq!(n, 0, "{table} row {id} must be cascade-deleted");
         }
+    }
+
+    fn setting_value(conn: &Connection, key: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [key],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    }
+
+    fn seed_workspace_with_theme(conn: &Connection, id: &str, theme: &str, active: i64) {
+        conn.execute(
+            "INSERT INTO workspaces (id, name, kind, theme, is_active, position, created_at, updated_at)
+             VALUES (?1, ?1, 'workspace', ?2, ?3, 0, '2026-08-24T00:00:00Z', '2026-08-24T00:00:00Z')",
+            rusqlite::params![id, theme, active],
+        )
+        .unwrap();
+    }
+
+    /// Clears `settings:theme` to simulate a pre-lock database.
+    fn clear_theme_setting(conn: &Connection) {
+        conn.execute("DELETE FROM settings WHERE key = ?1", [crate::db::THEME_KEY])
+            .unwrap();
+    }
+
+    /// The authority chain lifts the **active** workspace legacy theme into
+    /// `settings:theme` when the setting is absent, normalized to the
+    /// two-value contract (ADR-0022 §2.1, contract §4).
+    #[test]
+    fn v27_theme_authority_locks_active_workspace_preference() {
+        let conn = migrated();
+        seed_workspace_with_theme(&conn, "ws_inactive", "frosted-jasmine", 0);
+        seed_workspace_with_theme(&conn, "ws_active", "frosted-jasmine", 1);
+        clear_theme_setting(&conn);
+
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+
+        // Workspace switching after the lock never overwrites `settings:theme`.
+        seed_workspace_with_theme(&conn, "ws_b", "dark", 1);
+        conn.execute(
+            "UPDATE workspaces SET is_active = 0 WHERE id <> 'ws_b'",
+            [],
+        )
+        .unwrap();
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("light"),
+            "a locked settings:theme is never overwritten by a workspace switch"
+        );
+    }
+
+    /// Legacy aliases and unknown values stored under `settings:theme` are
+    /// normalized once and locked (V-002/V-004).
+    #[test]
+    fn v27_theme_authority_normalizes_stored_aliases_once() {
+        let conn = migrated();
+        crate::db::set_setting(&conn, crate::db::THEME_KEY, "terminal-volt").unwrap();
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("dark"));
+
+        crate::db::set_setting(&conn, crate::db::THEME_KEY, "frosted-jasmine").unwrap();
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+        // Second run is a no-op (nothing rewritten).
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+    }
+
+    /// No setting and no workspace → the contract default `dark` is locked.
+    #[test]
+    fn v27_theme_authority_defaults_to_dark() {
+        let conn = migrated();
+        clear_theme_setting(&conn);
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("dark"));
+    }
+
+    /// A canonical `light` setting is preserved across re-runs — idempotency.
+    #[test]
+    fn v27_theme_authority_preserves_canonical_light() {
+        let conn = migrated();
+        crate::db::set_setting(&conn, crate::db::THEME_KEY, "light").unwrap();
+        super::resolve_theme_authority(&conn).unwrap();
+        super::resolve_theme_authority(&conn).unwrap();
+        super::resolve_theme_authority(&conn).unwrap();
+        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
     }
 
     #[test]

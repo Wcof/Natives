@@ -2,7 +2,7 @@
 export const settings = {
   settings: {
     title: '设置',
-    backHome: '返回个人空间',
+    backHome: '返回',
     tabPersonalOverview: '个人概览',
     tabOverview: '个人概览',
     overviewDesc: '查看本机账户下的真实用量、项目活跃度与系统存储。',
@@ -631,6 +631,10 @@ export const settings = {
     about: '关于',
     themeTerminal: '暗黑流光 (Dark Glow)',
     themeJasmine: '晶透液态 (Liquid Crystal)',
+    themeDarkGlow: '暗黑流光 (Dark Glow)',
+    themeLiquidCrystal: '晶透液态 (Liquid Crystal)',
+    themeDescDarkGlow: '低对比深色画布、四级材质层次与克制流光焦点',
+    themeDescLiquidCrystal: '极净霜白顶层高光、分层微阴影与水彩渐变质感',
     version: 'Natives 版本',
     providers: '供应商管理',
     tabProviders: '供应商管理',

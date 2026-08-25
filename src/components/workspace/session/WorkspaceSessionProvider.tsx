@@ -8,7 +8,6 @@ import { setSession } from '@/lib/workspace/session-store';
 import { setSnapshot } from '@/lib/workspace/snapshot-store';
 import { onWorkspaceChanged } from '@/lib/workspace/events';
 import { createDefaultConfig, getWidget, serializeWidgetConfig } from '@/lib/workspace/widgets';
-import { applyTheme } from '@/lib/theme-engine';
 
 export type WorkspaceHostStatus = 'pending' | 'ready' | 'error';
 
@@ -57,7 +56,7 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot | null) => {
     setSnapshotState(next);
-    if (next) { setSnapshot(next.workspace.id, next); applyTheme(next.workspace.theme); }
+    if (next) { setSnapshot(next.workspace.id, next); }
   }, []);
 
   const refresh = useCallback(async (workspaceId?: string | null) => {

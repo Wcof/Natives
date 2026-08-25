@@ -28,12 +28,19 @@ use crate::Error;
 use rusqlite::Connection;
 
 /// Migration v29 → v30: complete (idempotently) the PWSV2 schema that v29
-/// started, then advance the marker to 30.
+/// started, re-assert the appearance authority lock, then advance the marker.
+///
+/// The theme re-assert covers the recovery path: a database whose marker
+/// advanced past v27 with a non-canonical `settings:theme` (or none) is
+/// repaired here. The chain is idempotent — once `settings:theme` is a
+/// canonical `dark`/`light` value it is a read-only no-op, so re-running the
+/// completion step never overwrites a user's theme (ADR-0022 §2.1).
 ///
 /// See `complete_pws2_schema` for the exact object set. This function never
 /// downgrades a newer marker and never drops user data.
 pub(super) fn migrate_v30(conn: &Connection) -> Result<(), Error> {
     complete_pws2_schema(conn)?;
+    super::migration_v27::resolve_theme_authority(conn)?;
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '30')",
         [],
@@ -168,6 +175,63 @@ mod migration_v30_validation {
             ),
             "templates origin index missing after v30"
         );
+    }
+
+    /// ADR-0022 §2.1: v30 re-asserts the theme authority lock on the recovery
+    /// path — an absent setting is lifted from the active workspace, and a
+    /// canonical setting is preserved (idempotent no-op across re-runs).
+    #[test]
+    fn v30_theme_authority_reassert_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_tables(&conn).unwrap();
+        apply_migrations(&conn).unwrap();
+        // Simulate an active legacy workspace with a non-canonical theme and
+        // no `settings:theme` yet (pre-lock install).
+        conn.execute(
+            "INSERT INTO workspaces (id, name, kind, theme, is_active, position, created_at, updated_at)
+             VALUES ('ws-a', 'A', 'workspace', 'frosted-jasmine', 1, 0, 't', 't')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM settings WHERE key = 'settings:theme'",
+            [],
+        )
+        .unwrap();
+
+        super::migrate_v30(&conn).unwrap();
+        let locked: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'settings:theme'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(locked, "light");
+
+        // Re-running the same completion step preserves the locked light
+        // theme — idempotent, no overwrite.
+        super::migrate_v30(&conn).unwrap();
+        let locked2: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'settings:theme'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(locked2, "light");
+
+        // The chain advances the marker back to HEAD and keeps the lock.
+        apply_migrations(&conn).unwrap();
+        assert_eq!(schema_version(&conn), SCHEMA_VERSION);
+        let locked3: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'settings:theme'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(locked3, "light");
     }
 
     /// PWSV2-T02: a FRESH database reaches v30 through the full chain and the
