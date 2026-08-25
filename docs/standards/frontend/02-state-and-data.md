@@ -17,9 +17,19 @@
 #### R-E7 · 全局 Shell 状态集中在 ShellLayout
 - **等级**：SHOULD
 - **分类**：状态
-- **规则**：跨域的全局状态（侧栏宽度、面板模式、终端高度、当前视图、主题/locale）**应该**集中在 `ShellLayout`（或其拆出的自定义 Hook），通过 props 下发。**禁止**在多个组件各自用 `useState` 重复持有同一份全局状态。
+- **规则**：跨域的全局状态（侧栏宽度、面板模式、终端高度、当前视图、locale）**应该**集中在 `ShellLayout`（或其拆出的自定义 Hook），通过 props 下发。**禁止**在多个组件各自用 `useState` 重复持有同一份全局状态。
 - **为什么**：单一真相源避免「侧栏在 A 组件折叠了，B 组件还以为展开」的不一致。
 - **检查方法**：新增全局可见状态时，确认它是否已在 ShellLayout 管理。
+
+#### R-E7.1 · 全局 AppearancePreference 单一协调权威
+- **等级**：MUST
+- **分类**：状态、主题
+- **规则**：
+  - Host `settings:theme` 为全应用唯一持久权威；Renderer 端的 `AppearanceCoordinator` 独占 Host 读写、Zod 校验、并发序列化、广播监听与 DOM/CSS 变量分发。
+  - DOM（`html[data-theme]`）是派生输出 Sink，**严禁**作为反向权威；React `ThemeContext` 仅暴露只读模型与 `select` 动作。
+  - Workspace snapshot、路由切换、返回按钮与子页面**严禁**直接调用 `applyTheme` 或覆盖全局主题设置。
+  - 布局手势生命周期严格维持 `idle → draft → commit | rollback`；失败或取消时必须通过 canonical snapshot 还原状态。
+- **为什么**：见 ADR-0022。消除多处直接写 DOM / DB 导致的竞态、FOUC 与返回覆盖。
 
 #### R-E8 · 局部状态就近，跨组件复用提为 Hook
 - **等级**：SHOULD

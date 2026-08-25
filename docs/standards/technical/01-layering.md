@@ -62,8 +62,11 @@ Infrastructure ── Tauri / SQLite / Keychain / PTY / HTTP / supervised proces
 #### R-T5 · 命名与协议 Source of Truth
 - **等级**：MUST
 - **分类**：命名、协议
-- **规则**：Host command/channel **必须**使用稳定的 `domain:action` 语义或项目生成绑定约定。仍存在的 Host↔sidecar wire type **必须**只有一个 Rust Source of Truth，前端 binding 由生成/同步检查维护，禁止手写影子类型。
-- **为什么**：迁移期更需要避免新旧契约漂移。
+- **规则**：
+  - Host command/channel **必须**使用稳定的 `domain:action` 语义或项目生成绑定约定。
+  - Rust 后端结构体是 DTO 单一 Source of Truth；前端 TS 绑定由 `ts-rs` 自动生成，**严禁**手写影子接口。
+  - Web Surface 运行时状态（打开、复用、隐藏、预算控制、关闭）**必须**由 Tauri 托管的单一 `BrowserStateHandle` 统一管理，**禁止**命令每次新建局部实例。
+- **为什么**：迁移期与多 Surface 管理中，协议与状态实例漂移会导致主键失效和资源泄露。
 
 ## 四、迁移 Gate
 

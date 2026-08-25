@@ -114,6 +114,14 @@
 - **规则**：Home Grid/Free Canvas 的 Pointer Move（drag/resize/pan/zoom 手势期间）**必须**只更新内存；**必须**在 Pointer Stop、Resize Stop 或 debounce/flush 时才持久化布局，move 路径对布局数据的写库次数必须为 0。
 - **检查方法**：布局 move 路径 `grep` 不得出现 DB 写入；持久化只出现在 stop/debounce/flush 处理器。
 
+#### R-B12 · 序列化契约与 Managed 运行时状态管理
+- **等级**：MUST
+- **分类**：协议、架构
+- **规则**：
+  - 公共 DTO 结构体（如 `AppView`）必须显式标注 `#[serde(rename_all = "camelCase")]` 与 `#[ts(export)]`，确保前后端字段命名完全一致，严禁出现前端 `undefined` 字段回退；
+  - 具备跨命令生命周期的运行时资源（如 Apps `BrowserState`）**必须**由 Tauri `manage()` 单例容器托管（`State<'_, BrowserStateHandle>`），**严禁**在每个 command 内部无状态新建局部实例导致状态分裂。
+- **为什么**：见 ADR-0022。保证协议单一 Source of Truth 与运行时生命周期的唯一权威。
+
 ---
 
 ## 七、本篇合规自检清单

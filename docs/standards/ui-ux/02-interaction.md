@@ -118,8 +118,25 @@
 #### R-U14 · 画布指针手势的持久化只在停止/flush 时发生
 - **等级**：MUST
 - **分类**：交互、性能
-- **规则**：Free Canvas 的 drag / resize / pan / zoom 期间指针移动**必须**只更新内存态；持久化**必须**在 Pointer Stop、Resize Stop 或 debounce/flush 时执行，move 过程中对布局数据的写库次数必须为 0。
-- **为什么**：与 product/02 R-F6、ADR-0021 §2（stop/debounce/flush 才持久化，指针移动只写内存）一致，避免拖拽期间写库放大 IO。
+- **规则**：Structured Grid 与 Free Canvas 的 drag / resize / pan / zoom 期间指针移动**必须**只更新内存态；持久化**必须**在 Pointer Stop、Resize Stop 或 debounce/flush 时执行，move 过程中对布局数据的写库次数必须为 0。操作被 Cancel（Escape、pointercancel）或持久化失败时必须无损回滚到最后确认的快照。
+- **为什么**：与 product/02 R-F6、ADR-0021/0022 一致，避免拖拽期间写库放大 IPC 与 SQLite IO，确保并发一致性。
+
+#### R-U14.1 · Structured Grid 拖拽手柄与取消区域严格分离
+- **等级**：MUST
+- **分类**：交互、Workspace
+- **规则**：
+  - Structured Grid 必须以卡片标题栏非控件空白区作为唯一拖拽手柄（`handle: .ws-shell-header`），编辑态呈现 `cursor: grab` / `cursor: grabbing`。
+  - Widget Body、按钮、输入框、下拉菜单、图表交互区与滚动区必须声明为取消区域（`cancel: .grid-content, .ws-drag-cancel` 等）。**严禁**将包含 Header 的祖先节点声明为 cancel，以防拖动被祖先拦截。
+  - 启动拖拽必须有 3px 移动阈值，避免普通单击被识别为拖动手势。
+
+#### R-U14.2 · 八向缩放手柄与屏幕空间命中尺寸
+- **等级**：MUST
+- **分类**：交互、可访问性
+- **规则**：
+  - Structured Grid 与 Free Canvas 的可编辑节点必须支持八向（n/e/s/w/ne/nw/se/sw）调整尺寸。
+  - 缩放手柄必须保证可见尺寸 ≥ 16px × 16px，触摸/鼠标命中区域 ≥ 24px × 24px。
+  - Free Canvas 缩放手柄必须由屏幕空间覆盖层（Screen-space Resize Overlay）承载，其命中尺寸必须保持屏幕像素恒定，**严禁**随世界坐标 zoom 缩小而缩水。
+- **为什么**：保证在任意缩放视口（如 25%~250%）和高分屏下，用户均能稳定抓取缩放手柄。
 
 ---
 

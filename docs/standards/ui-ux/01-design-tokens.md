@@ -43,12 +43,15 @@ Natives 同时维护两套令牌，各有用途：
 
 参考 CodePilot 的 macOS visual profile 后，Natives 的结论是：高级磨砂玻璃不能靠到处叠 `backdrop-filter` 实现。它必须先有透明窗口与透明根节点作为底座，再由 shell / navigation / floating control 分层承载玻璃材质，内容阅读层保持稳定和可读。真正的 Liquid Glass 只用于少数高价值容器或控件，不作为全局背景滤镜滥用。
 
-#### R-U2 · 深浅主题必须共享语义键并使用全局中性色板
+#### R-U2 · 深浅主题必须共享语义键并使用全局中性色板与 V2 语义色阶
 - **等级**: MUST
 - **分类**：主题
-- **规则**：每套常规主题**必须**提供完全相同的语义键集合，至少覆盖 `background` / `surface` / `surface-hover` / `sidebar` / `border` / `border-subtle` / `text` / `text-body` / `text-secondary` / `text-disabled` / `primary` / `primary-hover` / `primary-soft` / `primary-dark`。磨砂材质可以增加 `--vibe-*`，但不得建立另一套颜色权威。
-- **全局单色规则**：页面、侧栏、弹窗、控件、图表和第一方模块必须以 R-U2.5 的中性色板为品牌基底，不再由绿色或橙色主导。彩色仅允许用于 danger、warning、success、info、Diff、终端 ANSI、用户内容和第三方嵌入内容。
-- **为什么**：全局共享同一色板和语义角色，既能保持黑白灰品牌一致性，也能用足够的光度层次表达界面结构和数据体量。
+- **规则**：每套常规主题**必须**提供完全相同的语义键集合，至少覆盖 `background` / `surface` / `surface-hover` / `sidebar` / `border` / `border-subtle` / `text` / `text-body` / `text-secondary` / `text-disabled` / `primary` / `primary-hover` / `primary-soft` / `primary-dark` / `interactive-accent` / `control-*` / `vibe-*`。磨砂材质可以增加 `--vibe-*`，但不得建立另一套颜色权威。
+- **全局色彩规则（ADR-0022）**：页面、侧栏、弹窗、控件、图表和第一方模块以 Design System V2 语义 Token 为基底：
+  - **暗黑流光（Dark Glow）**：低反射深色 canvas（`#0B0F14`~`#0D1117`）、黑晶表面（`#121820` / 88% alpha）、微弱 glow 仅在 focus/selected/active 状态、琥珀金 accent（`#F59E0B`~`#FB923C`）。
+  - **晶透液态（Liquid Crystal）**：清透浅色 canvas（`#F5F6F8`~`#F8FAFC`）、白玉玻璃表面（`#FFFFFF` / 72% alpha）、顶边高光、双层柔和阴影、珊瑚橙 accent（`#EA580C`~`#F97316`）。
+  - 彩色仅允许用于交互 Accent、状态语义（danger/warning/success/info）、Diff、终端 ANSI、图表多维序列与用户嵌入内容。业务组件严禁编写局部 ad-hoc hex 色值。
+- **为什么**：全局共享同一色板和语义角色，既能保持品牌与质感一致性，也能用足够的光度层次表达界面结构和数据体量。
 
 #### R-U2.1 · 玻璃效果必须遵守材质分层矩阵
 - **等级**：MUST

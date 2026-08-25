@@ -91,10 +91,13 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 
 #### R-S10 · 窗口先隐藏，主题就绪后再显示
 - **等级**：MUST
-- **分类**：交互、性能
-- **规则**：Tauri v2 窗口**必须**以 `visible: false` 启动，Renderer 加载配置并挂载 CSS 变量后发送 `theme-applied-ready`，Main 收到后才显示窗口。
-- **为什么**：防 FOUC（Flash of Unstyled Content），避免用户看到无主题的裸界面闪烁。
-- **检查方法**：`tauri.conf.json` 含 `visible: false`；存在 `theme-applied-ready` 握手。
+- **分类**：交互、性能、安全
+- **规则**：
+  - Tauri v2 窗口**必须**以 `visible: false` 启动。
+  - Renderer 启动由 `RootClient` 执行 `get_theme` → Zod 校验 → 注入 `html[data-theme]` 与全量 CSS 变量 → 发送 `theme_ready_signal` → Host 收到后才显示窗口。
+  - 若 Host 读取超时或异常，**必须**使用受控 `dark` fallback 显窗并保留分类错误以供重试，**严禁**在主题就绪前提前显窗导致 FOUC 闪烁。
+- **为什么**：防 FOUC（Flash of Unstyled Content），避免用户看到无主题的裸界面或错误主题闪烁。
+- **检查方法**：`tauri.conf.json` 含 `visible: false`；存在严格的 `theme_ready_signal` 握手。
 
 #### R-S11 · 主题与配置参数必须经 Zod 校验
 - **等级**：MUST
@@ -102,6 +105,14 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 - **规则**：从 SQLite 读取的主题色、布局尺寸、配置参数**必须**经 Zod schema 校验后才注入 DOM / 使用（如颜色 hex 正则、像素范围）。**禁止**把未校验的 DB 值直接写进 CSS 变量。
 - **为什么**：损坏的配置不应让界面崩溃或注入非法 CSS。
 - **检查方法**：`theme-engine.ts` 的 `ThemeSchema` 校验是否覆盖所有注入字段。
+
+#### R-S11.1 · Child WebView 独立信任域与能力隔离
+- **等级**：MUST
+- **分类**：安全、沙箱
+- **规则**：
+  - Apps Web Surface 创建的 Child WebView 必须保持独立信任域，**严禁**注入主窗口 Tauri IPC、本地文件读写、进程 spawn、Shell、Secret 或 Workshop Session Token。
+  - WebView 的 URL 必须通过严格的 Scheme 与 Host 白名单校验；加载第三方 Web 应用不得使其具备超越受限 Web 环境的任何能力。
+- **为什么**：第三方 Web 页面可能包含恶意脚本，防止跨域逃逸和本地凭证环境泄露。
 
 ---
 
