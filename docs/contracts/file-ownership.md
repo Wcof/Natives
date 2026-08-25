@@ -63,3 +63,46 @@
 3. B 最先冻结 token 名 / primitive props / surfacePolicy enum；C 随即并行接入。
 4. 不得为方便建立第二套 Workspace / Theme / Layout / 数据 Source of Truth。
 5. 每波结束必须输出 handoff（Task ID / 文件 / Source of Truth 变化 / shared patch / 未验证假设 / Final Gate 风险）。
+
+---
+
+## 2026-08-25 整改专用任务租约与 Patch-Intent 契约（ADR-0022）
+
+### 1. 任务专属文件租约表
+
+| 任务 | 专属租约（Exclusive Scope） | 共享 Patch 目标 |
+|---|---|---|
+| **TH-01** (Theme Host) | `src-tauri/src/commands/theme.rs`, Workspace model/repo/service 中 theme 段, v30 migration 与对应 Rust tests | `handler_registration.rs`, `lib.rs` |
+| **TH-02** (Theme Renderer) | `src/lib/theme-engine.ts`, `src/context/ThemeContext.tsx`, `src/lib/appearance/*` 及 tests | `RootClient.tsx`, `ShellLayout.tsx` |
+| **TH-03** (Tokens) | `src/lib/design-tokens.ts`, `src/app/styles/tokens.css`, token tests | `WidgetShell.tsx`, `widgets.css` |
+| **WS-01/02** (Grid) | `src/components/workspace/GridWorkspaceView.tsx`, `CompactGrid.tsx`, grid tests | `WidgetShell.tsx`, `widgets.css` |
+| **WS-03/04** (Canvas) | `src/components/workspace/FreeCanvasView.tsx`, `src/lib/workspace/canvas/*`, canvas unit tests | `WorkspaceCompositionPage.tsx` |
+| **WS-05** (Widget Identity) | `src/lib/workspace/client.ts`, `session-store.ts`, Host workspace add transaction | `WorkspaceCompositionPage.tsx` |
+| **APP-01** (App DTO) | `src-tauri/src/apps/model.rs`, `src/types/generated/AppView.ts` (由 APP-01 运行生成命令) | `src/lib/tauri/apps.ts` |
+| **APP-02** (App Adapter) | `src/lib/tauri/apps.ts`, adapter tests | `ShellLayout.tsx` |
+| **APP-03/04** (App Runtime) | `src-tauri/src/commands/apps.rs`, `src-tauri/src/apps/service.rs`, `presentation/` | `lib.rs` |
+| **APP-05** (App UI) | `src/components/apps/**` | `ShellLayout.tsx`, `i18n/**` |
+| **MAIN** (主集成者) | Shared-lock 文件（Root, Shell, Layout, Composition, i18n, lib.rs, Cargo/package.json） | — |
+
+### 2. Patch-Intent 格式规范
+
+```text
+Target file: <path>
+Reason / contract: <ADR-0022 / task description>
+Anchor symbol: <symbol name / line context>
+Requested change: <minimal diff intent>
+Required imports/types: <types list>
+Failure if omitted: <consequence>
+Owning task: <Task ID>
+```
+
+### 3. 固定交接格式规范
+
+```text
+Task ID / status: implemented / awaiting-final-gate
+Exclusive files changed: <list>
+Contract/authority implemented: <summary>
+Tests authored but not yet run: <list>
+Shared patch intents: <list / none>
+Known final-gate risks: <risks / none>
+```

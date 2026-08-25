@@ -31,7 +31,7 @@ SQLite / Local Files -> Domain Service -> Typed IPC -> Renderer Snapshot/UI
 
 | 表 | 关键字段 | 语义 |
 |---|---|---|
-| `workspaces` | id TEXT PK, name, kind, icon, description, theme CHECK(dark\|light) DEFAULT 'dark', position INT, appearance_json DEFAULT '{}', default_layout_mode CHECK(structured\|free) DEFAULT 'structured', template_source_id NULL, template_version NULL, created_at, updated_at, deleted_at NULL | 软删（list/snapshot 过滤 `deleted_at`）；Close 不写这里 |
+| `workspaces` | id TEXT PK, name, kind, icon, description, theme CHECK(dark\|light) DEFAULT 'dark'（legacy 审计列，v30 起生产 DTO 不再读写，主题收敛至全局 settings:theme）, position INT, appearance_json DEFAULT '{}', default_layout_mode CHECK(structured\|free) DEFAULT 'structured', template_source_id NULL, template_version NULL, created_at, updated_at, deleted_at NULL | 软删（list/snapshot 过滤 `deleted_at`）；Close 不写这里；主题权威见 ADR-0022 |
 | `workspace_open_tabs`（v29 新表） | workspace_id TEXT PK FK ON DELETE CASCADE, sort_order REAL, is_pinned INT, opened_at, last_active_at | row 存在=打开；Close=删 row；Reopen=插 row。实现中同名的旧 `workspace_tabs`（tab_type/title/ref_id/url 内容 tab 表）PWSV2 起降为 legacy 表，v29 后无 production 读/写，death proof 后删除 |
 | `workspace_context_items` | id TEXT PK, workspace_id FK, kind CHECK(project_root\|pinned_file\|pinned_folder\|link\|note\|prompt_snippet\|usage_scope\|provider_profile\|proxy_profile), payload_json, sort_order, created_at, updated_at | 只存路径/引用/文本/非敏感配置；Credential 只存 opaque ref |
 | `workspace_widgets` | id TEXT PK, workspace_id FK, widget_type, config_version INT DEFAULT 1, config_json, appearance_json DEFAULT '{}'（V-003 白名单：surfaceVariant/header/opacity）, enabled INT DEFAULT 1, z_index INT DEFAULT 0, position INT, created_at, updated_at | 生产读写用 `enabled`（v29 迁移映射 `enabled = NOT hidden`，切换后不再读写 `hidden`，该列保留至 death proof）；appearance 只允许实例级外观，禁止颜色 token 入库 |
@@ -197,4 +197,22 @@ motion-easing / transition-fast / transition-normal / transition-slow
 类型化时机（无消费方不预置）：`WorkspaceTab` 已满足定义 1；`WorkspaceLayoutMode` 随 Compact Grid 切片（C-015..020）引入；`DataViewMode` 随 Data View 切片（C-021..025）引入。
 
 **schema 裁决**：本文件 §3 表结构与实现的偏离（TS/Rust/SQLite/frozen 四源矩阵 M-01..M-26）按 `workspace-v2-contract-matrix.md` §10 裁决执行：以实现为准的 12 项由 A 组同步修订本文档文本；A 组 schema 迁移的 12 项（含 M-17/18/19 layout_mode——解除 Grid/Canvas 双布局结构性阻断，最高优先）在迁移完成后同步修订本文档。）。
-- 125%/150% 缩放与窄窗口下材质、阴影、高光不破裂（V-055）。
+## 10. 布局手势生命周期与真实 Widget 身份契约（ADR-0022 冻结）
+
+### 10.1 手势生命周期状态机
+- **状态转移**: `idle → draft (dragging/resizing) → commit | rollback`。
+- **写库纪律**: `pointermove` 过程中 IPC / DB 写入次数为 **0**。仅在有效 stop（`drag-stop` / `resize-stop` / 键盘步进）时触发最多 **1** 次原子持久化事务。
+- **回滚保障**: 取消手势（`Escape`、`pointercancel`）或写入失败（网络、SQLite 冲突）必须无损恢复至最后确认的 canonical snapshot，并弹出分类错误与重试入口。
+
+### 10.2 Structured Grid 交互契约
+- **手柄边界**: 拖拽手柄绑定为 `.ws-shell-header`（仅卡片标题栏非控件空白区）；取消区域绑定为 `.grid-content, .ws-drag-cancel`（Widget Body、输入框、按钮、图表交互区、滚动区）。
+- **八向缩放**: 支持 n/e/s/w/ne/nw/se/sw 八向缩放，可见区域 ≥ 16px，命中区域 ≥ 24px。
+- **键盘操作**: 方向键以 1 grid unit 移动，Shift + 方向键以 2 units 移动。
+
+### 10.3 Free Canvas 交互契约
+- **手势独占**: 由 Stage 独占手势控制器（`gesture controller`），按状态职责拆分为 View 容器、Gesture Controller、Node Surface、Screen-space Resize Overlay 和 Toolbar。
+- **屏幕空间缩放手柄**: 八向缩放手柄命中尺寸保持屏幕像素恒定（≥ 24px），不随 world zoom 缩放。
+- **吸附与步进**: 8px 网格吸附；方向键 8px，Shift + 方向键 1px。
+
+### 10.4 真实 Widget 身份与原子创建
+- **实体一致性**: Free Canvas 添加 Widget 必须由 Host 在单事务内完成 `workspace_widgets` 实例创建（分配真实 `id`）与 `workspace_layouts` 记录更新，禁止 Renderer 产生幽灵节点（ghost nodes）。
