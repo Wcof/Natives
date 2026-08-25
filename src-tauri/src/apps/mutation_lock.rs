@@ -139,20 +139,62 @@ mod lock_tests {
     fn different_apps_run_in_parallel() {
         let lock = new_mutation_lock();
         let _a = rt().block_on(lock.acquire_app("app-a"));
-        let completed = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
         let lock2 = lock.clone();
-        let c2 = completed.clone();
         let handle = std::thread::spawn(move || {
             let _g = rt().block_on(lock2.acquire_app("app-b"));
-            c2.store(true, Ordering::SeqCst);
+            tx.send(()).expect("send acquired signal");
         });
         // B must acquire without waiting for A's long operation (CR-202 #04).
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(
-            completed.load(Ordering::SeqCst),
-            "unrelated apps must run in parallel"
-        );
+        // 确定性证明：B 获取到 app-b 才发信号；若锁退化成全局串行，B 会一直
+        // 阻塞在 A 上，recv_timeout 超时失败（而不是靠 50ms sleep 碰运气）。
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("B acquires while A is still held");
         drop(_a);
         handle.join().expect("join");
+    }
+
+    #[test]
+    fn install_semaphore_bounds_concurrency() {
+        let lock = new_mutation_lock();
+        let rt_guard = rt();
+        let _p1 = rt_guard.block_on(lock.acquire_install());
+        let _p2 = rt_guard.block_on(lock.acquire_install());
+        let entered = Arc::new(AtomicBool::new(false));
+        let lock2 = lock.clone();
+        let entered2 = entered.clone();
+        let handle = std::thread::spawn(move || {
+            let _p = rt().block_on(lock2.acquire_install());
+            entered2.store(true, Ordering::SeqCst);
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !entered.load(Ordering::SeqCst),
+            "the third install must wait for a bounded permit"
+        );
+        drop(_p1);
+        drop(_p2);
+        handle
+            .join()
+            .expect("third install proceeds after permits free");
+        assert!(entered.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn try_acquire_skips_locked_app_but_takes_free_one() {
+        let lock = new_mutation_lock();
+        let _a = rt().block_on(lock.acquire_app("app-a"));
+        assert!(
+            lock.try_acquire_app("app-a").is_none(),
+            "watchdog must not stall on an app under a lifecycle mutation"
+        );
+        let g = lock
+            .try_acquire_app("app-b")
+            .expect("free app is acquirable");
+        drop(g);
+        assert!(
+            lock.try_acquire_app("app-b").is_some(),
+            "a released app is acquirable again"
+        );
     }
 }
