@@ -64,6 +64,7 @@ ADR-0020 将首页固定为「唯一 Personal Workspace Home」，Widget 固定�
 ## 修订
 
 - ADR-0020 §1、§3 中与本文冲突的范围由本文取代；其余决策（产品身份、停止建设、领域边界、Host authority、Secret、迁移纪律）继续有效。
+- **主题 Authority 收敛（2026-08-25，ADR-0022）**：本文中关于 `workspaces.theme` 驱动主题的条款被 [ADR-0022](./0022-appearance-workspace-and-app-surface-authority.md) 取代。主题持久权威收敛为全局 `settings:theme`，Workspace 不再驱动主题读写；`workspaces.theme` 作为 v30 迁移存根保留。
 - **PWSV2（2026-08-23，Personal Workspace V2 完整重设计裁决，对应 plan2 方案）**：
   1. **布局模式词表**：统一为 `structured | free`（冻结契约历史词 `compact` 废弃；DB CHECK 与 wire 值一律 `structured`/`free`）。Structured Canvas 是默认布局模式——默认首页是内容优先 Dashboard，由内置模板 `Classic Personal Dashboard` 实例化，不是硬编码固定页面。
   2. **Tab 语义收敛**：旧 `workspace_tabs`（内容 tab：tab_type/title/ref_id/url）降为 legacy 表，v29 后无 production 读/写；"打开的 Workspace 会话"由新表 `workspace_open_tabs` 承载（`workspace_id` PK + sort_order/is_pinned/opened_at/last_active_at）。Close = 删 row（不删 Workspace），Reopen = 插 row。`workspace_tab_create/update/close/reorder` 命令族与旧 View Tab Strip 在同一切片删除，不保留 fallback。
