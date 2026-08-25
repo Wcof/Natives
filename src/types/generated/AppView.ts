@@ -7,14 +7,19 @@ import type { AppRuntimeState } from "./AppRuntimeState";
  *
  * `kind` / `registration_origin` 为 snake_case 字符串（03 规格，权威身份）；
  * `capabilities` 与 `runtime_state` 是后端派生值，不依赖前端手写 source 猜测。
+ *
+ * 序列化命名遵循 03 规格 wire 约定：根字段全量 camelCase
+ * （`appId` / `showInSidebar` / `sidebarOrder` / `runtimeState` / `updatedAt`），
+ * 枚举 wire value 保持 snake_case（`kind` / `registration_origin` 为 String 字段，
+ * 值域由 `AppKind` / `RegistrationOrigin` 保证，serde 不重命名字符串内容）。
  */
-export type AppView = { app_id: string, title: string, 
+export type AppView = { appId: string, title: string,
 /**
  * snake_case：`local_project` / `system_application` / `web_application`。
  */
-kind: string, 
+kind: string,
 /**
  * snake_case：`manual` / `local_scan` / `system_discovery` /
  * `legacy_internal` / `legacy_github` / `migration`。
  */
-registration_origin: string, description: string | null, show_in_sidebar: boolean, sidebar_order: bigint | null, capabilities: AppCapabilities, runtime_state: AppRuntimeState, updated_at: string, };
+registrationOrigin: string, description?: string, showInSidebar: boolean, sidebarOrder?: number, capabilities: AppCapabilities, runtimeState: AppRuntimeState, updatedAt: string, };

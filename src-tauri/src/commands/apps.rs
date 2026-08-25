@@ -11,7 +11,6 @@
 //! - Web Surface：`apps_web_close`, `apps_web_hide`, `apps_web_reload`, `apps_web_back`, `apps_web_forward`, `apps_web_clear_data`
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
 use crate::apps::model::{
@@ -31,21 +30,29 @@ use crate::creative_app::model_runtime::BrowserBounds;
 use crate::AppState;
 use crate::{Error, Result};
 
-fn service(
-    state: &AppState,
+/// 统一服务装配：所有 Apps 域 Tauri 命令共享同一 Managed State。
+///
+/// APP-03 修复根因：`BrowserState` 从 Tauri managed state 解析（`lib.rs`
+/// `app.manage(Mutex::new(BrowserState::new()))` 启动时注册），绝不再每次
+/// 调用 `BrowserState::default()` 新建——open / close / hide / budget / LRU 休眠
+/// 判定全部读写同一运行时实例，避免状态分裂（一个命令 open、另一个命令的
+/// **空** state 无法感知 → budget 判定失真 / `browser_close` 清不到条目）。
+///
+/// `browser` 参数是 `State<'_, BrowserStateHandle>` deref 出的 `&Mutex<BrowserState>`
+/// （同一 managed 实例的唯一借用）；`AppsService` 只在其内部（同一条 Tauri
+/// 命令作用域）存活，借用不与并发 unrelated 命令冲突。
+fn service<'a>(
     app_handle: &AppHandle,
+    state: &AppState,
     locks: &MutationLock,
     local_runtime: &LocalRuntimeHandle,
-) -> AppsService {
-    let browser = Arc::new(std::sync::Mutex::new(
-        crate::creative_app::browser::BrowserState::default(),
-    ));
-
+    browser_state: &'a BrowserStateHandle,
+) -> AppsService<'a> {
     AppsService::new(AppsServiceDeps {
         db: state.db.clone(),
         locks: locks.clone(),
         local_runtime: local_runtime.clone(),
-        browser,
+        browser: browser_state,
         app_handle: app_handle.clone(),
         host_http_port: 0,
     })
@@ -65,8 +72,9 @@ pub fn apps_list_views(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
 ) -> Result<Vec<AppView>> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.list_views()
 }
 
@@ -82,9 +90,10 @@ pub fn apps_get_view(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<Option<AppView>> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.get_view(&id)
 }
 
@@ -145,10 +154,11 @@ pub fn apps_local_logs(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     limit: Option<usize>,
 ) -> Result<Vec<serde_json::Value>> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.local_logs(&id, limit.unwrap_or(100))
 }
 
@@ -160,9 +170,10 @@ pub fn apps_register_local(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     input: RegisterLocalProjectInput,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.register_local(input)
 }
 
@@ -172,9 +183,10 @@ pub fn apps_register_system(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     input: RegisterSystemApplicationInput,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.register_system(input)
 }
 
@@ -184,9 +196,10 @@ pub fn apps_register_web(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     input: RegisterWebApplicationInput,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.register_web(input)
 }
 
@@ -198,9 +211,10 @@ pub fn apps_update_metadata(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     input: UpdateAppMetadataInput,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.update_metadata(input)
 }
 
@@ -210,9 +224,10 @@ pub fn apps_update_system_spec(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     input: UpdateSystemApplicationSpecInput,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.update_system_spec(input)
 }
 
@@ -222,9 +237,10 @@ pub fn apps_update_web_spec(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     input: UpdateWebApplicationSpecInput,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.update_web_spec(input)
 }
 
@@ -234,10 +250,11 @@ pub fn apps_set_sidebar_visibility(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     show: bool,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.set_sidebar(&id, Some(show), None)
 }
 
@@ -247,10 +264,11 @@ pub fn apps_set_sidebar_order(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     order: Option<i64>,
 ) -> Result<AppView> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.set_sidebar(&id, None, order)
 }
 
@@ -260,10 +278,11 @@ pub async fn apps_remove(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     risk_level: Option<u8>,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.remove(&id, risk_level.unwrap_or(1)).await?;
     Ok(true)
 }
@@ -276,11 +295,12 @@ pub async fn apps_open(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     // APPV2-T03：Renderer 实测内容区矩形（Web 目标「先 bounds 后 show」；其它 kind 忽略）。
     bounds: Option<BrowserBounds>,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.open(&id, bounds).await
 }
 
@@ -295,10 +315,11 @@ pub async fn apps_web_set_bounds(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     bounds: BrowserBounds,
 ) -> Result<BrowserBounds> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.web_set_bounds(&id, bounds).await
 }
 
@@ -308,9 +329,10 @@ pub async fn apps_start(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.start(&id).await
 }
 
@@ -320,10 +342,11 @@ pub async fn apps_stop(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     risk_level: Option<u8>,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     // APPV2-T06：system kind 走验证后的 graceful terminate（超时返回 typed Err）。
     svc.stop(&id, risk_level.unwrap_or(1)).await
 }
@@ -338,9 +361,10 @@ pub async fn apps_system_hide(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.hide_system(&id).await
 }
 
@@ -351,9 +375,10 @@ pub async fn apps_system_unhide(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.unhide_system(&id).await
 }
 
@@ -364,9 +389,10 @@ pub async fn apps_system_observe(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<system::SystemRunningState> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.observe_system(&id).await
 }
 
@@ -377,10 +403,11 @@ pub async fn apps_system_dock(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     bounds: BrowserBounds,
 ) -> Result<system::DockResult> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.dock_system(&id, bounds).await
 }
 
@@ -417,9 +444,10 @@ pub async fn apps_restart(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.restart(&id).await
 }
 
@@ -429,9 +457,10 @@ pub async fn apps_force_stop(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.force_stop(&id).await
 }
 
@@ -441,10 +470,11 @@ pub async fn apps_resolve_orphan(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
     action: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.local_resolve_orphan(&id, &action).await?;
     Ok(true)
 }
@@ -491,9 +521,10 @@ pub fn apps_web_clear_data(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.web_clear_data(&id)?;
     Ok(true)
 }
@@ -559,9 +590,10 @@ pub async fn apps_delete(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.remove(&id, 0).await?;
     Ok(true)
 }
@@ -572,9 +604,10 @@ pub async fn apps_kill(
     app_handle: AppHandle,
     locks: State<'_, MutationLock>,
     local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
     id: String,
 ) -> Result<bool> {
-    let svc = service(&state, &app_handle, &locks, &local_runtime);
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
     svc.force_stop(&id).await
 }
 

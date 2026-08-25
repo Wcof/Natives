@@ -29,24 +29,32 @@ use crate::db::DbPool;
 use crate::{Error, Result};
 
 /// AppsService 运行依赖包。
+///
+/// APP-03：`browser` 是 **共享** managed 实例的借用（`lib.rs`
+/// `app.manage(Mutex::new(BrowserState::new()))`，Tauri state 键为
+/// `Mutex<BrowserState>`）。所有命令在同一 Host 进程内借用到同一个
+/// `Mutex<BrowserState>`，open / close / hide / budget / LRU 休眠判定因此读写
+/// **同一运行时实例**——严禁在 `service()` 里每次 `BrowserState::default()`
+/// 新建（状态分裂：一个命令 open、另一个命令的空 state 无法感知 → budget 判定
+/// 失真 / `browser_close` 清不到条目）。
 #[derive(Clone)]
-pub struct AppsServiceDeps {
+pub struct AppsServiceDeps<'a> {
     pub db: DbPool,
     pub locks: Arc<MutationLockRegistry>,
     pub local_runtime: LocalRuntimeHandle,
-    pub browser: Arc<BrowserStateHandle>,
+    pub browser: &'a BrowserStateHandle,
     pub app_handle: AppHandle,
     pub host_http_port: u16,
 }
 
 /// 应用中心统一业务服务。
 #[derive(Clone)]
-pub struct AppsService {
-    deps: AppsServiceDeps,
+pub struct AppsService<'a> {
+    deps: AppsServiceDeps<'a>,
 }
 
-impl AppsService {
-    pub fn new(deps: AppsServiceDeps) -> Self {
+impl<'a> AppsService<'a> {
+    pub fn new(deps: AppsServiceDeps<'a>) -> Self {
         Self { deps }
     }
 

@@ -21,6 +21,7 @@ describe('App Center Action & Capability Matrix (APP-003 / APP-071)', () => {
         riskLevel: 0,
       },
       runtimeState: 'running',
+      updatedAt: '2026-08-25T00:00:00Z',
     };
 
     assert.equal(webApp.capabilities.canStop, false);
@@ -48,6 +49,7 @@ describe('App Center Action & Capability Matrix (APP-003 / APP-071)', () => {
         riskLevel: 1,
       },
       runtimeState: 'running',
+      updatedAt: '2026-08-25T00:00:00Z',
     };
 
     assert.equal(localApp.capabilities.canStart, true);
@@ -75,6 +77,7 @@ describe('App Center Action & Capability Matrix (APP-003 / APP-071)', () => {
         riskLevel: 2,
       },
       runtimeState: 'running',
+      updatedAt: '2026-08-25T00:00:00Z',
     };
 
     assert.equal(systemApp.capabilities.canOpen, true);

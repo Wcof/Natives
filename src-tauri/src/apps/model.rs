@@ -150,8 +150,14 @@ pub struct AppCapabilities {
 ///
 /// `kind` / `registration_origin` 为 snake_case 字符串（03 规格，权威身份）；
 /// `capabilities` 与 `runtime_state` 是后端派生值，不依赖前端手写 source 猜测。
+///
+/// 序列化命名遵循 03 规格 wire 约定：根字段全量 camelCase
+/// （`appId` / `showInSidebar` / `sidebarOrder` / `runtimeState` / `updatedAt`），
+/// 枚举 wire value 保持 snake_case（`kind` / `registration_origin` 为 String 字段，
+/// 值域由 `AppKind` / `RegistrationOrigin` 保证，serde 不重命名字符串内容）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/types/generated/")]
+#[serde(rename_all = "camelCase")]
 pub struct AppView {
     pub app_id: String,
     pub title: String,
@@ -161,9 +167,11 @@ pub struct AppView {
     /// `legacy_internal` / `legacy_github` / `migration`。
     pub registration_origin: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub description: Option<String>,
     pub show_in_sidebar: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
     pub sidebar_order: Option<i64>,
     pub capabilities: AppCapabilities,
     pub runtime_state: AppRuntimeState,
@@ -386,7 +394,7 @@ mod model_tests {
     }
 
     #[test]
-    fn app_view_serializes_kind_as_snake_case_and_caps_in_camel() {
+    fn app_view_serializes_kind_as_snake_case_and_root_fields_in_camel() {
         let view = AppView {
             app_id: "app-1".into(),
             title: "T".into(),
@@ -409,10 +417,47 @@ mod model_tests {
             updated_at: "2026-08-23T00:00:00Z".into(),
         };
         let json = to_string(&view).unwrap();
-        // kind 是 snake_case（03 规格）。
+
+        // APP-01 / 03 规格：AppView 根字段 wire 全量 camelCase。
+        for key in [
+            "appId",
+            "title",
+            "kind",
+            "registrationOrigin",
+            "showInSidebar",
+            "sidebarOrder",
+            "capabilities",
+            "runtimeState",
+            "updatedAt",
+        ] {
+            assert!(
+                json.contains(&format!("\"{key}\"")),
+                "root field must be camelCase `{key}`: {json}"
+            );
+        }
+        // 禁止残留 snake_case 根字段（wire 契约漂移即失败）。
+        for key in [
+            "app_id",
+            "registration_origin",
+            "show_in_sidebar",
+            "sidebar_order",
+            "runtime_state",
+            "updated_at",
+        ] {
+            assert!(
+                !json.contains(&format!("\"{key}\"")),
+                "snake_case root field {key} must not appear on wire: {json}"
+            );
+        }
+
+        // 枚举 wire value 保持 snake_case（03 规格，字符串字段不受 rename_all 影响）。
         assert!(
             json.contains("\"kind\":\"web_application\""),
             "kind must be snake_case: {json}"
+        );
+        assert!(
+            json.contains("\"registrationOrigin\":\"migration\""),
+            "registration_origin must keep snake_case value: {json}"
         );
         // capability 字段是 camelCase（crate 约定）。
         assert!(

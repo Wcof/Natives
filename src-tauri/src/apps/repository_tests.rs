@@ -119,7 +119,7 @@ fn register_web_writes_spec_and_validates_url() {
     );
 
     let loc =
-        AppRepository::register_web(&conn, "Local", "localhost:3000", &[], None, false).unwrap();
+        AppRepository::register_web(&conn, "Local", "http://localhost:3000", &[], None, false).unwrap();
     assert_eq!(
         AppRepository::load_web_spec(&conn, &loc).unwrap().url,
         "http://localhost:3000"
