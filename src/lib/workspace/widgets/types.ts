@@ -77,6 +77,8 @@ export interface WidgetDefinition<TData = unknown, TSettings extends Record<stri
   surfacePolicy: SurfacePolicy;
   /** RGL 最小尺寸。 */
   minSize?: { w: number; h: number };
+  /** RGL 最大尺寸。 */
+  maxSize?: { w: number; h: number };
   defaultEnabled?: boolean;
   /** true → broker key 包含 timeRange，切换时段触发独立 fetch。 */
   timeAware?: boolean;

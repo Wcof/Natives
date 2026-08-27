@@ -25,8 +25,6 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
   const locale = useLocale();
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
-  const [approvedOrigins, setApprovedOrigins] = useState('');
-  const [keepAlive, setKeepAlive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,9 +47,6 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
     if (check.ok && check.normalized) {
       const origin = deriveOriginFromUrl(check.normalized);
       if (origin) {
-        if (!approvedOrigins.trim()) {
-          setApprovedOrigins(origin);
-        }
         if (!title.trim()) {
           setTitle(origin);
         }
@@ -65,9 +60,6 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
     setUrl(normalized);
     try {
       const parsed = new URL(normalized);
-      if (!approvedOrigins && parsed.origin) {
-        setApprovedOrigins(parsed.origin);
-      }
       if (!title.trim() && parsed.hostname) {
         setTitle(parsed.hostname);
       }
@@ -83,21 +75,12 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
       return;
     }
 
-    const origins = approvedOrigins
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const withDefault =
-      origins.length > 0 ? origins : [deriveOriginFromUrl(urlCheck.normalized)].filter((s): s is string => !!s);
-
     setSubmitting(true);
     setError(null);
     try {
       const app = await appsApi.registerWeb({
         title: title.trim(),
         url: urlCheck.normalized,
-        approvedOrigins: withDefault,
-        keepAlive,
       });
       onSuccess(app);
     } catch (err) {
@@ -126,7 +109,7 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
           onChange={(e) => handleUrlChange(e.target.value)}
           onBlur={handleUrlBlur}
           placeholder="https://chatgpt.com, example.com"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
           required
         />
         <p className="mt-1 text-[0.6875rem] text-[var(--text-tertiary)]">
@@ -143,38 +126,9 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t(locale, 'appsPage.titlePlaceholder')}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
           required
         />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
-          {t(locale, 'appsPage.approvedOriginsLabel')}
-        </label>
-        <input
-          type="text"
-          value={approvedOrigins}
-          onChange={(e) => setApprovedOrigins(e.target.value)}
-          placeholder="https://chatgpt.com, https://auth0.openai.com"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
-        />
-        <p className="mt-1 text-[0.6875rem] text-[var(--text-tertiary)]">
-          {t(locale, 'appsPage.approvedOriginsHint')}
-        </p>
-      </div>
-
-      <div className="flex items-center gap-2 pt-1">
-        <input
-          type="checkbox"
-          id="keep-alive"
-          checked={keepAlive}
-          onChange={(e) => setKeepAlive(e.target.checked)}
-          className="h-4 w-4 rounded border-[var(--border-default)] text-[var(--interactive-accent)] focus:ring-0"
-        />
-        <label htmlFor="keep-alive" className="text-xs text-[var(--text-secondary)] select-none">
-          {t(locale, 'appsPage.keepAliveLabel')}
-        </label>
       </div>
 
       <div className="flex items-center justify-end gap-3 pt-2">
@@ -182,14 +136,14 @@ export function WebApplicationForm({ onSuccess, onCancel }: WebApplicationFormPr
           type="button"
           onClick={onCancel}
           disabled={submitting}
-          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text)]"
         >
           {t(locale, 'appsPage.cancel')}
         </button>
         <button
           type="submit"
           disabled={submitting || !title.trim() || !url.trim()}
-          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--interactive-accent)] text-[var(--text-on-accent)] hover:opacity-90 disabled:opacity-50 shadow-sm"
+          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)] disabled:opacity-50 shadow-sm"
         >
           {submitting ? t(locale, 'common.running') : t(locale, 'appsPage.confirmAdd')}
         </button>

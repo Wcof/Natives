@@ -52,7 +52,7 @@ export function AppActionBar({
           type="button"
           onClick={onOpen}
           disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--interactive-accent)] text-[var(--text-on-accent)] text-xs font-medium hover:opacity-90 transition-opacity shadow-sm"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium hover:bg-[var(--primary-hover)] transition-colors shadow-sm"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           {t(locale, 'appsPage.open')}
@@ -65,7 +65,7 @@ export function AppActionBar({
           type="button"
           onClick={onStart}
           disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--success)] text-[var(--text-on-accent)] text-xs font-medium hover:opacity-90 transition-opacity shadow-sm"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--success)] text-[var(--primary-foreground)] text-xs font-medium hover:opacity-90 transition-opacity shadow-sm"
         >
           <Play className="h-3.5 w-3.5" />
           {t(locale, 'appsPage.start')}
@@ -78,7 +78,7 @@ export function AppActionBar({
           type="button"
           onClick={onRestart}
           disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] text-xs font-medium transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:border-[var(--border-strong)] text-xs font-medium transition-colors"
         >
           <RotateCw className="h-3.5 w-3.5" />
           {t(locale, 'appsPage.restart')}
@@ -122,8 +122,8 @@ export function AppActionBar({
           disabled={loading}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-medium transition-colors ${
             app.showInSidebar
-              ? 'border-[var(--interactive-accent)] bg-[var(--interactive-accent)]/10 text-[var(--interactive-accent)]'
-              : 'border-[var(--border-default)] bg-[var(--surface-overlay)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]'
+              ? 'border-[var(--primary)] bg-[var(--primary-soft)] text-[var(--primary)]'
+              : 'border-[var(--border)] bg-[var(--surface)] text-[var(--text-tertiary)] hover:text-[var(--text)]'
           }`}
         >
           {app.showInSidebar ? (
@@ -146,7 +146,7 @@ export function AppActionBar({
           type="button"
           onClick={onEdit}
           disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-medium transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] text-xs font-medium transition-colors"
         >
           <Edit2 className="h-3.5 w-3.5" />
           {t(locale, 'appsPage.editApp')}

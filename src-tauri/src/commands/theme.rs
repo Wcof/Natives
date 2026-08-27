@@ -20,7 +20,8 @@ fn bump_theme_revision() -> u64 {
 /// `settings:theme` is the only source (ADR-0022); workspace legacy `theme`
 /// columns never drive the runtime theme once the migration has locked the key.
 fn current_theme(conn: &rusqlite::Connection) -> Result<String> {
-    let stored = db::get_setting(conn, db::THEME_KEY)?.unwrap_or_else(|| db::DEFAULT_THEME.to_string());
+    let stored =
+        db::get_setting(conn, db::THEME_KEY)?.unwrap_or_else(|| db::DEFAULT_THEME.to_string());
     // V-002: never return a legacy alias or unknown value across IPC.
     Ok(db::normalize_theme(&stored).to_string())
 }

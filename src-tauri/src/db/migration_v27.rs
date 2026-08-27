@@ -608,11 +608,9 @@ mod migration_v27_validation {
     }
 
     fn setting_value(conn: &Connection, key: &str) -> Option<String> {
-        conn.query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            [key],
-            |r| r.get::<_, String>(0),
-        )
+        conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            r.get::<_, String>(0)
+        })
         .ok()
     }
 
@@ -627,8 +625,11 @@ mod migration_v27_validation {
 
     /// Clears `settings:theme` to simulate a pre-lock database.
     fn clear_theme_setting(conn: &Connection) {
-        conn.execute("DELETE FROM settings WHERE key = ?1", [crate::db::THEME_KEY])
-            .unwrap();
+        conn.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            [crate::db::THEME_KEY],
+        )
+        .unwrap();
     }
 
     /// The authority chain lifts the **active** workspace legacy theme into
@@ -642,15 +643,15 @@ mod migration_v27_validation {
         clear_theme_setting(&conn);
 
         super::resolve_theme_authority(&conn).unwrap();
-        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("light")
+        );
 
         // Workspace switching after the lock never overwrites `settings:theme`.
         seed_workspace_with_theme(&conn, "ws_b", "dark", 1);
-        conn.execute(
-            "UPDATE workspaces SET is_active = 0 WHERE id <> 'ws_b'",
-            [],
-        )
-        .unwrap();
+        conn.execute("UPDATE workspaces SET is_active = 0 WHERE id <> 'ws_b'", [])
+            .unwrap();
         super::resolve_theme_authority(&conn).unwrap();
         assert_eq!(
             setting_value(&conn, crate::db::THEME_KEY).as_deref(),
@@ -666,14 +667,23 @@ mod migration_v27_validation {
         let conn = migrated();
         crate::db::set_setting(&conn, crate::db::THEME_KEY, "terminal-volt").unwrap();
         super::resolve_theme_authority(&conn).unwrap();
-        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("dark"));
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("dark")
+        );
 
         crate::db::set_setting(&conn, crate::db::THEME_KEY, "frosted-jasmine").unwrap();
         super::resolve_theme_authority(&conn).unwrap();
-        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("light")
+        );
         // Second run is a no-op (nothing rewritten).
         super::resolve_theme_authority(&conn).unwrap();
-        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("light")
+        );
     }
 
     /// No setting and no workspace → the contract default `dark` is locked.
@@ -682,7 +692,10 @@ mod migration_v27_validation {
         let conn = migrated();
         clear_theme_setting(&conn);
         super::resolve_theme_authority(&conn).unwrap();
-        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("dark"));
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("dark")
+        );
     }
 
     /// A canonical `light` setting is preserved across re-runs — idempotency.
@@ -693,7 +706,10 @@ mod migration_v27_validation {
         super::resolve_theme_authority(&conn).unwrap();
         super::resolve_theme_authority(&conn).unwrap();
         super::resolve_theme_authority(&conn).unwrap();
-        assert_eq!(setting_value(&conn, crate::db::THEME_KEY).as_deref(), Some("light"));
+        assert_eq!(
+            setting_value(&conn, crate::db::THEME_KEY).as_deref(),
+            Some("light")
+        );
     }
 
     #[test]

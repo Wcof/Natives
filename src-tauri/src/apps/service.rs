@@ -15,9 +15,10 @@ use tauri::{AppHandle, Manager};
 use super::capabilities::CapabilityResolver;
 use super::local;
 use super::model::{
-    AppKind, AppRuntimeState, AppView, RegisterLocalProjectInput, RegisterSystemApplicationInput,
-    RegisterWebApplicationInput, RegistrationOrigin, RuntimeInstance, RuntimeSpec, Surface,
-    UpdateAppMetadataInput, UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput,
+    AppKind, AppRuntimeState, AppView, LocalProjectSpec, RegisterLocalProjectInput,
+    RegisterSystemApplicationInput, RegisterWebApplicationInput, RegistrationOrigin,
+    RuntimeInstance, RuntimeSpec, Surface, SystemApplicationSpec, UpdateAppMetadataInput,
+    UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput, WebApplicationSpec,
 };
 use super::mutation_lock::MutationLockRegistry;
 use super::repository::AppRepository;
@@ -149,6 +150,32 @@ impl<'a> AppsService<'a> {
     pub fn active_spec(&self, application_id: &str) -> Result<Option<RuntimeSpec>> {
         let conn = self.conn()?;
         AppRepository::active_spec(&conn, application_id)
+    }
+
+    /// 获取指定 Web 应用的 Spec。
+    pub fn get_web_spec(&self, application_id: &str) -> Result<Option<WebApplicationSpec>> {
+        let conn = self.conn()?;
+        match AppRepository::load_web_spec(&conn, application_id) {
+            Ok(spec) => Ok(Some(spec)),
+            Err(Error::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 获取指定系统应用的 Spec。
+    pub fn get_system_spec(&self, application_id: &str) -> Result<Option<SystemApplicationSpec>> {
+        let conn = self.conn()?;
+        match AppRepository::load_system_spec(&conn, application_id) {
+            Ok(spec) => Ok(Some(spec)),
+            Err(Error::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 获取指定本地项目的 Spec。
+    pub fn get_local_spec(&self, application_id: &str) -> Result<Option<LocalProjectSpec>> {
+        let conn = self.conn()?;
+        AppRepository::load_local_spec(&conn, application_id)
     }
 
     pub async fn observe_system(&self, id: &str) -> Result<system::SystemRunningState> {
@@ -381,52 +408,14 @@ impl<'a> AppsService<'a> {
 
                 self.start(id).await
             }
-            AppKind::SystemApplication => {
-                let spec = {
-                    let conn = self.conn()?;
-                    AppRepository::load_system_spec(&conn, id)?
-                };
-                let driver = system::driver().ok_or_else(|| {
-                    system::unsupported("SystemDriver not available on this platform")
-                })?;
-                let result = driver
-                    .launch_or_activate(
-                        &self.deps.app_handle,
-                        id,
-                        &spec.application_path,
-                        spec.bundle_identifier.as_deref(),
-                    )
-                    .await?;
-
-                {
-                    let conn = self.conn()?;
-                    if result.confirmed {
-                        crate::creative_app::runtime_store::upsert_system_instance(
-                            &conn,
-                            id,
-                            result.identity.pid.map(|p| p as i32),
-                            Some(&result.identity.ownership),
-                            result.identity.bundle_id.as_deref(),
-                        )?;
-                    }
-                }
-
-                self.emit(
-                    if result.confirmed {
-                        "started"
-                    } else {
-                        "starting"
-                    },
-                    id,
-                    AppKind::SystemApplication,
-                );
-                Ok(true)
-            }
+            AppKind::SystemApplication => self.start(id).await,
             AppKind::WebApplication => {
                 let spec = {
                     let conn = self.conn()?;
                     AppRepository::load_web_spec(&conn, id)?
                 };
+                let approved_origins = vec![super::web_url::derive_origin(&spec.url)
+                    .ok_or_else(|| Error::InvalidInput("web url missing host".into()))?];
                 {
                     let conn = self.conn()?;
                     web::open(
@@ -435,7 +424,7 @@ impl<'a> AppsService<'a> {
                         &conn,
                         id,
                         &spec.url,
-                        &spec.approved_origins,
+                        &approved_origins,
                         bounds,
                     )?;
                 }

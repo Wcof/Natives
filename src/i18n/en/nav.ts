@@ -1,7 +1,7 @@
 // Natives i18n (en) — nav
 export const nav = {
   nav: {
-    dashboard: 'Personal Space',
+    dashboard: 'Space',
     store: 'Local Modules',
     workshop: 'App Center',
     assistant: 'Assistant',
@@ -33,7 +33,7 @@ export const nav = {
     showMore: '{count} more',
     showLess: 'Show less',
     quickAccessDirs: {
-      home: 'Personal Space',
+      home: 'Space',
       desktop: 'Desktop',
       documents: 'Documents',
       downloads: 'Downloads',

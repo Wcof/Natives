@@ -99,11 +99,11 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search installed applications..."
-            className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] pl-9 pr-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] pl-9 pr-3 py-2 text-xs text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
           />
         </div>
 
-        <div className="max-h-36 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-1 divide-y divide-[var(--border-subtle)]">
+        <div className="max-h-36 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-hover)] p-1 divide-y divide-[var(--border-subtle)]">
           {loadingDiscovery ? (
             <div className="p-3 text-center text-xs text-[var(--text-tertiary)]">
               Scanning installed applications...
@@ -120,8 +120,8 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
                 onClick={() => handleSelectCandidate(cand)}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs rounded-lg transition-colors ${
                   selectedCandidate?.path === cand.path
-                    ? 'bg-[var(--interactive-accent)]/15 text-[var(--interactive-accent)] font-medium'
-                    : 'text-[var(--text-primary)] hover:bg-[var(--surface-overlay)]'
+                    ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+                    : 'text-[var(--text)] hover:bg-[var(--surface)]'
                 }`}
               >
                 <Laptop className="h-3.5 w-3.5 shrink-0 opacity-70" />
@@ -144,7 +144,7 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t(locale, 'appsPage.titlePlaceholder')}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
           required
         />
       </div>
@@ -158,7 +158,7 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
           value={applicationPath}
           onChange={(e) => setApplicationPath(e.target.value)}
           placeholder="/Applications/Visual Studio Code.app"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
           required
         />
       </div>
@@ -172,7 +172,7 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
           value={bundleIdentifier}
           onChange={(e) => setBundleIdentifier(e.target.value)}
           placeholder="com.microsoft.VSCode"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
         />
       </div>
 
@@ -185,7 +185,7 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
           placeholder={t(locale, 'appsPage.descPlaceholder')}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none resize-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none resize-none"
         />
       </div>
 
@@ -194,14 +194,14 @@ export function SystemApplicationForm({ onSuccess, onCancel }: SystemApplication
           type="button"
           onClick={onCancel}
           disabled={submitting}
-          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text)]"
         >
           {t(locale, 'appsPage.cancel')}
         </button>
         <button
           type="submit"
           disabled={submitting || !title.trim() || !applicationPath.trim()}
-          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--interactive-accent)] text-[var(--text-on-accent)] hover:opacity-90 disabled:opacity-50 shadow-sm"
+          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)] disabled:opacity-50 shadow-sm"
         >
           {submitting ? t(locale, 'common.running') : t(locale, 'appsPage.confirmAdd')}
         </button>

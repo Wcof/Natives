@@ -478,7 +478,9 @@ pub(crate) fn stop_stdio_session(session: Arc<StdioSession>) {
     {
         let pid = child.id();
         unsafe {
-            libc::kill(-(pid as i32), libc::SIGTERM);
+            if libc::kill(-(pid as i32), libc::SIGTERM) != 0 {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
         }
         let deadline = std::time::Instant::now() + Duration::from_millis(300);
         loop {
@@ -492,10 +494,12 @@ pub(crate) fn stop_stdio_session(session: Arc<StdioSession>) {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Always SIGKILL the group: a grandchild that ignored TERM must not
+        // Always SIGKILL the group / process: a grandchild that ignored TERM must not
         // survive a server stop; an empty group makes this a no-op.
         unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
+            if libc::kill(-(pid as i32), libc::SIGKILL) != 0 {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
         }
         let _ = child.wait();
     }

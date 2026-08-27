@@ -189,6 +189,22 @@ export interface WorkspaceWidgetInput {
   zIndex?: number;
 }
 
+/** Atomic widget add input with placement constraints. */
+export interface WorkspaceWidgetAddInput {
+  widgetType: string;
+  config?: Record<string, unknown>;
+  configVersion?: number;
+  appearance?: Record<string, unknown>;
+  enabled?: boolean;
+  zIndex?: number;
+  defaultW?: number;
+  defaultH?: number;
+  minW?: number;
+  minH?: number;
+  maxW?: number;
+  maxH?: number;
+}
+
 /** A-032: single patch inside batchUpdateContextItems. */
 export interface WorkspaceContextItemPatch {
   id: string;

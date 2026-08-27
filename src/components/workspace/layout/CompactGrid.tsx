@@ -32,7 +32,8 @@
  * that is the single responsibility of WidgetShell inside the item.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactElement, ReactNode, KeyboardEvent as ReactKeyboardEvent, Ref } from 'react';
 import { Responsive, noCompactor, useContainerWidth } from 'react-grid-layout';
 import type { Layout, LayoutItem, ResizeHandleAxis } from 'react-grid-layout';
 import {
@@ -54,13 +55,49 @@ const RESIZE_HANDLES: readonly ResizeHandleAxis[] = [
 /** Visible handle glyph size in px (≥16 per contract). */
 const HANDLE_VISIBLE_SIZE = 16;
 /** Hit target including the invisible expanded ring (cursor area ≥24 per contract). */
-const HANDLE_HIT_EXTEND = 24;
+const _HANDLE_HIT_EXTEND = 24;
 
-function isWithinGrid(
+function _isWithinGrid(
   item: { x: number; y: number; w: number; h: number },
   cols: number,
 ): boolean {
   return item.x >= 0 && item.y >= 0 && item.x + item.w <= cols;
+}
+
+function applyKeyboardMove(
+  layout: Layout,
+  targetId: string,
+  dx: number,
+  dy: number,
+  constraints: { cols: number; minW?: number; minH?: number; maxW?: number; maxH?: number; isBounded?: boolean }
+): LayoutItem {
+  const item = layout.find((entry) => entry.i === targetId);
+  if (!item) {
+    throw new Error(`Item ${targetId} not found in layout`);
+  }
+  const maxX = Math.max(0, constraints.cols - item.w);
+  const nextX = Math.max(0, Math.min(maxX, item.x + dx));
+  const nextY = Math.max(0, item.y + dy);
+  return {
+    ...item,
+    x: nextX,
+    y: nextY,
+  };
+}
+
+function ResizeHandle(axis: ResizeHandleAxis, ref: Ref<HTMLSpanElement>): ReactElement {
+  return (
+    <span
+      ref={ref}
+      aria-label={`Resize ${axis}`}
+      className={`react-resizable-handle react-resizable-handle-${axis} absolute z-10 flex items-center justify-center`}
+    >
+      <span
+        className="block rounded-[3px] border border-[var(--border)] bg-[var(--surface)] shadow-xs"
+        style={{ width: HANDLE_VISIBLE_SIZE, height: HANDLE_VISIBLE_SIZE }}
+      />
+    </span>
+  );
 }
 
 export type CompactGridBreakpoint = keyof GridLayouts;
@@ -75,11 +112,12 @@ export interface CompactGridProps {
   layouts: GridLayouts;
   items: CompactGridItem[];
   editable?: boolean;
+  selectedId?: string | null;
   /** Called only on drag/resize stop or a committed keyboard nudge. */
   onLayoutChange?: (next: GridLayouts, breakpoint: CompactGridBreakpoint) => void;
   onBreakpointChange?: (breakpoint: CompactGridBreakpoint) => void;
   onRemoveItem?: (id: string) => void;
-  onActivateItem?: (id: string) => void;
+  onActivateItem?: (id: string | null) => void;
   /** Drag handle selector — default `.ws-shell-header` (title bar empty area). */
   dragHandleClass?: string;
   /** Cancel zones that must never trigger a drag. */
@@ -91,6 +129,7 @@ export default function CompactGrid({
   layouts,
   items,
   editable = false,
+  selectedId,
   onLayoutChange,
   onBreakpointChange,
   onRemoveItem,
@@ -109,9 +148,30 @@ export default function CompactGrid({
   editableRef.current = editable;
 
   const { width, containerRef, mounted } = useContainerWidth({
-    measureBeforeMount: true,
+    measureBeforeMount: false,
     initialWidth: 1000,
   });
+
+  // Dynamic layout gating: only the selected card in edit mode is draggable & resizable.
+  const dynamicLayouts = useMemo<GridLayouts>(() => {
+    const result: GridLayouts = { lg: [], md: [], sm: [] };
+    const breakpoints = ['lg', 'md', 'sm'] as const;
+    for (const bp of breakpoints) {
+      result[bp] = (layouts[bp] ?? []).map((entry) => {
+        const isSelected =
+          editable &&
+          (selectedId !== undefined
+            ? selectedId === entry.i
+            : focusIndex >= 0 && items[focusIndex]?.id === entry.i);
+        return {
+          ...entry,
+          isDraggable: isSelected,
+          isResizable: isSelected,
+        };
+      });
+    }
+    return result;
+  }, [layouts, editable, selectedId, focusIndex, items]);
 
   // Keyboard focus follows the focused index (ref callbacks only fire on mount).
   useEffect(() => {
@@ -216,11 +276,20 @@ export default function CompactGrid({
   layoutRef.current = layoutsRef.current[activeBreakpoint];
 
   return (
-    <div ref={containerRef} className="relative h-full w-full min-h-0">
+    <div
+      ref={containerRef}
+      className="relative h-full w-full min-h-0"
+      onPointerDown={(e) => {
+        if (e.target === containerRef.current) {
+          setFocusIndex(-1);
+          onActivateItem?.(null);
+        }
+      }}
+    >
       {mounted ? (
         <Responsive
           width={width}
-          layouts={layouts}
+          layouts={dynamicLayouts}
           breakpoints={GRID_BREAKPOINTS}
           cols={GRID_COLUMNS}
           rowHeight={GRID_ROW_HEIGHT}
@@ -243,32 +312,52 @@ export default function CompactGrid({
           onDragStop={handleStop}
           onResizeStop={handleStop}
         >
-          {items.map((item, index) => (
-            <article
-              key={item.id}
-              data-testid={`compact-grid-item-${item.id}`}
-              data-grid-index={index}
-              tabIndex={index === focusIndex ? 0 : -1}
-              onKeyDown={(e) => {
-                // Secondary: arrow nudge (WS-02 keyboard 1/2-unit moves).
-                handleItemKeyDown(e, index);
-              }}
-              onKeyDownCapture={(e) => {
-                // Primary focus-navigation lives here so it always wins over
-                // the per-item nudge handler, independent of propagation.
-                handleKeyDown(e, index);
-              }}
-              aria-label={item.title || item.id}
-              // WS-02: CompactGrid owns ONLY layout/size/drag/selection — no
-              // resident surface. The visual card (background/border/radius/
-              // padding) is the single responsibility of WidgetShell inside.
-              className={`compact-grid-item relative flex h-full min-h-0 flex-col overflow-hidden transition-colors focus-visible:outline-2 focus-visible:outline-[var(--primary)] ${
-                editable ? 'compact-grid-item--editable' : ''
-              } ${index === focusIndex ? 'compact-grid-item--focused' : ''}`}
-            >
-              {item.render({ editing: editable, active: index === focusIndex })}
-            </article>
-          ))}
+          {items.map((item, index) => {
+            const isSelected =
+              editable &&
+              (selectedId !== undefined
+                ? selectedId === item.id
+                : focusIndex === index);
+
+            return (
+              <article
+                key={item.id}
+                data-testid={`compact-grid-item-${item.id}`}
+                data-grid-index={index}
+                data-selected={isSelected ? 'true' : 'false'}
+                tabIndex={index === focusIndex ? 0 : -1}
+                onClick={() => {
+                  setFocusIndex(index);
+                  onActivateItem?.(item.id);
+                }}
+                onPointerDown={() => {
+                  if (editable) {
+                    setFocusIndex(index);
+                    onActivateItem?.(item.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  // Secondary: arrow nudge (WS-02 keyboard 1/2-unit moves).
+                  handleItemKeyDown(e, index);
+                }}
+                onKeyDownCapture={(e) => {
+                  // Primary focus-navigation lives here so it always wins over
+                  // the per-item nudge handler, independent of propagation.
+                  handleKeyDown(e, index);
+                }}
+                aria-label={item.title || item.id}
+                aria-selected={isSelected ? true : undefined}
+                // WS-02: CompactGrid owns ONLY layout/size/drag/selection — no
+                // resident surface. The visual card (background/border/radius/
+                // padding) is the single responsibility of WidgetShell inside.
+                className={`compact-grid-item relative flex h-full min-h-0 flex-col overflow-hidden transition-colors focus-visible:outline-2 focus-visible:outline-[var(--primary)] ${
+                  editable ? 'compact-grid-item--editable' : ''
+                } ${isSelected ? 'compact-grid-item--selected compact-grid-item--focused' : ''}`}
+              >
+                {item.render({ editing: editable, active: isSelected })}
+              </article>
+            );
+          })}
         </Responsive>
       ) : (
         <div className="flex h-full items-center justify-center text-xs text-[var(--text-disabled)]">
@@ -278,5 +367,3 @@ export default function CompactGrid({
     </div>
   );
 }
-
-type ReactKeyboardEvent = ReactKeyboardEvent;

@@ -85,7 +85,12 @@ pub fn validate_web_url(url: &str) -> Result<()> {
     }
     let host =
         host_of(u).ok_or_else(|| Error::InvalidInput(format!("web url missing host: {u}")))?;
-    if !is_loopback_host(&host) && !host.contains('.') {
+    if !is_loopback_host(&host)
+        && (!host.contains('.')
+            || host.starts_with('.')
+            || host.ends_with('.')
+            || host.contains(".."))
+    {
         return Err(Error::InvalidInput(format!(
             "web url host looks invalid: {u}"
         )));
@@ -121,7 +126,12 @@ pub fn navigation_within_origins(url: &str, approved_origins: &[String]) -> bool
         if o.is_empty() {
             return false;
         }
-        host_of(o).unwrap_or_else(|| o.to_ascii_lowercase()) == host
+        let approved = host_of(o).unwrap_or_else(|| o.to_ascii_lowercase());
+        host == approved
+            || host.ends_with(&format!(".{approved}"))
+            || approved
+                .strip_prefix("www.")
+                .is_some_and(|root| host == root)
     })
 }
 
@@ -171,6 +181,7 @@ mod tests {
             normalize_web_url("notaurl").is_err(),
             "host without dot rejected"
         );
+        assert!(normalize_web_url("baidu.").is_err());
     }
 
     #[test]
@@ -205,6 +216,14 @@ mod tests {
         assert!(navigation_within_origins(
             "https://github.com/repo",
             &["https://github.com".to_string()]
+        ));
+        assert!(navigation_within_origins(
+            "https://www.baidu.com/",
+            &["baidu.com".to_string()]
+        ));
+        assert!(!navigation_within_origins(
+            "https://evilbaidu.com/",
+            &["baidu.com".to_string()]
         ));
         // loopback http 在 approved 内放行（本地开发站点）。
         assert!(navigation_within_origins(

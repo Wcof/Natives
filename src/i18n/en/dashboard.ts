@@ -1,7 +1,7 @@
 // Natives i18n (en) — dashboard
 export const dashboard = {
   dashboard: {
-    title: 'Personal Space',
+    title: 'Space',
     greeting: 'Welcome back',
     subtitle: 'Your personal desktop',
     installedModules: 'Installed Modules',

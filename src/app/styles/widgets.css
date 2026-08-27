@@ -17,7 +17,7 @@
   overflow: hidden;
 }
 
-/* ── Header（整体作为 drag handle；编辑态 cursor:grab）──
+/* ── Header（整体作为 drag handle；编辑态选中后 cursor:grab）──
    WS-02：高度 36px、标题 13px、单一来源（删除组件内 inline padding 覆盖）。 */
 .ws-shell-header {
   display: flex;
@@ -32,10 +32,16 @@
 }
 
 .ws-shell--editing .ws-shell-header {
+  cursor: default;
+}
+
+.compact-grid-item--selected .ws-shell--editing .ws-shell-header,
+.compact-grid-item--focused .ws-shell--editing .ws-shell-header {
   cursor: grab;
 }
 
-.ws-shell--editing .ws-shell-header:active {
+.compact-grid-item--selected .ws-shell--editing .ws-shell-header:active,
+.compact-grid-item--focused .ws-shell--editing .ws-shell-header:active {
   cursor: grabbing;
 }
 
@@ -156,6 +162,10 @@ html[data-reduced-motion='true'] .ws-icon-button {
   outline-offset: 1px;
 }
 
+.compact-grid-item--editable {
+  overflow: visible !important;
+}
+
 .compact-grid-item--editable::after {
   content: '';
   position: absolute;
@@ -171,8 +181,97 @@ html[data-reduced-motion='true'] .ws-icon-button {
 }
 
 .compact-grid-item--focused::after,
-.compact-grid-item--editable.comp-grid-item--selected::after {
-  border-color: var(--primary);
+.compact-grid-item--selected::after {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+/* ── WS-02：React-Grid-Layout 8向 Resize Handle 几何与定位 ──
+   保证 visible glyph ≥16×16px，hit target ≥24×24px，光标方向与物理轴对齐。
+   只有在编辑状态且选中卡片时才显示拖拽调整点。 */
+.react-resizable-handle {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  z-index: 20;
+  display: none; /* 默认隐藏，选中后展示 */
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.compact-grid-item--selected .react-resizable-handle,
+.compact-grid-item--focused .react-resizable-handle {
+  display: flex;
+}
+
+.react-resizable-hide {
+  display: none !important;
+}
+
+.react-resizable-handle-n {
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.react-resizable-handle-s {
+  bottom: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.react-resizable-handle-e {
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.react-resizable-handle-w {
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.react-resizable-handle-ne {
+  top: -12px;
+  right: -12px;
+  cursor: nesw-resize;
+}
+
+.react-resizable-handle-nw {
+  top: -12px;
+  left: -12px;
+  cursor: nwse-resize;
+}
+
+.react-resizable-handle-se {
+  bottom: -12px;
+  right: -12px;
+  cursor: nwse-resize;
+}
+
+.react-resizable-handle-sw {
+  bottom: -12px;
+  left: -12px;
+  cursor: nesw-resize;
+}
+
+.react-resizable-handle > span {
+  transition: border-color 120ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 120ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.react-resizable-handle:hover > span {
+  border-color: var(--primary) !important;
+  background-color: var(--surface-hover) !important;
+  transform: scale(1.1);
 }
 
 [data-workspace-v2][data-mode="browse"] .react-grid-item {

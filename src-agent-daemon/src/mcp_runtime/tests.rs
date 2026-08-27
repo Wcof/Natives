@@ -750,6 +750,8 @@ for line in sys.stdin:
     elif method == "tools/call":
         while True:
             time.sleep(3600)
+while True:
+    time.sleep(3600)
 "#
             ),
         )

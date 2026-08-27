@@ -40,6 +40,14 @@
 ## Change discipline
 
 - Use `rtk` for shell commands.
+- Run Cargo from the repository root with the ambient target override removed:
+  `rtk env -u CARGO_TARGET_DIR cargo ...`. The checked-in `.cargo/config.toml`
+  then keeps every agent on the current checkout's single `target/`.
+- Never create or select another Cargo target directory (`src-tauri/target`,
+  `.cargo-target-*`, a worktree-local target, or a temporary target). Never run
+  `cargo clean` on the shared target unless the user explicitly requests it.
+- Do not run Cargo in secondary worktrees; run their Rust verification once
+  from the main checkout after integration so artifacts are reused.
 - Reuse existing domain modules, adapters, types, tokens, and test patterns
   before adding abstractions or dependencies.
 - Keep user-visible data real, error states explicit, and `src/i18n/zh.ts` /
@@ -54,7 +62,13 @@
 
 ## Verification
 
-Before handoff, run:
+During implementation, run only the smallest check that covers the changed
+code. Do not repeat a passing check unless relevant code changed afterward.
+For Rust, prefer an exact test or affected package before any workspace-wide
+command.
+
+Run the full applicable gates once, at final integration before merge/release
+(not once per agent or intermediate handoff):
 
 ```sh
 rtk npm run typecheck
@@ -63,9 +77,10 @@ rtk npm run test
 rtk npm run perf:check
 ```
 
-Also run the checks for the area touched:
+Also run the final checks for the area touched:
 
-- Rust: `rtk cargo fmt --check` and `rtk cargo test --workspace`.
+- Rust: `rtk env -u CARGO_TARGET_DIR cargo fmt --check` and
+  `rtk env -u CARGO_TARGET_DIR cargo test --workspace`.
 - Host/Daemon protocol: `rtk npm run protocol:check`.
 - Native engine: `rtk npm run verify:native-engine`.
 - Extension host: `rtk npm --prefix extension-host run typecheck` and

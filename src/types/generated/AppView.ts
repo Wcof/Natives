@@ -13,11 +13,11 @@ import type { AppRuntimeState } from "./AppRuntimeState";
  * 枚举 wire value 保持 snake_case（`kind` / `registration_origin` 为 String 字段，
  * 值域由 `AppKind` / `RegistrationOrigin` 保证，serde 不重命名字符串内容）。
  */
-export type AppView = { appId: string, title: string,
+export type AppView = { appId: string, title: string, 
 /**
  * snake_case：`local_project` / `system_application` / `web_application`。
  */
-kind: string,
+kind: string, 
 /**
  * snake_case：`manual` / `local_scan` / `system_discovery` /
  * `legacy_internal` / `legacy_github` / `migration`。

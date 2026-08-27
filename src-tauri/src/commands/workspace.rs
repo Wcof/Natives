@@ -284,6 +284,23 @@ pub fn workspace_context_remove(
 // ──────────────────────────────────────────────
 
 #[tauri::command]
+pub fn workspace_widget_add(
+    workspace_id: String,
+    input: workspace::WorkspaceWidgetAddInput,
+    expected_revision: Option<i64>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<WorkspaceSnapshot>> {
+    let snapshot = with_conn(&state, |conn| {
+        workspace::add_widget_atomically(conn, &workspace_id, &input, expected_revision)
+    })?;
+    if snapshot.is_some() {
+        emit_workspace(&app, &workspace_id, "widgetChanged");
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
 pub fn workspace_widget_upsert(
     workspace_id: String,
     input: WorkspaceWidgetInput,

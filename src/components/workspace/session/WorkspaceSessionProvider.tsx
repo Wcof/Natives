@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { GridLayouts } from '@/lib/workspace/views/types';
 import type { WorkspaceLayoutMode, WorkspaceSessionSnapshot, WorkspaceSnapshot, WorkspaceTemplate } from '@/lib/workspace/contracts';
-import { closeSession, createWorkspace as createHostWorkspace, getSessionSnapshot, getWorkspace, listTemplates, openSession, removeWidget, reorderSessions, resetWidget, restoreTemplate, saveLayout, savePersonalTemplate, updateWorkspace, upsertWidget } from '@/lib/workspace/client';
+import { addWidget, closeSession, createWorkspace as createHostWorkspace, getSessionSnapshot, getWorkspace, listTemplates, openSession, removeWidget, reorderSessions, resetWidget, restoreTemplate, saveLayout, savePersonalTemplate, updateWorkspace, upsertWidget } from '@/lib/workspace/client';
 import { setSession } from '@/lib/workspace/session-store';
 import { setSnapshot } from '@/lib/workspace/snapshot-store';
 import { onWorkspaceChanged } from '@/lib/workspace/events';
@@ -55,6 +55,7 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
   snapshotRef.current = snapshot;
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot | null) => {
+    snapshotRef.current = next;
     setSnapshotState(next);
     if (next) { setSnapshot(next.workspace.id, next); }
   }, []);
@@ -64,7 +65,9 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
     setSession(nextSession);
     setSessionState(nextSession);
     const id = workspaceId ?? nextSession.activeWorkspaceId;
-    applySnapshot(id ? await getWorkspace(id) : null);
+    const snap = id ? await getWorkspace(id) : null;
+    applySnapshot(snap);
+    return snap;
   }, [applySnapshot]);
 
   useEffect(() => {
@@ -75,7 +78,7 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
         let next = await getSessionSnapshot();
         let id = next.activeWorkspaceId ?? next.openedTabs[0]?.workspaceId ?? next.workspaces[0]?.id;
         if (!id) {
-          const created = await createHostWorkspace({ name: 'Personal Workspace', templateId: 'classic-personal-dashboard' });
+          const created = await createHostWorkspace({ name: 'Space', templateId: 'classic-personal-dashboard' });
           id = created.workspace.id;
           next = (await openSession(id)) ?? await getSessionSnapshot();
         } else if (!next.openedTabs.some((tab) => tab.workspaceId === id)) {
@@ -134,6 +137,25 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
     return current;
   }, []);
 
+  const mutateWithRetry = useCallback(async <T,>(
+    op: (current: WorkspaceSnapshot) => Promise<T>
+  ): Promise<T> => {
+    const current = requireSnapshot();
+    try {
+      return await op(current);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Conflict') || msg.includes('revision is stale') || msg.includes('stale')) {
+        const latest = await getWorkspace(current.workspace.id);
+        if (latest) {
+          applySnapshot(latest);
+          return await op(latest);
+        }
+      }
+      throw err;
+    }
+  }, [requireSnapshot, applySnapshot]);
+
   const api = useMemo<WorkspaceSessionApi>(() => ({
     reload: () => setReloadKey((key) => key + 1),
     openWorkspace: async (id) => {
@@ -159,64 +181,98 @@ export function WorkspaceSessionProvider({ children }: { children: React.ReactNo
     // revision mechanism. Host validates trim/non-empty/≤80 chars; a stale
     // revision rejects with a Conflict before writing.
     renameWorkspace: async (name) => {
-      const current = requireSnapshot();
       const trimmed = name.trim();
-      applySnapshot(await updateWorkspace(current.workspace.id, { name: trimmed }, current.revision));
-      const next = await getSessionSnapshot();
-      setSession(next); setSessionState(next);
+      await mutateWithRetry(async (current) => {
+        const updated = await updateWorkspace(current.workspace.id, { name: trimmed }, current.revision);
+        applySnapshot(updated);
+        const next = await getSessionSnapshot();
+        setSession(next); setSessionState(next);
+      });
     },
     setEditing,
     setLayoutMode: async (mode) => {
-      const current = requireSnapshot();
-      applySnapshot(await updateWorkspace(current.workspace.id, { defaultLayoutMode: mode }, current.revision));
+      await mutateWithRetry(async (current) => {
+        applySnapshot(await updateWorkspace(current.workspace.id, { defaultLayoutMode: mode }, current.revision));
+      });
     },
     setTheme: async (theme) => {
-      const current = requireSnapshot();
-      applySnapshot(await updateWorkspace(current.workspace.id, { theme }, current.revision));
+      await mutateWithRetry(async (current) => {
+        applySnapshot(await updateWorkspace(current.workspace.id, { theme }, current.revision));
+      });
     },
     addWidget: async (type) => {
-      const current = requireSnapshot();
       const def = getWidget(type);
       if (!def) throw new Error(`unregistered widget type: ${type}`);
-      await upsertWidget(current.workspace.id, { widgetType: type, configVersion: 1, config: serializeWidgetConfig(createDefaultConfig(def)), enabled: true }, current.revision);
-      await refresh(current.workspace.id);
+      await mutateWithRetry(async (current) => {
+        const updated = await addWidget(current.workspace.id, {
+          widgetType: type,
+          configVersion: 1,
+          config: serializeWidgetConfig(createDefaultConfig(def)),
+          enabled: true,
+          defaultW: def.minSize?.w ?? 4,
+          defaultH: def.minSize?.h ?? 4,
+          minW: def.minSize?.w ?? 2,
+          minH: def.minSize?.h ?? 2,
+          maxW: def.maxSize?.w,
+          maxH: def.maxSize?.h,
+        }, current.revision);
+        if (updated) {
+          applySnapshot(updated);
+        } else {
+          await refresh(current.workspace.id);
+        }
+      });
     },
     removeWidget: async (id) => {
-      const current = requireSnapshot();
-      await removeWidget(current.workspace.id, id, current.revision);
-      await refresh(current.workspace.id);
+      await mutateWithRetry(async (current) => {
+        await removeWidget(current.workspace.id, id, current.revision);
+        await refresh(current.workspace.id);
+      });
     },
     updateWidgetConfig: async (id, config) => {
-      const current = requireSnapshot();
-      const widget = current.widgets.find((item) => item.id === id);
-      if (!widget) throw new Error('widget not found');
-      await upsertWidget(current.workspace.id, { id, widgetType: widget.widgetType, configVersion: widget.configVersion, config, appearance: widget.appearance, enabled: widget.enabled, zIndex: widget.zIndex }, current.revision);
-      await refresh(current.workspace.id);
+      await mutateWithRetry(async (current) => {
+        const widget = current.widgets.find((item) => item.id === id);
+        if (!widget) throw new Error('widget not found');
+        await upsertWidget(current.workspace.id, {
+          id,
+          widgetType: widget.widgetType,
+          configVersion: widget.configVersion,
+          config,
+          appearance: widget.appearance,
+          enabled: widget.enabled,
+          zIndex: widget.zIndex,
+        }, current.revision);
+        await refresh(current.workspace.id);
+      });
     },
     resetWidget: async (id) => {
-      const current = requireSnapshot();
-      applySnapshot(await resetWidget(current.workspace.id, id, current.workspace.templateSourceId ?? undefined, current.revision));
+      await mutateWithRetry(async (current) => {
+        applySnapshot(await resetWidget(current.workspace.id, id, current.workspace.templateSourceId ?? undefined, current.revision));
+      });
     },
     saveStructuredLayout: async (layouts, active) => {
-      const current = requireSnapshot();
-      await saveLayout(current.workspace.id, 'structured', active, layouts[active] ?? [], current.revision);
-      await refresh(current.workspace.id);
+      await mutateWithRetry(async (current) => {
+        await saveLayout(current.workspace.id, 'structured', active, layouts[active] ?? [], current.revision);
+        await refresh(current.workspace.id);
+      });
     },
     saveFreeLayout: async (document) => {
-      const current = requireSnapshot();
-      await saveLayout(current.workspace.id, 'free', 'free', document, current.revision);
-      await refresh(current.workspace.id);
+      await mutateWithRetry(async (current) => {
+        await saveLayout(current.workspace.id, 'free', 'free', document, current.revision);
+        await refresh(current.workspace.id);
+      });
     },
     restoreTemplate: async (id) => {
-      const current = requireSnapshot();
-      applySnapshot(await restoreTemplate(current.workspace.id, id, current.revision));
+      await mutateWithRetry(async (current) => {
+        applySnapshot(await restoreTemplate(current.workspace.id, id, current.revision));
+      });
     },
     saveTemplate: async (name) => {
       const current = requireSnapshot();
       await savePersonalTemplate(current.workspace.id, name);
       setTemplates(await listTemplates());
     },
-  }), [applySnapshot, refresh, requireSnapshot]);
+  }), [applySnapshot, refresh, requireSnapshot, mutateWithRetry]);
 
   return <Context.Provider value={{ session, snapshot, templates, status, error, editing, api }}>{children}</Context.Provider>;
 }

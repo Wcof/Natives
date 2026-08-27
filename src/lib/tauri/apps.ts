@@ -24,8 +24,15 @@ import type {
   AppKind as AppKindWire,
   AppRuntimeState as AppRuntimeStateWire,
   AppView as AppViewWire,
+  LocalProjectSpec as LocalProjectSpecWire,
   RegistrationOrigin as RegistrationOriginWire,
+  SystemApplicationSpec as SystemApplicationSpecWire,
+  WebApplicationSpec as WebApplicationSpecWire,
 } from '@/types/generated';
+
+export type WebApplicationSpec = WebApplicationSpecWire;
+export type SystemApplicationSpec = SystemApplicationSpecWire;
+export type LocalProjectSpec = LocalProjectSpecWire;
 
 /**
  * AppView wire 契约 + 前端字面量收窄。
@@ -161,7 +168,7 @@ export type RegisterSystemApplicationInput = {
 export type RegisterWebApplicationInput = {
   title: string;
   url: string;
-  approvedOrigins: string[];
+  approvedOrigins?: string[];
   openBehavior?: string;
   keepAlive?: boolean;
 };
@@ -231,7 +238,7 @@ export function assertNonEmptyAppId(value: unknown, context: string): asserts va
   if (typeof value !== 'string' || value.trim() === '') {
     throw new AppContractError(
       'EMPTY_APP_ID',
-      `${context}: appId 必须是非空字符串，收到 ${typeof value === 'string' ? '空字符串' : typeof value}`,
+      `${context}: appId must be a non-empty string, received ${typeof value === 'string' ? 'empty string' : typeof value}`,
     );
   }
 }
@@ -239,7 +246,7 @@ export function assertNonEmptyAppId(value: unknown, context: string): asserts va
 /** 单个 AppView 的完整 trust-boundary 校验（字段形状 + appId 非空）。 */
 export function validateAppView(view: unknown, context: string): AppView {
   if (!view || typeof view !== 'object') {
-    throw new AppContractError('MALFORMED_VIEW', `${context}: AppView 不是对象`);
+    throw new AppContractError('MALFORMED_VIEW', `${context}: AppView must be an object`);
   }
   assertNonEmptyAppId((view as AppViewWire).appId, context);
   return view as AppView;
@@ -256,7 +263,7 @@ export function assertUniqueAppIds(views: AppView[], context: string): void {
   const seen = new Set<string>();
   for (const v of views) {
     if (seen.has(v.appId)) {
-      throw new AppContractError('DUPLICATE_APP_IDS', `${context}: 重复 appId: ${v.appId}`, {
+      throw new AppContractError('DUPLICATE_APP_IDS', `${context}: duplicate appId: ${v.appId}`, {
         duplicateId: v.appId,
       });
     }
@@ -286,6 +293,12 @@ export const appsApi = {
   get: (id: string) => cmd<App | null>('apps_get', { id }),
   getView: async (id: string) =>
     parseAppViewOrNull(await cmd<AppViewWire | null>('apps_get_view', { id }), 'apps_get_view'),
+  getWebSpec: (applicationId: string) =>
+    cmd<WebApplicationSpec | null>('apps_get_web_spec', { applicationId }),
+  getSystemSpec: (applicationId: string) =>
+    cmd<SystemApplicationSpec | null>('apps_get_system_spec', { applicationId }),
+  getLocalSpec: (applicationId: string) =>
+    cmd<LocalProjectSpec | null>('apps_get_local_spec', { applicationId }),
   listInstances: (applicationId: string) => cmd<RuntimeInstance[]>('apps_list_instances', { applicationId }),
   listSurfaces: (applicationId: string) => cmd<Surface[]>('apps_list_surfaces', { applicationId }),
   activeSpec: (applicationId: string) => cmd<unknown | null>('apps_active_spec', { applicationId }),

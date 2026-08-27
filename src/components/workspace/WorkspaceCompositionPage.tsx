@@ -180,10 +180,22 @@ function WorkspaceDashboard() {
             {editing && <>
               <button className="ws-dashboard-action" disabled={!undo.length} onClick={() => void applyHistory('undo')} aria-label={t(locale, 'workspace.undo')}><Undo2 size={15} /></button>
               <button className="ws-dashboard-action" disabled={!redo.length} onClick={() => void applyHistory('redo')} aria-label={t(locale, 'workspace.redo')}><Redo2 size={15} /></button>
-              <div className="relative"><button ref={addButtonRef} className="ws-dashboard-action" onClick={() => setCatalogOpen((open) => !open)} aria-label={t(locale, 'workspace.addWidget')}><Plus size={15} /></button><AddWidgetMenu open={catalogOpen} onOpenChange={setCatalogOpen} triggerRef={addButtonRef} onSelect={(type) => void api.addWidget(type).catch((cause) => setWriteError(String(cause)))} /></div>
+              <div className="relative">
+                <button
+                  ref={addButtonRef}
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--surface)] px-2.5 text-xs font-medium text-[var(--text)] shadow-xs transition-colors hover:bg-[var(--surface-hover)]"
+                  onClick={() => setCatalogOpen((open) => !open)}
+                  aria-label={t(locale, 'workspace.addWidget')}
+                >
+                  <Plus size={14} />
+                  <span>{t(locale, 'workspace.addWidget')}</span>
+                </button>
+                <AddWidgetMenu open={catalogOpen} onOpenChange={setCatalogOpen} triggerRef={addButtonRef} onSelect={(type) => void api.addWidget(type).catch((cause) => setWriteError(String(cause)))} />
+              </div>
               <button className="ws-dashboard-action" onClick={() => setInspectorOpen((open) => !open)} aria-pressed={inspectorOpen}><PanelRight size={15} /></button>
             </>}
-            <button type="button" className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium ${editing ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--surface)] text-[var(--text-secondary)] shadow-sm hover:text-[var(--text)]'}`} onClick={() => { api.setEditing(!editing); if (editing) setInspectorOpen(false); }}>{editing ? <><Check size={14} />{t(locale, 'workspace.doneEditingBtn')}</> : <><Settings2 size={14} />{t(locale, 'workspace.editLayoutBtn')}</>}</button>
+            <button type="button" className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium ${editing ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--surface)] text-[var(--text-secondary)] shadow-sm hover:text-[var(--text)]'}`} onClick={() => { api.setEditing(!editing); if (editing) { setInspectorOpen(false); setSelectedWidgetId(null); } }}>{editing ? <><Check size={14} />{t(locale, 'workspace.doneEditingBtn')}</> : <><Settings2 size={14} />{t(locale, 'workspace.editLayoutBtn')}</>}</button>
           </div>
         </header>
 
@@ -192,7 +204,7 @@ function WorkspaceDashboard() {
         <div className="flex min-h-0 flex-1">
           <section className="min-w-0 flex-1 overflow-hidden px-4 pb-4" aria-label="Workspace canvas">
             <Suspense fallback={<DashboardSkeleton compact />}>
-              {mode === 'structured' ? <GridWorkspaceView workspaceId={snapshot.workspace.id} viewId="dashboard" layouts={layouts} editable={editing} onLayoutChange={commitGrid} onAddWidget={api.addWidget} onRemoveWidget={api.removeWidget} onActivateItem={setSelectedWidgetId} onWriteError={setWriteError} /> : <FreeCanvasView key={`${snapshot.workspace.id}:${snapshot.revision}`} initialNodes={freeNodes} editable={editing} onCommit={(nodes) => void api.saveFreeLayout({ nodes }).catch((cause) => setWriteError(String(cause)))} onSelectionChange={(ids) => setSelectedWidgetId(ids[0] ?? null)} />}
+              {mode === 'structured' ? <GridWorkspaceView workspaceId={snapshot.workspace.id} viewId="dashboard" layouts={layouts} editable={editing} selectedId={selectedWidgetId} onLayoutChange={commitGrid} onAddWidget={api.addWidget} onRemoveWidget={api.removeWidget} onActivateItem={setSelectedWidgetId} onWriteError={setWriteError} /> : <FreeCanvasView key={`${snapshot.workspace.id}:${snapshot.revision}`} initialNodes={freeNodes} editable={editing} onCommit={(nodes) => void api.saveFreeLayout({ nodes }).catch((cause) => setWriteError(String(cause)))} onSelectionChange={(ids) => setSelectedWidgetId(ids[0] ?? null)} />}
             </Suspense>
           </section>
           {editing && inspectorOpen && <Inspector mode={mode} theme={snapshot.workspace.theme} selectedWidget={snapshot.widgets.find((widget) => widget.id === selectedWidgetId) ?? null} templates={templates} onMode={(next) => void api.setLayoutMode(next)} onTheme={(theme) => void api.setTheme(theme)} onWidgetConfig={(id, config) => void api.updateWidgetConfig(id, config)} onResetWidget={(id) => void api.resetWidget(id)} onRestore={(id) => void api.restoreTemplate(id)} onSaveTemplate={(name) => void api.saveTemplate(name)} onClose={() => setInspectorOpen(false)} />}

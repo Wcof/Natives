@@ -20,7 +20,7 @@ pub mod store_tabs;
 pub mod templates;
 pub mod types;
 
-pub use service::{batch_update_widget_configs, duplicate_workspace};
+pub use service::{add_widget_atomically, batch_update_widget_configs, duplicate_workspace};
 pub use snapshot::{get_workspace_mcp_exposure, load_session_snapshot, load_workspace_snapshot};
 pub use store::{
     add_context_item, batch_update_context_items, bind_tool_profile, close_workspace_tab,
@@ -33,5 +33,5 @@ pub use types::{
     WorkspaceContextItemPatch, WorkspaceCreateRequest, WorkspaceLayout, WorkspaceMcpExposure,
     WorkspaceSessionSnapshot, WorkspaceSnapshot, WorkspaceSummary, WorkspaceTemplate,
     WorkspaceTemplateSaveRequest, WorkspaceToolProfile, WorkspaceUpdateRequest, WorkspaceViewState,
-    WorkspaceWidget, WorkspaceWidgetConfigPatch, WorkspaceWidgetInput,
+    WorkspaceWidget, WorkspaceWidgetAddInput, WorkspaceWidgetConfigPatch, WorkspaceWidgetInput,
 };

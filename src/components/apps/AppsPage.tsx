@@ -210,7 +210,7 @@ export default function AppsPage({ onOpenApp }: { onOpenApp?: (appId: string) =>
   };
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden bg-[var(--surface-base)]">
+    <div className="relative flex h-full w-full overflow-hidden bg-[var(--surface-subtle)]">
       {/* App List Sidebar Panel */}
       <AppList
         apps={apps}
@@ -223,7 +223,7 @@ export default function AppsPage({ onOpenApp }: { onOpenApp?: (appId: string) =>
       />
 
       {(loadError || actionError) && (
-        <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-xl border border-[var(--danger)]/30 bg-[var(--surface-overlay)] px-4 py-2 text-xs text-[var(--danger)] shadow-lg">
+        <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-xl border border-[var(--danger)]/30 bg-[var(--surface)] px-4 py-2 text-xs text-[var(--danger)] shadow-lg">
           {loadError || actionError}
           {loadError && <button type="button" onClick={() => void loadApps()} className="ml-3 underline">{t(locale, 'common.retry')}</button>}
         </div>

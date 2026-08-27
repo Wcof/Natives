@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { normalizeThemeId } from '@/lib/theme-engine';
 import { useTheme } from '@/context/ThemeContext';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';

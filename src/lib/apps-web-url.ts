@@ -56,7 +56,7 @@ export function checkWebUrl(input: string): WebUrlCheck {
   }
   const host = hostOf(candidate);
   if (!host) return { ok: false, normalized: null, changed: candidate !== trimmed, reason: 'invalid-host' };
-  if (!isLoopbackHost(host) && !host.includes('.')) {
+  if (!isLoopbackHost(host) && (!host.includes('.') || host.startsWith('.') || host.endsWith('.') || host.includes('..'))) {
     return { ok: false, normalized: null, changed: candidate !== trimmed, reason: 'invalid-host' };
   }
   if (scheme === 'http' && !isLoopbackHost(host)) {

@@ -82,7 +82,7 @@ export default function CommandPalette({ open, onClose, commands, locale }: Comm
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t(locale, 'assistantCommandPalette.searchPlaceholder')}
-          className="w-full border-b border-[var(--border)] bg-transparent px-4 py-3 text-sm outline-none"
+          className="w-full border-b border-[var(--border)] bg-transparent px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--text-disabled)] outline-none"
         />
         <ul className="max-h-80 overflow-y-auto py-1">
           {filtered.length === 0 && (
@@ -100,7 +100,7 @@ export default function CommandPalette({ open, onClose, commands, locale }: Comm
                   cmd.run();
                   onClose();
                 }}
-                className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm ${
+                className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm text-[var(--text)] ${
                   i === index ? 'bg-[var(--surface-hover)]' : ''
                 } ${cmd.disabledReason ? 'opacity-50' : 'hover:bg-[var(--surface-hover)]'}`}
               >

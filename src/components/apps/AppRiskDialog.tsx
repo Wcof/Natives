@@ -34,12 +34,12 @@ export function AppRiskDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-overlay)]/60 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-medium)] backdrop-blur-sm p-4 animate-in fade-in duration-150"
       role="dialog"
       aria-modal="true"
       aria-labelledby="risk-dialog-title"
     >
-      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border-default)] bg-[var(--surface-overlay)] p-6 shadow-2xl space-y-4">
+      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-2xl space-y-4">
         <div className="flex items-start gap-3">
           <div
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
@@ -51,7 +51,7 @@ export function AppRiskDialog({
             {isLevel2 ? <AlertTriangle className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
           </div>
           <div className="space-y-1">
-            <h3 id="risk-dialog-title" className="text-base font-semibold text-[var(--text-primary)]">
+            <h3 id="risk-dialog-title" className="text-base font-semibold text-[var(--text)]">
               {title || t(locale, 'appsPage.riskModalTitle')}
             </h3>
             <p className="text-sm text-[var(--text-secondary)]">
@@ -61,7 +61,7 @@ export function AppRiskDialog({
         </div>
 
         {note && (
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-3 text-xs leading-relaxed text-[var(--text-tertiary)]">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-hover)] p-3 text-xs leading-relaxed text-[var(--text-tertiary)]">
             {note}
           </div>
         )}
@@ -71,7 +71,7 @@ export function AppRiskDialog({
             type="button"
             onClick={onCancel}
             disabled={loading}
-            className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+            className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text)] transition-colors"
           >
             {t(locale, 'common.cancel')}
           </button>
@@ -79,10 +79,10 @@ export function AppRiskDialog({
             type="button"
             onClick={onConfirm}
             disabled={loading}
-            className={`flex items-center justify-center px-4 py-2 text-sm font-medium rounded-xl text-[var(--text-on-accent)] shadow-sm transition-opacity ${
+            className={`flex items-center justify-center px-4 py-2 text-sm font-medium rounded-xl text-[var(--primary-foreground)] shadow-sm transition-opacity ${
               isLevel2
                 ? 'bg-[var(--danger)] hover:opacity-90'
-                : 'bg-[var(--interactive-accent)] hover:opacity-90'
+                : 'bg-[var(--primary)] hover:bg-[var(--primary-hover)]'
             } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {loading ? t(locale, 'common.running') : confirmLabel || t(locale, 'common.confirm')}

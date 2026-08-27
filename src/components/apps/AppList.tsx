@@ -39,6 +39,12 @@ export function AppList({
 
   const filteredApps = apps.filter((app) => {
     if (filterKind !== 'all' && app.kind !== filterKind) return false;
+    if (app.kind === 'web_application') {
+      if (filterStatus !== 'all') return false;
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return app.title.toLowerCase().includes(q) || Boolean(app.description?.toLowerCase().includes(q));
+    }
     const systemState = systemStates[app.appId];
     const status = systemState
       ? !systemState.installed || systemState.unobservable
@@ -64,7 +70,7 @@ export function AppList({
   const getKindIcon = (kind: AppKind) => {
     switch (kind) {
       case 'system_application':
-        return <Laptop className="h-4 w-4 text-[var(--interactive-accent)]" />;
+        return <Laptop className="h-4 w-4 text-[var(--accent)]" />;
       case 'web_application':
         return <Globe className="h-4 w-4 text-[var(--primary)]" />;
     }
@@ -102,7 +108,7 @@ export function AppList({
         );
       case 'hibernated':
         return (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-[var(--primary-soft)] text-[var(--interactive-accent)] border border-[var(--interactive-accent)]/20">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-[var(--primary-soft)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
             {t(locale, 'appsPage.stateHibernated')}
           </span>
         );
@@ -120,7 +126,7 @@ export function AppList({
         );
       default:
         return (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-[var(--surface-muted)] text-[var(--text-tertiary)] border border-[var(--border-subtle)]">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-[var(--surface-hover)] text-[var(--text-tertiary)] border border-[var(--border-subtle)]">
             {t(locale, 'appsPage.stateStopped')}
           </span>
         );
@@ -128,13 +134,13 @@ export function AppList({
   };
 
   return (
-    <div className="flex flex-col h-full border-r border-[var(--border-default)] bg-[var(--surface-base)] w-80 shrink-0 select-none">
+    <div className="flex flex-col h-full border-r border-[var(--border-subtle)] bg-[var(--surface)] w-80 shrink-0 select-none">
       {/* Header */}
       <div className="p-4 border-b border-[var(--border-subtle)] space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Layers className="h-5 w-5 text-[var(--interactive-accent)]" />
-            <h1 className="text-sm font-bold text-[var(--text-primary)]">
+            <Layers className="h-5 w-5 text-[var(--primary)]" />
+            <h1 className="text-sm font-bold text-[var(--text)]">
               {t(locale, 'appsPage.title')}
             </h1>
           </div>
@@ -144,14 +150,14 @@ export function AppList({
               onClick={onRefresh}
               disabled={loading}
               title={t(locale, 'appsPage.refresh')}
-              className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-overlay)] hover:text-[var(--text-primary)] transition-colors"
+              className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
             <button
               type="button"
               onClick={onAdd}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[var(--interactive-accent)] text-[var(--text-on-accent)] text-xs font-medium hover:opacity-90 transition-opacity shadow-sm"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium hover:bg-[var(--primary-hover)] transition-colors shadow-sm"
             >
               <Plus className="h-3.5 w-3.5" />
               {t(locale, 'appsPage.addApp')}
@@ -167,19 +173,19 @@ export function AppList({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t(locale, 'appsPage.searchPlaceholder')}
-            className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] pl-8 pr-3 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] pl-8 pr-3 py-1.5 text-xs text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none"
           />
         </div>
 
         {/* Filter Pills */}
-        <div className="flex rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-0.5 text-[11px]">
+        <div className="flex rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)] p-0.5 text-[11px]">
           <button
             type="button"
             onClick={() => setFilterKind('all')}
             className={`flex-1 py-1 rounded-md font-medium transition-all ${
               filterKind === 'all'
-                ? 'bg-[var(--surface-overlay)] text-[var(--text-primary)] shadow-sm'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
             }`}
           >
             {t(locale, 'appsPage.filterAll')}
@@ -189,8 +195,8 @@ export function AppList({
             onClick={() => setFilterKind('system_application')}
             className={`flex-1 py-1 rounded-md font-medium transition-all ${
               filterKind === 'system_application'
-                ? 'bg-[var(--surface-overlay)] text-[var(--text-primary)] shadow-sm'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
             }`}
           >
             {t(locale, 'appsPage.filterMac')}
@@ -200,14 +206,14 @@ export function AppList({
             onClick={() => setFilterKind('web_application')}
             className={`flex-1 py-1 rounded-md font-medium transition-all ${
               filterKind === 'web_application'
-                ? 'bg-[var(--surface-overlay)] text-[var(--text-primary)] shadow-sm'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
             }`}
           >
             {t(locale, 'appsPage.filterWeb')}
           </button>
         </div>
-        <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value as typeof filterStatus)} className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--text-secondary)]">
+        <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value as typeof filterStatus)} className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)] px-2 py-1 text-[11px] text-[var(--text-secondary)]">
           <option value="all">{t(locale, 'appsPage.filterStatusAll')}</option>
           <option value="running">{t(locale, 'appsPage.filterStatusRunning')}</option>
           <option value="stopped">{t(locale, 'appsPage.filterStatusStopped')}</option>
@@ -235,20 +241,20 @@ export function AppList({
               onClick={() => onSelect(app)}
               className={`w-full flex items-start gap-3 p-3 rounded-xl text-left transition-all ${
                 selectedId === app.appId
-                  ? 'bg-[var(--surface-overlay)] border border-[var(--interactive-accent)]/40 shadow-sm'
-                  : 'hover:bg-[var(--surface-overlay)]/60 border border-transparent'
+                  ? 'bg-[var(--surface-hover)] border border-[var(--primary)]/40 shadow-sm'
+                  : 'hover:bg-[var(--surface-hover)]/60 border border-transparent'
               }`}
             >
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-muted)] border border-[var(--border-subtle)]">
+              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-hover)] border border-[var(--border-subtle)]">
                 {getKindIcon(app.kind)}
               </div>
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-xs font-semibold text-[var(--text-primary)] truncate">
+                  <span className="text-xs font-semibold text-[var(--text)] truncate">
                     {app.title}
                   </span>
                   {app.showInSidebar && (
-                    <BookmarkCheck className="h-3 w-3 shrink-0 text-[var(--interactive-accent)]" />
+                    <BookmarkCheck className="h-3 w-3 shrink-0 text-[var(--primary)]" />
                   )}
                 </div>
                 {app.description && (
@@ -257,7 +263,9 @@ export function AppList({
                   </p>
                 )}
                 <div className="flex items-center justify-between gap-2 pt-0.5">
-                  {app.kind === 'system_application' && systemStates[app.appId]
+                  {app.kind === 'web_application'
+                    ? <span className="text-[10px] text-[var(--text-tertiary)]">{t(locale, 'appsPage.webSaved')}</span>
+                    : app.kind === 'system_application' && systemStates[app.appId]
                     ? getSystemStatusBadge(systemStates[app.appId]!)
                     : getStatusBadge(app.runtimeState)}
                   {app.updatedAt && <time className="text-[9px] text-[var(--text-disabled)]">{new Date(app.updatedAt).toLocaleDateString(locale)}</time>}

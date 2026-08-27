@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import { appsApi, type AppView } from '@/lib/tauri/apps';
 import { checkWebUrl } from '@/lib/apps-web-url';
@@ -17,10 +17,30 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
   const [description, setDescription] = useState(app.description || '');
   const [showInSidebar, setShowInSidebar] = useState(app.showInSidebar);
   const [url, setUrl] = useState('');
-  const [approvedOrigins, setApprovedOrigins] = useState('');
-  const [keepAlive, setKeepAlive] = useState(false);
+  const [loadingSpec, setLoadingSpec] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingSpec(true);
+    appsApi
+      .getWebSpec(app.appId)
+      .then((spec) => {
+        if (!active || !spec) return;
+        setUrl(spec.url || '');
+      })
+      .catch((err) => {
+        if (!active) return;
+        console.warn('Failed to load web application spec:', err);
+      })
+      .finally(() => {
+        if (active) setLoadingSpec(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [app.appId]);
 
   // APPV2-T01：与注册表单同一共享规范化策略（空值 = 保持不变）。
   const urlCheck = useMemo(() => (url.trim() ? checkWebUrl(url) : null), [url]);
@@ -52,27 +72,10 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
       });
 
       let updated = app;
-      if (urlCheck?.normalized || approvedOrigins.trim()) {
-        let origins = approvedOrigins
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const normalizedUrl = urlCheck?.normalized;
-
-        if (origins.length === 0 && normalizedUrl) {
-          try {
-            const parsed = new URL(normalizedUrl);
-            if (parsed.origin) origins = [parsed.origin];
-          } catch {
-            // fallback
-          }
-        }
-
+      if (urlCheck?.normalized) {
         updated = await appsApi.updateWebSpec({
           appId: app.appId,
-          url: urlCheck?.normalized ?? undefined,
-          approvedOrigins: origins.length > 0 ? origins : undefined,
-          keepAlive,
+          url: urlCheck.normalized,
         });
       } else {
         const refreshed = await appsApi.getView(app.appId);
@@ -103,7 +106,7 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] focus:border-[var(--primary)] focus:outline-none"
           required
         />
       </div>
@@ -116,22 +119,15 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           type="text"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder={t(locale, 'appsPage.webUrlEditPlaceholder')}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          placeholder={loadingSpec ? t(locale, 'appsPage.loadingSpec') : t(locale, 'appsPage.webUrlEditPlaceholder')}
+          disabled={loadingSpec || submitting}
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60"
         />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
-          {t(locale, 'appsPage.approvedOriginsLabel')}
-        </label>
-        <input
-          type="text"
-          value={approvedOrigins}
-          onChange={(e) => setApprovedOrigins(e.target.value)}
-          placeholder="example.com, auth.example.com"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
-        />
+        {urlCheck?.normalized && urlCheck.normalized !== url.trim() && (
+          <p className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+            {t(locale, 'appsPage.webUrlWillSaveAs', { url: urlCheck.normalized })}
+          </p>
+        )}
       </div>
 
       <div>
@@ -142,21 +138,8 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--interactive-accent)] focus:outline-none resize-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] focus:border-[var(--primary)] focus:outline-none resize-none"
         />
-      </div>
-
-      <div className="flex items-center gap-2 pt-1">
-        <input
-          type="checkbox"
-          id="web-keep-alive"
-          checked={keepAlive}
-          onChange={(e) => setKeepAlive(e.target.checked)}
-          className="h-4 w-4 rounded border-[var(--border-default)] text-[var(--interactive-accent)]"
-        />
-        <label htmlFor="web-keep-alive" className="text-xs text-[var(--text-secondary)] select-none">
-          {t(locale, 'appsPage.keepAliveLabel')}
-        </label>
       </div>
 
       <div className="flex items-center gap-2 pt-1">
@@ -165,7 +148,7 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           id="web-show-sidebar"
           checked={showInSidebar}
           onChange={(e) => setShowInSidebar(e.target.checked)}
-          className="h-4 w-4 rounded border-[var(--border-default)] text-[var(--interactive-accent)]"
+          className="h-4 w-4 rounded border-[var(--border)] text-[var(--primary)]"
         />
         <label htmlFor="web-show-sidebar" className="text-xs text-[var(--text-secondary)] select-none">
           {t(locale, 'appsPage.showInSidebar')}
@@ -177,14 +160,14 @@ export function WebApplicationEdit({ app, onSuccess, onCancel }: WebApplicationE
           type="button"
           onClick={onCancel}
           disabled={submitting}
-          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text)]"
         >
           {t(locale, 'appsPage.cancel')}
         </button>
         <button
           type="submit"
-          disabled={submitting || !title.trim()}
-          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--interactive-accent)] text-[var(--text-on-accent)] hover:opacity-90 disabled:opacity-50 shadow-sm"
+          disabled={submitting || loadingSpec || !title.trim()}
+          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)] disabled:opacity-50 shadow-sm"
         >
           {submitting ? t(locale, 'common.saving') : t(locale, 'appsPage.confirmSave')}
         </button>

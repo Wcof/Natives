@@ -23,7 +23,7 @@ import { HANDLE_SCREEN_SIZE, HANDLE_VISIBLE_SIZE } from '@/lib/workspace/canvas/
 
 const screenRect = { x: 100, y: 80, w: 240, h: 160 };
 
-function render(zoom = 1): string {
+function render(_zoom = 1): string {
   return renderToStaticMarkup(
     React.createElement(ResizeOverlay, {
       screenRect,

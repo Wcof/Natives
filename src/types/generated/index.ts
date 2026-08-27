@@ -40,3 +40,6 @@ export type { AppRuntimeState } from './AppRuntimeState';
 export type { AppCapabilities } from './AppCapabilities';
 export type { AppView } from './AppView';
 export type { RuntimeInstance } from './RuntimeInstance';
+export type { LocalProjectSpec } from './LocalProjectSpec';
+export type { SystemApplicationSpec } from './SystemApplicationSpec';
+export type { WebApplicationSpec } from './WebApplicationSpec';

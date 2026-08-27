@@ -70,7 +70,9 @@ export default function AppPresentationHost({
     if (!el || !onBoundsChange) return;
     const report = () => {
       const rect = el.getBoundingClientRect();
-      onBoundsChange({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+      if (rect.width > 0 && rect.height > 0) {
+        onBoundsChange({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+      }
     };
     const debounced = () => {
       if (boundsTimerRef.current !== null) window.clearTimeout(boundsTimerRef.current);
@@ -78,7 +80,13 @@ export default function AppPresentationHost({
     };
     const ro = new ResizeObserver(debounced);
     ro.observe(el);
-    debounced();
+    // Initial immediate report if element is already measured with positive dimensions
+    const initialRect = el.getBoundingClientRect();
+    if (initialRect.width > 0 && initialRect.height > 0) {
+      onBoundsChange({ x: initialRect.x, y: initialRect.y, width: initialRect.width, height: initialRect.height });
+    } else {
+      debounced();
+    }
     return () => {
       ro.disconnect();
       if (boundsTimerRef.current !== null) window.clearTimeout(boundsTimerRef.current);

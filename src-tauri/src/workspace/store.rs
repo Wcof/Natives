@@ -663,13 +663,93 @@ pub fn upsert_widget(
 }
 
 pub fn remove_widget(conn: &Connection, workspace_id: &str, widget_id: &str) -> Result<bool> {
-    let changed = conn
+    let tx = conn.unchecked_transaction().map_err(Error::Database)?;
+    let changed = tx
         .execute(
             "DELETE FROM workspace_widgets WHERE id = ?1 AND workspace_id = ?2",
             rusqlite::params![widget_id, workspace_id],
         )
         .map_err(Error::Database)?;
-    Ok(changed > 0)
+    if changed == 0 {
+        return Ok(false);
+    }
+
+    let now = now_rfc3339();
+    let mut stmt = tx
+        .prepare(
+            "SELECT id, layout_mode, layout_json FROM workspace_layouts WHERE workspace_id = ?1",
+        )
+        .map_err(Error::Database)?;
+    let rows = stmt
+        .query_map([workspace_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(Error::Database)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::Database)?;
+    drop(stmt);
+
+    for (layout_row_id, layout_mode, layout_json_str) in rows {
+        let mut modified = false;
+        if let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&layout_json_str) {
+            if layout_mode == "structured" {
+                if let Some(items) = parsed.as_array_mut() {
+                    let prev_len = items.len();
+                    items.retain(|item| {
+                        item.get("i")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|i| i != widget_id)
+                            .unwrap_or(true)
+                    });
+                    if items.len() != prev_len {
+                        modified = true;
+                    }
+                }
+            } else if layout_mode == "free" {
+                if let Some(nodes) = parsed
+                    .get_mut("nodes")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    let prev_len = nodes.len();
+                    nodes.retain(|node| {
+                        node.get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|id| id != widget_id)
+                            .unwrap_or(true)
+                    });
+                    if nodes.len() != prev_len {
+                        modified = true;
+                    }
+                } else if let Some(items) = parsed.as_array_mut() {
+                    let prev_len = items.len();
+                    items.retain(|node| {
+                        node.get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|id| id != widget_id)
+                            .unwrap_or(true)
+                    });
+                    if items.len() != prev_len {
+                        modified = true;
+                    }
+                }
+            }
+
+            if modified {
+                tx.execute(
+                    "UPDATE workspace_layouts SET layout_json = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![parsed.to_string(), now, layout_row_id],
+                )
+                .map_err(Error::Database)?;
+            }
+        }
+    }
+
+    tx.commit().map_err(Error::Database)?;
+    Ok(true)
 }
 
 // ──────────────────────────────────────────────

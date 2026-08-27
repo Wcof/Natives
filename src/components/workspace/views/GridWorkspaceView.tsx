@@ -25,12 +25,10 @@
  *    from the widget list so nothing renders into dead slots.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import { Empty } from '@/components/ui/design-system';
 import CompactGrid, { type CompactGridItem } from '../layout/CompactGrid';
-import { AddWidgetMenu } from '../widgets/AddWidgetMenu';
 import {
   DEFAULT_WIDGET_MIN_SIZE,
   createDefaultConfig,
@@ -44,7 +42,7 @@ import {
   subscribeSnapshot,
 } from '@/lib/workspace/snapshot-store';
 import type { WorkspaceWidget } from '@/lib/workspace/contracts';
-import type { GridLayoutItem, GridLayouts } from '@/lib/workspace/views/types';
+import type { GridLayouts } from '@/lib/workspace/views/types';
 
 export interface GridWorkspaceViewProps {
   /** Host workspace id that owns the widget rows (from the session context). */
@@ -52,6 +50,7 @@ export interface GridWorkspaceViewProps {
   viewId: string;
   layouts: GridLayouts;
   editable: boolean;
+  selectedId?: string | null;
   /**
    * Terminal-event callback (RGL drag/resize STOP only — never pointer move).
    * Must perform the host persistence (provider saveLayout); a rejected
@@ -68,7 +67,7 @@ export interface GridWorkspaceViewProps {
    * Rejections surface via onWriteError.
    */
   onRemoveWidget?: (widgetId: string) => Promise<void>;
-  onActivateItem?: (id: string) => void;
+  onActivateItem?: (id: string | null) => void;
   /** Host add callback (client.upsertWidget via the provider). */
   onAddWidget?: (widgetType: string) => Promise<void>;
   /** Real error text from a failed host write (never silently dropped). */
@@ -133,40 +132,21 @@ function resolveGridWidgets(locale: string, widgets: WorkspaceWidget[]): Resolve
   });
 }
 
-/** Simple vertical-flow layout from default widget sizes (no stored layout). */
-function defaultFlowLayout(widgets: ResolvedGridWidget[]): GridLayoutItem[] {
-  let y = 0;
-  return widgets.map((widget) => {
-    const item: GridLayoutItem = {
-      i: widget.id,
-      x: 0,
-      y,
-      w: widget.minSize.w,
-      h: widget.minSize.h,
-      minW: widget.minSize.w,
-      minH: widget.minSize.h,
-    };
-    y += widget.minSize.h;
-    return item;
-  });
-}
-
 export default function GridWorkspaceView({
   workspaceId,
   viewId: _viewId,
   layouts,
   editable,
+  selectedId,
   onLayoutChange,
   onBreakpointChange,
   onActivateItem,
-  onAddWidget,
+  onAddWidget: _onAddWidget,
   onRemoveWidget,
   onWriteError,
 }: GridWorkspaceViewProps) {
   const locale = useLocale();
   const widgets = useHostWidgets(workspaceId);
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const addWidgetButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const resolved = useMemo(
     () => resolveGridWidgets(locale, widgets),
@@ -178,16 +158,14 @@ export default function GridWorkspaceView({
       resolved.map((widget) => ({
         id: widget.id,
         title: widget.title,
-        render: ({ editing }) => (
-          <div className="grid-content flex h-full min-h-0 flex-col overflow-hidden">
-            <WidgetRenderer
-              instance={{ def: widget.def, config: widget.config }}
-              editing={editing || editable}
-              onRemove={
-                editable && onRemoveWidget ? () => onRemoveWidget(widget.id) : undefined
-              }
-            />
-          </div>
+        render: ({ editing, active: _active }) => (
+          <WidgetRenderer
+            instance={{ def: widget.def, config: widget.config }}
+            editing={editing || editable}
+            onRemove={
+              editable && onRemoveWidget ? () => onRemoveWidget(widget.id) : undefined
+            }
+          />
         ),
       })),
     [resolved, editable, onRemoveWidget],
@@ -195,13 +173,37 @@ export default function GridWorkspaceView({
 
   const effectiveLayouts = useMemo<GridLayouts>(() => {
     if (resolved.length === 0) return layouts;
-    const ids = new Set(resolved.map((widget) => widget.id));
-    const referencesRealWidgets = (['lg', 'md', 'sm'] as const).some((bp) =>
-      layouts[bp].some((entry) => ids.has(entry.i)),
-    );
-    if (referencesRealWidgets) return layouts;
-    const flow = defaultFlowLayout(resolved);
-    return { lg: flow, md: flow, sm: flow };
+    const result: GridLayouts = {
+      lg: [...(layouts.lg ?? [])],
+      md: [...(layouts.md ?? [])],
+      sm: [...(layouts.sm ?? [])],
+    };
+    const breakpoints = ['lg', 'md', 'sm'] as const;
+    for (const bp of breakpoints) {
+      const existingIds = new Set(result[bp].map((item) => item.i));
+      let nextY = result[bp].reduce((maxY, item) => Math.max(maxY, item.y + item.h), 0);
+      for (const widget of resolved) {
+        if (!existingIds.has(widget.id)) {
+          const def = widget.def;
+          const maxCols = bp === 'sm' ? 4 : bp === 'md' ? 8 : 12;
+          const w = Math.min(def.minSize?.w ?? 4, maxCols);
+          const h = def.minSize?.h ?? 4;
+          result[bp].push({
+            i: widget.id,
+            x: 0,
+            y: nextY,
+            w,
+            h,
+            minW: def.minSize?.w,
+            minH: def.minSize?.h,
+            maxW: def.maxSize?.w,
+            maxH: def.maxSize?.h,
+          });
+          nextY += h;
+        }
+      }
+    }
+    return result;
   }, [resolved, layouts]);
 
   /**
@@ -223,16 +225,6 @@ export default function GridWorkspaceView({
     [onLayoutChange, onWriteError],
   );
 
-  const handleAddWidget = useCallback(
-    (widgetType: string) => {
-      void onAddWidget?.(widgetType).catch((err: unknown) => {
-        console.error('[workspace] add widget failed:', err);
-        onWriteError?.(err instanceof Error ? err.message : String(err));
-      });
-    },
-    [onAddWidget, onWriteError],
-  );
-
   const handleRemoveWidget = useCallback(
     (widgetId: string) => {
       void onRemoveWidget?.(widgetId).catch((err: unknown) => {
@@ -245,27 +237,6 @@ export default function GridWorkspaceView({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto">
-      {editable && (
-        <div className="relative flex shrink-0 items-center justify-end gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-2">
-          <button
-            ref={addWidgetButtonRef}
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={addMenuOpen}
-            onClick={() => setAddMenuOpen((open) => !open)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90"
-          >
-            <Plus size={13} />
-            {t(locale, 'workspace.addCard')}
-          </button>
-          <AddWidgetMenu
-            open={addMenuOpen}
-            onOpenChange={setAddMenuOpen}
-            triggerRef={addWidgetButtonRef}
-            onSelect={handleAddWidget}
-          />
-        </div>
-      )}
       <div className="min-h-0 flex-1">
         {items.length === 0 ? (
           <div className="flex h-full items-center justify-center overflow-auto">
@@ -276,12 +247,13 @@ export default function GridWorkspaceView({
             layouts={effectiveLayouts}
             items={items}
             editable={editable}
+            selectedId={selectedId}
             onLayoutChange={handleLayoutChange}
             onBreakpointChange={onBreakpointChange}
             onRemoveItem={handleRemoveWidget}
             onActivateItem={onActivateItem}
             dragHandleClass=".ws-shell-header"
-            contentCancelClass=".grid-content, .ws-drag-cancel"
+            contentCancelClass=".ws-shell-body, .ws-drag-cancel, button, input, textarea, select, a, [role='button']"
             emptyText={t(locale, 'workspace.gridEmpty')}
           />
         )}

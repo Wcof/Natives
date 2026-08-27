@@ -14,9 +14,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::apps::model::{
-    App, AppKind, AppView, RegisterLocalProjectInput, RegisterSystemApplicationInput,
-    RegisterWebApplicationInput, RegistrationOrigin, RuntimeInstance, RuntimeSpec, Surface,
-    UpdateAppMetadataInput, UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput,
+    App, AppKind, AppView, LocalProjectSpec, RegisterLocalProjectInput,
+    RegisterSystemApplicationInput, RegisterWebApplicationInput, RegistrationOrigin,
+    RuntimeInstance, RuntimeSpec, Surface, SystemApplicationSpec, UpdateAppMetadataInput,
+    UpdateSystemApplicationSpecInput, UpdateWebApplicationSpecInput, WebApplicationSpec,
 };
 use crate::apps::mutation_lock::MutationLock;
 use crate::apps::repository::AppRepository;
@@ -122,6 +123,45 @@ pub fn apps_active_spec(
 ) -> Result<Option<RuntimeSpec>> {
     let conn = state.db.get().map_err(|e| Error::Internal(e.to_string()))?;
     AppRepository::active_spec(&conn, &application_id)
+}
+
+#[tauri::command]
+pub fn apps_get_web_spec(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
+    application_id: String,
+) -> Result<Option<WebApplicationSpec>> {
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
+    svc.get_web_spec(&application_id)
+}
+
+#[tauri::command]
+pub fn apps_get_system_spec(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
+    application_id: String,
+) -> Result<Option<SystemApplicationSpec>> {
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
+    svc.get_system_spec(&application_id)
+}
+
+#[tauri::command]
+pub fn apps_get_local_spec(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    locks: State<'_, MutationLock>,
+    local_runtime: State<'_, LocalRuntimeHandle>,
+    browser: State<'_, BrowserStateHandle>,
+    application_id: String,
+) -> Result<Option<LocalProjectSpec>> {
+    let svc = service(&app_handle, &state, &locks, &local_runtime, &browser);
+    svc.get_local_spec(&application_id)
 }
 
 #[tauri::command]

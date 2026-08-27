@@ -301,6 +301,35 @@ pub struct WorkspaceWidgetInput {
     pub z_index: Option<i64>,
 }
 
+/// Widget add request for atomic creation with guaranteed layout slots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceWidgetAddInput {
+    pub widget_type: String,
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub config_version: Option<i64>,
+    #[serde(default)]
+    pub appearance: Option<serde_json::Value>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub z_index: Option<i64>,
+    #[serde(default)]
+    pub default_w: Option<i64>,
+    #[serde(default)]
+    pub default_h: Option<i64>,
+    #[serde(default)]
+    pub min_w: Option<i64>,
+    #[serde(default)]
+    pub min_h: Option<i64>,
+    #[serde(default)]
+    pub max_w: Option<i64>,
+    #[serde(default)]
+    pub max_h: Option<i64>,
+}
+
 /// Single config patch inside `batch_update_widget_configs` (contract
 /// `batch_update_widget_configs`). `config` replaces the whole row config;
 /// missing widgets are ignored (they may have been removed concurrently).

@@ -221,6 +221,48 @@ pub struct RuntimeInstance {
     pub updated_at: String,
 }
 
+/// 本地项目 spec 行（无独立 spec 表 —— 复用 `local_creative_apps` 成熟表，
+/// `canonical_project_root` 等字段由 local driver 维护；这里只投影注册侧需要的）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProjectSpec {
+    pub application_id: String,
+    pub project_root: String,
+    pub project_kind: String,
+    pub plan_fingerprint: String,
+}
+
+/// 系统应用 spec 行（`system_application_specs`）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
+#[serde(rename_all = "camelCase")]
+pub struct SystemApplicationSpec {
+    pub application_id: String,
+    pub application_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bundle_identifier: Option<String>,
+    pub platform: String,
+    pub launch_policy: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Web 应用 spec 行（`web_application_specs`）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
+#[serde(rename_all = "camelCase")]
+pub struct WebApplicationSpec {
+    pub application_id: String,
+    pub url: String,
+    pub approved_origins: Vec<String>,
+    pub open_behavior: String,
+    pub keep_alive: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// 类型专属注册/编辑输入 DTO（APP-013）。
 ///
 /// 后端先行校验路径/URL/枚举（Phase C 在 service 层落地）；这些输入不再暴露

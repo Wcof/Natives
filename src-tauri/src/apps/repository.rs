@@ -11,54 +11,16 @@
 //! 目录、不碰 `.app`、不调用 BrowserProfile delete（清 Web 数据是独立高风险操作）。
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::model::{
-    App, AppKind, AppView, RegistrationOrigin, RuntimeInstance, RuntimeSpec, Surface,
-    UpdateAppMetadataInput,
+    App, AppKind, AppView, LocalProjectSpec, RegistrationOrigin, RuntimeInstance, RuntimeSpec,
+    Surface, SystemApplicationSpec, UpdateAppMetadataInput, WebApplicationSpec,
 };
 use crate::{Error, Result};
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
-}
-
-/// 本地项目 spec 行（无独立 spec 表 —— 复用 `local_creative_apps` 成熟表，
-/// `canonical_project_root` 等字段由 local driver 维护；这里只投影注册侧需要的）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalProjectSpec {
-    pub application_id: String,
-    pub project_root: String,
-    pub project_kind: String,
-    pub plan_fingerprint: String,
-}
-
-/// 系统应用 spec 行（`system_application_specs`）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SystemApplicationSpec {
-    pub application_id: String,
-    pub application_path: String,
-    pub bundle_identifier: Option<String>,
-    pub platform: String,
-    pub launch_policy: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// Web 应用 spec 行（`web_application_specs`）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct WebApplicationSpec {
-    pub application_id: String,
-    pub url: String,
-    pub approved_origins: Vec<String>,
-    pub open_behavior: String,
-    pub keep_alive: bool,
-    pub created_at: String,
-    pub updated_at: String,
 }
 
 const APP_COLUMNS: &str =
@@ -302,13 +264,15 @@ impl AppRepository {
         conn: &Connection,
         title: &str,
         url: &str,
-        approved_origins: &[String],
+        _approved_origins: &[String],
         open_behavior: Option<&str>,
         keep_alive: bool,
     ) -> Result<String> {
         // APPV2-T01：共享校验层统一入口 —— 无 scheme 输入规范化为 https 后持久化，
         // 公网必须 https、显式 http 仅 loopback（见 `web_url` 模块）。
         let normalized = crate::apps::web_url::normalize_web_url(url)?;
+        let approved_origins = vec![crate::apps::web_url::derive_origin(&normalized)
+            .ok_or_else(|| Error::InvalidInput("web url missing host".into()))?];
         let open_behavior = open_behavior
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -338,7 +302,7 @@ impl AppRepository {
             params![
                 app_id,
                 normalized,
-                serde_json::to_string(approved_origins).map_err(|e| Error::Json(e))?,
+                serde_json::to_string(&approved_origins).map_err(Error::Json)?,
                 open_behavior,
                 keep_alive as i64,
                 t
@@ -584,12 +548,15 @@ impl AppRepository {
         if let Some(u) = &normalized_url {
             sets.push("url = ?");
             args.push(Box::new(u.clone()));
-        }
-        if let Some(o) = approved_origins {
             sets.push("approved_origins_json = ?");
+            let origin = crate::apps::web_url::derive_origin(u)
+                .ok_or_else(|| Error::InvalidInput("web url missing host".into()))?;
             args.push(Box::new(
-                serde_json::to_string(o).map_err(|e| Error::Json(e))?,
+                serde_json::to_string(&[origin]).map_err(Error::Json)?,
             ));
+        } else if let Some(o) = approved_origins {
+            sets.push("approved_origins_json = ?");
+            args.push(Box::new(serde_json::to_string(o).map_err(Error::Json)?));
         }
         if let Some(b) = open_behavior {
             sets.push("open_behavior = ?");

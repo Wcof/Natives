@@ -31,6 +31,7 @@ import type {
   WorkspaceUpdateInput,
   WorkspaceViewState,
   WorkspaceWidget,
+  WorkspaceWidgetAddInput,
   WorkspaceWidgetConfigPatch,
   WorkspaceWidgetInput,
 } from './contracts';
@@ -144,6 +145,14 @@ export function getWorkspaceMcpExposure(
 // ──────────────────────────────────────────────
 // Widgets
 // ──────────────────────────────────────────────
+
+export function addWidget(
+  workspaceId: string,
+  input: WorkspaceWidgetAddInput,
+  expectedRevision?: ExpectedRevision,
+): Promise<WorkspaceSnapshot | null> {
+  return call('workspace_widget_add', { workspaceId, input, expectedRevision });
+}
 
 export function upsertWidget(
   workspaceId: string,

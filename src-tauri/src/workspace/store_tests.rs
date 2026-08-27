@@ -237,3 +237,65 @@ fn rename_workspace_validates_trim_nonempty_and_length() {
         .unwrap();
     assert_eq!(updated.name, "x".repeat(MAX_WORKSPACE_NAME_CHARS));
 }
+
+#[test]
+fn remove_widget_cleans_up_layouts() {
+    let conn = empty_db();
+    let ws = create_workspace(&conn, "ws1", "workspace", None, None, "dark", "structured").unwrap();
+    let widget = upsert_widget(
+        &conn,
+        &ws.id,
+        &WorkspaceWidgetInput {
+            id: None,
+            widget_type: "cost-metrics".into(),
+            config_version: Some(1),
+            config: Some(serde_json::json!({})),
+            appearance: None,
+            enabled: Some(true),
+            z_index: Some(0),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    let widget_id = widget.id;
+
+    save_layout(
+        &conn,
+        &ws.id,
+        "structured",
+        "lg",
+        1,
+        &format!(r#"[{{"i":"{widget_id}","x":0,"y":0,"w":4,"h":4}}]"#),
+    )
+    .unwrap();
+    save_layout(
+        &conn,
+        &ws.id,
+        "structured",
+        "md",
+        1,
+        &format!(r#"[{{"i":"{widget_id}","x":0,"y":0,"w":4,"h":4}}]"#),
+    )
+    .unwrap();
+    save_layout(
+        &conn,
+        &ws.id,
+        "free",
+        "free",
+        1,
+        &format!(r#"{{"nodes":[{{"id":"{widget_id}","x":0,"y":0}}]}}"#),
+    )
+    .unwrap();
+
+    let removed = remove_widget(&conn, &ws.id, &widget_id).unwrap();
+    assert!(removed);
+
+    let layouts = list_layouts(&conn, &ws.id).unwrap();
+    for l in layouts {
+        assert!(
+            !l.layout.to_string().contains(&widget_id),
+            "layout {} still contains {widget_id}",
+            l.breakpoint
+        );
+    }
+}

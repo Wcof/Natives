@@ -32,6 +32,7 @@ describe('apps-web-url (APPV2-T01 前端规范化回归)', () => {
     assert.equal(checkWebUrl('   ').reason, 'empty');
     // 无 scheme 的 "notaurl" 补 https 后 host 无点 → 拒绝（与 Rust 侧一致）。
     assert.equal(checkWebUrl('notaurl').reason, 'invalid-host');
+    assert.equal(checkWebUrl('baidu.').reason, 'invalid-host');
     assert.equal(checkWebUrl('https://').reason, 'invalid-host');
   });
 

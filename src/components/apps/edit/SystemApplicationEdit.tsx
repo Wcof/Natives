@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { t, useLocale } from '@/i18n';
 import { appsApi, type AppView } from '@/lib/tauri/apps';
 
@@ -17,8 +17,31 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
   const [showInSidebar, setShowInSidebar] = useState(app.showInSidebar);
   const [applicationPath, setApplicationPath] = useState('');
   const [bundleIdentifier, setBundleIdentifier] = useState('');
+  const [loadingSpec, setLoadingSpec] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingSpec(true);
+    appsApi
+      .getSystemSpec(app.appId)
+      .then((spec) => {
+        if (!active || !spec) return;
+        setApplicationPath(spec.applicationPath || '');
+        setBundleIdentifier(spec.bundleIdentifier || '');
+      })
+      .catch((err) => {
+        if (!active) return;
+        console.warn('Failed to load system application spec:', err);
+      })
+      .finally(() => {
+        if (active) setLoadingSpec(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [app.appId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,7 +91,7 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] focus:border-[var(--primary)] focus:outline-none"
           required
         />
       </div>
@@ -81,8 +104,9 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
           type="text"
           value={applicationPath}
           onChange={(e) => setApplicationPath(e.target.value)}
-          placeholder="Leave blank to keep unchanged"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          placeholder={loadingSpec ? t(locale, 'appsPage.loadingSpec') : '/Applications/Example.app'}
+          disabled={loadingSpec || submitting}
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none font-mono text-xs disabled:opacity-60"
         />
       </div>
 
@@ -94,8 +118,9 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
           type="text"
           value={bundleIdentifier}
           onChange={(e) => setBundleIdentifier(e.target.value)}
-          placeholder="com.example.app"
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--interactive-accent)] focus:outline-none"
+          placeholder={loadingSpec ? t(locale, 'appsPage.loadingSpec') : 'com.example.app'}
+          disabled={loadingSpec || submitting}
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60"
         />
       </div>
 
@@ -107,7 +132,7 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
-          className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-overlay)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--interactive-accent)] focus:outline-none resize-none"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-hover)] px-3 py-2 text-sm text-[var(--text)] focus:border-[var(--primary)] focus:outline-none resize-none"
         />
       </div>
 
@@ -117,7 +142,7 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
           id="system-show-sidebar"
           checked={showInSidebar}
           onChange={(e) => setShowInSidebar(e.target.checked)}
-          className="h-4 w-4 rounded border-[var(--border-default)] text-[var(--interactive-accent)]"
+          className="h-4 w-4 rounded border-[var(--border)] text-[var(--primary)]"
         />
         <label htmlFor="system-show-sidebar" className="text-xs text-[var(--text-secondary)] select-none">
           {t(locale, 'appsPage.showInSidebar')}
@@ -129,14 +154,14 @@ export function SystemApplicationEdit({ app, onSuccess, onCancel }: SystemApplic
           type="button"
           onClick={onCancel}
           disabled={submitting}
-          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          className="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text)]"
         >
           {t(locale, 'appsPage.cancel')}
         </button>
         <button
           type="submit"
-          disabled={submitting || !title.trim()}
-          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--interactive-accent)] text-[var(--text-on-accent)] hover:opacity-90 disabled:opacity-50 shadow-sm"
+          disabled={submitting || loadingSpec || !title.trim()}
+          className="px-4 py-2 text-sm font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)] disabled:opacity-50 shadow-sm"
         >
           {submitting ? t(locale, 'common.saving') : t(locale, 'appsPage.confirmSave')}
         </button>

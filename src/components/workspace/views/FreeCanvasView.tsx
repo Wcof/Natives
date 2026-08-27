@@ -36,7 +36,6 @@ import {
   sendToBack,
   snap,
 } from '@/lib/workspace/canvas/geometry';
-import { CANVAS_GRID } from '@/lib/workspace/canvas/types';
 import { clampCamera, fitCameraToWorld, screenToWorld, zoomAt } from '@/lib/workspace/canvas/camera';
 import {
   applyMarquee,

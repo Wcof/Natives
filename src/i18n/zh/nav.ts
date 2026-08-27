@@ -1,7 +1,7 @@
 // Natives i18n (zh) — nav
 export const nav = {
   nav: {
-    dashboard: '个人空间',
+    dashboard: '空间',
     store: '本地模块',
     workshop: '应用中心',
     assistant: '助理',
@@ -33,7 +33,7 @@ export const nav = {
     showMore: '还有 {count} 个',
     showLess: '收起',
     quickAccessDirs: {
-      home: '个人空间',
+      home: '空间',
       desktop: '桌面',
       documents: '文档',
       downloads: '下载',

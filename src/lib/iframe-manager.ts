@@ -307,8 +307,8 @@ export class IframeManager {
     overlay.style.flexDirection = 'column';
     overlay.style.alignItems = 'center';
     overlay.style.justifyContent = 'center';
-    overlay.style.background = 'rgba(0,0,0,0.7)';
-    overlay.style.color = '#fff';
+    overlay.style.background = 'var(--overlay-dense, rgba(0,0,0,0.7))';
+    overlay.style.color = 'var(--text, #fff)';
     overlay.style.zIndex = '1000';
     overlay.style.fontSize = '16px';
     overlay.style.gap = '12px';
@@ -321,9 +321,9 @@ export class IframeManager {
     reloadBtn.textContent = 'Reload';
     reloadBtn.style.padding = '8px 20px';
     reloadBtn.style.border = 'none';
-    reloadBtn.style.borderRadius = '4px';
+    reloadBtn.style.borderRadius = 'var(--radius-xs, 4px)';
     reloadBtn.style.background = 'var(--primary)';
-    reloadBtn.style.color = '#fff';
+    reloadBtn.style.color = 'var(--control-selected-fg, var(--background, #fff))';
     reloadBtn.style.cursor = 'pointer';
     reloadBtn.style.fontSize = '14px';
 

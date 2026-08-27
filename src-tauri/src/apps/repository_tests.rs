@@ -119,7 +119,8 @@ fn register_web_writes_spec_and_validates_url() {
     );
 
     let loc =
-        AppRepository::register_web(&conn, "Local", "http://localhost:3000", &[], None, false).unwrap();
+        AppRepository::register_web(&conn, "Local", "http://localhost:3000", &[], None, false)
+            .unwrap();
     assert_eq!(
         AppRepository::load_web_spec(&conn, &loc).unwrap().url,
         "http://localhost:3000"
@@ -134,6 +135,23 @@ fn register_web_writes_spec_and_validates_url() {
         .unwrap();
     assert_eq!(a, b);
     assert_eq!(AppRepository::list(&conn).unwrap().len(), 2);
+}
+
+#[test]
+fn register_web_derives_the_target_origin_at_submit_time() {
+    let conn = v28();
+    let app_id = AppRepository::register_web(
+        &conn,
+        "Baidu",
+        "https://baidu.com",
+        &["baidu.".into()],
+        None,
+        false,
+    )
+    .unwrap();
+
+    let spec = AppRepository::load_web_spec(&conn, &app_id).unwrap();
+    assert_eq!(spec.approved_origins, vec!["baidu.com"]);
 }
 
 /// APPV2-T01 回归（根因复现）：无 scheme 的用户输入（如 `chatgpt.com`）
@@ -389,4 +407,62 @@ fn instance_and_surface_queries_project_strong_types() {
     )
     .unwrap();
     assert!(AppRepository::active_instance(&conn, &a).unwrap().is_none());
+}
+
+#[test]
+fn load_spec_queries_roundtrip_correctly() {
+    let conn = v28();
+    let web_id = AppRepository::register_web(
+        &conn,
+        "ChatGPT",
+        "https://chatgpt.com",
+        &["chatgpt.com".into(), "oaistatic.com".into()],
+        Some("native_webview"),
+        true,
+    )
+    .unwrap();
+
+    let web_spec = AppRepository::load_web_spec(&conn, &web_id).unwrap();
+    assert_eq!(web_spec.application_id, web_id);
+    assert_eq!(web_spec.url, "https://chatgpt.com");
+    assert_eq!(
+        web_spec.approved_origins,
+        vec!["chatgpt.com".to_string(), "oaistatic.com".to_string()]
+    );
+    assert_eq!(web_spec.open_behavior, "native_webview");
+    assert!(web_spec.keep_alive);
+
+    let sys_id = AppRepository::register_system(
+        &conn,
+        "Calculator",
+        "/System/Applications/Calculator.app",
+        Some("com.apple.calculator"),
+        "macos",
+        Some("activate_existing"),
+        RegistrationOrigin::Manual,
+    )
+    .unwrap();
+
+    let sys_spec = AppRepository::load_system_spec(&conn, &sys_id).unwrap();
+    assert_eq!(sys_spec.application_id, sys_id);
+    assert_eq!(
+        sys_spec.application_path,
+        "/System/Applications/Calculator.app"
+    );
+    assert_eq!(
+        sys_spec.bundle_identifier.as_deref(),
+        Some("com.apple.calculator")
+    );
+    assert_eq!(sys_spec.platform, "macos");
+    assert_eq!(sys_spec.launch_policy, "activate_existing");
+
+    // 跨类型查询返回 NotFound 错误。
+    assert!(matches!(
+        AppRepository::load_web_spec(&conn, &sys_id),
+        Err(Error::NotFound(_))
+    ));
+    assert!(matches!(
+        AppRepository::load_system_spec(&conn, &web_id),
+        Err(Error::NotFound(_))
+    ));
 }

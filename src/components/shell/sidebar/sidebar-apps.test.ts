@@ -28,6 +28,7 @@ describe('Sidebar Apps Projection (APP-060 / APP-061 / APP-071)', () => {
         showInSidebar: false,
         capabilities: { canStart: true, canStop: false, canRestart: false, canOpen: false, canEdit: true, canRemove: true, canSidebar: true, riskLevel: 0 },
         runtimeState: 'stopped',
+        updatedAt: '2026-08-25T00:00:00Z',
       },
       {
         appId: '2',
@@ -38,6 +39,7 @@ describe('Sidebar Apps Projection (APP-060 / APP-061 / APP-071)', () => {
         sidebarOrder: 2,
         capabilities: { canStart: false, canStop: false, canRestart: false, canOpen: true, canEdit: true, canRemove: true, canSidebar: true, riskLevel: 0 },
         runtimeState: 'stopped',
+        updatedAt: '2026-08-25T00:00:00Z',
       },
       {
         appId: '3',
@@ -48,6 +50,7 @@ describe('Sidebar Apps Projection (APP-060 / APP-061 / APP-071)', () => {
         sidebarOrder: 1,
         capabilities: { canStart: false, canStop: false, canRestart: false, canOpen: true, canEdit: true, canRemove: true, canSidebar: true, riskLevel: 0 },
         runtimeState: 'stopped',
+        updatedAt: '2026-08-25T00:00:00Z',
       },
     ];
 

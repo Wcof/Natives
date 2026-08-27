@@ -27,6 +27,19 @@ use super::migration_v29::complete_pws2_schema;
 use crate::Error;
 use rusqlite::Connection;
 
+/// Unify historical system default workspace names ("Personal Workspace",
+/// "个人空间", "个人工作区") into "空间" without altering user-customized names.
+pub(crate) fn unify_default_workspace_names(conn: &Connection) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE workspaces
+         SET name = '空间'
+         WHERE name IN ('Personal Workspace', '个人空间', '个人工作区')",
+        [],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 /// Migration v29 → v30: complete (idempotently) the PWSV2 schema that v29
 /// started, re-assert the appearance authority lock, then advance the marker.
 ///
@@ -41,6 +54,7 @@ use rusqlite::Connection;
 pub(super) fn migrate_v30(conn: &Connection) -> Result<(), Error> {
     complete_pws2_schema(conn)?;
     super::migration_v27::resolve_theme_authority(conn)?;
+    unify_default_workspace_names(conn)?;
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '30')",
         [],
@@ -193,11 +207,8 @@ mod migration_v30_validation {
             [],
         )
         .unwrap();
-        conn.execute(
-            "DELETE FROM settings WHERE key = 'settings:theme'",
-            [],
-        )
-        .unwrap();
+        conn.execute("DELETE FROM settings WHERE key = 'settings:theme'", [])
+            .unwrap();
 
         super::migrate_v30(&conn).unwrap();
         let locked: String = conn
@@ -432,5 +443,66 @@ mod migration_v30_validation {
             conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {col}"), [])
                 .unwrap();
         }
+    }
+
+    /// Unify default workspace names while preserving custom names.
+    #[test]
+    fn v30_unifies_default_workspace_names_without_touching_custom() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_tables(&conn).unwrap();
+        apply_migrations(&conn).unwrap();
+
+        // Insert test workspaces with historical names and custom names
+        conn.execute(
+            "INSERT INTO workspaces (id, name, kind, theme, position, created_at, updated_at)
+             VALUES ('ws1', 'Personal Workspace', 'workspace', 'dark', 0, '2026-08-25', '2026-08-25')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, name, kind, theme, position, created_at, updated_at)
+             VALUES ('ws2', '个人空间', 'workspace', 'dark', 1, '2026-08-25', '2026-08-25')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, name, kind, theme, position, created_at, updated_at)
+             VALUES ('ws3', '个人工作区', 'workspace', 'dark', 2, '2026-08-25', '2026-08-25')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, name, kind, theme, position, created_at, updated_at)
+             VALUES ('ws4', 'My Custom Space', 'workspace', 'dark', 3, '2026-08-25', '2026-08-25')",
+            [],
+        )
+        .unwrap();
+
+        super::unify_default_workspace_names(&conn).unwrap();
+
+        let n1: String = conn
+            .query_row("SELECT name FROM workspaces WHERE id = 'ws1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let n2: String = conn
+            .query_row("SELECT name FROM workspaces WHERE id = 'ws2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let n3: String = conn
+            .query_row("SELECT name FROM workspaces WHERE id = 'ws3'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let n4: String = conn
+            .query_row("SELECT name FROM workspaces WHERE id = 'ws4'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(n1, "空间");
+        assert_eq!(n2, "空间");
+        assert_eq!(n3, "空间");
+        assert_eq!(n4, "My Custom Space");
     }
 }
