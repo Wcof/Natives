@@ -1,7 +1,7 @@
 /**
  * Space Shadow DOM Dashboard controller (<280 lines).
- * Handles: background rendering with backdrop filters, nine-grid slots,
- * full typography/display styles, and free-drag/scale/rotate gestures with zero IPC during move.
+ * Implements: In-place DOM Registry (Mount/Patch/Move/Unmount),
+ * GPU Compositing pipeline (translate3d/RAF throttle), and modular CSS caching.
  */
 
 export function createSpaceDashboard({
@@ -16,23 +16,25 @@ export function createSpaceDashboard({
 }) {
   let dashboardShadow = null;
   let dashboardRoot = null;
+  let bgLayerEl = null;
+  let currentBgKey = '';
+  let currentBgDisplayStr = '';
 
-  function buildShadow() {
-    const host = $('dashboard-host');
-    if (dashboardShadow && dashboardRoot && host.shadowRoot === dashboardShadow) {
-      dashboardRoot.replaceChildren();
-      return { shadow: dashboardShadow, root: dashboardRoot };
-    }
-    host.replaceChildren();
-    dashboardShadow = host.attachShadow({ mode: 'open' });
+  // Slot DOM containers: { topLeft, topCentre, ..., freeRoot }
+  const slotContainers = {};
+  // In-place Widget Registry: Map<widgetId, { element, wrapperEl, widget, pos, disposer }>
+  const widgetRegistry = new Map();
 
+  // Static cached stylesheet string compiled once
+  let staticStyleContent = '';
+  function getCompiledStyleSheet() {
+    if (staticStyleContent) return staticStyleContent;
     const pluginStyles = [
       ...Object.values(backgroundPlugins || {}).map((p) => p.styles || ''),
       ...Object.values(widgetPlugins || {}).map((p) => p.styles || ''),
     ].filter(Boolean).join('\n');
 
-    const style = document.createElement('style');
-    style.textContent = `
+    staticStyleContent = `
       :host { all: initial; }
       .dashboard { width:100%; height:100%; position:relative; overflow:hidden; display:grid; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif; }
       .background-layer { position:absolute; inset:0; background-size:cover; background-position:center; transition:background 0.3s ease, filter 0.3s ease; }
@@ -56,118 +58,116 @@ export function createSpaceDashboard({
       .free-widget .handle-rotate { top:-14px; left:50%; transform:translateX(-50%); cursor:grab; }
       ${pluginStyles}
     `;
+    return staticStyleContent;
+  }
+
+  function ensureShadowShell() {
+    const host = $('dashboard-host');
+    if (dashboardShadow && dashboardRoot && host?.shadowRoot === dashboardShadow) {
+      return { shadow: dashboardShadow, root: dashboardRoot };
+    }
+    if (!host) return { shadow: null, root: null };
+
+    host.replaceChildren();
+    dashboardShadow = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = getCompiledStyleSheet();
     dashboardShadow.append(style);
+
     dashboardRoot = document.createElement('div');
     dashboardRoot.className = 'dashboard';
     dashboardShadow.append(dashboardRoot);
+
+    // Create background layer
+    bgLayerEl = document.createElement('div');
+    bgLayerEl.className = 'background-layer';
+    dashboardRoot.append(bgLayerEl);
+
+    // Create nine-grid slot containers
+    const NINE_SLOTS = [
+      'topLeft', 'topCentre', 'topRight',
+      'middleLeft', 'middleCentre', 'middleRight',
+      'bottomLeft', 'bottomCentre', 'bottomRight',
+    ];
+    for (const slotName of NINE_SLOTS) {
+      const slotEl = document.createElement('div');
+      slotEl.className = `slot ${slotName}`;
+      dashboardRoot.append(slotEl);
+      slotContainers[slotName] = slotEl;
+    }
+
     return { shadow: dashboardShadow, root: dashboardRoot };
   }
 
   function render(snapshot, activeWorkspaceId, updateSnapshot) {
     if (!snapshot) return;
-    const { shadow, root } = buildShadow();
+    const { shadow, root } = ensureShadowShell();
+    if (!shadow || !root) return;
 
-    // 1. Render Background with Backdrop Filters (blur, brightness, night mode)
+    // 1. In-place Background Check & Patch
     const bgData = snapshot.backgroundJson || {};
     const bgKey = bgData.key || 'background/colour';
-    const bgPlugin = backgroundPlugins[bgKey] || backgroundPlugins['background/colour'];
     const bgDisplay = bgData.display || bgData.data || {};
+    const bgDisplayStr = JSON.stringify(bgDisplay);
 
-    if (bgPlugin) {
-      const bgContainer = document.createElement('div');
-      bgContainer.className = 'background-layer';
-
-      // Check night mode dimming
-      let isNight = false;
-      if (bgDisplay.nightDim) {
-        const h = new Date().getHours();
-        isNight = h >= 20 || h < 6;
+    if (bgKey !== currentBgKey || bgDisplayStr !== currentBgDisplayStr) {
+      currentBgKey = bgKey;
+      currentBgDisplayStr = bgDisplayStr;
+      const bgPlugin = backgroundPlugins[bgKey] || backgroundPlugins['background/colour'];
+      if (bgPlugin && bgLayerEl) {
+        let isNight = false;
+        if (bgDisplay.nightDim) {
+          const h = new Date().getHours();
+          isNight = h >= 20 || h < 6;
+        }
+        const blurPx = Number(bgDisplay.blur) || 0;
+        const bright = bgDisplay.brightness ?? (isNight ? 0.6 : 1);
+        bgLayerEl.style.filter = (blurPx > 0 || bright !== 1) ? `blur(${blurPx}px) brightness(${bright})` : 'none';
+        bgPlugin.render(bgLayerEl, bgDisplay, { t, lang: selectedLanguage });
       }
-
-      const blurPx = Number(bgDisplay.blur) || 0;
-      let bright = bgDisplay.brightness ?? (isNight ? 0.6 : 1);
-      if (blurPx > 0 || bright !== 1) {
-        bgContainer.style.filter = `blur(${blurPx}px) brightness(${bright})`;
-      }
-
-      bgPlugin.render(bgContainer, bgDisplay, { t, lang: selectedLanguage });
-      root.append(bgContainer);
     }
 
-    // 2. Group Widgets by position
-    const byPosition = {};
-    const freeWidgets = [];
-    for (const widget of snapshot.widgets || []) {
-      if (!widget.enabled) continue;
+    // 2. In-place Diff & Patch of Widgets
+    const incomingWidgets = (snapshot.widgets || []).filter((w) => w.enabled);
+    const incomingIds = new Set(incomingWidgets.map((w) => w.id));
+
+    // Remove unmounted widgets
+    for (const [id, entry] of widgetRegistry.entries()) {
+      if (!incomingIds.has(id)) {
+        entry.disposer?.();
+        (entry.wrapperEl || entry.element).remove();
+        widgetRegistry.delete(id);
+      }
+    }
+
+    // Mount or patch incoming widgets
+    for (const widget of incomingWidgets) {
+      const existing = widgetRegistry.get(widget.id);
       const pos = widget.displayJson?.position || 'middleCentre';
-      if (pos === 'free') {
-        freeWidgets.push(widget);
+
+      if (!existing) {
+        // Mount new widget
+        mountWidget(widget, pos, shadow, root, snapshot, activeWorkspaceId, updateSnapshot);
       } else {
-        (byPosition[pos] = byPosition[pos] || []).push(widget);
+        // In-place patch existing widget
+        patchWidget(existing, widget, pos, shadow, root, snapshot, activeWorkspaceId, updateSnapshot);
       }
-    }
-
-    // 3. Render Nine-grid slots
-    for (const [pos, widgets] of Object.entries(byPosition)) {
-      const slot = document.createElement('div');
-      slot.className = `slot ${pos}`;
-      for (const widget of widgets.sort((a, b) => a.order - b.order)) {
-        const el = createWidgetEl(widget, shadow, snapshot, activeWorkspaceId, updateSnapshot);
-        if (el) slot.append(el);
-      }
-      root.append(slot);
-    }
-
-    // 4. Render Free-positioned Widgets
-    for (const widget of freeWidgets) {
-      const freeWrapper = document.createElement('div');
-      freeWrapper.className = 'slot free-widget';
-      const disp = widget.displayJson || {};
-      const x = disp.xPercent ?? disp.x ?? 50;
-      const y = disp.yPercent ?? disp.y ?? 50;
-      const scale = disp.scale ?? 1;
-      const rot = disp.rotation ?? 0;
-      freeWrapper.style.left = `${x}%`;
-      freeWrapper.style.top = `${y}%`;
-      freeWrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${rot}deg)`;
-      freeWrapper.dataset.widgetId = widget.id;
-
-      // Handles for scale and rotate
-      const scaleHandle = document.createElement('div');
-      scaleHandle.className = 'free-handle handle-scale';
-      const rotHandle = document.createElement('div');
-      rotHandle.className = 'free-handle handle-rotate';
-      freeWrapper.append(scaleHandle, rotHandle);
-
-      attachFreeGestures(freeWrapper, scaleHandle, rotHandle, widget, snapshot, activeWorkspaceId, updateSnapshot);
-      const el = createWidgetEl(widget, shadow, snapshot, activeWorkspaceId, updateSnapshot);
-      if (el) freeWrapper.append(el);
-      root.append(freeWrapper);
     }
   }
 
-  function createWidgetEl(widget, shadowRoot, snapshot, activeWorkspaceId, updateSnapshot) {
+  function mountWidget(widget, pos, shadowRoot, root, snapshot, activeWorkspaceId, updateSnapshot) {
     const plugin = widgetPlugins[widget.key];
-    if (!plugin) return null;
+    if (!plugin) return;
+
     const container = document.createElement('div');
     const keyClass = widget.key.replace('widget/', '');
     container.className = `widget-container widget-${keyClass}`;
     container.dataset.widgetId = widget.id;
 
-    // Apply Display & Typography configuration
-    const disp = widget.displayJson || {};
-    if (disp.fontSize) container.style.fontSize = `${disp.fontSize}px`;
-    if (disp.colour && !disp.useAccentColor) container.style.color = disp.colour;
-    if (disp.useAccentColor) container.style.color = 'var(--accent, #cdf24b)';
-    if (disp.fontWeight) container.style.fontWeight = String(disp.fontWeight);
-    if (disp.fontStyle) container.style.fontStyle = disp.fontStyle;
-    if (disp.textDecoration) container.style.textDecoration = disp.textDecoration;
+    applyWidgetDisplayStyles(container, widget.displayJson || {});
 
-    // Custom CSS class (validated token)
-    if (disp.customClass && /^[a-zA-Z0-9_-]+$/.test(disp.customClass)) {
-      container.classList.add(disp.customClass);
-    }
-
+    let disposer = null;
     plugin.render(container, widget.configJson || {}, widget.displayJson || {}, {
       t,
       lang: selectedLanguage,
@@ -189,13 +189,93 @@ export function createSpaceDashboard({
       e.stopPropagation();
       onSelectWidget(widget.id);
     };
-    return container;
+
+    let wrapperEl = null;
+    if (pos === 'free') {
+      wrapperEl = document.createElement('div');
+      wrapperEl.className = 'slot free-widget';
+      const disp = widget.displayJson || {};
+      wrapperEl.style.left = `${disp.xPercent ?? 50}%`;
+      wrapperEl.style.top = `${disp.yPercent ?? 50}%`;
+      wrapperEl.style.transform = `translate(-50%, -50%) scale(${disp.scale ?? 1}) rotate(${disp.rotation ?? 0}deg)`;
+      wrapperEl.dataset.widgetId = widget.id;
+
+      const scaleHandle = document.createElement('div');
+      scaleHandle.className = 'free-handle handle-scale';
+      const rotHandle = document.createElement('div');
+      rotHandle.className = 'free-handle handle-rotate';
+      wrapperEl.append(scaleHandle, rotHandle, container);
+
+      attachFreeGestures(wrapperEl, scaleHandle, rotHandle, widget, snapshot, activeWorkspaceId, updateSnapshot);
+      root.append(wrapperEl);
+    } else {
+      const targetSlot = slotContainers[pos] || slotContainers.middleCentre;
+      targetSlot?.append(container);
+    }
+
+    widgetRegistry.set(widget.id, {
+      element: container,
+      wrapperEl,
+      widget,
+      pos,
+      disposer,
+    });
+  }
+
+  function patchWidget(entry, nextWidget, nextPos, shadowRoot, root, snapshot, activeWorkspaceId, updateSnapshot) {
+    const prevWidget = entry.widget;
+    entry.widget = nextWidget;
+
+    // Check position move
+    if (entry.pos !== nextPos) {
+      entry.disposer?.();
+      (entry.wrapperEl || entry.element).remove();
+      widgetRegistry.delete(nextWidget.id);
+      mountWidget(nextWidget, nextPos, shadowRoot, root, snapshot, activeWorkspaceId, updateSnapshot);
+      return;
+    }
+
+    // In-place style & class update
+    applyWidgetDisplayStyles(entry.element, nextWidget.displayJson || {});
+
+    // Re-render plugin contents only if config changed
+    if (JSON.stringify(prevWidget.configJson) !== JSON.stringify(nextWidget.configJson)) {
+      const plugin = widgetPlugins[nextWidget.key];
+      plugin?.render?.(entry.element, nextWidget.configJson || {}, nextWidget.displayJson || {}, {
+        t,
+        lang: selectedLanguage,
+        shadowRoot,
+        onDataChange: async (nextData) => {
+          try {
+            const result = await nativeCall('workspace_widget_upsert', {
+              workspaceId: activeWorkspaceId,
+              widget: { ...nextWidget, configJson: nextData },
+              expectedRevision: snapshot.revision,
+            });
+            updateSnapshot(result);
+            broadcastRevision();
+          } catch (err) {}
+        },
+      });
+    }
+  }
+
+  function applyWidgetDisplayStyles(container, disp) {
+    container.style.fontSize = disp.fontSize ? `${disp.fontSize}px` : '';
+    container.style.color = disp.useAccentColor ? 'var(--accent, #cdf24b)' : (disp.colour || '');
+    container.style.fontWeight = disp.fontWeight ? String(disp.fontWeight) : '';
+    container.style.fontStyle = disp.fontStyle || '';
+    container.style.textDecoration = disp.textDecoration || '';
+
+    // Custom class token
+    if (disp.customClass && /^[a-zA-Z0-9_-]+$/.test(disp.customClass)) {
+      container.classList.add(disp.customClass);
+    }
   }
 
   function attachFreeGestures(element, scaleHandle, rotHandle, widget, snapshot, activeWorkspaceId, updateSnapshot) {
-    let isDragging = false;
-    let isScaling = false;
-    let isRotating = false;
+    let isInteracting = false;
+    let mode = 'idle'; // 'drag' | 'scale' | 'rotate'
     let startX = 0;
     let startY = 0;
     let initXPercent = widget.displayJson?.xPercent ?? 50;
@@ -203,64 +283,95 @@ export function createSpaceDashboard({
     let initScale = widget.displayJson?.scale ?? 1;
     let initRot = widget.displayJson?.rotation ?? 0;
 
+    let rafId = null;
+    let curDx = 0;
+    let curDy = 0;
+    let curScale = initScale;
+    let curRot = initRot;
+
+    function applyTransform() {
+      if (mode === 'drag') {
+        element.style.transform = `translate3d(calc(-50% + ${curDx}px), calc(-50% + ${curDy}px), 0) scale(${initScale}) rotate(${initRot}deg)`;
+      } else if (mode === 'scale') {
+        element.style.transform = `translate3d(-50%, -50%, 0) scale(${curScale}) rotate(${initRot}deg)`;
+      } else if (mode === 'rotate') {
+        element.style.transform = `translate3d(-50%, -50%, 0) scale(${initScale}) rotate(${curRot}deg)`;
+      }
+      rafId = null;
+    }
+
     element.onpointerdown = (e) => {
       if (['INPUT', 'TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) return;
       if (e.target === scaleHandle || e.target === rotHandle) return;
-      isDragging = true;
+      isInteracting = true;
+      mode = 'drag';
       startX = e.clientX;
       startY = e.clientY;
       element.setPointerCapture(e.pointerId);
+      element.style.willChange = 'transform';
       e.stopPropagation();
     };
 
     scaleHandle.onpointerdown = (e) => {
-      isScaling = true;
+      isInteracting = true;
+      mode = 'scale';
       startX = e.clientX;
       scaleHandle.setPointerCapture(e.pointerId);
+      element.style.willChange = 'transform';
       e.stopPropagation();
     };
 
     rotHandle.onpointerdown = (e) => {
-      isRotating = true;
+      isInteracting = true;
+      mode = 'rotate';
       startX = e.clientX;
       rotHandle.setPointerCapture(e.pointerId);
+      element.style.willChange = 'transform';
       e.stopPropagation();
     };
 
     element.onpointermove = (e) => {
-      const host = $('dashboard-host');
-      if (isDragging) {
-        const dx = ((e.clientX - startX) / host.offsetWidth) * 100;
-        const dy = ((e.clientY - startY) / host.offsetHeight) * 100;
-        element.style.left = `${Math.max(0, Math.min(100, initXPercent + dx))}%`;
-        element.style.top = `${Math.max(0, Math.min(100, initYPercent + dy))}%`;
-      } else if (isScaling) {
+      if (!isInteracting) return;
+      if (mode === 'drag') {
+        curDx = e.clientX - startX;
+        curDy = e.clientY - startY;
+      } else if (mode === 'scale') {
         const ds = (e.clientX - startX) * 0.01;
-        const nextScale = Math.max(0.2, Math.min(3, initScale + ds));
-        element.style.transform = `translate(-50%, -50%) scale(${nextScale}) rotate(${initRot}deg)`;
-      } else if (isRotating) {
+        curScale = Math.max(0.2, Math.min(3, initScale + ds));
+      } else if (mode === 'rotate') {
         const dr = (e.clientX - startX) * 1.5;
-        const nextRot = Math.round(initRot + dr);
-        element.style.transform = `translate(-50%, -50%) scale(${initScale}) rotate(${nextRot}deg)`;
+        curRot = Math.round(initRot + dr);
+      }
+      if (!rafId && typeof requestAnimationFrame !== 'undefined') {
+        rafId = requestAnimationFrame(applyTransform);
       }
     };
 
     element.onpointerup = async (e) => {
-      if (!isDragging && !isScaling && !isRotating) return;
-      const wasDrag = isDragging;
-      const wasScale = isScaling;
-      const wasRotate = isRotating;
-      isDragging = false;
-      isScaling = false;
-      isRotating = false;
+      if (!isInteracting) return;
+      isInteracting = false;
+      element.style.willChange = 'auto';
+      if (rafId && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId);
 
       const host = $('dashboard-host');
-      const dx = ((e.clientX - startX) / host.offsetWidth) * 100;
-      const dy = ((e.clientY - startY) / host.offsetHeight) * 100;
-      const finalX = wasDrag ? Math.round(Math.max(0, Math.min(100, initXPercent + dx)) * 10) / 10 : initXPercent;
-      const finalY = wasDrag ? Math.round(Math.max(0, Math.min(100, initYPercent + dy)) * 10) / 10 : initYPercent;
-      const finalScale = wasScale ? Math.round(Math.max(0.2, Math.min(3, initScale + (e.clientX - startX) * 0.01)) * 10) / 10 : initScale;
-      const finalRot = wasRotate ? Math.round(initRot + (e.clientX - startX) * 1.5) : initRot;
+      const hostW = host?.offsetWidth || window.innerWidth;
+      const hostH = host?.offsetHeight || window.innerHeight;
+
+      const finalDxPercent = (curDx / hostW) * 100;
+      const finalDyPercent = (curDy / hostH) * 100;
+      const finalX = mode === 'drag' ? Math.round(Math.max(0, Math.min(100, initXPercent + finalDxPercent)) * 10) / 10 : initXPercent;
+      const finalY = mode === 'drag' ? Math.round(Math.max(0, Math.min(100, initYPercent + finalDyPercent)) * 10) / 10 : initYPercent;
+      const finalScale = mode === 'scale' ? Math.round(curScale * 10) / 10 : initScale;
+      const finalRot = mode === 'rotate' ? curRot : initRot;
+
+      // Reset transform and commit position in-place
+      element.style.left = `${finalX}%`;
+      element.style.top = `${finalY}%`;
+      element.style.transform = `translate(-50%, -50%) scale(${finalScale}) rotate(${finalRot}deg)`;
+
+      mode = 'idle';
+      curDx = 0;
+      curDy = 0;
 
       try {
         const nextDisplay = {
@@ -284,12 +395,20 @@ export function createSpaceDashboard({
     };
 
     element.onpointercancel = () => {
-      isDragging = false;
-      isScaling = false;
-      isRotating = false;
+      isInteracting = false;
+      mode = 'idle';
+      element.style.willChange = 'auto';
       render(snapshot, activeWorkspaceId, updateSnapshot);
     };
   }
 
-  return { render };
+  return {
+    render,
+    destroy() {
+      for (const entry of widgetRegistry.values()) {
+        entry.disposer?.();
+      }
+      widgetRegistry.clear();
+    },
+  };
 }

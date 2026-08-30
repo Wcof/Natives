@@ -1,195 +1,40 @@
 import assert from 'node:assert/strict';
-import { widgetPlugins, backgroundPlugins, WIDGET_KEYS, BACKGROUND_KEYS } from './space-plugins.js';
+import { widgetPlugins, backgroundPlugins } from './space-plugins.js';
 import { clearMemCache, getMemCache } from './plugins/plugins-cache.js';
+import { MockElement, setupTestDomEnvironment } from './test-dom-mock.js';
 
 console.log('=== Personal Space Deep Verification Suite ===');
 
-// 1. Minimal DOM Mock Environment
-globalThis.Node = { ELEMENT_NODE: 1, TEXT_NODE: 3 };
+setupTestDomEnvironment();
 
-class MockElement {
-  constructor(tagName = 'div') {
-    this.tagName = tagName.toUpperCase();
-    this.nodeType = globalThis.Node.ELEMENT_NODE;
-    this.id = '';
-    this.style = {};
-    this.dataset = {};
-    this.attributes = [];
-    this.childNodes = [];
-    this.parentNode = null;
-    this.classList = {
-      _classes: new Set(),
-      add(...cls) { cls.forEach((c) => this._classes.add(c)); },
-      remove(...cls) { cls.forEach((c) => this._classes.delete(c)); },
-      contains(c) { return this._classes.has(c); },
-    };
-    this._textContent = '';
-  }
-
-  get className() { return Array.from(this.classList._classes).join(' '); }
-  set className(val) {
-    this.classList._classes.clear();
-    String(val).split(/\s+/).filter(Boolean).forEach((c) => this.classList._classes.add(c));
-  }
-
-  get children() { return this.childNodes.filter((n) => n.nodeType === globalThis.Node.ELEMENT_NODE); }
-  get textContent() {
-    if (this.childNodes.length > 0) {
-      return this.childNodes.map((n) => n.textContent).join(' ');
-    }
-    return this._textContent;
-  }
-  set textContent(val) {
-    this._textContent = String(val);
-    this.childNodes = [];
-  }
-
-  get innerHTML() {
-    if (this.childNodes.length > 0) {
-      return this.childNodes.map((n) => {
-        const tag = n.tagName.toLowerCase();
-        const attrs = n.attributes.map((a) => ` ${a.name}="${a.value}"`).join('');
-        return `<${tag}${attrs}>${n.innerHTML || n.textContent}</${tag}>`;
-      }).join('');
-    }
-    return this._textContent;
-  }
-  set innerHTML(html) {
-    this.childNodes = [];
-    const matches = html.matchAll(/<([a-z0-9-]+)([^>]*)>(.*?)<\/\1>|<([a-z0-9-]+)([^>]*)\/?>/gis);
-    for (const match of matches) {
-      const tag = match[1] || match[4];
-      const attrs = match[2] || match[5] || '';
-      const text = match[3] || '';
-      const child = new MockElement(tag);
-      child.parentNode = this;
-      const idMatch = attrs.match(/id="([^"]+)"/);
-      if (idMatch) child.id = idMatch[1];
-      const typeMatch = attrs.match(/type="([^"]+)"/);
-      if (typeMatch) child.type = typeMatch[1];
-      const valMatch = attrs.match(/value="([^"]*)"/);
-      if (valMatch) child.value = valMatch[1];
-      if (/checked/i.test(attrs)) child.checked = true;
-      if (text && !text.startsWith('<')) child.textContent = text;
-      this.childNodes.push(child);
-    }
-  }
-
-  append(...nodes) {
-    nodes.forEach((n) => {
-      n.parentNode = this;
-      this.childNodes.push(n);
-    });
-  }
-  replaceChildren(...nodes) {
-    this.childNodes = [];
-    this.append(...nodes);
-    this._textContent = '';
-  }
-  setAttribute(k, v) {
-    const existing = this.attributes.find((a) => a.name === k);
-    if (existing) existing.value = String(v);
-    else this.attributes.push({ name: k, value: String(v) });
-  }
-  getAttribute(k) {
-    const a = this.attributes.find((attr) => attr.name === k);
-    return a ? a.value : null;
-  }
-  removeAttribute(k) { this.attributes = this.attributes.filter((a) => a.name !== k); }
-  remove() {
-    if (this.parentNode) {
-      this.parentNode.childNodes = this.parentNode.childNodes.filter((c) => c !== this);
-    }
-  }
-  querySelector(sel) {
-    return this.querySelectorAll(sel)[0] || null;
-  }
-  querySelectorAll(sel) {
-    const idMatch = sel.match(/#([a-zA-Z0-9_-]+)/);
-    const tagMatch = sel.match(/^[a-zA-Z0-9_-]+/);
-    const isClass = sel.startsWith('.');
-    const isCheckbox = sel.includes('[type="checkbox"]');
-
-    const results = [];
-    const walk = (node) => {
-      for (const child of node.childNodes) {
-        if (child.nodeType === globalThis.Node.ELEMENT_NODE) {
-          let match = true;
-          if (idMatch && child.id !== idMatch[1]) match = false;
-          if (tagMatch && child.tagName !== tagMatch[0].toUpperCase()) match = false;
-          if (isClass && !child.classList?.contains(sel.slice(1))) match = false;
-          if (isCheckbox && (child.tagName !== 'INPUT' || child.type !== 'checkbox')) match = false;
-          if (match) results.push(child);
-          walk(child);
-        }
-      }
-    };
-    walk(this);
-    return results;
-  }
-}
-
-globalThis.document = {
-  createElement(tag) { return new MockElement(tag); },
-};
-globalThis.DOMParser = class {
-  parseFromString(html) {
-    const doc = new MockElement('body');
-    doc.innerHTML = html;
-    return { body: doc };
-  }
-};
-
-// 2. Fetch Mock with parameter tracking
+// Fetch Mock with parameter tracking
 let lastFetchedUrl = '';
 globalThis.fetch = async (url) => {
   lastFetchedUrl = String(url);
-  if (lastFetchedUrl.includes('biturl.top')) {
-    return { json: async () => ({ url: 'https://bing.com/th?id=OHR.DailyWallpaper_1920x1080.jpg' }) };
-  }
-  if (lastFetchedUrl.includes('nasa.gov')) {
-    return { json: async () => ({ url: 'https://apod.nasa.gov/apod/image/stars.jpg', media_type: 'image' }) };
-  }
-  if (lastFetchedUrl.includes('wikimedia.org')) {
-    return { json: async () => ({ image: { thumbnail: { source: 'https://upload.wikimedia.org/potd.jpg' } } }) };
-  }
-  if (lastFetchedUrl.includes('open-meteo.com')) {
-    return { json: async () => ({ current: { temperature_2m: 24.5, weather_code: 0 } }) };
-  }
-  if (lastFetchedUrl.includes('er-api.com')) {
-    return { json: async () => ({ rates: { CNY: 7.24, EUR: 0.92 } }) };
-  }
-  if (lastFetchedUrl.includes('coingecko.com')) {
-    return { json: async () => ({ bitcoin: { usd: 68000, cny: 480000 } }) };
-  }
-  if (lastFetchedUrl.includes('ipify.org')) {
-    return { json: async () => ({ ip: '203.0.113.195' }) };
-  }
-  if (lastFetchedUrl.includes('jokeapi.dev')) {
-    return { json: async () => ({ joke: 'Why do programmers wear glasses? Because they need C#.' }) };
-  }
-  if (lastFetchedUrl.includes('leetcode')) {
-    return { json: async () => ({ questionTitle: 'Two Sum', difficulty: 'Easy', questionLink: 'https://leetcode.com/problems/two-sum' }) };
-  }
+  if (lastFetchedUrl.includes('biturl.top')) return { json: async () => ({ url: 'https://bing.com/th?id=OHR.DailyWallpaper_1920x1080.jpg' }) };
+  if (lastFetchedUrl.includes('nasa.gov')) return { json: async () => ({ url: 'https://apod.nasa.gov/apod/image/stars.jpg', media_type: 'image' }) };
+  if (lastFetchedUrl.includes('wikimedia.org')) return { json: async () => ({ image: { thumbnail: { source: 'https://upload.wikimedia.org/potd.jpg' } } }) };
+  if (lastFetchedUrl.includes('open-meteo.com')) return { json: async () => ({ current: { temperature_2m: 24.5, weather_code: 0 } }) };
+  if (lastFetchedUrl.includes('er-api.com')) return { json: async () => ({ rates: { CNY: 7.24, EUR: 0.92 } }) };
+  if (lastFetchedUrl.includes('coingecko.com')) return { json: async () => ({ bitcoin: { usd: 68000, cny: 480000 } }) };
+  if (lastFetchedUrl.includes('ipify.org')) return { json: async () => ({ ip: '203.0.113.195' }) };
+  if (lastFetchedUrl.includes('jokeapi.dev')) return { json: async () => ({ joke: 'Why do programmers wear glasses? Because they need C#.' }) };
+  if (lastFetchedUrl.includes('leetcode')) return { json: async () => ({ questionTitle: 'Two Sum', difficulty: 'Easy', questionLink: 'https://leetcode.com/problems/two-sum' }) };
   return { json: async () => ({}) };
 };
 
 globalThis.chrome = {
   bookmarks: {
-    getRecent(count, cb) {
-      cb([
-        { id: 'b1', title: 'GitHub', url: 'https://github.com' },
-        { id: 'b2', title: 'MDN', url: 'https://developer.mozilla.org' },
-      ]);
-    },
+    getRecent: (count, cb) => cb([
+      { id: 'b1', title: 'GitHub', url: 'https://github.com' },
+      { id: 'b2', title: 'MDN', url: 'https://developer.mozilla.org' },
+    ]),
   },
   topSites: {
-    get(cb) {
-      cb([
-        { title: 'Google', url: 'https://google.com' },
-        { title: 'Bing', url: 'https://bing.com' },
-      ]);
-    },
+    get: (cb) => cb([
+      { title: 'Google', url: 'https://google.com' },
+      { title: 'Bing', url: 'https://bing.com' },
+    ]),
   },
 };
 
