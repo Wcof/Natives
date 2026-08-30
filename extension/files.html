@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="archive">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title data-i18n="appName">Natives Files</title>
+    <link rel="stylesheet" href="files.css" />
+  </head>
+  <body>
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></symbol>
+      <symbol id="i-forward" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z" /></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 20h16" /></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h5" /></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></symbol>
+      <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 5v14m-4-4 4 4 4-4M16 19V5m-4 4 4-4 4 4" /></symbol>
+      <symbol id="i-preview" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></symbol>
+      <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5m13 5h5v-5" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+      <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></symbol>
+      <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></symbol>
+      <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M10 20H4v-6M4 20l8-8" /></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z" /></symbol>
+      <symbol id="i-rotate-left" viewBox="0 0 24 24"><path d="M4 5v5h5M4 10a8 8 0 1 1 2.3 6.3" /></symbol>
+      <symbol id="i-rotate-right" viewBox="0 0 24 24"><path d="M20 5v5h-5M20 10a8 8 0 1 0-2.3 6.3" /></symbol>
+      <symbol id="i-flip-h" viewBox="0 0 24 24"><path d="M12 3v18M8 8 4 12l4 4M16 8l4 4-4 4" /></symbol>
+      <symbol id="i-flip-v" viewBox="0 0 24 24"><path d="M3 12h18M8 8l4-4 4 4M8 16l4 4 4-4" /></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="m14 5 5 5L8 21H3v-5z" /></symbol>
+      <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6" /></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16m-3 0h6" /></symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12" /></symbol>
+      <symbol id="i-mosaic" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" /><rect x="13" y="4" width="7" height="7" opacity=".45" /><rect x="4" y="13" width="7" height="7" opacity=".45" /><rect x="13" y="13" width="7" height="7" /></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M8 5 3 10l5 5M3 10h11a6 6 0 0 1 0 12h-3" /></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="m16 5 5 5-5 5M21 10H10a6 6 0 0 0 0 12h3" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7" /></symbol>
+      <symbol id="i-target" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4M8 11h6M11 8v6" /></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m5 18 5-5 3 3 3-3 3 3" /></symbol>
+      <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3" /></symbol>
+      <symbol id="i-audio" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" /></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4h9a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" /><path d="M5 17a3 3 0 0 1 3-3h10" /></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5v8l-9 5-9-5z" /><path d="m3 8 9 5 9-5M12 13v8" /></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 1 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 1 0 5.7 5.7l1.2-1.2" /></symbol>
+      <symbol id="i-bold" viewBox="0 0 24 24"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zm0 7h7a3.5 3.5 0 0 1 0 7H7z" /></symbol>
+      <symbol id="i-italic" viewBox="0 0 24 24"><path d="M10 5h8M6 19h8M14 5l-4 14" /></symbol>
+      <symbol id="i-heading" viewBox="0 0 24 24"><path d="M6 5v14M18 5v14M6 12h12" /></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4" /></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z" /></symbol>
+      <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="1.2" /><circle cx="17.5" cy="10.5" r="1.2" /><circle cx="8.5" cy="7.5" r="1.2" /><circle cx="6.5" cy="12.5" r="1.2" /><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 1.8 1.8 0 0 0 1.3-3 1.8 1.8 0 0 1 1.3-3H17a5 5 0 0 0 5-5c0-4.9-4.5-9-10-9z" /></symbol>
+    </svg>
+
+    <aside id="app-sidebar" data-i18n-aria-label="productNavigation" aria-label="产品导航">
+      <div class="brand"><span class="brand-mark"><svg class="icon"><use href="#i-bolt" /></svg></span><div><strong>Natives</strong><small data-i18n="personalDesktop">personal desktop</small></div><button id="toggle-sidebar" class="icon-button" data-i18n-title="collapseSidebar" title="折叠侧栏" aria-label="折叠侧栏" aria-pressed="false"><svg class="icon"><use href="#i-panel" /></svg></button></div>
+      <button id="command-search-trigger" class="command-search" type="button" aria-keyshortcuts="Meta+K Control+K"><svg class="icon"><use href="#i-search" /></svg><span data-i18n="search">搜索文件</span><kbd>⌘K</kbd></button>
+      <nav class="app-menu-space" data-i18n-aria-label="navSpace" aria-label="空间">
+        <div class="app-menu-section"><span data-i18n="navSpace">空间</span>
+          <a class="app-menu-item" id="nav-space" href="space.html"><svg class="icon"><use href="#i-box" /></svg><span data-i18n="personalSpace">个人空间</span></a>
+        </div>
+      </nav>
+      <nav class="app-menu" data-i18n-aria-label="productMenu" aria-label="产品菜单">
+        <div class="app-menu-section"><span data-i18n="navDocuments">文档</span>
+          <button class="app-menu-item" data-root-id="desktop" type="button"><svg class="icon"><use href="#i-panel" /></svg><span data-i18n="desktop">桌面</span></button>
+          <button class="app-menu-item" data-root-id="downloads" type="button"><svg class="icon"><use href="#i-download" /></svg><span data-i18n="downloads">下载</span></button>
+          <button class="app-menu-item" data-root-id="documents" type="button"><svg class="icon"><use href="#i-file" /></svg><span data-i18n="documents">文档</span></button>
+        </div>
+      </nav>
+      <button id="settings-entry" class="settings-entry" type="button" aria-expanded="false" aria-haspopup="menu" aria-keyshortcuts="Alt+L" data-i18n-title="settings" title="设置"><svg class="icon"><use href="#i-gear" /></svg><span data-i18n="settings">设置</span></button>
+      <button id="sidebar-resizer" type="button" role="separator" tabindex="0" aria-orientation="vertical" aria-valuemin="190" aria-valuemax="420" aria-valuenow="248" aria-label="Resize file sidebar"></button>
+    </aside>
+
+    <header class="toolbar">
+      <div class="nav-buttons" data-i18n-aria-label="navigation">
+        <button id="back" class="icon-button" data-i18n-title="back" title="后退" aria-label="后退"><svg class="icon"><use href="#i-back" /></svg></button>
+        <button id="forward" class="icon-button" data-i18n-title="forward" title="前进" aria-label="前进"><svg class="icon"><use href="#i-forward" /></svg></button>
+        <button id="up" class="icon-button" data-i18n-title="up" title="上一级" aria-label="上一级"><svg class="icon"><use href="#i-up" /></svg></button>
+        <button id="refresh" class="icon-button" data-i18n-title="refresh" title="刷新" aria-label="刷新" aria-keyshortcuts="Control+Shift+R Meta+Shift+R"><svg class="icon"><use href="#i-refresh" /></svg></button>
+      </div>
+      <nav id="breadcrumb" class="breadcrumb" data-i18n-aria-label="breadcrumb" aria-label="Breadcrumb"></nav>
+      <div class="toolbar-controls">
+        <label class="toggle compact-toggle"><input id="show-hidden" type="checkbox" /> <span data-i18n="showHidden">隐藏文件</span></label>
+        <div id="sort-tabs" class="seg sort-tabs" role="radiogroup" data-i18n-aria-label="sort" aria-label="排序"><button type="button" class="sort-tab" data-sort="mtime" data-i18n="modified" aria-pressed="false">时间</button><button type="button" class="sort-tab" data-sort="size" data-i18n="size" aria-pressed="false">大小</button><button type="button" class="sort-tab" data-sort="name" data-i18n="name" aria-pressed="true">名称</button></div>
+        <button id="sort-direction" class="icon-button" data-i18n-title="sortAscending" title="升序" aria-label="升序"><svg class="icon"><use href="#i-sort" /></svg></button>
+        <div class="view-buttons"><button id="list-view" class="icon-button" data-i18n-title="list" title="列表" aria-pressed="true" aria-keyshortcuts="Control+Shift+G Meta+Shift+G"><svg class="icon"><use href="#i-list" /></svg></button><button id="grid-view" class="icon-button" data-i18n-title="grid" title="网格" aria-pressed="false" aria-keyshortcuts="Control+Shift+G Meta+Shift+G"><svg class="icon"><use href="#i-grid" /></svg></button><button class="grid-size-button" id="grid-small" data-i18n-title="gridSmall" aria-pressed="false">·</button><button class="grid-size-button" id="grid-medium" data-i18n-title="gridMedium" aria-pressed="true">▪</button><button class="grid-size-button" id="grid-large" data-i18n-title="gridLarge" aria-pressed="false">◼</button></div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="content" aria-live="polite">
+        <div class="file-header">
+          <span id="item-count" class="muted" aria-live="polite"></span>
+          <div id="quick-filter-wrap" class="quick-filter-wrap"><svg class="icon"><use href="#i-search" /></svg><input id="quick-filter" type="search" data-i18n-placeholder="filterCurrentDirectory" placeholder="筛选当前目录" autocomplete="off" aria-keyshortcuts="Meta+F Control+F" /></div>
+          <button id="quick-filter-toggle" class="icon-button" type="button" data-i18n-title="filterCurrentDirectory" title="筛选当前目录" aria-label="筛选当前目录" aria-expanded="false" aria-controls="quick-filter-wrap"><svg class="icon"><use href="#i-search" /></svg></button>
+          <button id="new-menu" class="primary" data-i18n="new">新建</button>
+        </div>
+        <div id="status" role="status"></div>
+        <div id="entries" class="entries" role="listbox" data-i18n-aria-label="files" aria-label="文件" aria-multiselectable="true" tabindex="0"></div>
+        <div id="empty" class="empty-state" role="status" aria-live="polite" hidden></div>
+        <nav class="pagination" data-i18n-aria-label="pagination" aria-label="分页"><button id="previous-page" data-i18n="previousPage" disabled>上一页</button><span id="page-label"></span><button id="next-page" data-i18n="nextPage" disabled>下一页</button></nav>
+      </section>
+      <aside id="preview" data-i18n-aria-label="preview" aria-label="预览" hidden>
+        <button id="preview-resizer" class="preview-resizer" type="button" role="separator" tabindex="0" data-i18n-title="preview" title="预览" aria-orientation="vertical" aria-valuemin="240" aria-valuemax="620" aria-valuenow="320"></button>
+        <div class="preview-heading"><h2 data-i18n="preview">预览</h2><div class="preview-heading-actions"><button id="toggle-preview-layout" class="icon-button" title="移至下方" aria-label="移至下方" aria-pressed="false"><svg class="icon"><use href="#i-preview" /></svg></button><button id="maximize-preview" class="icon-button" title="放大预览" aria-label="放大预览"><svg class="icon"><use href="#i-maximize" /></svg></button><button id="close-preview" class="icon-button" data-i18n-title="close" title="关闭" aria-label="关闭"><svg class="icon"><use href="#i-close" /></svg></button></div></div>
+        <div id="preview-body"><p class="muted" data-i18n="selectPreview">选择文件查看预览</p></div>
+      </aside>
+    </main>
+
+    <div id="new-popover" class="popover" hidden><button id="new-folder" data-i18n="newFolder">新建文件夹</button><button id="new-file" data-i18n="newFile">新建文件</button><button id="import-files" data-i18n="importFiles">导入文件</button><button id="import-folder" data-i18n="importFolder">导入文件夹</button></div>
+    <footer id="status-bar" aria-live="polite"><span id="selection-status"></span><span id="file-clipboard-status" class="muted" aria-live="polite"></span><button id="clear-file-clipboard" type="button" hidden data-i18n-aria-label="clearClipboard" aria-label="清空剪贴板">×</button><button id="disk-usage" data-i18n="diskUsage">占用透视</button><button id="open-trash" data-i18n="openTrash">废纸篓</button><label class="toggle"><input id="follow-changes" type="checkbox" /> <span data-i18n="followChanges">跟随变更</span></label><progress id="operation-progress" max="1" value="0" hidden data-i18n-aria-label="operationProgress" aria-label="操作进度"></progress><button id="cancel-operation" data-i18n="cancel" hidden>取消</button><button id="retry-operation" data-i18n="retryFailed" hidden>重试失败项</button><span id="host-status" class="muted"></span></footer>
+
+    <dialog id="search-dialog" class="search-dialog" aria-labelledby="search-title"><form method="dialog"><div class="dialog-heading"><h2 id="search-title" data-i18n="search">搜索文件</h2><button id="search-close" class="icon-button" value="cancel" data-i18n-title="close" title="关闭" aria-label="关闭"><svg class="icon"><use href="#i-close" /></svg></button></div><label class="search-box"><span class="sr-only" data-i18n="search">搜索文件</span><input id="search" type="search" data-i18n-placeholder="search" placeholder="搜索文件" autocomplete="off" aria-describedby="search-hint" aria-keyshortcuts="Meta+K Control+K" /></label><span id="search-hint" class="muted" data-i18n="searchHint">使用 content:关键词 搜索文件内容</span><div class="search-options"><button id="scope-toggle" class="scope-toggle" type="button" data-i18n-title="toggleSearchScope" title="切换搜索范围" aria-pressed="false">⌂ 当前目录</button><label class="toggle"><input id="recursive-search" type="checkbox" /> <span data-i18n="recursiveSearch">递归搜索</span></label></div></form></dialog>
+    <div id="context-menu" class="context-menu" role="menu" hidden></div>
+    <dialog id="modal" aria-labelledby="modal-title"><form id="modal-form" method="dialog"><h2 id="modal-title"></h2><p id="modal-message" class="muted"></p><label id="modal-field-label" for="modal-input"></label><input id="modal-input" autocomplete="off" /><div class="modal-actions"><button id="modal-cancel" value="cancel" data-i18n="cancel">取消</button><button id="modal-submit" class="primary" value="default" data-i18n="confirm">确认</button></div></form></dialog>
+    <dialog id="dirty-modal" aria-labelledby="dirty-title"><form method="dialog"><h2 id="dirty-title" data-i18n="unsavedChanges">Unsaved changes</h2><p class="muted" data-i18n="unsavedChangesMessage">Save your changes before continuing?</p><div class="modal-actions"><button id="dirty-cancel" value="cancel" data-i18n="cancel">取消</button><button id="dirty-discard" value="discard" data-i18n="discardChanges">放弃更改</button><button id="dirty-save" class="primary" value="save" data-i18n="saveAndContinue">保存并继续</button></div></form></dialog>
+    <dialog id="conflict-modal" aria-labelledby="conflict-title"><form method="dialog"><h2 id="conflict-title" data-i18n="editConflict">File changed externally</h2><p class="muted" data-i18n="editConflictMessage">The file changed outside Natives. Choose whether to reload or overwrite it.</p><div class="modal-actions"><button id="conflict-cancel" value="cancel" data-i18n="cancel">取消</button><button id="conflict-reload" value="reload" data-i18n="reloadFile">重新加载文件</button><button id="conflict-overwrite" class="primary" value="overwrite" data-i18n="overwriteFile">覆盖</button></div></form></dialog>
+    <dialog id="usage-modal" aria-labelledby="usage-title"><h2 id="usage-title"></h2><div id="usage-body"></div><div class="modal-actions"><button id="usage-back" type="button" data-i18n="back">返回</button><button id="usage-close" type="button" data-i18n="close">关闭</button></div></dialog>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+    <script src="files-bootstrap.js"></script>
+  </body>
+</html>

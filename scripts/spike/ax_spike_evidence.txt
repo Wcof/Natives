@@ -1,5 +1,0 @@
-axspike trusted=1 host=ax_window_spike
-DingTalk running=1 pid=12752 wins=1 main=AXStandardWindow pos=(0,30) size=(1440x870) pSet=1 sSet=1 full=0 sheet=0 set=ok_samepos rb=match t=钉钉
-WeChat running=1 pid=4934 wins=1 main=AXStandardWindow pos=(159,30) size=(1121x870) pSet=1 sSet=1 full=0 sheet=0 set=ok_samepos rb=match t=微信
-ChatGPT running=1 pid=78025 wins=1 main=AXStandardWindow pos=(82,44) size=(1280x820) pSet=1 sSet=1 full=0 sheet=0 set=ok_samepos rb=match t=ChatGP
-build=swiftc -O ax_window_spike.swift -o /tmp/ax_window_spike date=2026-08-23 20:26:56

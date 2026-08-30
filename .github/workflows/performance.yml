@@ -14,8 +14,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      # T002 (P1-015): fail CI when package.json and package-lock.json drift,
-      # and when the installed npm is not the pinned packageManager.
       - run: npm ci
-      - run: node scripts/check-lockfile-sync.mjs
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p native-file-host --release
       - run: npm run perf:check

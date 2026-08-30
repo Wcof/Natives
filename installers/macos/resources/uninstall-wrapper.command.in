@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+/usr/bin/osascript -e 'do shell script "/bin/sh /Library/Application\\ Support/Natives/uninstall.sh" with administrator privileges'

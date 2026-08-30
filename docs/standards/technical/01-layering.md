@@ -23,6 +23,11 @@
 - **为什么**：个人桌面应用应让进程复杂度对应真实隔离需求，而不是内部逻辑分层。
 - **检查方法**：新增 capability 是否可直接落 Host；新增 sidecar 是否有生命周期 ADR、supervisor、shutdown 与回滚测试。
 
+**Files V1 例外（ADR-0023）**：正式 Chrome 文件 Surface 的主链为
+`Chrome Extension Page → Native Messaging → native-file-host → file-manager-core`，不经过 Tauri。
+该 Host 必须由 Chrome 按需启动、由文件页面端口拥有生命周期，禁止成为 daemon、开机启动项或
+Service Worker 长连接。旧 Tauri Files 调用链是迁移源，不得继续作为生产 fallback。
+
 #### R-T2 · 数据 authority 单一
 - **等级**：MUST
 - **分类**：数据、安全
@@ -57,6 +62,7 @@ Infrastructure ── Tauri / SQLite / Keychain / PTY / HTTP / supervised proces
   - Host ↔ 必要 sidecar：版本化协议、鉴权、大小/超时限制、取消与 shutdown；协议能力必须诚实。
   - Legacy Workshop iframe：删除前继续遵守 postMessage source 验证、Session Token 与 sandbox 红线。
   - Embed/WebView：禁止获得 Workshop Bridge/Session Token。
+  - Chrome Files Surface：只有 `files.html` 可直接持有 Native Port；新标签页与 Service Worker 禁止持有或保活 Native Host。
 - **为什么**：通信通道同时决定权限、生命周期与可观测性。
 
 #### R-T5 · 命名与协议 Source of Truth

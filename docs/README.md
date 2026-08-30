@@ -1,7 +1,8 @@
 # Natives 文档索引
 
-> **当前目标**: AI Native Personal Workspace
+> **当前目标**: Chrome Files Workspace（AI Native Personal Workspace 的文件产品入口）
 > **冻结决策**: [ADR-0020](./adr/0020-ai-native-personal-workspace-rearchitecture.md)
+> **Chromium 文件管理迁移**: [ADR-0023](./adr/0023-chromium-extension-files-surface.md)
 > **原则**: 约束进 `standards/`；决策进 `adr/`；当前实现与迁移证据进既有 `architecture/` 文档。
 
 ## 权威顺序
@@ -32,6 +33,8 @@ AiNative
 
 ## 当前迁移事实（2026-08-25 更新）
 
+> 当前唯一生产代码为 `extension/` + `crates/native-file-host` + `crates/file-manager-core`；旧 AI Workspace/Tauri/Daemon 域已删除，相关 ADR 与审计文档仅保留决策和迁移证据，不属于文件扩展生产入口。
+
 - **ADR-0022（Appearance Preference、Workspace 交互与 Apps Web Surface 统一权威）**已接受：
   - 主题持久权威收敛为 Host `settings:theme`（词表 `dark | light`），由 `AppearanceCoordinator` 单一协调；`workspaces.theme` 降为 v30 迁移存根；
   - Workspace 布局手势严格遵循 `idle → draft → commit | rollback`，移动期间写库为 0，有效 stop 单次原子写入；恢复 Structured Grid 标题栏拖拽与八向缩放，Free Canvas 采用屏幕空间恒定缩放手柄；
@@ -40,12 +43,11 @@ AiNative
 - Workspace V2 目标架构 ADR-0021（Multi-Workspace + Grid/Canvas 双布局 + Design System V2）已接受，取代 ADR-0020 §1/§3 冲突范围（其余 ADR-0020 决策继续有效）；冻结契约见 `contracts/workspace-v2-contract.md`，Host SQLite 为 Workspace 唯一权威（v27 迁移 7 表已注册），旧 localStorage 权威判定为 delete（`development/g009-localstorage-conclusion.md`）。
 
 - PWSV2 Personal Workspace V2 完整重设计裁决（2026-08-23）：布局模式词表 `structured | free`（structured 为默认，历史词 `compact` 废弃）；旧 `workspace_tabs` 内容 tab 表降为 legacy，新增 `workspace_open_tabs`（Workspace 会话）与 `workspace_templates`（内置/个人模板）；workspaces 软删 `deleted_at` + `default_layout_mode` + `template_source_id/template_version`；widget `enabled`/`config_version`/`appearance`/`z_index`（`enabled = NOT hidden` 映射）；layout `layout_mode`/`layout_version` + `UNIQUE(workspace_id, layout_mode, breakpoint)`；Browse/Edit 双态 + `Classic Personal Dashboard` 内置模板；增量迁移 **v29**（v28 为应用中心迁移）。见 ADR-0021 修订 §PWSV2 与契约修订头。
-- 新 IA 目标边界已落地：`src-tauri/src/apps/`（App/RuntimeSpec/RuntimeInstance/Surface）、`src-tauri/src/ai/`（Provider/Connection/Credential/Model + secret_ref）、`src-tauri/src/proxy/`（Listener/Route/可替换 ProxyEngine trait）、`src-tauri/src/integrations/`（AI Tool 七步契约）、`src-tauri/src/secrets/`（OS Keychain SecretStore + 迁移状态机）、`src-tauri/src/key_pool.rs`（Key Pool/Failover）。
+- 旧 Tauri/Next/Daemon 生产路径已删除；当前文件产品只保留扩展、Native Host 与文件授权内核。
 - 首页 `/` 已是 PersonalWorkspace Home（Grid Widget + 5 个默认 Widget 接真实 Domain）；完整 Usage Dashboard 已迁至数据/用量页（`/usage`）；设置个人概览只保留摘要；Sidebar 折叠为 64px Icon Rail（含数据/用量入口）。
 - P0-A 已通过：三协议 fixture/transport、Key Pool、SecretStore、secret scan（PASS）；P0-B 逐文件审计已落档（`provider-adapters-p0b-audit.md`）。
-- Legacy 死亡清单已建立（`architecture/legacy-death-list.md`）；`examples/minimal-agent` 与 `extension-host` 已删除（无生产引用，编译/类型检查无破坏）。
-- 剩余生产切换项（ADR-0020 P0 parity cutover 后执行）：Host ProxyEngine 生产执行、Daemon/Agent crates/前端 legacy 页面删除、`provider_kek`/`env_encryption_key` 迁出 SQLite、packaged Tauri/WebKit 与完整 verify:native-engine 证据链。
-- 源码仍包含 Assistant、Jobs、Capabilities、Agent Daemon、Agent crates、Workshop/Plugin Runtime 残留；这些是待迁移 Legacy（见 death-list 第 2 节），不是新产品入口。
+- Legacy 死亡清单保留为删除证据；Tauri/Next/Daemon、Agent、Jobs、Capabilities、Workshop/Plugin Runtime 生产代码已删除，不得重新引入。
+- 当前剩余门禁属于发布证据：Chrome Web Store 真实 ID、平台签名/公证、Windows 实机安装验证及跨平台发布检查；不构成文件代码闭环阻塞。
 
 ## 按任务速查
 

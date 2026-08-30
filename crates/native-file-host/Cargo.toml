@@ -1,0 +1,15 @@
+[package]
+name = "native-file-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+dirs = "6"
+file-manager-core = { path = "../file-manager-core", features = ["native-host"] }
+notify = "7"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"

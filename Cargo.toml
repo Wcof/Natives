@@ -1,15 +1,11 @@
 [workspace]
 members = [
-    "src-tauri",
-    "crates/assistant-protocol",
-    "crates/harness-core",
-    "crates/agent-core",
-    "crates/contract-linter",
-    "crates/provider-adapters",
-    "crates/capability-gateway",
-    "src-agent-daemon",
+    "crates/file-manager-core",
+    "crates/native-file-host",
 ]
 resolver = "2"
+# Formal Chromium file-manager release target.
+default-members = ["crates/file-manager-core", "crates/native-file-host"]
 
 [workspace.package]
 edition = "2021"

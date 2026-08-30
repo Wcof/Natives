@@ -87,11 +87,24 @@
   - Apps Web Surface 运行时实例必须受严格预算限制：活跃 child WebView 上限最多 **6** 个，总实例上限 **10** 个。超出预算时触发 LRU 休眠（Hibernate）回收 WebKit 渲染进程，**严禁**无界创建 child WebView 导致内存耗尽。
 - **为什么**：见 ADR-0022。高频写库与无界 WebView 实例是桌面应用最严重的卡顿与崩溃诱因。
 
+#### R-P12 · Chrome Files Surface 零常驻预算
+- **等级**：MUST
+- **分类**：性能、生命周期、分发
+- **规则**：
+  - 新标签页不得连接 Native Host；Service Worker 不得持有 Native Port、轮询或用计时器保活。
+  - 文件页面按需直连 Host；`pagehide` 必须断开，隐藏且无进行中操作 60 秒后必须断开。
+  - 最后端口关闭后 Host 必须在 2 秒内退出；未打开文件页面时 Host 的 CPU、RSS、GPU 占用均为 0。
+  - Release Host 空闲 RSS ≤ 12 MB、60 秒平均 CPU ≤ 0.5%，不得创建 GPU 进程或上下文。
+  - 扩展 ZIP ≤ 250 KB、单架构 Release Host ≤ 3 MB；安装包目标 ≤ 10 MB，超出必须给出文件级归因。
+  - 安装、启动和更新不得引入 Electron/Tauri 壳、daemon、托盘常驻进程或后台更新轮询。
+- **为什么**：Natives 复用用户已有 Chrome，增量成本必须限制在当前文件 Surface，而不是复制浏览器或常驻运行时。
+
 ## 提交前清单
 
 - [ ] 有同设备、同数据集前后证据（R-P1）。
 - [ ] 无同步阻塞 IO、sleep 或渲染期副作用（R-P2、R-P3）。
 - [ ] 长列表、事件、缓存和并发均有界（R-P4、R-P6、R-P9、R-P11）。
 - [ ] 画布手势 move 写入为 0，stop 写入 ≤1（R-P11）。
+- [ ] 未打开文件页时 Native Host 为 0 进程；包体、RSS、CPU、GPU 与退出延迟通过 R-P12 门禁。
 - [ ] 重型能力按需加载，动画不运行无界 rAF（R-P7、R-P8）。
 - [ ] `npm run perf:check` 和相关 Rust 测试通过（R-P10）。

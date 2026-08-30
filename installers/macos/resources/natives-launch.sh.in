@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+url='chrome-extension://__EXTENSION_ID__/newtab.html'
+for browser in "${NATIVES_BROWSER:-Google Chrome}" Chromium "Google Chrome"; do
+  [ -n "$browser" ] || continue
+  if /usr/bin/open -a "$browser" "$url" >/dev/null 2>&1; then exit 0; fi
+done
+echo 'Natives: Google Chrome or Chromium was not found.' >&2
+exit 1

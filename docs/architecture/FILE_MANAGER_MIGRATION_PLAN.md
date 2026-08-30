@@ -3,14 +3,53 @@
 > 2026-07-26 制定。依据：`FILE_MANAGER_AUDIT.md`（现状清单与差距对照，本方案不重复其内容）。
 > 归类：**Hub** 面。
 >
-> **进度（2026-07-26 更新）**：
+> **进度（2026-08-29 更新，当前权威基线）**：
+> - 目标架构已由 [ADR-0023](../adr/0023-chromium-extension-files-surface.md) 变更为 `extension/` + `crates/native-file-host` + `crates/file-manager-core`（Chrome `files.html` → Native Messaging → Host → Core → 真实磁盘）；正文 W1–W19 工作项在旧 Tauri 架构上实施，其结论已被新主链吸收，正文仅作决策历史保留。
+> - 当前执行基线为「Natives 文件管理全量迁移计划」M0–M7 里程碑（2026-08-29，纯文件全量 + 三皮肤高保真 + 固定主链，不含 Git/Agent/终端）：
+>
+> | 里程碑 | 状态（2026-08-29） |
+> |---|---|
+> | M0 重新冻结真实基线 | ✅ `extension:check` 全绿；包体估算在 250KB 预算内；Host release 二进制 ≤3MB |
+> | M1 连接与状态接缝 | ✅ 唯一 session owner；隐藏 60s 断开 / 重新可见重连 / `pagehide` / Host EOF 清理 |
+> | M2 fanbox 布局与三皮肤 | ✅ 布局、三皮肤令牌、按需预览面板（右侧/底部/全屏）；⬜ 遗留：交互图标受控 SVG 化 |
+> | M3 浏览、搜索与选择 | ✅ roots/Volumes/懒加载树/面包屑/地址栏/历史/排序/即时过滤/全局与内容搜索/键盘选择 |
+> | M4 文件操作与导入 | ✅ 新建/重命名/复制/移动/副本/批量 + 进度/取消/部分失败重试 + 系统废纸篓 + 512KiB 分块导入（2GiB 上限、uploadId、临时清理） |
+> | M5 预览与编辑 | ✅ 800ms 自动保存 + mtime 冲突保护 + 图片编辑器；HEIC/HEIF 走 macOS `sips` 受控转换 |
+> | M6 收藏、Watcher、磁盘与压缩 | ✅ 收藏/最近（有界、失效清理、路径迁移）/Watcher/变更热度/跟随/磁盘透视/ZIP·TAR 创建·清单·安全解压；⬜ 遗留：7z/RAR 受控工具只读列出，否则 `unavailable` |
+> | M7 收敛、性能与最终门禁 | ⬜ 进行中：`files.js` 双 production path 收敛、Host `WatchManager` 接入、CSS 五区段、真实 Chrome 三皮肤回归证据 |
+>
+> **能力差距表（fanbox 来源 → Natives 现状）**：
+>
+> | 能力域 | fanbox 来源 | Natives 现状 | 状态 |
+> |---|---|---|---|
+> | roots / 磁盘 / 目录树 / 面包屑 / 地址栏 / 历史导航 | 侧栏 + 面包屑 + 地址栏 | `roots`/`volumes`/懒加载树/面包屑/`path-form`（locate 四级兜底）/后退·前进·上级 + Ctrl+`[`/`]` + 滚动位置恢复 | implemented |
+> | 列表 / 网格 / 三档密度 / 排序 / 隐藏文件 / 缩略图 / 项目徽标 | 三档密度网格 + 徽标 | list/grid + S/M/L，后端排序，`showHidden`，`image_preview` 缩略图（IntersectionObserver），`projectBadge` | implemented |
+> | 单选 / 多选 / 范围 / 键盘导航 / 右键菜单 | fanbox 选择体系 | 单选/Cmd·Ctrl 多选/Shift 范围/Cmd·Ctrl+A/方向键/Home·End·PageDown/Cmd·Ctrl+Enter/F2/Esc + 上下文菜单 | implemented |
+> | 当前目录过滤 / 授权 roots 全局搜索 / 内容搜索 / 取消 / 旧响应隔离 | ⌘K 搜索面板 | `quick-filter` + 搜索对话框 + `content:` + 递归 + `search_cancel` + token 代际隔离 | implemented |
+> | 收藏 / 最近打开 / 最近修改 | fanbox 收藏 / 最近 | `chrome.storage.local`（recent 40 / recentModified 30 / favorites 50），失效清理 + 路径变更迁移 | implemented |
+> | 新建 / 重命名 / 复制 / 移动 / 副本 / 批量 / 系统废纸篓 | fanbox 文件操作 | `create_folder`/`write_file`/`rename`/`copy·move·duplicate·trash_batch` + 进度/取消/部分失败重试 + 自动编号冲突策略 | implemented |
+> | 应用内剪贴板 / 系统剪贴板 / 内部拖拽 / Finder 导入 | fanbox 剪贴板 + 拖拽 | `fileClipboard` + `copy_paths`/`copy_image` + 内部拖拽 JSON 路径 + Finder 文件/目录导入 | implemented |
+> | 文本 / Markdown / JSON / CSV / HTML / 图片 / PDF / 音视频 / 压缩包预览 | fanbox 预览体系 | 安全 DOM Markdown（不执行原始 HTML）/HTML Blob+CSP sandbox/图片 base64 + 透明棋盘 + 灯箱/PDF Blob 分页/音视频有界 Blob/`archive_list` + 大文件只读截断 + object URL 回收 | implemented |
+> | 自动保存 / 原子写 / mtime 冲突保护 / 图片编辑 | fanbox 编辑器 | 800ms 自动保存 + `expectedMtime` 冲突弹窗（重载/覆盖）+ `guardDirty` + 图片编辑器（裁剪/旋转/翻转/画笔/矩形/箭头/文字/马赛克/撤销·重做/PNG·JPEG·WebP 另存） | implemented |
+> | Watcher / 变更热度 / 当前目录跟随 / 磁盘占用 | fanbox heat + 跟随 | `watch_start/stop` 只订阅当前目录，250ms 合并 + 噪声/自身操作过滤 + 变更热度徽标 + 跟随变更 + `disk_usage` 逐级下钻 Dialog | implemented |
+> | ZIP/TAR 创建、清单与安全解压 | fanbox 压缩 | `create_zip_with_cancel` + `extract_archive`（Zip Slip/符号链接/压缩炸弹防护）+ `list_archive`（仅中央目录，不解压） | implemented |
+> | 7z/RAR 只读列出 | fanbox 可列出 7z/RAR | 本轮实现：`list_archive` 走受控系统工具只读列出，工具不可用返回 `unavailable`，不捆绑新运行时 | unsupported（本轮实现） |
+> | 系统打开 / 编辑器打开 / Finder 显示 / 打开废纸篓 / 复制路径·文件·图片 | fanbox 系统集成 | `open`/`editor`/`reveal`/`open_trash`/`copy_paths`/`copy_image` | implemented |
+> | 三皮肤 Volt / Archive / Index | fanbox 三张截图 | 令牌级三皮肤、共享结构与交互 CSS、1180/760/560 响应式断点 | implemented |
+> | 受控 SVG 交互图标 | 计划 §二 | 收藏/树展开/图片编辑工具/PDF 分页/搜索范围等残留 emoji·字符图标，本轮替换为 SVG symbol | partial（本轮收敛） |
+> | 模块收敛（单一 production path / Host 主循环 / CSS 五区段） | 计划 §二 / §M7 | `files.js` recentMode·trash·context·预览猴子补丁、Host `main.rs` 内联 watch（已有 `WatchManager` 未接入）、CSS 五区段收口 | partial（本轮收敛） |
+> | 真实 Chrome 三皮肤全回归 / 真实磁盘核对 / 性能证据 | 计划 §四 | `extension:check` + UI Harness + perf 预算门禁通过；真实 Chrome 截图与 RSS/EOF/10k 目录实测值于 M7 退出时记录 | partial（待实机证据） |
+>
+> 明确 unsupported（本轮迁移范围外，不得重新引入）：Git diff、回合快照、AI 整理、Agent、终端、Skills、截图直通车、发布系统、微信、Electron/Tauri、本地 HTTP、daemon、Plugin Runtime、7z/RAR 创建与解压、非 macOS HEIC/HEIF。
+>
+> 历史进度（2026-07-26，旧 Tauri 架构，已被上表取代）：
 > - Phase 1（W1–W6）✅ 完成：提交 ea0012dd / cb508a72 / 012c080a
 > - 追加「契约收紧」✅：ts-rs 类型单一来源（`npm run types:generate`）、
 >   files-api / file-events 契约模块、detectFileKind/badge TS 副本删除
 > - Phase 2（W7–W13）✅ 完成：提交 cb8e34c（W10/W9）、21c282a（W12）、
 >   4af9572（W7/W8/W11 后端）、1596617（前端接线）；
 >   W13 审查确认已有完整实现（screenshot.rs 稳定性等待 + ScreenshotCard），无需迁移
-> - Phase 3（W14–W19）⬜ 未启动；全量 cargo test 待并行会话的协议改造完成后统一跑
+> - Phase 3（W14–W19）⬜ 未启动（已被 M0–M7 基线取代，不再在旧架构上执行）
 
 ## 一、启动门槛（前置分支合并后必做）
 

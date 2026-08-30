@@ -1,0 +1,9 @@
+{
+  "name": "com.natives.file_manager",
+  "description": "Natives local file manager Native Messaging Host",
+  "path": "__INSTALL_ROOT__\\natives-native-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}

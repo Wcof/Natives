@@ -1,0 +1,1055 @@
+{
+  "addFavorite": {
+    "message": "加入收藏"
+  },
+  "addFirstWidget": {
+    "message": "添加第一个组件"
+  },
+  "addWidget": {
+    "message": "添加 Widget"
+  },
+  "addedFavorite": {
+    "message": "已加入收藏"
+  },
+  "allWidgetsAdded": {
+    "message": "所有可用 Widget 均已添加"
+  },
+  "appName": {
+    "message": "Natives 文件管理"
+  },
+  "applyCrop": {
+    "message": "应用裁剪"
+  },
+  "archiveCompressing": {
+    "message": "压缩中"
+  },
+  "archiveCreated": {
+    "message": "个文件已打包"
+  },
+  "archiveEntries": {
+    "message": "压缩包条目"
+  },
+  "archiveExtracted": {
+    "message": "个文件已解压"
+  },
+  "archiveName": {
+    "message": "归档名称"
+  },
+  "archivePreviewUnavailable": {
+    "message": "无法安全读取压缩包清单"
+  },
+  "archiveToolUnavailable": {
+    "message": "系统未安装可列出此格式的受控工具，清单不可用；不支持创建与解压。"
+  },
+  "archiveValidating": {
+    "message": "校验中"
+  },
+  "back": {
+    "message": "返回"
+  },
+  "background": {
+    "message": "背景"
+  },
+  "backgroundNone": {
+    "message": "无背景"
+  },
+  "backgroundNotConfigured": {
+    "message": "该背景服务需要 API key，当前未配置。"
+  },
+  "backgroundSettings": {
+    "message": "背景设置"
+  },
+  "backgroundSource": {
+    "message": "背景源"
+  },
+  "blur": {
+    "message": "模糊度"
+  },
+  "breadcrumb": {
+    "message": "面包屑导航"
+  },
+  "brightness": {
+    "message": "亮度"
+  },
+  "browserDropUnavailable": {
+    "message": "Chrome 页面无法直接取得 Finder 文件路径，请使用“新建”或系统文件管理器"
+  },
+  "cancel": {
+    "message": "取消"
+  },
+  "changeAdded": {
+    "message": "已新增"
+  },
+  "changeCount": {
+    "message": "变更"
+  },
+  "changeModified": {
+    "message": "已修改"
+  },
+  "changePathMissing": {
+    "message": "变更文件已不存在"
+  },
+  "changeRemoved": {
+    "message": "已删除"
+  },
+  "changes": {
+    "message": "本次变更"
+  },
+  "changesEmpty": {
+    "message": "本次会话暂无变更"
+  },
+  "clearChanges": {
+    "message": "清空本次变更"
+  },
+  "clearClipboard": {
+    "message": "清除剪贴板"
+  },
+  "clipboardCleared": {
+    "message": "剪贴板已清除"
+  },
+  "clipboardCopied": {
+    "message": "项已复制"
+  },
+  "clipboardCut": {
+    "message": "项已剪切"
+  },
+  "clipboardUnavailable": {
+    "message": "剪贴板不可用"
+  },
+  "close": {
+    "message": "关闭"
+  },
+  "collapseFolder": {
+    "message": "收起文件夹"
+  },
+  "collapseSidebar": {
+    "message": "折叠侧栏"
+  },
+  "completed": {
+    "message": "项已完成"
+  },
+  "confirm": {
+    "message": "确认"
+  },
+  "confirmCopy": {
+    "message": "确认复制此文件？"
+  },
+  "confirmImport": {
+    "message": "确认导入并覆盖"
+  },
+  "confirmMove": {
+    "message": "确认移动此文件？"
+  },
+  "confirmRemoveWidget": {
+    "message": "确定移除此组件吗？"
+  },
+  "connecting": {
+    "message": "正在连接本地文件系统…"
+  },
+  "contentSearchUnavailable": {
+    "message": "PDF 文本搜索不可用"
+  },
+  "copiedPath": {
+    "message": "路径已复制"
+  },
+  "copy": {
+    "message": "复制到…"
+  },
+  "copyFile": {
+    "message": "复制文件"
+  },
+  "copyImage": {
+    "message": "复制图片"
+  },
+  "copyPath": {
+    "message": "复制路径"
+  },
+  "createArchive": {
+    "message": "创建 ZIP"
+  },
+  "createArchiveHint": {
+    "message": "选中项目必须位于同一目录"
+  },
+  "created": {
+    "message": "已创建"
+  },
+  "createdAt": {
+    "message": "创建"
+  },
+  "cropHandle": {
+    "message": "裁剪控制点"
+  },
+  "csvPreview": {
+    "message": "CSV 预览"
+  },
+  "currentDirectorySearch": {
+    "message": "当前目录搜索"
+  },
+  "customClass": {
+    "message": "自定义 CSS 类"
+  },
+  "dashboard": {
+    "message": "Dashboard"
+  },
+  "delete": {
+    "message": "删除"
+  },
+  "deleteWidget": {
+    "message": "删除组件"
+  },
+  "deleteWorkspace": {
+    "message": "删除空间"
+  },
+  "deleteWorkspaceHint": {
+    "message": "此操作无法撤销。"
+  },
+  "desktop": {
+    "message": "桌面"
+  },
+  "destination": {
+    "message": "目标文件夹路径"
+  },
+  "destinationHint": {
+    "message": "请输入目标文件夹的完整路径"
+  },
+  "disable": {
+    "message": "停用"
+  },
+  "discardChanges": {
+    "message": "放弃更改"
+  },
+  "diskUsage": {
+    "message": "占用透视"
+  },
+  "documents": {
+    "message": "文稿"
+  },
+  "downloads": {
+    "message": "下载"
+  },
+  "dropHint": {
+    "message": "释放以导入或移动文件"
+  },
+  "duplicate": {
+    "message": "制作副本"
+  },
+  "duplicated": {
+    "message": "副本已创建"
+  },
+  "editConflict": {
+    "message": "文件已被外部修改"
+  },
+  "editConflictMessage": {
+    "message": "文件在 Natives 外部发生了修改。请选择重新加载或覆盖。"
+  },
+  "editImage": {
+    "message": "编辑图片"
+  },
+  "editorLabel": {
+    "message": "文件编辑器"
+  },
+  "emptyFile": {
+    "message": "空文件"
+  },
+  "emptyFolder": {
+    "message": "此文件夹为空"
+  },
+  "emptySpaceDesc": {
+    "message": "从丰富的小组件目录中挑选并添加到你的个人空间"
+  },
+  "emptySpaceTitle": {
+    "message": "这个空间还没有组件"
+  },
+  "enable": {
+    "message": "启用"
+  },
+  "expandFolder": {
+    "message": "展开文件夹"
+  },
+  "expandSidebar": {
+    "message": "展开侧栏"
+  },
+  "exportTabliss": {
+    "message": "导出 Tabliss 配置"
+  },
+  "extractArchive": {
+    "message": "解压缩包"
+  },
+  "extractArchiveHint": {
+    "message": "请输入解压目标文件夹路径（支持 ZIP/TAR）"
+  },
+  "failed": {
+    "message": "项失败"
+  },
+  "favorites": {
+    "message": "收藏"
+  },
+  "fileCopied": {
+    "message": "文件已复制"
+  },
+  "fileLocations": {
+    "message": "文件位置"
+  },
+  "files": {
+    "message": "文件"
+  },
+  "filesCount": {
+    "message": "个文件"
+  },
+  "filterCurrentDirectory": {
+    "message": "筛选当前目录"
+  },
+  "flipHorizontal": {
+    "message": "水平翻转"
+  },
+  "flipVertical": {
+    "message": "垂直翻转"
+  },
+  "folder": {
+    "message": "文件夹"
+  },
+  "folderName": {
+    "message": "文件夹名称"
+  },
+  "followChanges": {
+    "message": "跟随修改"
+  },
+  "followChangesStopped": {
+    "message": "手动浏览，已停止跟随"
+  },
+  "fontSize": {
+    "message": "字号"
+  },
+  "fontWeight": {
+    "message": "字重"
+  },
+  "forward": {
+    "message": "前进"
+  },
+  "fullscreenTooltip": {
+    "message": "全屏 (F)"
+  },
+  "globalSearch": {
+    "message": "全局搜索"
+  },
+  "greetingAfternoon": {
+    "message": "下午好"
+  },
+  "greetingEvening": {
+    "message": "晚上好"
+  },
+  "greetingMorning": {
+    "message": "早上好"
+  },
+  "grid": {
+    "message": "网格"
+  },
+  "gridLarge": {
+    "message": "大网格"
+  },
+  "gridMedium": {
+    "message": "中网格"
+  },
+  "gridSmall": {
+    "message": "小网格"
+  },
+  "home": {
+    "message": "主目录"
+  },
+  "hostConnected": {
+    "message": "Host 已连接"
+  },
+  "hostConnectionFailed": {
+    "message": "Native Host 连接失败"
+  },
+  "hostDisconnected": {
+    "message": "Native Host 已断开"
+  },
+  "hostDisconnectedShort": {
+    "message": "Host 未连接"
+  },
+  "hostNotInstalled": {
+    "message": "Native Host 未安装或不可用"
+  },
+  "htmlPreview": {
+    "message": "HTML 预览（已禁用脚本）"
+  },
+  "imageArrow": {
+    "message": "箭头"
+  },
+  "imageBrushSize": {
+    "message": "画笔大小"
+  },
+  "imageColor": {
+    "message": "画笔颜色"
+  },
+  "imageCopied": {
+    "message": "图片已复制"
+  },
+  "imageCrop": {
+    "message": "裁剪"
+  },
+  "imageFormat": {
+    "message": "输出格式"
+  },
+  "imageInserted": {
+    "message": "图片已插入"
+  },
+  "imageMosaic": {
+    "message": "马赛克"
+  },
+  "imagePen": {
+    "message": "画笔"
+  },
+  "imagePreviewUnavailable": {
+    "message": "图片预览暂不可用，请使用系统应用打开"
+  },
+  "imageQuality": {
+    "message": "输出质量"
+  },
+  "imageRectangle": {
+    "message": "矩形"
+  },
+  "imageText": {
+    "message": "文字"
+  },
+  "imageTextPrompt": {
+    "message": "输入文字"
+  },
+  "importCancelled": {
+    "message": "导入已取消"
+  },
+  "importDestination": {
+    "message": "导入到"
+  },
+  "importFiles": {
+    "message": "导入文件"
+  },
+  "importFolder": {
+    "message": "导入文件夹"
+  },
+  "importPreview": {
+    "message": "导入预览"
+  },
+  "importSummary": {
+    "message": "配置概览"
+  },
+  "importTabliss": {
+    "message": "导入 Tabliss 配置"
+  },
+  "imported": {
+    "message": "个文件已导入"
+  },
+  "importing": {
+    "message": "导入中"
+  },
+  "inspector": {
+    "message": "Inspector"
+  },
+  "interfaceLanguage": {
+    "message": "界面语言"
+  },
+  "interfaceTheme": {
+    "message": "界面主题"
+  },
+  "invalidImportPath": {
+    "message": "导入路径无效"
+  },
+  "invalidPath": {
+    "message": "路径无效"
+  },
+  "items": {
+    "message": "个项目"
+  },
+  "jsonPreview": {
+    "message": "JSON 预览"
+  },
+  "language": {
+    "message": "语言"
+  },
+  "languageEn": {
+    "message": "English"
+  },
+  "languageZh": {
+    "message": "中文简体"
+  },
+  "largeFilePreviewUnavailable": {
+    "message": "大文件不会读入浏览器，请使用系统应用打开"
+  },
+  "largeTextReadOnly": {
+    "message": "大文件仅显示预览，编辑已禁用"
+  },
+  "linkPrompt": {
+    "message": "链接地址"
+  },
+  "list": {
+    "message": "列表"
+  },
+  "loadMore": {
+    "message": "加载更多"
+  },
+  "loading": {
+    "message": "加载中…"
+  },
+  "management": {
+    "message": "配置管理"
+  },
+  "markdownBold": {
+    "message": "加粗"
+  },
+  "markdownCode": {
+    "message": "代码"
+  },
+  "markdownHeading": {
+    "message": "标题"
+  },
+  "markdownImage": {
+    "message": "插入图片"
+  },
+  "markdownImages": {
+    "message": "Markdown 图片"
+  },
+  "markdownItalic": {
+    "message": "斜体"
+  },
+  "markdownLink": {
+    "message": "链接"
+  },
+  "markdownList": {
+    "message": "列表"
+  },
+  "markdownPreview": {
+    "message": "Markdown 预览"
+  },
+  "mediaPreviewUnavailable": {
+    "message": "音视频使用系统默认应用打开"
+  },
+  "modified": {
+    "message": "修改时间"
+  },
+  "modifiedAt": {
+    "message": "修改"
+  },
+  "moreActions": {
+    "message": "更多"
+  },
+  "moreAvailable": {
+    "message": "可继续加载"
+  },
+  "move": {
+    "message": "移动到…"
+  },
+  "movePreviewBelow": {
+    "message": "将预览移到下方"
+  },
+  "movePreviewSide": {
+    "message": "将预览移到右侧"
+  },
+  "moveToTrash": {
+    "message": "移到废纸篓"
+  },
+  "moved": {
+    "message": "已移动"
+  },
+  "movies": {
+    "message": "影片"
+  },
+  "music": {
+    "message": "音乐"
+  },
+  "name": {
+    "message": "名称"
+  },
+  "nativeHostIncompatible": {
+    "message": "Native Host 协议不兼容，请更新 Native Host（需要 v1）"
+  },
+  "navAccount": {
+    "message": "Natives 用户"
+  },
+  "navAccountType": {
+    "message": "普通账户"
+  },
+  "navDocuments": {
+    "message": "文档"
+  },
+  "navFavorites": {
+    "message": "收藏"
+  },
+  "navMyFavorites": {
+    "message": "我的收藏"
+  },
+  "navRecent": {
+    "message": "最近"
+  },
+  "navSpace": {
+    "message": "空间"
+  },
+  "navigation": {
+    "message": "导航"
+  },
+  "new": {
+    "message": "新建"
+  },
+  "newFile": {
+    "message": "新建文件"
+  },
+  "newFolder": {
+    "message": "新建文件夹"
+  },
+  "newName": {
+    "message": "新名称"
+  },
+  "newWorkspace": {
+    "message": "新建 Workspace"
+  },
+  "newtabDescription": {
+    "message": "你的本地工作台"
+  },
+  "newtabHeading": {
+    "message": "Natives"
+  },
+  "newtabTitle": {
+    "message": "Natives"
+  },
+  "nextPage": {
+    "message": "下一页"
+  },
+  "nightDim": {
+    "message": "夜间自动调暗"
+  },
+  "noFilterResults": {
+    "message": "当前目录没有匹配项目"
+  },
+  "noMatchingWidgets": {
+    "message": "没有匹配的组件"
+  },
+  "noSearchResults": {
+    "message": "没有匹配的文件"
+  },
+  "noWidgets": {
+    "message": "当前 Workspace 没有 Widget。"
+  },
+  "noWidgetsInWorkspace": {
+    "message": "当前空间暂无组件"
+  },
+  "noWorkspaces": {
+    "message": "暂无 Workspace，点击下方新建。"
+  },
+  "open": {
+    "message": "打开"
+  },
+  "openEditor": {
+    "message": "在编辑器打开"
+  },
+  "openFiles": {
+    "message": "打开文件管理"
+  },
+  "openTrash": {
+    "message": "打开废纸篓"
+  },
+  "opened": {
+    "message": "已打开"
+  },
+  "openedEditor": {
+    "message": "已在编辑器打开"
+  },
+  "operationCancelled": {
+    "message": "操作已取消"
+  },
+  "operationFailed": {
+    "message": "操作失败"
+  },
+  "operationProgress": {
+    "message": "操作进度"
+  },
+  "overwriteFile": {
+    "message": "覆盖保存"
+  },
+  "pageError": {
+    "message": "页面初始化失败"
+  },
+  "pagination": {
+    "message": "分页"
+  },
+  "paste": {
+    "message": "粘贴"
+  },
+  "pasted": {
+    "message": "项已粘贴"
+  },
+  "path": {
+    "message": "路径"
+  },
+  "pathPlaceholder": {
+    "message": "输入路径"
+  },
+  "pdfNext": {
+    "message": "下一页"
+  },
+  "pdfPage": {
+    "message": "当前页"
+  },
+  "pdfPreviewUnavailable": {
+    "message": "PDF 使用系统默认应用打开"
+  },
+  "pdfPrevious": {
+    "message": "上一页"
+  },
+  "pdfViewerHint": {
+    "message": "PDF 查看器"
+  },
+  "personalDesktop": {
+    "message": "个人工作台"
+  },
+  "personalSpace": {
+    "message": "个人空间"
+  },
+  "pictures": {
+    "message": "图片"
+  },
+  "position": {
+    "message": "位置模式"
+  },
+  "positionAndLayout": {
+    "message": "位置与布局"
+  },
+  "preview": {
+    "message": "预览"
+  },
+  "previewCancelled": {
+    "message": "预览已取消"
+  },
+  "previewTruncated": {
+    "message": "内容已截断"
+  },
+  "previewUnavailable": {
+    "message": "预览已切换，无法重试"
+  },
+  "previewUnsupported": {
+    "message": "此文件类型不在安全内置预览范围内。"
+  },
+  "previousPage": {
+    "message": "上一页"
+  },
+  "processing": {
+    "message": "处理中"
+  },
+  "productMenu": {
+    "message": "产品菜单"
+  },
+  "productNavigation": {
+    "message": "产品导航"
+  },
+  "projects": {
+    "message": "项目"
+  },
+  "readFailed": {
+    "message": "读取文件失败"
+  },
+  "readMode": {
+    "message": "阅读"
+  },
+  "ready": {
+    "message": "就绪"
+  },
+  "recent": {
+    "message": "最近使用"
+  },
+  "recentModified": {
+    "message": "最近修改"
+  },
+  "recentModifiedEmpty": {
+    "message": "暂无最近修改的文件"
+  },
+  "recentResults": {
+    "message": "个最近修改项目"
+  },
+  "recursiveSearch": {
+    "message": "递归搜索"
+  },
+  "redo": {
+    "message": "重做"
+  },
+  "refresh": {
+    "message": "刷新"
+  },
+  "reloadFile": {
+    "message": "重新加载"
+  },
+  "reloaded": {
+    "message": "已重新加载"
+  },
+  "remove": {
+    "message": "移除"
+  },
+  "removeFavorite": {
+    "message": "取消收藏"
+  },
+  "removedFavorite": {
+    "message": "已取消收藏"
+  },
+  "rename": {
+    "message": "重命名"
+  },
+  "renameWorkspace": {
+    "message": "重命名空间"
+  },
+  "renamed": {
+    "message": "已重命名"
+  },
+  "requestTimeout": {
+    "message": "请求超时"
+  },
+  "resetWorkspace": {
+    "message": "重置空间..."
+  },
+  "resetWorkspaceTitle": {
+    "message": "重置空间"
+  },
+  "resetWorkspaceDescription": {
+    "message": "选择重置后使用的空间模板。当前组件和背景配置将被替换。"
+  },
+  "resetWorkspaceTemplate": {
+    "message": "空间模板"
+  },
+  "resetTemplateClassic": {
+    "message": "经典"
+  },
+  "resetTemplateClassicDesc": {
+    "message": "时间、问候语和搜索"
+  },
+  "resetTemplateFocus": {
+    "message": "专注"
+  },
+  "resetTemplateFocusDesc": {
+    "message": "时间和问候语"
+  },
+  "resetTemplateBlank": {
+    "message": "空白"
+  },
+  "resetTemplateBlankDesc": {
+    "message": "不添加任何组件"
+  },
+  "confirmResetWorkspace": {
+    "message": "确认重置"
+  },
+  "retry": {
+    "message": "重试连接"
+  },
+  "retryFailed": {
+    "message": "重试失败项"
+  },
+  "reveal": {
+    "message": "显示"
+  },
+  "rotateLeft": {
+    "message": "向左旋转"
+  },
+  "rotateRight": {
+    "message": "向右旋转"
+  },
+  "save": {
+    "message": "保存"
+  },
+  "saveAndContinue": {
+    "message": "保存并继续"
+  },
+  "saveAsImage": {
+    "message": "另存为图片"
+  },
+  "saveFailed": {
+    "message": "保存失败"
+  },
+  "saved": {
+    "message": "已保存"
+  },
+  "search": {
+    "message": "搜索文件"
+  },
+  "searchCancelled": {
+    "message": "搜索已取消"
+  },
+  "searchFiles": {
+    "message": "搜索文件"
+  },
+  "searchHint": {
+    "message": "使用 content:关键词 搜索文件内容"
+  },
+  "searchResults": {
+    "message": "个搜索结果"
+  },
+  "searchWidgets": {
+    "message": "搜索组件..."
+  },
+  "selectPreview": {
+    "message": "选择文件查看预览"
+  },
+  "selected": {
+    "message": "已选择"
+  },
+  "selectedSize": {
+    "message": "选中大小"
+  },
+  "selectedText": {
+    "message": "文本"
+  },
+  "settings": {
+    "message": "设置"
+  },
+  "showHidden": {
+    "message": "显示隐藏文件"
+  },
+  "singleSelectionRequired": {
+    "message": "请先只选择一个项目"
+  },
+  "size": {
+    "message": "大小"
+  },
+  "skipped": {
+    "message": "项已跳过"
+  },
+  "sort": {
+    "message": "排序"
+  },
+  "sortAscending": {
+    "message": "升序"
+  },
+  "sortDescending": {
+    "message": "降序"
+  },
+  "sourceMode": {
+    "message": "源码"
+  },
+  "sourceSettings": {
+    "message": "源配置"
+  },
+  "spaceEmptyDesc": {
+    "message": "此空间暂无内容，你的文件与资料整理后将在这里呈现。"
+  },
+  "spaceEmptyTitle": {
+    "message": "个人空间"
+  },
+  "spaceSettings": {
+    "message": "空间设置"
+  },
+  "spaceSettingsTooltip": {
+    "message": "空间设置 (S)"
+  },
+  "textColor": {
+    "message": "文本颜色"
+  },
+  "theme": {
+    "message": "主题"
+  },
+  "themeArchive": {
+    "message": "浅色"
+  },
+  "themeVolt": {
+    "message": "深色"
+  },
+  "tmp": {
+    "message": "临时目录"
+  },
+  "toggleSearchScope": {
+    "message": "切换搜索范围"
+  },
+  "toggleWidgetsTooltip": {
+    "message": "显示/隐藏组件 (W)"
+  },
+  "trash": {
+    "message": "删除"
+  },
+  "trashConfirm": {
+    "message": "将所选项目移到系统废纸篓？"
+  },
+  "trashFolderConfirm": {
+    "message": "将所选文件夹移到系统废纸篓？可恢复。"
+  },
+  "trashOpened": {
+    "message": "已打开系统废纸篓"
+  },
+  "trashed": {
+    "message": "项已移到系统废纸篓，可恢复"
+  },
+  "type": {
+    "message": "类型"
+  },
+  "typographyAndStyle": {
+    "message": "字体与样式"
+  },
+  "undo": {
+    "message": "撤销"
+  },
+  "unsaved": {
+    "message": "未保存"
+  },
+  "unsavedChanges": {
+    "message": "有未保存的更改"
+  },
+  "unsavedChangesMessage": {
+    "message": "继续前要保存更改吗？"
+  },
+  "up": {
+    "message": "上级目录"
+  },
+  "usageErrors": {
+    "message": "个项目无法读取"
+  },
+  "usageTruncated": {
+    "message": "已达扫描上限"
+  },
+  "useAccentColor": {
+    "message": "使用强调色"
+  },
+  "viewAllRecent": {
+    "message": "查看全部"
+  },
+  "visualEffects": {
+    "message": "视觉效果"
+  },
+  "volumes": {
+    "message": "磁盘与外接设备"
+  },
+  "welcomeDesc": {
+    "message": "从左侧侧边栏选择工作目录，或按 ⌘K 快速全局搜索文件。"
+  },
+  "welcomeTitle": {
+    "message": "请从左侧选择目录"
+  },
+  "widgetCatalog": {
+    "message": "组件目录"
+  },
+  "widgetCustomSettings": {
+    "message": "组件设置"
+  },
+  "widgetInstanceCount": {
+    "message": "已添加"
+  },
+  "widgetList": {
+    "message": "Widget"
+  },
+  "widgetNotMigrated": {
+    "message": "该 Widget 迁移中，即将可用。"
+  },
+  "widgets": {
+    "message": "小组件"
+  },
+  "widgetsCount": {
+    "message": "可导入组件数"
+  },
+  "workspaceCreated": {
+    "message": "Workspace 已创建"
+  },
+  "workspaceDeleted": {
+    "message": "空间已删除"
+  },
+  "workspaceName": {
+    "message": "Workspace 名称"
+  },
+  "workspaceRenamed": {
+    "message": "空间已重命名"
+  },
+  "zoomImageHint": {
+    "message": "滚轮缩放图片"
+  }
+}

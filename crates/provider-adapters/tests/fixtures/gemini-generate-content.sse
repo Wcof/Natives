@@ -1,2 +1,0 @@
-data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Need the file.","thought":true},{"functionCall":{"name":"read_file","args":{"path":"AGENTS.md"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":18,"cachedContentTokenCount":80,"thoughtsTokenCount":4}}
-
