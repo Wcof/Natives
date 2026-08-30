@@ -26,6 +26,20 @@ export function createSpaceToolbar({
     return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
   }
 
+  function applyWidgetsHidden(hidden) {
+    widgetsHidden = Boolean(hidden);
+    document.body.classList.toggle('space-widgets-hidden', widgetsHidden);
+    const host = $('dashboard-host');
+    if (host) {
+      host.classList.toggle('widgets-hidden', widgetsHidden);
+      host.dataset.widgetsHidden = String(widgetsHidden);
+    }
+    if (toggleWidgetsBtn) {
+      toggleWidgetsBtn.setAttribute('aria-pressed', String(widgetsHidden));
+    }
+    onToggleWidgets?.(widgetsHidden);
+  }
+
   // Setup buttons
   if (settingsBtn) {
     settingsBtn.onclick = () => onToggleSettings();
@@ -33,9 +47,7 @@ export function createSpaceToolbar({
 
   if (toggleWidgetsBtn) {
     toggleWidgetsBtn.onclick = () => {
-      widgetsHidden = !widgetsHidden;
-      document.body.classList.toggle('space-widgets-hidden', widgetsHidden);
-      onToggleWidgets?.(widgetsHidden);
+      applyWidgetsHidden(!widgetsHidden);
     };
   }
 
@@ -68,9 +80,7 @@ export function createSpaceToolbar({
       onToggleSettings();
     } else if (key === 'w') {
       event.preventDefault();
-      widgetsHidden = !widgetsHidden;
-      document.body.classList.toggle('space-widgets-hidden', widgetsHidden);
-      onToggleWidgets?.(widgetsHidden);
+      applyWidgetsHidden(!widgetsHidden);
     } else if (key === 'f' && document.fullscreenEnabled) {
       event.preventDefault();
       if (!document.fullscreenElement) {

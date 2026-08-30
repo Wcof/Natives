@@ -204,10 +204,11 @@ async function handleDeleteWorkspace(workspace) {
 
 async function init() {
   await Promise.race([loadLocale(), new Promise((resolve) => setTimeout(resolve, 1000))]);
-  const [storedTheme, storedWidth, sidebarWidth] = await Promise.all([
+  const [storedTheme, storedWidth, sidebarWidth, sidebarCollapsed] = await Promise.all([
     getStored('natives-theme', 'archive'),
     getStored('natives-inspector-width', 360),
     getStored('natives-sidebar-width', 248),
+    getStored('natives-sidebar-collapsed', false),
   ]);
   selectedTheme = ['volt', 'archive'].includes(storedTheme) ? storedTheme : 'archive';
   inspectorWidth = Math.max(240, Math.min(620, Number(storedWidth) || 360));
@@ -219,13 +220,14 @@ async function init() {
   initNativeClient();
   initResizers();
 
-  createSidebarController({
+  const sidebarController = createSidebarController({
     resizer: $('sidebar-resizer'),
-    toggleButton: null,
+    toggleButton: $('toggle-sidebar'),
     initialWidth: sidebarWidth,
-    initialCollapsed: false,
+    initialCollapsed: sidebarCollapsed,
     t,
     onWidthChange: (w) => setStored('natives-sidebar-width', w),
+    onCollapsedChange: (c) => setStored('natives-sidebar-collapsed', c),
   });
 
   nameModal = createSpaceNameModal({ $, t, onSaveWorkspaceName: handleSaveWorkspaceName });
@@ -242,7 +244,7 @@ async function init() {
   toolbar = createSpaceToolbar({
     $, t,
     onToggleSettings: () => { if (inspector.isOpen) inspector.close(); else inspector.open('overview'); },
-    onToggleWidgets: () => {},
+    onToggleWidgets: (hidden) => { dashboard.setWidgetsHidden(hidden); },
     onOpenCatalog: () => inspector.open('catalog'),
   });
 
@@ -259,6 +261,13 @@ async function init() {
   });
 
   $('workspace-create').onclick = () => nameModal.open(null);
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      sidebarController.toggle();
+    }
+  });
 
   try { await refreshSession(); } catch (err) { toast(`${t('hostConnectionFailed', 'Native Host 连接失败')}：${err.message}`); }
 

@@ -33,7 +33,7 @@
 html,body { width:100%; height:100%; }
 body { margin:0; overflow:hidden; display:grid; grid-template-columns:var(--sidebar-width) minmax(0,1fr); grid-template-rows:52px minmax(0,1fr) 30px; color:var(--text); background:var(--surface); font:14px/1.4 var(--font); -webkit-font-smoothing:antialiased; }
 body.sidebar-collapsed { grid-template-columns:52px minmax(0,1fr); }
-body.sidebar-collapsed #app-sidebar { padding:10px 8px; background:transparent; border-right:none; }
+body.sidebar-collapsed #app-sidebar { padding:16px 8px 10px; background:var(--surface-2); border-right:1px solid var(--border); }
 body.sidebar-collapsed #app-sidebar > :not(.brand) { display:none; }
 body.sidebar-collapsed .brand { justify-content:center; padding:0; }
 body.sidebar-collapsed .brand > :not(#toggle-sidebar) { display:none; }

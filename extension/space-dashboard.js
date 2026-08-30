@@ -36,6 +36,11 @@ export function createSpaceDashboard({
 
     staticStyleContent = `
       :host { all: initial; }
+      :host([data-widgets-hidden="true"]) .slot,
+      :host(.widgets-hidden) .slot,
+      :host-context(body.space-widgets-hidden) .slot {
+        display: none !important;
+      }
       .dashboard { width:100%; height:100%; position:relative; overflow:hidden; display:grid; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif; }
       .background-layer { position:absolute; inset:0; background-size:cover; background-position:center; transition:background 0.3s ease, filter 0.3s ease; }
       .background-not-configured { position:absolute; inset:0; display:grid; place-items:center; color:rgba(255,255,255,.6); font-size:14px; background:#111; }
@@ -404,6 +409,13 @@ export function createSpaceDashboard({
 
   return {
     render,
+    setWidgetsHidden(hidden) {
+      const host = $('dashboard-host');
+      if (host) {
+        host.classList.toggle('widgets-hidden', Boolean(hidden));
+        host.dataset.widgetsHidden = String(Boolean(hidden));
+      }
+    },
     destroy() {
       for (const entry of widgetRegistry.values()) {
         entry.disposer?.();
