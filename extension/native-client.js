@@ -12,6 +12,7 @@ export function createNativeClient({ host, connectNative = (name) => globalThis.
   function handleDisconnect(next) {
     if (port !== next) return;
     const error = new Error(disconnectError());
+    error.code = 'host_disconnected';
     const wasIntentional = intentional;
     intentional = false;
     port = undefined;
@@ -54,11 +55,15 @@ export function createNativeClient({ host, connectNative = (name) => globalThis.
         if (isWrite) writesInFlight--;
         if (transportError) reject(transportError);
         else if (message?.ok) resolve(message.result);
-        else reject(new Error(message?.error || '操作失败'));
+        else {
+          const error = new Error(message?.error || '操作失败');
+          error.code = message?.errorCode || 'internal_error';
+          reject(error);
+        }
       };
       const timeout = setTimeout(() => {
         if (!pending.delete(id)) return;
-        settle(undefined, new Error('请求超时'));
+        const error = new Error('请求超时'); error.code = 'request_timeout'; settle(undefined, error);
       }, timeoutMs);
       pending.set(id, settle);
       try { next.postMessage({ id, method, params }); } catch (error) {

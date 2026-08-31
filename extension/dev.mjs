@@ -12,9 +12,12 @@ const extensionSource = join(root, 'extension');
 const devExtension = join(root, 'dist', 'dev-extension');
 const devKeyPath = join(root, 'dist', '.natives-dev-extension-public-key');
 const nativeHost = join(root, 'target', 'debug', platform() === 'win32' ? 'native-file-host.exe' : 'native-file-host');
+const modelHost = join(root, 'target', 'debug', platform() === 'win32' ? 'model-host.exe' : 'model-host');
 const projectHostPaths = [
   nativeHost,
   join(root, 'target', 'release', platform() === 'win32' ? 'native-file-host.exe' : 'native-file-host'),
+  modelHost,
+  join(root, 'target', 'release', platform() === 'win32' ? 'model-host.exe' : 'model-host'),
 ].map(path => resolve(path));
 
 function posixHostPids(output, hostPaths = projectHostPaths) {
@@ -104,7 +107,7 @@ async function selfTest() {
   const id = await prepareExtension();
   const manifest = JSON.parse(await readFile(join(devExtension, 'manifest.json'), 'utf8'));
   if (!/^[a-p]{32}$/.test(id) || manifest.key !== (await readFile(devKeyPath, 'utf8')).trim()) throw new Error('dev extension key/ID setup failed.');
-  assert.deepEqual(posixHostPids(`  10 ${projectHostPaths[0]}\n  11 ${projectHostPaths[1]} --flag\n  12 /tmp/native-file-host\n`), [10, 11]);
+  assert.deepEqual(posixHostPids(`  10 ${projectHostPaths[0]}\n  11 ${projectHostPaths[1]} --flag\n  12 ${projectHostPaths[2]}\n  13 ${projectHostPaths[3]} --relay\n  14 /tmp/native-file-host\n`), [10, 11, 12, 13]);
   console.log(`dev launcher self-test passed (${id})`);
 }
 
@@ -116,10 +119,13 @@ if (process.argv.includes('--self-test')) {
 await stopProjectHosts();
 run('rtk', ['env', '-u', 'CARGO_TARGET_DIR', 'cargo', 'build', '-p', 'native-file-host'], 'native-file-host build failed.');
 if (!existsSync(nativeHost)) throw new Error(`native-file-host was not created: ${nativeHost}`);
+const modelBuild = spawnSync('rtk', ['go', 'build', '-o', modelHost, '.'], { cwd: join(root, 'model-host'), stdio: 'inherit' });
+if (modelBuild.status !== 0 || !existsSync(modelHost)) throw new Error('model-host build failed.');
 const id = await prepareExtension();
 run(process.execPath, [join(extensionSource, 'install-native-host.mjs'), '--extension-id', id, '--host-path', nativeHost], 'Native Host registration failed.');
+run(process.execPath, [join(extensionSource, 'install-native-host.mjs'), '--extension-id', id, '--host-path', modelHost, '--host-name', 'com.natives.model_host', '--description', 'Natives model settings and local model proxy'], 'Model Host registration failed.');
 await stopProjectHosts();
-console.log(`Natives dev ready.\nExtension: ${devExtension}\nNative Host: ${nativeHost}\nChrome will start the Host on demand; this command does not open a browser.\nPress Ctrl+C to stop dev.`);
+console.log(`Natives dev ready.\nExtension: ${devExtension}\nFiles Host: ${nativeHost}\nModel Host: ${modelHost}\nChrome will start the Host on demand for each capability; this command does not open a browser.\nPress Ctrl+C to stop dev.`);
 const keepAlive = setInterval(() => {}, 2 ** 31 - 1);
 let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => {

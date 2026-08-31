@@ -13,8 +13,9 @@
 
 ## Target architecture and current migration
 
-- Current production code is limited to the Chrome/Chromium extension plus
-  `crates/native-file-host` and `crates/file-manager-core`. `src/`, `src-tauri/`,
+- Current production code is limited to the Chrome/Chromium extension,
+  `crates/native-file-host`, `crates/file-manager-core`, and the single-purpose
+  `model-host` authorized by ADR-0020. `src/`, `src-tauri/`,
   `src-agent-daemon/`, Agent/Harness/Capability crates, Jobs, Assistant, and
   Plugin Runtime have been deleted; do not recreate them.
 - The extension's `newtab.html` is static, while `files.html` directly owns its
@@ -24,6 +25,10 @@
   or local service. Host cleanup is driven by Native Messaging stdin EOF.
 - The extension page is the only product surface; do not reintroduce iframe,
   WebView, React workspace, plugin, or runtime surfaces.
+- `model-host` is an AI-domain Native Messaging Host, not a general daemon. It
+  may remain resident only after the user explicitly enables that setting; it
+  must bind loopback, remain single-instance, keep Secrets in OS Keychain, and
+  must not own Files capabilities or expose CLIProxyAPI management endpoints.
 
 ## Change discipline
 

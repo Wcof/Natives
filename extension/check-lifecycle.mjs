@@ -385,8 +385,9 @@ assert.match(spaceTree, /oncontextmenu/, 'workspace names must support right-cli
 assert.match(spaceTree, /i-more/, 'workspace rows must expose a hover More action');
 assert.doesNotMatch(spaceTree, /\b(?:prompt|confirm)\s*\(/, 'workspace actions must not use browser prompt commands');
 assert.match(filesHtml, /class="brand"[\s\S]*id="toggle-sidebar"/, 'files sidebar toggle must live in the shared sidebar');
-assert.doesNotMatch(spaceHtml, /id="toggle-sidebar"/, 'personal space must not expose the legacy sidebar toggle');
+assert.match(spaceHtml, /id="space-toggle-sidebar-btn"/, 'personal space must expose the dashboard sidebar toggle');
 assert.match(spaceHtml, /id="space-toggle-widgets-btn"/, 'personal space must expose the dashboard widget visibility toggle');
+assert.match(filesCss, /body\.sidebar-collapsed #app-sidebar\s*\{[^}]*background:var\(--surface-2\);/, 'files collapsed sidebar must have solid surface-2 background');
 assert.match(filesSidebar, /createSidebarController/, 'file manager must reuse the shared sidebar controller');
 assert.match(spaceScript, /createSidebarController/, 'personal space must reuse the shared sidebar resize controller');
 assert.match(sidebarController, /sidebar-collapsed/, 'shared sidebar controller must own collapse state');

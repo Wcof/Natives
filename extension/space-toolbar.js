@@ -8,10 +8,12 @@ export function createSpaceToolbar({
   t,
   onToggleSettings,
   onToggleWidgets,
+  onToggleSidebar,
   onOpenCatalog,
 }) {
   const toolbar = $('dashboard-toolbar');
   const settingsBtn = $('space-settings-btn');
+  const toggleSidebarBtn = $('space-toggle-sidebar-btn');
   const toggleWidgetsBtn = $('space-toggle-widgets-btn');
   const fullscreenBtn = $('space-fullscreen-btn');
   const emptyState = $('space-empty-state');
@@ -28,13 +30,15 @@ export function createSpaceToolbar({
 
   function applyWidgetsHidden(hidden) {
     widgetsHidden = Boolean(hidden);
-    document.body.classList.toggle('space-widgets-hidden', widgetsHidden);
+    if (typeof document !== 'undefined' && document.body?.classList) {
+      document.body.classList.toggle('space-widgets-hidden', widgetsHidden);
+    }
     const host = $('dashboard-host');
     if (host) {
-      host.classList.toggle('widgets-hidden', widgetsHidden);
-      host.dataset.widgetsHidden = String(widgetsHidden);
+      host.classList?.toggle?.('widgets-hidden', widgetsHidden);
+      if (host.dataset) host.dataset.widgetsHidden = String(widgetsHidden);
     }
-    if (toggleWidgetsBtn) {
+    if (toggleWidgetsBtn && typeof toggleWidgetsBtn.setAttribute === 'function') {
       toggleWidgetsBtn.setAttribute('aria-pressed', String(widgetsHidden));
     }
     onToggleWidgets?.(widgetsHidden);
@@ -43,6 +47,10 @@ export function createSpaceToolbar({
   // Setup buttons
   if (settingsBtn) {
     settingsBtn.onclick = () => onToggleSettings();
+  }
+
+  if (toggleSidebarBtn) {
+    toggleSidebarBtn.onclick = () => onToggleSidebar?.();
   }
 
   if (toggleWidgetsBtn) {

@@ -9,6 +9,7 @@ export function createSettingsMenu({
   initialTheme = 'archive',
   onLanguageChange,
   onThemeChange,
+  onModelSettings,
   t = (k, f) => f || k,
 }) {
   let language = initialLanguage;
@@ -24,6 +25,13 @@ export function createSettingsMenu({
 
   const langRow = _menuRow('i-globe', 'interfaceLanguage', '界面语言');
   const themeRow = _menuRow('i-palette', 'interfaceTheme', '界面主题');
+  const modelRow = _menuRow('i-box', 'modelSettings', '模型设置');
+  modelRow.querySelector('.chev')?.remove();
+  modelRow.removeAttribute('aria-haspopup');
+  modelRow.onclick = () => {
+    toggle(false);
+    onModelSettings?.(anchorButton);
+  };
 
   langRow.onmouseenter = () => _showSubmenu(langRow, 'lang');
   themeRow.onmouseenter = () => _showSubmenu(themeRow, 'theme');
@@ -32,7 +40,7 @@ export function createSettingsMenu({
 
   const langSub = _buildSubmenu('lang');
   const themeSub = _buildSubmenu('theme');
-  menu.append(langRow, themeRow);
+  menu.append(modelRow, langRow, themeRow);
   document.body.append(menu, langSub, themeSub);
 
   function _menuRow(icon, i18nKey, fallback) {
@@ -85,6 +93,7 @@ export function createSettingsMenu({
   function _buildMenuItems() {
     langRow.querySelector('span').textContent = t('interfaceLanguage', '界面语言');
     themeRow.querySelector('span').textContent = t('interfaceTheme', '界面主题');
+    modelRow.querySelector('span').textContent = t('modelSettings', '模型设置');
     _syncSubmenus();
   }
 

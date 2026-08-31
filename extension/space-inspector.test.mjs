@@ -146,12 +146,19 @@ console.log('✓ Close and focus anchor restoration verified');
 
 // 7. Toolbar shortcuts & state sync
 let toolbarSettingsToggled = false;
+let toolbarWidgetsToggled = false;
+let toolbarSidebarToggled = false;
 let toolbarCatalogOpened = false;
+
+const toggleSidebarBtn = createMockEl('space-toggle-sidebar-btn');
+elementMap['space-toggle-sidebar-btn'] = toggleSidebarBtn;
+
 const toolbar = createSpaceToolbar({
   $,
   t,
   onToggleSettings: () => { toolbarSettingsToggled = true; },
-  onToggleWidgets: () => {},
+  onToggleWidgets: () => { toolbarWidgetsToggled = true; },
+  onToggleSidebar: () => { toolbarSidebarToggled = true; },
   onOpenCatalog: () => { toolbarCatalogOpened = true; },
 });
 
@@ -164,6 +171,10 @@ assert.equal(emptyStateEl.hidden, false, 'Empty workspace must show empty state 
 // Test toolbar button clicks
 settingsBtn.onclick();
 assert.equal(toolbarSettingsToggled, true);
+toggleSidebarBtn.onclick();
+assert.equal(toolbarSidebarToggled, true);
+toggleWidgetsBtn.onclick();
+assert.equal(toolbarWidgetsToggled, true);
 emptyAddBtn.onclick();
 assert.equal(toolbarCatalogOpened, true);
 console.log('✓ Toolbar actions and empty state sync verified');

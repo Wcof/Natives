@@ -32,6 +32,10 @@ async function loadLocale() {
 }
 const localeReady = loadLocale();
 const t = (key, fallback) => localeMessages[key]?.message || chrome.i18n?.getMessage(key) || fallback;
+async function openModelSettings(returnFocus) {
+  const module = await import('./model-settings.js');
+  await module.openModelSettings({ t, language: selectedLanguage, returnFocus });
+}
 chrome.storage?.onChanged?.addListener((changes, area) => {
   if (area !== 'local') return;
   const next = changes['natives-language']?.newValue;
@@ -555,6 +559,7 @@ async function bootstrap() {
     },
     onLanguageChange: (lang) => switchLanguage(lang),
     onThemeChange: (theme) => applyTheme(theme),
+    onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
     t: (key, fallback) => t(key, fallback),
   });
   filesPreviewPanel = createFilesPreviewPanel({

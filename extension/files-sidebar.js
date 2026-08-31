@@ -21,6 +21,7 @@ export class FilesSidebar {
     onCollapsedChange,
     onLanguageChange,
     onThemeChange,
+    onModelSettings,
     t = (key, fallback) => fallback || key,
   }) {
     this.container = typeof container === 'string' ? document.querySelector(container) : container;
@@ -37,6 +38,7 @@ export class FilesSidebar {
     this.onCollapsedChange = onCollapsedChange;
     this.onLanguageChange = onLanguageChange;
     this.onThemeChange = onThemeChange;
+    this.onModelSettings = onModelSettings;
     this.t = t;
 
     this.language = 'zh_CN';
@@ -81,6 +83,7 @@ export class FilesSidebar {
           this.theme = theme;
           this.onThemeChange?.(theme);
         },
+        onModelSettings: (anchor) => this.onModelSettings?.(anchor),
         t: this.t,
       });
       settingsEntry.onclick = () => this.settingsMenu?.toggle();

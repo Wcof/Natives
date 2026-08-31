@@ -7,7 +7,32 @@
 > **关联**: [ADR-0019](../adr/0019-unified-model-proxy-authority.md)（Authority 边界 + 选型）；`provider-routing-sub2api.md`（旧路由语义，2026-08-11 冻结，本文件第 4 节收敛）
 > **Plan**: `Natives-Proxy-Minimal-Dependency-Plan-v4`（`00-EXECUTION-OVERRIDES.md` 为最高优先级修订）
 
-> **ADR-0020 delta**：完成态为 Host-native `ProxyEngine`，Provider/Connection/Credential 分离，Secret 进入 OS Keychain；Daemon 路由仅是待迁移 current production。P0 fixture parity、stream lifecycle、OAuth/Key Pool 和 Secret migration Gate 通过前不得切换或宣称完成。
+> **ADR-0020 delta**：2026-08-30 起，Extension 产品面使用单用途 Go Model Host 复用 CLIProxyAPI SDK；Provider/Connection/Credential/Proxy authority 位于该 Host。旧 Tauri/Agent Daemon、Harness、Agent crates、Capabilities、Jobs 与 Plugin Runtime 仍保持删除。
+
+---
+
+## 0. Current production selection（2026-08-30）
+
+- **选择**：CLIProxyAPI SDK adapter，而非 stock binary，也非完整 Rust 重写。
+- **锁定**：`github.com/router-for-me/CLIProxyAPI/v7`
+  `v7.2.146-0.20260828172046-f0de1d008fe8`，对应提交
+  `f0de1d008fe8881dcb7431cf97b147295874c2b2`。
+- **已验证 Gate**：该提交可由 Go 1.26 外部 module 解析；公开 `sdk/config` 可构造配置，
+  `sdk/cliproxy.Builder.WithCoreAuthManager` 可注入 manager，`sdk/cliproxy/auth.Store`
+  提供 `List/Save/Delete` seam，可替换默认 FileTokenStore。
+- **Natives-owned implementation**：Native Messaging、Keychain Store、非敏感 metadata、
+  revision、单实例/常驻生命周期、loopback access key 和设置 UI。
+- **CLIProxy-owned implementation**：五类 OAuth provider、token refresh、model registry、
+  account selection、四协议转换与 streaming。
+- **OAuth 安全语义**：Codex、Claude 使用 SDK 的随机 state、loopback callback 校验与
+  PKCE；Antigravity 使用随机 state 与 callback 校验。Kimi、xAI 采用供应商的 OAuth
+  Device Authorization Grant（device code / user code / expiry / polling interval），没有
+  browser callback，因此 PKCE/state 不适用；两者仍受 Model Host 会话超时与取消约束。
+- **禁止**：生产绝对路径 `replace`、默认 token/config Secret 落盘、完整 Management API、
+  Renderer 直连 gateway 管理面、Files Host 获得模型 Secret。
+
+下文第 2 节起保留的是删除前系统的迁移审计证据，不是当前生产结构；其中
+`src-tauri`、Agent Daemon、Provider crates、LAN gateway 等描述不得作为新实现入口。
 
 ---
 
@@ -187,7 +212,10 @@ Plan v4 §22 要求：每个外部引用必须回答「具体未解决问题」�
 | 9 | 是否形成第二个 Authority？ | 设计上必须禁止（C 不得拥有 DB/Provider SoT/Usage；B 不得强制 plaintext 持久化）——违反即 Stop-the-line（Goal §40） |
 | 10 | 最终总复杂度下降还是上升？ | 由 P0.5 决策矩阵裁定；**当前无任何外部生产依赖被证明必要** |
 
-**P0 结论**：`Benefit <= Long-term Complexity` 尚不能否定，但**必要性未被证明** → 按 Plan v4，不引入任何外部生产依赖；CLIProxyAPI 仅作为 P0.5 候选评估对象（Level 1，具体问题驱动），EasyCLI 仅作 UX 参考（Level 2）。B 的安全 gate（plaintext 持久化、刷新回写）未证实前默认不合格（fail-closed）。
+**历史 P0 结论（已被第 0 节与 ADR-0020 取代）**：当时 `Benefit <= Long-term Complexity`
+尚不能否定但必要性未证明，因此未引入外部生产依赖。2026-08-30 的 SDK Gate 已验证
+自定义 Secret Store、刷新回写和外部 module 编译，第 0 节的固定 SDK 方案现为生产选择；
+stock binary 仍不合格，EasyCLI 仍只作 UX 参考。
 
 ---
 

@@ -28,6 +28,11 @@ let inspectorWidth = 360;
 const $ = (id) => document.getElementById(id);
 const t = (key, fallback) => localeMessages[key]?.message || fallback || key;
 
+async function openModelSettings(returnFocus) {
+  const module = await import('./model-settings.js');
+  await module.openModelSettings({ t, language: selectedLanguage, returnFocus });
+}
+
 function toast(message, kind = 'info') {
   const el = $('toast');
   if (!el) return;
@@ -245,6 +250,7 @@ async function init() {
     $, t,
     onToggleSettings: () => { if (inspector.isOpen) inspector.close(); else inspector.open('overview'); },
     onToggleWidgets: (hidden) => { dashboard.setWidgetsHidden(hidden); },
+    onToggleSidebar: () => { sidebarController.toggle(); },
     onOpenCatalog: () => inspector.open('catalog'),
   });
 
@@ -257,6 +263,7 @@ async function init() {
       document.documentElement.dataset.theme = theme;
       await setStored('natives-theme', theme);
     },
+    onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
     t,
   });
 

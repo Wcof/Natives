@@ -33,7 +33,7 @@ AiNative
 
 ## 当前迁移事实（2026-08-25 更新）
 
-> 当前唯一生产代码为 `extension/` + `crates/native-file-host` + `crates/file-manager-core`；旧 AI Workspace/Tauri/Daemon 域已删除，相关 ADR 与审计文档仅保留决策和迁移证据，不属于文件扩展生产入口。
+> 当前生产代码为 `extension/` + `crates/native-file-host` + `crates/file-manager-core`，以及 ADR-0020 授权的单用途 `model-host`；旧 AI Workspace/Tauri/通用 Daemon 域仍保持删除。Model Host 只负责模型配置、OAuth、Keychain Secret 与 loopback 兼容代理，不属于 Files Host，也不得演化为通用 Runtime。
 
 - **ADR-0022（Appearance Preference、Workspace 交互与 Apps Web Surface 统一权威）**已接受：
   - 主题持久权威收敛为 Host `settings:theme`（词表 `dark | light`），由 `AppearanceCoordinator` 单一协调；`workspaces.theme` 降为 v30 迁移存根；
@@ -43,7 +43,7 @@ AiNative
 - Workspace V2 目标架构 ADR-0021（Multi-Workspace + Grid/Canvas 双布局 + Design System V2）已接受，取代 ADR-0020 §1/§3 冲突范围（其余 ADR-0020 决策继续有效）；冻结契约见 `contracts/workspace-v2-contract.md`，Host SQLite 为 Workspace 唯一权威（v27 迁移 7 表已注册），旧 localStorage 权威判定为 delete（`development/g009-localstorage-conclusion.md`）。
 
 - PWSV2 Personal Workspace V2 完整重设计裁决（2026-08-23）：布局模式词表 `structured | free`（structured 为默认，历史词 `compact` 废弃）；旧 `workspace_tabs` 内容 tab 表降为 legacy，新增 `workspace_open_tabs`（Workspace 会话）与 `workspace_templates`（内置/个人模板）；workspaces 软删 `deleted_at` + `default_layout_mode` + `template_source_id/template_version`；widget `enabled`/`config_version`/`appearance`/`z_index`（`enabled = NOT hidden` 映射）；layout `layout_mode`/`layout_version` + `UNIQUE(workspace_id, layout_mode, breakpoint)`；Browse/Edit 双态 + `Classic Personal Dashboard` 内置模板；增量迁移 **v29**（v28 为应用中心迁移）。见 ADR-0021 修订 §PWSV2 与契约修订头。
-- 旧 Tauri/Next/Daemon 生产路径已删除；当前文件产品只保留扩展、Native Host 与文件授权内核。
+- 旧 Tauri/Next/通用 Daemon 生产路径已删除；文件产品只使用 Rust Files Host，模型设置使用隔离的单用途 Model Host。
 - 首页 `/` 已是 PersonalWorkspace Home（Grid Widget + 5 个默认 Widget 接真实 Domain）；完整 Usage Dashboard 已迁至数据/用量页（`/usage`）；设置个人概览只保留摘要；Sidebar 折叠为 64px Icon Rail（含数据/用量入口）。
 - P0-A 已通过：三协议 fixture/transport、Key Pool、SecretStore、secret scan（PASS）；P0-B 逐文件审计已落档（`provider-adapters-p0b-audit.md`）。
 - Legacy 死亡清单保留为删除证据；Tauri/Next/Daemon、Agent、Jobs、Capabilities、Workshop/Plugin Runtime 生产代码已删除，不得重新引入。

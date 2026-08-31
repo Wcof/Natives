@@ -8,13 +8,21 @@ const args = new Map(process.argv.slice(2).flatMap((value, index, values) =>
 const uninstall = process.argv.includes('--uninstall');
 const extensionId = args.get('extension-id');
 const hostPath = args.get('host-path');
+const hostName = args.get('host-name') || 'com.natives.file_manager';
+const description = args.get('description');
+if (!/^com\.natives\.[a-z0-9_]+$/.test(hostName)) {
+  console.error('Native Host 名称无效。');
+  process.exit(1);
+}
 if (!uninstall && (!extensionId || !hostPath || !/^[a-p]{32}$/.test(extensionId))) {
-  console.error('用法：node extension/install-native-host.mjs --extension-id <32位ID> --host-path <Host绝对路径>');
+  console.error('用法：node extension/install-native-host.mjs --extension-id <32位ID> --host-path <Host绝对路径> [--host-name com.natives.xxx]');
   process.exit(1);
 }
 
 const template = JSON.parse(await readFile(new URL('./native-host-manifest.json', import.meta.url), 'utf8'));
 if (!uninstall) {
+  template.name = hostName;
+  if (description) template.description = description;
   template.allowed_origins = [`chrome-extension://${extensionId}/`];
   template.path = resolve(hostPath);
 }
@@ -25,16 +33,16 @@ const configPath = platform() === 'darwin'
     ? join(process.env.LOCALAPPDATA || join(home, 'AppData/Local'), 'Natives/extension-id')
     : join(home, '.config/natives/extension-id');
 const destinations = platform() === 'darwin'
-  ? ['Google/Chrome', 'Chromium'].map(browser => join(home, `Library/Application Support/${browser}/NativeMessagingHosts/com.natives.file_manager.json`))
+  ? ['Google/Chrome', 'Chromium'].map(browser => join(home, `Library/Application Support/${browser}/NativeMessagingHosts/${hostName}.json`))
   : platform() === 'win32'
-    ? [join(process.env.LOCALAPPDATA || join(home, 'AppData/Local'), 'Natives/com.natives.file_manager.json')]
-    : ['google-chrome', 'chromium'].map(browser => join(home, `.config/${browser}/NativeMessagingHosts/com.natives.file_manager.json`));
+    ? [join(process.env.LOCALAPPDATA || join(home, 'AppData/Local'), `Natives/${hostName}.json`)]
+    : ['google-chrome', 'chromium'].map(browser => join(home, `.config/${browser}/NativeMessagingHosts/${hostName}.json`));
 if (uninstall) {
   await Promise.all(destinations.map(path => unlink(path).catch(() => {})));
-  await unlink(configPath).catch(() => {});
+  if (hostName === 'com.natives.file_manager') await unlink(configPath).catch(() => {});
   if (platform() === 'win32') {
     for (const browser of ['Google\\Chrome', 'Chromium']) {
-      execFileSync('reg.exe', ['DELETE', `HKCU\\Software\\${browser}\\NativeMessagingHosts\\com.natives.file_manager`, '/f'], { stdio: 'inherit' });
+      execFileSync('reg.exe', ['DELETE', `HKCU\\Software\\${browser}\\NativeMessagingHosts\\${hostName}`, '/f'], { stdio: 'inherit' });
     }
   }
   console.log(`已卸载 Native Host：${destinations.join('、')}`);
@@ -49,7 +57,7 @@ await writeFile(configPath, `${extensionId}\n`, 'utf8');
 if (platform() === 'win32') {
   for (const browser of ['Google\\Chrome', 'Chromium']) {
     execFileSync('reg.exe', [
-      'ADD', `HKCU\\Software\\${browser}\\NativeMessagingHosts\\com.natives.file_manager`,
+      'ADD', `HKCU\\Software\\${browser}\\NativeMessagingHosts\\${hostName}`,
       '/ve', '/t', 'REG_SZ', '/d', destinations[0], '/f',
     ], { stdio: 'inherit' });
   }

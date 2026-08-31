@@ -65,6 +65,33 @@ Agent Daemon 是待迁移旧生产路径，不再是目标 Provider/Run authorit
 
 迁移必须幂等、可恢复、可回滚：读取旧密文、写 Keychain、回读验证、切换引用、再清理旧密文。Keychain locked/unavailable 必须显式报错并保持旧数据可恢复；任何阶段都不得把明文写入日志、事件、Renderer 或临时文件。
 
+### 6.1 Model Host exception（2026-08-30）
+
+模型设置与 Local Proxy 使用隔离的单用途 Go `model-host`，复用固定提交
+`CLIProxyAPI v7@f0de1d008fe8881dcb7431cf97b147295874c2b2` 的 SDK implementation。
+这是第三方运行时与可选独立生命周期所需的受限 sidecar，不恢复旧 Agent Daemon：
+
+- Extension 只通过独立 Native Messaging interface 调用 Model Host；Files Host 与
+  Model Host 不共享文件、进程或 Secret interface。
+- Model Host 是 Provider、OAuth account、model catalog、Secret reference 与 loopback
+  gateway runtime 的单一 authority；CLIProxyAPI 默认配置文件和 token 文件不得成为
+  第二 authority。
+- Secret 只进入 OS Keychain 和必要的短时进程内存；CLIProxyAPI 使用自定义 auth Store，
+  禁止把 access token、refresh token、API Key 或 gateway key 写入配置文件、日志、
+  argv 或环境变量。
+- Gateway 只绑定 `127.0.0.1`，必须鉴权，不暴露 CLIProxyAPI Management API。
+- 默认生命周期由 Native Messaging 页面连接拥有。用户显式开启「常驻」后，Model
+  Host 可以跨页面关闭继续运行，但必须单实例、可显式停止、无系统登录自启动；电脑重启
+  后仅在再次打开 Natives 页面时按设置恢复。
+- OAuth browser callback 流必须校验随机 state，并在供应商协议支持时使用 PKCE；Kimi、
+  xAI 的供应商原生 Device Authorization Grant 以短时 device/user code、过期与轮询约束
+  替代 callback state/PKCE，不得伪造不存在的 callback 安全步骤。
+
+复用 Gate：外部 Go module 必须能锁定该提交；CLIProxyAPI 的 `sdk/config`、
+`sdk/auth`、`sdk/cliproxy` 必须可由外部 module 编译；自定义 `auth.Store` 必须替换
+FileTokenStore 并接管 refresh 回写。任一条件不满足时停止集成，不得以明文 token 文件
+或完整 Rust 协议重写绕过。
+
 ### 7. 迁移与删除
 
 实施顺序：P0 Gate → ADR/Standards → Shell/IA/Home Foundation → Files → Apps → AI Resources → Proxy → AI Tool Integration → Usage/Data → Home Widgets → Legacy Removal → Stability/Release Gate。
@@ -106,4 +133,3 @@ Home Grid 采用与否另过 packaged Tauri/WebKit、缩放/Retina、循环压�
 - ADR-0015：Jobs 不再是目标产品域，只允许迁移与删除工作。
 - ADR-0016：Capability Hub 不再是目标产品域；可复用连接/配置能力分别归 AI Resources 或 AI Tool Integration。
 - ADR-0019：保留 P0 源码审计；Daemon 作为完成态 Model Gateway authority 的决策被取代。
-
