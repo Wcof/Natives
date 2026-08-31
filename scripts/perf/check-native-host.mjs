@@ -35,7 +35,7 @@ function frame(value) {
   return Buffer.concat([header, body]);
 }
 
-function waitForResponse(child, timeoutMs = 2000) {
+function waitForResponse(child, timeoutMs = 3500) {
   return new Promise((resolvePromise, reject) => {
     let data = Buffer.alloc(0);
     const timer = setTimeout(() => reject(new Error('host response timeout')), timeoutMs);

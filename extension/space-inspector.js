@@ -1,5 +1,5 @@
 /**
- * Space Inspector State Machine & Shell Controller (<300 lines).
+ * Space Inspector State Machine & Shell Controller (<290 lines).
  * States: closed | overview | catalog | widget(id) | background | importPreview.
  */
 
@@ -17,6 +17,7 @@ export function createSpaceInspector({
   nativeCall,
   broadcastRevision,
   updateSnapshot,
+  onPositionEditChange,
   onCloseFocusAnchor,
 }) {
   const inspectorEl = $('inspector');
@@ -77,21 +78,15 @@ export function createSpaceInspector({
         });
         updateSnapshot(result);
         broadcastRevision();
+        onPositionEditChange?.(null);
         routeTo('overview');
       } catch (err) {}
     },
-    onReorderWidget: async (orderedIds) => {
-      try {
-        const result = await nativeCall('workspace_widget_reorder', {
-          workspaceId: activeWorkspaceId,
-          orderedIds,
-          expectedRevision: currentSnapshot.revision,
-        });
-        updateSnapshot(result);
-        broadcastRevision();
-      } catch (err) {}
+    onPositionEditChange: (widgetId) => onPositionEditChange?.(widgetId),
+    onBackToOverview: () => {
+      onPositionEditChange?.(null);
+      routeTo('overview');
     },
-    onBackToOverview: () => routeTo('overview'),
   });
 
   const bgSettingsCtrl = createSpaceBackgroundSettings({
@@ -129,6 +124,9 @@ export function createSpaceInspector({
   });
 
   function routeTo(state, widgetId = null) {
+    if (currentState === 'widget' && state !== 'widget') {
+      onPositionEditChange?.(null);
+    }
     currentState = state;
     activeWidgetId = widgetId;
     renderCurrentState();
@@ -254,6 +252,7 @@ export function createSpaceInspector({
   }
 
   function close() {
+    onPositionEditChange?.(null);
     currentState = 'closed';
     activeWidgetId = null;
     renderCurrentState();

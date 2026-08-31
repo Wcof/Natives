@@ -233,6 +233,9 @@
   "documents": {
     "message": "文稿"
   },
+  "doneEditingPosition": {
+    "message": "完成调整"
+  },
   "downloads": {
     "message": "下载"
   },
@@ -256,6 +259,9 @@
   },
   "editImage": {
     "message": "编辑图片"
+  },
+  "editPosition": {
+    "message": "调整位置"
   },
   "editorLabel": {
     "message": "文件编辑器"
@@ -337,6 +343,9 @@
   },
   "forward": {
     "message": "前进"
+  },
+  "freeMoveHelp": {
+    "message": "点击“调整位置”后，可在画布上自由拖动组件，拖拽四角缩放手柄或顶部旋转手柄。"
   },
   "fullscreenTooltip": {
     "message": "全屏 (F)"
@@ -1025,6 +1034,9 @@
   "requestTimeout": {
     "message": "请求超时"
   },
+  "resetPosition": {
+    "message": "重置位置"
+  },
   "resetTemplateBlank": {
     "message": "空白"
   },
@@ -1162,6 +1174,9 @@
   },
   "textColor": {
     "message": "文本颜色"
+  },
+  "textOutline": {
+    "message": "文字描边"
   },
   "theme": {
     "message": "主题"

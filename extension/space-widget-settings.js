@@ -1,18 +1,20 @@
 /**
- * Widget Display and Plugin Settings Controller (<280 lines).
+ * Widget Display and Plugin Settings Controller (<260 lines).
  * Full migration of Tabliss Widget.tsx and WidgetDisplay.tsx.
  */
 
-import { widgetPlugins, pluginName, POSITIONS, escapeHtml } from './space-plugins.js';
+import { widgetPlugins, pluginName, escapeHtml } from './space-plugins.js';
 
 export function createSpaceWidgetSettings({
   t,
   language = 'zh_CN',
   onUpdateWidget,
   onRemoveWidget,
-  onReorderWidget,
+  onPositionEditChange,
   onBackToOverview,
 }) {
+  let isEditingPosition = false;
+
   function render(container, snapshot, workspaceId, widgetId) {
     const widget = (snapshot?.widgets || []).find((w) => w.id === widgetId);
     if (!widget) {
@@ -39,7 +41,13 @@ export function createSpaceWidgetSettings({
         <svg class="icon" style="color:var(--danger)"><use href="#i-trash" /></svg>
       </button>
     `;
-    header.querySelector('.inspector-back').onclick = () => onBackToOverview();
+    header.querySelector('.inspector-back').onclick = () => {
+      if (isEditingPosition) {
+        isEditingPosition = false;
+        onPositionEditChange?.(null);
+      }
+      onBackToOverview();
+    };
     header.querySelector('.widget-delete-trigger').onclick = () => showDeleteConfirm();
 
     // Body
@@ -62,7 +70,7 @@ export function createSpaceWidgetSettings({
       body.append(pluginSec);
     }
 
-    // 2. Position & Layout section
+    // 2. Position & Layout section (Tabliss PositionInput & Moveable Controls)
     const posSec = document.createElement('div');
     posSec.className = 'inspector-section';
     posSec.innerHTML = `
@@ -82,49 +90,82 @@ export function createSpaceWidgetSettings({
           <option value="free" ${disp.position === 'free' ? 'selected' : ''}>自由拖动 (Free Canvas)</option>
         </select>
       </label>
-      <div id="free-pos-fields" style="${disp.position === 'free' ? 'display:grid;gap:6px;' : 'display:none;'}">
-        <label class="inspector-field"><span>X (%)</span><input type="number" id="w-x" min="0" max="100" value="${disp.xPercent ?? 50}" /></label>
-        <label class="inspector-field"><span>Y (%)</span><input type="number" id="w-y" min="0" max="100" value="${disp.yPercent ?? 50}" /></label>
-        <label class="inspector-field"><span>缩放</span><input type="number" id="w-scale" min="0.1" max="3" step="0.1" value="${disp.scale ?? 1}" /></label>
-        <label class="inspector-field"><span>旋转 (°)</span><input type="number" id="w-rot" min="-180" max="180" value="${disp.rotation ?? 0}" /></label>
+      <div id="free-pos-controls" style="${disp.position === 'free' ? 'display:grid;gap:8px;' : 'display:none;'}">
+        <div style="display:flex;gap:6px;">
+          <button id="btn-edit-pos" class="primary" type="button" style="flex:1;">
+            ${isEditingPosition ? t('doneEditingPosition', '完成调整') : t('editPosition', '调整位置')}
+          </button>
+          <button id="btn-reset-pos" type="button">
+            ${t('resetPosition', '重置位置')}
+          </button>
+        </div>
+        <p class="inspector-empty" style="margin:0;font-size:11.5px;line-height:1.4;">
+          ${t('freeMoveHelp', '点击“调整位置”后，可在画布上自由拖动组件，拖拽四角缩放手柄或顶部旋转手柄。')}
+        </p>
       </div>
     `;
 
     const posSelect = posSec.querySelector('#w-position');
-    const freeFields = posSec.querySelector('#free-pos-fields');
+    const freeControls = posSec.querySelector('#free-pos-controls');
+    const editPosBtn = posSec.querySelector('#btn-edit-pos');
+    const resetPosBtn = posSec.querySelector('#btn-reset-pos');
+
     posSelect.onchange = () => {
       const isFree = posSelect.value === 'free';
-      freeFields.style.display = isFree ? 'grid' : 'none';
+      freeControls.style.display = isFree ? 'grid' : 'none';
+      if (!isFree && isEditingPosition) {
+        isEditingPosition = false;
+        onPositionEditChange?.(null);
+      }
       onUpdateWidget({ ...widget, displayJson: { ...disp, position: posSelect.value } });
     };
 
-    const updateFreeFields = () => {
-      onUpdateWidget({
-        ...widget,
-        displayJson: {
-          ...disp,
-          position: 'free',
-          xPercent: Number(posSec.querySelector('#w-x').value) || 50,
-          yPercent: Number(posSec.querySelector('#w-y').value) || 50,
-          scale: Number(posSec.querySelector('#w-scale').value) || 1,
-          rotation: Number(posSec.querySelector('#w-rot').value) || 0,
-        },
-      });
-    };
-    posSec.querySelectorAll('#free-pos-fields input').forEach((inp) => {
-      inp.onchange = updateFreeFields;
-    });
+    if (editPosBtn) {
+      editPosBtn.onclick = () => {
+        isEditingPosition = !isEditingPosition;
+        editPosBtn.textContent = isEditingPosition ? t('doneEditingPosition', '完成调整') : t('editPosition', '调整位置');
+        onPositionEditChange?.(isEditingPosition ? widget.id : null);
+      };
+    }
+
+    if (resetPosBtn) {
+      resetPosBtn.onclick = () => {
+        onUpdateWidget({
+          ...widget,
+          displayJson: {
+            ...disp,
+            position: 'free',
+            xPercent: 50,
+            yPercent: 50,
+            scale: 1,
+            rotation: 0,
+          },
+        });
+      };
+    }
 
     body.append(posSec);
 
-    // 3. Typography & Styling section
+    // 3. Typography & Styling section (Font size, Scale, Rotation, Color, Outline, Custom Class)
     const styleSec = document.createElement('div');
     styleSec.className = 'inspector-section';
     styleSec.innerHTML = `
       <h3>${t('typographyAndStyle', '字体与样式')}</h3>
       <label class="inspector-field"><span>${t('fontSize', '字号')}</span><input type="range" id="w-fontsize" min="10" max="120" value="${disp.fontSize || 32}" /><span id="w-fontsize-val">${disp.fontSize || 32}px</span></label>
+      <label class="inspector-field"><span>${t('scale', '缩放')}</span><input type="range" id="w-scale" min="0.2" max="3" step="0.1" value="${disp.scale ?? 1}" /><span id="w-scale-val">${disp.scale ?? 1}x</span></label>
+      <label class="inspector-field"><span>${t('rotation', '旋转')}</span><input type="range" id="w-rot" min="-180" max="180" step="1" value="${disp.rotation ?? 0}" /><span id="w-rot-val">${disp.rotation ?? 0}°</span></label>
       <label class="inspector-field"><span>${t('textColor', '文本颜色')}</span><input type="color" id="w-colour" value="${disp.colour || '#ffffff'}" /></label>
       <label class="inspector-checkbox"><input type="checkbox" id="w-accent" ${disp.useAccentColor ? 'checked' : ''} /><span>${t('useAccentColor', '使用强调色')}</span></label>
+      <label class="inspector-checkbox"><input type="checkbox" id="w-outline" ${disp.textOutline ? 'checked' : ''} /><span>${t('textOutline', '文字描边')}</span></label>
+      <div id="outline-details" style="${disp.textOutline ? 'display:grid;gap:6px;' : 'display:none;'}">
+        <label class="inspector-field"><span>描边颜色</span><input type="color" id="w-outline-color" value="${disp.textOutlineColor || '#000000'}" /></label>
+        <label class="inspector-field"><span>描边模式</span>
+          <select id="w-outline-style">
+            <option value="basic" ${disp.textOutlineStyle === 'basic' || !disp.textOutlineStyle ? 'selected' : ''}>投影描边 (Basic)</option>
+            <option value="advanced" ${disp.textOutlineStyle === 'advanced' ? 'selected' : ''}>粗边描摹 (Advanced)</option>
+          </select>
+        </label>
+      </div>
       <label class="inspector-field"><span>${t('fontWeight', '字重')}</span>
         <select id="w-weight">
           <option value="200" ${disp.fontWeight === '200' ? 'selected' : ''}>极细 (200)</option>
@@ -142,12 +183,36 @@ export function createSpaceWidgetSettings({
     fontSlider.oninput = () => { fontVal.textContent = `${fontSlider.value}px`; };
     fontSlider.onchange = () => { onUpdateWidget({ ...widget, displayJson: { ...disp, fontSize: Number(fontSlider.value) } }); };
 
+    const scaleSlider = styleSec.querySelector('#w-scale');
+    const scaleVal = styleSec.querySelector('#w-scale-val');
+    scaleSlider.oninput = () => { scaleVal.textContent = `${scaleSlider.value}x`; };
+    scaleSlider.onchange = () => { onUpdateWidget({ ...widget, displayJson: { ...disp, scale: Number(scaleSlider.value) } }); };
+
+    const rotSlider = styleSec.querySelector('#w-rot');
+    const rotVal = styleSec.querySelector('#w-rot-val');
+    rotSlider.oninput = () => { rotVal.textContent = `${rotSlider.value}°`; };
+    rotSlider.onchange = () => { onUpdateWidget({ ...widget, displayJson: { ...disp, rotation: Number(rotSlider.value) } }); };
+
     styleSec.querySelector('#w-colour').onchange = (e) => {
       onUpdateWidget({ ...widget, displayJson: { ...disp, colour: e.target.value } });
     };
     styleSec.querySelector('#w-accent').onchange = (e) => {
       onUpdateWidget({ ...widget, displayJson: { ...disp, useAccentColor: e.target.checked } });
     };
+
+    const outlineCheckbox = styleSec.querySelector('#w-outline');
+    const outlineDetails = styleSec.querySelector('#outline-details');
+    outlineCheckbox.onchange = (e) => {
+      outlineDetails.style.display = e.target.checked ? 'grid' : 'none';
+      onUpdateWidget({ ...widget, displayJson: { ...disp, textOutline: e.target.checked } });
+    };
+    styleSec.querySelector('#w-outline-color').onchange = (e) => {
+      onUpdateWidget({ ...widget, displayJson: { ...disp, textOutlineColor: e.target.value } });
+    };
+    styleSec.querySelector('#w-outline-style').onchange = (e) => {
+      onUpdateWidget({ ...widget, displayJson: { ...disp, textOutlineStyle: e.target.value } });
+    };
+
     styleSec.querySelector('#w-weight').onchange = (e) => {
       onUpdateWidget({ ...widget, displayJson: { ...disp, fontWeight: e.target.value } });
     };
@@ -159,7 +224,7 @@ export function createSpaceWidgetSettings({
 
     body.append(styleSec);
 
-    // Delete Confirmation Card (Inline)
+    // Delete Confirmation Card
     function showDeleteConfirm() {
       let confirmCard = container.querySelector('.delete-confirm-card');
       if (confirmCard) return;
@@ -175,6 +240,10 @@ export function createSpaceWidgetSettings({
       confirmCard.querySelector('.cancel-btn').onclick = () => confirmCard.remove();
       confirmCard.querySelector('.confirm-btn').onclick = () => {
         confirmCard.remove();
+        if (isEditingPosition) {
+          isEditingPosition = false;
+          onPositionEditChange?.(null);
+        }
         onRemoveWidget(widget.id);
       };
       container.prepend(confirmCard);

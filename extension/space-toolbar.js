@@ -22,9 +22,16 @@ export function createSpaceToolbar({
   let widgetsHidden = false;
 
   function isEditableFocused() {
-    const el = document.activeElement;
+    let el = document.activeElement;
+    const host = $('dashboard-host');
+    if (host?.shadowRoot?.activeElement) {
+      el = host.shadowRoot.activeElement;
+    }
+    while (el?.shadowRoot?.activeElement) {
+      el = el.shadowRoot.activeElement;
+    }
     if (!el) return false;
-    const tag = el.tagName.toLowerCase();
+    const tag = el.tagName?.toLowerCase();
     return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
   }
 

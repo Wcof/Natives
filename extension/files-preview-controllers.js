@@ -194,22 +194,120 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
     if (generation !== session.previewGeneration || editorState?.path !== item.path) return;
     loading.remove(); images.filter(Boolean).forEach((image) => section.append(image)); section.hidden = body.querySelector('.markdown-mode-toggle')?.dataset.mode !== 'reading'; if (section.querySelector('img')) body.append(section);
   }
+  function renderInlineMarkdown(source, container) {
+    if (!source) return;
+    const pattern = /(`[^`]+`|!?\[[^\]]*\]\([^) \t\r\n]+(?:\s+["'][^"']*["'])?\)|(?:\*\*|__)(?:[^*_]+|\*(?!\*)|\_(?!\_))+(?:\*\*|__)|~~[^~]+~~|(?:\*|_)(?:[^*_]+)+(?:\*|_))/g;
+    let lastIndex = 0; let match;
+    while ((match = pattern.exec(source)) !== null) {
+      if (match.index > lastIndex) container.append(document.createTextNode(source.slice(lastIndex, match.index)));
+      const token = match[0]; lastIndex = pattern.lastIndex;
+      if (token.startsWith('`') && token.endsWith('`') && token.length >= 2) {
+        const code = document.createElement('code'); code.textContent = token.slice(1, -1); container.append(code); continue;
+      }
+      if (token.startsWith('![') || token.startsWith('[')) {
+        const isImg = token.startsWith('!');
+        const linkMatch = token.match(/^!?\[([^\]]*)\]\(([^)\s]+)(?:\s+["']([^"']*)["'])?\)$/);
+        if (linkMatch) {
+          const text = linkMatch[1]; const rawUrl = linkMatch[2];
+          if (isImg) {
+            const img = document.createElement('img'); img.className = 'markdown-inline-image'; img.alt = text; img.title = linkMatch[3] || text;
+            if (/^(https?:|data:image\/)/i.test(rawUrl)) img.src = rawUrl;
+            container.append(img);
+          } else if (/^https?:\/\//i.test(rawUrl)) {
+            const a = document.createElement('a'); a.href = rawUrl; a.textContent = text || rawUrl; a.target = '_blank'; a.rel = 'noopener noreferrer'; container.append(a);
+          } else container.append(document.createTextNode(token));
+          continue;
+        }
+      }
+      if ((token.startsWith('**') && token.endsWith('**')) || (token.startsWith('__') && token.endsWith('__'))) {
+        const strong = document.createElement('strong'); renderInlineMarkdown(token.slice(2, -2), strong); container.append(strong); continue;
+      }
+      if (token.startsWith('~~') && token.endsWith('~~')) {
+        const del = document.createElement('del'); renderInlineMarkdown(token.slice(2, -2), del); container.append(del); continue;
+      }
+      if ((token.startsWith('*') && token.endsWith('*')) || (token.startsWith('_') && token.endsWith('_'))) {
+        const em = document.createElement('em'); renderInlineMarkdown(token.slice(1, -1), em); container.append(em); continue;
+      }
+      container.append(document.createTextNode(token));
+    }
+    if (lastIndex < source.length) container.append(document.createTextNode(source.slice(lastIndex)));
+  }
   function renderMarkdownSafePreview(item, content, body, generation) {
     if (!/\.(md|markdown|mdx)$/i.test(item.name)) return;
     const section = document.createElement('section'); section.className = 'markdown-preview';
     const heading = document.createElement('p'); heading.className = 'preview-meta muted'; heading.textContent = t('markdownPreview', 'Markdown preview'); section.append(heading);
-    let fenced = false; let block; let list; let nodes = 0;
-    for (const rawLine of String(content || '').slice(0, 64 * 1024).split(/\r?\n/)) {
-      if (nodes >= 400) break;
-      const line = rawLine.slice(0, 2_000);
-      if (/^\s*```/.test(line)) { fenced = !fenced; list = undefined; if (fenced) { block = document.createElement('pre'); section.append(block); } nodes++; continue; }
-      if (fenced) { block.textContent += `${line}\n`; continue; }
-      if (!/^\s*[-*+]\s+/.test(line)) list = undefined;
-      if (/^\s*[-*+]\s+/.test(line)) { if (!list) { list = document.createElement('ul'); section.append(list); } const itemNode = document.createElement('li'); itemNode.textContent = line.replace(/^\s*[-*+]\s+/, ''); list.append(itemNode); nodes++; continue; }
-      if (/^\s*\|/.test(line) && line.includes('|')) { const cells = line.split('|').slice(1, -1).map((cell) => cell.trim()); if (cells.length && !cells.every((cell) => /^:?-{3,}:?$/.test(cell))) { const row = document.createElement('div'); row.className = 'markdown-table-row'; for (const cell of cells) { const cellNode = document.createElement('span'); cellNode.textContent = cell; row.append(cellNode); } section.append(row); nodes++; } continue; }
-      const match = line.match(/^\s*(#{1,6})\s+(.+)$/); const quote = line.match(/^\s*>\s?(.*)$/);
-      const element = match ? document.createElement(`h${match[1].length}`) : quote ? document.createElement('blockquote') : document.createElement('p');
-      const source = match ? match[2] : quote ? quote[1] : line; const parts = source.split(/(\[[^\]]+\]\(https?:\/\/[^)\s]+\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g); for (const part of parts) { const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/); const emphasis = part.match(/^\*\*(.+)\*\*$|^__(.+)__$/); const italic = part.match(/^\*(.+)\*$|^_(.+)_$/); const node = linkMatch ? document.createElement('a') : emphasis ? document.createElement('strong') : italic ? document.createElement('em') : document.createTextNode(part); if (linkMatch) { node.textContent = linkMatch[1]; node.href = linkMatch[2]; node.target = '_blank'; node.rel = 'noopener noreferrer'; } else node.textContent = emphasis ? (emphasis[1] || emphasis[2]) : italic ? (italic[1] || italic[2]) : part; element.append(node); } section.append(element); nodes++;
+    let fenced = false; let codeBlock; let currentList = null; let currentListType = null; let currentTable = null; let nodes = 0;
+    const lines = String(content || '').slice(0, 128 * 1024).split(/\r?\n/);
+    for (let i = 0; i < lines.length && nodes < 1000; i++) {
+      const line = lines[i].slice(0, 4_000);
+      if (/^\s*```/.test(line)) {
+        fenced = !fenced; currentList = null; currentTable = null;
+        if (fenced) {
+          codeBlock = document.createElement('pre'); const code = document.createElement('code');
+          const langMatch = line.match(/^\s*```([a-zA-Z0-9_-]+)/); if (langMatch) code.className = `language-${langMatch[1]}`;
+          codeBlock.append(code); section.append(codeBlock); nodes++;
+        }
+        continue;
+      }
+      if (fenced) { const code = codeBlock.querySelector('code') || codeBlock; code.textContent += `${line}\n`; continue; }
+      const trimmed = line.trim();
+      if (!trimmed) { currentList = null; currentTable = null; continue; }
+      if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) { currentList = null; currentTable = null; section.append(document.createElement('hr')); nodes++; continue; }
+      const headerMatch = line.match(/^\s*(#{1,6})\s+(.+)$/);
+      if (headerMatch) {
+        currentList = null; currentTable = null;
+        const h = document.createElement(`h${headerMatch[1].length}`); renderInlineMarkdown(headerMatch[2], h); section.append(h); nodes++; continue;
+      }
+      const quoteMatch = line.match(/^\s*>\s?(.*)$/);
+      if (quoteMatch) {
+        currentList = null; currentTable = null;
+        const quote = document.createElement('blockquote'); renderInlineMarkdown(quoteMatch[1], quote); section.append(quote); nodes++; continue;
+      }
+      const taskMatch = line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/);
+      if (taskMatch) {
+        currentTable = null;
+        if (currentListType !== 'task' || !currentList) {
+          currentList = document.createElement('ul'); currentList.className = 'markdown-task-list'; currentListType = 'task'; section.append(currentList);
+        }
+        const li = document.createElement('li'); li.className = 'markdown-task-item';
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.disabled = true; checkbox.checked = taskMatch[1].toLowerCase() === 'x';
+        const textSpan = document.createElement('span'); renderInlineMarkdown(taskMatch[2], textSpan);
+        li.append(checkbox, textSpan); currentList.append(li); nodes++; continue;
+      }
+      const unorderedMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+      if (unorderedMatch) {
+        currentTable = null;
+        if (currentListType !== 'ul' || !currentList) {
+          currentList = document.createElement('ul'); currentListType = 'ul'; section.append(currentList);
+        }
+        const li = document.createElement('li'); renderInlineMarkdown(unorderedMatch[1], li); currentList.append(li); nodes++; continue;
+      }
+      const orderedMatch = line.match(/^\s*(\d+)\.\s+(.+)$/);
+      if (orderedMatch) {
+        currentTable = null;
+        if (currentListType !== 'ol' || !currentList) {
+          currentList = document.createElement('ol'); currentListType = 'ol'; section.append(currentList);
+        }
+        const li = document.createElement('li'); renderInlineMarkdown(orderedMatch[2], li); currentList.append(li); nodes++; continue;
+      }
+      if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.includes('|')) {
+        currentList = null; const cells = trimmed.slice(1, -1).split('|').map((c) => c.trim());
+        if (cells.every((c) => /^:?-{3,}:?$/.test(c))) continue;
+        if (!currentTable) {
+          currentTable = document.createElement('table'); currentTable.className = 'markdown-table';
+          const thead = document.createElement('thead'); const tr = document.createElement('tr');
+          cells.forEach((cell) => { const th = document.createElement('th'); renderInlineMarkdown(cell, th); tr.append(th); });
+          thead.append(tr); currentTable.append(thead, document.createElement('tbody')); section.append(currentTable); nodes++; continue;
+        }
+        const tbody = currentTable.querySelector('tbody');
+        if (tbody) {
+          const tr = document.createElement('tr');
+          cells.forEach((cell) => { const td = document.createElement('td'); renderInlineMarkdown(cell, td); tr.append(td); });
+          tbody.append(tr); nodes++; continue;
+        }
+      }
+      currentList = null; currentTable = null;
+      const p = document.createElement('p'); renderInlineMarkdown(trimmed, p); section.append(p); nodes++;
     }
     if (generation === session.previewGeneration && editorState?.path === item.path) body.append(section);
   }

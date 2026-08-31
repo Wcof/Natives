@@ -1,8 +1,21 @@
 /**
- * Space Shadow DOM Dashboard controller (<280 lines).
- * Implements: In-place DOM Registry (Mount/Patch/Move/Unmount),
- * GPU Compositing pipeline (translate3d/RAF throttle), and modular CSS caching.
+ * Space Shadow DOM Dashboard controller (<290 lines).
+ * Full implementation of Tabliss Widgets.sass and Slot.sass.
+ * Separates direct widget interactive usage from explicit position editing.
  */
+
+const transformOriginMap = {
+  topLeft: 'top left',
+  topCentre: 'top center',
+  topRight: 'top right',
+  middleLeft: 'center left',
+  middleCentre: 'center center',
+  middleRight: 'center right',
+  bottomLeft: 'bottom left',
+  bottomCentre: 'bottom center',
+  bottomRight: 'bottom right',
+  free: 'center center',
+};
 
 export function createSpaceDashboard({
   $,
@@ -12,20 +25,17 @@ export function createSpaceDashboard({
   widgetPlugins,
   nativeCall,
   broadcastRevision,
-  onSelectWidget,
 }) {
   let dashboardShadow = null;
   let dashboardRoot = null;
   let bgLayerEl = null;
   let currentBgKey = '';
   let currentBgDisplayStr = '';
+  let currentEditingWidgetId = null;
 
-  // Slot DOM containers: { topLeft, topCentre, ..., freeRoot }
   const slotContainers = {};
-  // In-place Widget Registry: Map<widgetId, { element, wrapperEl, widget, pos, disposer }>
   const widgetRegistry = new Map();
 
-  // Static cached stylesheet string compiled once
   let staticStyleContent = '';
   function getCompiledStyleSheet() {
     if (staticStyleContent) return staticStyleContent;
@@ -36,31 +46,39 @@ export function createSpaceDashboard({
 
     staticStyleContent = `
       :host { all: initial; }
-      :host([data-widgets-hidden="true"]) .slot,
-      :host(.widgets-hidden) .slot,
-      :host-context(body.space-widgets-hidden) .slot {
+      :host([data-widgets-hidden="true"]) .Slot,
+      :host(.widgets-hidden) .Slot,
+      :host-context(body.space-widgets-hidden) .Slot {
         display: none !important;
       }
-      .dashboard { width:100%; height:100%; position:relative; overflow:hidden; display:grid; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif; }
+      .Widgets { width:100%; height:100%; position:relative; overflow:hidden; padding:0; text-align:center; pointer-events:none; user-select:auto; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif; }
       .background-layer { position:absolute; inset:0; background-size:cover; background-position:center; transition:background 0.3s ease, filter 0.3s ease; }
       .background-not-configured { position:absolute; inset:0; display:grid; place-items:center; color:rgba(255,255,255,.6); font-size:14px; background:#111; }
-      .slot { position:absolute; display:flex; flex-direction:column; gap:8px; pointer-events:auto; z-index:2; }
-      .slot.topLeft { top:5%; left:5%; align-items:flex-start; }
-      .slot.topCentre { top:5%; left:50%; transform:translateX(-50%); align-items:center; }
-      .slot.topRight { top:5%; right:5%; align-items:flex-end; }
-      .slot.middleLeft { top:50%; left:5%; transform:translateY(-50%); align-items:flex-start; }
-      .slot.middleCentre { top:50%; left:50%; transform:translate(-50%,-50%); align-items:center; }
-      .slot.middleRight { top:50%; right:5%; transform:translateY(-50%); align-items:flex-end; }
-      .slot.bottomLeft { bottom:5%; left:5%; align-items:flex-start; }
-      .slot.bottomCentre { bottom:5%; left:50%; transform:translateX(-50%); align-items:center; }
-      .slot.bottomRight { bottom:5%; right:5%; align-items:flex-end; }
-      .slot.free-widget { position:absolute; cursor:move; user-select:none; }
-      .widget-container { color:#fff; text-shadow:0 1px 4px rgba(0,0,0,.6); transition:transform 0.1s ease; cursor:pointer; }
-      .widget-container:hover { outline:1px dashed rgba(255,255,255,0.4); border-radius:4px; }
-      .free-widget .free-handle { position:absolute; width:10px; height:10px; border-radius:50%; background:#fff; border:1px solid #333; opacity:0; pointer-events:auto; }
-      .free-widget:hover .free-handle { opacity:0.8; }
-      .free-widget .handle-scale { bottom:-6px; right:-6px; cursor:nwse-resize; }
-      .free-widget .handle-rotate { top:-14px; left:50%; transform:translateX(-50%); cursor:grab; }
+      .container { position:relative; width:100%; height:100%; }
+      .Slot { position:absolute; pointer-events:none; }
+      .Slot > * { margin:1rem; pointer-events:all; }
+      .Slot.free > * { margin:0; }
+      .Slot.topLeft { top:0; left:0; text-align:left; }
+      .Slot.topCentre { top:0; left:50%; transform:translateX(-50%); text-align:center; }
+      .Slot.topRight { top:0; right:0; text-align:right; }
+      .Slot.middleLeft { top:50%; left:0; transform:translateY(-50%); text-align:left; }
+      .Slot.middleCentre { top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }
+      .Slot.middleRight { top:50%; right:0; transform:translateY(-50%); text-align:right; }
+      .Slot.bottomLeft { bottom:3rem; left:0; text-align:left; }
+      .Slot.bottomCentre { bottom:3rem; left:50%; transform:translateX(-50%); text-align:center; }
+      .Slot.bottomRight { bottom:3rem; right:0; text-align:right; }
+      .Slot.free-slot-wrap { position:absolute; }
+      .Widget { position:relative; transition:color 0.15s ease; user-select:auto; display:inline-block; }
+      h1, h2, h3, h4 { line-height:1; margin:0; }
+      .weight-override h1, .weight-override h2, .weight-override h3, .weight-override h4 { font-weight:inherit; }
+      .drag-selected { z-index:1000 !important; outline:2px dashed var(--accent, #cdf24b) !important; border-radius:4px; box-shadow:0 0 0 4px rgba(205,242,75,0.25); }
+      .drag-selected > * { pointer-events:none; }
+      .free-handles-wrap { position:absolute; inset:-4px; pointer-events:none; z-index:1001; }
+      .free-handle { position:absolute; width:12px; height:12px; border-radius:50%; background:#fff; border:2px solid #222; pointer-events:auto; box-shadow:0 2px 6px rgba(0,0,0,0.35); }
+      .free-handle.handle-scale { bottom:-6px; right:-6px; cursor:nwse-resize; }
+      .free-handle.handle-rotate { top:-18px; left:50%; transform:translateX(-50%); cursor:grab; }
+      .free-floating-done { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:1100; display:inline-flex; align-items:center; gap:8px; padding:10px 24px; background:var(--accent, #cdf24b); color:#000; font-weight:700; font-size:14px; border:0; border-radius:999px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,0.4); pointer-events:auto; }
+      .free-floating-done:hover { filter:brightness(1.1); transform:translateX(-50%) scale(1.03); }
       ${pluginStyles}
     `;
     return staticStyleContent;
@@ -81,15 +99,17 @@ export function createSpaceDashboard({
     dashboardShadow.append(style);
 
     dashboardRoot = document.createElement('div');
-    dashboardRoot.className = 'dashboard';
+    dashboardRoot.className = 'Widgets';
     dashboardShadow.append(dashboardRoot);
 
-    // Create background layer
     bgLayerEl = document.createElement('div');
     bgLayerEl.className = 'background-layer';
     dashboardRoot.append(bgLayerEl);
 
-    // Create nine-grid slot containers
+    const containerEl = document.createElement('div');
+    containerEl.className = 'container';
+    dashboardRoot.append(containerEl);
+
     const NINE_SLOTS = [
       'topLeft', 'topCentre', 'topRight',
       'middleLeft', 'middleCentre', 'middleRight',
@@ -97,10 +117,11 @@ export function createSpaceDashboard({
     ];
     for (const slotName of NINE_SLOTS) {
       const slotEl = document.createElement('div');
-      slotEl.className = `slot ${slotName}`;
-      dashboardRoot.append(slotEl);
+      slotEl.className = `Slot ${slotName}`;
+      containerEl.append(slotEl);
       slotContainers[slotName] = slotEl;
     }
+    slotContainers.container = containerEl;
 
     return { shadow: dashboardShadow, root: dashboardRoot };
   }
@@ -137,7 +158,6 @@ export function createSpaceDashboard({
     const incomingWidgets = (snapshot.widgets || []).filter((w) => w.enabled);
     const incomingIds = new Set(incomingWidgets.map((w) => w.id));
 
-    // Remove unmounted widgets
     for (const [id, entry] of widgetRegistry.entries()) {
       if (!incomingIds.has(id)) {
         entry.disposer?.();
@@ -146,16 +166,13 @@ export function createSpaceDashboard({
       }
     }
 
-    // Mount or patch incoming widgets
     for (const widget of incomingWidgets) {
       const existing = widgetRegistry.get(widget.id);
       const pos = widget.displayJson?.position || 'middleCentre';
 
       if (!existing) {
-        // Mount new widget
         mountWidget(widget, pos, shadow, root, snapshot, activeWorkspaceId, updateSnapshot);
       } else {
-        // In-place patch existing widget
         patchWidget(existing, widget, pos, shadow, root, snapshot, activeWorkspaceId, updateSnapshot);
       }
     }
@@ -167,10 +184,9 @@ export function createSpaceDashboard({
 
     const container = document.createElement('div');
     const keyClass = widget.key.replace('widget/', '');
-    container.className = `widget-container widget-${keyClass}`;
     container.dataset.widgetId = widget.id;
 
-    applyWidgetDisplayStyles(container, widget.displayJson || {});
+    applyWidgetDisplayStyles(container, widget.displayJson || {}, keyClass, false);
 
     let disposer = null;
     plugin.render(container, widget.configJson || {}, widget.displayJson || {}, {
@@ -190,29 +206,17 @@ export function createSpaceDashboard({
       },
     });
 
-    container.onclick = (e) => {
-      e.stopPropagation();
-      onSelectWidget(widget.id);
-    };
-
     let wrapperEl = null;
     if (pos === 'free') {
       wrapperEl = document.createElement('div');
-      wrapperEl.className = 'slot free-widget';
+      wrapperEl.className = 'Slot free free-slot-wrap';
       const disp = widget.displayJson || {};
       wrapperEl.style.left = `${disp.xPercent ?? 50}%`;
       wrapperEl.style.top = `${disp.yPercent ?? 50}%`;
       wrapperEl.style.transform = `translate(-50%, -50%) scale(${disp.scale ?? 1}) rotate(${disp.rotation ?? 0}deg)`;
       wrapperEl.dataset.widgetId = widget.id;
-
-      const scaleHandle = document.createElement('div');
-      scaleHandle.className = 'free-handle handle-scale';
-      const rotHandle = document.createElement('div');
-      rotHandle.className = 'free-handle handle-rotate';
-      wrapperEl.append(scaleHandle, rotHandle, container);
-
-      attachFreeGestures(wrapperEl, scaleHandle, rotHandle, widget, snapshot, activeWorkspaceId, updateSnapshot);
-      root.append(wrapperEl);
+      wrapperEl.append(container);
+      slotContainers.container?.append(wrapperEl);
     } else {
       const targetSlot = slotContainers[pos] || slotContainers.middleCentre;
       targetSlot?.append(container);
@@ -223,6 +227,7 @@ export function createSpaceDashboard({
       wrapperEl,
       widget,
       pos,
+      keyClass,
       disposer,
     });
   }
@@ -231,7 +236,6 @@ export function createSpaceDashboard({
     const prevWidget = entry.widget;
     entry.widget = nextWidget;
 
-    // Check position move
     if (entry.pos !== nextPos) {
       entry.disposer?.();
       (entry.wrapperEl || entry.element).remove();
@@ -240,10 +244,9 @@ export function createSpaceDashboard({
       return;
     }
 
-    // In-place style & class update
-    applyWidgetDisplayStyles(entry.element, nextWidget.displayJson || {});
+    const isEditing = currentEditingWidgetId === nextWidget.id;
+    applyWidgetDisplayStyles(entry.element, nextWidget.displayJson || {}, entry.keyClass, isEditing);
 
-    // Re-render plugin contents only if config changed
     if (JSON.stringify(prevWidget.configJson) !== JSON.stringify(nextWidget.configJson)) {
       const plugin = widgetPlugins[nextWidget.key];
       plugin?.render?.(entry.element, nextWidget.configJson || {}, nextWidget.displayJson || {}, {
@@ -265,22 +268,87 @@ export function createSpaceDashboard({
     }
   }
 
-  function applyWidgetDisplayStyles(container, disp) {
-    container.style.fontSize = disp.fontSize ? `${disp.fontSize}px` : '';
+  function applyWidgetDisplayStyles(container, disp, keyClass, isEditing = false) {
     container.style.color = disp.useAccentColor ? 'var(--accent, #cdf24b)' : (disp.colour || '');
+    if (disp.fontFamily) container.style.fontFamily = disp.fontFamily;
+    container.style.fontSize = disp.fontSize ? `${disp.fontSize}px` : '';
     container.style.fontWeight = disp.fontWeight ? String(disp.fontWeight) : '';
     container.style.fontStyle = disp.fontStyle || '';
     container.style.textDecoration = disp.textDecoration || '';
 
-    // Custom class token
+    const origin = transformOriginMap[disp.position || 'middleCentre'] || 'center center';
+    container.style.transformOrigin = origin;
+
+    if (!isEditing && disp.position !== 'free') {
+      const s = disp.scale ?? 1;
+      const r = disp.rotation ?? 0;
+      container.style.transform = (s !== 1 || r !== 0) ? `scale(${s}) rotate(${r}deg)` : '';
+    }
+
+    if (disp.textOutline) {
+      const outlineColor = disp.textOutlineColor || '#000000';
+      if (disp.textOutlineStyle === 'advanced') {
+        const outlineSize = Number(disp.textOutlineSize) || 1;
+        container.style.webkitTextStroke = `${outlineSize * 2}px ${outlineColor}`;
+        container.style.textShadow = '';
+      } else {
+        container.style.webkitTextStroke = '';
+        container.style.textShadow = `-1px -1px 0 ${outlineColor}, 1px -1px 0 ${outlineColor}, -1px 1px 0 ${outlineColor}, 1px 1px 0 ${outlineColor}`;
+      }
+    } else {
+      container.style.webkitTextStroke = '';
+      container.style.textShadow = '';
+    }
+
+    container.className = `Widget widget-${keyClass || ''} ${disp.fontWeight ? 'weight-override' : ''}`;
     if (disp.customClass && /^[a-zA-Z0-9_-]+$/.test(disp.customClass)) {
       container.classList.add(disp.customClass);
     }
   }
 
-  function attachFreeGestures(element, scaleHandle, rotHandle, widget, snapshot, activeWorkspaceId, updateSnapshot) {
+  function setEditingWidget(widgetId, snapshot, activeWorkspaceId, updateSnapshot) {
+    currentEditingWidgetId = widgetId;
+    const { shadow, root } = ensureShadowShell();
+    if (!shadow || !root) return;
+
+    // Remove existing edit handles and floating button
+    shadow.querySelectorAll('.free-handles-wrap, .free-floating-done').forEach((el) => el.remove());
+    shadow.querySelectorAll('.drag-selected').forEach((el) => el.classList.remove('drag-selected'));
+
+    if (!widgetId) return;
+
+    const entry = widgetRegistry.get(widgetId);
+    if (!entry || entry.pos !== 'free' || !entry.wrapperEl) return;
+
+    const targetWrapper = entry.wrapperEl;
+    targetWrapper.classList.add('drag-selected');
+
+    // Create handles
+    const handlesWrap = document.createElement('div');
+    handlesWrap.className = 'free-handles-wrap';
+    const scaleHandle = document.createElement('div');
+    scaleHandle.className = 'free-handle handle-scale';
+    const rotHandle = document.createElement('div');
+    rotHandle.className = 'free-handle handle-rotate';
+    handlesWrap.append(scaleHandle, rotHandle);
+    targetWrapper.append(handlesWrap);
+
+    // Floating Done Button
+    const doneBtn = document.createElement('button');
+    doneBtn.className = 'free-floating-done';
+    doneBtn.type = 'button';
+    doneBtn.innerHTML = `<span>✓</span><span>${t('doneEditingPosition', '完成调整')}</span>`;
+    doneBtn.onclick = () => {
+      setEditingWidget(null);
+    };
+    root.append(doneBtn);
+
+    attachEditingGestures(targetWrapper, scaleHandle, rotHandle, entry.widget, snapshot, activeWorkspaceId, updateSnapshot);
+  }
+
+  function attachEditingGestures(element, scaleHandle, rotHandle, widget, snapshot, activeWorkspaceId, updateSnapshot) {
     let isInteracting = false;
-    let mode = 'idle'; // 'drag' | 'scale' | 'rotate'
+    let mode = 'idle';
     let startX = 0;
     let startY = 0;
     let initXPercent = widget.displayJson?.xPercent ?? 50;
@@ -306,7 +374,6 @@ export function createSpaceDashboard({
     }
 
     element.onpointerdown = (e) => {
-      if (['INPUT', 'TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) return;
       if (e.target === scaleHandle || e.target === rotHandle) return;
       isInteracting = true;
       mode = 'drag';
@@ -369,7 +436,6 @@ export function createSpaceDashboard({
       const finalScale = mode === 'scale' ? Math.round(curScale * 10) / 10 : initScale;
       const finalRot = mode === 'rotate' ? curRot : initRot;
 
-      // Reset transform and commit position in-place
       element.style.left = `${finalX}%`;
       element.style.top = `${finalY}%`;
       element.style.transform = `translate(-50%, -50%) scale(${finalScale}) rotate(${finalRot}deg)`;
@@ -377,6 +443,10 @@ export function createSpaceDashboard({
       mode = 'idle';
       curDx = 0;
       curDy = 0;
+      initXPercent = finalX;
+      initYPercent = finalY;
+      initScale = finalScale;
+      initRot = finalRot;
 
       try {
         const nextDisplay = {
@@ -394,21 +464,19 @@ export function createSpaceDashboard({
         });
         updateSnapshot(result);
         broadcastRevision();
-      } catch (err) {
-        render(snapshot, activeWorkspaceId, updateSnapshot);
-      }
+      } catch (err) {}
     };
 
     element.onpointercancel = () => {
       isInteracting = false;
       mode = 'idle';
       element.style.willChange = 'auto';
-      render(snapshot, activeWorkspaceId, updateSnapshot);
     };
   }
 
   return {
     render,
+    setEditingWidget,
     setWidgetsHidden(hidden) {
       const host = $('dashboard-host');
       if (host) {

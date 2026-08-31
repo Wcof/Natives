@@ -239,10 +239,11 @@ async function init() {
   deleteModal = createSpaceDeleteModal({ $, t, onDeleteWorkspaceConfirmed: handleDeleteWorkspace });
 
   wsTree = createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorkspace: (ws) => nameModal.open(ws), deleteWorkspace: (ws) => deleteModal.open(ws) });
-  dashboard = createSpaceDashboard({ $, t, selectedLanguage, backgroundPlugins, widgetPlugins, nativeCall, broadcastRevision, onSelectWidget: (widgetId) => inspector.open({ widgetId }) });
+  dashboard = createSpaceDashboard({ $, t, selectedLanguage, backgroundPlugins, widgetPlugins, nativeCall, broadcastRevision });
 
   inspector = createSpaceInspector({
     $, t, language: selectedLanguage, nativeCall, broadcastRevision, updateSnapshot,
+    onPositionEditChange: (widgetId) => dashboard.setEditingWidget(widgetId, activeSnapshot, activeWorkspaceId, updateSnapshot),
     onCloseFocusAnchor: () => toolbar?.settingsButton?.focus(),
   });
 

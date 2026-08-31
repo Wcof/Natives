@@ -233,6 +233,9 @@
   "documents": {
     "message": "Documents"
   },
+  "doneEditingPosition": {
+    "message": "Done editing position"
+  },
   "downloads": {
     "message": "Downloads"
   },
@@ -256,6 +259,9 @@
   },
   "editImage": {
     "message": "Edit image"
+  },
+  "editPosition": {
+    "message": "Edit position"
   },
   "editorLabel": {
     "message": "File editor"
@@ -337,6 +343,9 @@
   },
   "forward": {
     "message": "Forward"
+  },
+  "freeMoveHelp": {
+    "message": "After clicking \"Edit position\", freely drag the widget on the canvas, drag corner handles to scale, or top handle to rotate."
   },
   "fullscreenTooltip": {
     "message": "Fullscreen (F)"
@@ -1025,6 +1034,9 @@
   "requestTimeout": {
     "message": "Request timed out"
   },
+  "resetPosition": {
+    "message": "Reset position"
+  },
   "resetTemplateBlank": {
     "message": "Blank"
   },
@@ -1162,6 +1174,9 @@
   },
   "textColor": {
     "message": "Text color"
+  },
+  "textOutline": {
+    "message": "Text outline"
   },
   "theme": {
     "message": "Theme"
