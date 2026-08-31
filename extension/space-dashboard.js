@@ -114,7 +114,7 @@ export function createSpaceDashboard({
     const bgData = snapshot.backgroundJson || {};
     const bgKey = bgData.key || 'background/colour';
     const bgDisplay = bgData.display || bgData.data || {};
-    const bgDisplayStr = JSON.stringify(bgDisplay);
+    const bgDisplayStr = JSON.stringify({ key: bgKey, ...bgDisplay });
 
     if (bgKey !== currentBgKey || bgDisplayStr !== currentBgDisplayStr) {
       currentBgKey = bgKey;

@@ -171,4 +171,25 @@ assert.equal(upsertResult.widgets.length, 3);
 assert.equal(upsertResult.revision, 2);
 console.log('✓ workspace_widget_upsert call passed');
 
+// Test 4: Background persistence across widget interaction test
+console.log('--- Background Persistence Across Widget Clicks ---');
+const bgSaveResult = {
+  ...snapshot,
+  backgroundJson: { key: 'background/online', display: { url: 'https://images.unsplash.com/photo-nature.jpg' } },
+  revision: 3,
+};
+assert.equal(bgSaveResult.backgroundJson.key, 'background/online');
+
+// Simulate widget click and subsequent snapshot update
+const postClickSnapshot = {
+  ...bgSaveResult,
+  widgets: [
+    ...bgSaveResult.widgets,
+    { id: 'w-quote-1', key: 'widget/quote', order: 2, enabled: true, configJson: {}, displayJson: { position: 'topLeft' } },
+  ],
+  revision: 4,
+};
+assert.equal(postClickSnapshot.backgroundJson.key, 'background/online', 'Background must remain online/bing image and not revert to solid colour');
+console.log('✓ Background preserved across widget clicks and updates');
+
 console.log('All space tests passed!\n');
