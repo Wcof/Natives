@@ -62,6 +62,9 @@
   "backgroundSource": {
     "message": "Background source"
   },
+  "bingAutoUpdate": {
+    "message": "Automatically sync Bing official 4K/1080P wallpapers daily."
+  },
   "blur": {
     "message": "Blur"
   },
@@ -76,6 +79,9 @@
   },
   "cancel": {
     "message": "Cancel"
+  },
+  "carouselInterval": {
+    "message": "Carousel interval"
   },
   "changeAdded": {
     "message": "Added"
@@ -142,6 +148,9 @@
   },
   "confirmRemoveWidget": {
     "message": "Are you sure you want to remove this widget?"
+  },
+  "confirmResetWorkspace": {
+    "message": "Reset workspace"
   },
   "connecting": {
     "message": "Connecting to local file system…"
@@ -235,6 +244,9 @@
   },
   "duplicated": {
     "message": "Copy created"
+  },
+  "edit": {
+    "message": "Edit"
   },
   "editConflict": {
     "message": "File changed externally"
@@ -524,6 +536,213 @@
   "mediaPreviewUnavailable": {
     "message": "Open audio and video with the system default app"
   },
+  "modelAPIFormat": {
+    "message": "API format"
+  },
+  "modelAPIKeyPlaceholder": {
+    "message": "Leave blank to keep the current key"
+  },
+  "modelAccessKeyUnavailable": {
+    "message": "No access key has been generated"
+  },
+  "modelAccountActive": {
+    "message": "Available"
+  },
+  "modelAccountNeedsReauth": {
+    "message": "Sign-in required"
+  },
+  "modelAccounts": {
+    "message": "accounts"
+  },
+  "modelAddAccount": {
+    "message": "Add account"
+  },
+  "modelAddProvider": {
+    "message": "Add custom provider"
+  },
+  "modelAlias": {
+    "message": "Alias"
+  },
+  "modelAllowLAN": {
+    "message": "Allow LAN address"
+  },
+  "modelAuthorizationFailed": {
+    "message": "OAuth authorization failed. Please try again."
+  },
+  "modelAuthorizationTimeout": {
+    "message": "OAuth authorization timed out. Start again."
+  },
+  "modelAuthorizing": {
+    "message": "Authorizing"
+  },
+  "modelCancelAuthorization": {
+    "message": "Cancel authorization"
+  },
+  "modelConnectionSucceeded": {
+    "message": "Connected; found $1 models"
+  },
+  "modelContextLength": {
+    "message": "Context"
+  },
+  "modelCopyAccessKey": {
+    "message": "Copy access key"
+  },
+  "modelCopyEndpoint": {
+    "message": "Copy endpoint"
+  },
+  "modelCustomProviders": {
+    "message": "Custom providers"
+  },
+  "modelDeleteAccountConfirm": {
+    "message": "Delete this OAuth account?"
+  },
+  "modelDeleteProviderConfirm": {
+    "message": "Delete this provider and its models?"
+  },
+  "modelDisplayName": {
+    "message": "Display name"
+  },
+  "modelEndpointUnavailable": {
+    "message": "Gateway endpoint is unavailable"
+  },
+  "modelErrorGatewayRestart": {
+    "message": "The configuration was saved, but the gateway could not restart. Try again."
+  },
+  "modelErrorGatewayStart": {
+    "message": "The local model gateway could not start."
+  },
+  "modelErrorGatewayStop": {
+    "message": "The local model gateway could not stop."
+  },
+  "modelErrorInternal": {
+    "message": "The model settings operation failed."
+  },
+  "modelErrorInvalidRequest": {
+    "message": "Some input is invalid. Check it and try again."
+  },
+  "modelErrorKeychainUnavailable": {
+    "message": "The system keychain is unavailable."
+  },
+  "modelErrorNotFound": {
+    "message": "This configuration no longer exists. Refresh and try again."
+  },
+  "modelErrorOAuthInProgress": {
+    "message": "Another OAuth authorization is already in progress."
+  },
+  "modelErrorRevisionConflict": {
+    "message": "The configuration changed in another page. Refresh and try again."
+  },
+  "modelErrorSecretMissing": {
+    "message": "Configure credentials first."
+  },
+  "modelErrorTimeout": {
+    "message": "The request timed out. Try again."
+  },
+  "modelErrorUpstream": {
+    "message": "The provider request failed. Try again later."
+  },
+  "modelErrorUpstreamInvalid": {
+    "message": "The provider returned an invalid response."
+  },
+  "modelErrorUpstreamTooLarge": {
+    "message": "The provider response exceeded the size limit."
+  },
+  "modelErrorUpstreamUnauthorized": {
+    "message": "The provider rejected the credential. Check the API key."
+  },
+  "modelErrorUpstreamUnreachable": {
+    "message": "Could not reach the provider. Check the address and network."
+  },
+  "modelFailed": {
+    "message": "Failed"
+  },
+  "modelFetchModels": {
+    "message": "Fetch models"
+  },
+  "modelGatewayNotRunning": {
+    "message": "Gateway is not running"
+  },
+  "modelGatewaySummary": {
+    "message": "$1 providers · $2 accounts · $3 models"
+  },
+  "modelHostDisconnected": {
+    "message": "Model Host disconnected"
+  },
+  "modelID": {
+    "message": "Model ID"
+  },
+  "modelList": {
+    "message": "Models"
+  },
+  "modelLoading": {
+    "message": "Loading model settings…"
+  },
+  "modelLocalGateway": {
+    "message": "Local model gateway"
+  },
+  "modelNoAccounts": {
+    "message": "No connected accounts"
+  },
+  "modelNoAccountsHint": {
+    "message": "Select Add account and finish authorization in your browser."
+  },
+  "modelNoCustomProviders": {
+    "message": "No custom providers yet"
+  },
+  "modelNoModels": {
+    "message": "No models"
+  },
+  "modelNoModelsHint": {
+    "message": "Fetch models automatically or add one with the form below."
+  },
+  "modelOAuthModelsHint": {
+    "message": "Models sync automatically after account authorization and gateway startup."
+  },
+  "modelOAuthProviders": {
+    "message": "OAuth"
+  },
+  "modelReauthorize": {
+    "message": "Reauthorize"
+  },
+  "modelRefresh": {
+    "message": "Refresh"
+  },
+  "modelResident": {
+    "message": "Keep running"
+  },
+  "modelRestarting": {
+    "message": "Restarting"
+  },
+  "modelRotateAccessKey": {
+    "message": "Regenerate key"
+  },
+  "modelRunning": {
+    "message": "Running"
+  },
+  "modelSettings": {
+    "message": "Model settings"
+  },
+  "modelSettingsDescription": {
+    "message": "Manage OAuth and custom model providers for use through the local compatible gateway."
+  },
+  "modelStartGateway": {
+    "message": "Start"
+  },
+  "modelStarting": {
+    "message": "Starting"
+  },
+  "modelStopGateway": {
+    "message": "Stop"
+  },
+  "modelStopped": {
+    "message": "Stopped"
+  },
+  "modelStopping": {
+    "message": "Stopping"
+  },
+  "modelTestConnection": {
+    "message": "Test connection"
+  },
   "modified": {
     "message": "Modified"
   },
@@ -613,6 +832,9 @@
   },
   "nextPage": {
     "message": "Next page"
+  },
+  "nextWallpaper": {
+    "message": "Switch to next wallpaper"
   },
   "nightDim": {
     "message": "Night auto-dim"
@@ -773,6 +995,9 @@
   "refresh": {
     "message": "Refresh"
   },
+  "regionMarket": {
+    "message": "Wallpaper region"
+  },
   "reloadFile": {
     "message": "Reload file"
   },
@@ -800,17 +1025,11 @@
   "requestTimeout": {
     "message": "Request timed out"
   },
-  "resetWorkspace": {
-    "message": "Reset workspace..."
+  "resetTemplateBlank": {
+    "message": "Blank"
   },
-  "resetWorkspaceTitle": {
-    "message": "Reset workspace"
-  },
-  "resetWorkspaceDescription": {
-    "message": "Choose the template to apply. Current widgets and background settings will be replaced."
-  },
-  "resetWorkspaceTemplate": {
-    "message": "Workspace template"
+  "resetTemplateBlankDesc": {
+    "message": "Start without widgets"
   },
   "resetTemplateClassic": {
     "message": "Classic"
@@ -824,14 +1043,20 @@
   "resetTemplateFocusDesc": {
     "message": "Time and greeting"
   },
-  "resetTemplateBlank": {
-    "message": "Blank"
+  "resetWorkspace": {
+    "message": "Reset workspace..."
   },
-  "resetTemplateBlankDesc": {
-    "message": "Start without widgets"
+  "resetWorkspaceDescription": {
+    "message": "Choose the template to apply. Current widgets and background settings will be replaced."
   },
-  "confirmResetWorkspace": {
+  "resetWorkspaceTemplate": {
+    "message": "Workspace template"
+  },
+  "resetWorkspaceTitle": {
     "message": "Reset workspace"
+  },
+  "resolution": {
+    "message": "Resolution"
   },
   "retry": {
     "message": "Retry connection"
@@ -989,6 +1214,9 @@
   "unsavedChangesMessage": {
     "message": "Save your changes before continuing?"
   },
+  "unsplashThemeQuery": {
+    "message": "Theme (Query)"
+  },
   "up": {
     "message": "Parent directory"
   },
@@ -1049,75 +1277,6 @@
   "workspaceRenamed": {
     "message": "Workspace renamed"
   },
-  "modelSettings": { "message": "Model settings" },
-  "modelSettingsDescription": { "message": "Manage OAuth and custom model providers for use through the local compatible gateway." },
-  "modelRefresh": { "message": "Refresh" },
-  "modelLoading": { "message": "Loading model settings…" },
-  "modelAddProvider": { "message": "Add custom provider" },
-  "modelLocalGateway": { "message": "Local model gateway" },
-  "modelStartGateway": { "message": "Start" },
-  "modelStopGateway": { "message": "Stop" },
-  "modelResident": { "message": "Keep running" },
-  "modelCopyEndpoint": { "message": "Copy endpoint" },
-  "modelCopyAccessKey": { "message": "Copy access key" },
-  "modelRotateAccessKey": { "message": "Regenerate key" },
-  "modelGatewayNotRunning": { "message": "Gateway is not running" },
-  "modelGatewaySummary": { "message": "$1 providers · $2 accounts · $3 models" },
-  "modelAccountActive": { "message": "Available" },
-  "modelAccountNeedsReauth": { "message": "Sign-in required" },
-  "modelAuthorizationTimeout": { "message": "OAuth authorization timed out. Start again." },
-  "modelOAuthProviders": { "message": "OAuth" },
-  "modelCustomProviders": { "message": "Custom providers" },
-  "modelNoCustomProviders": { "message": "No custom providers yet" },
-  "modelAuthorizing": { "message": "Authorizing" },
-  "modelCancelAuthorization": { "message": "Cancel authorization" },
-  "modelAddAccount": { "message": "Add account" },
-  "modelNoAccounts": { "message": "No connected accounts" },
-  "modelNoAccountsHint": { "message": "Select Add account and finish authorization in your browser." },
-  "modelReauthorize": { "message": "Reauthorize" },
-  "modelAPIFormat": { "message": "API format" },
-  "modelAPIKeyPlaceholder": { "message": "Leave blank to keep the current key" },
-  "modelAllowLAN": { "message": "Allow LAN address" },
-  "modelFetchModels": { "message": "Fetch models" },
-  "modelTestConnection": { "message": "Test connection" },
-  "modelConnectionSucceeded": { "message": "Connected; found $1 models" },
-  "modelList": { "message": "Models" },
-  "modelNoModels": { "message": "No models" },
-  "modelNoModelsHint": { "message": "Fetch models automatically or add one with the form below." },
-  "modelOAuthModelsHint": { "message": "Models sync automatically after account authorization and gateway startup." },
-  "modelAccounts": { "message": "accounts" },
-  "modelID": { "message": "Model ID" },
-  "modelDisplayName": { "message": "Display name" },
-  "modelAlias": { "message": "Alias" },
-  "modelContextLength": { "message": "Context" },
-  "modelRunning": { "message": "Running" },
-  "modelStarting": { "message": "Starting" },
-  "modelStopping": { "message": "Stopping" },
-  "modelStopped": { "message": "Stopped" },
-  "modelFailed": { "message": "Failed" },
-  "modelRestarting": { "message": "Restarting" },
-  "modelHostDisconnected": { "message": "Model Host disconnected" },
-  "modelEndpointUnavailable": { "message": "Gateway endpoint is unavailable" },
-  "modelAccessKeyUnavailable": { "message": "No access key has been generated" },
-  "modelAuthorizationFailed": { "message": "OAuth authorization failed. Please try again." },
-  "modelDeleteAccountConfirm": { "message": "Delete this OAuth account?" },
-  "modelDeleteProviderConfirm": { "message": "Delete this provider and its models?" },
-  "modelErrorInvalidRequest": { "message": "Some input is invalid. Check it and try again." },
-  "modelErrorNotFound": { "message": "This configuration no longer exists. Refresh and try again." },
-  "modelErrorRevisionConflict": { "message": "The configuration changed in another page. Refresh and try again." },
-  "modelErrorKeychainUnavailable": { "message": "The system keychain is unavailable." },
-  "modelErrorSecretMissing": { "message": "Configure credentials first." },
-  "modelErrorUpstreamUnreachable": { "message": "Could not reach the provider. Check the address and network." },
-  "modelErrorUpstreamUnauthorized": { "message": "The provider rejected the credential. Check the API key." },
-  "modelErrorUpstream": { "message": "The provider request failed. Try again later." },
-  "modelErrorUpstreamInvalid": { "message": "The provider returned an invalid response." },
-  "modelErrorUpstreamTooLarge": { "message": "The provider response exceeded the size limit." },
-  "modelErrorGatewayStart": { "message": "The local model gateway could not start." },
-  "modelErrorGatewayStop": { "message": "The local model gateway could not stop." },
-  "modelErrorGatewayRestart": { "message": "The configuration was saved, but the gateway could not restart. Try again." },
-  "modelErrorOAuthInProgress": { "message": "Another OAuth authorization is already in progress." },
-  "modelErrorInternal": { "message": "The model settings operation failed." },
-  "modelErrorTimeout": { "message": "The request timed out. Try again." },
   "zoomImageHint": {
     "message": "Scroll to zoom image"
   }
