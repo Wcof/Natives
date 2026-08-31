@@ -89,12 +89,46 @@ export class FilesPreviewPanel {
     }
 
     if (this.resizer) {
-      this.resizer.addEventListener('mousedown', (event) => {
+      const beginResize = (event) => {
         this.resizing = true;
         document.body.style.cursor = this.bottom ? 'row-resize' : 'col-resize';
         document.body.style.userSelect = 'none';
+        if (event.target?.setPointerCapture && event.pointerId !== undefined) {
+          try { event.target.setPointerCapture(event.pointerId); } catch {}
+        }
         event.preventDefault();
-      });
+      };
+      const updateResize = (event) => {
+        if (!this.resizing) return;
+        if (this.bottom) {
+          const statusBarHeight = document.querySelector('#status-bar')?.offsetHeight || 30;
+          this.setHeight(window.innerHeight - event.clientY - statusBarHeight);
+        } else {
+          this.setWidth(window.innerWidth - event.clientX);
+        }
+      };
+      const endResize = (event) => {
+        if (!this.resizing) return;
+        this.resizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        if (event?.target?.releasePointerCapture && event?.pointerId !== undefined) {
+          try { event.target.releasePointerCapture(event.pointerId); } catch {}
+        }
+        this.onLayoutChange?.({ bottom: this.bottom, width: this.width, height: this.height });
+      };
+
+      this.resizer.addEventListener('pointerdown', beginResize);
+      this.resizer.addEventListener('pointermove', updateResize);
+      this.resizer.addEventListener('pointerup', endResize);
+      this.resizer.addEventListener('pointercancel', endResize);
+      document.addEventListener('pointermove', updateResize);
+      document.addEventListener('pointerup', endResize);
+      document.addEventListener('pointercancel', endResize);
+
+      this.resizer.addEventListener('mousedown', beginResize);
+      document.addEventListener('mousemove', updateResize);
+      document.addEventListener('mouseup', endResize);
 
       this.resizer.addEventListener('keydown', (event) => {
         if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
@@ -108,23 +142,6 @@ export class FilesPreviewPanel {
         }
       });
     }
-
-    document.addEventListener('mousemove', (event) => {
-      if (!this.resizing) return;
-      if (this.bottom) {
-        this.setHeight(window.innerHeight - event.clientY);
-      } else {
-        this.setWidth(window.innerWidth - event.clientX);
-      }
-    });
-
-    document.addEventListener('mouseup', () => {
-      if (!this.resizing) return;
-      this.resizing = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      this.onLayoutChange?.({ bottom: this.bottom, width: this.width, height: this.height });
-    });
   }
 
   _syncLayout() {

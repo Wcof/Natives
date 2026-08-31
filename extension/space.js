@@ -14,6 +14,7 @@ import { createSpaceNameModal } from './space-modal-name.js';
 import { createSpaceDeleteModal } from './space-modal-delete.js';
 import { createSidebarController } from './sidebar-controller.js';
 import { createSettingsMenu } from './settings-menu.js';
+import { createGlobalSearchModal } from './global-search-modal.js';
 
 let localeMessages = {};
 let selectedLanguage = 'zh_CN';
@@ -237,6 +238,7 @@ async function init() {
 
   nameModal = createSpaceNameModal({ $, t, onSaveWorkspaceName: handleSaveWorkspaceName });
   deleteModal = createSpaceDeleteModal({ $, t, onDeleteWorkspaceConfirmed: handleDeleteWorkspace });
+  createGlobalSearchModal({ $, t, nativeCall });
 
   wsTree = createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorkspace: (ws) => nameModal.open(ws), deleteWorkspace: (ws) => deleteModal.open(ws) });
   dashboard = createSpaceDashboard({ $, t, selectedLanguage, backgroundPlugins, widgetPlugins, nativeCall, broadcastRevision });

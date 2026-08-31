@@ -4,6 +4,13 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
   let menuWorkspace = null;
   let menuTrigger = null;
 
+  function formatWorkspaceDisplayName(name) {
+    if (!name || name === 'Personal Space' || name === 'Default') {
+      return t('personalSpace', '个人空间');
+    }
+    return name;
+  }
+
   function closeMenu({ restoreFocus = false } = {}) {
     if (menu.hidden) return;
     menu.hidden = true;
@@ -56,11 +63,12 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
       const item = document.createElement('div');
       item.className = `ws-item${workspace.id === activeWorkspaceId ? ' active' : ''}`;
 
+      const displayName = formatWorkspaceDisplayName(workspace.name);
       const select = document.createElement('button');
       select.type = 'button';
       select.className = 'ws-select';
-      select.textContent = workspace.name;
-      select.title = workspace.name;
+      select.textContent = displayName;
+      select.title = displayName;
       select.setAttribute('aria-current', workspace.id === activeWorkspaceId ? 'page' : 'false');
       select.onclick = () => activateWorkspace(workspace.id);
       select.oncontextmenu = (event) => {
@@ -72,7 +80,7 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
       more.type = 'button';
       more.className = 'ws-more-btn';
       more.title = t('moreActions', '更多');
-      more.setAttribute('aria-label', `${workspace.name} · ${more.title}`);
+      more.setAttribute('aria-label', `${displayName} · ${more.title}`);
       more.setAttribute('aria-haspopup', 'menu');
       more.setAttribute('aria-expanded', 'false');
       more.innerHTML = '<svg class="icon"><use href="#i-more"/></svg>';

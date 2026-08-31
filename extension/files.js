@@ -532,7 +532,7 @@ new MutationObserver((records) => { for (const record of records) for (const nod
 new MutationObserver((records) => { for (const record of records) for (const node of record.addedNodes) { if (!(node instanceof HTMLElement) || !node.classList.contains('entry') || session.viewMode !== 'grid' || node.dataset.path === undefined) continue; const item = session.entries.find((entry) => entry.path === node.dataset.path); if (!item || item.isDir || item.kind !== 'image' || !gridThumbObserver) continue; const icon = node.querySelector('.entry-icon'); if (!icon) continue; const image = document.createElement('img'); image.className = 'grid-thumbnail'; image.alt = item.name; image.loading = 'lazy'; icon.replaceChildren(image); gridThumbObserver.observe(image); } }).observe($('entries'), { childList: true });
 document.addEventListener('keydown', async (event) => { const dialog = $('image-lightbox'); if (!dialog?.open || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return; const candidates = session.entries.filter((item) => item.kind === 'image' && !item.isDir); const index = candidates.findIndex((item) => item.path === dialog.dataset.path); if (index < 0 || !candidates.length) return; event.preventDefault(); const item = candidates[(index + (event.key === 'ArrowRight' ? 1 : -1) + candidates.length) % candidates.length]; const requestId = crypto.randomUUID(); dialog.dataset.request = requestId; try { const result = await call('image_preview', { path: item.path }, requestId); if (!dialog.open || dialog.dataset.request !== requestId || !/^image\//.test(result?.mimeType || '') || typeof result.data !== 'string') return; const image = dialog.querySelector('img'); image.src = `data:${result.mimeType};base64,${result.data}`; image.alt = item.name; dialog.dataset.path = item.path; } catch { /* keep current image when navigation fails */ } });
 document.addEventListener('keydown', (event) => { if (session.viewMode !== 'grid' || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key) || event.target.matches('input,textarea,select')) return; const row = event.target.closest('.entry'); if (!row) return; const index = Number(row.dataset.index); const columns = Math.max(1, getComputedStyle($('entries')).gridTemplateColumns.split(' ').length); const delta = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' ? -columns : columns; const next = Math.max(0, Math.min(session.entries.length - 1, index + delta)); event.preventDefault(); event.stopImmediatePropagation(); selectEntry(next, event); document.querySelector(`[data-index="${next}"]`)?.focus(); }, true);
-new MutationObserver(() => { const toggle = $('preview-body').querySelector('.markdown-mode-toggle'); const toolbar = toggle?.closest('.editor-toolbar'); if (!toolbar || toolbar.dataset.formatReady) return; toolbar.dataset.formatReady = 'true'; const tools = document.createElement('span'); tools.className = 'markdown-tools'; for (const action of ['bold', 'italic', 'code', 'list', 'heading', 'link', 'image']) { const button = document.createElement('button'); button.type = 'button'; button.dataset.mdAction = action; button.append(iconElement({ bold: 'bold', italic: 'italic', code: 'code', list: 'list', heading: 'heading', link: 'link', image: 'image' }[action])); button.title = t(`markdown${action[0].toUpperCase()}${action.slice(1)}`, action); button.setAttribute('aria-label', button.title); tools.append(button); } toolbar.insertBefore(tools, toggle); }).observe($('preview-body'), { childList: true, subtree: true });
+new MutationObserver(() => { const left = $('preview-body').querySelector('.editor-toolbar-left'); const toolbar = left?.closest('.editor-toolbar'); if (!toolbar || !left || toolbar.dataset.formatReady) return; toolbar.dataset.formatReady = 'true'; const tools = document.createElement('span'); tools.className = 'markdown-tools'; for (const action of ['bold', 'italic', 'code', 'list', 'heading', 'link', 'image']) { const button = document.createElement('button'); button.type = 'button'; button.dataset.mdAction = action; button.append(iconElement({ bold: 'bold', italic: 'italic', code: 'code', list: 'list', heading: 'heading', link: 'link', image: 'image' }[action])); button.title = t(`markdown${action[0].toUpperCase()}${action.slice(1)}`, action); button.setAttribute('aria-label', button.title); tools.append(button); } left.prepend(tools); }).observe($('preview-body'), { childList: true, subtree: true });
 document.addEventListener('click', (event) => { const button = event.target.closest('[data-md-action]'); if (!button) return; if (button.dataset.mdAction === 'image') { const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/*'; input.onchange = async () => { const editor = $('preview-body').querySelector('.file-editor'); if (!editor) return; for (const file of input.files || []) if (!await importImageIntoEditor(file, editor)) break; }; input.click(); } else applyMarkdownFormat(button.dataset.mdAction); });
 updateSortDirection(); updateNavigationButtons();
 $('refresh').onclick = () => { if (session.currentPath) searchQuery ? search(searchQuery) : loadDirectory(session.currentPath); };
@@ -691,9 +691,50 @@ $('toggle-preview-layout').onclick = () => {
 // fanbox parity: drag the preview's left edge; persistence keeps the layout stable between sessions.
 function beginPreviewResize(event) {
   if ($('preview').classList.contains('is-maximized')) return;
-  resizingPreview = true; document.body.style.cursor = session.previewBottom ? 'row-resize' : 'col-resize'; document.body.style.userSelect = 'none'; event.preventDefault();
+  resizingPreview = true;
+  document.body.style.cursor = session.previewBottom ? 'row-resize' : 'col-resize';
+  document.body.style.userSelect = 'none';
+  if (event.target?.setPointerCapture && event.pointerId !== undefined) {
+    try { event.target.setPointerCapture(event.pointerId); } catch {}
+  }
+  event.preventDefault();
 }
-$('preview-resizer').addEventListener('mousedown', beginPreviewResize);
+function updatePreviewResize(event) {
+  if (!resizingPreview) return;
+  if (session.previewBottom) {
+    const statusBarHeight = $('status-bar')?.offsetHeight || 30;
+    session.previewHeight = Math.min(600, Math.max(180, innerHeight - event.clientY - statusBarHeight));
+  } else {
+    session.previewWidth = Math.min(620, Math.max(240, innerWidth - event.clientX));
+  }
+  document.documentElement.style.setProperty(session.previewBottom ? '--preview-height' : '--preview-width', `${session.previewBottom ? session.previewHeight : session.previewWidth}px`);
+  $('preview-resizer').setAttribute('aria-valuenow', String(session.previewBottom ? session.previewHeight : session.previewWidth));
+}
+function endPreviewResize(event) {
+  if (!resizingPreview) return;
+  resizingPreview = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  if (event?.target?.releasePointerCapture && event?.pointerId !== undefined) {
+    try { event.target.releasePointerCapture(event.pointerId); } catch {}
+  }
+  $('preview-resizer').setAttribute('aria-valuenow', String(session.previewBottom ? session.previewHeight : session.previewWidth));
+  storageSet(session.previewBottom ? 'natives-preview-height' : 'natives-preview-width', session.previewBottom ? session.previewHeight : session.previewWidth).catch(() => {});
+}
+
+const previewResizerNode = $('preview-resizer');
+previewResizerNode.addEventListener('pointerdown', beginPreviewResize);
+previewResizerNode.addEventListener('pointermove', updatePreviewResize);
+previewResizerNode.addEventListener('pointerup', endPreviewResize);
+previewResizerNode.addEventListener('pointercancel', endPreviewResize);
+document.addEventListener('pointermove', updatePreviewResize);
+document.addEventListener('pointerup', endPreviewResize);
+document.addEventListener('pointercancel', endPreviewResize);
+// Legacy mouse fallback
+previewResizerNode.addEventListener('mousedown', beginPreviewResize);
+document.addEventListener('mousemove', (e) => updatePreviewResize(e));
+document.addEventListener('mouseup', (e) => endPreviewResize(e));
+
 $('preview-resizer').addEventListener('keydown', (event) => {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key) || $('preview').classList.contains('is-maximized')) return;
   const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -20 : event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 20 : 0;
@@ -701,23 +742,12 @@ $('preview-resizer').addEventListener('keydown', (event) => {
   else session.previewWidth = event.key === 'Home' ? 240 : event.key === 'End' ? 620 : Math.min(620, Math.max(240, session.previewWidth + delta));
   document.documentElement.style.setProperty(session.previewBottom ? '--preview-height' : '--preview-width', `${session.previewBottom ? session.previewHeight : session.previewWidth}px`); $('preview-resizer').setAttribute('aria-valuenow', String(session.previewBottom ? session.previewHeight : session.previewWidth)); storageSet(session.previewBottom ? 'natives-preview-height' : 'natives-preview-width', session.previewBottom ? session.previewHeight : session.previewWidth).catch(() => {}); event.preventDefault();
 });
-$('preview').addEventListener('mousedown', (event) => {
+$('preview').addEventListener('pointerdown', (event) => {
   if (event.target === $('preview-resizer')) return;
   const bounds = $('preview').getBoundingClientRect();
   const edgeDistance = session.previewBottom ? event.clientY - bounds.top : event.clientX - bounds.left;
   if (edgeDistance > 9) return;
   beginPreviewResize(event);
-});
-document.addEventListener('mousemove', (event) => {
-  if (!resizingPreview) return;
-  if (session.previewBottom) session.previewHeight = Math.min(600, Math.max(180, innerHeight - event.clientY));
-  else session.previewWidth = Math.min(620, Math.max(240, innerWidth - event.clientX));
-  document.documentElement.style.setProperty(session.previewBottom ? '--preview-height' : '--preview-width', `${session.previewBottom ? session.previewHeight : session.previewWidth}px`); $('preview-resizer').setAttribute('aria-valuenow', String(session.previewBottom ? session.previewHeight : session.previewWidth));
-});
-document.addEventListener('mouseup', () => {
-  if (!resizingPreview) return;
-  resizingPreview = false; document.body.style.cursor = ''; document.body.style.userSelect = '';
-  $('preview-resizer').setAttribute('aria-valuenow', String(session.previewBottom ? session.previewHeight : session.previewWidth)); storageSet(session.previewBottom ? 'natives-preview-height' : 'natives-preview-width', session.previewBottom ? session.previewHeight : session.previewWidth).catch(() => {});
 });
 
 function applySidebarCollapsed() {

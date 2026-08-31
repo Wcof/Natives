@@ -37,11 +37,11 @@
 
     <aside id="app-sidebar" data-i18n-aria-label="productNavigation" aria-label="产品导航">
       <div class="brand"><span class="brand-mark"><svg class="icon"><use href="#i-bolt" /></svg></span><div><strong>Natives</strong><small data-i18n="personalDesktop">personal desktop</small></div></div>
-      <a class="command-search" href="files.html"><svg class="icon"><use href="#i-search" /></svg><span data-i18n="search">搜索文件</span><kbd>⌘K</kbd></a>
+      <button id="command-search-trigger" class="command-search" type="button" aria-keyshortcuts="Meta+K Control+K"><svg class="icon"><use href="#i-search" /></svg><span data-i18n="search">搜索文件</span><kbd>⌘K</kbd></button>
 
       <nav class="app-menu-space" data-i18n-aria-label="navSpace" aria-label="空间">
         <div class="app-menu-section">
-          <div class="app-menu-section-title"><span data-i18n="navSpace">空间</span><button id="workspace-create" class="workspace-create-icon" type="button" data-i18n-title="newWorkspace" title="新建 Workspace"><svg class="icon"><use href="#i-create-space" /></svg></button></div>
+          <div class="app-menu-section-title"><span data-i18n="navSpace">空间</span><button id="workspace-create" class="workspace-create-icon" type="button" data-i18n-title="newWorkspace" title="新建空间"><svg class="icon"><use href="#i-create-space" /></svg></button></div>
           <div id="workspace-tree" class="workspace-tree"></div>
         </div>
       </nav>
@@ -83,9 +83,25 @@
     </div>
 
     <div id="workspace-menu" class="workspace-menu" role="menu" hidden><button type="button" role="menuitem" data-action="rename"><svg class="icon"><use href="#i-pen" /></svg><span data-i18n="renameWorkspace">重命名</span></button><button type="button" role="menuitem" class="danger" data-action="delete"><svg class="icon"><use href="#i-trash" /></svg><span data-i18n="deleteWorkspace">删除</span></button></div>
-    <dialog id="ws-name-modal" aria-labelledby="ws-name-title"><form method="dialog"><h2 id="ws-name-title">新建 Workspace</h2><label class="ws-name-label" for="ws-name-input" data-i18n="workspaceName">Workspace 名称</label><input id="ws-name-input" autocomplete="off" required /><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button id="ws-name-submit" class="primary" value="default" data-i18n="confirm">确认</button></div></form></dialog>
+    <dialog id="ws-name-modal" aria-labelledby="ws-name-title"><form method="dialog"><h2 id="ws-name-title">新建空间</h2><label class="ws-name-label" for="ws-name-input" data-i18n="workspaceName">空间名称</label><input id="ws-name-input" autocomplete="off" required /><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button id="ws-name-submit" class="primary" value="default" data-i18n="confirm">确认</button></div></form></dialog>
     <dialog id="ws-delete-modal" aria-labelledby="ws-delete-title"><form method="dialog"><h2 id="ws-delete-title" data-i18n="deleteWorkspace">删除空间</h2><p id="ws-delete-message"></p><p class="ws-delete-hint" data-i18n="deleteWorkspaceHint">此操作无法撤销。</p><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button class="danger" value="default" data-i18n="deleteWorkspace">删除</button></div></form></dialog>
     <dialog id="ws-reset-modal" aria-labelledby="ws-reset-title"><form method="dialog"><h2 id="ws-reset-title" data-i18n="resetWorkspaceTitle">重置空间</h2><p class="ws-reset-description" data-i18n="resetWorkspaceDescription">选择重置后使用的空间模板。当前组件和背景配置将被替换。</p><div class="ws-reset-options" role="group" data-i18n-aria-label="resetWorkspaceTemplate"><button type="button" data-reset-template="classic" aria-pressed="true"><strong data-i18n="resetTemplateClassic">经典</strong><span data-i18n="resetTemplateClassicDesc">时间、问候语和搜索</span></button><button type="button" data-reset-template="focus" aria-pressed="false"><strong data-i18n="resetTemplateFocus">专注</strong><span data-i18n="resetTemplateFocusDesc">时间和问候语</span></button><button type="button" data-reset-template="blank" aria-pressed="false"><strong data-i18n="resetTemplateBlank">空白</strong><span data-i18n="resetTemplateBlankDesc">不添加任何组件</span></button></div><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button class="danger" value="default" data-i18n="confirmResetWorkspace">确认重置</button></div></form></dialog>
+    
+    <dialog id="search-dialog" class="search-dialog" aria-labelledby="search-title">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <h2 id="search-title" data-i18n="search">搜索文件</h2>
+          <button id="search-close" class="icon-button" value="cancel" data-i18n-title="close" title="关闭" aria-label="关闭"><svg class="icon"><use href="#i-close" /></svg></button>
+        </div>
+        <label class="search-box">
+          <span class="sr-only" data-i18n="search">搜索文件</span>
+          <input id="search" type="search" data-i18n-placeholder="search" placeholder="搜索文件" autocomplete="off" aria-describedby="search-hint" aria-keyshortcuts="Meta+K Control+K" />
+        </label>
+        <span id="search-hint" class="muted" data-i18n="searchHint">使用 content:关键词 搜索文件内容</span>
+        <div id="search-results-box" class="search-results-box" style="display:grid;gap:4px;max-height:50vh;overflow-y:auto;margin-top:10px;"></div>
+      </form>
+    </dialog>
+
     <div id="toast" role="status" aria-live="polite" hidden></div>
     <script type="module" src="space.js"></script>
   </body>

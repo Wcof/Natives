@@ -41,7 +41,21 @@ test('native host gate verifies roots once and EOF exit', async () => {
   try {
     const bin = join(root, 'host');
     writeFileSync(bin, `#!/usr/bin/env node
-let b=Buffer.alloc(0); process.stdin.on('data', c => { b=Buffer.concat([b,c]); if (b.length >= 4) { const out=Buffer.from(JSON.stringify({ok:true,result:{roots:[]}})); const h=Buffer.alloc(4); h.writeUInt32LE(out.length); process.stdout.write(Buffer.concat([h,out])); } });
+let b=Buffer.alloc(0);
+process.stdin.on('data', c => {
+  b=Buffer.concat([b,c]);
+  while(b.length >= 4) {
+    const l=b.readUInt32LE(0);
+    if(b.length < l+4) break;
+    const msg=JSON.parse(b.subarray(4, l+4).toString());
+    b=b.subarray(l+4);
+    const result = msg.method === 'roots' ? { roots: [] } : { entries: [], hasMore: false };
+    const out=Buffer.from(JSON.stringify({ id: msg.id, ok: true, result }));
+    const h=Buffer.alloc(4);
+    h.writeUInt32LE(out.length);
+    process.stdout.write(Buffer.concat([h, out]));
+  }
+});
 process.stdin.on('end', () => process.exit(0));\n`);
     chmodSync(bin, 0o755);
     const result = await runNativeHostCheck(root, 'host');

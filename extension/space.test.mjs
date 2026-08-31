@@ -217,4 +217,41 @@ assert.equal(settingsMenuInstance.isOpen, false, 'Clicking anchor again must tog
 settingsMenuInstance.destroy();
 console.log('✓ Settings menu anchor toggle passed');
 
+// Test 6: Global search modal standalone in space
+console.log('--- Standalone Global Search Modal Test ---');
+const { createGlobalSearchModal } = await import('./global-search-modal.js');
+const searchDialogEl = {
+  id: 'search-dialog',
+  open: false,
+  showModal() { this.open = true; },
+  close() { this.open = false; },
+};
+const searchTriggerEl = { id: 'command-search-trigger', onclick: null };
+const searchInputEl = { id: 'search', value: '', focus() {}, select() {} };
+const searchResultsBoxEl = { id: 'search-results-box', children: [], replaceChildren() { this.children = []; } };
+
+const searchElements = {
+  'search-dialog': searchDialogEl,
+  'command-search-trigger': searchTriggerEl,
+  'search': searchInputEl,
+  'search-results-box': searchResultsBoxEl,
+};
+
+const searchModal = createGlobalSearchModal({
+  $: (id) => searchElements[id],
+  t: (k, f) => f || k,
+  nativeCall: async (method) => {
+    if (method === 'roots') return [{ path: '/Users/test' }];
+    if (method === 'search') return { entries: [{ name: 'test.md', path: '/Users/test/test.md' }] };
+    return {};
+  },
+});
+
+assert.equal(typeof searchTriggerEl.onclick, 'function', 'searchTrigger must be wired to open dialog');
+searchTriggerEl.onclick();
+assert.equal(searchDialogEl.open, true, 'Clicking search trigger must open standalone search dialog without navigation');
+searchModal.close();
+assert.equal(searchDialogEl.open, false, 'Closing search dialog must close in-place');
+console.log('✓ Standalone global search modal passed');
+
 console.log('All space tests passed!\n');
