@@ -43,6 +43,13 @@ export function createSettingsMenu({
   menu.append(modelRow, langRow, themeRow);
   document.body.append(menu, langSub, themeSub);
 
+  if (anchorButton) {
+    anchorButton.onclick = (e) => {
+      e.stopPropagation();
+      toggle();
+    };
+  }
+
   function _menuRow(icon, i18nKey, fallback) {
     const row = document.createElement('button');
     row.type = 'button';

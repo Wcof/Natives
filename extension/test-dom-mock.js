@@ -112,6 +112,20 @@ export class MockElement {
     return a ? a.value : null;
   }
   removeAttribute(k) { this.attributes = this.attributes.filter((a) => a.name !== k); }
+  addEventListener(evt, fn) {
+    if (!this._listeners) this._listeners = {};
+    if (!this._listeners[evt]) this._listeners[evt] = [];
+    this._listeners[evt].push(fn);
+  }
+  removeEventListener(evt, fn) {
+    if (this._listeners?.[evt]) {
+      this._listeners[evt] = this._listeners[evt].filter((f) => f !== fn);
+    }
+  }
+  dispatchEvent(evt) {
+    const handlers = this._listeners?.[evt.type || evt] || [];
+    handlers.forEach((h) => h(evt));
+  }
   remove() {
     if (this.parentNode) {
       this.parentNode.childNodes = this.parentNode.childNodes.filter((c) => c !== this);
@@ -154,7 +168,9 @@ export class MockElement {
 }
 
 export function setupTestDomEnvironment() {
+  const bodyEl = new MockElement('body');
   globalThis.document = {
+    body: bodyEl,
     createElement: (tag) => new MockElement(tag),
     addEventListener: () => {},
     removeEventListener: () => {},

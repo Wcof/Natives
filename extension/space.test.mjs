@@ -192,4 +192,29 @@ const postClickSnapshot = {
 assert.equal(postClickSnapshot.backgroundJson.key, 'background/online', 'Background must remain online/bing image and not revert to solid colour');
 console.log('✓ Background preserved across widget clicks and updates');
 
+// Test 5: Settings menu anchor click test
+console.log('--- Settings Menu Anchor Click Test ---');
+const { setupTestDomEnvironment } = await import('./test-dom-mock.js');
+setupTestDomEnvironment();
+const { createSettingsMenu } = await import('./settings-menu.js');
+const anchorMock = {
+  id: 'settings-entry',
+  getBoundingClientRect: () => ({ left: 10, top: 800, right: 200, bottom: 840, width: 190, height: 40 }),
+  setAttribute: () => {},
+  focus: () => {},
+};
+const settingsMenuInstance = createSettingsMenu({
+  anchorButton: anchorMock,
+  initialLanguage: 'zh_CN',
+  initialTheme: 'archive',
+  t: (k, f) => f || k,
+});
+assert.equal(typeof anchorMock.onclick, 'function', 'createSettingsMenu must bind anchorButton.onclick');
+anchorMock.onclick({ stopPropagation() {} });
+assert.equal(settingsMenuInstance.isOpen, true, 'Clicking anchor must toggle settings menu open');
+anchorMock.onclick({ stopPropagation() {} });
+assert.equal(settingsMenuInstance.isOpen, false, 'Clicking anchor again must toggle settings menu closed');
+settingsMenuInstance.destroy();
+console.log('✓ Settings menu anchor toggle passed');
+
 console.log('All space tests passed!\n');
