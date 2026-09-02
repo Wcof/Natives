@@ -1,19 +1,10 @@
 import { createModelSettingsAPI } from './model-settings-api.js';
 import { createModelSettingsView, renderNewProvider } from './model-settings-view.js';
+import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
+import { localizedModelError } from './model-settings-errors.js';
+import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
 
 let instance;
-
-const ERROR_MESSAGES = {
-  invalid_request: ['modelErrorInvalidRequest', '输入内容无效，请检查后重试。'], not_found: ['modelErrorNotFound', '对应配置已不存在，请刷新。'],
-  revision_conflict: ['modelErrorRevisionConflict', '配置已在其他页面更新，请刷新后重试。'], keychain_unavailable: ['modelErrorKeychainUnavailable', '系统钥匙串当前不可用。'],
-  secret_not_configured: ['modelErrorSecretMissing', '请先配置凭证。'], upstream_unreachable: ['modelErrorUpstreamUnreachable', '无法连接供应商，请检查地址和网络。'],
-  upstream_unauthorized: ['modelErrorUpstreamUnauthorized', '供应商拒绝了凭证，请检查 API Key。'], upstream_error: ['modelErrorUpstream', '供应商请求失败，请稍后重试。'],
-  upstream_invalid_response: ['modelErrorUpstreamInvalid', '供应商返回了无效响应。'], upstream_response_too_large: ['modelErrorUpstreamTooLarge', '供应商响应超过大小限制。'],
-  gateway_start_failed: ['modelErrorGatewayStart', '本地模型代理启动失败。'], gateway_stop_failed: ['modelErrorGatewayStop', '本地模型代理停止失败。'],
-  gateway_restart_failed: ['modelErrorGatewayRestart', '配置已保存，但代理重启失败，请重试。'], oauth_in_progress: ['modelErrorOAuthInProgress', '已有 OAuth 授权正在进行。'],
-  internal_error: ['modelErrorInternal', '模型设置操作失败。'],
-  host_disconnected: ['modelHostDisconnected', '模型 Host 已断开'], request_timeout: ['modelErrorTimeout', '请求超时，请重试。'],
-};
 
 export async function openModelSettings(options) {
   if (!instance) instance = new ModelSettings(options);
@@ -29,6 +20,14 @@ class ModelSettings {
     this.snapshot = null;
     this.selectedID = 'codex';
     this.pendingOAuth = null;
+
+    this.usageFilter = { range: '4h', page: 1, limit: 20 };
+    this.usageFilterOptions = null;
+    this.overviewData = null;
+    this.analyticsData = null;
+    this.eventsData = null;
+    this.pricingData = null;
+    this.importerWizard = null;
     this.api = createModelSettingsAPI({
       onEvent: (event) => this.handleEvent(event),
       onDisconnect: (_error, intentional) => { if (!intentional && this.view?.dialog.open) this.showError(this.t('modelHostDisconnected', '模型 Host 已断开')); },
@@ -38,20 +37,20 @@ class ModelSettings {
     this.view.dialog.addEventListener('submit', (event) => this.handleSubmit(event));
     this.view.dialog.addEventListener('model-provider-submit', (event) => this.saveProvider(event));
   }
-
   setLocale({ t, language, returnFocus }) { this.t = t; this.language = language; this.returnFocus = returnFocus; }
-
   async open() {
     this.view.open();
     await this.refresh();
   }
-
   async refresh() {
     this.view.setLoading(true);
     this.view.showError('');
     try {
       this.snapshot = await this.api.snapshot();
       if (!this.snapshot.providers.some((provider) => provider.id === this.selectedID)) this.selectedID = this.snapshot.providers[0]?.id;
+      if (this.view.activePage === 'usage') {
+        await this.loadUsageData();
+      }
       this.render();
     } catch (error) {
       this.showError(error);
@@ -60,11 +59,54 @@ class ModelSettings {
     }
   }
 
-  render() { if (this.snapshot) this.view.render(this.snapshot, this.selectedID, this.pendingOAuth); }
+  async loadUsageData() {
+    try {
+      if (!this.usageFilterOptions) this.usageFilterOptions = await this.api.getUsageAnalysis({ range: 'all' });
+      const tab = this.view.activeUsageTab;
+      const query = {
+        range: this.usageFilter.range,
+        startTime: this.usageFilter.startTime,
+        endTime: this.usageFilter.endTime,
+        models: this.usageFilter.model ? [this.usageFilter.model] : [],
+        providers: this.usageFilter.provider ? [this.usageFilter.provider] : [],
+        sources: this.usageFilter.source ? [this.usageFilter.source] : [],
+        accessKeyIds: this.usageFilter.accessKeyId ? [this.usageFilter.accessKeyId] : [],
+        result: this.usageFilter.result || undefined,
+      };
+      if (tab === 'overview') {
+        this.overviewData = await this.api.getUsageOverview(query);
+      } else if (tab === 'analytics') {
+        this.analyticsData = await this.api.getUsageAnalysis(query);
+      } else if (tab === 'events') {
+        this.eventsData = await this.api.getUsageEvents({
+          ...query,
+          offset: (this.usageFilter.page - 1) * this.usageFilter.limit,
+          limit: this.usageFilter.limit,
+        });
+      } else if (tab === 'pricing') {
+        this.pricingData = await this.api.getUsagePricing();
+      }
+    } catch (err) {
+      this.showError(err);
+    }
+  }
+
+  render() {
+    if (this.snapshot) {
+      this.view.render(this.snapshot, this.selectedID, this.pendingOAuth, {
+        overviewData: this.overviewData,
+        analyticsData: this.analyticsData,
+        eventsData: this.eventsData,
+        pricingData: this.pricingData,
+        currentFilter: this.usageFilter,
+        filterOptions: this.usageFilterOptions,
+      });
+    }
+  }
+
   showError(error) {
     if (!error) { this.view.showError(''); return; }
-    const localized = typeof error === 'object' && ERROR_MESSAGES[error.code];
-    this.view.showError(localized ? this.t(...localized) : String(error.message || error));
+    this.view.showError(localizedModelError(error, this.t));
   }
 
   async mutate(work, { select } = {}) {
@@ -81,15 +123,31 @@ class ModelSettings {
     }
   }
 
-  handleAction(action, target) {
+  async handleAction(action, target, event) {
     const revision = this.snapshot?.revision;
     if (action === 'close') return this.view.close();
     if (action === 'refresh') return this.refresh();
+    if (action === 'select-model-page') {
+      const page = target.dataset.page;
+      const kind = page === 'custom' ? 'custom' : page === 'oauth' ? 'oauth' : '';
+      if (kind && !this.snapshot.providers.some((provider) => provider.id === this.selectedID && provider.kind === kind)) {
+        this.selectedID = this.snapshot.providers.find((provider) => provider.kind === kind)?.id;
+      }
+      this.view.setPage(page);
+      if (page === 'usage') {
+        this.view.setLoading(true);
+        await this.loadUsageData();
+        this.view.setLoading(false);
+      }
+      this.render();
+      return;
+    }
     if (action === 'select-provider') { this.selectedID = target.dataset.providerId; this.render(); return; }
     if (action === 'new-provider') { renderNewProvider(this.view.dialog.querySelector('[data-role="detail"]'), this.t); return; }
     if (action === 'cancel-new-provider') return this.render();
     if (action === 'start-gateway') return this.mutate(() => this.api.startGateway({ expectedRevision: revision }));
     if (action === 'stop-gateway') return this.mutate(() => this.api.stopGateway({ expectedRevision: revision }));
+    if (action === 'restart-gateway') return this.mutate(() => this.api.restartGateway({ expectedRevision: revision }));
     if (action === 'resident') return this.mutate(() => this.api.setResident({ resident: target.checked, expectedRevision: revision }));
     if (action === 'copy-endpoint') return this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'));
     if (action === 'reveal-key') return this.copyAccessKey();
@@ -105,10 +163,23 @@ class ModelSettings {
     if (action === 'edit-model') return this.editModel(target.dataset.modelId);
     if (action === 'cancel-model-edit') return this.resetModelForm();
     if (action === 'delete-model') return this.mutate(() => this.api.deleteModel({ providerId: this.selectedID, modelId: target.dataset.modelId, expectedRevision: revision }));
+
+	if (await handleUsageAction(this, action, target)) return;
+	await handleAdvancedAction(this, action, target, revision);
   }
 
   async handleSubmit(event) {
     const form = event.target;
+    if (form.dataset.role?.startsWith('usage-')) {
+      event.preventDefault();
+      await handleUsageSubmit(this, form);
+      return;
+    }
+    if (['basic-settings-form', 'network-settings-form', 'kernel-settings-form'].includes(form.dataset.role)) {
+      event.preventDefault();
+      await handleAdvancedSubmit(this, form);
+      return;
+    }
     if (form.matches('[data-new-provider]')) {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(form));
@@ -121,6 +192,7 @@ class ModelSettings {
       const data = Object.fromEntries(new FormData(form));
       const existing = this.snapshot.providers.find((provider) => provider.id === this.selectedID)?.models.find((model) => model.id === form.dataset.editingId);
       await this.mutate(() => this.api.upsertModel({ providerId: this.selectedID, model: { ...data, contextLength: Number(data.contextLength) || 0, enabled: existing?.enabled ?? true, manual: true }, expectedRevision: this.snapshot.revision }));
+      return;
     }
   }
 
@@ -163,6 +235,12 @@ class ModelSettings {
     if (message?.event === 'model_catalog_changed' && message.result?.snapshot) {
       this.snapshot = message.result.snapshot;
       this.render();
+      return;
+    }
+    if (message?.event === 'model_usage_updated') {
+      if (this.view.activePage === 'usage') {
+        this.loadUsageData().then(() => this.render());
+      }
       return;
     }
     if (message?.event !== 'model_oauth_state_changed') return;

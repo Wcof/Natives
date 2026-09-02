@@ -29,8 +29,16 @@ const started = await api.startGateway({ expectedRevision: 1 });
 assert.deepEqual(started.accepted, { expectedRevision: 1 });
 const probed = await api.testProvider({ providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
 assert.deepEqual(probed.accepted, { providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
+const usageOverview = await api.getUsageOverview({ range: 'today' });
+assert.deepEqual(usageOverview.accepted, { range: 'today' });
+const createdKey = await api.createGatewayKey({ expectedRevision: 1, name: 'Test Key' });
+assert.deepEqual(createdKey.accepted, { expectedRevision: 1, name: 'Test Key' });
+
 port.emit({ ok: true, event: 'model_oauth_state_changed', result: { state: 'succeeded' } });
 assert.equal(event.event, 'model_oauth_state_changed');
+port.emit({ ok: true, event: 'model_usage_updated', result: { updatedAt: '2026-08-31T00:00:00Z' } });
+assert.equal(event.event, 'model_usage_updated');
+
 api.disconnect();
 delete globalThis.__NATIVES_DEV_NATIVE_CONNECT__;
 
@@ -44,11 +52,39 @@ const [files, space, controller, view, zh, en] = await Promise.all([
 ]);
 for (const source of [files, space]) assert.match(source, /import\('\.\/model-settings\.js'\)/, 'model settings must stay lazy-loaded');
 for (const source of [controller, view]) assert.doesNotMatch(source, /\b(?:alert|prompt|confirm)\s*\(/, 'model settings must use graphical controls');
+const declaredRoles = new Set([...view.matchAll(/data-role="([^"]+)"/g)].map(([, role]) => role));
+for (const [, role] of view.matchAll(/\broles\.([A-Za-z]\w*)/g)) {
+  assert.ok(declaredRoles.has(role), `view references missing data-role="${role}"`);
+}
 assert.match(view, /showModal\(\)/);
 assert.match(view, /aria-live="polite"/);
 assert.match(view, /data-action="test-new-provider"/);
+for (const page of ['custom', 'oauth', 'gateway', 'usage', 'advanced']) {
+  assert.match(view, new RegExp(`data-action="select-model-page" data-page="${page}"`), `model settings must expose the ${page} second-level page`);
+  assert.match(view, new RegExp(`data-page-panel="${page}"`), `model settings must render the ${page} page`);
+}
+assert.match(controller, /action === 'select-model-page'/, 'controller must switch model settings subpages');
 assert.match(controller, /model_catalog_changed/);
-for (const key of ['modelSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts']) {
+assert.match(controller, /model_usage_updated/);
+assert.match(controller, /form\.dataset\.role\?\.startsWith\('usage-'\)/, 'usage forms must prevent native submission before awaiting work');
+assert.doesNotMatch(controller, /await handleAdvancedSubmit\([^\n]+\)\) \{ event\.preventDefault/, 'advanced forms must prevent native submission synchronously');
+const usageView = await readFile(new URL('./model-usage-view.js', import.meta.url), 'utf8');
+const pricingView = await readFile(new URL('./model-pricing-view.js', import.meta.url), 'utf8');
+const advancedView = await readFile(new URL('./model-advanced-view.js', import.meta.url), 'utf8');
+const css = await readFile(new URL('./model-settings.css', import.meta.url), 'utf8');
+
+assert.match(usageView, /selectFilter\('provider'/);
+assert.match(usageView, /dataset\.role = 'usage-custom-range-form'/);
+assert.match(usageView, /model-filter-bar-dimensions/, 'dimensions filter bar modifier class must exist');
+assert.match(usageView, /model-col-time[\s\S]*model-col-model[\s\S]*model-col-cost/, 'events table must declare semantic column classes');
+assert.match(pricingView, /model-filter-bar-price/, 'pricing form modifier class must exist');
+assert.match(pricingView, /model-col-model[\s\S]*model-col-num[\s\S]*model-col-actions/, 'pricing table must declare semantic column classes');
+assert.match(advancedView, /model-col-name[\s\S]*model-col-mask[\s\S]*model-col-actions/, 'keys table must declare semantic column classes');
+assert.match(css, /\.model-oauth-row\s*\{[^}]*grid-template-columns:/, 'oauth row must use shared grid template');
+assert.match(css, /\.model-filter-bar-dimensions\s*\{[^}]*repeat\(6,/, 'dimensions filter must arrange in 6 equal columns on wide screens');
+assert.match(css, /\.model-adv-form\s*\{[^}]*repeat\(2,/, 'advanced form must use 2-column grid layout');
+assert.doesNotMatch(usageView, /data-action="search-events"/, 'usage UI must not expose a fake search action');
+for (const key of ['modelSettings', 'modelCustomModels', 'modelOAuthModels', 'modelLocalProxy', 'modelUsageRecords', 'modelAdvancedSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts']) {
   assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `locale key ${key} must exist in zh_CN and en`);
 }
 for (const key of new Set(controller.match(/modelError[A-Za-z]+/g))) {

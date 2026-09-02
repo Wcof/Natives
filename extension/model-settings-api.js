@@ -2,10 +2,14 @@ import { createNativeClient } from './native-client.js';
 
 const WRITE_METHODS = new Set([
   'model_provider_create', 'model_provider_update', 'model_provider_delete', 'model_provider_set_enabled',
-	'model_provider_test',
+  'model_provider_test',
   'model_oauth_start', 'model_oauth_cancel', 'model_account_set_enabled', 'model_account_reauth', 'model_account_delete',
   'model_models_refresh', 'model_models_upsert', 'model_models_delete', 'model_models_set_enabled',
-  'model_gateway_start', 'model_gateway_stop', 'model_gateway_set_resident', 'model_gateway_rotate_access_key',
+  'model_gateway_start', 'model_gateway_stop', 'model_gateway_restart', 'model_gateway_set_resident',
+  'model_gateway_settings_update', 'model_gateway_key_create', 'model_gateway_key_update', 'model_gateway_key_delete',
+  'model_gateway_key_rotate', 'model_gateway_rotate_access_key',
+  'model_usage_price_upsert', 'model_usage_price_delete', 'model_usage_price_sync',
+  'model_usage_import_begin', 'model_usage_import_chunk', 'model_usage_import_commit', 'model_usage_import_cancel',
 ]);
 
 export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
@@ -35,9 +39,32 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     setModelEnabled: (params) => client.call('model_models_set_enabled', params),
     startGateway: (params) => client.call('model_gateway_start', params),
     stopGateway: (params) => client.call('model_gateway_stop', params),
+    restartGateway: (params) => client.call('model_gateway_restart', params),
     setResident: (params) => client.call('model_gateway_set_resident', params),
+    updateGatewaySettings: (params) => client.call('model_gateway_settings_update', params),
+    createGatewayKey: (params) => client.call('model_gateway_key_create', params),
+    updateGatewayKey: (params) => client.call('model_gateway_key_update', params),
+    deleteGatewayKey: (params) => client.call('model_gateway_key_delete', params),
+    rotateGatewayKey: (params) => client.call('model_gateway_key_rotate', params),
+    revealGatewayKey: (params) => client.call('model_gateway_key_reveal', params),
     rotateAccessKey: (params) => client.call('model_gateway_rotate_access_key', params),
     revealAccessKey: () => client.call('model_gateway_reveal_access_key'),
+
+    // Usage & Analytics
+    getUsageStatus: () => client.call('model_usage_status'),
+    getUsageOverview: (params) => client.call('model_usage_overview', params),
+    getUsageAnalysis: (params) => client.call('model_usage_analysis', params),
+    getUsageEvents: (params) => client.call('model_usage_events', params),
+    getUsagePricing: () => client.call('model_usage_pricing'),
+    upsertUsagePrice: (params) => client.call('model_usage_price_upsert', params),
+    deleteUsagePrice: (params) => client.call('model_usage_price_delete', params),
+    syncUsagePrice: () => client.call('model_usage_price_sync'),
+    beginUsageImport: (params) => client.call('model_usage_import_begin', params),
+    chunkUsageImport: (params) => client.call('model_usage_import_chunk', params),
+    previewUsageImport: (params) => client.call('model_usage_import_preview', params),
+    commitUsageImport: (params) => client.call('model_usage_import_commit', params),
+    cancelUsageImport: (params) => client.call('model_usage_import_cancel', params),
+
     disconnect: () => client.disconnect(),
     get connected() { return client.connected; },
   };
