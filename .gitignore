@@ -70,7 +70,7 @@ archive/
 
 # 插件模板/示例 (非项目核心代码)
 plugin-template/
-plugins/
+/plugins/
 
 # 外部引用目录
 References/
@@ -91,3 +91,4 @@ References/
 !.runtime-evidence/after/baseline.json
 !.runtime-evidence/after/baseline.md
 .cargo-target-local/
+.zcode/
