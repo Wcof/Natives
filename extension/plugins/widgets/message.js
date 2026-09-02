@@ -10,7 +10,10 @@ export const messageWidget = {
   defaultData: { message: 'Hello World' },
   render(container, data) {
     container.className = 'Widget Message';
-    container.textContent = data.message || '';
+    const h3 = document.createElement('h3');
+    h3.style.whiteSpace = 'pre';
+    h3.textContent = data.message || '';
+    container.append(h3);
   },
   renderSettings(container, data, onChange, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `
@@ -20,7 +23,5 @@ export const messageWidget = {
     `;
     container.querySelector('input').onchange = (e) => onChange({ ...data, message: e.target.value });
   },
-  styles: `
-    .Message { line-height: 1.2; font-size: 1.2em; text-align: center; }
-  `,
+  styles: '',
 };

@@ -11,6 +11,16 @@ console.log('--- 29 Space Widgets Structural & Baseline Verification ---');
 assert.equal(WIDGET_KEYS.length, 29, 'Must register exactly 29 widgets');
 const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
 assert.deepEqual(manifest.optional_permissions?.sort(), ['bookmarks', 'topSites']);
+// Every host the network widgets fetch must stay declared, or real Chrome CORS-blocks them.
+const declaredHosts = new Set((manifest.host_permissions || []).map((p) => p.replace(/^https?:\/\//, '').replace(/\/\*$/, '').replace(/\/$/, '')));
+const sources = Object.values(widgetPlugins).map((p) => String(p.render || '') + String(p.renderSettings || ''));
+for (const src of sources) {
+  for (const m of src.matchAll(/fetch\(`?https?:\/\/([a-z0-9.-]+)/gi)) {
+    const host = m[1];
+    const covered = [...declaredHosts].some((d) => host === d || host.endsWith(`.${d}`));
+    assert.ok(covered, `manifest.host_permissions must cover fetched host: ${host}`);
+  }
+}
 
 const mockContainer = document.createElement('div');
 document.body.append(mockContainer);

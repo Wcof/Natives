@@ -49,6 +49,6 @@ export const ipInfoWidget = {
     container.append(notice);
   },
   styles: `
-    .IpInfo { text-align: center; font-variant-numeric: tabular-nums; font-weight: 500; font-size: 1.1em; }
+    .IpInfo { text-align: center; }
   `,
 };

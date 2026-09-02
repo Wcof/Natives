@@ -10,7 +10,9 @@ export const customTextWidget = {
   defaultData: { text: 'Custom Text' },
   render(container, data) {
     container.className = 'Widget CustomText';
-    container.textContent = data.text || '';
+    const h3 = document.createElement('h3');
+    h3.textContent = data.text || '';
+    container.append(h3);
   },
   renderSettings(container, data, onChange, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `
@@ -21,6 +23,6 @@ export const customTextWidget = {
     container.querySelector('textarea').onchange = (e) => onChange({ ...data, text: e.target.value });
   },
   styles: `
-    .CustomText { white-space: pre-wrap; line-height: 1.4; text-align: center; }
+
   `,
 };

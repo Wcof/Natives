@@ -64,7 +64,7 @@ export const paletteWidget = {
     wrap.className = 'inspector-field-group';
     wrap.innerHTML = `
       <div class="inspector-notice">${t('paletteNotice', '每日色彩搭配灵感，在色块上悬停查看代码，点击直接复制到剪贴板。')}</div>
-      <button id="p-next-btn" type="button" class="primary" style="margin-top:8px;">${t('nextPalette', '换一组调色板')}</button>
+      <button id="p-next-btn" type="button" class="primary">${t('nextPalette', '换一组调色板')}</button>
     `;
     wrap.querySelector('#p-next-btn').onclick = () => {
       const idx = Number(data.paletteIndex) || 0;

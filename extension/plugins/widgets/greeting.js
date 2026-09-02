@@ -17,7 +17,9 @@ export const greetingWidget = {
       : hour < 18
       ? (t ? t('greetingAfternoon', '下午好') : '下午好')
       : (t ? t('greetingEvening', '晚上好') : '晚上好');
-    container.textContent = data.name ? `${prefix}，${data.name}` : prefix;
+    const h2 = document.createElement('h2');
+    h2.textContent = data.name ? `${prefix}，${data.name}` : prefix;
+    container.append(h2);
   },
   renderSettings(container, data, onChange, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `
@@ -25,7 +27,5 @@ export const greetingWidget = {
     `;
     container.querySelector('input').onchange = (e) => onChange({ ...data, name: e.target.value.trim() });
   },
-  styles: `
-    .Greeting { line-height: 1.2; font-weight: 300; }
-  `,
+  styles: '',
 };

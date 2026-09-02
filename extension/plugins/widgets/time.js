@@ -49,7 +49,13 @@ export const timeWidget = {
           ...(data.showSeconds ? { second: '2-digit' } : {}),
           hour12: Boolean(data.hour12),
         };
-        container.textContent = now.toLocaleTimeString(lang === 'en' ? 'en-US' : 'zh-CN', options);
+        let h1 = container.querySelector('h1');
+        if (!h1) {
+          container.replaceChildren();
+          h1 = document.createElement('h1');
+          container.append(h1);
+        }
+        h1.textContent = now.toLocaleTimeString(lang === 'en' ? 'en-US' : 'zh-CN', options);
       }
     }
 

@@ -90,7 +90,7 @@ export const linksWidget = {
             </div>
           `).join('')}
         </div>
-        <button type="button" class="add-link-btn primary" style="margin-top:8px;">+ ${t('addLink', '添加链接')}</button>
+        <button type="button" class="add-link-btn primary">+ ${t('addLink', '添加链接')}</button>
       </div>
     `;
 
