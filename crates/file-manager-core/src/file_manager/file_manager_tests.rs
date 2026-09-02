@@ -67,6 +67,33 @@ fn authorization_rejects_dangling_symlink() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[cfg(unix)]
+#[test]
+fn authorization_accepts_home_and_home_ancestors_read() {
+    let home = dirs::home_dir().expect("home dir");
+    let auth_home = FileAccessPolicy::authorize_path_buf(&home, OperationPolicy::Read);
+    assert!(
+        auth_home.is_ok(),
+        "home directory must be authorized for read"
+    );
+
+    if let Some(parent) = home.parent() {
+        if parent.exists() {
+            let auth_parent = FileAccessPolicy::authorize_path_buf(parent, OperationPolicy::Read);
+            assert!(
+                auth_parent.is_ok(),
+                "home ancestor directory must be authorized for read"
+            );
+            let auth_parent_write =
+                FileAccessPolicy::authorize_path_buf(parent, OperationPolicy::Write);
+            assert!(
+                auth_parent_write.is_err(),
+                "home ancestor directory must not be authorized for write"
+            );
+        }
+    }
+}
+
 #[test]
 fn detect_project_badge_priority() {
     let mut names = std::collections::HashSet::new();

@@ -210,11 +210,11 @@ impl AuthorizedPath {
 pub struct FileAccessPolicy;
 
 impl FileAccessPolicy {
-    pub fn authorize_path(path: &str, _op: OperationPolicy) -> Result<AuthorizedPath> {
-        Self::authorize_path_buf(&PathBuf::from(path), _op)
+    pub fn authorize_path(path: &str, op: OperationPolicy) -> Result<AuthorizedPath> {
+        Self::authorize_path_buf(&PathBuf::from(path), op)
     }
 
-    pub fn authorize_path_buf(path: &Path, _op: OperationPolicy) -> Result<AuthorizedPath> {
+    pub fn authorize_path_buf(path: &Path, op: OperationPolicy) -> Result<AuthorizedPath> {
         let path_str = path.to_string_lossy();
         if path_str.contains('\0') {
             return Err(Error::InvalidInput("path contains null byte".into()));
@@ -230,6 +230,7 @@ impl FileAccessPolicy {
 
         let canon = canonicalize_with_existing_parent(path)?;
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let home_canon = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
 
         // Blocklist: sensitive dotfiles (unchanged from validate_path).
         let blocked = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube"];
@@ -242,7 +243,12 @@ impl FileAccessPolicy {
         // Allowlist: home + system temp locations (incl. macOS /var/folders/.../T).
         let sys_tmp = std::env::temp_dir();
         let sys_tmp_canon = std::fs::canonicalize(&sys_tmp).unwrap_or(sys_tmp);
-        if canon.starts_with(&home)
+        let is_home_child = canon.starts_with(&home) || canon.starts_with(&home_canon);
+        let is_home_parent_read = op == OperationPolicy::Read
+            && (home.starts_with(&canon) || home_canon.starts_with(&canon));
+
+        if is_home_child
+            || is_home_parent_read
             || canon.starts_with("/tmp")
             || canon.starts_with("/private/tmp")
             || canon.starts_with(&sys_tmp_canon)
