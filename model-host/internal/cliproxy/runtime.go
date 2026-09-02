@@ -2,9 +2,7 @@ package cliproxy
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -38,13 +36,19 @@ type Runtime struct {
 	manager *coreauth.Manager
 }
 
-func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretStore secrets.Store, authStore *AuthStore, gatewayKey, configPath string) (int, error) {
+func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretStore secrets.Store, authStore *AuthStore, configPath string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.service != nil {
 		return r.port, nil
 	}
-	listener, port, err := listenLoopback(snapshot.Gateway.PreferredPort)
+
+	preferredPort := snapshot.Gateway.Settings.PreferredPort
+	if preferredPort == 0 {
+		preferredPort = snapshot.Gateway.PreferredPort
+	}
+
+	listener, port, err := listenLoopback(preferredPort)
 	if err != nil {
 		return 0, err
 	}
@@ -53,12 +57,12 @@ func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretSto
 		_ = listener.Close()
 		return 0, err
 	}
-	internalKey, err := ephemeralKey()
+	gatewayKeys, err := enabledGatewayKeys(snapshot, secretStore)
 	if err != nil {
 		_ = listener.Close()
 		return 0, err
 	}
-	cfg, err := runtimeConfig(snapshot, secretStore, internalKey, internalPort, filepath.Join(filepath.Dir(configPath), "auth"))
+	cfg, err := runtimeConfig(snapshot, secretStore, gatewayKeys, internalPort, filepath.Join(filepath.Dir(configPath), "auth"))
 	if err != nil {
 		_ = listener.Close()
 		return 0, err
@@ -91,7 +95,7 @@ func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretSto
 	done := make(chan error, 1)
 	r.service, r.cancel, r.done, r.port, r.manager = service, cancel, done, port, manager
 	go func() { done <- service.Run(runCtx) }()
-	if err = waitReady(ctx, internalPort, internalKey, done); err != nil {
+	if err = waitReady(ctx, internalPort, gatewayKeys[0], done); err != nil {
 		_ = listener.Close()
 		cancel()
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -102,14 +106,12 @@ func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretSto
 	}
 	target, _ := url.Parse("http://127.0.0.1:" + strconv.Itoa(internalPort))
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	direct := proxy.Director
-	proxy.Director = func(request *http.Request) {
-		direct(request)
-		request.Header.Del("x-api-key")
-		request.Header.Del("x-goog-api-key")
-		request.Header.Set("Authorization", "Bearer "+internalKey)
+	front := &http.Server{
+		Handler:           gatewayHandler(proxy),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
-	front := &http.Server{Handler: gatewayHandler(gatewayKey, proxy), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
 	r.front = front
 	go func() { _ = front.Serve(listener) }()
 	return port, nil
@@ -162,12 +164,29 @@ func (r *Runtime) RemoveAuth(ctx context.Context, id string) {
 	}
 }
 
-func runtimeConfig(snapshot domain.Snapshot, secretStore secrets.Store, gatewayKey string, port int, authDir string) (*clipconfig.Config, error) {
+func runtimeConfig(snapshot domain.Snapshot, secretStore secrets.Store, gatewayKeys []string, port int, authDir string) (*clipconfig.Config, error) {
+	settings := snapshot.Gateway.Settings
 	configMap := map[string]any{
-		"host": "127.0.0.1", "port": port, "api-keys": []string{gatewayKey},
+		"host": "127.0.0.1", "port": port, "api-keys": gatewayKeys,
 		"auth-dir": authDir, "debug": false, "logging-to-file": false,
 		"request-log": false, "usage-statistics-enabled": false,
 	}
+
+	if settings.RoutingStrategy != "" || settings.SessionAffinity || settings.SessionAffinityTTL > 0 {
+		strategy := strings.ReplaceAll(settings.RoutingStrategy, "_", "-")
+		configMap["routing"] = map[string]any{
+			"strategy": strategy, "session-affinity": settings.SessionAffinity,
+			"session-affinity-ttl": fmt.Sprintf("%ds", settings.SessionAffinityTTL),
+		}
+	}
+	configMap["request-retry"] = settings.RequestRetry
+	configMap["max-retry-credentials"] = settings.MaxRetryCredentials
+	configMap["max-retry-interval"] = settings.MaxRetryIntervalSeconds
+	configMap["streaming"] = map[string]any{"bootstrap-retries": settings.StreamingBootstrapRetries}
+	if settings.ProxyURL != "" {
+		configMap["proxy-url"] = settings.ProxyURL
+	}
+
 	var openAI, claude, gemini []map[string]any
 	for _, provider := range snapshot.Providers {
 		if provider.Kind != "custom" || !provider.Enabled {
@@ -257,12 +276,8 @@ func listenLoopback(preferred int) (net.Listener, int, error) {
 	return nil, 0, errors.New("no loopback port is available")
 }
 
-func gatewayHandler(key string, proxy http.Handler) http.Handler {
+func gatewayHandler(proxy http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !validGatewayKey(request, key) {
-			writer.WriteHeader(http.StatusUnauthorized)
-			return
-		}
 		if !allowedGatewayPath(request.URL.Path) {
 			http.NotFound(writer, request)
 			return
@@ -272,7 +287,7 @@ func gatewayHandler(key string, proxy http.Handler) http.Handler {
 	})
 }
 
-func validGatewayKey(request *http.Request, key string) bool {
+func extractClientKey(request *http.Request) string {
 	provided := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 	if provided == request.Header.Get("Authorization") {
 		provided = request.Header.Get("x-api-key")
@@ -280,19 +295,44 @@ func validGatewayKey(request *http.Request, key string) bool {
 			provided = request.Header.Get("x-goog-api-key")
 		}
 	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1
+	return strings.TrimSpace(provided)
+}
+
+func validMultiKey(request *http.Request, keys []string) bool {
+	provided := extractClientKey(request)
+	if provided == "" {
+		return false
+	}
+	for _, key := range keys {
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func allowedGatewayPath(path string) bool {
 	return path == "/v1/models" || path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/messages" || path == "/v1/messages/count_tokens" || path == "/v1beta/models" || strings.HasPrefix(path, "/v1beta/models/")
 }
 
-func ephemeralKey() (string, error) {
-	value := make([]byte, 32)
-	if _, err := rand.Read(value); err != nil {
-		return "", err
+func enabledGatewayKeys(snapshot domain.Snapshot, secretStore secrets.Store) ([]string, error) {
+	keys := make([]string, 0, len(snapshot.Gateway.AccessKeys))
+	for _, record := range snapshot.Gateway.AccessKeys {
+		if !record.Enabled {
+			continue
+		}
+		key, err := secretStore.Get(record.SecretRef)
+		if err != nil {
+			return nil, fmt.Errorf("load enabled gateway key: %w", err)
+		}
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
 	}
-	return hex.EncodeToString(value), nil
+	if len(keys) == 0 {
+		return nil, errors.New("at least one enabled gateway key is required")
+	}
+	return keys, nil
 }
 
 type fixedTransportProvider struct{ transport http.RoundTripper }

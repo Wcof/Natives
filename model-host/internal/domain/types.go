@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 var OAuthProviders = []string{"codex", "claude", "antigravity", "kimi", "xai"}
 
@@ -51,14 +51,40 @@ type Account struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type GatewayAccessKey struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	SecretRef string `json:"secretRef"`
+	Mask      string `json:"mask"`
+	Enabled   bool   `json:"enabled"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type GatewaySettings struct {
+	PreferredPort             int    `json:"preferredPort,omitempty"`
+	ProxyURL                  string `json:"proxyUrl,omitempty"`
+	ProxyCredentialRef        string `json:"proxyCredentialRef,omitempty"`
+	RoutingStrategy           string `json:"routingStrategy,omitempty"` // "round_robin" | "fill_first"
+	SessionAffinity           bool   `json:"sessionAffinity"`
+	SessionAffinityTTL        int    `json:"sessionAffinityTtl,omitempty"`
+	RequestRetry              int    `json:"requestRetry,omitempty"`
+	MaxRetryCredentials       int    `json:"maxRetryCredentials,omitempty"`
+	MaxRetryIntervalSeconds   int    `json:"maxRetryIntervalSeconds,omitempty"`
+	StreamingBootstrapRetries int    `json:"streamingBootstrapRetries,omitempty"`
+	StartOnSettingsOpen       bool   `json:"startOnSettingsOpen"`
+}
+
 type Gateway struct {
-	State         string `json:"state"`
-	Resident      bool   `json:"resident"`
-	PreferredPort int    `json:"preferredPort,omitempty"`
-	Port          int    `json:"port,omitempty"`
-	BaseURL       string `json:"baseUrl,omitempty"`
-	ErrorCode     string `json:"errorCode,omitempty"`
-	AccessKeyMask string `json:"accessKeyMask,omitempty"`
+	State         string             `json:"state"`
+	Resident      bool               `json:"resident"`
+	PreferredPort int                `json:"preferredPort,omitempty"`
+	Port          int                `json:"port,omitempty"`
+	BaseURL       string             `json:"baseUrl,omitempty"`
+	ErrorCode     string             `json:"errorCode,omitempty"`
+	AccessKeyMask string             `json:"accessKeyMask,omitempty"`
+	AccessKeys    []GatewayAccessKey `json:"accessKeys,omitempty"`
+	Settings      GatewaySettings    `json:"settings"`
 }
 
 type Snapshot struct {
@@ -79,12 +105,26 @@ func NewSnapshot() Snapshot {
 			Enabled: true, Models: []Model{}, UpdatedAt: now,
 		})
 	}
+	defaultKey := GatewayAccessKey{
+		ID:        "key_default",
+		Name:      "默认密钥",
+		SecretRef: "gateway:access-key",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Revision:      1,
 		Providers:     providers,
 		Accounts:      []Account{},
-		Gateway:       Gateway{State: "stopped"},
-		UpdatedAt:     now,
+		Gateway: Gateway{
+			State:      "stopped",
+			AccessKeys: []GatewayAccessKey{defaultKey},
+			Settings: GatewaySettings{
+				RoutingStrategy: "round_robin",
+			},
+		},
+		UpdatedAt: now,
 	}
 }

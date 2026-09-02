@@ -4,6 +4,8 @@
 
 Natives Model Host links `github.com/router-for-me/CLIProxyAPI/v7` at commit
 `f0de1d008fe8881dcb7431cf97b147295874c2b2`.
+The compile-time SDK/internal subset is vendored at `third_party/cliproxyapi`;
+the local usage-manager patch is documented in `NATIVES_FORK.md` there.
 
 MIT License
 

@@ -23,6 +23,7 @@ import (
 func TestRuntimeUsesAuthenticatedLoopbackAndPublicConfigHasNoSecrets(t *testing.T) {
 	secretStore := secrets.NewMemoryStore()
 	secretStore.Values["provider"] = "upstream-secret"
+	secretStore.Values["gateway:access-key"] = "gateway-secret"
 	snapshot := domain.NewSnapshot()
 	snapshot.Providers = append(snapshot.Providers, domain.Provider{
 		ID: "custom", Kind: "custom", Name: "Custom", BaseURL: "https://example.invalid/v1",
@@ -33,7 +34,7 @@ func TestRuntimeUsesAuthenticatedLoopbackAndPublicConfigHasNoSecrets(t *testing.
 	runtime := &Runtime{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), "gateway-secret", configPath)
+	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +82,24 @@ func TestRuntimeUsesAuthenticatedLoopbackAndPublicConfigHasNoSecrets(t *testing.
 	}
 }
 
+func TestRuntimeConfigMapsGatewayKeysRoutingAndRetrySettings(t *testing.T) {
+	snapshot := domain.NewSnapshot()
+	snapshot.Gateway.Settings = domain.GatewaySettings{
+		RoutingStrategy: "fill_first", SessionAffinity: true, SessionAffinityTTL: 1800,
+		RequestRetry: 2, MaxRetryCredentials: 3, MaxRetryIntervalSeconds: 20, StreamingBootstrapRetries: 1,
+	}
+	cfg, err := runtimeConfig(snapshot, secrets.NewMemoryStore(), []string{"first", "second"}, 8317, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.APIKeys) != 2 || cfg.APIKeys[1] != "second" || cfg.Routing.Strategy != "fill-first" || !cfg.Routing.SessionAffinity || cfg.Routing.SessionAffinityTTL != "1800s" {
+		t.Fatalf("gateway auth/routing config = %+v", cfg)
+	}
+	if cfg.RequestRetry != 2 || cfg.MaxRetryCredentials != 3 || cfg.MaxRetryInterval != 20 || cfg.Streaming.BootstrapRetries != 1 {
+		t.Fatalf("gateway retry config = %+v", cfg)
+	}
+}
+
 func TestRuntimeStreamsToolsUsageAndPropagatesCancellation(t *testing.T) {
 	cancelled := make(chan struct{}, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -93,6 +112,7 @@ func TestRuntimeStreamsToolsUsageAndPropagatesCancellation(t *testing.T) {
 	defer upstream.Close()
 	secretStore := secrets.NewMemoryStore()
 	secretStore.Values["stream-key"] = "upstream-stream-secret"
+	secretStore.Values["gateway:access-key"] = "gateway-secret"
 	snapshot := domain.NewSnapshot()
 	snapshot.Providers = append(snapshot.Providers, domain.Provider{
 		ID: "stream", Kind: "custom", Name: "Stream", BaseURL: upstream.URL + "/v1",
@@ -102,7 +122,7 @@ func TestRuntimeStreamsToolsUsageAndPropagatesCancellation(t *testing.T) {
 	runtime := &Runtime{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), "gateway-secret", filepath.Join(t.TempDir(), "runtime.yaml"))
+	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), filepath.Join(t.TempDir(), "runtime.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +164,7 @@ func TestRuntimeStreamingParityAgainstMockUpstream(t *testing.T) {
 	}))
 	defer upstream.Close()
 	secretStore := secrets.NewMemoryStore()
+	secretStore.Values["gateway:access-key"] = "gateway-secret"
 	for ref, key := range map[string]string{"responses-key": "responses-secret", "claude-key": "claude-secret", "gemini-key": "gemini-secret"} {
 		secretStore.Values[ref] = key
 	}
@@ -156,7 +177,7 @@ func TestRuntimeStreamingParityAgainstMockUpstream(t *testing.T) {
 	runtime := &Runtime{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), "gateway-secret", filepath.Join(t.TempDir(), "runtime.yaml"))
+	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), filepath.Join(t.TempDir(), "runtime.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,12 +221,13 @@ func TestRuntimeReturnsPromptlyWhenUpstreamStreamEndsUnexpectedly(t *testing.T) 
 	defer upstream.Close()
 	secretStore := secrets.NewMemoryStore()
 	secretStore.Values["eof-key"] = "upstream-secret"
+	secretStore.Values["gateway:access-key"] = "gateway-secret"
 	snapshot := domain.NewSnapshot()
 	snapshot.Providers = append(snapshot.Providers, domain.Provider{ID: "eof", Kind: "custom", Name: "EOF", BaseURL: upstream.URL + "/v1", Protocol: domain.ProtocolOpenAIChat, Enabled: true, SecretRef: "eof-key", Models: []domain.Model{{ID: "eof-model", Enabled: true}}})
 	runtime := &Runtime{}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), "gateway-secret", filepath.Join(t.TempDir(), "runtime.yaml"))
+	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), filepath.Join(t.TempDir(), "runtime.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,6 +299,7 @@ func TestRuntimeProtocolParityAgainstMockUpstream(t *testing.T) {
 		{ID: "gemini", Kind: "custom", Name: "Gemini", BaseURL: upstream.URL, Protocol: domain.ProtocolGemini, Enabled: true, SecretRef: "gemini-key", Models: []domain.Model{{ID: "gemini-model", Enabled: true}}},
 	}
 	snapshot.Providers = append(snapshot.Providers, providers...)
+	secretStore.Values["gateway:access-key"] = "gateway-secret"
 	secretStore.Values["chat-key"] = "openai-chat-secret"
 	secretStore.Values["responses-key"] = "openai-responses-secret"
 	secretStore.Values["claude-key"] = "claude-secret"
@@ -284,7 +307,7 @@ func TestRuntimeProtocolParityAgainstMockUpstream(t *testing.T) {
 	runtime := &Runtime{}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), "gateway-secret", filepath.Join(t.TempDir(), "runtime.yaml"))
+	port, err := runtime.Start(ctx, snapshot, secretStore, NewAuthStore(secretStore, nil, nil), filepath.Join(t.TempDir(), "runtime.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

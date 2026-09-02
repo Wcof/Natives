@@ -92,6 +92,12 @@ Agent Daemon 是待迁移旧生产路径，不再是目标 Provider/Run authorit
 FileTokenStore 并接管 refresh 回写。任一条件不满足时停止集成，不得以明文 token 文件
 或完整 Rust 协议重写绕过。
 
+该固定提交的 SDK usage manager 存在两个已验证的嵌入缺口：队列参数未生效导致无界
+增长，以及 `Service.Shutdown` 后全局 dispatcher 无法再次启动。生产构建因此使用
+`third_party/cliproxyapi` 的最小源码 fork；只保留编译必需的 `sdk/`、`internal/` 与
+嵌入资源，只修改 usage manager 的有界背压和可重启生命周期。版本、MIT 许可与上游
+提交仍必须锁定，禁止借此引入 CLI、Management UI 或新的配置/凭证 authority。
+
 ### 7. 迁移与删除
 
 实施顺序：P0 Gate → ADR/Standards → Shell/IA/Home Foundation → Files → Apps → AI Resources → Proxy → AI Tool Integration → Usage/Data → Home Widgets → Legacy Removal → Stability/Release Gate。

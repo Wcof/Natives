@@ -78,14 +78,37 @@ func (r *Repository) loadUnlocked() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read model state: %w", err)
 	}
-	var snapshot Snapshot
-	if err = json.Unmarshal(data, &snapshot); err != nil {
-		return Snapshot{}, fmt.Errorf("decode model state: %w", err)
-	}
-	if snapshot.SchemaVersion != SchemaVersion || snapshot.Revision < 1 {
-		return Snapshot{}, errors.New("unsupported model state schema")
-	}
-	return snapshot, nil
+		var snapshot Snapshot
+		if err = json.Unmarshal(data, &snapshot); err != nil {
+			return Snapshot{}, fmt.Errorf("decode model state: %w", err)
+		}
+		if snapshot.Revision < 1 {
+			return Snapshot{}, errors.New("unsupported model state schema")
+		}
+		// Migrate SchemaVersion 1 -> 2
+		if snapshot.SchemaVersion == 1 {
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if len(snapshot.Gateway.AccessKeys) == 0 {
+				defaultKey := GatewayAccessKey{
+					ID:        "key_default",
+					Name:      "默认密钥",
+					SecretRef: "gateway:access-key",
+					Mask:      snapshot.Gateway.AccessKeyMask,
+					Enabled:   true,
+					CreatedAt: now,
+					UpdatedAt: now,
+				}
+				snapshot.Gateway.AccessKeys = []GatewayAccessKey{defaultKey}
+			}
+			if snapshot.Gateway.PreferredPort > 0 && snapshot.Gateway.Settings.PreferredPort == 0 {
+				snapshot.Gateway.Settings.PreferredPort = snapshot.Gateway.PreferredPort
+			}
+			snapshot.SchemaVersion = SchemaVersion
+			_ = r.saveUnlocked(snapshot)
+		} else if snapshot.SchemaVersion != SchemaVersion {
+			return Snapshot{}, errors.New("unsupported model state schema")
+		}
+		return snapshot, nil
 }
 
 func (r *Repository) saveUnlocked(snapshot Snapshot) error {

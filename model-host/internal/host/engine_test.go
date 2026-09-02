@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/nativeio"
 	"github.com/ldh/natives/model-host/internal/secrets"
+	"github.com/ldh/natives/model-host/internal/usage"
 )
 
 func TestCustomProviderCRUDKeepsAPIKeyOutOfState(t *testing.T) {
@@ -314,6 +316,152 @@ func TestRunningGatewayReloadsAfterModelConfigurationChanges(t *testing.T) {
 		}
 	default:
 		t.Fatal("gateway reload did not emit state changes")
+	}
+}
+
+func TestGatewayMultiKeyAndUsageAPIs(t *testing.T) {
+	dir := t.TempDir()
+	secretStore := secrets.NewMemoryStore()
+	repo := domain.NewRepository(filepath.Join(dir, "state.json"))
+	engine, err := NewEngine(repo, secretStore, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.runtimeConfigPath = filepath.Join(dir, "runtime.yaml")
+	t.Cleanup(engine.Close)
+
+	// 1. Gateway settings update
+	settingsRes, err := engine.dispatch(context.Background(), "model_gateway_settings_update", json.RawMessage(`{"expectedRevision":1,"settings":{"routingStrategy":"fill_first","requestRetry":3,"preferredPort":8317}}`))
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	snap := settingsRes.(domain.Snapshot)
+	if snap.Gateway.Settings.RoutingStrategy != "fill_first" || snap.Gateway.Settings.RequestRetry != 3 {
+		t.Fatalf("unexpected settings: %+v", snap.Gateway.Settings)
+	}
+
+	// 2. Gateway Key Create
+	createKeyRes, err := engine.dispatch(context.Background(), "model_gateway_key_create", json.RawMessage(`{"expectedRevision":`+jsonNumber(snap.Revision)+`,"name":"Dev Key"}`))
+	if err != nil {
+		t.Fatalf("key create failed: %v", err)
+	}
+	createMap := createKeyRes.(map[string]any)
+	newKeyText := createMap["accessKey"].(string)
+	snap = createMap["snapshot"].(domain.Snapshot)
+	if len(snap.Gateway.AccessKeys) != 2 || snap.Gateway.AccessKeys[1].Name != "Dev Key" {
+		t.Fatalf("unexpected access keys: %+v", snap.Gateway.AccessKeys)
+	}
+	devKeyID := snap.Gateway.AccessKeys[1].ID
+
+	// 3. Gateway Key Reveal
+	revealRes, err := engine.dispatch(context.Background(), "model_gateway_key_reveal", json.RawMessage(`{"keyId":"`+devKeyID+`"}`))
+	if err != nil {
+		t.Fatalf("reveal failed: %v", err)
+	}
+	if revealRes.(map[string]string)["accessKey"] != newKeyText {
+		t.Fatalf("revealed key mismatch: %v vs %v", revealRes, newKeyText)
+	}
+
+	// 4. Gateway Key Update
+	updateKeyRes, err := engine.dispatch(context.Background(), "model_gateway_key_update", json.RawMessage(`{"expectedRevision":`+jsonNumber(snap.Revision)+`,"keyId":"`+devKeyID+`","name":"Renamed Key"}`))
+	if err != nil {
+		t.Fatalf("key update failed: %v", err)
+	}
+	snap = updateKeyRes.(domain.Snapshot)
+	if snap.Gateway.AccessKeys[1].Name != "Renamed Key" {
+		t.Fatalf("expected renamed key: %+v", snap.Gateway.AccessKeys[1])
+	}
+
+	// 5. Usage DB Status & APIs
+	statusRes, err := engine.dispatch(context.Background(), "model_usage_status", nil)
+	if err != nil {
+		t.Fatalf("usage status failed: %v", err)
+	}
+	statusMap := statusRes.(map[string]any)
+	if statusMap["dbPath"] == "" {
+		t.Fatalf("expected dbPath in status, got %+v", statusMap)
+	}
+
+	// 6. Insert dummy event directly into usageStore to test overview and analytics
+	err = engine.usageStore.InsertEvent(&usage.Event{
+		ID:          "evt-test-1",
+		RequestedAt: time.Now().UTC(),
+		LatencyMs:   100,
+		Provider:    "openai",
+		Model:       "gpt-4o",
+		Result:      usage.ResultSuccess,
+		HTTPStatus:  200,
+		InputTokens: 100,
+		TotalTokens: 100,
+		CostMicro:   250,
+	})
+	if err != nil {
+		t.Fatalf("InsertEvent failed: %v", err)
+	}
+
+	overviewRes, err := engine.dispatch(context.Background(), "model_usage_overview", json.RawMessage(`{"range":"all"}`))
+	if err != nil {
+		t.Fatalf("overview failed: %v", err)
+	}
+	ov := overviewRes.(*usage.OverviewResult)
+	if ov.TotalEventsCount != 1 || ov.Metrics.TotalRequests != 1 {
+		t.Fatalf("unexpected overview metrics: %+v", ov)
+	}
+
+	analyticsRes, err := engine.dispatch(context.Background(), "model_usage_analysis", json.RawMessage(`{"range":"all"}`))
+	if err != nil {
+		t.Fatalf("analytics failed: %v", err)
+	}
+	an := analyticsRes.(*usage.AnalyticsResult)
+	if len(an.ByModel) != 1 || an.ByModel[0].Requests != 1 {
+		t.Fatalf("unexpected analytics result: %+v", an)
+	}
+
+	eventsRes, err := engine.dispatch(context.Background(), "model_usage_events", json.RawMessage(`{"range":"all","limit":10}`))
+	if err != nil {
+		t.Fatalf("events failed: %v", err)
+	}
+	ev := eventsRes.(*usage.EventsResult)
+	if ev.Total != 1 || len(ev.Events) != 1 {
+		t.Fatalf("unexpected events result: %+v", ev)
+	}
+
+	// 7. Pricing catalog
+	pricingRes, err := engine.dispatch(context.Background(), "model_usage_pricing", nil)
+	if err != nil {
+		t.Fatalf("pricing failed: %v", err)
+	}
+	pr := pricingRes.(*usage.PricingResult)
+	if len(pr.Prices) == 0 {
+		t.Fatalf("expected non-empty pricing catalog")
+	}
+
+	// 8. Custom price upsert and delete
+	upsertPriceRes, err := engine.dispatch(context.Background(), "model_usage_price_upsert", json.RawMessage(`{"providerId":"custom","modelId":"my-model","inputPriceMicro":1000,"outputPriceMicro":2000}`))
+	if err != nil {
+		t.Fatalf("price upsert failed: %v", err)
+	}
+	if len(upsertPriceRes.(*usage.PricingResult).Prices) == 0 {
+		t.Fatalf("expected updated pricing")
+	}
+	if _, err := engine.dispatch(context.Background(), "model_usage_price_upsert", json.RawMessage(`{"modelId":"bad","inputPriceMicro":-1}`)); err == nil {
+		t.Fatal("expected negative price to be rejected")
+	}
+
+	deletePriceRes, err := engine.dispatch(context.Background(), "model_usage_price_delete", json.RawMessage(`{"providerId":"custom","modelId":"my-model"}`))
+	if err != nil {
+		t.Fatalf("price delete failed: %v", err)
+	}
+	_ = deletePriceRes
+
+	// 9. Key Delete
+	delKeyRes, err := engine.dispatch(context.Background(), "model_gateway_key_delete", json.RawMessage(`{"expectedRevision":`+jsonNumber(snap.Revision)+`,"keyId":"`+devKeyID+`"}`))
+	if err != nil {
+		t.Fatalf("key delete failed: %v", err)
+	}
+	snap = delKeyRes.(domain.Snapshot)
+	if len(snap.Gateway.AccessKeys) != 1 {
+		t.Fatalf("expected 1 remaining key: %+v", snap.Gateway.AccessKeys)
 	}
 }
 

@@ -30,6 +30,12 @@
   browser callback，因此 PKCE/state 不适用；两者仍受 Model Host 会话超时与取消约束。
 - **禁止**：生产绝对路径 `replace`、默认 token/config Secret 落盘、完整 Management API、
   Renderer 直连 gateway 管理面、Files Host 获得模型 Secret。
+- **最小 fork**：`model-host/go.mod` 使用仓库相对路径指向
+  `third_party/cliproxyapi`。fork 与上述提交同源，仅修复 SDK usage manager 的 512 条
+  有界队列和 `stop → start` 生命周期；回归测试覆盖两次启动/排空。Natives 使用记录
+  独占 `~/.natives/usage.db`，原始上游失败正文和 Secret 不落库。
+- **历史迁移**：使用记录页可分块导入 EasyCLIProxyAPI V3 `usage.db`；Host 以只读模式
+  识别源 schema，限制单文件 2 GiB、最多两个并发会话，按源事件稳定生成去重 ID。
 
 下文第 2 节起保留的是删除前系统的迁移审计证据，不是当前生产结构；其中
 `src-tauri`、Agent Daemon、Provider crates、LAN gateway 等描述不得作为新实现入口。
