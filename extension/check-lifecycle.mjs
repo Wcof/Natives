@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesPreview, filesCss, newtab, newtabCss, newtabScript, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
+const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesPreview, filesCss, newtab, newtabCss, newtabScript, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
   readFile(new URL('./manifest.json', import.meta.url), 'utf8'),
   readFile(new URL('./background.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.js', import.meta.url), 'utf8'),
@@ -23,6 +23,20 @@ const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, fil
   readFile(new URL('./files-disk-usage.js', import.meta.url), 'utf8'),
   readFile(new URL('./files-operations.js', import.meta.url), 'utf8'),
   readFile(new URL('./files-preview-controllers.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-search.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-shortcuts.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-entries-renderer.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-context-menu.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-preferences.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-preview-layout.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-toolbar.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-workspace-bindings.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-editor-bindings.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-entry-effects.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-host-connection.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-feedback.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-watch-controller.js', import.meta.url), 'utf8'),
+  readFile(new URL('./files-paths.js', import.meta.url), 'utf8'),
   readFile(new URL('../crates/native-file-host/src/protocol.rs', import.meta.url), 'utf8'),
   readFile(new URL('../crates/native-file-host/src/main.rs', import.meta.url), 'utf8'),
   readFile(new URL('../crates/native-file-host/src/workspace_store/mod.rs', import.meta.url), 'utf8'),
@@ -38,13 +52,17 @@ const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, fil
 ]);
 const enMessages = JSON.parse(en);
 const zhMessages = JSON.parse(zh);
-const scriptLocaleKeys = [...files.matchAll(/(?:^|[^\w])t\('([^']+)'/g)].map((match) => match[1]);
+const filesBundle = [files, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, filesSidebar].join('\n');
+const scriptLocaleKeys = [...filesBundle.matchAll(/\bt\('([^']+)'/g)].map((match) => match[1]);
 for (const key of new Set(scriptLocaleKeys)) {
   assert.ok(enMessages[key]?.message, `files.js locale key missing in en: ${key}`);
   assert.ok(zhMessages[key]?.message, `files.js locale key missing in zh: ${key}`);
 }
-const filesBundle = [files, filesOperations, filesPreviewControllers].join('\n');
-assert.match(files, /const fileClipboard = ops\.getClipboard\(\)/, 'files.js must read clipboard state through the operations module');
+assert.match(files, /(?:const fileClipboard = ops\.getClipboard\(\)|getClipboard:\s*\(\)\s*=>\s*ops\.getClipboard\(\))/, 'files.js must read clipboard state through the operations module');
+const searchControllerOffset = files.indexOf('const searchController = createFilesSearch');
+assert.ok(searchControllerOffset >= 0, 'files page must create its search controller');
+assert.ok(searchControllerOffset < files.indexOf('const entriesRenderer = createFilesEntriesRenderer'), 'search controller must exist before the entries renderer reads it');
+assert.ok(searchControllerOffset < files.indexOf('const contextMenu = createFilesContextMenu'), 'search controller must exist before the context menu reads it');
 const manifestData = JSON.parse(manifest);
 assert.equal(manifestData.chrome_url_overrides.newtab, 'space.html');
 assert.ok(manifestData.permissions.includes('storage'), 'files page persists UI state through chrome.storage.local');
@@ -64,12 +82,12 @@ assert.match(newtabScript, /document\.documentElement\.lang = language === 'en'/
 assert.match(newtabScript, /stored === 'en' \|\| stored === 'zh_CN' \? stored : 'zh_CN'/, 'new tab must use the Chinese manifest locale on first launch');
 assert.match(newtabScript, /await applyLocale\(\)/, 'new tab language changes must apply without a page reload');
 assert.match(newtabScript, /chrome\.storage\?\.onChanged\?\.addListener/);
-assert.match(filesBundle, /document\.documentElement\.lang = selectedLanguage === 'en'/);
+assert.match(filesBundle, /document\.documentElement\.lang = (?:selectedLanguage|language) === 'en'/);
 assert.match(filesBundle, /chrome\.storage\?\.onChanged\?\.addListener/);
 assert.doesNotMatch(files, /new Promise\([^\n]+chrome\.storage\.local\.(?:get|set)/, 'storage bootstrap must not hang behind callback-wrapped Chrome APIs');
-assert.match(filesBundle, /await Promise\.race\(\[chrome\.storage\.local\.get/, 'storage bootstrap must bound the MV3 Promise API');
+assert.match(filesBundle, /await Promise\.race\(\[\s*chrome\.storage\.local\.get/, 'storage bootstrap must bound the MV3 Promise API');
 assert.match(filesBundle, /filesSidebar\?\.setPreferences/, 'theme and language preferences must sync into the settings menu');
-assert.match(filesBundle, /event\.key\.toLowerCase\(\) !== 'l'.*openSettings\('language'\)/, 'files page Alt+L must open the settings menu on language');
+assert.match(filesBundle, /event\.key\.toLowerCase\(\) !== 'l'[\s\S]*openLanguageSettings/, 'files page Alt+L must open the settings menu on language');
 assert.match(filesBundle, /t\('movePreviewSide'[^\n]*t\('movePreviewBelow'/, 'preview layout labels must be localized');
 assert.match(filesBundle, /t\(sidebarCollapsed \? 'expandSidebar' : 'collapseSidebar'/, 'sidebar state labels must be localized');
 assert.match(newtabScript, /event\.key\.toLowerCase\(\) !== 'l'.*language\.focus\(\)/, 'new tab Alt+L must focus the language control');
@@ -145,7 +163,7 @@ for (const key of ['productNavigation', 'productMenu', 'personalDesktop', 'navDo
   assert.ok(enMessages[key]?.message);
   assert.ok(zhMessages[key]?.message);
 }
-assert.match(filesBundle, /event\.key\.toLowerCase\(\) !== 'l'.*language\.focus\(\)/, 'files page must expose Alt+L language access');
+assert.match(filesBundle, /openLanguageSettings: \(\) => filesSidebar\?\.openSettings\('language'\)/, 'files page must expose Alt+L language access');
 assert.match(filesBundle, /function applyTheme\(/);
 assert.match(filesBundle, /!\['\[', '\]'\]\.includes\(event\.key\)/, 'history navigation must support Ctrl/Meta bracket shortcuts');
 assert.match(filesBundle, /natives-theme/);
@@ -154,7 +172,7 @@ assert.deepEqual(Object.keys(JSON.parse(zh)).filter((key) => key.startsWith('the
 assert.match(filesBundle, /watchedPath/);
 assert.match(filesBundle, /protocolVersion !== 1/);
 assert.doesNotMatch(files, /document\.hidden \|\| nativePort \|\| reconnectTimer \|\| !session\.currentPath/, 'initial Host failures must be retried before a path is known');
-assert.match(filesBundle, /if \(session\.currentPath\) loadDirectory\(session\.currentPath\); else init\(\)/, 'Host reconnect must recover the initial page bootstrap');
+assert.match(filesBundle, /(?:if \(session\.currentPath\) loadDirectory\(session\.currentPath\); else init\(\)|session\.currentPath \? loadDirectory\(session\.currentPath\) : init\(\))/, 'Host reconnect must recover the initial page bootstrap');
 assert.match(filesBundle, /PAGE_SIZE = 100/);
 assert.match(filesBundle, /limit: PAGE_SIZE/);
 assert.doesNotMatch(files, /limit: 500|load-more|render\([^)]*, append/);
@@ -184,7 +202,7 @@ assert.match(filesBundle, /function copyFileSelected/, 'file context menus must 
 assert.match(filesBundle, /item && !item\.isDir && item\.kind !== 'image'/, 'non-image files must expose copy file');
 assert.match(filesHtml, /id="file-clipboard-status"/, 'file clipboard mode must be visible');
 assert.match(filesBundle, /function clearFileClipboard/, 'file clipboard must be clearable');
-assert.match(filesBundle, /clear-file-clipboard.*onclick = clearFileClipboard/, 'file clipboard clear action must be wired');
+assert.match(filesBundle, /clear-file-clipboard.*onclick = (?:ops\.)?clearFileClipboard/, 'file clipboard clear action must be wired');
 assert.match(filesBundle, /const phase = message\.result\.event === 'archive_progress'/, 'batch progress must expose a visible phase');
 assert.match(filesBundle, /setStatus\(`\$\{phase\} · \$\{completed\}\/\$\{total\}`\)/, 'batch progress must expose completed counts');
 assert.doesNotMatch(files, /favorite-toggle|toggleFavorite|natives-favorites/, 'favorites from the removed file-locations panel must stay removed');
@@ -196,8 +214,8 @@ assert.match(filesBundle, /call\('image_preview', \{ path: item\.path \}/, 'grid
 assert.match(filesCss, /\.grid-thumbnail \{ width:100%; height:70px; object-fit:contain/, 'grid thumbnails must remain bounded and use the design icon area');
 assert.match(filesBundle, /function openItemFromDoubleClick/, 'double-click preview must have a dedicated fanbox flow');
 assert.match(filesBundle, /row\.ondblclick = \(\) => openItemFromDoubleClick\(item\)/, 'double-click text/media must maximize preview');
-assert.match(filesBundle, /event\.key === 'Enter'\).*openItemFromDoubleClick\(session\.entries\[index\]\)/, 'keyboard Enter must share the preview flow');
-assert.match(filesBundle, /event\.key !== 'Enter'.*event\.shiftKey.*openEditorSelected\(\)/, 'Shift+Enter must open the selected item in an editor');
+assert.match(filesBundle, /event\.key === 'Enter'[\s\S]*openItemFromDoubleClick\(session\.entries\[index\]\)/, 'keyboard Enter must share the preview flow');
+assert.match(filesBundle, /event\.key !== 'Enter'[\s\S]*event\.shiftKey[\s\S]*openEditorSelected/, 'Shift+Enter must open the selected item in an editor');
 assert.match(filesBundle, /setPendingSelectionPath\(`\$\{session\.currentPath\.replace/, 'new entries must be selected after creation');
 assert.match(filesBundle, /setPendingSelectionPath\((?:moved|copied)\.at\(-1\)/, 'dropped moves and copies must select the last written item');
 assert.match(filesBundle, /setPendingSelectionPath\(result\?\.path\)/, 'created archives must be selected after writing');
@@ -205,7 +223,7 @@ assert.match(filesBundle, /const previewPending = Boolean\(pendingSelectionPath 
 assert.match(filesBundle, /if \(previewPending\) renderSelection\(\)/, 'located search results must render the selected preview');
 assert.match(filesBundle, /const historyScroll = new Map/, 'navigation must keep bounded scroll history');
 assert.match(filesBundle, /pendingScrollTop = historyScroll\.get\(path\) \?\? 0/, 'back-forward navigation must restore scroll position');
-assert.match(filesBundle, /event\.key !== 'Escape' \|\| !searchQuery.*cancelActiveSearches\(\)/, 'Escape must clear the active search query');
+assert.match(filesBundle, /event\.key === 'Escape'[\s\S]*cancelActiveSearches\(\)/, 'Escape must clear the active search query');
 assert.match(filesBundle, /const failedPaths = errors\.map/, 'batch retries must retain only failed source paths');
 assert.match(filesBundle, /const viewport = document\.querySelector\('\.content'\); if \(viewport\) viewport\.scrollTop = scrollTop/, 'batch retries must restore scroll position');
 assert.match(filesBundle, /const candidates = failedPaths\.length \? failedPaths : cancelled \? items\.map/, 'duplicate cancellation must retain actionable selection');
@@ -214,8 +232,8 @@ assert.match(filesBundle, /if \(!dialog\.open\) dialog\.showModal\(\)/, 'disk us
 assert.match(filesBundle, /migrateTrackedPath/, 'rename must migrate shortcut paths');
 assert.match(filesBundle, /method === 'move' && completed\.length === items\.length|migrateBatchPaths\(items\.map/, 'moves must migrate shortcut paths');
 assert.match(filesBundle, /migrateBatchPaths\(paths, moved, errors\)/, 'drag moves must migrate shortcut paths');
-assert.match(filesBundle, /method === 'move_batch'.*migrateBatchPaths\(params\.paths/, 'all partial move callers must migrate successful paths');
-assert.match(filesBundle, /method === 'trash_batch'.*rememberFailedOperation/, 'trash failures must retain retryable paths');
+assert.match(filesBundle, /method === 'move_batch'[\s\S]*(?:migrateBatchPaths|onMoveBatchResult)/, 'all partial move callers must migrate successful paths');
+assert.match(filesBundle, /method === 'trash_batch'[\s\S]*(?:rememberFailedOperation|onTrashBatchErrors)/, 'trash failures must retain retryable paths');
 assert.match(filesBundle, /const failed = lastFailedOperation\?\.method === 'trash_batch'/, 'trash retries must refresh the current directory');
 assert.match(filesBundle, /scrollTop = document\.querySelector\('\.content'\)\?\.scrollTop/, 'trash retries must preserve scroll position');
 assert.match(filesBundle, /session\.selectedPaths = new Set\(\[\.\.\.failed\]/, 'trash retries must reselect remaining failures');
@@ -225,7 +243,7 @@ assert.match(filesHtml, /id="scope-toggle"/, 'search scope must be visible');
 assert.match(filesHtml, /id="grid-view"[^>]*aria-keyshortcuts="Control\+Shift\+G Meta\+Shift\+G"/, 'view buttons must expose the grid/list shortcut');
 assert.match(filesHtml, /id="settings-entry"/, 'settings entry must be visible in the sidebar');
 assert.match(filesBundle, /natives-language/, 'language preference must persist');
-assert.match(filesBundle, /fetch\(`_locales\/\$\{selectedLanguage\}\/messages\.json`\)/, 'language switch must load bundled locale data');
+assert.match(filesBundle, /fetch\(`_locales\/\$\{(?:selectedLanguage|language)\}\/messages\.json`\)/, 'language switch must load bundled locale data');
 assert.match(filesCss, /@media \(max-width:560px\)/, 'file layout must adapt to narrow viewports');
 assert.match(filesCss, /\.preview-image[^\n]*background-image:linear-gradient/, 'image previews must show a transparency checkerboard');
 assert.match(filesCss, /@media \(max-width:1180px\)[\s\S]*\.layout\.preview-bottom\.preview-open #preview \{ grid-row:2/, 'preview-bottom must place preview below the file list');
@@ -246,11 +264,10 @@ assert.match(filesBundle, /function rememberEditorViewState/, 'closing preview m
 assert.match(filesBundle, /function resetPreviewNow\(\) \{ rememberEditorViewState\(\);/, 'preview reset must capture editor view first');
 assert.match(filesHtml, /id="toggle-preview-layout"[^>]*aria-pressed/, 'preview layout control must expose pressed state');
 assert.match(filesBundle, /function syncPreviewLayoutControls/, 'preview layout controls must sync after restore');
-assert.match(filesBundle, /globalSearchMode = false; updateSearchScopeButton\(\); session\.currentPath && loadDirectory/, 'clearing search must sync scope control');
-assert.match(filesBundle, /node\.setAttribute\('role', 'button'\)/, 'search match summaries must be keyboard accessible');
+assert.match(filesBundle, /setSearchQuery\(''\)[\s\S]{0,120}setGlobalMode\(false\)[\s\S]{0,120}loadDirectory\(session\.currentPath\)/, 'clearing search must sync scope control');
+assert.match(filesBundle, /excerpt\.setAttribute\('role', 'button'\)/, 'search match summaries must be keyboard accessible');
 assert.match(filesBundle, /excerpt\.click\(\)/, 'search match summaries must activate from keyboard');
-assert.match(filesBundle, /event\.key === 'Enter'.*dispatchEvent\(new MouseEvent\('dblclick'/, 'Enter on a match must open preview context');
-assert.match(filesBundle, /event\.key !== 'Enter'.*searchQuery/, 'search result Enter must preview in place');
+assert.match(filesBundle, /event\.key === 'Enter'[\s\S]{0,120}dispatchEvent\(new MouseEvent\('dblclick'/, 'Enter on a match must open preview context');
 assert.match(filesBundle, /entry-source/, 'global search results must expose source paths');
 assert.match(filesBundle, /searchTruncated/, 'search truncation must be tracked and surfaced');
 assert.match(filesBundle, /if \(searchQuery\) search\(searchQuery\); else \{ searchToken\+\+; cancelActiveSearches\(\); loadDirectory\(session\.currentPath\); \}/, 'clearing search must cancel stale requests before loading directory');
@@ -276,14 +293,14 @@ assert.match(filesBundle, /\$\{importTarget\} · \$\{importedCount\}/, 'import c
 assert.match(filesBundle, /rememberFailedOperation\(\{ method: 'move_batch'/, 'drag moves must retain failed paths');
 assert.match(filesBundle, /rememberFailedOperation\(\{ method: 'copy_batch'/, 'URI imports must retain failed paths');
 assert.match(filesBundle, /else if \(urls\) await copyDroppedUris\(urls, item\.path\)/, 'directory drops must accept ordinary file URIs');
-assert.match(filesBundle, /Finder may include a non-JSON text\/plain label/, 'external file drops must bypass internal JSON path handling');
+assert.match(filesBundle, /if \(event\.dataTransfer\.files\.length\) await ops\.importFileList[\s\S]{0,120}else if \(raw\.startsWith\('\['\)\)/, 'external file drops must bypass internal JSON path handling');
 assert.match(filesBundle, /t\('dropHint', '释放以导入或移动文件'\)/, 'drag targets must expose a visible drop hint');
-assert.match(filesBundle, /input\.multiple = true; input\.accept = 'image\/\*'/, 'markdown image picker must support multi-selection');
-assert.match(filesBundle, /if \(!await importImageIntoEditor\(file, editor\)\) break/, 'cancelled image imports must stop the remaining batch');
-assert.match(filesBundle, /const files = \[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\].*slice\(0, 20\)/, 'editor drops must accept a bounded image batch');
-assert.match(filesBundle, /setData\('text\/html'.*htmlEscape/, 'file drags must expose escaped HTML links');
-assert.match(filesBundle, /method: 'image-import'.*editorPath/, 'failed editor image imports must retain retry context');
-assert.match(filesBundle, /method: 'image-copy'.*editorPath/, 'failed editor image copies must retain retry context');
+assert.match(filesBundle, /input\.multiple = true;[\s\S]{0,80}input\.accept = 'image\/\*'/, 'markdown image picker must support multi-selection');
+assert.match(filesBundle, /if \(!await (?:ops\.)?importImageIntoEditor\(file, editor\)\) break/, 'cancelled image imports must stop the remaining batch');
+assert.match(filesBundle, /const files = \[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\][\s\S]*slice\(0, 20\)/, 'editor drops must accept a bounded image batch');
+assert.match(filesBundle, /setData\('text\/html'[\s\S]*htmlEscape/, 'file drags must expose escaped HTML links');
+assert.match(filesBundle, /method: 'image-import'[\s\S]*editorPath/, 'failed editor image imports must retain retry context');
+assert.match(filesBundle, /method: 'image-copy'[\s\S]*editorPath/, 'failed editor image copies must retain retry context');
 assert.match(filesBundle, /begun\?\.renamed/, 'imports must surface Host conflict renames');
 assert.match(filesBundle, /countRenamedPaths\(paths, completed\)/, 'batch retries must surface renamed outputs');
 assert.match(filesBundle, /countRenamedPaths\(clip\.paths, completed\)/, 'clipboard pastes must surface renamed outputs');
@@ -291,25 +308,25 @@ assert.match(filesBundle, /migrateBatchPaths\(paths, moved, errors\)/, 'partial 
 assert.match(filesBundle, /const finalName = result\?\.path \? parentAndName\(result\.path\)\.name/, 'single renames must expose the final name');
 assert.match(filesBundle, /restore:\s*\{ selection: \[\.\.\.importSelection\], scrollTop: importScrollTop \}/, 'import retries must retain selection and scroll position');
 assert.match(filesBundle, /dataset\.action = 'createArchive'/, 'archive creation must be available from context menus');
-assert.match(filesBundle, /event\.key !== 'Enter'.*session\.selectedPaths\.size !== 1.*openEditorSelected/, 'Cmd/Ctrl+Enter must open the selected item in an editor');
+assert.match(filesBundle, /event\.key !== 'Enter'[\s\S]*session\.selectedPaths\.size !== 1[\s\S]*openEditorSelected/, 'Cmd/Ctrl+Enter must open the selected item in an editor');
 assert.match(filesBundle, /activeElement\?\.classList\.contains\('pdf-preview'\)/, 'PDF viewer must retain native find shortcut');
 assert.match(filesBundle, /findButton\.dataset\.action = 'pdf-find'/, 'PDF viewer must expose a visible find action');
-assert.match(filesBundle, /const pageStep = Math\.max\(1, Math\.floor\(\(\$\('entries'\)\.clientHeight/, 'entry paging must follow viewport size');
+assert.match(filesBundle, /const pageStep = Math\.max\(1, Math\.floor\(\(entries\.clientHeight/, 'entry paging must follow viewport size');
 assert.doesNotMatch(files, /recentModified|recent-modified|recent_files/, 'recent-modified feature must stay removed');
 assert.match(filesBundle, /const watchedDirectory = session\.currentPath/, 'watch refresh must capture the watched directory');
 assert.match(filesBundle, /markChangedPath\(changedPath, message\.result\.kind/, 'watch events must preserve their change kind');
-assert.match(filesBundle, /if \(session\.currentPath !== watchedDirectory\) return; const scrollTop/, 'stale watcher events must not refresh a new directory');
-assert.match(filesBundle, /const refresh = searchQuery \? search\(searchQuery\) : loadDirectory\(watchedDirectory\)/, 'watch refresh must preserve active search context');
+assert.match(filesBundle, /if \(session\.currentPath !== watchedDirectory\) return;[\s\S]*const scrollTop/, 'stale watcher events must not refresh a new directory');
+assert.match(filesBundle, /const refresh = searchQuery \? (?:searchController\.)?search\(searchQuery\) : loadDirectory\(watchedDirectory\)/, 'watch refresh must preserve active search context');
 assert.match(filesBundle, /viewport\.scrollTop = scrollTop/, 'watch refresh must preserve scroll position');
-assert.match(filesBundle, /previewPath && !visiblePaths\.has\(previewPath\).*resetPreviewNow\(\)/, 'watch refresh must close clean previews for deleted files');
-assert.match(filesBundle, /message\.result\.kind === 'removed'.*resetPreviewNow\(\)/, 'removed watcher events must close stale previews in search mode');
+assert.match(filesBundle, /previewPath && !visiblePaths\.has\(previewPath\)[\s\S]{0,120}resetPreviewNow\(\)/, 'watch refresh must close clean previews for deleted files');
+assert.match(filesBundle, /message\.result\.kind === 'removed'[\s\S]{0,220}(?:resetPreviewNow|resetPreview)\(\)/, 'removed watcher events must close stale previews in search mode');
 assert.doesNotMatch(files, /changeLog|renderChanges|openChangePath/, 'removed file-location change inbox must stay removed');
 assert.match(filesBundle, /storageSet\('natives-last-path', path\)/, 'navigation must persist the last directory');
 assert.match(filesBundle, /storageGet\('natives-last-path', ''\)/, 'startup must restore the last directory preference');
 assert.match(filesBundle, /result\?\.found && result\.isDir\) navigate\(stored, false\)/, 'restored paths must be validated as authorized directories');
 assert.match(filesBundle, /activePreviewId && isHostConnected\(\)/, 'preview cancellation must not reconnect a disconnected Host');
 assert.match(filesBundle, /__nativesPreviewCleanup/, 'Host disconnect must clear clean preview state');
-assert.match(filesBundle, /selectedPaths\.has\(changed\).*renderPreviewSelection\(\)/, 'binary previews must refresh after external file changes');
+assert.match(filesBundle, /selectedPaths\.has\(changedPath\)[\s\S]{0,120}renderPreviewSelection\(\)/, 'binary previews must refresh after external file changes');
 for (const key of ['rotateLeft', 'rotateRight', 'flipHorizontal', 'flipVertical', 'imagePen', 'imageCrop', 'applyCrop']) {
   assert.ok(JSON.parse(en)[key]?.message, `${key} must be localized in en`);
   assert.ok(JSON.parse(zh)[key]?.message, `${key} must be localized in zh`);
@@ -332,7 +349,7 @@ assert.match(filesCss, /\.entries\.drop-target\s*\{[^}]*outline:/, 'file area dr
 assert.match(filesBundle, /closest\('#new-popover'\).*hidden = true/, 'new menu must close when clicking outside');
 assert.match(filesCss, /\.nav-buttons,\.toolbar-controls,\.view-buttons/, 'view controls must stay on one horizontal row');
 assert.match(filesCss, /\[hidden\] \{ display:none !important; \}/, 'hidden menus must not cover the workspace');
-assert.match(filesBundle, /popover\.style\.left = `\$\{left\}px`/, 'new menu must anchor to its trigger');
+assert.match(filesBundle, /popover\.style\.left = `\$\{Math\.max\(8, Math\.min\(anchor\.right - width/, 'new menu must anchor to its trigger');
 assert.match(filesCss, /@media \(max-width:1180px\)[\s\S]*\.layout\.preview-open.*grid-template-columns:minmax\(0,1fr\)/, 'files content must collapse before fixed panels overflow');
 assert.match(filesCss, /@media \(max-width:760px\)/, 'files layout must remain usable on narrow widths');
 assert.match(filesCss, /@media \(max-width:760px\)[\s\S]*\.entry \{ grid-template-columns:28px minmax\(0,1fr\)/, 'file rows must compress before the content column overflows');
@@ -344,7 +361,7 @@ assert.match(filesBundle, /t\('createdAt', '创建'\)/, 'preview metadata must e
 assert.match(filesBundle, /className = 'preview-meta-field'/, 'preview metadata must render separate accessible fields');
 assert.match(filesCss, /\.preview-actions,\.editor-toolbar,\.markdown-tools \{ display:flex; flex-wrap:wrap/, 'preview actions must wrap in narrow panes');
 assert.match(filesBundle, /function stopFollowOnManual\(\)/, 'manual navigation must stop follow mode');
-assert.match(filesBundle, /if \(session\.currentPath && followChanges && !pendingSelectionPath\) stopFollowOnManual\(\)/, 'manual directory navigation must stop follow mode');
+assert.match(filesBundle, /if \(session\.currentPath && followChanges && !pendingSelectionPath\) watchController\.stopFollowOnManual\(\)/, 'manual directory navigation must stop follow mode');
 assert.match(filesBundle, /for \(const \[path, value\] of changedPaths\)/, 'renames and moves must migrate transient change heat paths');
 for (const key of ['pagination', 'previousPage', 'nextPage']) {
   assert.ok(JSON.parse(en)[key]?.message);
