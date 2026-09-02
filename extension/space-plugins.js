@@ -8,7 +8,7 @@ import { widgetPlugins } from './plugins/widgets/index.js';
 
 export { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml, backgroundPlugins, widgetPlugins };
 
-const ZH_PLUGIN_NAMES = {
+const DEFAULT_ZH_NAMES = {
   'widget/binaryTime': '二进制时钟',
   'widget/bitcoin': '比特币内存池',
   'widget/bookmarks': '书签',
@@ -21,21 +21,21 @@ const ZH_PLUGIN_NAMES = {
   'widget/html': '自定义 HTML',
   'widget/ipInfo': 'IP 信息',
   'widget/joke': '笑话',
-  'widget/leetcode': 'LeetCode 日历',
+  'widget/leetcode': 'LeetCode 挑战',
   'widget/links': '快速链接',
   'widget/literatureClock': '文学时钟',
   'widget/message': '消息',
-  'widget/notes': '笔记',
+  'widget/notes': '便签',
   'widget/palette': '随机调色板',
   'widget/quote': '名言',
-  'widget/search': '搜索',
+  'widget/search': '搜索框',
   'widget/since': '时间跨度',
   'widget/tallyCounter': '计数器',
   'widget/time': '时间',
   'widget/timeTracker': '时间追踪器',
   'widget/todo': '待办事项',
   'widget/topSites': '常用站点',
-  'widget/trello': 'Trello',
+  'widget/trello': 'Trello 看板',
   'widget/weather': '天气',
   'widget/workHours': '工作时间',
   'background/apod': '每日天文图片',
@@ -49,6 +49,14 @@ const ZH_PLUGIN_NAMES = {
   'background/wikimedia': 'Wikimedia 每日图片',
 };
 
-export function pluginName(key, language = 'en', fallback = key) {
-  return language === 'zh_CN' ? ZH_PLUGIN_NAMES[key] || fallback : fallback;
+export function pluginName(key, language = 'en', fallback = key, t = null) {
+  if (typeof t === 'function') {
+    const localeKey = `plugin_${key.replace('/', '_')}`;
+    const localized = t(localeKey, fallback);
+    if (localized && localized !== localeKey) return localized;
+  }
+  if (language === 'zh_CN') {
+    return DEFAULT_ZH_NAMES[key] || fallback;
+  }
+  return fallback;
 }

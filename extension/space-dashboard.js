@@ -1,8 +1,4 @@
-/**
- * Space Shadow DOM Dashboard controller (<290 lines).
- * Full implementation of Tabliss Widgets.sass and Slot.sass.
- * Separates direct widget interactive usage from explicit position editing.
- */
+import { buildDashboardStyles } from './space-dashboard-styles.js';
 
 const transformOriginMap = {
   topLeft: 'top left',
@@ -31,6 +27,7 @@ export function createSpaceDashboard({
   let bgLayerEl = null;
   let currentBgKey = '';
   let currentBgDisplayStr = '';
+  let currentBgDisposer = null;
   let currentEditingWidgetId = null;
 
   const slotContainers = {};
@@ -39,48 +36,12 @@ export function createSpaceDashboard({
   let staticStyleContent = '';
   function getCompiledStyleSheet() {
     if (staticStyleContent) return staticStyleContent;
-    const pluginStyles = [
-      ...Object.values(backgroundPlugins || {}).map((p) => p.styles || ''),
-      ...Object.values(widgetPlugins || {}).map((p) => p.styles || ''),
-    ].filter(Boolean).join('\n');
+    const backgroundStyles = Object.values(backgroundPlugins || {})
+      .map((plugin) => plugin.styles || '').filter(Boolean).join('\n');
+    const widgetStyles = Object.values(widgetPlugins || {})
+      .map((plugin) => plugin.styles || '').filter(Boolean).join('\n');
 
-    staticStyleContent = `
-      :host { all: initial; }
-      :host([data-widgets-hidden="true"]) .Slot,
-      :host(.widgets-hidden) .Slot,
-      :host-context(body.space-widgets-hidden) .Slot {
-        display: none !important;
-      }
-      .Widgets { width:100%; height:100%; position:relative; overflow:hidden; padding:0; text-align:center; pointer-events:none; user-select:auto; font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif; }
-      .background-layer { position:absolute; inset:0; background-size:cover; background-position:center; transition:background 0.3s ease, filter 0.3s ease; }
-      .background-not-configured { position:absolute; inset:0; display:grid; place-items:center; color:rgba(255,255,255,.6); font-size:14px; background:#111; }
-      .container { position:relative; width:100%; height:100%; }
-      .Slot { position:absolute; pointer-events:none; }
-      .Slot > * { margin:1rem; pointer-events:all; }
-      .Slot.free > * { margin:0; }
-      .Slot.topLeft { top:0; left:0; text-align:left; }
-      .Slot.topCentre { top:0; left:50%; transform:translateX(-50%); text-align:center; }
-      .Slot.topRight { top:0; right:0; text-align:right; }
-      .Slot.middleLeft { top:50%; left:0; transform:translateY(-50%); text-align:left; }
-      .Slot.middleCentre { top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }
-      .Slot.middleRight { top:50%; right:0; transform:translateY(-50%); text-align:right; }
-      .Slot.bottomLeft { bottom:3rem; left:0; text-align:left; }
-      .Slot.bottomCentre { bottom:3rem; left:50%; transform:translateX(-50%); text-align:center; }
-      .Slot.bottomRight { bottom:3rem; right:0; text-align:right; }
-      .Slot.free-slot-wrap { position:absolute; }
-      .Widget { position:relative; transition:color 0.15s ease; user-select:auto; display:inline-block; }
-      h1, h2, h3, h4 { line-height:1; margin:0; }
-      .weight-override h1, .weight-override h2, .weight-override h3, .weight-override h4 { font-weight:inherit; }
-      .drag-selected { z-index:1000 !important; outline:2px dashed var(--accent, #cdf24b) !important; border-radius:4px; box-shadow:0 0 0 4px rgba(205,242,75,0.25); }
-      .drag-selected > * { pointer-events:none; }
-      .free-handles-wrap { position:absolute; inset:-4px; pointer-events:none; z-index:1001; }
-      .free-handle { position:absolute; width:12px; height:12px; border-radius:50%; background:#fff; border:2px solid #222; pointer-events:auto; box-shadow:0 2px 6px rgba(0,0,0,0.35); }
-      .free-handle.handle-scale { bottom:-6px; right:-6px; cursor:nwse-resize; }
-      .free-handle.handle-rotate { top:-18px; left:50%; transform:translateX(-50%); cursor:grab; }
-      .free-floating-done { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:1100; display:inline-flex; align-items:center; gap:8px; padding:10px 24px; background:var(--accent, #cdf24b); color:#000; font-weight:700; font-size:14px; border:0; border-radius:999px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,0.4); pointer-events:auto; }
-      .free-floating-done:hover { filter:brightness(1.1); transform:translateX(-50%) scale(1.03); }
-      ${pluginStyles}
-    `;
+    staticStyleContent = buildDashboardStyles({ backgroundStyles, widgetStyles });
     return staticStyleContent;
   }
 
@@ -131,13 +92,16 @@ export function createSpaceDashboard({
     const { shadow, root } = ensureShadowShell();
     if (!shadow || !root) return;
 
-    // 1. In-place Background Check & Patch
     const bgData = snapshot.backgroundJson || {};
     const bgKey = bgData.key || 'background/colour';
     const bgDisplay = bgData.display || bgData.data || {};
     const bgDisplayStr = JSON.stringify({ key: bgKey, ...bgDisplay });
 
     if (bgKey !== currentBgKey || bgDisplayStr !== currentBgDisplayStr) {
+      if (typeof currentBgDisposer === 'function') {
+        currentBgDisposer();
+        currentBgDisposer = null;
+      }
       currentBgKey = bgKey;
       currentBgDisplayStr = bgDisplayStr;
       const bgPlugin = backgroundPlugins[bgKey] || backgroundPlugins['background/colour'];
@@ -150,11 +114,13 @@ export function createSpaceDashboard({
         const blurPx = Number(bgDisplay.blur) || 0;
         const bright = bgDisplay.brightness ?? (isNight ? 0.6 : 1);
         bgLayerEl.style.filter = (blurPx > 0 || bright !== 1) ? `blur(${blurPx}px) brightness(${bright})` : 'none';
-        bgPlugin.render(bgLayerEl, bgDisplay, { t, lang: selectedLanguage });
+        const maybeBgDisposer = bgPlugin.render(bgLayerEl, bgDisplay, { t, lang: selectedLanguage });
+        if (typeof maybeBgDisposer === 'function') {
+          currentBgDisposer = maybeBgDisposer;
+        }
       }
     }
 
-    // 2. In-place Diff & Patch of Widgets
     const incomingWidgets = (snapshot.widgets || []).filter((w) => w.enabled);
     const incomingIds = new Set(incomingWidgets.map((w) => w.id));
 
@@ -186,25 +152,31 @@ export function createSpaceDashboard({
     const keyClass = widget.key.replace('widget/', '');
     container.dataset.widgetId = widget.id;
 
-    applyWidgetDisplayStyles(container, widget.displayJson || {}, keyClass, false);
-
     let disposer = null;
-    plugin.render(container, widget.configJson || {}, widget.displayJson || {}, {
-      t,
-      lang: selectedLanguage,
-      shadowRoot,
-      onDataChange: async (nextData) => {
-        try {
-          const result = await nativeCall('workspace_widget_upsert', {
-            workspaceId: activeWorkspaceId,
-            widget: { ...widget, configJson: nextData },
-            expectedRevision: snapshot.revision,
-          });
-          updateSnapshot(result);
-          broadcastRevision();
-        } catch (err) {}
-      },
-    });
+    try {
+      const maybeDisposer = plugin.render(container, widget.configJson || {}, widget.displayJson || {}, {
+        t,
+        lang: selectedLanguage,
+        shadowRoot,
+        onDataChange: async (nextData) => {
+          try {
+            const result = await nativeCall('workspace_widget_upsert', {
+              workspaceId: activeWorkspaceId,
+              widget: { ...widget, configJson: nextData },
+              expectedRevision: snapshot.revision,
+            });
+            updateSnapshot(result);
+            broadcastRevision();
+          } catch (err) {}
+        },
+      });
+      if (typeof maybeDisposer === 'function') {
+        disposer = maybeDisposer;
+      }
+    } catch (err) {
+      container.innerHTML = '<div class="widget-error" style="color:var(--danger,#ff7f8f);font-size:12px;padding:4px 8px;">Render error</div>';
+    }
+    applyWidgetDisplayStyles(container, widget.displayJson || {}, keyClass, false);
 
     let wrapperEl = null;
     if (pos === 'free') {
@@ -244,12 +216,10 @@ export function createSpaceDashboard({
       return;
     }
 
-    const isEditing = currentEditingWidgetId === nextWidget.id;
-    applyWidgetDisplayStyles(entry.element, nextWidget.displayJson || {}, entry.keyClass, isEditing);
-
     if (JSON.stringify(prevWidget.configJson) !== JSON.stringify(nextWidget.configJson)) {
       const plugin = widgetPlugins[nextWidget.key];
-      plugin?.render?.(entry.element, nextWidget.configJson || {}, nextWidget.displayJson || {}, {
+      entry.disposer?.();
+      const nextDisposer = plugin?.render?.(entry.element, nextWidget.configJson || {}, nextWidget.displayJson || {}, {
         t,
         lang: selectedLanguage,
         shadowRoot,
@@ -265,12 +235,15 @@ export function createSpaceDashboard({
           } catch (err) {}
         },
       });
+      entry.disposer = typeof nextDisposer === 'function' ? nextDisposer : null;
     }
+    const isEditing = currentEditingWidgetId === nextWidget.id;
+    applyWidgetDisplayStyles(entry.element, nextWidget.displayJson || {}, entry.keyClass, isEditing);
   }
 
   function applyWidgetDisplayStyles(container, disp, keyClass, isEditing = false) {
-    container.style.color = disp.useAccentColor ? 'var(--accent, #cdf24b)' : (disp.colour || '');
-    if (disp.fontFamily) container.style.fontFamily = disp.fontFamily;
+    container.style.color = disp.useAccentColor ? 'var(--accent, #cdf24b)' : (disp.colour || '#ffffff');
+    container.style.fontFamily = disp.fontFamily || '';
     container.style.fontSize = disp.fontSize ? `${disp.fontSize}px` : '';
     container.style.fontWeight = disp.fontWeight ? String(disp.fontWeight) : '';
     container.style.fontStyle = disp.fontStyle || '';
@@ -300,9 +273,15 @@ export function createSpaceDashboard({
       container.style.textShadow = '';
     }
 
-    container.className = `Widget widget-${keyClass || ''} ${disp.fontWeight ? 'weight-override' : ''}`;
+    container.classList.add('Widget');
+    if (keyClass) container.classList.add(`widget-${keyClass}`);
+    if (disp.fontWeight) container.classList.add('weight-override');
+    else container.classList.remove('weight-override');
+    if (container.dataset.customClass) container.classList.remove(container.dataset.customClass);
+    container.dataset.customClass = '';
     if (disp.customClass && /^[a-zA-Z0-9_-]+$/.test(disp.customClass)) {
       container.classList.add(disp.customClass);
+      container.dataset.customClass = disp.customClass;
     }
   }
 
@@ -311,7 +290,6 @@ export function createSpaceDashboard({
     const { shadow, root } = ensureShadowShell();
     if (!shadow || !root) return;
 
-    // Remove existing edit handles and floating button
     shadow.querySelectorAll('.free-handles-wrap, .free-floating-done').forEach((el) => el.remove());
     shadow.querySelectorAll('.drag-selected').forEach((el) => el.classList.remove('drag-selected'));
 
@@ -323,7 +301,6 @@ export function createSpaceDashboard({
     const targetWrapper = entry.wrapperEl;
     targetWrapper.classList.add('drag-selected');
 
-    // Create handles
     const handlesWrap = document.createElement('div');
     handlesWrap.className = 'free-handles-wrap';
     const scaleHandle = document.createElement('div');
@@ -333,7 +310,6 @@ export function createSpaceDashboard({
     handlesWrap.append(scaleHandle, rotHandle);
     targetWrapper.append(handlesWrap);
 
-    // Floating Done Button
     const doneBtn = document.createElement('button');
     doneBtn.className = 'free-floating-done';
     doneBtn.type = 'button';
@@ -484,7 +460,15 @@ export function createSpaceDashboard({
         host.dataset.widgetsHidden = String(Boolean(hidden));
       }
     },
+    getWidgetsHidden() {
+      const host = $('dashboard-host');
+      return host ? host.classList.contains('widgets-hidden') : false;
+    },
     destroy() {
+      if (typeof currentBgDisposer === 'function') {
+        currentBgDisposer();
+        currentBgDisposer = null;
+      }
       for (const entry of widgetRegistry.values()) {
         entry.disposer?.();
       }

@@ -3,16 +3,16 @@
     "message": "加入收藏"
   },
   "addFirstWidget": {
-    "message": "添加第一个组件"
+    "message": "添加首张卡片"
   },
   "addWidget": {
-    "message": "添加 Widget"
+    "message": "添加卡片"
   },
   "addedFavorite": {
     "message": "已加入收藏"
   },
   "allWidgetsAdded": {
-    "message": "所有可用 Widget 均已添加"
+    "message": "所有可用卡片均已添加"
   },
   "appName": {
     "message": "Natives 文件管理"
@@ -147,7 +147,7 @@
     "message": "确认移动此文件？"
   },
   "confirmRemoveWidget": {
-    "message": "确定移除此组件吗？"
+    "message": "确定移除此卡片吗？"
   },
   "confirmResetWorkspace": {
     "message": "确认重置"
@@ -204,7 +204,7 @@
     "message": "删除"
   },
   "deleteWidget": {
-    "message": "删除组件"
+    "message": "删除卡片"
   },
   "deleteWorkspace": {
     "message": "删除空间"
@@ -273,10 +273,10 @@
     "message": "此文件夹为空"
   },
   "emptySpaceDesc": {
-    "message": "从丰富的小组件目录中挑选并添加到你的个人空间"
+    "message": "从丰富的卡片目录中挑选并添加到你的个人空间"
   },
   "emptySpaceTitle": {
-    "message": "这个空间还没有组件"
+    "message": "这个空间还没有卡片"
   },
   "enable": {
     "message": "启用"
@@ -479,6 +479,9 @@
   "invalidPath": {
     "message": "路径无效"
   },
+  "insertLink": {
+    "message": "插入链接"
+  },
   "items": {
     "message": "个项目"
   },
@@ -563,11 +566,48 @@
   "modelAccounts": {
     "message": "账户"
   },
+  "modelActions": {
+    "message": "操作"
+  },
   "modelAddAccount": {
     "message": "添加账户"
   },
+  "modelAddCustomPrice": {
+    "message": "添加自定义费率"
+  },
   "modelAddProvider": {
     "message": "添加自定义供应商"
+  },
+  "modelAdvBasic": { "message": "基础控制" },
+  "modelAdvBasicDesc": { "message": "管理本地内核状态、监听端口和兼容 API 地址。" },
+  "modelAdvBasicTitle": { "message": "代理运行控制" },
+  "modelAdvImporter": {
+    "message": "数据迁移"
+  },
+  "modelAdvKeys": {
+    "message": "访问密钥"
+  },
+  "modelAdvKeysDesc": {
+    "message": "支持创建多达 64 个独立访问密钥，密钥持久化存储于系统钥匙串中。"
+  },
+  "modelAdvKeysTitle": {
+    "message": "网关多访问密钥管理"
+  },
+  "modelAdvKernel": { "message": "内核设置" },
+  "modelAdvKernelDesc": { "message": "设置失败重试范围；保存后运行中的代理会安全重启。" },
+  "modelAdvKernelTitle": { "message": "内核重试设置" },
+  "modelAdvNetwork": {
+    "message": "网络与代理"
+  },
+  "modelAdvRouting": {
+    "message": "路由与负载"
+  },
+  "modelAdvNetworkRouting": { "message": "网络与路由" },
+  "modelAdvancedSettings": {
+    "message": "高级设置"
+  },
+  "modelAdvancedSettingsDescription": {
+    "message": "管理代理运行、访问密钥、网络路由与内核参数。"
   },
   "modelAlias": {
     "message": "别名"
@@ -584,8 +624,17 @@
   "modelAuthorizing": {
     "message": "授权中"
   },
+  "modelBackToWorkspace": {
+    "message": "返回工作区"
+  },
   "modelCancelAuthorization": {
     "message": "取消授权"
+  },
+  "modelConfirmImport": {
+    "message": "确认合并导入"
+  },
+  "modelConnectedAccounts": {
+    "message": "已连接账户"
   },
   "modelConnectionSucceeded": {
     "message": "连接成功，发现 $1 个模型"
@@ -599,17 +648,32 @@
   "modelCopyEndpoint": {
     "message": "复制地址"
   },
+  "modelCreateKey": {
+    "message": "新建密钥"
+  },
+  "modelCustomModels": {
+    "message": "自定义模型"
+  },
+  "modelCustomModelsDescription": {
+    "message": "配置兼容接口、API Key 与可用模型。"
+  },
   "modelCustomProviders": {
     "message": "自定义供应商"
   },
   "modelDeleteAccountConfirm": {
     "message": "确定删除这个 OAuth 账户吗？"
   },
+  "modelDeleteKeyConfirm": {
+    "message": "确定删除此访问密钥吗？删除后客户端将无法使用该密钥访问网关。"
+  },
   "modelDeleteProviderConfirm": {
     "message": "确定删除这个供应商及其模型吗？"
   },
   "modelDisplayName": {
     "message": "显示名称"
+  },
+  "modelDropFileHere": {
+    "message": "点击选择或拖拽 usage.db 文件至此处"
   },
   "modelEndpointUnavailable": {
     "message": "代理地址当前不可用"
@@ -662,6 +726,27 @@
   "modelErrorUpstreamUnreachable": {
     "message": "无法连接供应商，请检查地址和网络。"
   },
+  "modelEventCost": {
+    "message": "费用"
+  },
+  "modelEventKey": {
+    "message": "访问密钥"
+  },
+  "modelEventLatency": {
+    "message": "耗时/TTFT"
+  },
+  "modelEventProviderModel": {
+    "message": "供应商 / 模型"
+  },
+  "modelEventStatus": {
+    "message": "状态"
+  },
+  "modelEventTime": {
+    "message": "时间"
+  },
+  "modelEventTokens": {
+    "message": "Tokens (入/出)"
+  },
   "modelFailed": {
     "message": "异常"
   },
@@ -680,6 +765,33 @@
   "modelID": {
     "message": "模型 ID"
   },
+  "modelImportPreview": {
+    "message": "导入数据概览"
+  },
+  "modelImportSuccess": {
+    "message": "成功导入 $1 条记录"
+  },
+  "modelImporterDesc": {
+    "message": "上传旧版 usage.db 数据库文件，自动分块上传校验并无缝合并至 Natives 使用记录。"
+  },
+  "modelImporterTitle": {
+    "message": "EasyCLIProxyAPI 历史数据迁移"
+  },
+  "modelKeyCopied": {
+    "message": "密钥已复制到剪贴板"
+  },
+  "modelKeyCreated": {
+    "message": "创建时间"
+  },
+  "modelKeyCreatedAndCopied": {
+    "message": "访问密钥已创建并复制到剪贴板"
+  },
+  "modelKeyMask": {
+    "message": "密钥摘要"
+  },
+  "modelKeyRotatedAndCopied": {
+    "message": "密钥已重置并复制到剪贴板"
+  },
   "modelList": {
     "message": "模型列表"
   },
@@ -689,14 +801,68 @@
   "modelLocalGateway": {
     "message": "本地模型代理"
   },
+  "modelLocalProxy": {
+    "message": "本地代理"
+  },
+  "modelLocalProxyDescription": {
+    "message": "管理本地兼容接口、访问密钥与常驻状态。"
+  },
+  "modelMetricCacheHitRate": {
+    "message": "Prompt 缓存命中率"
+  },
+  "modelMetricEstimatedCost": {
+    "message": "估算总费用"
+  },
+  "modelMetricSuccessRate": {
+    "message": "请求成功率"
+  },
+  "modelMetricTPS": {
+    "message": "平均吞吐量 (TPS)"
+  },
+  "modelMetricTotalRequests": {
+    "message": "总调用次数"
+  },
+  "modelMetricTotalTokens": {
+    "message": "Token 消耗总量"
+  },
+  "modelModelsAndServices": {
+    "message": "模型与服务"
+  },
+  "modelNetworkDesc": {
+    "message": "配置模型代理访问外部 API 时的网络代理 (支持 HTTP/HTTPS/SOCKS5)。"
+  },
+  "modelNetworkTitle": {
+    "message": "上游代理网络出口"
+  },
+  "modelNextPage": {
+    "message": "下一页"
+  },
   "modelNoAccounts": {
     "message": "尚未连接账户"
   },
   "modelNoAccountsHint": {
     "message": "点击“添加账户”并在浏览器中完成授权。"
   },
+  "modelNoAnalyticsData": {
+    "message": "暂无分析数据"
+  },
   "modelNoCustomProviders": {
     "message": "尚未添加自定义供应商"
+  },
+  "modelNoData": {
+    "message": "暂无数据"
+  },
+  "modelNoEventsFound": {
+    "message": "未找到匹配的调用记录"
+  },
+  "modelNoEventsHint": {
+    "message": "尝试调整筛选条件或发起新的 API 请求。"
+  },
+  "modelNoKeys": {
+    "message": "暂无访问密钥"
+  },
+  "modelNoKeysHint": {
+    "message": "点击“新建密钥”生成新的客户端访问凭证。"
   },
   "modelNoModels": {
     "message": "暂无模型"
@@ -704,11 +870,86 @@
   "modelNoModelsHint": {
     "message": "自动获取，或使用下面的表单手动添加。"
   },
+  "modelNoPricingData": {
+    "message": "暂无费率数据"
+  },
+  "modelNoPricingHint": {
+    "message": "点击“从远端同步最新费率”载入主流模型定价。"
+  },
+  "modelNoUsageHint": {
+    "message": "启动代理并使用 API 调用后即可查看调用统计。"
+  },
+  "modelNoUsageRecords": {
+    "message": "暂无使用记录"
+  },
+  "modelNotConnected": {
+    "message": "未连接"
+  },
+  "modelOAuthModels": {
+    "message": "OAuth 模型"
+  },
+  "modelOAuthModelsDescription": {
+    "message": "管理通过 OAuth 授权连接的模型供应商账户。"
+  },
   "modelOAuthModelsHint": {
     "message": "账户授权并启动代理后自动同步模型。"
   },
   "modelOAuthProviders": {
     "message": "OAuth"
+  },
+  "modelPreferredPort": {
+    "message": "首选代理监听端口 (默认自动分配)"
+  },
+  "modelPrevPage": {
+    "message": "上一页"
+  },
+  "modelPriceCacheRead": {
+    "message": "缓存读取 ($/1M)"
+  },
+  "modelPriceCacheWrite": {
+    "message": "缓存写入 ($/1M)"
+  },
+  "modelPriceCatalogVer": {
+    "message": "价格表版本"
+  },
+  "modelPriceInput": {
+    "message": "输入 ($/1M)"
+  },
+  "modelPriceOutput": {
+    "message": "输出 ($/1M)"
+  },
+  "modelPriceSource": {
+    "message": "来源"
+  },
+  "modelProvider": {
+    "message": "供应商"
+  },
+  "modelProxyURL": {
+    "message": "上游代理 URL"
+  },
+  "modelRange30d": {
+    "message": "近 30 天"
+  },
+  "modelRange7d": {
+    "message": "近 7 天"
+  },
+  "modelRangeAll": {
+    "message": "全部"
+  },
+  "modelRangeToday": {
+    "message": "今日"
+  },
+  "modelRankByAccessKey": {
+    "message": "访问密钥分布"
+  },
+  "modelRankByHour": {
+    "message": "24小时活跃时段"
+  },
+  "modelRankByModel": {
+    "message": "模型调用排行"
+  },
+  "modelRankByProvider": {
+    "message": "供应商分布"
   },
   "modelReauthorize": {
     "message": "重新授权"
@@ -716,29 +957,56 @@
   "modelRefresh": {
     "message": "刷新"
   },
+  "modelRequestRetry": {
+    "message": "故障自动重试次数 (0-10)"
+  },
   "modelResident": {
     "message": "常驻"
   },
   "modelRestarting": {
     "message": "重启中"
   },
+  "modelRotate": {
+    "message": "重置"
+  },
   "modelRotateAccessKey": {
     "message": "重新生成密钥"
   },
+  "modelRoutingDesc": {
+    "message": "配置多 Provider / 多 OAuth 账户并发调度与重试策略。"
+  },
+  "modelRoutingStrategy": {
+    "message": "多凭证路由调度策略"
+  },
+  "modelRoutingTitle": {
+    "message": "路由策略与负载均衡"
+  },
   "modelRunning": {
     "message": "运行中"
+  },
+  "modelSearchEvents": {
+    "message": "筛选模型/供应商..."
+  },
+  "modelSelectFile": {
+    "message": "选择 SQLite 数据库"
   },
   "modelSettings": {
     "message": "模型设置"
   },
   "modelSettingsDescription": {
-    "message": "管理 OAuth 与自定义模型供应商，配置后可通过本地兼容接口使用。"
+    "message": "管理模型供应商配置，包括自定义模型、OAuth 模型和本地代理设置。"
+  },
+  "modelSettingsSaved": {
+    "message": "网关设置已保存"
   },
   "modelStartGateway": {
     "message": "启动"
   },
   "modelStarting": {
     "message": "启动中"
+  },
+  "modelStatus": {
+    "message": "状态"
   },
   "modelStopGateway": {
     "message": "停止"
@@ -749,8 +1017,68 @@
   "modelStopping": {
     "message": "停止中"
   },
+  "modelStrategyFillFirst": {
+    "message": "填满优先 (Fill First)"
+  },
+  "modelStrategyRoundRobin": {
+    "message": "轮询调度 (Round Robin)"
+  },
+  "modelSyncPricing": {
+    "message": "从远端同步最新费率"
+  },
+  "modelSyncPricingSuccess": {
+    "message": "价格表已成功从远端同步更新"
+  },
   "modelTestConnection": {
     "message": "测试连接"
+  },
+  "modelTimeSpan": {
+    "message": "时间跨度"
+  },
+  "modelTokenCacheRead": {
+    "message": "缓存读取"
+  },
+  "modelTokenCacheWrite": {
+    "message": "缓存写入"
+  },
+  "modelTokenComposition": {
+    "message": "Token 构成分析"
+  },
+  "modelTokenInput": {
+    "message": "输入 Token"
+  },
+  "modelTokenOutput": {
+    "message": "输出 Token"
+  },
+  "modelTokenReasoning": {
+    "message": "思考 Token"
+  },
+  "modelTotalRecords": {
+    "message": "共 $1 条记录"
+  },
+  "modelTrendBreakdown": {
+    "message": "时段调用趋势"
+  },
+  "modelUploading": {
+    "message": "正在分块上传并校验..."
+  },
+  "modelUsageAnalytics": {
+    "message": "透视分析"
+  },
+  "modelUsageEvents": {
+    "message": "明细记录"
+  },
+  "modelUsageOverview": {
+    "message": "总览"
+  },
+  "modelUsagePricing": {
+    "message": "价格与费率"
+  },
+  "modelUsageRecords": {
+    "message": "使用记录"
+  },
+  "modelUsageRecordsDescription": {
+    "message": "查看调用指标、Token 消耗、透视分析与费率定价。"
   },
   "modified": {
     "message": "修改时间"
@@ -828,7 +1156,7 @@
     "message": "新名称"
   },
   "newWorkspace": {
-    "message": "新建 Workspace"
+    "message": "新建空间"
   },
   "newtabDescription": {
     "message": "你的本地工作台"
@@ -848,23 +1176,26 @@
   "nightDim": {
     "message": "夜间自动调暗"
   },
+  "matches": {
+    "message": "处匹配"
+  },
   "noFilterResults": {
     "message": "当前目录没有匹配项目"
   },
   "noMatchingWidgets": {
-    "message": "没有匹配的组件"
+    "message": "没有匹配的卡片"
   },
   "noSearchResults": {
     "message": "没有匹配的文件"
   },
   "noWidgets": {
-    "message": "当前 Workspace 没有 Widget。"
+    "message": "当前空间暂无卡片。"
   },
   "noWidgetsInWorkspace": {
-    "message": "当前空间暂无组件"
+    "message": "当前空间暂无卡片"
   },
   "noWorkspaces": {
-    "message": "暂无 Workspace，点击下方新建。"
+    "message": "暂无空间，点击下方新建。"
   },
   "open": {
     "message": "打开"
@@ -1041,7 +1372,7 @@
     "message": "空白"
   },
   "resetTemplateBlankDesc": {
-    "message": "不添加任何组件"
+    "message": "不添加任何卡片"
   },
   "resetTemplateClassic": {
     "message": "经典"
@@ -1059,7 +1390,7 @@
     "message": "重置空间..."
   },
   "resetWorkspaceDescription": {
-    "message": "选择重置后使用的空间模板。当前组件和背景配置将被替换。"
+    "message": "选择重置后使用的空间模板。当前卡片和背景配置将被替换。"
   },
   "resetWorkspaceTemplate": {
     "message": "空间模板"
@@ -1115,8 +1446,17 @@
   "searchResults": {
     "message": "个搜索结果"
   },
+  "searchSpace": {
+    "message": "搜索空间、卡片与命令"
+  },
+  "searchSpaceHint": {
+    "message": "按 ↑↓ 浏览，回车执行，支持卡片直达、卡片库添加与空间切换"
+  },
+  "searchSpacePlaceholder": {
+    "message": "搜索卡片、添加新卡片或快捷命令..."
+  },
   "searchWidgets": {
-    "message": "搜索组件..."
+    "message": "搜索卡片..."
   },
   "selectPreview": {
     "message": "选择文件查看预览"
@@ -1181,6 +1521,9 @@
   "theme": {
     "message": "主题"
   },
+  "text": {
+    "message": "文字内容"
+  },
   "themeArchive": {
     "message": "浅色"
   },
@@ -1194,7 +1537,7 @@
     "message": "切换搜索范围"
   },
   "toggleWidgetsTooltip": {
-    "message": "显示/隐藏组件 (W)"
+    "message": "显示/隐藏卡片 (W)"
   },
   "trash": {
     "message": "删除"
@@ -1260,38 +1603,226 @@
     "message": "请从左侧选择目录"
   },
   "widgetCatalog": {
-    "message": "组件目录"
+    "message": "卡片目录"
   },
   "widgetCustomSettings": {
-    "message": "组件设置"
+    "message": "卡片设置"
   },
   "widgetInstanceCount": {
     "message": "已添加"
   },
   "widgetList": {
-    "message": "Widget"
+    "message": "卡片"
   },
   "widgetNotMigrated": {
-    "message": "该 Widget 迁移中，即将可用。"
+    "message": "该卡片迁移中，即将可用。"
   },
   "widgets": {
-    "message": "小组件"
+    "message": "卡片"
   },
   "widgetsCount": {
-    "message": "可导入组件数"
+    "message": "可导入卡片数"
   },
   "workspaceCreated": {
-    "message": "Workspace 已创建"
+    "message": "空间已创建"
   },
   "workspaceDeleted": {
     "message": "空间已删除"
   },
   "workspaceName": {
-    "message": "Workspace 名称"
+    "message": "空间名称"
   },
   "workspaceRenamed": {
     "message": "空间已重命名"
   },
+  "modelCreateKeyDefaultName": { "message": "新建密钥" },
+  "modelGatewayBaseURL": { "message": "当前 API URL" },
+  "modelImportHistory": { "message": "导入历史记录" },
+  "modelMaxRetryCredentials": { "message": "每轮最多尝试凭证数" },
+  "modelMaxRetryInterval": { "message": "最大重试等待（秒）" },
+  "modelNetworkRoutingDesc": { "message": "配置上游代理、凭证选择策略和会话粘性。" },
+  "modelNetworkRoutingTitle": { "message": "网络与会话路由" },
+  "modelPricedRequests": { "message": "已定价请求" },
+  "modelRange24h": { "message": "近 24 小时" },
+  "modelRange4h": { "message": "近 4 小时" },
+  "modelRestartGateway": { "message": "重启" },
+  "modelSessionAffinity": { "message": "启用会话粘性路由" },
+  "modelSessionAffinityTTL": { "message": "会话粘性 TTL（秒）" },
+  "modelStreamingRetries": { "message": "流式启动重试次数" },
+  "modelUnpricedRequests": { "message": "未定价请求" },
+  "modelAllKeys": { "message": "全部密钥" },
+  "modelAllModels": { "message": "全部模型" },
+  "modelAllProviders": { "message": "全部供应商" },
+  "modelAllResults": { "message": "全部结果" },
+  "modelAllSources": { "message": "全部来源" },
+  "modelCancelled": { "message": "已取消" },
+  "modelCustomRange": { "message": "自定义时间" },
+  "modelEndTime": { "message": "结束时间" },
+  "modelFailed": { "message": "失败" },
+  "modelInvalidTimeRange": { "message": "结束时间必须晚于开始时间" },
+  "modelProviderOptional": { "message": "供应商（可选）" },
+  "modelSavePrice": { "message": "保存自定义费率" },
+  "modelStartTime": { "message": "开始时间" },
+  "modelSuccess": { "message": "成功" },
+  "showHours": { "message": "显示小时" },
+  "showMinutes": { "message": "显示分钟" },
+  "showSeconds": { "message": "显示秒数" },
+  "activeColor": { "message": "亮点颜色" },
+  "inactiveColor": { "message": "暗点颜色" },
+  "color": { "message": "颜色" },
+  "monochrome": { "message": "单色" },
+  "transparent": { "message": "透明" },
+  "numberOfBlocks": { "message": "区块数量" },
+  "minutesAgo": { "message": "分钟前" },
+  "bookmarksAuthRequired": { "message": "需要书签访问权限以展示收藏夹" },
+  "clickToAuthorizeBookmarks": { "message": "授权书签权限" },
+  "searchBookmarks": { "message": "搜索书签…" },
+  "noMatchingBookmarks": { "message": "未找到匹配书签" },
+  "emptyFolder": { "message": "文件夹为空" },
+  "viewMode": { "message": "展示模式" },
+  "listView": { "message": "列表视图" },
+  "gridView": { "message": "图标网格" },
+  "showSearchBar": { "message": "显示书签搜索栏" },
+  "setCountdownDate": { "message": "设置目标日期以倒计时" },
+  "countdownComplete": { "message": "目标时间已到" },
+  "eventTitle": { "message": "事件名称" },
+  "eventDateTime": { "message": "目标日期和时间" },
+  "customCssLabel": { "message": "CSS（仅作用于个人空间画布）" },
+  "rateUnavailable": { "message": "不可用" },
+  "baseCurrency": { "message": "基准货币" },
+  "targetCurrencies": { "message": "目标货币" },
+  "contributionsLastYear": { "message": "过去一年的贡献" },
+  "username": { "message": "用户名" },
+  "colorGreen": { "message": "绿色" },
+  "colorBlue": { "message": "蓝色" },
+  "colorOrange": { "message": "橙色" },
+  "colorPurple": { "message": "紫色" },
+  "colorGold": { "message": "金色" },
+  "showStreak": { "message": "显示连续提交天数" },
+  "yourName": { "message": "你的名字" },
+  "safeHtml": { "message": "HTML（安全清洗）" },
+  "ipDetecting": { "message": "IP：检测中…" },
+  "ipUnavailable": { "message": "IP：未能获取" },
+  "ipFetchFailed": { "message": "IP 获取失败" },
+  "ipInfoNotice": { "message": "自动检测并展示当前公网 IP 地址。" },
+  "jokeNotice": { "message": "定期获取编程幽默与趣味笑话。" },
+  "submissionsLastYear": { "message": "过去一年的提交" },
+  "columnsCount": { "message": "排列列数（1–6）" },
+  "showFavicons": { "message": "显示网站图标" },
+  "openInNewTab": { "message": "在新标签页中打开" },
+  "linksList": { "message": "链接列表" },
+  "addLink": { "message": "添加链接" },
+  "literatureClockNotice": { "message": "根据当前时刻自动匹配文学作品中的时刻段落。" },
+  "message": { "message": "消息" },
+  "clickToWriteNote": { "message": "点击此处记录便签…" },
+  "notesNotice": { "message": "可在画布中点击编辑便签，失去焦点后自动保存。" },
+  "clickToCopy": { "message": "点击复制" },
+  "copied": { "message": "已复制" },
+  "paletteNotice": { "message": "悬停查看色值，点击复制。" },
+  "nextPalette": { "message": "换一组调色板" },
+  "quote": { "message": "名言" },
+  "author": { "message": "作者" },
+  "searchProvider": { "message": "搜索引擎" },
+  "placeholder": { "message": "占位提示文字" },
+  "style": { "message": "样式" },
+  "default": { "message": "默认" },
+  "rounded": { "message": "透明圆角" },
+  "outlined": { "message": "简洁描边" },
+  "decrease": { "message": "减少" },
+  "increase": { "message": "增加" },
+  "reset": { "message": "重置" },
+  "label": { "message": "标题" },
+  "currentCount": { "message": "当前值" },
+  "step": { "message": "步长" },
+  "showReset": { "message": "显示重置按钮" },
+  "eventHasArrived": { "message": "目标时间已到" },
+  "days": { "message": "天" },
+  "hours": { "message": "小时" },
+  "minutes": { "message": "分钟" },
+  "seconds": { "message": "秒" },
+  "displayMode": { "message": "显示模式" },
+  "compact": { "message": "紧凑" },
+  "detailed": { "message": "详细" },
+  "showCompletionMessage": { "message": "到期后显示完成信息" },
+  "completionMessage": { "message": "完成信息" },
+  "italicizeTime": { "message": "时间使用斜体" },
+  "digitalClock": { "message": "数字时钟" },
+  "analogueClock": { "message": "模拟表盘" },
+  "hour12Format": { "message": "12 小时制" },
+  "addTodo": { "message": "添加待办事项…" },
+  "todoNotice": { "message": "可在画布中新增、完成和删除待办事项。" },
+  "noTopSites": { "message": "暂无常用网址" },
+  "clickToAuthorizeTopSites": { "message": "授权常用网址权限" },
+  "displayLimit": { "message": "显示数量（1–18）" },
+  "noTrelloCards": { "message": "暂无任务卡片" },
+  "addCard": { "message": "添加卡片…" },
+  "boardName": { "message": "看板名称" },
+  "listName": { "message": "列表名称" },
+  "feelsLike": { "message": "体感" },
+  "humidity": { "message": "湿度" },
+  "cityName": { "message": "城市名称" },
+  "temperatureUnit": { "message": "温度单位" },
+  "showFiveDayForecast": { "message": "显示五天天气预报" },
+  "latitude": { "message": "纬度" },
+  "longitude": { "message": "经度" },
+  "weatherClear": { "message": "晴" },
+  "weatherPartlyCloudy": { "message": "少云" },
+  "weatherOvercast": { "message": "阴" },
+  "weatherFoggy": { "message": "雾" },
+  "weatherDrizzle": { "message": "毛毛雨" },
+  "weatherRainy": { "message": "雨" },
+  "weatherSnowy": { "message": "雪" },
+  "weatherThunder": { "message": "雷暴" },
+  "weatherCloudy": { "message": "多云" },
+  "startTime": { "message": "开始时间" },
+  "endTime": { "message": "结束时间" },
+  "flipPercentage": { "message": "显示剩余百分比" },
+  "plugin_widget_binaryTime": { "message": "二进制时钟" },
+  "plugin_widget_bitcoin": { "message": "比特币内存池" },
+  "plugin_widget_bookmarks": { "message": "书签" },
+  "plugin_widget_countdown": { "message": "倒计时" },
+  "plugin_widget_css": { "message": "自定义 CSS" },
+  "plugin_widget_currencyRates": { "message": "货币汇率" },
+  "plugin_widget_customText": { "message": "自定义文本" },
+  "plugin_widget_github": { "message": "GitHub 日历" },
+  "plugin_widget_greeting": { "message": "问候语" },
+  "plugin_widget_html": { "message": "自定义 HTML" },
+  "plugin_widget_ipInfo": { "message": "IP 信息" },
+  "plugin_widget_joke": { "message": "笑话" },
+  "plugin_widget_leetcode": { "message": "LeetCode 挑战" },
+  "plugin_widget_links": { "message": "快速链接" },
+  "plugin_widget_literatureClock": { "message": "文学时钟" },
+  "plugin_widget_message": { "message": "消息" },
+  "plugin_widget_notes": { "message": "便签" },
+  "plugin_widget_palette": { "message": "随机调色板" },
+  "plugin_widget_quote": { "message": "名言" },
+  "plugin_widget_search": { "message": "搜索框" },
+  "plugin_widget_since": { "message": "时间跨度" },
+  "plugin_widget_tallyCounter": { "message": "计数器" },
+  "plugin_widget_time": { "message": "时间" },
+  "plugin_widget_timeTracker": { "message": "时间追踪器" },
+  "plugin_widget_todo": { "message": "待办事项" },
+  "plugin_widget_topSites": { "message": "常用站点" },
+  "plugin_widget_trello": { "message": "Trello 看板" },
+  "plugin_widget_weather": { "message": "天气" },
+  "plugin_widget_workHours": { "message": "工作时间" },
+  "plugin_background_apod": { "message": "每日天文图片" },
+  "plugin_background_bing": { "message": "Bing 每日壁纸" },
+  "plugin_background_colour": { "message": "纯色背景" },
+  "plugin_background_giphy": { "message": "GIPHY 动图" },
+  "plugin_background_gradient": { "message": "颜色渐变" },
+  "plugin_background_media": { "message": "本地图片与视频" },
+  "plugin_background_online": { "message": "在线图片" },
+  "plugin_background_unsplash": { "message": "Unsplash 壁纸" },
+  "plugin_background_wikimedia": { "message": "Wikimedia 每日图片" },
+  "clickToAuthorize": { "message": "点击授权权限" },
+  "permissionRequired": { "message": "需要授权才能展示内容" },
+  "notConfigured": { "message": "未配置" },
+  "catTimeAndClocks": { "message": "时间与时钟" },
+  "catProductivity": { "message": "生产力与工具" },
+  "catInformationFeeds": { "message": "资讯与数据" },
+  "catInspirationText": { "message": "灵感与问候" },
+  "catCustomAdvanced": { "message": "自定义与扩展" },
   "zoomImageHint": {
     "message": "滚轮缩放图片"
   }

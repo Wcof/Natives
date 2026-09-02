@@ -210,11 +210,10 @@ async function handleDeleteWorkspace(workspace) {
 
 async function init() {
   await Promise.race([loadLocale(), new Promise((resolve) => setTimeout(resolve, 1000))]);
-  const [storedTheme, storedWidth, sidebarWidth, sidebarCollapsed] = await Promise.all([
+  const [storedTheme, storedWidth, sidebarWidth] = await Promise.all([
     getStored('natives-theme', 'archive'),
     getStored('natives-inspector-width', 360),
     getStored('natives-sidebar-width', 248),
-    getStored('natives-sidebar-collapsed', false),
   ]);
   selectedTheme = ['volt', 'archive'].includes(storedTheme) ? storedTheme : 'archive';
   inspectorWidth = Math.max(240, Math.min(620, Number(storedWidth) || 360));
@@ -228,12 +227,11 @@ async function init() {
 
   const sidebarController = createSidebarController({
     resizer: $('sidebar-resizer'),
-    toggleButton: $('toggle-sidebar'),
+    toggleButton: $('space-toggle-sidebar-btn'),
     initialWidth: sidebarWidth,
-    initialCollapsed: sidebarCollapsed,
+    initialCollapsed: true,
     t,
     onWidthChange: (w) => setStored('natives-sidebar-width', w),
-    onCollapsedChange: (c) => setStored('natives-sidebar-collapsed', c),
   });
 
   nameModal = createSpaceNameModal({ $, t, onSaveWorkspaceName: handleSaveWorkspaceName });
@@ -253,7 +251,7 @@ async function init() {
     $, t,
     onToggleSettings: () => { if (inspector.isOpen) inspector.close(); else inspector.open('overview'); },
     onToggleWidgets: (hidden) => { dashboard.setWidgetsHidden(hidden); },
-    onToggleSidebar: () => { sidebarController.toggle(); },
+    onToggleSidebar: null,
     onOpenCatalog: () => inspector.open('catalog'),
   });
 

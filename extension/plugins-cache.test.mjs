@@ -74,4 +74,58 @@ console.log('✓ Clear cache passed');
 
 // Reset to default capacity
 setMaxCapacity(50);
+
+// 7. Background Image LRU Quota & Offline Resilience
+console.log('--- Background Image Cache & Quota Tests ---');
+const {
+  loadCachedBackground,
+  getBackgroundCacheStats,
+  clearBackgroundCache,
+  setMaxBackgroundCacheBytes,
+} = await import('./plugins/plugins-cache.js');
+
+await clearBackgroundCache();
+const initialStats = getBackgroundCacheStats();
+assert.equal(initialStats.count, 0);
+assert.equal(initialStats.totalBytes, 0);
+
+// Mock fetch for image blob in test environment
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (url) => ({
+  ok: true,
+  status: 200,
+  blob: async () => ({
+    size: 1.5 * 1024 * 1024, // 1.5 MB mock image
+    type: 'image/jpeg',
+  }),
+});
+if (!globalThis.URL.createObjectURL) {
+  globalThis.URL.createObjectURL = (blob) => `blob:http://localhost/${Date.now()}`;
+}
+
+// Set small quota to test LRU auto-eviction (2MB quota: holds 1 image, 2nd image causes eviction)
+setMaxBackgroundCacheBytes(2 * 1024 * 1024);
+
+const mockUrl1 = 'https://images.unsplash.com/test-bg-1.jpg';
+const cached1 = await loadCachedBackground(mockUrl1, { category: 'unsplash' });
+assert.ok(cached1);
+
+let stats = getBackgroundCacheStats();
+assert.equal(stats.count, 1);
+
+// Add 2nd image -> triggers quota check and evicts 1st image
+const mockUrl2 = 'https://images.unsplash.com/test-bg-2.jpg';
+const cached2 = await loadCachedBackground(mockUrl2, { category: 'unsplash' });
+assert.ok(cached2);
+
+stats = getBackgroundCacheStats();
+assert.equal(stats.count, 1); // 1st was evicted because total exceeded 2MB
+
+await clearBackgroundCache();
+assert.equal(getBackgroundCacheStats().count, 0);
+
+// Restore fetch
+globalThis.fetch = originalFetch;
+console.log('✓ Background image LRU quota & resilience passed');
+
 console.log('All plugins-cache tests passed!\n');

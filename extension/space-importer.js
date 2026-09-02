@@ -31,7 +31,7 @@ export function createSpaceImporter({
       <div class="inspector-card">
         <p><strong>${t('importSummary', '配置概览')}</strong></p>
         <p>${t('background', '背景')}: <code>${previewData?.background_json?.key || 'background/colour'}</code></p>
-        <p>${t('widgetsCount', '可导入组件数')}: <strong>${previewData?.widgets?.length || 0}</strong></p>
+        <p>${t('widgetsCount', '可导入卡片数')}: <strong>${previewData?.widgets?.length || 0}</strong></p>
       </div>
       <div style="display:flex;gap:8px;margin-top:12px;">
         <button type="button" class="cancel-btn">${t('cancel', '取消')}</button>

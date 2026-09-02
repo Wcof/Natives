@@ -181,9 +181,9 @@ export function createSpaceInspector({
     const widgetSec = document.createElement('div');
     widgetSec.className = 'inspector-section';
     widgetSec.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <h3>${t('widgets', '小组件')}</h3>
-        <button class="icon-button add-widget-trigger" type="button" title="${t('addWidget', '添加组件')}"><svg class="icon"><use href="#i-plus" /></svg></button>
+      <div class="inspector-heading-main">
+        <h3>${t('widgets', '卡片')}</h3>
+        <button class="icon-button add-widget-trigger" type="button" title="${t('addWidget', '添加卡片')}"><svg class="icon"><use href="#i-plus" /></svg></button>
       </div>
       <div class="inspector-widget-list"></div>
     `;
@@ -194,7 +194,7 @@ export function createSpaceInspector({
     if (!widgets.length) {
       const empty = document.createElement('div');
       empty.className = 'inspector-empty';
-      empty.textContent = t('noWidgetsInWorkspace', '当前空间暂无组件');
+      empty.textContent = t('noWidgetsInWorkspace', '当前空间暂无卡片');
       widgetList.append(empty);
     } else {
       widgets.forEach((w) => {

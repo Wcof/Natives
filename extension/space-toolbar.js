@@ -56,8 +56,11 @@ export function createSpaceToolbar({
     settingsBtn.onclick = () => onToggleSettings();
   }
 
-  if (toggleSidebarBtn) {
-    toggleSidebarBtn.onclick = () => onToggleSidebar?.();
+  if (toggleSidebarBtn && onToggleSidebar) {
+    toggleSidebarBtn.onclick = (e) => {
+      e?.stopPropagation?.();
+      onToggleSidebar();
+    };
   }
 
   if (toggleWidgetsBtn) {

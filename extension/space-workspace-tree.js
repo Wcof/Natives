@@ -5,8 +5,12 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
   let menuTrigger = null;
 
   function formatWorkspaceDisplayName(name) {
-    if (!name || name === 'Personal Space' || name === 'Default') {
+    if (!name || name === 'Personal Space' || name === 'Default' || name === 'Workspace' || name === 'Default Workspace') {
       return t('personalSpace', '个人空间');
+    }
+    const match = name.match(/^Workspace\s+(\d+)$/i);
+    if (match) {
+      return `${t('personalSpace', '个人空间')} ${match[1]}`;
     }
     return name;
   }

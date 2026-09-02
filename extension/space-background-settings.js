@@ -23,7 +23,7 @@ export function createSpaceBackgroundSettings({
     const header = document.createElement('div');
     header.className = 'inspector-heading';
     header.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;">
+      <div class="inspector-heading-main">
         <button class="inspector-back" type="button"><svg class="icon"><use href="#i-chevron-left" /></svg><span>${t('back', '返回')}</span></button>
         <h2>${t('backgroundSettings', '背景设置')}</h2>
       </div>
@@ -39,16 +39,18 @@ export function createSpaceBackgroundSettings({
     typeSec.className = 'inspector-section';
     typeSec.innerHTML = `
       <h3>${t('backgroundSource', '背景源')}</h3>
-      <label class="inspector-field">
-        <span>${t('type', '类型')}</span>
-        <select id="bg-type-select">
-          ${BACKGROUND_KEYS.map((k) => `
-            <option value="${k}" ${k === currentKey ? 'selected' : ''}>
-              ${pluginName(k, language, backgroundPlugins[k]?.name || k)}
-            </option>
-          `).join('')}
-        </select>
-      </label>
+      <div class="inspector-field-group">
+        <label class="inspector-field">
+          <span>${t('type', '类型')}</span>
+          <select id="bg-type-select">
+            ${BACKGROUND_KEYS.map((k) => `
+              <option value="${k}" ${k === currentKey ? 'selected' : ''}>
+                ${pluginName(k, language, backgroundPlugins[k]?.name || k)}
+              </option>
+            `).join('')}
+          </select>
+        </label>
+      </div>
     `;
 
     typeSec.querySelector('#bg-type-select').onchange = (e) => {
@@ -84,20 +86,20 @@ export function createSpaceBackgroundSettings({
       filterSec.className = 'inspector-section';
       filterSec.innerHTML = `
         <h3>${t('visualEffects', '视觉效果')}</h3>
-        <label class="inspector-field">
-          <span>${t('blur', '模糊度')}</span>
-          <input type="range" id="bg-blur" min="0" max="40" value="${currentDisplay.blur || 0}" />
-          <span id="bg-blur-val">${currentDisplay.blur || 0}px</span>
-        </label>
-        <label class="inspector-field">
-          <span>${t('brightness', '亮度')}</span>
-          <input type="range" id="bg-bright" min="20" max="150" value="${Math.round((currentDisplay.brightness ?? 1) * 100)}" />
-          <span id="bg-bright-val">${Math.round((currentDisplay.brightness ?? 1) * 100)}%</span>
-        </label>
-        <label class="inspector-checkbox">
-          <input type="checkbox" id="bg-night" ${currentDisplay.nightDim ? 'checked' : ''} />
-          <span>${t('nightDim', '夜间自动调暗')}</span>
-        </label>
+        <div class="inspector-field-group">
+          <div class="inspector-field-range">
+            <div class="inspector-field-range-header"><span>${t('blur', '模糊度')}</span><span id="bg-blur-val">${currentDisplay.blur || 0}px</span></div>
+            <input type="range" id="bg-blur" min="0" max="40" value="${currentDisplay.blur || 0}" />
+          </div>
+          <div class="inspector-field-range">
+            <div class="inspector-field-range-header"><span>${t('brightness', '亮度')}</span><span id="bg-bright-val">${Math.round((currentDisplay.brightness ?? 1) * 100)}%</span></div>
+            <input type="range" id="bg-bright" min="20" max="150" value="${Math.round((currentDisplay.brightness ?? 1) * 100)}" />
+          </div>
+          <label class="inspector-checkbox">
+            <input type="checkbox" id="bg-night" ${currentDisplay.nightDim ? 'checked' : ''} />
+            <span>${t('nightDim', '夜间自动调暗')}</span>
+          </label>
+        </div>
       `;
 
       const blurInp = filterSec.querySelector('#bg-blur');

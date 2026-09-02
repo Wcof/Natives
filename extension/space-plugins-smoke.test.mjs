@@ -16,7 +16,10 @@ globalThis.fetch = async (url) => {
 };
 
 globalThis.chrome = {
-  bookmarks: { getRecent: (count, cb) => cb([{ id: '1', title: 'Example', url: 'https://example.com' }]) },
+  bookmarks: {
+    getRecent: (count, cb) => cb([{ id: '1', title: 'Example', url: 'https://example.com' }]),
+    getChildren: (id, cb) => cb([{ id: '1', title: 'Example', url: 'https://example.com' }]),
+  },
   topSites: { get: (cb) => cb([{ title: 'GitHub', url: 'https://github.com' }]) },
 };
 
@@ -39,9 +42,14 @@ for (const key of WIDGET_KEYS) {
   assert.ok(typeof plugin.render === 'function', `render function missing: ${key}`);
 
   const container = new MockElement('div');
+  let disposer = null;
   assert.doesNotThrow(() => {
-    plugin.render(container, plugin.defaultData, { position: 'middleCentre' }, mockContext);
+    disposer = plugin.render(container, plugin.defaultData, { position: 'middleCentre' }, mockContext);
   }, `Widget render failed: ${key}`);
+
+  if (typeof disposer === 'function') {
+    disposer();
+  }
 
   if (plugin.renderSettings) {
     assert.ok(typeof plugin.renderSettings === 'function', `renderSettings must be function: ${key}`);
@@ -70,9 +78,14 @@ for (const key of BACKGROUND_KEYS) {
   assert.ok(typeof plugin.render === 'function', `render function missing: ${key}`);
 
   const container = new MockElement('div');
+  let disposer = null;
   assert.doesNotThrow(() => {
-    plugin.render(container, plugin.defaultData, mockContext);
+    disposer = plugin.render(container, plugin.defaultData, mockContext);
   }, `Background render failed: ${key}`);
+
+  if (typeof disposer === 'function') {
+    disposer();
+  }
 
   if (plugin.renderSettings) {
     assert.ok(typeof plugin.renderSettings === 'function', `renderSettings must be function: ${key}`);

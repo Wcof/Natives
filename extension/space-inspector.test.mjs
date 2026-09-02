@@ -25,6 +25,17 @@ function createMockEl(id = '') {
     dataset: {},
     children: [],
     attributes: [],
+    classList: {
+      toggle(cls, state) {
+        if (state) this.classes.add(cls);
+        else this.classes.delete(cls);
+      },
+      add(cls) { this.classes.add(cls); },
+      remove(cls) { this.classes.delete(cls); },
+      classes: new Set(),
+    },
+    setAttribute(k, v) { this[k] = v; },
+    getAttribute(k) { return this[k]; },
     append(...nodes) { this.children.push(...nodes); },
     replaceChildren(...nodes) { this.children = [...nodes]; },
     querySelector(sel) {
@@ -177,6 +188,47 @@ toggleWidgetsBtn.onclick();
 assert.equal(toolbarWidgetsToggled, true);
 emptyAddBtn.onclick();
 assert.equal(toolbarCatalogOpened, true);
-console.log('✓ Toolbar actions and empty state sync verified');
+// 8. Visual & Layout Contracts Verification
+console.log('--- Inspector Compact Controls & Plugins Structure Contract ---');
+const [spaceCss, filesCss] = await Promise.all([
+  readFile(new URL('./space.css', import.meta.url), 'utf8'),
+  readFile(new URL('./files.css', import.meta.url), 'utf8'),
+]);
+
+// A. Check search input shell contract equivalence
+assert.match(filesCss, /\.command-search\s*\{[^}]*min-height:34px;[^}]*padding:0 11px;/, 'Left search must declare 34px compact shell');
+assert.match(spaceCss, /\.catalog-search-wrap\s*\{[^}]*min-height:34px;[^}]*padding:0 11px;/, 'Catalog search must match left command-search compact dimensions');
+
+// B. Check top-label contract and container queries
+assert.match(spaceCss, /\.inspector-field\s*\{[^}]*display:grid;[^}]*gap:6px;/, 'Inspector fields must place labels on top with 6px gap');
+assert.match(spaceCss, /container-type:inline-size/, 'Inspector must declare container queries');
+assert.match(spaceCss, /\.inspector-field-range-header/, 'Range fields must display label and value in header row');
+
+// C. Verify all 29 widget and 9 background renderSettings without inline style attributes
+const { widgetPlugins, backgroundPlugins } = await import('./space-plugins.js');
+const testHost = createMockEl('plugin-test-host');
+
+for (const [key, plugin] of Object.entries(widgetPlugins)) {
+  if (plugin.renderSettings) {
+    testHost.children = [];
+    testHost.innerHTML = '';
+    plugin.renderSettings(testHost, plugin.defaultData || {}, () => {}, { t });
+    const content = testHost.innerHTML || '';
+    assert.doesNotMatch(content, /style="[^"]*display\s*:\s*flex[^"]*"/i, `Widget ${key} renderSettings must not use inline flex layout`);
+    assert.doesNotMatch(content, /style="[^"]*width\s*:\s*100%[^"]*"/i, `Widget ${key} renderSettings must not use inline width style`);
+  }
+}
+
+for (const [key, plugin] of Object.entries(backgroundPlugins)) {
+  if (plugin.renderSettings) {
+    testHost.children = [];
+    testHost.innerHTML = '';
+    plugin.renderSettings(testHost, plugin.defaultData || {}, () => {}, { t });
+    const content = testHost.innerHTML || '';
+    assert.doesNotMatch(content, /style="[^"]*display\s*:\s*flex[^"]*"/i, `Background ${key} renderSettings must not use inline flex layout`);
+    assert.doesNotMatch(content, /style="[^"]*width\s*:\s*100%[^"]*"/i, `Background ${key} renderSettings must not use inline width style`);
+  }
+}
+console.log('✓ Compact controls and plugin settings contracts verified');
 
 console.log('All space-inspector and toolbar tests passed!\n');

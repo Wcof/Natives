@@ -190,12 +190,79 @@ const postClickSnapshot = {
   revision: 4,
 };
 assert.equal(postClickSnapshot.backgroundJson.key, 'background/online', 'Background must remain online/bing image and not revert to solid colour');
+
+// Verify dashboard preserves widget plugin classes when background changes
+const { setupTestDomEnvironment, MockElement } = await import('./test-dom-mock.js');
+setupTestDomEnvironment();
+const { createSpaceDashboard } = await import('./space-dashboard.js');
+const mockHost = new MockElement('div');
+mockHost.shadowRoot = null;
+mockHost.attachShadow = () => {
+  mockHost.shadowRoot = new MockElement('shadow-root');
+  return mockHost.shadowRoot;
+};
+const testDashboard = createSpaceDashboard({
+  $: (id) => (id === 'dashboard-host' ? mockHost : null),
+  t: (k, f) => f || k,
+  selectedLanguage: 'zh_CN',
+  backgroundPlugins,
+  widgetPlugins,
+  nativeCall: async () => ({}),
+  broadcastRevision: () => {},
+});
+
+testDashboard.render(snapshot, 'ws-1', () => {});
+const widgetContainer = mockHost.shadowRoot?.children?.find((c) => c.className === 'Widgets');
+assert.ok(widgetContainer, 'Dashboard must render Widgets container');
+assert.ok(mockHost.shadowRoot.querySelector('.widget-time'), 'Initial render must preserve the shared widget key class');
+// Render next snapshot with background change
+testDashboard.render(postClickSnapshot, 'ws-1', () => {});
+testDashboard.destroy();
 console.log('✓ Background preserved across widget clicks and updates');
+
+let disposedRenders = 0;
+const lifecycleHost = new MockElement('div');
+lifecycleHost.attachShadow = () => {
+  lifecycleHost.shadowRoot = new MockElement('shadow-root');
+  return lifecycleHost.shadowRoot;
+};
+const lifecycleDashboard = createSpaceDashboard({
+  $: () => lifecycleHost,
+  t: (k, f) => f || k,
+  selectedLanguage: 'zh_CN',
+  backgroundPlugins: { 'background/colour': { render() {} } },
+  widgetPlugins: {
+    'widget/probe': {
+      styles: '',
+      render(element, data) {
+        element.className = 'Widget Probe';
+        element.textContent = String(data.value);
+        return () => { disposedRenders += 1; };
+      },
+    },
+  },
+  nativeCall: async () => ({}),
+  broadcastRevision: () => {},
+});
+const probeSnapshot = (value, customClass = 'custom-probe') => ({
+  revision: value,
+  backgroundJson: { key: 'background/colour', display: {} },
+  widgets: [{ id: 'probe', key: 'widget/probe', enabled: true, configJson: { value }, displayJson: { position: 'middleCentre', customClass } }],
+});
+lifecycleDashboard.render(probeSnapshot(1), 'ws-1', () => {});
+assert.ok(lifecycleHost.shadowRoot.querySelector('.widget-probe'));
+assert.ok(lifecycleHost.shadowRoot.querySelector('.custom-probe'));
+lifecycleDashboard.render(probeSnapshot(2), 'ws-1', () => {});
+assert.equal(disposedRenders, 1, 'Re-render must dispose the previous widget resources');
+lifecycleDashboard.render(probeSnapshot(2, 'next-probe'), 'ws-1', () => {});
+assert.equal(lifecycleHost.shadowRoot.querySelector('.custom-probe'), null, 'Changing display class must remove the previous class');
+assert.ok(lifecycleHost.shadowRoot.querySelector('.next-probe'));
+lifecycleDashboard.destroy();
+assert.equal(disposedRenders, 2, 'Dashboard destroy must dispose the active widget resources');
+console.log('✓ Widget class and disposer lifecycle passed');
 
 // Test 5: Settings menu anchor click test
 console.log('--- Settings Menu Anchor Click Test ---');
-const { setupTestDomEnvironment } = await import('./test-dom-mock.js');
-setupTestDomEnvironment();
 const { createSettingsMenu } = await import('./settings-menu.js');
 const anchorMock = {
   id: 'settings-entry',
@@ -228,7 +295,7 @@ const searchDialogEl = {
 };
 const searchTriggerEl = { id: 'command-search-trigger', onclick: null };
 const searchInputEl = { id: 'search', value: '', focus() {}, select() {} };
-const searchResultsBoxEl = { id: 'search-results-box', children: [], replaceChildren() { this.children = []; } };
+const searchResultsBoxEl = { id: 'search-results-box', children: [], replaceChildren() { this.children = []; }, append(...nodes) { this.children.push(...nodes); } };
 
 const searchElements = {
   'search-dialog': searchDialogEl,

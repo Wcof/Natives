@@ -172,6 +172,7 @@ export function setupTestDomEnvironment() {
   globalThis.document = {
     body: bodyEl,
     createElement: (tag) => new MockElement(tag),
+    createElementNS: (_namespace, tag) => new MockElement(tag),
     addEventListener: () => {},
     removeEventListener: () => {},
   };

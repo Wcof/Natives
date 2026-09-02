@@ -479,6 +479,9 @@
   "invalidPath": {
     "message": "Invalid path"
   },
+  "insertLink": {
+    "message": "Insert link"
+  },
   "items": {
     "message": "items"
   },
@@ -563,11 +566,48 @@
   "modelAccounts": {
     "message": "accounts"
   },
+  "modelActions": {
+    "message": "Actions"
+  },
   "modelAddAccount": {
     "message": "Add account"
   },
+  "modelAddCustomPrice": {
+    "message": "Add Custom Price"
+  },
   "modelAddProvider": {
     "message": "Add custom provider"
+  },
+  "modelAdvBasic": { "message": "Basic Control" },
+  "modelAdvBasicDesc": { "message": "Manage the local core, listen port, and compatible API URLs." },
+  "modelAdvBasicTitle": { "message": "Gateway Control" },
+  "modelAdvImporter": {
+    "message": "Data Migration"
+  },
+  "modelAdvKeys": {
+    "message": "Access Keys"
+  },
+  "modelAdvKeysDesc": {
+    "message": "Support creating up to 64 independent access keys persisted in OS Keychain."
+  },
+  "modelAdvKeysTitle": {
+    "message": "Gateway Access Keys Management"
+  },
+  "modelAdvKernel": { "message": "Core Settings" },
+  "modelAdvKernelDesc": { "message": "Configure failure retries. A running gateway restarts safely after saving." },
+  "modelAdvKernelTitle": { "message": "Core Retry Settings" },
+  "modelAdvNetwork": {
+    "message": "Network & Proxy"
+  },
+  "modelAdvRouting": {
+    "message": "Routing & Load"
+  },
+  "modelAdvNetworkRouting": { "message": "Network & Routing" },
+  "modelAdvancedSettings": {
+    "message": "Advanced Settings"
+  },
+  "modelAdvancedSettingsDescription": {
+    "message": "Manage gateway control, access keys, network routing, and core parameters."
   },
   "modelAlias": {
     "message": "Alias"
@@ -584,8 +624,17 @@
   "modelAuthorizing": {
     "message": "Authorizing"
   },
+  "modelBackToWorkspace": {
+    "message": "Back to workspace"
+  },
   "modelCancelAuthorization": {
     "message": "Cancel authorization"
+  },
+  "modelConfirmImport": {
+    "message": "Confirm and Merge"
+  },
+  "modelConnectedAccounts": {
+    "message": "Connected accounts"
   },
   "modelConnectionSucceeded": {
     "message": "Connected; found $1 models"
@@ -599,17 +648,32 @@
   "modelCopyEndpoint": {
     "message": "Copy endpoint"
   },
+  "modelCreateKey": {
+    "message": "Create Key"
+  },
+  "modelCustomModels": {
+    "message": "Custom models"
+  },
+  "modelCustomModelsDescription": {
+    "message": "Configure compatible endpoints, API keys, and available models."
+  },
   "modelCustomProviders": {
     "message": "Custom providers"
   },
   "modelDeleteAccountConfirm": {
     "message": "Delete this OAuth account?"
   },
+  "modelDeleteKeyConfirm": {
+    "message": "Are you sure you want to delete this access key? Clients will lose access immediately."
+  },
   "modelDeleteProviderConfirm": {
     "message": "Delete this provider and its models?"
   },
   "modelDisplayName": {
     "message": "Display name"
+  },
+  "modelDropFileHere": {
+    "message": "Click or drop usage.db file here"
   },
   "modelEndpointUnavailable": {
     "message": "Gateway endpoint is unavailable"
@@ -662,6 +726,27 @@
   "modelErrorUpstreamUnreachable": {
     "message": "Could not reach the provider. Check the address and network."
   },
+  "modelEventCost": {
+    "message": "Cost"
+  },
+  "modelEventKey": {
+    "message": "Access Key"
+  },
+  "modelEventLatency": {
+    "message": "Latency / TTFT"
+  },
+  "modelEventProviderModel": {
+    "message": "Provider / Model"
+  },
+  "modelEventStatus": {
+    "message": "Status"
+  },
+  "modelEventTime": {
+    "message": "Time"
+  },
+  "modelEventTokens": {
+    "message": "Tokens (In/Out)"
+  },
   "modelFailed": {
     "message": "Failed"
   },
@@ -680,6 +765,33 @@
   "modelID": {
     "message": "Model ID"
   },
+  "modelImportPreview": {
+    "message": "Import Data Preview"
+  },
+  "modelImportSuccess": {
+    "message": "Successfully imported $1 records"
+  },
+  "modelImporterDesc": {
+    "message": "Upload legacy usage.db SQLite file to chunk-upload, preview, and seamlessly merge records."
+  },
+  "modelImporterTitle": {
+    "message": "EasyCLIProxyAPI Data Migration"
+  },
+  "modelKeyCopied": {
+    "message": "Access key copied to clipboard"
+  },
+  "modelKeyCreated": {
+    "message": "Created At"
+  },
+  "modelKeyCreatedAndCopied": {
+    "message": "Access key created and copied to clipboard"
+  },
+  "modelKeyMask": {
+    "message": "Key Mask"
+  },
+  "modelKeyRotatedAndCopied": {
+    "message": "Access key rotated and copied to clipboard"
+  },
   "modelList": {
     "message": "Models"
   },
@@ -689,14 +801,68 @@
   "modelLocalGateway": {
     "message": "Local model gateway"
   },
+  "modelLocalProxy": {
+    "message": "Local proxy"
+  },
+  "modelLocalProxyDescription": {
+    "message": "Manage local compatible endpoints, access keys, and resident mode."
+  },
+  "modelMetricCacheHitRate": {
+    "message": "Prompt Cache Hit Rate"
+  },
+  "modelMetricEstimatedCost": {
+    "message": "Estimated Cost"
+  },
+  "modelMetricSuccessRate": {
+    "message": "Success Rate"
+  },
+  "modelMetricTPS": {
+    "message": "Avg Throughput (TPS)"
+  },
+  "modelMetricTotalRequests": {
+    "message": "Total Requests"
+  },
+  "modelMetricTotalTokens": {
+    "message": "Total Tokens"
+  },
+  "modelModelsAndServices": {
+    "message": "Models and services"
+  },
+  "modelNetworkDesc": {
+    "message": "Configure outbound network proxy (HTTP/HTTPS/SOCKS5) for model API requests."
+  },
+  "modelNetworkTitle": {
+    "message": "Upstream Proxy Network"
+  },
+  "modelNextPage": {
+    "message": "Next"
+  },
   "modelNoAccounts": {
     "message": "No connected accounts"
   },
   "modelNoAccountsHint": {
     "message": "Select Add account and finish authorization in your browser."
   },
+  "modelNoAnalyticsData": {
+    "message": "No Analytics Data"
+  },
   "modelNoCustomProviders": {
     "message": "No custom providers yet"
+  },
+  "modelNoData": {
+    "message": "No data"
+  },
+  "modelNoEventsFound": {
+    "message": "No matching events found"
+  },
+  "modelNoEventsHint": {
+    "message": "Adjust search filters or make new API requests."
+  },
+  "modelNoKeys": {
+    "message": "No Access Keys"
+  },
+  "modelNoKeysHint": {
+    "message": "Click Create Key to generate new client credentials."
   },
   "modelNoModels": {
     "message": "No models"
@@ -704,11 +870,86 @@
   "modelNoModelsHint": {
     "message": "Fetch models automatically or add one with the form below."
   },
+  "modelNoPricingData": {
+    "message": "No Pricing Data"
+  },
+  "modelNoPricingHint": {
+    "message": "Click Sync Pricing from Remote to load model rates."
+  },
+  "modelNoUsageHint": {
+    "message": "Start the gateway and make API requests to see usage statistics."
+  },
+  "modelNoUsageRecords": {
+    "message": "No Usage Records"
+  },
+  "modelNotConnected": {
+    "message": "Not connected"
+  },
+  "modelOAuthModels": {
+    "message": "OAuth models"
+  },
+  "modelOAuthModelsDescription": {
+    "message": "Manage model provider accounts connected through OAuth."
+  },
   "modelOAuthModelsHint": {
     "message": "Models sync automatically after account authorization and gateway startup."
   },
   "modelOAuthProviders": {
     "message": "OAuth"
+  },
+  "modelPreferredPort": {
+    "message": "Preferred Gateway Port (0 for auto)"
+  },
+  "modelPrevPage": {
+    "message": "Previous"
+  },
+  "modelPriceCacheRead": {
+    "message": "Cache Read ($/1M)"
+  },
+  "modelPriceCacheWrite": {
+    "message": "Cache Write ($/1M)"
+  },
+  "modelPriceCatalogVer": {
+    "message": "Catalog Version"
+  },
+  "modelPriceInput": {
+    "message": "Input ($/1M)"
+  },
+  "modelPriceOutput": {
+    "message": "Output ($/1M)"
+  },
+  "modelPriceSource": {
+    "message": "Source"
+  },
+  "modelProvider": {
+    "message": "Provider"
+  },
+  "modelProxyURL": {
+    "message": "Upstream Proxy URL"
+  },
+  "modelRange30d": {
+    "message": "Past 30 Days"
+  },
+  "modelRange7d": {
+    "message": "Past 7 Days"
+  },
+  "modelRangeAll": {
+    "message": "All Time"
+  },
+  "modelRangeToday": {
+    "message": "Today"
+  },
+  "modelRankByAccessKey": {
+    "message": "Requests by Access Key"
+  },
+  "modelRankByHour": {
+    "message": "24h Activity Distribution"
+  },
+  "modelRankByModel": {
+    "message": "Requests by Model"
+  },
+  "modelRankByProvider": {
+    "message": "Requests by Provider"
   },
   "modelReauthorize": {
     "message": "Reauthorize"
@@ -716,29 +957,56 @@
   "modelRefresh": {
     "message": "Refresh"
   },
+  "modelRequestRetry": {
+    "message": "Automatic Request Retries (0-10)"
+  },
   "modelResident": {
     "message": "Keep running"
   },
   "modelRestarting": {
     "message": "Restarting"
   },
+  "modelRotate": {
+    "message": "Rotate"
+  },
   "modelRotateAccessKey": {
     "message": "Regenerate key"
   },
+  "modelRoutingDesc": {
+    "message": "Configure multi-provider and multi-account concurrent routing and retry policies."
+  },
+  "modelRoutingStrategy": {
+    "message": "Credential Routing Strategy"
+  },
+  "modelRoutingTitle": {
+    "message": "Routing Strategy & Load Balancing"
+  },
   "modelRunning": {
     "message": "Running"
+  },
+  "modelSearchEvents": {
+    "message": "Filter model/provider..."
+  },
+  "modelSelectFile": {
+    "message": "Select SQLite DB"
   },
   "modelSettings": {
     "message": "Model settings"
   },
   "modelSettingsDescription": {
-    "message": "Manage OAuth and custom model providers for use through the local compatible gateway."
+    "message": "Manage model providers, including custom models, OAuth models, and local proxy settings."
+  },
+  "modelSettingsSaved": {
+    "message": "Gateway settings saved"
   },
   "modelStartGateway": {
     "message": "Start"
   },
   "modelStarting": {
     "message": "Starting"
+  },
+  "modelStatus": {
+    "message": "Status"
   },
   "modelStopGateway": {
     "message": "Stop"
@@ -749,8 +1017,68 @@
   "modelStopping": {
     "message": "Stopping"
   },
+  "modelStrategyFillFirst": {
+    "message": "Fill First"
+  },
+  "modelStrategyRoundRobin": {
+    "message": "Round Robin"
+  },
+  "modelSyncPricing": {
+    "message": "Sync Pricing from Remote"
+  },
+  "modelSyncPricingSuccess": {
+    "message": "Pricing catalog synced successfully"
+  },
   "modelTestConnection": {
     "message": "Test connection"
+  },
+  "modelTimeSpan": {
+    "message": "Time Span"
+  },
+  "modelTokenCacheRead": {
+    "message": "Cache Read"
+  },
+  "modelTokenCacheWrite": {
+    "message": "Cache Write"
+  },
+  "modelTokenComposition": {
+    "message": "Token Breakdown"
+  },
+  "modelTokenInput": {
+    "message": "Input Tokens"
+  },
+  "modelTokenOutput": {
+    "message": "Output Tokens"
+  },
+  "modelTokenReasoning": {
+    "message": "Reasoning Tokens"
+  },
+  "modelTotalRecords": {
+    "message": "$1 total records"
+  },
+  "modelTrendBreakdown": {
+    "message": "Hourly Trend"
+  },
+  "modelUploading": {
+    "message": "Uploading chunks and validating..."
+  },
+  "modelUsageAnalytics": {
+    "message": "Analytics"
+  },
+  "modelUsageEvents": {
+    "message": "Events"
+  },
+  "modelUsageOverview": {
+    "message": "Overview"
+  },
+  "modelUsagePricing": {
+    "message": "Pricing & Rates"
+  },
+  "modelUsageRecords": {
+    "message": "Usage Records"
+  },
+  "modelUsageRecordsDescription": {
+    "message": "View request metrics, token consumption, analytics breakdowns, and model pricing."
   },
   "modified": {
     "message": "Modified"
@@ -847,6 +1175,9 @@
   },
   "nightDim": {
     "message": "Night auto-dim"
+  },
+  "matches": {
+    "message": "matches"
   },
   "noFilterResults": {
     "message": "No matching items in this folder"
@@ -1115,6 +1446,15 @@
   "searchResults": {
     "message": "search results"
   },
+  "searchSpace": {
+    "message": "Search space, cards & commands"
+  },
+  "searchSpaceHint": {
+    "message": "Press ↑↓ to navigate, Enter to run, supports cards, catalog and space switching"
+  },
+  "searchSpacePlaceholder": {
+    "message": "Search cards, add new cards or run commands..."
+  },
   "searchWidgets": {
     "message": "Search widgets..."
   },
@@ -1180,6 +1520,9 @@
   },
   "theme": {
     "message": "Theme"
+  },
+  "text": {
+    "message": "Text content"
   },
   "themeArchive": {
     "message": "Light"
@@ -1292,6 +1635,194 @@
   "workspaceRenamed": {
     "message": "Workspace renamed"
   },
+  "modelCreateKeyDefaultName": { "message": "New key" },
+  "modelGatewayBaseURL": { "message": "Current API URL" },
+  "modelImportHistory": { "message": "Import history" },
+  "modelMaxRetryCredentials": { "message": "Maximum credentials per round" },
+  "modelMaxRetryInterval": { "message": "Maximum retry wait (seconds)" },
+  "modelNetworkRoutingDesc": { "message": "Configure the upstream proxy, credential selection, and session affinity." },
+  "modelNetworkRoutingTitle": { "message": "Network and Session Routing" },
+  "modelPricedRequests": { "message": "Priced requests" },
+  "modelRange24h": { "message": "Last 24 hours" },
+  "modelRange4h": { "message": "Last 4 hours" },
+  "modelRestartGateway": { "message": "Restart" },
+  "modelSessionAffinity": { "message": "Enable session affinity" },
+  "modelSessionAffinityTTL": { "message": "Session affinity TTL (seconds)" },
+  "modelStreamingRetries": { "message": "Streaming bootstrap retries" },
+  "modelUnpricedRequests": { "message": "Unpriced requests" },
+  "modelAllKeys": { "message": "All keys" },
+  "modelAllModels": { "message": "All models" },
+  "modelAllProviders": { "message": "All providers" },
+  "modelAllResults": { "message": "All results" },
+  "modelAllSources": { "message": "All sources" },
+  "modelCancelled": { "message": "Cancelled" },
+  "modelCustomRange": { "message": "Custom range" },
+  "modelEndTime": { "message": "End time" },
+  "modelFailed": { "message": "Failed" },
+  "modelInvalidTimeRange": { "message": "End time must be after start time" },
+  "modelProviderOptional": { "message": "Provider (optional)" },
+  "modelSavePrice": { "message": "Save custom price" },
+  "modelStartTime": { "message": "Start time" },
+  "modelSuccess": { "message": "Success" },
+  "showHours": { "message": "Show hours" },
+  "showMinutes": { "message": "Show minutes" },
+  "showSeconds": { "message": "Show seconds" },
+  "activeColor": { "message": "Active color" },
+  "inactiveColor": { "message": "Inactive color" },
+  "color": { "message": "Color" },
+  "monochrome": { "message": "Monochrome" },
+  "transparent": { "message": "Transparent" },
+  "numberOfBlocks": { "message": "Number of blocks" },
+  "minutesAgo": { "message": "minutes ago" },
+  "bookmarksAuthRequired": { "message": "Bookmark permission is required" },
+  "clickToAuthorizeBookmarks": { "message": "Grant bookmark permission" },
+  "searchBookmarks": { "message": "Search bookmarks…" },
+  "noMatchingBookmarks": { "message": "No matching bookmarks" },
+  "emptyFolder": { "message": "This folder is empty" },
+  "viewMode": { "message": "View mode" },
+  "listView": { "message": "List" },
+  "gridView": { "message": "Grid" },
+  "showSearchBar": { "message": "Show bookmark search" },
+  "setCountdownDate": { "message": "Set a target date" },
+  "countdownComplete": { "message": "It is time" },
+  "eventTitle": { "message": "Event title" },
+  "eventDateTime": { "message": "Event date and time" },
+  "customCssLabel": { "message": "CSS (personal space only)" },
+  "rateUnavailable": { "message": "Unavailable" },
+  "baseCurrency": { "message": "Base currency" },
+  "targetCurrencies": { "message": "Target currencies" },
+  "contributionsLastYear": { "message": "contributions in the last year" },
+  "username": { "message": "Username" },
+  "colorGreen": { "message": "Green" },
+  "colorBlue": { "message": "Blue" },
+  "colorOrange": { "message": "Orange" },
+  "colorPurple": { "message": "Purple" },
+  "colorGold": { "message": "Gold" },
+  "showStreak": { "message": "Show contribution streak" },
+  "yourName": { "message": "Your name" },
+  "safeHtml": { "message": "HTML (sanitized)" },
+  "ipDetecting": { "message": "IP: detecting…" },
+  "ipUnavailable": { "message": "IP: unavailable" },
+  "ipFetchFailed": { "message": "Unable to fetch IP" },
+  "ipInfoNotice": { "message": "Detect and show the current public IP address." },
+  "jokeNotice": { "message": "Periodically fetch programming jokes." },
+  "submissionsLastYear": { "message": "submissions in the last year" },
+  "columnsCount": { "message": "Columns (1–6)" },
+  "showFavicons": { "message": "Show site icons" },
+  "openInNewTab": { "message": "Open in a new tab" },
+  "linksList": { "message": "Links" },
+  "addLink": { "message": "Add link" },
+  "literatureClockNotice": { "message": "Match literary passages to the current time." },
+  "message": { "message": "Message" },
+  "clickToWriteNote": { "message": "Click to add a note…" },
+  "notesNotice": { "message": "Click the note on the canvas to edit; it saves on blur." },
+  "clickToCopy": { "message": "Click to copy" },
+  "copied": { "message": "Copied" },
+  "paletteNotice": { "message": "Hover to view a color and click to copy it." },
+  "nextPalette": { "message": "Next palette" },
+  "quote": { "message": "Quote" },
+  "author": { "message": "Author" },
+  "searchProvider": { "message": "Search engine" },
+  "placeholder": { "message": "Placeholder text" },
+  "style": { "message": "Style" },
+  "default": { "message": "Default" },
+  "rounded": { "message": "Transparent rounded" },
+  "outlined": { "message": "Minimal outline" },
+  "decrease": { "message": "Decrease" },
+  "increase": { "message": "Increase" },
+  "reset": { "message": "Reset" },
+  "label": { "message": "Label" },
+  "currentCount": { "message": "Current count" },
+  "step": { "message": "Step" },
+  "showReset": { "message": "Show reset button" },
+  "eventHasArrived": { "message": "The event has arrived" },
+  "days": { "message": "days" },
+  "hours": { "message": "hours" },
+  "minutes": { "message": "minutes" },
+  "seconds": { "message": "seconds" },
+  "displayMode": { "message": "Display mode" },
+  "compact": { "message": "Compact" },
+  "detailed": { "message": "Detailed" },
+  "showCompletionMessage": { "message": "Show a completion message" },
+  "completionMessage": { "message": "Completion message" },
+  "italicizeTime": { "message": "Italicize time" },
+  "digitalClock": { "message": "Digital clock" },
+  "analogueClock": { "message": "Analogue clock" },
+  "hour12Format": { "message": "12-hour format" },
+  "addTodo": { "message": "Add todo…" },
+  "todoNotice": { "message": "Add, complete, and remove todo items directly on the canvas." },
+  "noTopSites": { "message": "No top sites" },
+  "clickToAuthorizeTopSites": { "message": "Grant top-sites permission" },
+  "displayLimit": { "message": "Display limit (1–18)" },
+  "noTrelloCards": { "message": "No cards" },
+  "addCard": { "message": "Add card…" },
+  "boardName": { "message": "Board name" },
+  "listName": { "message": "List name" },
+  "feelsLike": { "message": "Feels like" },
+  "humidity": { "message": "Humidity" },
+  "cityName": { "message": "City" },
+  "temperatureUnit": { "message": "Temperature unit" },
+  "showFiveDayForecast": { "message": "Show five-day forecast" },
+  "latitude": { "message": "Latitude" },
+  "longitude": { "message": "Longitude" },
+  "weatherClear": { "message": "Clear" },
+  "weatherPartlyCloudy": { "message": "Partly cloudy" },
+  "weatherOvercast": { "message": "Overcast" },
+  "weatherFoggy": { "message": "Fog" },
+  "weatherDrizzle": { "message": "Drizzle" },
+  "weatherRainy": { "message": "Rain" },
+  "weatherSnowy": { "message": "Snow" },
+  "weatherThunder": { "message": "Thunderstorm" },
+  "weatherCloudy": { "message": "Cloudy" },
+  "startTime": { "message": "Start time" },
+  "endTime": { "message": "End time" },
+  "flipPercentage": { "message": "Show remaining percentage" },
+  "plugin_widget_binaryTime": { "message": "Binary Time" },
+  "plugin_widget_bitcoin": { "message": "Bitcoin Mempool" },
+  "plugin_widget_bookmarks": { "message": "Bookmarks" },
+  "plugin_widget_countdown": { "message": "Countdown" },
+  "plugin_widget_css": { "message": "Custom CSS" },
+  "plugin_widget_currencyRates": { "message": "Currency Rates" },
+  "plugin_widget_customText": { "message": "Custom Text" },
+  "plugin_widget_github": { "message": "GitHub Calendar" },
+  "plugin_widget_greeting": { "message": "Greeting" },
+  "plugin_widget_html": { "message": "Custom HTML" },
+  "plugin_widget_ipInfo": { "message": "IP Info" },
+  "plugin_widget_joke": { "message": "Joke" },
+  "plugin_widget_leetcode": { "message": "LeetCode Daily" },
+  "plugin_widget_links": { "message": "Quick Links" },
+  "plugin_widget_literatureClock": { "message": "Literature Clock" },
+  "plugin_widget_message": { "message": "Message" },
+  "plugin_widget_notes": { "message": "Notes" },
+  "plugin_widget_palette": { "message": "Color Palette" },
+  "plugin_widget_quote": { "message": "Quote" },
+  "plugin_widget_search": { "message": "Search" },
+  "plugin_widget_since": { "message": "Time Since" },
+  "plugin_widget_tallyCounter": { "message": "Tally Counter" },
+  "plugin_widget_time": { "message": "Time" },
+  "plugin_widget_timeTracker": { "message": "Time Tracker" },
+  "plugin_widget_todo": { "message": "Todo" },
+  "plugin_widget_topSites": { "message": "Top Sites" },
+  "plugin_widget_trello": { "message": "Trello" },
+  "plugin_widget_weather": { "message": "Weather" },
+  "plugin_widget_workHours": { "message": "Work Hours" },
+  "plugin_background_apod": { "message": "NASA APOD" },
+  "plugin_background_bing": { "message": "Bing Daily Wallpaper" },
+  "plugin_background_colour": { "message": "Solid Color" },
+  "plugin_background_giphy": { "message": "GIPHY" },
+  "plugin_background_gradient": { "message": "Gradient" },
+  "plugin_background_media": { "message": "Local Media" },
+  "plugin_background_online": { "message": "Online Image" },
+  "plugin_background_unsplash": { "message": "Unsplash" },
+  "plugin_background_wikimedia": { "message": "Wikimedia POTD" },
+  "clickToAuthorize": { "message": "Click to grant permission" },
+  "permissionRequired": { "message": "Permission required to show content" },
+  "notConfigured": { "message": "Not configured" },
+  "catTimeAndClocks": { "message": "Time & Clocks" },
+  "catProductivity": { "message": "Productivity & Tools" },
+  "catInformationFeeds": { "message": "Information & Feeds" },
+  "catInspirationText": { "message": "Inspiration & Text" },
+  "catCustomAdvanced": { "message": "Custom & Advanced" },
   "zoomImageHint": {
     "message": "Scroll to zoom image"
   }

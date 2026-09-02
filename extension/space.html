@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="space.css" />
     <link rel="stylesheet" href="model-settings.css" />
   </head>
-  <body class="space-page">
+  <body class="space-page sidebar-collapsed">
     <svg class="svg-sprite" aria-hidden="true">
       <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></symbol>
@@ -60,17 +60,17 @@
       <main id="dashboard-host" class="dashboard-host" data-i18n-aria-label="dashboard" aria-label="Dashboard"></main>
 
       <div id="dashboard-toolbar" class="dashboard-toolbar">
-        <button id="space-toggle-sidebar-btn" class="space-toolbar-btn" data-i18n-title="collapseSidebar" title="折叠侧栏" aria-label="折叠侧栏"><svg class="icon"><use href="#i-panel" /></svg></button>
-        <button id="space-toggle-widgets-btn" class="space-toolbar-btn" data-i18n-title="toggleWidgetsTooltip" title="显示/隐藏组件 (W)" aria-label="显示/隐藏组件"><svg class="icon"><use href="#i-preview" /></svg></button>
+        <button id="space-toggle-sidebar-btn" class="space-toolbar-btn" data-i18n-title="expandSidebar" title="展开侧栏" aria-label="展开侧栏" aria-pressed="true"><svg class="icon"><use href="#i-panel" /></svg></button>
+        <button id="space-toggle-widgets-btn" class="space-toolbar-btn" data-i18n-title="toggleWidgetsTooltip" title="显示/隐藏卡片 (W)" aria-label="显示/隐藏卡片"><svg class="icon"><use href="#i-preview" /></svg></button>
         <button id="space-fullscreen-btn" class="space-toolbar-btn" data-i18n-title="fullscreenTooltip" title="全屏 (F)" aria-label="全屏"><svg class="icon"><use href="#i-expand" /></svg></button>
         <button id="space-settings-btn" class="space-toolbar-btn primary-tool" data-i18n-title="spaceSettingsTooltip" title="空间设置 (S)" aria-label="空间设置"><svg class="icon"><use href="#i-gear" /></svg></button>
       </div>
 
       <div id="space-empty-state" class="space-empty-state" hidden>
         <div class="space-empty-card">
-          <h3 data-i18n="emptySpaceTitle">这个空间还没有组件</h3>
-          <p data-i18n="emptySpaceDesc">从丰富的小组件目录中挑选并添加到你的个人空间</p>
-          <button id="space-empty-add-btn" class="primary" data-i18n="addFirstWidget">添加第一个组件</button>
+          <h3 data-i18n="emptySpaceTitle">这个空间还没有卡片</h3>
+          <p data-i18n="emptySpaceDesc">从丰富的卡片目录中挑选并添加到你的个人空间</p>
+          <button id="space-empty-add-btn" class="primary" data-i18n="addFirstWidget">添加首张卡片</button>
         </div>
       </div>
 
@@ -85,7 +85,7 @@
     <div id="workspace-menu" class="workspace-menu" role="menu" hidden><button type="button" role="menuitem" data-action="rename"><svg class="icon"><use href="#i-pen" /></svg><span data-i18n="renameWorkspace">重命名</span></button><button type="button" role="menuitem" class="danger" data-action="delete"><svg class="icon"><use href="#i-trash" /></svg><span data-i18n="deleteWorkspace">删除</span></button></div>
     <dialog id="ws-name-modal" aria-labelledby="ws-name-title"><form method="dialog"><h2 id="ws-name-title">新建空间</h2><label class="ws-name-label" for="ws-name-input" data-i18n="workspaceName">空间名称</label><input id="ws-name-input" autocomplete="off" required /><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button id="ws-name-submit" class="primary" value="default" data-i18n="confirm">确认</button></div></form></dialog>
     <dialog id="ws-delete-modal" aria-labelledby="ws-delete-title"><form method="dialog"><h2 id="ws-delete-title" data-i18n="deleteWorkspace">删除空间</h2><p id="ws-delete-message"></p><p class="ws-delete-hint" data-i18n="deleteWorkspaceHint">此操作无法撤销。</p><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button class="danger" value="default" data-i18n="deleteWorkspace">删除</button></div></form></dialog>
-    <dialog id="ws-reset-modal" aria-labelledby="ws-reset-title"><form method="dialog"><h2 id="ws-reset-title" data-i18n="resetWorkspaceTitle">重置空间</h2><p class="ws-reset-description" data-i18n="resetWorkspaceDescription">选择重置后使用的空间模板。当前组件和背景配置将被替换。</p><div class="ws-reset-options" role="group" data-i18n-aria-label="resetWorkspaceTemplate"><button type="button" data-reset-template="classic" aria-pressed="true"><strong data-i18n="resetTemplateClassic">经典</strong><span data-i18n="resetTemplateClassicDesc">时间、问候语和搜索</span></button><button type="button" data-reset-template="focus" aria-pressed="false"><strong data-i18n="resetTemplateFocus">专注</strong><span data-i18n="resetTemplateFocusDesc">时间和问候语</span></button><button type="button" data-reset-template="blank" aria-pressed="false"><strong data-i18n="resetTemplateBlank">空白</strong><span data-i18n="resetTemplateBlankDesc">不添加任何组件</span></button></div><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button class="danger" value="default" data-i18n="confirmResetWorkspace">确认重置</button></div></form></dialog>
+    <dialog id="ws-reset-modal" aria-labelledby="ws-reset-title"><form method="dialog"><h2 id="ws-reset-title" data-i18n="resetWorkspaceTitle">重置空间</h2><p class="ws-reset-description" data-i18n="resetWorkspaceDescription">选择重置后使用的空间模板。当前卡片和背景配置将被替换。</p><div class="ws-reset-options" role="group" data-i18n-aria-label="resetWorkspaceTemplate"><button type="button" data-reset-template="classic" aria-pressed="true"><strong data-i18n="resetTemplateClassic">经典</strong><span data-i18n="resetTemplateClassicDesc">时间、问候语和搜索</span></button><button type="button" data-reset-template="focus" aria-pressed="false"><strong data-i18n="resetTemplateFocus">专注</strong><span data-i18n="resetTemplateFocusDesc">时间和问候语</span></button><button type="button" data-reset-template="blank" aria-pressed="false"><strong data-i18n="resetTemplateBlank">空白</strong><span data-i18n="resetTemplateBlankDesc">不添加任何卡片</span></button></div><div class="modal-actions"><button value="cancel" data-i18n="cancel">取消</button><button class="danger" value="default" data-i18n="confirmResetWorkspace">确认重置</button></div></form></dialog>
     
     <dialog id="search-dialog" class="search-dialog" aria-labelledby="search-title">
       <form method="dialog">
