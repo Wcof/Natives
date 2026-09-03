@@ -11,7 +11,8 @@ export const BUDGET = 250 * 1024;
 const DEV_NAMES = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', '__pycache__']);
 // Runtime files plus Chrome's localized message catalogs. Installer helpers,
 // manifests and READMEs intentionally stay outside the extension ZIP.
-const DISTRIBUTABLE = /^(manifest\.json|(?!(?:ui-harness)\.js$)(?:[^/]+|plugins\/.+)\.(?:html|css|js)|icons\/[^/]+|_locales\/[^/]+\/messages\.json)$/;
+// ui-harness.js and test-dom-mock.js are development/test-only entry points.
+const DISTRIBUTABLE = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock)\.js$)(?:[^/]+|plugins\/.+)\.(?:html|css|js)|icons\/[^/]+|_locales\/[^/]+\/messages\.json)$/;
 
 export function distributableFiles(root = ROOT) {
   const dir = join(root, 'extension');

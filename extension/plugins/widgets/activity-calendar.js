@@ -5,7 +5,6 @@ const THEME_PALETTES = {
   purple: ['#161b22', '#2e1065', '#581c87', '#9333ea', '#c084fc'],
   gold: ['#161b22', '#3f2e04', '#785b09', '#d97706', '#fbbf24'],
 };
-
 export function renderActivityCalendar({
   container,
   data = [],
@@ -17,7 +16,6 @@ export function renderActivityCalendar({
   t,
 }) {
   container.replaceChildren();
-
   const colors = THEME_PALETTES[theme] || THEME_PALETTES.green;
   const wrapper = document.createElement(profileUrl ? 'a' : 'div');
   wrapper.className = 'activity-calendar-root';
@@ -26,22 +24,18 @@ export function renderActivityCalendar({
     wrapper.target = '_blank';
     wrapper.rel = 'noopener noreferrer';
   }
-
   const svgWidth = 700;
   const svgHeight = 104;
   const cellSize = 10;
   const cellGap = 2.5;
   const colStep = cellSize + cellGap;
-
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('class', 'activity-calendar-svg');
   svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
   svg.setAttribute('width', '100%');
-
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const monthG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   monthG.setAttribute('class', 'activity-calendar-months');
-
   const now = new Date();
   for (let m = 0; m < 12; m++) {
     const mDate = new Date(now.getFullYear(), now.getMonth() - 11 + m, 1);
@@ -56,7 +50,6 @@ export function renderActivityCalendar({
     monthG.append(mText);
   }
   svg.append(monthG);
-
   const daysG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   daysG.setAttribute('class', 'activity-calendar-weekdays');
   const dayLabels = [{ name: 'Mon', y: 32 }, { name: 'Wed', y: 57 }, { name: 'Fri', y: 82 }];
@@ -70,30 +63,24 @@ export function renderActivityCalendar({
     daysG.append(dText);
   }
   svg.append(daysG);
-
   const cellsG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   cellsG.setAttribute('transform', 'translate(22, 16)');
-
   const dataMap = new Map();
   for (const item of data) {
     dataMap.set(item.date, item);
   }
-
   const daysCount = 53 * 7;
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - daysCount + (7 - startDate.getDay()));
-
   for (let col = 0; col < 53; col++) {
     for (let row = 0; row < 7; row++) {
       const cur = new Date(startDate);
       cur.setDate(cur.getDate() + col * 7 + row);
       if (cur > now) continue;
-
       const dateStr = cur.toISOString().slice(0, 10);
       const entry = dataMap.get(dateStr) || { count: 0, level: 0 };
       const level = Math.max(0, Math.min(4, entry.level || (entry.count > 0 ? (entry.count > 8 ? 4 : entry.count > 4 ? 3 : entry.count > 2 ? 2 : 1) : 0)));
       const color = colors[level];
-
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       rect.setAttribute('x', String(col * colStep));
       rect.setAttribute('y', String(row * colStep));
@@ -103,17 +90,14 @@ export function renderActivityCalendar({
       rect.setAttribute('fill', color);
       rect.setAttribute('data-date', dateStr);
       rect.setAttribute('data-count', String(entry.count));
-
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
       title.textContent = `${entry.count} on ${dateStr}`;
       rect.append(title);
-
       cellsG.append(rect);
     }
   }
   svg.append(cellsG);
   wrapper.append(svg);
-
   const footer = document.createElement('div');
   footer.className = 'activity-calendar-footer';
   const total = document.createElement('span');
@@ -127,10 +111,8 @@ export function renderActivityCalendar({
     footer.append(legend);
   }
   wrapper.append(footer);
-
   container.append(wrapper);
 }
-
 export const activityCalendarStyles = `
   .activity-calendar-root {
     display: inline-flex;

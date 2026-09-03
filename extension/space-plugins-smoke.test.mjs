@@ -9,7 +9,7 @@ setupTestDomEnvironment();
 globalThis.fetch = async (url) => {
   const urlStr = String(url);
   if (urlStr.includes('open-meteo')) return { json: async () => ({ current: { temperature_2m: 22, weather_code: 0 } }) };
-  if (urlStr.includes('er-api.com')) return { json: async () => ({ rates: { CNY: 7.23, USD: 1 } }) };
+  if (urlStr.includes('er-api.com')) return { json: async () => ({ result: 'success', rates: { CNY: 7.23, USD: 1 } }) };
   if (urlStr.includes('coingecko')) return { json: async () => ({ bitcoin: { usd: 65000, cny: 460000 } }) };
   if (urlStr.includes('ipify')) return { json: async () => ({ ip: '114.114.114.114' }) };
   return { json: async () => ({}) };

@@ -1,7 +1,4 @@
-/** Bookmarks explorer using the Tabliss bookmark row presentation. */
-
 import { escapeHtml } from '../sanitizer.js';
-
 export const bookmarksWidget = {
   key: 'widget/bookmarks',
   name: 'Bookmarks',
@@ -15,14 +12,11 @@ export const bookmarksWidget = {
     let currentFolderId = data.folderId || '1';
     let folderHistory = [];
     let searchQuery = '';
-
     container.className = 'Widget Bookmarks';
     container.replaceChildren();
-
     const root = document.createElement('div');
     root.className = `bookmarks-root mode-${data.viewMode || 'list'}`;
     container.append(root);
-
     function loadFolder(folderId, permissionChecked = false) {
       if (disposed || (container.isConnected !== undefined && !container.isConnected)) return;
       if (!permissionChecked && globalThis.chrome?.permissions?.contains) {
@@ -37,7 +31,6 @@ export const bookmarksWidget = {
         renderPermissionPrompt();
         return;
       }
-
       if (searchQuery && typeof chrome.bookmarks.search === 'function') {
         chrome.bookmarks.search(searchQuery, (results) => {
           if (disposed) return;
@@ -50,7 +43,6 @@ export const bookmarksWidget = {
         });
       }
     }
-
     function renderPermissionPrompt() {
       root.replaceChildren();
       const prompt = document.createElement('div');
@@ -69,13 +61,10 @@ export const bookmarksWidget = {
       };
       root.append(prompt);
     }
-
     function renderItems(items, isSearchResult) {
       root.replaceChildren();
-
       const topBar = document.createElement('div');
       topBar.className = 'bookmarks-top-bar';
-
       if (!isSearchResult && folderHistory.length > 0) {
         const backBtn = document.createElement('button');
         backBtn.type = 'button';
@@ -87,7 +76,6 @@ export const bookmarksWidget = {
         };
         topBar.append(backBtn);
       }
-
       if (data.showSearch !== false) {
         const searchInput = document.createElement('input');
         searchInput.type = 'search';
@@ -100,14 +88,11 @@ export const bookmarksWidget = {
         };
         topBar.append(searchInput);
       }
-
       if (topBar.childNodes.length > 0) {
         root.append(topBar);
       }
-
       const listEl = document.createElement('div');
       listEl.className = 'bookmarks-list';
-
       if (items.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'bookmarks-empty';
@@ -118,7 +103,6 @@ export const bookmarksWidget = {
           const isFolder = !item.url;
           const node = document.createElement(isFolder ? 'button' : 'a');
           node.className = `${isFolder ? 'folder' : 'bookmark'} bookmark-item`;
-
           if (isFolder) {
             node.type = 'button';
             node.innerHTML = `
@@ -142,16 +126,12 @@ export const bookmarksWidget = {
               <span class="bm-title">${escapeHtml(item.title || domain || item.url)}</span>
             `;
           }
-
           listEl.append(node);
         }
       }
-
       root.append(listEl);
     }
-
     loadFolder(currentFolderId);
-
     return () => {
       disposed = true;
       container.replaceChildren();
@@ -174,7 +154,6 @@ export const bookmarksWidget = {
         <span>${t('showSearchBar', '显示书签搜索栏')}</span>
       </label>
     `;
-
     wrap.querySelector('#bm-mode').onchange = (e) => onChange({ ...data, viewMode: e.target.value });
     wrap.querySelector('#bm-search').onchange = (e) => onChange({ ...data, showSearch: e.target.checked });
     container.append(wrap);
@@ -282,7 +261,6 @@ export const bookmarksWidget = {
     }
   `,
 };
-
 function extractDomain(url) {
   try {
     return new URL(url).hostname;

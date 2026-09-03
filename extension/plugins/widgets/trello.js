@@ -1,7 +1,4 @@
-/** Trello list presentation. Authentication remains outside page-owned widget data. */
-
 import { escapeHtml } from '../sanitizer.js';
-
 export const trelloWidget = {
   key: 'widget/trello',
   name: 'Trello',
@@ -15,11 +12,8 @@ export const trelloWidget = {
   render(container, data = {}, display = {}, { t = (k, f) => f || k, onDataChange } = {}) {
     container.className = 'Widget Trello';
     container.replaceChildren();
-
     const root = document.createElement('div');
     root.className = 'widget-container';
-
-    // Header
     const header = document.createElement('div');
     header.className = 'trello-header';
     header.innerHTML = `
@@ -29,12 +23,9 @@ export const trelloWidget = {
       </div>
     `;
     root.append(header);
-
     const cards = Array.isArray(data.cards) ? data.cards : [];
-
     const listEl = document.createElement('div');
     listEl.className = 'trello-cards-list';
-
     if (cards.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'trello-empty';
@@ -60,10 +51,7 @@ export const trelloWidget = {
         listEl.append(cardEl);
       });
     }
-
     root.append(listEl);
-
-    // Inline add card input
     const addForm = document.createElement('form');
     addForm.className = 'trello-add-form';
     addForm.innerHTML = `
@@ -79,9 +67,7 @@ export const trelloWidget = {
       onDataChange?.({ ...data, cards: nextCards });
     };
     root.append(addForm);
-
     container.append(root);
-
     return () => container.replaceChildren();
   },
   renderSettings(container, data = {}, onChange = () => {}, { t = (k, f) => f || k } = {}) {
@@ -98,7 +84,6 @@ export const trelloWidget = {
         <input type="text" id="t-list" value="${escapeHtml(data.listName || '')}" placeholder="To Do" />
       </label>
     `;
-
     wrap.querySelector('#t-board').onchange = (e) => onChange({ ...data, boardName: e.target.value.trim() });
     wrap.querySelector('#t-list').onchange = (e) => onChange({ ...data, listName: e.target.value.trim() });
     container.append(wrap);

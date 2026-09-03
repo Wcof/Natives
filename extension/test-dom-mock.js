@@ -33,7 +33,14 @@ export class MockElement {
 
   get children() { return this.childNodes.filter((n) => n.nodeType === globalThis.Node.ELEMENT_NODE); }
   get textContent() {
-    if (this.childNodes.length > 0) return this.childNodes.map((n) => n.textContent).join(' ');
+    if (this.childNodes.length > 0) {
+      const parts = [];
+      if (this._textContent) parts.push(this._textContent);
+      for (const n of this.childNodes) {
+        if (n.textContent) parts.push(n.textContent);
+      }
+      return parts.join(' ');
+    }
     return this._textContent;
   }
   set textContent(val) {
@@ -53,7 +60,15 @@ export class MockElement {
   }
   set innerHTML(html) {
     this.childNodes = [];
-    this._parseHtmlInto(this, html);
+    const str = String(html || '');
+    if (!str.includes('<')) {
+      this._textContent = str;
+      return;
+    }
+    // Extract leading text before the first child tag
+    const leading = str.replace(/<[\s\S]*$/, '').trim();
+    this._textContent = leading;
+    this._parseHtmlInto(this, str);
   }
 
   _parseHtmlInto(parent, html) {

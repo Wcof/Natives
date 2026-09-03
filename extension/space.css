@@ -1,34 +1,23 @@
-/* Personal space shell (ADR-0024): left workspace tree / centre Shadow DOM dashboard / right inspector. */
 .space-shell { grid-column:2; grid-row:1; min-width:0; min-height:0; display:flex; position:relative; overflow:hidden; }
 body.space-page.sidebar-collapsed { grid-template-columns:minmax(0,1fr); }
 body.space-page.sidebar-collapsed #app-sidebar { display:none !important; }
 body.space-page.sidebar-collapsed .space-shell { grid-column:1 / -1; width:100%; height:100%; }
 .dashboard-host { flex:1 1 auto; min-width:0; min-height:0; position:relative; overflow:hidden; background:var(--surface); }
 .dashboard-host.dashboard-shadow-host { border:0; padding:0; }
-
-/* Floating Dashboard Toolbar */
 .dashboard-toolbar { position:absolute; top:12px; right:12px; z-index:30; display:flex; align-items:center; gap:6px; background:rgba(0,0,0,0.35); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); padding:4px 6px; border-radius:24px; border:1px solid rgba(255,255,255,0.15); box-shadow:0 4px 16px rgba(0,0,0,0.25); }
 .space-toolbar-btn { display:grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:50%; background:transparent; color:#fff; cursor:pointer; opacity:0.8; transition:all 0.15s ease; }
 .space-toolbar-btn:hover { opacity:1; background:rgba(255,255,255,0.2); }
 .space-toolbar-btn .icon { width:15px; height:15px; }
-
-/* Empty Workspace State */
 .space-empty-state { position:absolute; inset:0; z-index:5; display:grid; place-items:center; pointer-events:none; }
 .space-empty-card { pointer-events:auto; text-align:center; padding:32px 40px; background:rgba(0,0,0,0.45); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border-radius:12px; border:1px solid rgba(255,255,255,0.2); color:#fff; box-shadow:0 12px 40px rgba(0,0,0,0.4); max-width:380px; }
 .space-empty-card h3 { margin:0 0 8px 0; font-size:18px; color:#fff; }
 .space-empty-card p { margin:0 0 18px 0; font-size:13px; opacity:0.8; line-height:1.5; }
 .space-empty-card button { min-height:36px; padding:0 20px; font-weight:bold; }
-
-/* Hide Widgets Toggle */
 body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
-
-/* Inspector Backdrop (Transparent overlay without canvas blur) */
 .inspector-backdrop { position:fixed; inset:0; z-index:45; background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; pointer-events:none; }
 @media (max-width:760px) {
   .inspector-backdrop { pointer-events:auto; }
 }
-
-/* Left Workspace Tree */
 .app-menu-section-title { display:flex; align-items:center; justify-content:space-between; min-height:32px; padding:0 4px 0 10px; color:var(--muted); font:700 11px/1.4 var(--display-font); letter-spacing:.06em; text-transform:uppercase; }
 .workspace-create-icon,.ws-more-btn { display:grid; flex:0 0 auto; place-items:center; width:28px; min-height:28px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--muted); cursor:pointer; }
 .workspace-create-icon:hover,.ws-more-btn:hover { background:var(--hover); color:var(--text); }
@@ -45,51 +34,37 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .workspace-menu button:hover,.workspace-menu button:focus-visible { background:var(--hover); }
 .workspace-menu button.danger { color:var(--danger); }
 .workspace-menu .icon { width:14px; height:14px; }
-
-/* Right Inspector (Compact Settings Panel Shell) */
 .inspector { position:fixed; top:0; right:0; bottom:0; z-index:50; width:var(--inspector-width,360px); min-width:240px; max-width:620px; overflow-y:auto; overflow-x:hidden; padding:16px 14px 24px; border-left:1px solid var(--border); background:var(--surface-2); scrollbar-gutter:stable; display:flex; flex-direction:column; box-sizing:border-box; box-shadow:-8px 0 32px rgba(0,0,0,0.28); container-type:inline-size; }
 .inspector[hidden] { display:none !important; }
 .inspector-resizer { position:absolute; inset:0 auto 0 0; width:8px; min-height:0; padding:0; border:0; border-radius:0; background:transparent; cursor:col-resize; }
 .inspector-resizer:hover,.inspector-resizer:focus-visible { background:color-mix(in srgb,var(--accent) 35%,transparent); }
-
-/* Inspector Header */
 .inspector-heading { display:flex; align-items:center; justify-content:space-between; min-height:34px; margin-bottom:20px; padding-bottom:8px; border-bottom:1px solid var(--border); gap:8px; }
 .inspector-heading-main { display:flex; align-items:center; gap:8px; min-width:0; flex:1; }
 .inspector-heading h2 { margin:0; font:700 16px/1.2 var(--display-font); color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-/* Inspector Content Sections */
 .inspector-body { display:grid; gap:20px; }
 .inspector-section { display:grid; gap:8px; }
 .inspector-section > h3 { margin:0; padding:0 2px; color:var(--muted); font:700 11px/1.4 var(--display-font); letter-spacing:.06em; text-transform:uppercase; }
 .inspector-field-group,
 .bg-plugin-host,
 .plugin-settings-host { display:grid; gap:12px; width:100%; box-sizing:border-box; }
-
-/* Unified Input, Select, Textarea Controls (Baseline with command-search) */
 .inspector input:not([type="range"]):not([type="checkbox"]):not([type="color"]):not([type="radio"]):not([type="file"]),
 .inspector select { width:100%; min-height:34px; height:34px; padding:0 11px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-3); color:var(--text); font-size:13px; line-height:1.4; box-sizing:border-box; transition:border-color 0.15s ease, background 0.15s ease; }
 .inspector select { padding-right:26px; cursor:pointer; }
 .inspector textarea { width:100%; min-height:88px; padding:8px 11px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-3); color:var(--text); font-size:13px; line-height:1.4; font-family:inherit; box-sizing:border-box; resize:vertical; transition:border-color 0.15s ease, background 0.15s ease; }
-
 .inspector input:hover,
 .inspector select:hover,
 .inspector textarea:hover { border-color:color-mix(in srgb,var(--accent) 40%,var(--control)); }
 .inspector input:focus-visible,
 .inspector select:focus-visible,
 .inspector textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); background:var(--surface); }
-
-/* Color & Range Controls */
 .inspector input[type="color"] { width:100%; height:34px; min-height:34px; padding:2px 4px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-3); cursor:pointer; box-sizing:border-box; }
 .inspector input[type="range"] { width:100%; min-height:22px; margin:0; accent-color:var(--accent); cursor:pointer; }
 .inspector input[type="file"] { width:100%; min-height:34px; padding:4px 8px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-3); font-size:12px; color:var(--text); box-sizing:border-box; cursor:pointer; }
-
-/* Clickable Cards & List Rows (Lightweight List Items) */
 .inspector-card-clickable { display:flex; align-items:center; gap:10px; min-height:44px; padding:0 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-3); color:var(--text); cursor:pointer; transition:border-color 0.15s ease, background 0.15s ease; box-sizing:border-box; }
 .inspector-card-clickable:hover { border-color:var(--accent); background:var(--hover); }
 .inspector-card-clickable span { flex:1; font-weight:550; font-size:13px; }
 .inspector-card-clickable .icon { width:16px; height:16px; color:var(--accent); }
 .inspector-card-clickable .chev { opacity:0.5; width:15px; height:15px; }
-
 .inspector-widget-list { display:grid; gap:4px; }
 .inspector-row { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 10px; border:1px solid transparent; border-radius:var(--radius); background:var(--surface-3); color:var(--text); cursor:pointer; transition:all 0.15s ease; box-sizing:border-box; }
 .inspector-row:hover { border-color:var(--control); background:var(--hover); }
@@ -99,25 +74,15 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .inspector-row .row-action-toggle { display:grid; place-items:center; width:28px; height:28px; min-height:28px; padding:0; border:0; border-radius:var(--radius); background:transparent; color:var(--muted); cursor:pointer; }
 .inspector-row .row-action-toggle:hover { background:var(--hover); color:var(--accent); }
 .inspector-row .chev { opacity:0.4; width:14px; height:14px; }
-
-/* Top-Label Form Fields (Contract: Label Top, Control Below) */
 .inspector-field { display:grid; gap:6px; font-size:12.5px; color:var(--muted); width:100%; box-sizing:border-box; }
 .inspector-field > span { color:var(--text); font-size:12.5px; font-weight:550; }
-
-/* Range Field Contract (Header: Label + Val, Below: Slider) */
 .inspector-field-range { display:grid; gap:6px; font-size:12.5px; width:100%; box-sizing:border-box; }
 .inspector-field-range-header { display:flex; align-items:center; justify-content:space-between; width:100%; }
 .inspector-field-range-header > span:first-child { color:var(--text); font-size:12.5px; font-weight:550; }
 .inspector-field-range-header > span:last-child { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
-
-/* Checkboxes */
 .inspector-checkbox { display:flex; align-items:center; gap:9px; min-height:30px; padding:2px 0; font-size:12.5px; color:var(--text); cursor:pointer; user-select:none; }
 .inspector-checkbox input[type="checkbox"] { width:15px; height:15px; min-height:15px; accent-color:var(--accent); margin:0; cursor:pointer; }
-
-/* Paired 2-Column Fields */
 .inspector-fields-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; width:100%; box-sizing:border-box; }
-
-/* Notices, Empties, Buttons */
 .inspector-empty { color:var(--muted); font-size:12px; padding:8px 2px; line-height:1.5; }
 .inspector-notice { padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-3); color:var(--muted); font-size:12px; line-height:1.5; box-sizing:border-box; }
 .inspector-back { min-height:30px; height:30px; padding:0 9px; border:1px solid var(--control); border-radius:var(--radius); background:transparent; color:var(--muted); cursor:pointer; display:inline-flex; align-items:center; gap:5px; font-size:12px; }
@@ -125,15 +90,12 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .inspector-back .icon { width:13px; height:13px; }
 .inspector-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
 .inspector-actions button { min-height:34px; padding:0 12px; font-size:12.5px; }
-
-/* Catalog View (Single Scroll, Shared Shell with Command-Search) */
 .catalog-search-wrap { display:flex; align-items:center; gap:9px; width:100%; min-height:34px; height:34px; padding:0 11px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-3); color:var(--muted); box-sizing:border-box; margin-bottom:14px; transition:border-color 0.15s ease, background 0.15s ease; }
 .catalog-search-wrap:hover { border-color:color-mix(in srgb,var(--accent) 40%,var(--control)); background:var(--hover); }
 .catalog-search-wrap:focus-within { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); background:var(--surface-3); color:var(--text); }
 .catalog-search-wrap .icon { flex:0 0 auto; width:15px; height:15px; color:var(--muted); }
 .catalog-search-wrap input.catalog-search { flex:1 1 auto; min-width:0; height:30px; border:0; outline:0; padding:0; background:transparent; color:var(--text); font-size:13px; line-height:1.4; }
 .catalog-search-wrap input.catalog-search::-webkit-search-cancel-button { -webkit-appearance:none; }
-
 .catalog-list { display:grid; gap:10px; width:100%; box-sizing:border-box; }
 .catalog-category-group { display:grid; gap:4px; }
 .catalog-category-header { display:flex; align-items:center; gap:8px; width:100%; min-height:32px; padding:0 8px; border:0; border-radius:var(--radius); background:transparent; color:var(--text); font-size:12px; font-weight:600; text-align:left; cursor:pointer; transition:background 0.15s ease; }
@@ -144,8 +106,6 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .catalog-category-header.collapsed .chev { transform:rotate(0deg); }
 .catalog-category-body { display:grid; gap:4px; }
 .catalog-category-body[hidden] { display:none !important; }
-
-/* Catalog Item (Compact Double-Row List) */
 .catalog-card { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:52px; padding:8px 10px; border:1px solid transparent; border-radius:var(--radius); background:var(--surface-3); box-sizing:border-box; transition:background 0.15s ease, border-color 0.15s ease; }
 .catalog-card:hover { background:var(--hover); border-color:var(--control); }
 .catalog-card-info { flex:1; min-width:0; display:grid; gap:2px; }
@@ -153,11 +113,8 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .catalog-card-info small { font-size:11.5px; color:var(--muted); line-height:1.35; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .catalog-count-badge { display:inline-block; font-size:10px; color:var(--accent); font-weight:600; margin-top:2px; }
 .catalog-add-btn { flex:0 0 auto; display:inline-flex; align-items:center; gap:4px; min-height:30px; height:30px; padding:0 10px; font-size:12px; }
-
-/* Delete confirmation card */
 .delete-confirm-card { padding:12px; border:1px solid var(--danger); border-radius:var(--radius); background:color-mix(in srgb,var(--danger) 12%,transparent); margin-bottom:12px; }
 .delete-confirm-card p { margin:0 0 8px 0; font-size:12.5px; font-weight:600; }
-
 .ws-name-label { display:grid; gap:6px; color:var(--muted); font-size:12.5px; }
 .ws-name-label input { width:100%; min-height:34px; height:34px; padding:0 11px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-3); color:var(--text); font-size:13px; box-sizing:border-box; }
 .ws-name-label input:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); background:var(--surface); }
@@ -169,13 +126,10 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .ws-reset-options button[aria-pressed="true"] { border-color:var(--accent); background:var(--selected); box-shadow:inset 0 0 0 1px var(--accent); }
 .ws-reset-options strong { color:var(--text); font-size:12.5px; }
 .ws-reset-options span { color:var(--muted); font-size:11.5px; line-height:1.35; }
-
-/* Inspector Container Queries */
 @container (max-width: 300px) {
   .inspector-fields-row { grid-template-columns:1fr; }
   .inspector-heading h2 { font-size:15px; }
 }
-
 @media (max-width:1180px) {
   .inspector { position:fixed; inset:0 0 0 auto; z-index:50; width:100% !important; max-width:440px; border-left:1px solid var(--border); box-shadow:var(--shadow); }
   .inspector-resizer { display:none; }

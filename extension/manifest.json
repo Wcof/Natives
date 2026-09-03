@@ -23,7 +23,11 @@
     "https://mempool.space/*",
     "https://github-contributions-api.jogruber.de/*",
     "https://alfa-leetcode-api.onrender.com/*",
-    "https://i.pravatar.cc/*"
+    "https://i.pravatar.cc/*",
+    "https://api.coingecko.com/*",
+    "https://www.google.com/*",
+    "https://duckduckgo.com/*",
+    "https://en.wikipedia.org/*"
   ],
   "chrome_url_overrides": { "newtab": "space.html" },
   "action": {

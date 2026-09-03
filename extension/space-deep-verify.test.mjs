@@ -15,7 +15,7 @@ globalThis.fetch = async (url) => {
   if (lastFetchedUrl.includes('nasa.gov')) return { ok: true, json: async () => ({ url: 'https://apod.nasa.gov/apod/image/stars.jpg', media_type: 'image' }) };
   if (lastFetchedUrl.includes('wikimedia.org')) return { ok: true, json: async () => ({ image: { thumbnail: { source: 'https://upload.wikimedia.org/potd.jpg' } } }) };
   if (lastFetchedUrl.includes('open-meteo.com')) return { ok: true, json: async () => ({ current: { temperature_2m: 24.5, weather_code: 0, relative_humidity_2m: 50, wind_speed_10m: 12 }, daily: { time: ['2026-09-01', '2026-09-02'], weather_code: [0, 1], temperature_2m_max: [28, 27], temperature_2m_min: [18, 17] } }) };
-  if (lastFetchedUrl.includes('er-api.com')) return { ok: true, json: async () => ({ rates: { CNY: 7.24, EUR: 0.92, JPY: 155.2, GBP: 0.78 } }) };
+  if (lastFetchedUrl.includes('er-api.com')) return { ok: true, json: async () => ({ result: 'success', rates: { CNY: 7.24, EUR: 0.92, JPY: 155.2, GBP: 0.78 } }) };
   if (lastFetchedUrl.includes('coingecko.com')) return { ok: true, json: async () => ({ bitcoin: { usd: 68000, cny: 480000 } }) };
   if (lastFetchedUrl.includes('mempool.space/api/v1/blocks')) return { ok: true, json: async () => ([{ height: 860000, size: 1400000, tx_count: 2500, timestamp: Math.floor(Date.now() / 1000) - 300 }]) };
   if (lastFetchedUrl.includes('mempool.space/api/v1/fees')) return { ok: true, json: async () => ({ fastestFee: 15, halfHourFee: 10, hourFee: 8, minimumFee: 5 }) };

@@ -6,7 +6,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
     :host-context(body.space-widgets-hidden) .Slot {
       display: none !important;
     }
-
     .Widgets {
       color: #ffffff;
       width: 100%;
@@ -19,17 +18,14 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       user-select: auto;
       font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     }
-
     .Widgets a {
       color: inherit;
     }
-
     .Widgets input {
       font-family: inherit;
       color: inherit;
       border-color: white;
     }
-
     .Widgets input::placeholder {
       color: inherit;
       opacity: 0.5;
@@ -49,7 +45,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
     .Widgets .button--primary {
       background-color: var(--accent-color, var(--accent, #cdf24b));
     }
-
     .Widgets svg {
       filter: drop-shadow(0 0 0.5rem rgba(0, 0, 0, 0.25));
     }
@@ -63,7 +58,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
     .Widgets .theme-stroke {
       stroke: white;
     }
-
     .background-layer {
       position: absolute;
       inset: 0;
@@ -80,23 +74,19 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       font-size: 14px;
       background: #111;
     }
-
     .container {
       position: relative;
       width: 100%;
       height: 100%;
     }
-
     .Slot {
       position: absolute;
       pointer-events: none;
     }
-
     .Slot > * {
       margin: 1rem;
       pointer-events: all;
     }
-
     .Slot.topLeft {
       top: 0;
       left: 0;
@@ -147,7 +137,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       right: 0;
       text-align: right;
     }
-
     .Slot.free-slot-wrap {
       position: absolute;
       display: block;
@@ -155,13 +144,11 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
     .Slot.free > * {
       margin: 0;
     }
-
     .Widget {
       position: relative;
       transition: color 0.15s ease;
       user-select: auto;
     }
-
     h1, h2, h3, h4 {
       line-height: 1;
       margin: 0;
@@ -169,7 +156,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
     .weight-override h1, .weight-override h2, .weight-override h3, .weight-override h4 {
       font-weight: inherit;
     }
-
     .drag-selected {
       z-index: 1000 !important;
       outline: 2px dashed var(--accent, #cdf24b) !important;
@@ -230,7 +216,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       filter: brightness(1.1);
       transform: translateX(-50%) scale(1.03);
     }
-
     ${backgroundStyles}
     ${widgetStyles}
   `;

@@ -1,7 +1,5 @@
 import { escapeHtml } from '../sanitizer.js';
-
 const DEFAULT_TIME = Date.now();
-
 export const timeTrackerWidget = {
   key: 'widget/timeTracker',
   name: 'Time Tracker',
@@ -19,7 +17,6 @@ export const timeTrackerWidget = {
     const root = document.createElement('div');
     root.className = 'time-tracker-content';
     container.append(root);
-
     const renderTime = () => {
       const target = Number(data.time) || DEFAULT_TIME;
       const difference = target - Date.now();
@@ -27,7 +24,6 @@ export const timeTrackerWidget = {
         root.innerHTML = `<div class="completed">${escapeHtml(data.completedMessage || t('eventHasArrived', '目标时间已到'))}</div>`;
         return;
       }
-
       const title = data.title ? `<span class="title">${escapeHtml(data.title)}</span>` : '';
       const italic = data.italicizeTime ? ' italic-time' : '';
       if (data.displayMode !== 'detailed') {
@@ -36,7 +32,6 @@ export const timeTrackerWidget = {
         root.innerHTML = `<h3>${title}${title ? ' ' : ''}<span class="${italic.trim()}">${escapeHtml(relative)}</span></h3>`;
         return;
       }
-
       const secondsTotal = Math.floor(Math.abs(difference) / 1000);
       const parts = [
         [Math.floor(secondsTotal / 86400), t('days', '天')],
@@ -46,7 +41,6 @@ export const timeTrackerWidget = {
       ];
       root.innerHTML = `<div class="detailed">${title ? `<h3 class="title">${escapeHtml(data.title)}</h3>` : ''}<div class="time-info"><div class="time-components">${parts.map(([value, unit]) => `<span class="time-component"><span class="value">${value}</span><span class="unit${italic}">${escapeHtml(unit)}</span></span>`).join('')}</div></div></div>`;
     };
-
     renderTime();
     const intervalId = setInterval(renderTime, 1000);
     return () => {
@@ -87,7 +81,6 @@ export const timeTrackerWidget = {
     .TimeTracker .time-component .unit { font-size:.8em; opacity:.8; }
   `,
 };
-
 function relativeUnit(milliseconds) {
   const absoluteSeconds = Math.abs(milliseconds) / 1000;
   if (absoluteSeconds >= 86400) return { value: Math.round(milliseconds / 86400000), unit: 'day' };
@@ -95,7 +88,6 @@ function relativeUnit(milliseconds) {
   if (absoluteSeconds >= 60) return { value: Math.round(milliseconds / 60000), unit: 'minute' };
   return { value: Math.round(milliseconds / 1000), unit: 'second' };
 }
-
 function toLocalDateTime(timestamp) {
   const date = new Date(timestamp - new Date(timestamp).getTimezoneOffset() * 60000);
   return date.toISOString().slice(0, 16);
