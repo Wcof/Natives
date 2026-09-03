@@ -20,6 +20,15 @@ export const githubWidget = {
     container.replaceChildren();
 
     if (!user) {
+      const promptCard = document.createElement('div');
+      promptCard.className = 'activity-calendar-wrap github-unconfigured';
+      promptCard.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:center;gap:8px;padding:16px 20px;text-align:center;">
+          <svg class="icon" style="width:20px;height:20px;flex-shrink:0;"><use href="#i-box" /></svg>
+          <span style="font-size:13px;font-weight:500;">${t('githubPromptUsername', '设置 GitHub 用户名后显示贡献日历')}</span>
+        </div>
+      `;
+      container.append(promptCard);
       return () => container.replaceChildren();
     }
 

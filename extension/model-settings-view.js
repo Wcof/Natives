@@ -48,7 +48,7 @@ export function createModelSettingsView({ t, onAction }) {
           </section>
           <section class="model-settings-page" data-page-panel="gateway" hidden>
             <header class="model-page-heading"><div><h3 data-role="gatewayTitle"></h3><p class="muted" data-role="gatewayDescription"></p></div></header>
-            <section class="model-gateway-card" data-role="gateway"></section>
+            <div class="model-gateway-view" data-role="gateway"></div>
           </section>
           <section class="model-settings-page" data-page-panel="usage" hidden>
             <header class="model-page-heading"><div><h3 data-role="usageTitle"></h3><p class="muted" data-role="usageDescription"></p></div></header>
@@ -115,7 +115,7 @@ export function createModelSettingsView({ t, onAction }) {
       roles.usageNav.textContent = t('modelUsageRecords', '使用记录');
       roles.advancedNav.textContent = t('modelAdvancedSettings', '高级设置');
 
-      dialog.querySelector('#model-settings-title').textContent = t('modelSettings', '模型设置');
+      dialog.querySelector('#model-settings-title').textContent = t('modelSettings', '模型与服务');
       roles.subtitle.textContent = t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 模型和本地代理设置。');
       roles.customTitle.textContent = t('modelCustomModels', '自定义模型');
       roles.customDescription.textContent = t('modelCustomModelsDescription', '配置兼容接口、API Key 与可用模型。');

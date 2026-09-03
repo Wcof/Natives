@@ -1,4 +1,3 @@
-/* Theme tokens */
 :root,
 :root[data-theme="volt"] {
   color-scheme:dark;
@@ -28,7 +27,6 @@
   background-size:4px 4px;
 }
 
-/* Structure */
 * { box-sizing:border-box; }
 html,body { width:100%; height:100%; }
 body { margin:0; overflow:hidden; display:grid; grid-template-columns:var(--sidebar-width) minmax(0,1fr); grid-template-rows:52px minmax(0,1fr) 30px; color:var(--text); background:var(--surface); font:14px/1.4 var(--font); -webkit-font-smoothing:antialiased; }
@@ -285,9 +283,9 @@ dialog input { width:100%; padding:0 10px; }
 .usage-entry-fill { display:block; height:100%; background:var(--selected); transition:width .3s ease; }
 .usage-entry-size { font-variant-numeric:tabular-nums; }
 #toast { position:fixed; right:18px; bottom:18px; z-index:40; max-width:360px; padding:10px 13px; border:1px solid var(--border); border-radius:var(--radius); color:var(--text); background:var(--surface-3); box-shadow:var(--shadow); }
-#image-lightbox { max-width:96vw; max-height:96vh; padding:0; background:var(--backdrop); }.lightbox-image { display:block; max-width:94vw; max-height:92vh; object-fit:contain; }
+#image-lightbox { max-width:96vw; max-height:96vh; padding:0; background:var(--backdrop); }
+.lightbox-image { display:block; max-width:94vw; max-height:92vh; object-fit:contain; }
 
-/* Controlled SVG icons */
 .scope-toggle { display:inline-flex; align-items:center; gap:5px; }
 .usage-entry-label { display:inline-flex; align-items:center; gap:6px; min-width:0; }
 .usage-entry-label .icon { width:14px; height:14px; flex:0 0 auto; }
@@ -295,7 +293,6 @@ dialog input { width:100%; padding:0 10px; }
 .icon.spinning { animation:spin .9s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
-/* Responsive */
 @media (max-width:1180px) {
   .toolbar { flex-wrap:wrap; grid-auto-rows:auto; height:auto; padding:7px 10px; }
   body { grid-template-rows:auto minmax(0,1fr) 34px; }

@@ -15,6 +15,13 @@ export async function handleAdvancedAction(controller, action, target, revision)
     if (result?.accessKey) await copied(controller, result.accessKey, 'modelKeyRotatedAndCopied', '密钥已重置并复制到剪贴板');
   } else if (action === 'toggle-key-id') {
     await controller.mutate(() => controller.api.updateGatewayKey({ keyId: target.dataset.keyId, enabled: target.dataset.enabled === 'true', expectedRevision: revision }));
+  } else if (action === 'rename-key-id') {
+    const current = target.dataset.currentName || '';
+    controller.promptInput(controller.t('modelPromptKeyName', '请输入新的密钥名称：'), current, (name) => {
+      if (name && name !== current) {
+        controller.mutate(() => controller.api.updateGatewayKey({ keyId: target.dataset.keyId, name, expectedRevision: revision }));
+      }
+    });
   } else if (action === 'delete-key-id') {
     controller.confirmDelete(controller.t('modelDeleteKeyConfirm', '确定删除此访问密钥吗？'), () => controller.api.deleteGatewayKey({ keyId: target.dataset.keyId, expectedRevision: revision }));
   } else return false;

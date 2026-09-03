@@ -20,6 +20,67 @@ export const todoWidget = {
     const root = document.createElement('div');
     root.className = 'todo-content';
 
+    let timerInterval = null;
+    let timerRemaining = (data.focusDuration || 25) * 60;
+    let timerRunning = false;
+
+    // Optional Pomodoro Focus bar
+    if (data.showPomodoro) {
+      const pomodoroBar = document.createElement('div');
+      pomodoroBar.className = 'todo-pomodoro-bar';
+      
+      const timeDisplay = document.createElement('span');
+      timeDisplay.className = 'todo-pomodoro-time';
+      const formatTime = (sec) => {
+        const m = Math.floor(sec / 60).toString().padStart(2, '0');
+        const s = (sec % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+      };
+      timeDisplay.textContent = formatTime(timerRemaining);
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'todo-pomodoro-btn';
+      toggleBtn.textContent = '▶ 专注';
+
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'todo-pomodoro-btn reset';
+      resetBtn.textContent = '↺';
+      resetBtn.title = t('reset', '重置');
+
+      toggleBtn.onclick = () => {
+        timerRunning = !timerRunning;
+        toggleBtn.textContent = timerRunning ? '⏸ 暂停' : '▶ 专注';
+        if (timerRunning) {
+          timerInterval = setInterval(() => {
+            if (timerRemaining > 0) {
+              timerRemaining--;
+              timeDisplay.textContent = formatTime(timerRemaining);
+            } else {
+              clearInterval(timerInterval);
+              timerRunning = false;
+              toggleBtn.textContent = '▶ 专注';
+              timeDisplay.textContent = '🎉 完成!';
+            }
+          }, 1000);
+        } else {
+          clearInterval(timerInterval);
+        }
+      };
+
+      resetBtn.onclick = () => {
+        clearInterval(timerInterval);
+        timerRunning = false;
+        toggleBtn.textContent = '▶ 专注';
+        timerRemaining = (data.focusDuration || 25) * 60;
+        timeDisplay.textContent = formatTime(timerRemaining);
+      };
+
+      pomodoroBar.append(timeDisplay, toggleBtn, resetBtn);
+      root.append(pomodoroBar);
+    }
+
     const list = document.createElement('div');
     list.className = 'TodoList';
 
@@ -73,19 +134,73 @@ export const todoWidget = {
     root.append(list, addInput);
     container.append(root);
 
-    return () => container.replaceChildren();
+    return () => {
+      if (timerInterval) clearInterval(timerInterval);
+      container.replaceChildren();
+    };
   },
   renderSettings(container, data = {}, onChange = () => {}, { t = (k, f) => f || k } = {}) {
     container.replaceChildren();
-    const notice = document.createElement('div');
-    notice.className = 'inspector-notice';
-    notice.textContent = t('todoNotice', '待办事项支持在 Dashboard 上直接勾选完成、回车新增与悬停删除。');
-    container.append(notice);
+    const wrap = document.createElement('div');
+    wrap.className = 'inspector-field-group';
+    wrap.innerHTML = `
+      <label class="inspector-checkbox">
+        <input type="checkbox" id="td-pomodoro" ${data.showPomodoro ? 'checked' : ''} />
+        <span>${t('enablePomodoroFocus', '启用番茄钟 / 专注计时器')}</span>
+      </label>
+      <label class="inspector-field">
+        <span>${t('pomodoroDuration', '单轮专注时长（分钟）')}</span>
+        <input type="number" id="td-pomodoro-dur" min="5" max="120" value="${data.focusDuration || 25}" />
+      </label>
+      <div class="inspector-notice">
+        ${t('todoNotice', '待办事项支持在 Dashboard 上直接勾选完成、回车新增与悬停删除。')}
+      </div>
+    `;
+    const update = () => onChange({
+      ...data,
+      showPomodoro: container.querySelector('#td-pomodoro').checked,
+      focusDuration: Number(container.querySelector('#td-pomodoro-dur').value) || 25,
+    });
+    container.querySelectorAll('input').forEach((el) => { el.onchange = update; });
+    container.append(wrap);
   },
   styles: `
     .Todo .todo-content {
       display: inline-flex;
       flex-direction: column;
+    }
+    .Todo .todo-pomodoro-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 4px 10px;
+      margin-bottom: 8px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.25);
+    }
+    .Todo .todo-pomodoro-time {
+      font-variant-numeric: tabular-nums;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .Todo .todo-pomodoro-btn {
+      min-height: 22px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.15);
+      color: inherit;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .Todo .todo-pomodoro-btn.reset {
+      padding: 0 6px;
+    }
+    .Todo .todo-pomodoro-btn:hover {
+      background: rgba(255,255,255,0.3);
     }
     .Todo .TodoList { display:inline-block; margin:.25em 0; max-height:35vh; overflow:hidden; }
     .Todo .TodoList:hover { overflow-y:auto; }

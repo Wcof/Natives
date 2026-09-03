@@ -6,9 +6,9 @@ import { setupTestDomEnvironment } from './test-dom-mock.js';
 
 setupTestDomEnvironment();
 
-console.log('--- 29 Space Widgets Structural & Baseline Verification ---');
+console.log('--- 24 Space Widgets Structural & Baseline Verification ---');
 
-assert.equal(WIDGET_KEYS.length, 29, 'Must register exactly 29 widgets');
+assert.equal(WIDGET_KEYS.length, 24, 'Must register exactly 24 widgets');
 const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
 assert.deepEqual(manifest.optional_permissions?.sort(), ['bookmarks', 'topSites']);
 // Every host the network widgets fetch must stay declared, or real Chrome CORS-blocks them.
@@ -96,18 +96,6 @@ function renderWidget(key, data = widgetPlugins[key].defaultData) {
   dispose();
 }
 
-{
-  const { container, dispose } = renderWidget('widget/timeTracker', {
-    time: Date.now() + 86400000,
-    title: 'Release',
-    displayMode: 'detailed',
-    showCompletedMessage: true,
-  });
-  assert.equal(container.querySelectorAll('.time-component').length, 4);
-  assert.ok(container.querySelector('.detailed'));
-  dispose();
-}
-
 const dashboardStyles = buildDashboardStyles({
   widgetStyles: Object.values(widgetPlugins).map((plugin) => plugin.styles || '').join('\n'),
 });
@@ -117,4 +105,4 @@ assert.doesNotMatch(dashboardStyles, /\.Weather[^}]*backdrop-filter/s);
 assert.doesNotMatch(dashboardStyles, /\.Notes[^}]*backdrop-filter/s);
 assert.doesNotMatch(dashboardStyles, /\.Trello[^}]*backdrop-filter/s);
 
-console.log('\nAll 29 widgets pass structural and DOM contract verification!');
+console.log('\nAll 24 widgets pass structural and DOM contract verification!');

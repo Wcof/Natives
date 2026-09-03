@@ -148,9 +148,22 @@ class ModelSettings {
     if (action === 'start-gateway') return this.mutate(() => this.api.startGateway({ expectedRevision: revision }));
     if (action === 'stop-gateway') return this.mutate(() => this.api.stopGateway({ expectedRevision: revision }));
     if (action === 'restart-gateway') return this.mutate(() => this.api.restartGateway({ expectedRevision: revision }));
+    if (action === 'refresh-gateway') {
+      this.view.setLoading(true);
+      try {
+        this.snapshot = await this.api.loadSnapshot();
+        this.view.showNotice(this.t('modelStatusRefreshed', '状态已刷新'));
+      } catch (error) {
+        this.showError(error);
+      } finally {
+        this.view.setLoading(false);
+        this.render();
+      }
+      return;
+    }
     if (action === 'resident') return this.mutate(() => this.api.setResident({ resident: target.checked, expectedRevision: revision }));
     if (action === 'copy-endpoint') return this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'));
-    if (action === 'reveal-key') return this.copyAccessKey();
+    if (action === 'reveal-key' || action === 'copy-first-key') return this.copyAccessKey();
     if (action === 'rotate-key') return this.rotateAccessKey();
     if (action === 'oauth-start') return this.pendingOAuth?.provider === target.dataset.provider ? this.cancelOAuth() : this.startOAuth(target.dataset.provider);
     if (action === 'toggle-account') return this.mutate(() => this.api.setAccountEnabled({ accountId: target.dataset.accountId, enabled: target.dataset.enabled === 'true', expectedRevision: revision }));
@@ -317,5 +330,24 @@ class ModelSettings {
     actions.append(cancel, submit); form.append(text, actions); dialog.append(form); document.body.append(dialog);
     dialog.addEventListener('close', () => { if (dialog.returnValue === 'default') this.mutate(work, options); dialog.remove(); }, { once: true });
     dialog.showModal();
+  }
+
+  promptInput(message, initialValue, onConfirm) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'model-confirm-dialog';
+    const form = document.createElement('form'); form.method = 'dialog';
+    const text = document.createElement('p'); text.textContent = message;
+    const input = document.createElement('input'); input.type = 'text'; input.value = initialValue || '';
+    input.style.cssText = 'width:100%;min-height:36px;padding:6px 12px;margin:10px 0 16px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);box-sizing:border-box;color:var(--text);font-size:13px;';
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.value = 'cancel'; cancel.textContent = this.t('cancel', '取消');
+    const submit = document.createElement('button'); submit.value = 'default'; submit.className = 'primary'; submit.textContent = this.t('save', '保存');
+    actions.append(cancel, submit); form.append(text, input, actions); dialog.append(form); document.body.append(dialog);
+    dialog.addEventListener('close', () => {
+      if (dialog.returnValue === 'default' && input.value.trim()) onConfirm(input.value.trim());
+      dialog.remove();
+    }, { once: true });
+    dialog.showModal();
+    input.focus(); input.select();
   }
 }

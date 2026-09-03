@@ -94,6 +94,65 @@ fn authorization_accepts_home_and_home_ancestors_read() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn authorization_accepts_external_volumes_read_and_volume_contents_write() {
+    let vol_path = Path::new("/Volumes");
+    if vol_path.exists() {
+        let auth_read = FileAccessPolicy::authorize_path_buf(vol_path, OperationPolicy::Read);
+        assert!(
+            auth_read.is_ok(),
+            "/Volumes container directory must be authorized for read"
+        );
+        let auth_write = FileAccessPolicy::authorize_path_buf(vol_path, OperationPolicy::Write);
+        assert!(
+            auth_write.is_err(),
+            "/Volumes container directory must not be authorized for write"
+        );
+    }
+
+    let untitled = Path::new("/Volumes/UNTITLED");
+    if untitled.exists() {
+        let auth_read = FileAccessPolicy::authorize_path_buf(untitled, OperationPolicy::Read);
+        assert!(
+            auth_read.is_ok(),
+            "Mounted volume root must be authorized for read"
+        );
+        let auth_write = FileAccessPolicy::authorize_path_buf(untitled, OperationPolicy::Write);
+        assert!(
+            auth_write.is_ok(),
+            "Mounted volume root must be authorized for write"
+        );
+
+        // Subpaths inside the mounted volume (including pending creations) must be authorized for write
+        let sub_path = untitled.join("pending_new_file.txt");
+        let auth_sub_write =
+            FileAccessPolicy::authorize_path_buf(&sub_path, OperationPolicy::Write);
+        assert!(
+            auth_sub_write.is_ok(),
+            "Pending file inside volume must be authorized for write"
+        );
+
+        // Sensitive dotfiles inside external volumes must still be denied by blocklist
+        let ssh_path = untitled.join(".ssh").join("id_rsa");
+        let auth_ssh = FileAccessPolicy::authorize_path_buf(&ssh_path, OperationPolicy::Read);
+        assert!(
+            auth_ssh.is_err(),
+            "Sensitive files inside volume must stay denied"
+        );
+    }
+
+    // Unrelated system directories outside allowed list must still be rejected
+    let etc_path = Path::new("/etc");
+    if etc_path.exists() {
+        let auth_etc_write = FileAccessPolicy::authorize_path_buf(etc_path, OperationPolicy::Write);
+        assert!(
+            auth_etc_write.is_err(),
+            "/etc must not be authorized for write"
+        );
+    }
+}
+
 #[test]
 fn detect_project_badge_priority() {
     let mut names = std::collections::HashSet::new();

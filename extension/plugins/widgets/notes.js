@@ -72,6 +72,43 @@ export const notesWidget = {
     };
 
     root.append(viewEl, editArea);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'notes-quick-bar';
+    toolbar.innerHTML = `
+      <button type="button" class="notes-chip-btn" data-act="prompt" title="快速插入 AI 提示词框架">✨ Prompt 模板</button>
+      <button type="button" class="notes-chip-btn" data-act="code" title="快速插入代码块草稿">💻 代码草稿</button>
+      <button type="button" class="notes-chip-btn" data-act="copy" title="一键复制全部便签内容">📋 复制</button>
+    `;
+
+    toolbar.onclick = (e) => {
+      const btn = e.target.closest('.notes-chip-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      const act = btn.dataset.act;
+      if (act === 'copy') {
+        const curText = editArea.value || data.content || '';
+        if (curText) {
+          navigator.clipboard?.writeText(curText);
+          btn.textContent = '✓ 已复制';
+          setTimeout(() => { btn.textContent = '📋 复制'; }, 1500);
+        }
+      } else if (act === 'prompt') {
+        const tpl = `## 角色设定\n你是一名资深的工程师，擅长系统架构与代码审计。\n\n## 背景与目标\n\n## 约束规范\n- 符合生产环境安全标准\n- 严禁硬编码敏感凭证\n`;
+        const nextVal = editArea.value ? `${editArea.value}\n\n${tpl}` : tpl;
+        editArea.value = nextVal;
+        viewEl.innerHTML = formatNoteContent(nextVal);
+        onDataChange?.({ ...data, content: nextVal });
+      } else if (act === 'code') {
+        const tpl = `\`\`\`typescript\n// 快速测试脚本 / AI 生成代码片段\nfunction executeTask() {\n  \n}\n\`\`\``;
+        const nextVal = editArea.value ? `${editArea.value}\n\n${tpl}` : tpl;
+        editArea.value = nextVal;
+        viewEl.innerHTML = formatNoteContent(nextVal);
+        onDataChange?.({ ...data, content: nextVal });
+      }
+    };
+
+    root.append(toolbar);
     container.append(root);
 
     return () => container.replaceChildren();
@@ -97,6 +134,30 @@ export const notesWidget = {
       font-size:inherit;
       resize: vertical;
       box-sizing: border-box;
+    }
+    .Notes .notes-quick-bar {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .Notes .notes-chip-btn {
+      min-height: 22px;
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.08);
+      color: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      opacity: 0.75;
+      transition: all .15s ease;
+    }
+    .Notes .notes-chip-btn:hover {
+      opacity: 1;
+      background: rgba(255,255,255,0.18);
+      border-color: rgba(255,255,255,0.4);
     }
   `,
 };

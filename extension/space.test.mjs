@@ -16,11 +16,11 @@ import { createSpaceDeleteModal } from './space-modal-delete.js';
 console.log('--- Space Plugin Registry & Modals Test ---');
 
 // 1. Check registry completeness and consistency
-assert.equal(WIDGET_KEYS.length, 29, 'Must have exactly 29 Chromium widgets');
+assert.equal(WIDGET_KEYS.length, 24, 'Must have exactly 24 Chromium widgets');
 assert.equal(BACKGROUND_KEYS.length, 9, 'Must have exactly 9 backgrounds');
 assert.equal(POSITIONS.length, 10, 'Must have 9-grid + free layout positions');
 
-assert.equal(Object.keys(widgetPlugins).length, 29, 'widgetPlugins must contain 29 entries');
+assert.equal(Object.keys(widgetPlugins).length, 24, 'widgetPlugins must contain 24 entries');
 assert.equal(Object.keys(backgroundPlugins).length, 9, 'backgroundPlugins must contain 9 entries');
 
 for (const key of WIDGET_KEYS) {

@@ -302,6 +302,11 @@ fn reset_workspace_to_built_in_templates() {
         .create("ToReset", Some("focus"))
         .expect("create focus");
     assert_eq!(created.widgets.len(), 3);
+    let focus_keys: Vec<&str> = created.widgets.iter().map(|w| w.key.as_str()).collect();
+    assert_eq!(
+        focus_keys,
+        vec!["widget/time", "widget/todo", "widget/notes"]
+    );
 
     // Reset to blank
     let reset_blank = store
@@ -315,7 +320,15 @@ fn reset_workspace_to_built_in_templates() {
         .reset(&created.workspace.id, "classic", Some(reset_blank.revision))
         .expect("reset to classic");
     assert_eq!(reset_classic.widgets.len(), 3);
-    assert!(reset_classic.widgets.iter().any(|w| w.key == "widget/time"));
+    let classic_keys: Vec<&str> = reset_classic
+        .widgets
+        .iter()
+        .map(|w| w.key.as_str())
+        .collect();
+    assert_eq!(
+        classic_keys,
+        vec!["widget/time", "widget/greeting", "widget/quote"]
+    );
 
     // Revision conflict on reset
     let conflict = store
@@ -326,6 +339,68 @@ fn reset_workspace_to_built_in_templates() {
         )
         .expect_err("stale revision conflict");
     assert!(matches!(conflict, WorkspaceError::RevisionConflict { .. }));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn migration_purges_retired_widgets_and_cleans_personal_templates() {
+    let (store, path) = temp_store("migration-retired");
+    let ws = store.create("TestWs", Some("blank")).expect("create blank");
+
+    // Insert retired widgets directly into workspace_widgets
+    {
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO workspace_widgets (id, workspace_id, key, \"order\", enabled, config_json, display_json, config_version)
+             VALUES ('w1', ?1, 'widget/joke', 0, 1, '{}', '{}', 1),
+                    ('w2', ?1, 'widget/time', 1, 1, '{}', '{}', 1),
+                    ('w3', ?1, 'widget/bitcoin', 2, 1, '{}', '{}', 1)",
+            [&ws.workspace.id],
+        ).unwrap();
+        // Insert personal template containing retired widgets
+        let payload = serde_json::json!({
+            "background_json": {"key": "background/colour"},
+            "widgets": [
+                {"id": "pw1", "workspaceId": "", "key": "widget/joke", "order": 0, "enabled": true, "configJson": {}, "displayJson": {}},
+                {"id": "pw2", "workspaceId": "", "key": "widget/todo", "order": 1, "enabled": true, "configJson": {}, "displayJson": {}}
+            ]
+        });
+        conn.execute(
+            "INSERT INTO workspace_templates (id, origin, name, payload_json, created_at, updated_at)
+             VALUES ('tpl-retired', 'personal', 'RetiredTpl', ?1, 'now', 'now')",
+            [&payload.to_string()],
+        ).unwrap();
+    }
+
+    let initial_rev = store.snapshot(&ws.workspace.id).unwrap().revision;
+
+    // Run migration
+    store.migrate().expect("run migration");
+
+    // Verify workspace widgets were cleaned up
+    let snap = store.snapshot(&ws.workspace.id).unwrap();
+    assert_eq!(snap.widgets.len(), 1);
+    assert_eq!(snap.widgets[0].key, "widget/time");
+    assert_eq!(snap.revision, initial_rev + 1);
+
+    // Verify personal template was cleaned up
+    let tpl_list = store.template_list().unwrap();
+    assert!(tpl_list.iter().any(|t| t.id == "tpl-retired"));
+    let instantiated = store
+        .instantiate_template("tpl-retired", "CleanedFromTpl")
+        .unwrap();
+    assert_eq!(instantiated.widgets.len(), 1);
+    assert_eq!(instantiated.widgets[0].key, "widget/todo");
+
+    // Run remigration (idempotency)
+    let rev_before_remigrate = store.snapshot(&ws.workspace.id).unwrap().revision;
+    store.migrate().expect("run remigration");
+    let rev_after_remigrate = store.snapshot(&ws.workspace.id).unwrap().revision;
+    assert_eq!(
+        rev_before_remigrate, rev_after_remigrate,
+        "Remigration must be idempotent"
+    );
 
     let _ = std::fs::remove_file(path);
 }

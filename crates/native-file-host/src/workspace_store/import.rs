@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 
-use super::schema::{validate_background_key, validate_widget_key};
+use super::schema::{validate_background_key, validate_widget_key, RETIRED_WIDGET_KEYS};
 use super::types::{StoreResult, TemplatePayload, WidgetRecord, WorkspaceError, WorkspaceSnapshot};
 
 pub fn builtin_template_payload(key: &str) -> StoreResult<TemplatePayload> {
@@ -76,12 +76,11 @@ pub fn parse_tabliss_config(value: &Value) -> StoreResult<TemplatePayload> {
             || key == "widget/js"
             || key == "widget/nba"
             || key == "widget/randomMessage"
+            || RETIRED_WIDGET_KEYS.contains(&key.as_str())
         {
             continue;
         }
-        if validate_widget_key(&key).is_err() {
-            continue;
-        }
+        validate_widget_key(&key)?;
         let order = entry
             .get("order")
             .and_then(Value::as_i64)

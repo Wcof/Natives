@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -32,12 +33,15 @@ func (e *Engine) reconfigureGateway(snapshot domain.Snapshot, mutationErr error)
 		var port int
 		port, err = e.runtime.Start(ctx, restarting, e.secrets, e.authStore, e.runtimeConfigPath)
 		if err == nil {
-			snapshot, err = e.repo.Update(nil, func(current *domain.Snapshot) error {
-				current.Gateway.State = "running"
-				current.Gateway.Port = port
-				current.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
-				return nil
-			})
+				snapshot, err = e.repo.Update(nil, func(current *domain.Snapshot) error {
+					current.Gateway.State = "running"
+					current.Gateway.Port = port
+					current.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+					current.Gateway.PID = os.Getpid()
+					current.Gateway.KernelVersion = "v7.2.139"
+					current.Gateway.Version = "v0.2.25"
+					return nil
+				})
 		}
 	}
 	if err != nil {
@@ -101,5 +105,6 @@ func resetGateway(snapshot *domain.Snapshot) error {
 	snapshot.Gateway.Port = 0
 	snapshot.Gateway.BaseURL = ""
 	snapshot.Gateway.ErrorCode = ""
+	snapshot.Gateway.PID = 0
 	return nil
 }

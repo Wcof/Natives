@@ -170,9 +170,9 @@ export function createSpaceInspector({
     bgSec.className = 'inspector-section';
     bgSec.innerHTML = `
       <h3>${t('background', '背景')}</h3>
-      <div class="inspector-card-clickable" id="bg-overview-card">
-        <svg class="icon"><use href="#i-image" /></svg><span>${bgName}</span><svg class="icon chev"><use href="#i-chevron-right" /></svg>
-      </div>
+      <button type="button" class="inspector-card-clickable" id="bg-overview-card" aria-label="${t('background', '背景')}: ${bgName}">
+        <svg class="icon" aria-hidden="true"><use href="#i-image" /></svg><span>${bgName}</span><svg class="icon chev" aria-hidden="true"><use href="#i-chevron-right" /></svg>
+      </button>
     `;
     bgSec.querySelector('#bg-overview-card').onclick = () => routeTo('background');
     body.append(bgSec);
@@ -181,11 +181,11 @@ export function createSpaceInspector({
     const widgetSec = document.createElement('div');
     widgetSec.className = 'inspector-section';
     widgetSec.innerHTML = `
-      <div class="inspector-heading-main">
+      <div class="inspector-section-header">
         <h3>${t('widgets', '卡片')}</h3>
-        <button class="icon-button add-widget-trigger" type="button" title="${t('addWidget', '添加卡片')}"><svg class="icon"><use href="#i-plus" /></svg></button>
+        <button class="icon-button add-widget-trigger" type="button" title="${t('addWidget', '添加卡片')}" aria-label="${t('addWidget', '添加卡片')}"><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></button>
       </div>
-      <div class="inspector-widget-list"></div>
+      <div class="inspector-widget-list" role="list" aria-label="${t('widgets', '卡片')}"></div>
     `;
     widgetSec.querySelector('.add-widget-trigger').onclick = () => routeTo('catalog');
 
@@ -200,11 +200,12 @@ export function createSpaceInspector({
       widgets.forEach((w) => {
         const row = document.createElement('div');
         row.className = `inspector-row ${w.enabled ? '' : 'disabled'}`;
+        row.setAttribute('role', 'listitem');
         const name = pluginName(w.key, language, widgetPlugins[w.key]?.name || w.key);
         row.innerHTML = `
-          <svg class="icon"><use href="#i-box" /></svg><span>${name}</span>
-          <button type="button" class="row-action-toggle" title="${w.enabled ? t('disable', '停用') : t('enable', '启用')}"><svg class="icon"><use href="#i-check" /></svg></button>
-          <svg class="icon chev"><use href="#i-chevron-right" /></svg>
+          <svg class="icon" aria-hidden="true"><use href="#i-box" /></svg><span>${name}</span>
+          <button type="button" class="row-action-toggle" title="${w.enabled ? t('disable', '停用') : t('enable', '启用')}" aria-label="${w.enabled ? t('disable', '停用') : t('enable', '启用')} ${name}" aria-pressed="${w.enabled ? 'true' : 'false'}"><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg></button>
+          <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-right" /></svg>
         `;
         row.onclick = (e) => {
           if (e.target.closest('.row-action-toggle')) {
@@ -228,10 +229,10 @@ export function createSpaceInspector({
     manageSec.className = 'inspector-section';
     manageSec.innerHTML = `
       <h3>${t('management', '配置管理')}</h3>
-      <div class="inspector-actions">
+      <div class="inspector-actions" role="group" aria-label="${t('management', '配置管理')}">
         <button id="import-tabliss-btn" type="button">${t('importTabliss', '导入 Tabliss 配置')}</button>
         <button id="export-tabliss-btn" type="button">${t('exportTabliss', '导出 Tabliss 配置')}</button>
-        <button id="reset-workspace-btn" type="button">${t('resetWorkspace', '重置空间...')}</button>
+        <button id="reset-workspace-btn" class="danger" type="button">${t('resetWorkspace', '重置空间...')}</button>
       </div>
     `;
     manageSec.querySelector('#import-tabliss-btn').onclick = () => importerCtrl.startImportFile(inspectorContainer, activeWorkspaceId, currentSnapshot);

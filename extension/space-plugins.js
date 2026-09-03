@@ -10,7 +10,6 @@ export { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml, back
 
 const DEFAULT_ZH_NAMES = {
   'widget/binaryTime': '二进制时钟',
-  'widget/bitcoin': '比特币内存池',
   'widget/bookmarks': '书签',
   'widget/countdown': '倒计时',
   'widget/css': '自定义 CSS',
@@ -20,10 +19,7 @@ const DEFAULT_ZH_NAMES = {
   'widget/greeting': '问候语',
   'widget/html': '自定义 HTML',
   'widget/ipInfo': 'IP 信息',
-  'widget/joke': '笑话',
-  'widget/leetcode': 'LeetCode 挑战',
   'widget/links': '快速链接',
-  'widget/literatureClock': '文学时钟',
   'widget/message': '消息',
   'widget/notes': '便签',
   'widget/palette': '随机调色板',
@@ -32,7 +28,6 @@ const DEFAULT_ZH_NAMES = {
   'widget/since': '时间跨度',
   'widget/tallyCounter': '计数器',
   'widget/time': '时间',
-  'widget/timeTracker': '时间追踪器',
   'widget/todo': '待办事项',
   'widget/topSites': '常用站点',
   'widget/trello': 'Trello 看板',

@@ -6,7 +6,6 @@ use super::types::{StoreResult, WidgetRecord, WorkspaceError};
 
 pub const WIDGET_KEYS: &[&str] = &[
     "widget/binaryTime",
-    "widget/bitcoin",
     "widget/bookmarks",
     "widget/countdown",
     "widget/css",
@@ -16,10 +15,7 @@ pub const WIDGET_KEYS: &[&str] = &[
     "widget/greeting",
     "widget/html",
     "widget/ipInfo",
-    "widget/joke",
-    "widget/leetcode",
     "widget/links",
-    "widget/literatureClock",
     "widget/message",
     "widget/notes",
     "widget/palette",
@@ -28,12 +24,19 @@ pub const WIDGET_KEYS: &[&str] = &[
     "widget/since",
     "widget/tallyCounter",
     "widget/time",
-    "widget/timeTracker",
     "widget/todo",
     "widget/topSites",
     "widget/trello",
     "widget/weather",
     "widget/workHours",
+];
+
+pub const RETIRED_WIDGET_KEYS: &[&str] = &[
+    "widget/joke",
+    "widget/bitcoin",
+    "widget/leetcode",
+    "widget/literatureClock",
+    "widget/timeTracker",
 ];
 
 pub const BACKGROUND_KEYS: &[&str] = &[
@@ -347,7 +350,79 @@ pub fn migrate_db(conn: &Connection) -> StoreResult<()> {
         "DROP INDEX IF EXISTS idx_widgets_workspace;
          CREATE INDEX idx_widgets_workspace ON workspace_widgets(workspace_id, \"order\");",
     )?;
+
+    // Idempotently purge retired widgets and clean up personal template payloads
+    clean_retired_widgets(&tx)?;
+
     tx.commit()?;
+    Ok(())
+}
+
+fn clean_retired_widgets(tx: &Connection) -> StoreResult<()> {
+    // 1. Identify affected workspaces with retired widgets
+    let mut affected_workspaces = Vec::new();
+    {
+        let mut stmt = tx.prepare(
+            "SELECT DISTINCT workspace_id FROM workspace_widgets
+             WHERE key IN ('widget/joke', 'widget/bitcoin', 'widget/leetcode', 'widget/literatureClock', 'widget/timeTracker')"
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            affected_workspaces.push(row?);
+        }
+    }
+
+    if !affected_workspaces.len() == 0 || !affected_workspaces.is_empty() {
+        tx.execute(
+            "DELETE FROM workspace_widgets
+             WHERE key IN ('widget/joke', 'widget/bitcoin', 'widget/leetcode', 'widget/literatureClock', 'widget/timeTracker')",
+            [],
+        )?;
+        for ws_id in &affected_workspaces {
+            tx.execute(
+                "UPDATE workspaces SET revision = revision + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+                [ws_id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE workspace_meta SET revision = revision + 1 WHERE id = 1",
+            [],
+        )?;
+    }
+
+    // 2. Clean personal templates containing retired widgets
+    let mut templates_to_update = Vec::new();
+    {
+        let mut stmt = tx.prepare(
+            "SELECT id, payload_json FROM workspace_templates WHERE origin = 'personal'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, payload_str) = row?;
+            if let Ok(mut payload) = serde_json::from_str::<Value>(&payload_str) {
+                if let Some(widgets) = payload.get_mut("widgets").and_then(Value::as_array_mut) {
+                    let orig_len = widgets.len();
+                    widgets.retain(|w| {
+                        let k = w.get("key").and_then(Value::as_str).unwrap_or("");
+                        !RETIRED_WIDGET_KEYS.contains(&k)
+                    });
+                    if widgets.len() != orig_len {
+                        templates_to_update
+                            .push((id, serde_json::to_string(&payload).unwrap_or(payload_str)));
+                    }
+                }
+            }
+        }
+    }
+    for (id, new_payload) in templates_to_update {
+        tx.execute(
+            "UPDATE workspace_templates SET payload_json = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?2",
+            [&new_payload, &id],
+        )?;
+    }
+
     Ok(())
 }
 

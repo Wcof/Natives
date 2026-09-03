@@ -1,5 +1,10 @@
 import { escapeHtml } from '../sanitizer.js';
 const PROVIDERS = {
+  chatgpt: { name: 'ChatGPT', action: 'https://chatgpt.com/', param: 'q', ai: true },
+  deepseek: { name: 'DeepSeek', action: 'https://chat.deepseek.com/', param: 'q', ai: true },
+  claude: { name: 'Claude', action: 'https://claude.ai/new', param: 'q', ai: true },
+  kimi: { name: 'Kimi', action: 'https://kimi.moonshot.cn/', param: 'q', ai: true },
+  metaso: { name: '秘塔 AI 搜索', action: 'https://metaso.cn/', param: 'q', ai: true },
   google: { name: 'Google', action: 'https://www.google.com/search', param: 'q' },
   bing: { name: 'Bing', action: 'https://www.bing.com/search', param: 'q' },
   baidu: { name: '百度', action: 'https://www.baidu.com/s', param: 'wd' },
@@ -161,7 +166,12 @@ export const searchWidget = {
       <label class="inspector-field">
         <span>${t('searchProvider', '搜索引擎')}</span>
         <select id="s-provider">
-          ${Object.entries(PROVIDERS).map(([k, v]) => `<option value="${k}" ${k === curProvider ? 'selected' : ''}>${v.name}</option>`).join('')}
+          <optgroup label="AI 对话与搜索">
+            ${Object.entries(PROVIDERS).filter(([, v]) => v.ai).map(([k, v]) => `<option value="${k}" ${k === curProvider ? 'selected' : ''}>${v.name}</option>`).join('')}
+          </optgroup>
+          <optgroup label="通用搜索引擎">
+            ${Object.entries(PROVIDERS).filter(([, v]) => !v.ai).map(([k, v]) => `<option value="${k}" ${k === curProvider ? 'selected' : ''}>${v.name}</option>`).join('')}
+          </optgroup>
         </select>
       </label>
       <label class="inspector-field">

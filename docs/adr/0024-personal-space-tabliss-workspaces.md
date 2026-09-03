@@ -20,7 +20,7 @@
 
 TablissNG 源码（Chromium 目标）已确认可按 Natives 目标许可证重许可；其实际注册矩阵为：
 
-- **Widgets（29）**：binaryTime, bitcoin, bookmarks, countdown, css, currencyRates, customText, github, greeting, html, ipInfo, joke, leetcode, links, literatureClock, message, notes, palette, quote, search, since, tallyCounter, time, timeTracker, todo, topSites, trello, weather, workHours。**排除**：nba（上游已注释损坏）、js 与 randomMessage（前者仅 Web 构建启用、后者上游已移除）。
+- **Widgets（24）**：binaryTime, bookmarks, countdown, css, currencyRates, customText, github, greeting, html, ipInfo, links, message, notes, palette, quote, search, since, tallyCounter, time, todo, topSites, trello, weather, workHours。**排除/退役**：nba（上游已注释损坏）、js 与 randomMessage（前者仅 Web 构建启用、后者上游已移除）；以及 2026-09 退役精简的 5 个组件：joke, bitcoin, leetcode, literatureClock, timeTracker（详见修订 2026-09）。
 - **Backgrounds（9）**：apod, bing, colour, giphy, gradient, media, online, unsplash, wikimedia。
 - **布局模型（Tabliss 原生）**：九宫槽位 `topLeft | topCentre | topRight | middleLeft | middleCentre | middleRight | bottomLeft | bottomCentre | bottomRight` + `free`；`free` 使用 `x/y` 或 `xPercent/yPercent` 百分比定位、`scale`、`rotation`；拖拽/缩放过程零持久化，stop 提交一次。
 - **全局偏好（并入 Natives 系统设置）**：locale（仅 `zh_CN`/`en`）、themePreference、accent、timeZone、favicon、highlightingEnabled、hideSettingsIcon。
@@ -129,4 +129,9 @@ Natives 品牌 + 全局搜索                 Tabliss Dashboard              总
 
 ## 修订
 
-- 本 ADR 取代 ADR-0021 §2、ADR-0023 §「浏览器与页面」中 newtab 相关行与资源预算行；其余条款继续有效。后续 29 Widget 全量迁移、React+Rspack 落地、Trello/Keychain 切片各自独立验收，不阻塞本 ADR 的架构效力。
+- **2026-09 组件精简契约**：根据产品低噪音与维护成本审计，正式退役 5 个组件（`widget/joke`, `widget/bitcoin`, `widget/leetcode`, `widget/literatureClock`, `widget/timeTracker`），正式支持组件契约由 29 个调整为 24 个。
+  - 启动阶段由 SQLite 幂等迁移从所有 Workspace 及个人模板 `payload_json` 中清理这 5 类退役组件实例；
+  - 后端白名单 `WIDGET_KEYS` 严格收敛为 24 个，拒绝新增退役组件；
+  - Tabliss v2/v3 配置导入时遇到上述 5 个退役 key 时主动忽略跳过，不计入有效导入组件数，未知 key 仍报错回滚；
+  - 移除对应外部网络权限（`jokeapi.dev`, `mempool.space`, `alfa-leetcode-api.onrender.com`）。
+- 本 ADR 取代 ADR-0021 §2、ADR-0023 §「浏览器与页面」中 newtab 相关行与资源预算行；其余条款继续有效。后续组件全量迁移、React+Rspack 落地、Trello/Keychain 切片各自独立验收，不阻塞本 ADR 的架构效力。

@@ -204,7 +204,18 @@ assert.match(spaceCss, /\.inspector-field\s*\{[^}]*display:grid;[^}]*gap:6px;/, 
 assert.match(spaceCss, /container-type:inline-size/, 'Inspector must declare container queries');
 assert.match(spaceCss, /\.inspector-field-range-header/, 'Range fields must display label and value in header row');
 
-// C. Verify all 29 widget and 9 background renderSettings without inline style attributes
+// B2. Verify Inspector sidebar low-noise design contracts
+assert.match(spaceCss, /\.inspector\s*\{[^}]*box-shadow:none;/, 'Inspector on desktop must not have heavy box shadow');
+assert.match(spaceCss, /\.inspector-row\s*\{[^}]*background:transparent;/, 'Inspector rows must have transparent low-noise background');
+assert.match(spaceCss, /\.inspector-card-clickable\s*\{[^}]*background:transparent;/, 'Inspector background card must have transparent low-noise background');
+assert.match(spaceCss, /\.catalog-card\s*\{[^}]*background:transparent;/, 'Catalog cards must have transparent background');
+assert.match(spaceCss, /\.catalog-add-btn\s*\{[^}]*background:transparent;/, 'Catalog add button must be a neutral button by default');
+assert.match(spaceCss, /\.inspector-row\s*\.row-action-toggle\[aria-pressed="true"\]\s*\{[^}]*color:var\(--accent\);/, 'Row toggle must reflect aria-pressed state');
+assert.match(spaceCss, /\.inspector-section-header\s*\{[^}]*justify-content:space-between;/, 'Section header must space title and add button');
+assert.match(spaceCss, /\.catalog-search-wrap input\.catalog-search\s*\{[^}]*border:0 !important;/, 'Search input must not have double borders');
+assert.match(spaceCss, /\.inspector select\s*\{[^}]*appearance:none;/, 'Select must use unified custom arrow');
+
+// C. Verify all 24 widget and 9 background renderSettings without inline style attributes
 const { widgetPlugins, backgroundPlugins } = await import('./space-plugins.js');
 const testHost = createMockEl('plugin-test-host');
 

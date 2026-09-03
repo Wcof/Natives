@@ -71,6 +71,7 @@ assert.doesNotMatch(controller, /await handleAdvancedSubmit\([^\n]+\)\) \{ event
 const usageView = await readFile(new URL('./model-usage-view.js', import.meta.url), 'utf8');
 const pricingView = await readFile(new URL('./model-pricing-view.js', import.meta.url), 'utf8');
 const advancedView = await readFile(new URL('./model-advanced-view.js', import.meta.url), 'utf8');
+const gatewayView = await readFile(new URL('./model-gateway-view.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('./model-settings.css', import.meta.url), 'utf8');
 
 assert.match(usageView, /selectFilter\('provider'/);
@@ -80,9 +81,15 @@ assert.match(usageView, /model-col-time[\s\S]*model-col-model[\s\S]*model-col-co
 assert.match(pricingView, /model-filter-bar-price/, 'pricing form modifier class must exist');
 assert.match(pricingView, /model-col-model[\s\S]*model-col-num[\s\S]*model-col-actions/, 'pricing table must declare semantic column classes');
 assert.match(advancedView, /model-col-name[\s\S]*model-col-mask[\s\S]*model-col-actions/, 'keys table must declare semantic column classes');
+assert.match(gatewayView, /data-action=\"resident\"/, 'gateway overview must preserve the resident control');
+assert.match(gatewayView, /#i-box[\s\S]*'i-link'/, 'gateway overview must reuse the shared SVG sprite');
+assert.doesNotMatch(gatewayView, /127\.0\.0\.1:8317|v7\.2\.139|v0\.2\.25/, 'gateway overview must not invent runtime values');
+assert.doesNotMatch(gatewayView, /<svg[^>]+viewBox=/, 'gateway overview must not embed standalone icon artwork');
 assert.match(css, /\.model-oauth-row\s*\{[^}]*grid-template-columns:/, 'oauth row must use shared grid template');
 assert.match(css, /\.model-filter-bar-dimensions\s*\{[^}]*repeat\(6,/, 'dimensions filter must arrange in 6 equal columns on wide screens');
 assert.match(css, /\.model-adv-form\s*\{[^}]*repeat\(2,/, 'advanced form must use 2-column grid layout');
+assert.match(css, /\.model-settings-shell\s*\{[^}]*grid-template-columns:240px/, 'model navigation must use the compact shared width');
+assert.match(css, /\.model-settings-header,\.model-settings-pages,\.model-settings-notice\s*\{[^}]*1120px/, 'model content must use the shared maximum width');
 assert.doesNotMatch(usageView, /data-action="search-events"/, 'usage UI must not expose a fake search action');
 for (const key of ['modelSettings', 'modelCustomModels', 'modelOAuthModels', 'modelLocalProxy', 'modelUsageRecords', 'modelAdvancedSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts']) {
   assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `locale key ${key} must exist in zh_CN and en`);

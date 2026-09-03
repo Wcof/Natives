@@ -3,12 +3,12 @@
  */
 
 export const WIDGET_KEYS = [
-  'widget/binaryTime', 'widget/bitcoin', 'widget/bookmarks', 'widget/countdown',
+  'widget/binaryTime', 'widget/bookmarks', 'widget/countdown',
   'widget/css', 'widget/currencyRates', 'widget/customText', 'widget/github',
-  'widget/greeting', 'widget/html', 'widget/ipInfo', 'widget/joke',
-  'widget/leetcode', 'widget/links', 'widget/literatureClock', 'widget/message',
+  'widget/greeting', 'widget/html', 'widget/ipInfo',
+  'widget/links', 'widget/message',
   'widget/notes', 'widget/palette', 'widget/quote', 'widget/search',
-  'widget/since', 'widget/tallyCounter', 'widget/time', 'widget/timeTracker',
+  'widget/since', 'widget/tallyCounter', 'widget/time',
   'widget/todo', 'widget/topSites', 'widget/trello', 'widget/weather', 'widget/workHours',
 ];
 

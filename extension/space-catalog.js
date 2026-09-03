@@ -13,10 +13,8 @@ export const WIDGET_CATEGORIES = [
     keys: [
       'widget/time',
       'widget/binaryTime',
-      'widget/literatureClock',
       'widget/since',
       'widget/countdown',
-      'widget/timeTracker',
       'widget/workHours',
     ],
   },
@@ -42,10 +40,8 @@ export const WIDGET_CATEGORIES = [
     keys: [
       'widget/weather',
       'widget/currencyRates',
-      'widget/bitcoin',
       'widget/ipInfo',
       'widget/github',
-      'widget/leetcode',
     ],
   },
   {
@@ -55,7 +51,6 @@ export const WIDGET_CATEGORIES = [
     keys: [
       'widget/greeting',
       'widget/quote',
-      'widget/joke',
       'widget/palette',
       'widget/message',
       'widget/customText',
@@ -185,8 +180,8 @@ export function createSpaceCatalog({
               <small>${item.desc}</small>
               ${item.count > 0 ? `<span class="catalog-count-badge">${t('widgetInstanceCount', '已添加')} ${item.count}</span>` : ''}
             </div>
-            <button class="catalog-add-btn primary" type="button">
-              <svg class="icon"><use href="#i-plus" /></svg>
+            <button class="catalog-add-btn" type="button" aria-label="${t('addWidget', '添加卡片')}: ${item.name}">
+              <svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg>
               <span>${t('addWidget', '添加卡片')}</span>
             </button>
           `;

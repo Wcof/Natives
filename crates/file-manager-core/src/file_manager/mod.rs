@@ -253,7 +253,7 @@ impl FileAccessPolicy {
             || canon.starts_with("/private/tmp")
             || canon.starts_with(&sys_tmp_canon)
             || canon.starts_with("/var/folders")
-            || is_authorized_external_volume(&canon)
+            || is_authorized_external_volume(&canon, op)
         {
             Ok(AuthorizedPath { path: canon })
         } else {
@@ -264,21 +264,102 @@ impl FileAccessPolicy {
     }
 }
 
-fn is_authorized_external_volume(path: &Path) -> bool {
-    for prefix in ["/Volumes", "/mnt", "/media"] {
-        let Ok(relative) = path.strip_prefix(prefix) else {
+fn is_authorized_external_volume(path: &Path, op: OperationPolicy) -> bool {
+    #[cfg(unix)]
+    {
+        is_authorized_external_volume_unix(path, op)
+    }
+    #[cfg(windows)]
+    {
+        is_authorized_external_volume_windows(path, op)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, op);
+        false
+    }
+}
+
+#[cfg(unix)]
+fn is_authorized_external_volume_unix(path: &Path, op: OperationPolicy) -> bool {
+    let prefixes = [
+        "/Volumes",
+        "/System/Volumes/Data/Volumes",
+        "/run/media",
+        "/media",
+        "/mnt",
+    ];
+
+    for prefix_str in prefixes {
+        let prefix = Path::new(prefix_str);
+        let prefix_canon = std::fs::canonicalize(prefix).unwrap_or_else(|_| prefix.to_path_buf());
+
+        let stripped = path
+            .strip_prefix(prefix)
+            .or_else(|_| path.strip_prefix(&prefix_canon));
+
+        let Ok(relative) = stripped else {
             continue;
         };
-        let Some(volume) = relative.components().next() else {
-            continue;
-        };
-        let root = Path::new(prefix).join(volume.as_os_str());
-        let Ok(root_canon) = std::fs::canonicalize(root) else {
-            continue;
-        };
-        if path.starts_with(root_canon) {
-            return true;
+
+        // 1. Path is the container root itself (e.g. /Volumes, /media, /run/media, /mnt).
+        // Read-only access is permitted so users can list mounted external storage.
+        if relative.as_os_str().is_empty() {
+            return op != OperationPolicy::Write;
         }
+
+        let comps: Vec<_> = relative.components().collect();
+        if comps.is_empty() {
+            return op != OperationPolicy::Write;
+        }
+
+        // 2. Multi-tier media paths on Linux (e.g. /run/media/$USER/<volume> or /media/$USER/<volume>).
+        let is_user_media_prefix = prefix_str == "/run/media" || prefix_str == "/media";
+        if is_user_media_prefix && comps.len() == 1 {
+            // Container directory for a specific user (e.g. /run/media/username)
+            return op != OperationPolicy::Write;
+        }
+
+        // 3. Resolve the potential volume root.
+        // Try two-tier if possible, otherwise one-tier.
+        let candidate_roots = if is_user_media_prefix && comps.len() >= 2 {
+            vec![
+                prefix.join(comps[0].as_os_str()).join(comps[1].as_os_str()),
+                prefix.join(comps[0].as_os_str()),
+            ]
+        } else {
+            vec![prefix.join(comps[0].as_os_str())]
+        };
+
+        for root in candidate_roots {
+            let Ok(root_canon) = std::fs::canonicalize(&root) else {
+                continue;
+            };
+            // Never treat system root `/` (e.g. macOS /Volumes/Macintosh HD -> /) as an external volume.
+            if root_canon == Path::new("/") {
+                continue;
+            }
+            if path.starts_with(&root_canon) || path.starts_with(&root) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn is_authorized_external_volume_windows(path: &Path, _op: OperationPolicy) -> bool {
+    use std::path::Component;
+    let Some(Component::Prefix(prefix_comp)) = path.components().next() else {
+        return false;
+    };
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("C:\\"));
+    let home_prefix = home.components().next();
+
+    // If path is on a different drive than the home directory (e.g. D: vs C:),
+    // and the drive prefix is valid, authorize it as external storage.
+    if Some(Component::Prefix(prefix_comp)) != home_prefix {
+        return true;
     }
     false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -76,13 +77,16 @@ func (e *Engine) startGatewayWithState(ctx context.Context, expectedRevision *in
 		e.emitSnapshot("model_gateway_state_changed", failed)
 		return failed, &SafeError{Code: "gateway_start_failed", Message: "本地模型代理启动失败"}
 	}
-	running, err := e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
-		snapshot.Gateway.State = "running"
-		snapshot.Gateway.Port = port
-		snapshot.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
-		snapshot.Gateway.ErrorCode = ""
-		return nil
-	})
+		running, err := e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
+			snapshot.Gateway.State = "running"
+			snapshot.Gateway.Port = port
+			snapshot.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+			snapshot.Gateway.ErrorCode = ""
+			snapshot.Gateway.PID = os.Getpid()
+			snapshot.Gateway.KernelVersion = "v7.2.139"
+			snapshot.Gateway.Version = "v0.2.25"
+			return nil
+		})
 	if err == nil {
 		e.emitSnapshot("model_gateway_state_changed", running)
 	}

@@ -176,19 +176,7 @@ console.log('\n--- Batch B: Verifying 29 Widgets ---');
   console.log('✓ widget/currencyRates live exchange rate passed');
 }
 
-// 3. Bitcoin Price
-{
-  clearMemCache();
-  const c = new MockElement();
-  const d = widgetPlugins['widget/bitcoin'].render(c, { currency: 'USD' });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(c.querySelectorAll('.bitcoin-block').length, 1, 'Bitcoin must render the returned mempool block');
-  assert.ok(c.querySelector('.block-height'), 'Bitcoin block must include its height');
-  if (typeof d === 'function') d();
-  console.log('✓ widget/bitcoin mempool block rendering passed');
-}
-
-// 4. IP Info
+// 3. IP Info
 {
   clearMemCache();
   const c = new MockElement();
@@ -382,31 +370,7 @@ console.log('\n--- Batch B: Verifying 29 Widgets ---');
   console.log('✓ widget/countdown and widget/since date calculations passed');
 }
 
-// 17. Literature Clock
-{
-  const c = new MockElement();
-  const d = widgetPlugins['widget/literatureClock'].render(c, {});
-  assert.ok(c.childNodes.length >= 2, 'Literature clock must render quote and citation');
-  if (typeof d === 'function') d();
-  console.log('✓ widget/literatureClock quote matching passed');
-}
-
-// 18. Joke & LeetCode
-{
-  const jc = new MockElement();
-  const dj = widgetPlugins['widget/joke'].render(jc, {});
-  assert.ok(jc.textContent.length > 5, 'Joke must output a non-empty joke');
-  if (typeof dj === 'function') dj();
-
-  const lc = new MockElement();
-  const dl = widgetPlugins['widget/leetcode'].render(lc, { username: 'tester' });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.ok(lc.querySelector('.activity-calendar-root'), 'LeetCode must render its activity calendar');
-  if (typeof dl === 'function') dl();
-  console.log('✓ widget/joke and widget/leetcode live feeds passed');
-}
-
-// 19. Tally Counter
+// 17. Tally Counter
 {
   let countVal = 0;
   const c = new MockElement();
@@ -423,8 +387,8 @@ console.log('\n--- Batch B: Verifying 29 Widgets ---');
   console.log('✓ widget/tallyCounter counter mutation passed');
 }
 
-// 20. Remaining widgets contract & default verification
-for (const key of ['widget/binaryTime', 'widget/customText', 'widget/message', 'widget/quote', 'widget/timeTracker', 'widget/trello']) {
+// 18. Remaining widgets contract & default verification
+for (const key of ['widget/binaryTime', 'widget/customText', 'widget/message', 'widget/quote', 'widget/trello']) {
   const c = new MockElement();
   const d = widgetPlugins[key].render(c, widgetPlugins[key].defaultData, {}, ctx);
   assert.ok(c.textContent.length > 0 || c.childNodes.length > 0, `Widget ${key} must render content`);
@@ -433,6 +397,12 @@ for (const key of ['widget/binaryTime', 'widget/customText', 'widget/message', '
 }
 
 {
+  const cEmpty = new MockElement();
+  const dEmpty = widgetPlugins['widget/github'].render(cEmpty, { username: '' }, {}, ctx);
+  assert.ok(cEmpty.childNodes.length > 0, 'GitHub widget with empty username must render unconfigured prompt');
+  assert.ok(cEmpty.textContent.includes('GitHub') || cEmpty.innerHTML.includes('github-unconfigured'), 'Must show prompt message');
+  if (typeof dEmpty === 'function') dEmpty();
+
   const c = new MockElement();
   const d = widgetPlugins['widget/github'].render(c, { username: 'octocat' }, {}, ctx);
   await new Promise((r) => setTimeout(r, 10));
@@ -442,5 +412,5 @@ for (const key of ['widget/binaryTime', 'widget/customText', 'widget/message', '
 }
 
 console.log('\n======================================================');
-console.log('ALL 29 WIDGETS AND 9 BACKGROUNDS PASS DEEP VERIFICATION!');
+console.log('ALL 24 WIDGETS AND 9 BACKGROUNDS PASS DEEP VERIFICATION!');
 console.log('======================================================\n');
