@@ -90,7 +90,10 @@ export const linksWidget = {
             </div>
           `).join('')}
         </div>
-        <button type="button" class="add-link-btn primary">+ ${t('addLink', '添加链接')}</button>
+        <div class="link-actions-group">
+          <button type="button" class="add-link-btn primary">+ ${t('addLink', '添加链接')}</button>
+          <button type="button" class="preset-ai-btn">✨ 导入 AI 工具预设</button>
+        </div>
       </div>
     `;
 
@@ -123,6 +126,18 @@ export const linksWidget = {
 
     wrap.querySelector('.add-link-btn').onclick = () => {
       emitChange([...links, { title: 'New Link', url: 'https://' }]);
+    };
+
+    wrap.querySelector('.preset-ai-btn').onclick = () => {
+      const aiPresets = [
+        { title: 'ChatGPT', url: 'https://chatgpt.com' },
+        { title: 'Claude', url: 'https://claude.ai' },
+        { title: 'DeepSeek', url: 'https://chat.deepseek.com' },
+        { title: 'Hugging Face', url: 'https://huggingface.co' },
+        { title: 'GitHub Copilot', url: 'https://github.com/features/copilot' },
+        { title: '秘塔 AI', url: 'https://metaso.cn' },
+      ];
+      emitChange(aiPresets);
     };
 
     container.append(wrap);

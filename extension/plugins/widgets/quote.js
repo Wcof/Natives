@@ -2,6 +2,15 @@
 
 import { escapeHtml } from '../sanitizer.js';
 
+const AI_TECH_QUOTES = [
+  { text: 'We can only see a short distance ahead, but we can see plenty there that needs to be done.', author: 'Alan Turing' },
+  { text: 'Information is the resolution of uncertainty.', author: 'Claude Shannon' },
+  { text: 'If people do not believe that mathematics is simple, it is only because they do not realize how complicated life is.', author: 'John von Neumann' },
+  { text: 'The best way to predict the future is to invent it.', author: 'Alan Kay' },
+  { text: 'Intelligence is the ability to adapt to change.', author: 'Stephen Hawking' },
+  { text: 'Stay hungry, stay foolish.', author: 'Steve Jobs' },
+];
+
 export const quoteWidget = {
   key: 'widget/quote',
   name: 'Quote',
@@ -23,6 +32,7 @@ export const quoteWidget = {
       <div class="inspector-field-group">
         <label class="inspector-field"><span>${t('quote', '名言')}</span><textarea rows="2" id="q-txt">${escapeHtml(data.text || '')}</textarea></label>
         <label class="inspector-field"><span>${t('author', '作者')}</span><input type="text" id="q-auth" value="${escapeHtml(data.author || '')}" /></label>
+        <button type="button" id="q-dice" class="quote-random-btn">🎲 随机换一句科技先驱名言</button>
       </div>
     `;
     const update = () => onChange({
@@ -31,6 +41,12 @@ export const quoteWidget = {
     });
     container.querySelector('#q-txt').onchange = update;
     container.querySelector('#q-auth').onchange = update;
+    container.querySelector('#q-dice').onclick = () => {
+      const pick = AI_TECH_QUOTES[Math.floor(Math.random() * AI_TECH_QUOTES.length)];
+      container.querySelector('#q-txt').value = pick.text;
+      container.querySelector('#q-auth').value = pick.author;
+      onChange(pick);
+    };
   },
   styles: `
     .Quote { overflow-y:hidden; max-height:33vh; }
