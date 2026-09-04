@@ -84,4 +84,16 @@ const t = (k, f) => f || k;
   console.log('✓ Quota View rendered successfully');
 }
 
+// 4. Test Icon & Text Alignment CSS Contracts
+{
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('./model-settings.css', import.meta.url), 'utf8');
+  assert.match(css, /\.model-oauth-login-btn\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*gap:\s*6px;/, 'OAuth login button must declare inline-flex centered alignment with 6px gap');
+  assert.match(css, /\.btn-af-action\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*gap:\s*6px;/, 'Auth files action button must declare inline-flex centered alignment');
+  assert.match(css, /\.btn-quota-action\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*gap:\s*6px;/, 'Quota action button must declare inline-flex centered alignment');
+  assert.match(css, /\.btn-af-tool\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*gap:\s*5px;/, 'Row tool buttons must declare inline-flex centered alignment');
+  assert.match(css, /\.model-quota-loading\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;/, 'Quota loading indicator must align icon and text with inline-flex');
+  console.log('✓ Model OAuth CSS alignment and icon sizing contracts verified');
+}
+
 console.log('All model OAuth sub-views tests passed!\n');

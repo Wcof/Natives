@@ -17,7 +17,7 @@
 .model-settings-nav { display:flex; min-height:0; flex-direction:column; gap:16px; padding:20px 12px; border-right:1px solid var(--border); background:var(--surface-2); }
 .model-settings-brand { display:flex; align-items:center; gap:10px; padding:0 8px; font:700 17px/1 var(--display-font); }
 .model-settings-brand > span { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--radius); color:var(--on-accent); background:var(--accent); font-size:18px; }
-.model-settings-back { justify-content:flex-start; width:100%; border-color:transparent !important; color:var(--muted) !important; background:transparent !important; text-align:left; }
+.model-settings-back { display:flex; align-items:center; justify-content:flex-start; width:100%; border-color:transparent !important; color:var(--muted) !important; background:transparent !important; text-align:left; }
 .model-settings-back:hover { color:var(--text) !important; background:var(--hover) !important; }
 .model-settings-nav-group { display:grid; gap:4px; }
 .model-settings-nav-group > span { min-height:28px; padding:6px 10px; color:var(--muted); font:700 11px/1.4 var(--display-font); letter-spacing:.06em; text-transform:uppercase; box-sizing:border-box; }
@@ -218,7 +218,7 @@
 
 /* OAuth Tab Navigation & Header */
 .model-oauth-tabs-nav { display:flex; gap:4px; margin-bottom:16px; padding:3px; background:var(--surface-3); border-radius:var(--radius); width:fit-content; }
-.model-oauth-tab-btn { min-height:30px !important; height:30px; padding:0 14px !important; border:1px solid transparent !important; background:transparent !important; color:var(--muted) !important; font-size:12.5px !important; border-radius:var(--radius); cursor:pointer; }
+.model-oauth-tab-btn { min-height:30px !important; height:30px; padding:0 14px !important; border:1px solid transparent !important; background:transparent !important; color:var(--muted) !important; font-size:12.5px !important; border-radius:var(--radius); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
 .model-oauth-tab-btn:hover { color:var(--text) !important; background:var(--hover) !important; }
 .model-oauth-tab-btn.selected { color:var(--text) !important; background:var(--surface-2) !important; border-color:var(--border) !important; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,0.15); }
 .model-oauth-header-text { display:grid; gap:2px; }
@@ -237,17 +237,20 @@
 .model-oauth-card-icon { display:grid; place-items:center; width:36px; height:36px; border-radius:var(--radius); background:var(--surface-3); }
 .model-oauth-card-name { font-size:15px; font-weight:600; color:var(--text); }
 .model-oauth-card-desc { margin:0 0 16px 0; font-size:12px; color:var(--muted); line-height:1.45; flex:1; }
-.model-oauth-login-btn { width:100%; min-height:36px !important; height:36px; font-size:13px !important; }
+.model-oauth-login-btn { width:100%; min-height:36px !important; height:36px; font-size:13px !important; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.model-oauth-login-btn .icon { width:14px; height:14px; flex-shrink:0; }
 
 /* Auth Files Management View */
 .model-af-topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
 .model-af-stats { color:var(--muted); font-size:13px; font-weight:550; }
 .model-af-actions { display:flex; gap:8px; align-items:center; }
-.btn-af-action { min-height:32px !important; height:32px; padding:0 12px !important; font-size:12.5px !important; display:inline-flex; align-items:center; gap:4px; }
-.btn-af-import { cursor:pointer; min-height:32px; height:32px; padding:0 14px; border-radius:var(--radius); font-size:12.5px; display:inline-flex; align-items:center; justify-content:center; }
+.btn-af-action { min-height:32px !important; height:32px; padding:0 12px !important; font-size:12.5px !important; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.btn-af-action .icon { width:14px; height:14px; flex-shrink:0; }
+.btn-af-import { cursor:pointer; min-height:32px; height:32px; padding:0 12px; border-radius:var(--radius); font-size:12.5px; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.btn-af-import .icon { width:14px; height:14px; flex-shrink:0; }
 .model-af-filterbar { display:flex; gap:10px; align-items:center; margin-bottom:14px; }
 .model-af-search-wrap { flex:1; min-width:180px; display:flex; align-items:center; gap:8px; height:34px; padding:0 10px; border:1px solid var(--control); border-radius:var(--radius); background:var(--surface-2); }
-.model-af-search-wrap .icon { width:14px; height:14px; color:var(--muted); }
+.model-af-search-wrap .icon { width:14px; height:14px; color:var(--muted); flex-shrink:0; }
 .model-af-search-wrap input { flex:1; border:0 !important; background:transparent !important; height:30px; font-size:12.5px; padding:0 !important; color:var(--text); }
 .model-af-select { min-height:34px !important; height:34px; min-width:110px; font-size:12.5px !important; }
 .model-af-list { display:grid; gap:8px; }
@@ -256,37 +259,41 @@
 .model-af-row.disabled { opacity:0.6; }
 .model-af-row-main { display:flex; align-items:flex-start; gap:12px; min-width:0; flex:1; }
 .model-af-icon { display:grid; place-items:center; width:28px; height:28px; border-radius:var(--radius); background:var(--surface-3); color:var(--muted); flex-shrink:0; margin-top:2px; }
-.model-af-icon .icon { width:16px; height:16px; }
+.model-af-icon .icon { width:15px; height:15px; }
 .model-af-info { display:grid; gap:3px; min-width:0; }
 .model-af-title-line { display:flex; align-items:center; gap:8px; }
 .model-af-filename { font-size:13.5px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.model-af-badge { font-size:10.5px; font-weight:600; padding:1px 6px; border-radius:999px; text-transform:lowercase; }
+.model-af-badge { font-size:10.5px; font-weight:600; padding:1px 6px; border-radius:999px; text-transform:lowercase; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
 .model-af-badge.active { color:var(--success); background:color-mix(in srgb,var(--success) 12%,transparent); border:1px solid color-mix(in srgb,var(--success) 30%,transparent); }
 .model-af-badge.disabled { color:var(--muted); background:var(--surface-3); border:1px solid var(--border); }
 .model-af-meta-line { font-size:12px; color:var(--muted); }
 .model-af-quota-pills { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
-.model-af-quota-pill { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--surface-3); border:1px solid var(--border); color:var(--text); }
+.model-af-quota-pill { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--surface-3); border:1px solid var(--border); color:var(--text); display:inline-flex; align-items:center; justify-content:center; line-height:1; }
 .model-af-row-side { display:flex; align-items:center; gap:14px; flex-shrink:0; }
 .model-af-filemeta { display:flex; flex-direction:column; align-items:flex-end; gap:2px; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .model-af-row-actions { display:flex; align-items:center; gap:6px; }
-.btn-af-tool { min-height:28px !important; height:28px; padding:0 8px !important; font-size:11.5px !important; white-space:nowrap; }
-.btn-af-icon { width:28px; height:28px; min-height:28px !important; padding:0 !important; display:grid; place-items:center; font-size:12px; cursor:pointer; }
+.btn-af-tool { min-height:28px !important; height:28px; padding:0 9px !important; font-size:11.5px !important; white-space:nowrap; display:inline-flex; align-items:center; justify-content:center; gap:5px; }
+.btn-af-tool .icon { width:13px; height:13px; flex-shrink:0; }
+.btn-af-icon { width:28px; height:28px; min-height:28px !important; padding:0 !important; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+.btn-af-icon .icon { width:14px; height:14px; }
 
 /* Quota Inquiry View */
 .model-quota-topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
 .model-quota-stats { color:var(--muted); font-size:13px; font-weight:550; }
 .model-quota-actions { display:flex; gap:8px; }
-.btn-quota-action { min-height:32px !important; height:32px; padding:0 12px !important; font-size:12.5px !important; }
+.btn-quota-action { min-height:32px !important; height:32px; padding:0 12px !important; font-size:12.5px !important; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.btn-quota-action .icon { width:14px; height:14px; flex-shrink:0; }
 .model-quota-content { display:grid; gap:20px; }
 .model-quota-group { display:grid; gap:10px; }
 .model-quota-group-header { display:flex; align-items:center; justify-content:space-between; padding:0 4px; font-size:13px; }
 .model-quota-group-title { display:flex; align-items:center; gap:8px; font-size:15px; color:var(--text); }
-.model-quota-group-title .icon { width:16px; height:16px; color:var(--accent); }
+.model-quota-group-title .icon { width:16px; height:16px; color:var(--accent); flex-shrink:0; }
 .model-quota-card { padding:14px 16px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); display:grid; gap:12px; box-sizing:border-box; }
 .model-quota-card-header { display:flex; align-items:center; justify-content:space-between; }
 .model-quota-card-title strong { font-size:13.5px; color:var(--text); }
 .model-quota-card-sub { font-size:11.5px; color:var(--muted); display:flex; gap:4px; margin-top:2px; }
-.btn-quota-refresh-card { width:28px; height:28px; min-height:28px !important; padding:0 !important; display:grid; place-items:center; cursor:pointer; font-size:12px; }
+.btn-quota-refresh-card { width:28px; height:28px; min-height:28px !important; padding:0 !important; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+.btn-quota-refresh-card .icon { width:14px; height:14px; }
 .model-quota-card-body { display:grid; gap:12px; }
 .model-quota-window { display:grid; gap:4px; }
 .model-quota-window-header { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; }
@@ -296,6 +303,7 @@
 .model-quota-progress-fill { height:100%; background:var(--text); border-radius:4px; transition:width .25s ease; }
 .model-quota-window-sub { font-size:11px; color:var(--muted); }
 .model-quota-empty { display:flex; align-items:center; gap:10px; font-size:12px; padding:4px 0; }
-.model-quota-loading,.model-quota-error { font-size:12px; padding:6px 0; }
-.model-quota-error { color:var(--danger); }
+.model-quota-loading { display:inline-flex; align-items:center; gap:8px; font-size:12px; padding:6px 0; }
+.model-quota-loading .icon { width:14px; height:14px; flex-shrink:0; }
+.model-quota-error { font-size:12px; padding:6px 0; color:var(--danger); }
 
