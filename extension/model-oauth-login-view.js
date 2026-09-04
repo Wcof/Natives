@@ -80,7 +80,7 @@ export function renderOAuthLoginView(container, { snapshot, pendingOAuth, t }) {
       <p class="model-oauth-card-desc">${card.desc}</p>
       <div class="model-oauth-card-action">
         <button type="button" class="model-oauth-login-btn primary" data-action="oauth-start" data-provider="${card.key}">
-          ${isPending ? `⏳ ${t('authorizing', '授权中...')}` : `→] ${t('startLogin', '开始登录')}`}
+          ${isPending ? `<svg class="icon spinning" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-refresh" /></svg><span>${t('authorizing', '授权中...')}</span>` : `<svg class="icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-forward" /></svg><span>${t('startLogin', '开始登录')}</span>`}
         </button>
       </div>
     `;

@@ -32,7 +32,10 @@ export const quoteWidget = {
       <div class="inspector-field-group">
         <label class="inspector-field"><span>${t('quote', '名言')}</span><textarea rows="2" id="q-txt">${escapeHtml(data.text || '')}</textarea></label>
         <label class="inspector-field"><span>${t('author', '作者')}</span><input type="text" id="q-auth" value="${escapeHtml(data.author || '')}" /></label>
-        <button type="button" id="q-dice" class="quote-random-btn">🎲 随机换一句科技先驱名言</button>
+        <button type="button" id="q-dice" class="quote-random-btn">
+          <svg class="icon" aria-hidden="true" style="width:13px;height:13px;"><use href="#i-refresh" /></svg>
+          <span>随机换一句科技先驱名言</span>
+        </button>
       </div>
     `;
     const update = () => onChange({

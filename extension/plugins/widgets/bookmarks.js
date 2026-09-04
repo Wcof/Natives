@@ -106,7 +106,7 @@ export const bookmarksWidget = {
           if (isFolder) {
             node.type = 'button';
             node.innerHTML = `
-              <span class="bm-icon folder-icon">📁</span>
+              <span class="bm-icon folder-icon"><svg class="icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-folder" /></svg></span>
               <span class="bm-title">${escapeHtml(item.title || '文件夹')}</span>
               <span class="bm-arrow">›</span>
             `;

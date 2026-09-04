@@ -24,13 +24,16 @@ export function renderAuthFilesView(container, { files = [], quotaMap = {}, filt
     </div>
     <div class="model-af-actions">
       <button type="button" class="btn-af-action" data-action="auth-files-refresh">
-        <span>🔄 ${t('refresh', '刷新')}</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+        <span>${t('refresh', '刷新')}</span>
       </button>
       <button type="button" class="btn-af-action" data-action="auth-files-open-dir">
-        <span>📁 ${t('openFolder', '打开文件夹')}</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg>
+        <span>${t('openFolder', '打开文件夹')}</span>
       </button>
       <label class="btn-af-action primary btn-af-import">
-        <span>📥 ${t('import', '导入')}</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
+        <span>${t('import', '导入')}</span>
         <input type="file" id="af-file-input" accept=".json,application/json" multiple hidden />
       </label>
     </div>
@@ -127,16 +130,17 @@ export function renderAuthFilesView(container, { files = [], quotaMap = {}, filt
               ${t('models', '模型')}
             </button>
             <button type="button" class="btn-af-tool" data-action="auth-files-priority" data-name="${escapeHtml(file.name)}" data-priority="${file.priority || 0}">
-              ✏️ ${t('priority', '优先级')} ${file.priority || 0}
+              <svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg>
+              <span>${t('priority', '优先级')} ${file.priority || 0}</span>
             </button>
-            <button type="button" class="btn-af-icon" data-action="auth-files-copy" data-name="${escapeHtml(file.name)}" title="${t('copyName', '复制文件名')}">
-              📋
+            <button type="button" class="btn-af-icon" data-action="auth-files-copy" data-name="${escapeHtml(file.name)}" title="${t('copyName', '复制文件名')}" aria-label="${t('copyName', '复制文件名')}">
+              <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>
             </button>
             <button type="button" class="btn-af-tool" data-action="auth-files-toggle" data-name="${escapeHtml(file.name)}" data-disabled="${String(!file.disabled)}">
               ${file.disabled ? t('enable', '启用') : t('disable', '停用')}
             </button>
-            <button type="button" class="btn-af-icon danger" data-action="auth-files-delete" data-name="${escapeHtml(file.name)}" title="${t('delete', '删除')}">
-              🗑️
+            <button type="button" class="btn-af-icon danger" data-action="auth-files-delete" data-name="${escapeHtml(file.name)}" title="${t('delete', '删除')}" aria-label="${t('delete', '删除')}">
+              <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
             </button>
           </div>
         </div>

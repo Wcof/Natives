@@ -91,8 +91,14 @@ export const linksWidget = {
           `).join('')}
         </div>
         <div class="link-actions-group">
-          <button type="button" class="add-link-btn primary">+ ${t('addLink', '添加链接')}</button>
-          <button type="button" class="preset-ai-btn">✨ 导入 AI 工具预设</button>
+          <button type="button" class="add-link-btn primary">
+            <svg class="icon" aria-hidden="true" style="width:13px;height:13px;"><use href="#i-plus" /></svg>
+            <span>${t('addLink', '添加链接')}</span>
+          </button>
+          <button type="button" class="preset-ai-btn">
+            <svg class="icon" aria-hidden="true" style="width:13px;height:13px;"><use href="#i-bolt" /></svg>
+            <span>导入 AI 工具预设</span>
+          </button>
         </div>
       </div>
     `;

@@ -33,10 +33,12 @@ export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAct
     </div>
     <div class="model-quota-actions">
       <button type="button" class="btn-quota-action" data-action="quota-read-list">
-        <span>🔄 ${t('readList', '读列表')}</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+        <span>${t('readList', '读列表')}</span>
       </button>
       <button type="button" class="btn-quota-action" data-action="quota-refresh-all">
-        <span>🔄 ${t('refreshAll', '刷新全部')}</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+        <span>${t('refreshAll', '刷新全部')}</span>
       </button>
     </div>
   `;
@@ -91,8 +93,8 @@ export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAct
                 ${quota.plan ? `<span>· ${escapeHtml(quota.plan)}</span>` : ''}
               </div>
             </div>
-            <button type="button" class="btn-quota-refresh-card icon-button" data-action="quota-refresh-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" title="${t('refreshQuota', '刷新额度')}">
-              🔄
+            <button type="button" class="btn-quota-refresh-card icon-button" data-action="quota-refresh-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" title="${t('refreshQuota', '刷新额度')}" aria-label="${t('refreshQuota', '刷新额度')}">
+              <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
             </button>
           </div>
           <div class="model-quota-card-body">
@@ -111,10 +113,10 @@ export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAct
 
 function renderQuotaWindows(quota, file, t) {
   if (quota.status === 'loading') {
-    return `<div class="model-quota-loading"><span>⏳ ${t('queryingQuota', '正在查询配额...')}</span></div>`;
+    return `<div class="model-quota-loading"><svg class="icon spinning" aria-hidden="true"><use href="#i-refresh" /></svg><span>${t('queryingQuota', '正在查询配额...')}</span></div>`;
   }
   if (quota.status === 'error') {
-    return `<div class="model-quota-error"><span>❌ ${escapeHtml(quota.error || t('fetchFailed', '获取失败'))}</span></div>`;
+    return `<div class="model-quota-error"><span>${escapeHtml(quota.error || t('fetchFailed', '获取失败'))}</span></div>`;
   }
   if (!quota.windows || !quota.windows.length) {
     return `

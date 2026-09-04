@@ -76,9 +76,18 @@ export const notesWidget = {
     const toolbar = document.createElement('div');
     toolbar.className = 'notes-quick-bar';
     toolbar.innerHTML = `
-      <button type="button" class="notes-chip-btn" data-act="prompt" title="快速插入 AI 提示词框架">✨ Prompt 模板</button>
-      <button type="button" class="notes-chip-btn" data-act="code" title="快速插入代码块草稿">💻 代码草稿</button>
-      <button type="button" class="notes-chip-btn" data-act="copy" title="一键复制全部便签内容">📋 复制</button>
+      <button type="button" class="notes-chip-btn" data-act="prompt" title="快速插入 AI 提示词框架">
+        <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-bolt" /></svg>
+        <span>Prompt 模板</span>
+      </button>
+      <button type="button" class="notes-chip-btn" data-act="code" title="快速插入代码块草稿">
+        <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-code" /></svg>
+        <span>代码草稿</span>
+      </button>
+      <button type="button" class="notes-chip-btn" data-act="copy" title="一键复制全部便签内容">
+        <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-copy" /></svg>
+        <span>复制</span>
+      </button>
     `;
 
     toolbar.onclick = (e) => {
@@ -90,8 +99,9 @@ export const notesWidget = {
         const curText = editArea.value || data.content || '';
         if (curText) {
           navigator.clipboard?.writeText(curText);
-          btn.textContent = '✓ 已复制';
-          setTimeout(() => { btn.textContent = '📋 复制'; }, 1500);
+          const span = btn.querySelector('span');
+          if (span) span.textContent = '已复制';
+          setTimeout(() => { if (span) span.textContent = '复制'; }, 1500);
         }
       } else if (act === 'prompt') {
         const tpl = `## 角色设定\n你是一名资深的工程师，擅长系统架构与代码审计。\n\n## 背景与目标\n\n## 约束规范\n- 符合生产环境安全标准\n- 严禁硬编码敏感凭证\n`;
