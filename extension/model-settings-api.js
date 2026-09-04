@@ -65,6 +65,14 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     commitUsageImport: (params) => client.call('model_usage_import_commit', params),
     cancelUsageImport: (params) => client.call('model_usage_import_cancel', params),
 
+    // Auth Files & Quota
+    listAuthFiles: () => client.call('model_auth_files_list'),
+    importAuthFile: (params) => client.call('model_auth_files_import', params),
+    updateAuthFile: (params) => client.call('model_auth_files_update', params),
+    deleteAuthFile: (params) => client.call('model_auth_files_delete', params),
+    openAuthDir: () => client.call('model_auth_files_open_dir'),
+    queryQuota: (params) => client.call('model_quota_query', params),
+
     disconnect: () => client.disconnect(),
     get connected() { return client.connected; },
   };

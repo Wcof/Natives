@@ -28,6 +28,11 @@ class ModelSettings {
     this.eventsData = null;
     this.pricingData = null;
     this.importerWizard = null;
+
+    // OAuth Sub-views state
+    this.authFiles = [];
+    this.quotaMap = {};
+    this.authFileFilter = { query: '', provider: 'all', status: 'all' };
     this.api = createModelSettingsAPI({
       onEvent: (event) => this.handleEvent(event),
       onDisconnect: (_error, intentional) => { if (!intentional && this.view?.dialog.open) this.showError(this.t('modelHostDisconnected', '模型 Host 已断开')); },
@@ -50,12 +55,22 @@ class ModelSettings {
       if (!this.snapshot.providers.some((provider) => provider.id === this.selectedID)) this.selectedID = this.snapshot.providers[0]?.id;
       if (this.view.activePage === 'usage') {
         await this.loadUsageData();
+      } else if (this.view.activePage === 'oauth') {
+        await this.loadAuthFiles();
       }
       this.render();
     } catch (error) {
       this.showError(error);
     } finally {
       this.view.setLoading(false);
+    }
+  }
+
+  async loadAuthFiles() {
+    try {
+      this.authFiles = await this.api.listAuthFiles() || [];
+    } catch (err) {
+      this.authFiles = [];
     }
   }
 
@@ -93,14 +108,24 @@ class ModelSettings {
 
   render() {
     if (this.snapshot) {
-      this.view.render(this.snapshot, this.selectedID, this.pendingOAuth, {
-        overviewData: this.overviewData,
-        analyticsData: this.analyticsData,
-        eventsData: this.eventsData,
-        pricingData: this.pricingData,
-        currentFilter: this.usageFilter,
-        filterOptions: this.usageFilterOptions,
-      });
+      this.view.render(
+        this.snapshot,
+        this.selectedID,
+        this.pendingOAuth,
+        {
+          overviewData: this.overviewData,
+          analyticsData: this.analyticsData,
+          eventsData: this.eventsData,
+          pricingData: this.pricingData,
+          currentFilter: this.usageFilter,
+          filterOptions: this.usageFilterOptions,
+        },
+        {
+          authFiles: this.authFiles,
+          quotaMap: this.quotaMap,
+          authFileFilter: this.authFileFilter,
+        },
+      );
     }
   }
 
@@ -176,6 +201,121 @@ class ModelSettings {
     if (action === 'edit-model') return this.editModel(target.dataset.modelId);
     if (action === 'cancel-model-edit') return this.resetModelForm();
     if (action === 'delete-model') return this.mutate(() => this.api.deleteModel({ providerId: this.selectedID, modelId: target.dataset.modelId, expectedRevision: revision }));
+
+    // OAuth Sub-tabs & Actions
+    if (action === 'select-oauth-tab') {
+      this.view.setOAuthTab(target.dataset.tab);
+      if (target.dataset.tab === 'authFiles' || target.dataset.tab === 'quota') {
+        await this.loadAuthFiles();
+        this.render();
+      }
+      return;
+    }
+    if (action === 'auth-files-refresh' || action === 'quota-read-list') {
+      this.view.setLoading(true);
+      await this.loadAuthFiles();
+      this.view.setLoading(false);
+      this.render();
+      return;
+    }
+    if (action === 'auth-files-open-dir') {
+      try {
+        await this.api.openAuthDir();
+      } catch (err) {
+        this.showError(err);
+      }
+      return;
+    }
+    if (action === 'auth-files-toggle') {
+      const name = target.dataset.name;
+      const disabled = target.dataset.disabled === 'true';
+      try {
+        await this.api.updateAuthFile({ name, disabled });
+        await this.loadAuthFiles();
+        this.render();
+      } catch (err) {
+        this.showError(err);
+      }
+      return;
+    }
+    if (action === 'auth-files-delete') {
+      const name = target.dataset.name;
+      return this.confirmDelete(this.t('confirmDeleteAuthFile', `确定删除凭据文件 ${name} 吗？`), async () => {
+        await this.api.deleteAuthFile({ name });
+        await this.loadAuthFiles();
+        this.render();
+      });
+    }
+    if (action === 'auth-files-priority') {
+      const name = target.dataset.name;
+      const cur = Number(target.dataset.priority) || 0;
+      const next = cur + 1; // Increment priority on click
+      try {
+        await this.api.updateAuthFile({ name, priority: next });
+        await this.loadAuthFiles();
+        this.render();
+      } catch (err) {
+        this.showError(err);
+      }
+      return;
+    }
+    if (action === 'auth-files-copy') {
+      const name = target.dataset.name;
+      if (name) {
+        await navigator.clipboard?.writeText(name);
+        this.view.showNotice(this.t('copied', '已复制'));
+      }
+      return;
+    }
+    if (action === 'auth-files-quota-one' || action === 'quota-refresh-one') {
+      const name = target.dataset.name;
+      const provider = target.dataset.provider;
+      this.quotaMap[name] = { status: 'loading', windows: [] };
+      this.render();
+      try {
+        const res = await this.api.queryQuota({ name, provider });
+        this.quotaMap[name] = res;
+      } catch (err) {
+        this.quotaMap[name] = { status: 'error', error: String(err) };
+      }
+      this.render();
+      return;
+    }
+    if (action === 'quota-refresh-all') {
+      const active = (this.authFiles || []).filter((f) => !f.disabled);
+      for (const f of active) {
+        this.quotaMap[f.name] = { status: 'loading', windows: [] };
+      }
+      this.render();
+      await Promise.all(
+        active.map(async (f) => {
+          try {
+            const res = await this.api.queryQuota({ name: f.name, provider: f.provider });
+            this.quotaMap[f.name] = res;
+          } catch (err) {
+            this.quotaMap[f.name] = { status: 'error', error: String(err) };
+          }
+        }),
+      );
+      this.render();
+      return;
+    }
+    if (action === 'auth-files-filter') {
+      this.authFileFilter = { ...this.authFileFilter, ...target };
+      this.render();
+      return;
+    }
+    if (action === 'auth-files-import-file') {
+      try {
+        await this.api.importAuthFile(target);
+        await this.loadAuthFiles();
+        this.render();
+        this.view.showNotice(this.t('authFileImported', '认证文件导入成功'));
+      } catch (err) {
+        this.showError(err);
+      }
+      return;
+    }
 
 	if (await handleUsageAction(this, action, target)) return;
 	await handleAdvancedAction(this, action, target, revision);

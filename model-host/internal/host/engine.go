@@ -13,8 +13,10 @@ import (
 	"time"
 
 	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
+	"github.com/ldh/natives/model-host/internal/authfiles"
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/nativeio"
+	"github.com/ldh/natives/model-host/internal/quota"
 	"github.com/ldh/natives/model-host/internal/secrets"
 	"github.com/ldh/natives/model-host/internal/usage"
 	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
@@ -41,6 +43,8 @@ type Engine struct {
 	usageCalculator   *usage.Calculator
 	usageImporter     *usage.Importer
 	usagePlugin       *usage.NativesUsagePlugin
+	authFiles         *authfiles.Manager
+	quotaClient       *quota.Client
 	mu                sync.Mutex
 	gatewayMu         sync.Mutex
 	secretMu          sync.Mutex
@@ -131,6 +135,9 @@ func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nat
 	usagePlg := usage.NewNativesUsagePlugin(usageStore, usageCalc, keyResolver, broadcastFunc)
 	cliproxyusage.RegisterNamedPlugin("natives-usage", usagePlg)
 
+	afManager, _ := authfiles.NewManager("")
+	qClient := quota.NewClient()
+
 	engine := &Engine{
 		repo:              repo,
 		secrets:           secretStore,
@@ -142,6 +149,8 @@ func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nat
 		usageCalculator:   usageCalc,
 		usageImporter:     usageImp,
 		usagePlugin:       usagePlg,
+		authFiles:         afManager,
+		quotaClient:       qClient,
 		sessions:          make(map[string]context.CancelFunc),
 		runtimeConfigPath: runtimeConfigPath,
 		oauthTimeout:      6 * time.Minute,
@@ -260,10 +269,24 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.previewUsageImport(raw)
 	case "model_usage_import_commit":
 		return e.commitUsageImport(raw)
-	case "model_usage_import_cancel":
-		return e.cancelUsageImport(raw)
+		case "model_usage_import_cancel":
+			return e.cancelUsageImport(raw)
 
-	default:
+		// Auth Files and Quota Inquiry methods
+		case "model_auth_files_list":
+			return e.listAuthFiles()
+		case "model_auth_files_import":
+			return e.importAuthFile(raw)
+		case "model_auth_files_update":
+			return e.updateAuthFile(raw)
+		case "model_auth_files_delete":
+			return e.deleteAuthFile(raw)
+		case "model_auth_files_open_dir":
+			return e.openAuthDir()
+		case "model_quota_query":
+			return e.queryQuota(ctx, raw)
+
+		default:
 		return nil, invalid("不支持的模型设置操作")
 	}
 }

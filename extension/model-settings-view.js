@@ -1,6 +1,9 @@
 import { renderUsageView } from './model-usage-view.js';
 import { renderAdvancedView } from './model-advanced-view.js';
 import { renderGateway } from './model-gateway-view.js';
+import { renderOAuthLoginView } from './model-oauth-login-view.js';
+import { renderAuthFilesView } from './model-auth-files-view.js';
+import { renderQuotaView } from './model-quota-view.js';
 
 const OAUTH_LABELS = {
   codex: 'OpenAI Codex', claude: 'Anthropic Claude', antigravity: 'Google Gemini', kimi: 'Kimi', xai: 'xAI Grok',
@@ -8,6 +11,7 @@ const OAUTH_LABELS = {
 
 export function createModelSettingsView({ t, onAction }) {
   let activePage = 'oauth';
+  let activeOAuthTab = 'login'; // 'login' | 'authFiles' | 'quota'
   let activeUsageTab = 'overview';
   let activeAdvancedTab = 'basic';
 
@@ -42,9 +46,28 @@ export function createModelSettingsView({ t, onAction }) {
             <div class="model-settings-layout"><aside class="model-provider-pane"><div class="model-provider-scroll" data-role="providerList"></div></aside><div class="model-provider-detail" data-role="detail"></div></div>
           </section>
           <section class="model-settings-page" data-page-panel="oauth" hidden>
-            <header class="model-page-heading"><div><h3 data-role="oauthTitle"></h3><p class="muted" data-role="oauthDescription"></p></div></header>
-            <div class="model-oauth-table" data-role="oauthList"></div>
-            <div class="model-oauth-detail" data-role="oauthDetail" hidden></div>
+            <header class="model-page-heading">
+              <div>
+                <div class="model-oauth-tabs-nav" role="tablist">
+                  <button type="button" class="model-oauth-tab-btn selected" data-action="select-oauth-tab" data-tab="login" role="tab" aria-selected="true" data-role="tabLogin">OAuth 登录</button>
+                  <button type="button" class="model-oauth-tab-btn" data-action="select-oauth-tab" data-tab="authFiles" role="tab" aria-selected="false" data-role="tabAuthFiles">认证文件</button>
+                  <button type="button" class="model-oauth-tab-btn" data-action="select-oauth-tab" data-tab="quota" role="tab" aria-selected="false" data-role="tabQuota">额度查询</button>
+                </div>
+                <div class="model-oauth-header-text">
+                  <span class="model-oauth-section-tag" data-role="oauthSectionTag">OAUTH</span>
+                  <h3 data-role="oauthTitle"></h3>
+                </div>
+              </div>
+            </header>
+            <div class="model-oauth-panel" data-oauth-panel="login">
+              <div class="model-oauth-login-container" data-role="oauthLoginContainer"></div>
+            </div>
+            <div class="model-oauth-panel" data-oauth-panel="authFiles" hidden>
+              <div class="model-auth-files-container" data-role="authFilesContainer"></div>
+            </div>
+            <div class="model-oauth-panel" data-oauth-panel="quota" hidden>
+              <div class="model-quota-container" data-role="quotaContainer"></div>
+            </div>
           </section>
           <section class="model-settings-page" data-page-panel="gateway" hidden>
             <header class="model-page-heading"><div><h3 data-role="gatewayTitle"></h3><p class="muted" data-role="gatewayDescription"></p></div></header>
@@ -93,6 +116,25 @@ export function createModelSettingsView({ t, onAction }) {
       }
       for (const panel of dialog.querySelectorAll('[data-page-panel]')) panel.hidden = panel.dataset.pagePanel !== activePage;
     },
+    setOAuthTab(tab) {
+      activeOAuthTab = tab;
+      for (const btn of dialog.querySelectorAll('[data-action="select-oauth-tab"]')) {
+        const selected = btn.dataset.tab === activeOAuthTab;
+        btn.classList.toggle('selected', selected);
+        btn.setAttribute('aria-selected', String(selected));
+      }
+      for (const panel of dialog.querySelectorAll('[data-oauth-panel]')) {
+        panel.hidden = panel.dataset.oauthPanel !== activeOAuthTab;
+      }
+      // Update section tag & heading
+      if (roles.oauthSectionTag) {
+        roles.oauthSectionTag.textContent = activeOAuthTab === 'login' ? 'OAUTH' : activeOAuthTab === 'authFiles' ? 'AUTH FILES' : 'QUOTA';
+      }
+      if (roles.oauthTitle) {
+        roles.oauthTitle.textContent = activeOAuthTab === 'login' ? t('modelOAuthLogin', 'OAuth 登录') : activeOAuthTab === 'authFiles' ? t('modelAuthFiles', '认证文件') : t('modelQuotaInquiry', '额度查询');
+      }
+    },
+    get activeOAuthTab() { return activeOAuthTab; },
     setUsageTab(tab) { activeUsageTab = tab; },
     setAdvancedTab(tab) { activeAdvancedTab = tab; },
     get activePage() { return activePage; },
@@ -101,7 +143,7 @@ export function createModelSettingsView({ t, onAction }) {
     setLoading(loading) { roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); },
     showError(message) { roles.error.hidden = !message; roles.error.querySelector('p').textContent = message || ''; if (message) roles.notice.hidden = true; },
     showNotice(message) { roles.notice.hidden = !message; roles.notice.textContent = message || ''; },
-    render(snapshot, selectedID, pendingOAuth, usageContext = {}) {
+    render(snapshot, selectedID, pendingOAuth, usageContext = {}, oauthContext = {}) {
       roles.refresh.textContent = t('modelRefresh', '刷新');
       roles.close.textContent = t('close', '关闭');
       roles.loading.textContent = t('modelLoading', '正在加载模型设置…');
@@ -110,17 +152,15 @@ export function createModelSettingsView({ t, onAction }) {
       roles.close.textContent = `← ${t('modelBackToWorkspace', '返回工作区')}`;
       roles.navGroup.textContent = t('modelModelsAndServices', '模型与服务');
       roles.customNav.textContent = t('modelCustomModels', '自定义模型');
-      roles.oauthNav.textContent = t('modelOAuthModels', 'OAuth 模型');
+      roles.oauthNav.textContent = 'OAuth';
       roles.gatewayNav.textContent = t('modelLocalProxy', '本地代理');
       roles.usageNav.textContent = t('modelUsageRecords', '使用记录');
       roles.advancedNav.textContent = t('modelAdvancedSettings', '高级设置');
 
       dialog.querySelector('#model-settings-title').textContent = t('modelSettings', '模型与服务');
-      roles.subtitle.textContent = t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 模型和本地代理设置。');
+      roles.subtitle.textContent = t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 和本地代理设置。');
       roles.customTitle.textContent = t('modelCustomModels', '自定义模型');
       roles.customDescription.textContent = t('modelCustomModelsDescription', '配置兼容接口、API Key 与可用模型。');
-      roles.oauthTitle.textContent = t('modelOAuthModels', 'OAuth 模型');
-      roles.oauthDescription.textContent = t('modelOAuthModelsDescription', '管理通过 OAuth 授权连接的模型供应商账户。');
       roles.gatewayTitle.textContent = t('modelLocalProxy', '本地代理');
       roles.gatewayDescription.textContent = t('modelLocalProxyDescription', '管理本地兼容接口、访问密钥与常驻状态。');
       roles.usageTitle.textContent = t('modelUsageRecords', '使用记录');
@@ -135,12 +175,23 @@ export function createModelSettingsView({ t, onAction }) {
       if (selectedCustom) renderCustomDetail(roles.detail, selectedCustom, snapshot, t);
       else roles.detail.append(emptyState(t('modelNoCustomProviders', '尚未添加自定义供应商'), t('modelNoModelsHint', '添加供应商后即可配置和调用模型。')));
 
-      renderOAuthOverview(roles.oauthList, snapshot, selectedID, pendingOAuth, t);
-      const selectedOAuth = snapshot.providers.find((provider) => provider.id === selectedID && provider.kind === 'oauth');
-      const hasOAuthDetail = selectedOAuth && (selectedOAuth.models.length || snapshot.accounts.some((account) => account.provider === selectedOAuth.oauthProvider));
-      roles.oauthDetail.hidden = !hasOAuthDetail;
-      if (hasOAuthDetail) renderOAuthDetail(roles.oauthDetail, selectedOAuth, snapshot, pendingOAuth, t);
-      else roles.oauthDetail.replaceChildren();
+      // Render 3 OAuth Sub-views
+      renderOAuthLoginView(roles.oauthLoginContainer, { snapshot, pendingOAuth, t });
+      renderAuthFilesView(roles.authFilesContainer, {
+        files: oauthContext.authFiles || [],
+        quotaMap: oauthContext.quotaMap || {},
+        filter: oauthContext.authFileFilter || {},
+        t,
+        onAction,
+      });
+      renderQuotaView(roles.quotaContainer, {
+        files: oauthContext.authFiles || [],
+        quotaMap: oauthContext.quotaMap || {},
+        t,
+        onAction,
+      });
+
+      this.setOAuthTab(activeOAuthTab);
 
       // Render Usage & Advanced
       renderUsageView(roles.usageContainer, {

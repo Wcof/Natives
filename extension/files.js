@@ -1,6 +1,5 @@
 import { createFilesSession } from './files-session.js';
 import { createFilesSidebar } from './files-sidebar.js';
-import { createFilesPreviewPanel } from './files-preview-panel.js';
 import { createFilesHomeView } from './files-home-view.js';
 import { entryIcon, iconElement, htmlEscape, setIconTheme, isTextFile, TEXT_KINDS } from './files-icons.js';
 import { createPreviewControllers } from './files-preview-controllers.js';
@@ -646,36 +645,6 @@ async function bootstrap() {
     onThemeChange: (theme) => applyTheme(theme),
     onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
     t: (key, fallback) => t(key, fallback),
-  });
-  filesPreviewPanel = createFilesPreviewPanel({
-    container: $('preview'),
-    body: $('preview-body'),
-    resizer: $('preview-resizer'),
-    layoutButton: $('toggle-preview-layout'),
-    maximizeButton: $('maximize-preview'),
-    closeButton: $('close-preview'),
-    initialWidth: session.previewWidth,
-    initialHeight: session.previewHeight,
-    initialBottom: session.previewBottom,
-    call,
-    t,
-    entryIcon,
-    iconElement,
-    formatSize,
-    onStatus: (msg, type) => setStatus(msg, type),
-    onToast: (msg, type) => toast(msg, type),
-    onOpenItem: (item) => ops.openItem(item),
-    onRevealItem: (item) => ops.revealPath(item.path),
-    onLayoutChange: ({ bottom, width, height }) => {
-      session.previewBottom = bottom;
-      session.previewWidth = width;
-      session.previewHeight = height;
-      storageSet('natives-preview-bottom', bottom).catch(() => {});
-      storageSet('natives-preview-width', width).catch(() => {});
-      storageSet('natives-preview-height', height).catch(() => {});
-    },
-    onRememberPath: (path) => remember(path),
-    onDirectoryReload: () => session.currentPath && loadDirectory(session.currentPath),
   });
   init();
 }
