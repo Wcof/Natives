@@ -24,11 +24,26 @@ function renderRuntime(gateway, running, busy, t) {
   state.setAttribute('aria-live', 'polite');
   heading.append(state);
 
+  const latestVer = gateway.latestKernelVersion || '—';
+  const hasUpdate = Boolean(gateway.latestKernelVersion && gateway.kernelVersion && gateway.latestKernelVersion !== gateway.kernelVersion);
+
+  const latestRow = element('div', 'model-settings-row');
+  const latestLabel = element('span', '', t('modelLatestKernelVersion', '最新版本'));
+  const latestVal = element('div', 'model-kernel-latest-val');
+  latestVal.innerHTML = `
+    <span class="font-mono">${escapeText(latestVer)}</span>
+    ${hasUpdate
+      ? `<button type="button" class="btn-af-tool btn-kernel-update primary" data-action="update-kernel">${escapeText(t('update', '更新'))}</button>`
+      : `<button type="button" class="btn-af-tool btn-kernel-check" data-action="check-kernel-update" title="${escapeText(t('checkUpdate', '检查更新'))}"><svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-refresh" /></svg><span>${escapeText(t('checkUpdate', '检查更新'))}</span></button>`}
+  `;
+  latestRow.append(latestLabel, latestVal);
+
   const details = element('div', 'model-settings-rows');
   details.append(
     detailRow(t('modelRunStatus', '运行状态'), stateLabel(gateway.state, t)),
     detailRow(t('modelProcessPID', '进程 PID'), running && gateway.pid ? gateway.pid : '—', true),
     detailRow(t('modelKernelVersion', '内核版本'), gateway.kernelVersion || '—', true),
+    latestRow,
     detailRow(t('modelSoftwareVersion', '软件版本'), gateway.version || '—', true),
   );
 

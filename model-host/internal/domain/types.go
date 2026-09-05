@@ -85,9 +85,10 @@ type Gateway struct {
 	AccessKeyMask string             `json:"accessKeyMask,omitempty"`
 	AccessKeys    []GatewayAccessKey `json:"accessKeys,omitempty"`
 	Settings      GatewaySettings    `json:"settings"`
-	PID           int                `json:"pid,omitempty"`
-	KernelVersion string             `json:"kernelVersion,omitempty"`
-	Version       string             `json:"version,omitempty"`
+	PID                 int                `json:"pid,omitempty"`
+	KernelVersion       string             `json:"kernelVersion,omitempty"`
+	LatestKernelVersion string             `json:"latestKernelVersion,omitempty"`
+	Version             string             `json:"version,omitempty"`
 }
 
 type Snapshot struct {

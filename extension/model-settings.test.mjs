@@ -37,6 +37,10 @@ const accountModels = await api.getAccountModels({ accountId: 'account-1' });
 assert.deepEqual(accountModels.accepted, { accountId: 'account-1' });
 const updatedAccountModels = await api.updateAccountModels({ accountId: 'account-1', enabledModelIds: ['model-a'], expectedRevision: 1 });
 assert.deepEqual(updatedAccountModels.accepted, { accountId: 'account-1', enabledModelIds: ['model-a'], expectedRevision: 1 });
+const kernelCheck = await api.checkKernelUpdate();
+assert.ok(kernelCheck.accepted !== undefined);
+const kernelUpdate = await api.updateKernel();
+assert.ok(kernelUpdate.accepted !== undefined);
 
 port.emit({ ok: true, event: 'model_oauth_state_changed', result: { state: 'succeeded' } });
 assert.equal(event.event, 'model_oauth_state_changed');
@@ -91,6 +95,7 @@ assert.match(pricingView, /model-filter-bar-price/, 'pricing form modifier class
 assert.match(pricingView, /model-col-model[\s\S]*model-col-num[\s\S]*model-col-actions/, 'pricing table must declare semantic column classes');
 assert.match(advancedView, /model-col-name[\s\S]*model-col-mask[\s\S]*model-col-actions/, 'keys table must declare semantic column classes');
 assert.match(gatewayView, /data-action=\"resident\"/, 'gateway overview must preserve the resident control');
+assert.match(gatewayView, /data-action=\"(?:update-kernel|check-kernel-update)\"/, 'gateway overview must expose kernel update actions');
 assert.match(gatewayView, /#i-box[\s\S]*'i-link'/, 'gateway overview must reuse the shared SVG sprite');
 assert.doesNotMatch(gatewayView, /127\.0\.0\.1:8317|v7\.2\.139|v0\.2\.25/, 'gateway overview must not invent runtime values');
 assert.doesNotMatch(gatewayView, /<svg[^>]+viewBox=/, 'gateway overview must not embed standalone icon artwork');

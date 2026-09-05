@@ -1,7 +1,7 @@
 # Natives CLIProxyAPI fork
 
 Source: `github.com/router-for-me/CLIProxyAPI/v7` at commit
-`f0de1d008fe8881dcb7431cf97b147295874c2b2` (MIT).
+`5208aec7` (`v7.2.151`, MIT).
 
 Only `sdk/`, `internal/`, module metadata, embedded runtime assets, and the
 license are retained. Natives changes only the usage manager so its queue is

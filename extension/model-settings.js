@@ -214,6 +214,31 @@ class ModelSettings {
       }
       return;
     }
+    if (action === 'check-kernel-update') {
+      try {
+        const res = await this.api.checkKernelUpdate();
+        if (this.snapshot?.gateway) {
+          this.snapshot.gateway.latestKernelVersion = res?.latestVersion;
+        }
+        this.render();
+        this.view.showToast(this.t('modelKernelCheckDone', '已检查内核最新版本'));
+      } catch (err) {
+        this.showError(err);
+      }
+      return;
+    }
+    if (action === 'update-kernel') {
+      this.view.showToast(this.t('modelKernelUpdating', '正在更新内核…'));
+      try {
+        const res = await this.api.updateKernel();
+        this.snapshot = await this.api.loadSnapshot();
+        this.render();
+        this.view.showNotice(res?.message || this.t('modelKernelUpdated', '内核已成功更新'));
+      } catch (err) {
+        this.showError(err);
+      }
+      return;
+    }
     if (action === 'resident') return this.mutate(() => this.api.setResident({ resident: target.checked, expectedRevision: revision }));
     if (action === 'copy-endpoint') {
       if (await this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'))) this.view.showToast(this.t('copied', '已复制'));

@@ -83,7 +83,8 @@ func (e *Engine) startGatewayWithState(ctx context.Context, expectedRevision *in
 			snapshot.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 			snapshot.Gateway.ErrorCode = ""
 			snapshot.Gateway.PID = os.Getpid()
-			snapshot.Gateway.KernelVersion = "v7.2.139"
+			snapshot.Gateway.KernelVersion = getLocalKernelVersion()
+			snapshot.Gateway.LatestKernelVersion = getCachedLatestKernelVersion()
 			snapshot.Gateway.Version = "v0.2.25"
 			return nil
 		})

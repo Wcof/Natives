@@ -172,7 +172,11 @@
   "modelAuthKeysTitle": {"message":"Access Key Management"},
   "modelClaudeCompat": {"message":"Anthropic Compatible"},
   "modelGeminiCompat": {"message":"Gemini Compatible"},
+  "modelKernelCheckDone": {"message":"Checked latest kernel version"},
+  "modelKernelUpdated": {"message":"Kernel updated successfully"},
+  "modelKernelUpdating": {"message":"Updating kernel…"},
   "modelKernelVersion": {"message":"Kernel Version"},
+  "modelLatestKernelVersion": {"message":"Latest Version"},
   "modelOpenAICompat": {"message":"OpenAI Compatible"},
   "modelProcessPID": {"message":"Process PID"},
   "modelPromptKeyName": {"message":"Enter new key name:"},
@@ -754,5 +758,7 @@
   "authFileNoAccountMatch": "This credential file has no matching OAuth account, so per-account models are unavailable",
   "authFilePriorityPrompt": "Enter priority (higher number wins):",
   "authFilePriorityInvalid": "Priority must be an integer",
-  "authFilePrioritySaved": "Priority updated"
+  "authFilePrioritySaved": "Priority updated",
+  "checkUpdate": "Check for updates",
+  "update": "Update"
 }

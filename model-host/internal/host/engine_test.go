@@ -476,3 +476,38 @@ func gatewayStatus(t *testing.T, baseURL, key string) int {
 	_ = response.Body.Close()
 	return response.StatusCode
 }
+
+func TestCheckAndPerformKernelUpdate(t *testing.T) {
+	repo := domain.NewRepository(filepath.Join(t.TempDir(), "state.json"))
+	engine, err := NewEngine(repo, secrets.NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(engine.Close)
+
+	checkRes, err := engine.dispatch(context.Background(), "model_kernel_check_update", nil)
+	if err != nil {
+		t.Fatalf("model_kernel_check_update failed: %v", err)
+	}
+	checkMap := checkRes.(map[string]any)
+	if checkMap["latestVersion"] == "" {
+		t.Fatalf("expected latestVersion, got: %#v", checkMap)
+	}
+
+	updateRes, err := engine.dispatch(context.Background(), "model_kernel_update", nil)
+	if err != nil {
+		t.Fatalf("model_kernel_update failed: %v", err)
+	}
+	updateMap := updateRes.(map[string]any)
+	if updateMap["ok"] != true || updateMap["version"] == "" {
+		t.Fatalf("expected update ok with version, got: %#v", updateMap)
+	}
+
+	snap, err := repo.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Gateway.KernelVersion == "" || snap.Gateway.LatestKernelVersion == "" {
+		t.Fatalf("expected KernelVersion and LatestKernelVersion in snapshot: %#v", snap.Gateway)
+	}
+}

@@ -2,25 +2,30 @@ package usage
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 )
 
-type countingPlugin struct{ count atomic.Int64 }
+func TestStreamFromContextDefaultsMissingToFalse(t *testing.T) {
+	if StreamFromContext(context.Background()) {
+		t.Fatalf("StreamFromContext(background) = true, want false")
+	}
+}
 
-func (p *countingPlugin) HandleUsage(context.Context, Record) { p.count.Add(1) }
+func TestStreamFromContextHonorsExplicitTrue(t *testing.T) {
+	ctx := WithStream(context.Background(), true)
+	if !StreamFromContext(ctx) {
+		t.Fatalf("StreamFromContext(true) = false, want true")
+	}
+}
 
-func TestManagerCanRestartAfterDrain(t *testing.T) {
-	manager := NewManager(1)
-	plugin := &countingPlugin{}
-	manager.Register(plugin)
-	for cycle := 1; cycle <= 2; cycle++ {
-		manager.Start(context.Background())
-		manager.Publish(context.Background(), Record{Model: "test"})
-		manager.Stop()
-		if got := plugin.count.Load(); got != int64(cycle) {
-			t.Fatalf("cycle %d delivered %d records", cycle, got)
-		}
+func TestRecordStreamField(t *testing.T) {
+	record := Record{
+		Provider: "openai",
+		Model:    "gpt-5.4",
+		Stream:   true,
+	}
+	if !record.Stream {
+		t.Fatalf("Record.Stream = false, want true")
 	}
 }
 

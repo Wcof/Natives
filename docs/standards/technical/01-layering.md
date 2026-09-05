@@ -2,14 +2,14 @@
 
 > **版本**: 3.0.0 · **日期**: 2026-08-19
 > **关联 ADR**: [ADR-0020](../../adr/0020-ai-native-personal-workspace-rearchitecture.md)、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)
-> **迁移说明**: Agent Daemon/UDS 仍存在于当前源码，但不再是目标 authority；只允许迁移与删除所需变更。
+> **适用范围**: 当前生产范围为 Chrome 扩展、Files Native Host/Core，以及 ADR-0020 §6.1 的单用途 Model Host。旧 Tauri/Renderer/Daemon 说明仅适用于历史迁移与删除，不构成恢复许可。
 
 ## 一、Authority
 
-#### R-T1 · Tauri Host 是默认 Native Backend
+#### R-T1 · Native authority 与已接受的生产范围
 - **等级**：MUST
 - **分类**：分层、进程、安全
-- **规则**：
+- **规则**：当前 Files 主链遵循下方 ADR-0023，Model Host 遵循 ADR-0020 §6.1；扩展页面是唯一产品 Surface。下表及 Tauri 主链记录历史架构，仅在审计、迁移或删除相应历史实现时适用。
 
 | 运行域 | 目标 authority | 允许 | 禁止 |
 |---|---|---|---|
@@ -17,7 +17,7 @@
 | Renderer (`src/`) | UI 投影与交互状态 | typed adapter/IPC、事件订阅、普通 React Widget | SQLite、重文件 IO、业务 spawn、Secret、直接 Provider HTTP |
 | 外部 Surface | iframe/WebView/外部工具等独立信任域 | 最小授权通信 | 获得不属于其 trust domain 的 Bridge/Token/DB/Secret |
 
-  目标生产主链**必须**是 `Renderer → Tauri Host → Domain module`。Sidecar 只有在真实独立生命周期、崩溃隔离或第三方 runtime 要求下才允许，并**必须**由 Host supervisor 管理。
+  历史 Tauri 实现的主链**必须**是 `Renderer → Tauri Host → Domain module`。Sidecar 只有在真实独立生命周期、崩溃隔离或第三方 runtime 要求下才允许，并**必须**由 Host supervisor 管理。
 
   Agent Daemon 是迁移期 legacy。新功能**禁止**增加对 Daemon、Harness、Agent crates 或 Capability Gateway 的依赖；production cutover **禁止**长期保留 Host/Daemon 双执行或静默 fallback。
 - **为什么**：个人桌面应用应让进程复杂度对应真实隔离需求，而不是内部逻辑分层。
@@ -27,6 +27,8 @@
 `Chrome Extension Page → Native Messaging → native-file-host → file-manager-core`，不经过 Tauri。
 该 Host 必须由 Chrome 按需启动、由文件页面端口拥有生命周期，禁止成为 daemon、开机启动项或
 Service Worker 长连接。旧 Tauri Files 调用链是迁移源，不得继续作为生产 fallback。
+
+**Model Host 例外（ADR-0020 §6.1）**：扩展通过独立 Native Messaging interface 调用单用途 `model-host`，不得共享 Files 能力。默认由页面连接拥有生命周期；仅用户显式开启常驻后可跨页面关闭存活，必须单实例、可停止且无登录自启动。Gateway 仅绑定 `127.0.0.1` 并鉴权，禁止 Management API；持久 Secret 由 OS Keychain 持有。该例外不授权通用 Daemon 或新的产品 Surface。
 
 #### R-T2 · 数据 authority 单一
 - **等级**：MUST

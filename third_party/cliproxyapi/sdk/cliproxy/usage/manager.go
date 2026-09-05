@@ -44,7 +44,9 @@ type Record struct {
 	// Generate reports whether the client requested actual generation.
 	// nil or true means generation is enabled; only an explicit false disables generation.
 	// Use GenerateFlag to set the value and GenerateEnabled to read it with the default.
-	Generate    *bool
+	Generate *bool
+	// Stream reports whether the request was executed in streaming mode.
+	Stream      bool
 	RequestedAt time.Time
 	Latency     time.Duration
 	TTFT        time.Duration
@@ -78,6 +80,7 @@ type requestedModelAliasContextKey struct{}
 type reasoningEffortContextKey struct{}
 type serviceTierContextKey struct{}
 type generateContextKey struct{}
+type streamContextKey struct{}
 
 // WithRequestedModelAlias stores the client-requested model name for usage sinks.
 func WithRequestedModelAlias(ctx context.Context, alias string) context.Context {
@@ -195,6 +198,29 @@ func GenerateFromContext(ctx context.Context) bool {
 	}
 }
 
+// WithStream stores whether the request was executed in streaming mode for usage sinks.
+func WithStream(ctx context.Context, stream bool) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, streamContextKey{}, stream)
+}
+
+// StreamFromContext returns whether the request was executed in streaming mode.
+// Missing values default to false.
+func StreamFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	raw := ctx.Value(streamContextKey{})
+	switch value := raw.(type) {
+	case bool:
+		return value
+	default:
+		return false
+	}
+}
+
 // GenerateFlag returns a pointer suitable for Record.Generate.
 func GenerateFlag(generate bool) *bool {
 	return &generate
@@ -221,15 +247,14 @@ type queueItem struct {
 
 // Manager maintains a queue of usage records and delivers them to registered plugins.
 type Manager struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	once     sync.Once
+	stopOnce sync.Once
+	cancel   context.CancelFunc
 
-	mu       sync.Mutex
-	cond     *sync.Cond
-	queue    []queueItem
-	capacity int
-	running  bool
-	closed   bool
+	mu     sync.Mutex
+	cond   *sync.Cond
+	queue  []queueItem
+	closed bool
 
 	pluginsMu sync.RWMutex
 	plugins   []Plugin
@@ -238,10 +263,7 @@ type Manager struct {
 
 // NewManager constructs a manager with a buffered queue.
 func NewManager(buffer int) *Manager {
-	if buffer < 1 {
-		buffer = 1
-	}
-	m := &Manager{capacity: buffer}
+	m := &Manager{}
 	m.cond = sync.NewCond(&m.mu)
 	return m
 }
@@ -251,19 +273,14 @@ func (m *Manager) Start(ctx context.Context) {
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
-	if m.running {
-		m.mu.Unlock()
-		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	workerCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	m.cancel, m.done, m.closed, m.running = cancel, done, false, true
-	m.mu.Unlock()
-	go m.run(workerCtx, done)
+	m.once.Do(func() {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var workerCtx context.Context
+		workerCtx, m.cancel = context.WithCancel(ctx)
+		go m.run(workerCtx)
+	})
 }
 
 // Stop stops the dispatcher and drains the queue.
@@ -271,19 +288,15 @@ func (m *Manager) Stop() {
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
-	if !m.running {
+	m.stopOnce.Do(func() {
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.mu.Lock()
+		m.closed = true
 		m.mu.Unlock()
-		return
-	}
-	m.closed = true
-	cancel, done := m.cancel, m.done
-	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	m.cond.Broadcast()
-	<-done
+		m.cond.Broadcast()
+	})
 }
 
 // Register appends a plugin to the delivery list.
@@ -333,25 +346,12 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 		m.mu.Unlock()
 		return
 	}
-	item := queueItem{ctx: ctx, record: record}
-	if len(m.queue) >= m.capacity {
-		m.mu.Unlock()
-		m.dispatch(item)
-		return
-	}
-	m.queue = append(m.queue, item)
+	m.queue = append(m.queue, queueItem{ctx: ctx, record: record})
 	m.mu.Unlock()
 	m.cond.Signal()
 }
 
-func (m *Manager) run(ctx context.Context, done chan struct{}) {
-	defer func() {
-		m.mu.Lock()
-		m.running = false
-		m.cancel = nil
-		close(done)
-		m.mu.Unlock()
-	}()
+func (m *Manager) run(ctx context.Context) {
 	for {
 		m.mu.Lock()
 		for !m.closed && len(m.queue) == 0 {

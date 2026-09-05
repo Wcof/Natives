@@ -235,6 +235,10 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.startGateway(ctx, raw)
 	case "model_gateway_stop":
 		return e.stopGateway(ctx, raw)
+	case "model_kernel_check_update":
+		return e.checkKernelUpdate()
+	case "model_kernel_update":
+		return e.updateKernel(ctx)
 	case "model_oauth_start", "model_account_reauth":
 		return e.startOAuth(ctx, raw)
 	case "model_oauth_cancel":

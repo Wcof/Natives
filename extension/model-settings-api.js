@@ -50,6 +50,8 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     revealGatewayKey: (params) => client.call('model_gateway_key_reveal', params),
     rotateAccessKey: (params) => client.call('model_gateway_rotate_access_key', params),
     revealAccessKey: () => client.call('model_gateway_reveal_access_key'),
+    checkKernelUpdate: () => client.call('model_kernel_check_update'),
+    updateKernel: () => client.call('model_kernel_update'),
 
     // Usage & Analytics
     getUsageStatus: () => client.call('model_usage_status'),

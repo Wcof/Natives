@@ -172,7 +172,11 @@
   "modelAuthKeysTitle": {"message":"鉴权密钥管理"},
   "modelClaudeCompat": {"message":"Anthropic兼容格式"},
   "modelGeminiCompat": {"message":"Gemini兼容格式"},
+  "modelKernelCheckDone": {"message":"已检查内核最新版本"},
+  "modelKernelUpdated": {"message":"内核已成功更新"},
+  "modelKernelUpdating": {"message":"正在更新内核…"},
   "modelKernelVersion": {"message":"内核版本"},
+  "modelLatestKernelVersion": {"message":"最新版本"},
   "modelOpenAICompat": {"message":"OpenAI兼容格式"},
   "modelProcessPID": {"message":"进程 PID"},
   "modelPromptKeyName": {"message":"请输入新的密钥名称："},
@@ -754,5 +758,7 @@
   "authFileNoAccountMatch": "该凭据文件未匹配到 OAuth 账户，无法配置账号模型",
   "authFilePriorityPrompt": "请输入优先级（数字，越大越优先）：",
   "authFilePriorityInvalid": "优先级必须是整数",
-  "authFilePrioritySaved": "优先级已更新"
+  "authFilePrioritySaved": "优先级已更新",
+  "checkUpdate": "检查更新",
+  "update": "更新"
 }

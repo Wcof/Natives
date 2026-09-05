@@ -38,7 +38,8 @@ func (e *Engine) reconfigureGateway(snapshot domain.Snapshot, mutationErr error)
 					current.Gateway.Port = port
 					current.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 					current.Gateway.PID = os.Getpid()
-					current.Gateway.KernelVersion = "v7.2.139"
+					current.Gateway.KernelVersion = getLocalKernelVersion()
+					current.Gateway.LatestKernelVersion = getCachedLatestKernelVersion()
 					current.Gateway.Version = "v0.2.25"
 					return nil
 				})

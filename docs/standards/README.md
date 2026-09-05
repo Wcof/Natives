@@ -64,7 +64,7 @@ docs/standards/
 ## 全局合规自检
 
 - [ ] 新功能属于 Home / Files / Apps / AI / Data & Usage / Settings。
-- [ ] Tauri Host 是默认 owner；Sidecar 有真实隔离/生命周期理由且受监督。
+- [ ] 当前 Native owner 与生命周期符合 `technical/01` 的 Files / Model Host 规则；不恢复历史 Tauri/通用 Daemon。
 - [ ] 无 Renderer 直连 SQLite/文件重 IO/进程/Provider/Secret。
 - [ ] Secret 在 OS Keychain；迁移幂等、可恢复、可回滚。
 - [ ] 用户可见数据有真实来源，loading/empty/error/unsupported 分离。
