@@ -22,11 +22,12 @@
 .model-settings-nav-group { display:grid; gap:4px; }
 .model-settings-nav-group > span { min-height:28px; padding:6px 10px; color:var(--muted); font:700 11px/1.4 var(--display-font); letter-spacing:.06em; text-transform:uppercase; box-sizing:border-box; }
 .model-settings-subnav { display:grid; gap:2px; }
-.model-settings-subnav button { position:relative; display:flex; align-items:center; justify-content:flex-start; min-height:38px; width:100%; padding:0 10px 0 28px; border-color:transparent; color:var(--muted); background:transparent; text-align:left; line-height:1; }
-.model-settings-subnav button::before { position:absolute; left:12px; top:50%; transform:translateY(-50%); width:6px; height:6px; border-radius:50%; background:currentColor; content:""; opacity:.35; }
+.model-settings-subnav button { position:relative; display:flex; align-items:center; justify-content:flex-start; gap:8px; min-height:38px; width:100%; padding:0 10px; border-color:transparent; color:var(--muted); background:transparent; text-align:left; line-height:1; }
+.model-settings-subnav button .icon { width:15px; height:15px; flex-shrink:0; opacity:.55; transition:opacity .15s ease; }
 .model-settings-subnav button:hover { color:var(--text); background:var(--hover); }
+.model-settings-subnav button:hover .icon { opacity:.85; }
 .model-settings-subnav button.selected { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 32%,transparent); background:var(--selected); font-weight:600; }
-.model-settings-subnav button.selected::before { opacity:1; }
+.model-settings-subnav button.selected .icon { opacity:1; }
 
 .model-settings-workspace { min-width:0; min-height:0; overflow:auto; scrollbar-gutter:stable; }
 .model-settings-header,.model-settings-pages,.model-settings-notice { width:min(1120px,calc(100% - 64px)); margin-inline:auto; }
@@ -189,7 +190,6 @@
   .model-settings-back { width:auto; }
   .model-settings-subnav { display:flex; overflow-x:auto; }
   .model-settings-subnav button { flex:0 0 auto; width:auto; justify-content:center; padding:0 12px; }
-  .model-settings-subnav button::before { display:none; }
   .model-settings-header,.model-settings-pages,.model-settings-notice { width:calc(100% - 28px); }
   .model-settings-header { padding-top:20px; }
   .model-settings-header h2 { font-size:22px; }

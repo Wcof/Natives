@@ -91,7 +91,10 @@ assert.match(css, /\.model-adv-form\s*\{[^}]*repeat\(2,/, 'advanced form must us
 assert.match(css, /\.model-settings-shell\s*\{[^}]*grid-template-columns:240px/, 'model navigation must use the compact shared width');
 assert.match(css, /\.model-settings-header,\.model-settings-pages,\.model-settings-notice\s*\{[^}]*1120px/, 'model content must use the shared maximum width');
 assert.match(css, /\.model-settings-subnav button\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/, 'subnav buttons must center their label vertically with flex');
-assert.match(css, /\.model-settings-subnav button::before\s*\{[^}]*top:\s*50%;[^}]*transform:\s*translateY\(-50%\);/, 'subnav dot indicator must be vertically centered against the label');
+assert.match(css, /\.model-settings-subnav button \.icon\s*\{[^}]*width:\s*15px;[^}]*height:\s*15px;/, 'subnav icons must use the shared 15px sizing');
+for (const [page, icon] of [['custom', 'i-pen'], ['oauth', 'i-globe'], ['gateway', 'i-bolt'], ['usage', 'i-list'], ['advanced', 'i-gear']]) {
+  assert.match(view, new RegExp(`data-page="${page}"[^>]*><svg class="icon"[^>]*><use href="#${icon}"`), `subnav ${page} must declare its ${icon} icon inline`);
+}
 assert.doesNotMatch(usageView, /data-action="search-events"/, 'usage UI must not expose a fake search action');
 for (const key of ['modelSettings', 'modelCustomModels', 'modelOAuthModels', 'modelLocalProxy', 'modelUsageRecords', 'modelAdvancedSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts']) {
   assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `locale key ${key} must exist in zh_CN and en`);

@@ -26,11 +26,11 @@ export function createModelSettingsView({ t, onAction }) {
         <div class="model-settings-nav-group">
           <span data-role="navGroup"></span>
           <nav class="model-settings-subnav" aria-label="Model settings">
-            <button type="button" data-action="select-model-page" data-page="custom" data-role="customNav"></button>
-            <button type="button" data-action="select-model-page" data-page="oauth" data-role="oauthNav"></button>
-            <button type="button" data-action="select-model-page" data-page="gateway" data-role="gatewayNav"></button>
-            <button type="button" data-action="select-model-page" data-page="usage" data-role="usageNav"></button>
-            <button type="button" data-action="select-model-page" data-page="advanced" data-role="advancedNav"></button>
+            <button type="button" data-action="select-model-page" data-page="custom"><svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg><span data-role="customNav"></span></button>
+            <button type="button" data-action="select-model-page" data-page="oauth"><svg class="icon" aria-hidden="true"><use href="#i-globe" /></svg><span data-role="oauthNav"></span></button>
+            <button type="button" data-action="select-model-page" data-page="gateway"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg><span data-role="gatewayNav"></span></button>
+            <button type="button" data-action="select-model-page" data-page="usage"><svg class="icon" aria-hidden="true"><use href="#i-list" /></svg><span data-role="usageNav"></span></button>
+            <button type="button" data-action="select-model-page" data-page="advanced"><svg class="icon" aria-hidden="true"><use href="#i-gear" /></svg><span data-role="advancedNav"></span></button>
           </nav>
         </div>
       </aside>
