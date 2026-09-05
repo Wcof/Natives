@@ -26,7 +26,7 @@ export const notesWidget = {
     if (content) {
       viewEl.innerHTML = formatNoteContent(content);
     } else {
-      viewEl.innerHTML = `<span class="placeholder">✎ <span>${escapeHtml(t('clickToWriteNote', '点击此处记录便签...'))}</span></span>`;
+      viewEl.innerHTML = `<span class="placeholder"><svg class="icon" aria-hidden="true" style="width:13px;height:13px;display:inline-block;vertical-align:-2px;"><use href="#i-pen" /></svg> <span>${escapeHtml(t('clickToWriteNote', '点击此处记录便签...'))}</span></span>`;
     }
 
     // Edit textarea (hidden by default)
@@ -50,7 +50,7 @@ export const notesWidget = {
       if (nextContent) {
         viewEl.innerHTML = formatNoteContent(nextContent);
       } else {
-        viewEl.innerHTML = `<span class="placeholder">✎ <span>${escapeHtml(t('clickToWriteNote', '点击此处记录便签...'))}</span></span>`;
+        viewEl.innerHTML = `<span class="placeholder"><svg class="icon" aria-hidden="true" style="width:13px;height:13px;display:inline-block;vertical-align:-2px;"><use href="#i-pen" /></svg> <span>${escapeHtml(t('clickToWriteNote', '点击此处记录便签...'))}</span></span>`;
       }
       if (nextContent !== (data.content || '').trim() && onDataChange) {
         onDataChange({ ...data, content: editArea.value });
@@ -84,9 +84,17 @@ export const notesWidget = {
         <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-code" /></svg>
         <span>代码草稿</span>
       </button>
+      <button type="button" class="notes-chip-btn" data-act="review" title="快速插入代码评审 Prompt">
+        <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-target" /></svg>
+        <span>代码评审</span>
+      </button>
       <button type="button" class="notes-chip-btn" data-act="copy" title="一键复制全部便签内容">
         <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-copy" /></svg>
         <span>复制</span>
+      </button>
+      <button type="button" class="notes-chip-btn" data-act="export" title="导出为 Markdown 文件">
+        <svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-download" /></svg>
+        <span>导出 .md</span>
       </button>
     `;
 
@@ -115,6 +123,26 @@ export const notesWidget = {
         editArea.value = nextVal;
         viewEl.innerHTML = formatNoteContent(nextVal);
         onDataChange?.({ ...data, content: nextVal });
+      } else if (act === 'review') {
+        const tpl = `## 代码审查指令\n请审查以下代码片段，关注：\n1. 边界异常与空指针防御\n2. 潜在竞态与并发安全\n3. 复杂度与性能优化空间\n\n\`\`\`\n\n\`\`\``;
+        const nextVal = editArea.value ? `${editArea.value}\n\n${tpl}` : tpl;
+        editArea.value = nextVal;
+        viewEl.innerHTML = formatNoteContent(nextVal);
+        onDataChange?.({ ...data, content: nextVal });
+      } else if (act === 'export') {
+        const curText = editArea.value || data.content || '';
+        if (curText) {
+          const blob = new Blob([curText], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `note-${new Date().toISOString().slice(0, 10)}.md`;
+          a.click();
+          URL.revokeObjectURL(url);
+          const span = btn.querySelector('span');
+          if (span) span.textContent = '已导出';
+          setTimeout(() => { if (span) span.textContent = '导出 .md'; }, 1500);
+        }
       }
     };
 

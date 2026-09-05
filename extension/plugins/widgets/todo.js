@@ -41,17 +41,22 @@ export const todoWidget = {
       const toggleBtn = document.createElement('button');
       toggleBtn.type = 'button';
       toggleBtn.className = 'todo-pomodoro-btn';
-      toggleBtn.textContent = '▶ 专注';
+      const renderToggleContent = () => {
+        toggleBtn.innerHTML = timerRunning
+          ? `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-pause" /></svg><span>${t('pause', '暂停')}</span>`
+          : `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-play" /></svg><span>${t('focus', '专注')}</span>`;
+      };
+      renderToggleContent();
 
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';
       resetBtn.className = 'todo-pomodoro-btn reset';
-      resetBtn.textContent = '↺';
+      resetBtn.innerHTML = `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-refresh" /></svg>`;
       resetBtn.title = t('reset', '重置');
 
       toggleBtn.onclick = () => {
         timerRunning = !timerRunning;
-        toggleBtn.textContent = timerRunning ? '⏸ 暂停' : '▶ 专注';
+        renderToggleContent();
         if (timerRunning) {
           timerInterval = setInterval(() => {
             if (timerRemaining > 0) {
@@ -60,8 +65,8 @@ export const todoWidget = {
             } else {
               clearInterval(timerInterval);
               timerRunning = false;
-              toggleBtn.textContent = '▶ 专注';
-              timeDisplay.textContent = '🎉 完成!';
+              renderToggleContent();
+              timeDisplay.textContent = t('completed', '已完成!');
             }
           }, 1000);
         } else {
@@ -72,7 +77,7 @@ export const todoWidget = {
       resetBtn.onclick = () => {
         clearInterval(timerInterval);
         timerRunning = false;
-        toggleBtn.textContent = '▶ 专注';
+        renderToggleContent();
         timerRemaining = (data.focusDuration || 25) * 60;
         timeDisplay.textContent = formatTime(timerRemaining);
       };
@@ -107,7 +112,7 @@ export const todoWidget = {
       const delBtn = document.createElement('button');
       delBtn.className = 'todo-del-btn';
       delBtn.type = 'button';
-      delBtn.innerHTML = '×';
+      delBtn.innerHTML = `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-close" /></svg>`;
       delBtn.title = t('delete', '删除');
       delBtn.onclick = (e) => {
         e.stopPropagation();
@@ -131,7 +136,30 @@ export const todoWidget = {
       }
     };
 
-    root.append(list, addInput);
+    if (items.length > 0) {
+      const quickBar = document.createElement('div');
+      quickBar.className = 'todo-quick-bar';
+      quickBar.innerHTML = `
+        <button type="button" class="todo-chip-btn" data-act="ai-plan" title="一键将未完成待办生成为 AI 任务规划 Prompt">
+          <svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-bolt" /></svg>
+          <span>AI 规划 Prompt</span>
+        </button>
+      `;
+      quickBar.onclick = (e) => {
+        const btn = e.target.closest('.todo-chip-btn');
+        if (!btn) return;
+        const pending = items.filter((it) => !(it.completed ?? it.done));
+        if (!pending.length) return;
+        const promptText = `## 待办任务清单\n${pending.map((it) => `- [ ] ${it.contents ?? it.text ?? ''}`).join('\n')}\n\n请作为我的个人时间效能教练，帮我：\n1. 按照四象限重要度（Eisenhower 矩阵）为以上任务进行优先级排序；\n2. 预估每个任务的合理耗时与执行策略；\n3. 制定高效的心流执行节奏建议。`;
+        navigator.clipboard?.writeText(promptText);
+        const span = btn.querySelector('span');
+        if (span) span.textContent = '已复制 Prompt!';
+        setTimeout(() => { if (span) span.textContent = 'AI 规划 Prompt'; }, 1500);
+      };
+      root.append(list, addInput, quickBar);
+    } else {
+      root.append(list, addInput);
+    }
     container.append(root);
 
     return () => {
@@ -195,12 +223,40 @@ export const todoWidget = {
       color: inherit;
       font-size: 11px;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
     }
     .Todo .todo-pomodoro-btn.reset {
       padding: 0 6px;
     }
     .Todo .todo-pomodoro-btn:hover {
       background: rgba(255,255,255,0.3);
+    }
+    .Todo .todo-quick-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .Todo .todo-chip-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(255,255,255,0.08);
+      color: inherit;
+      font-size: 10.5px;
+      cursor: pointer;
+      opacity: 0.82;
+      transition: opacity .15s, background .15s;
+    }
+    .Todo .todo-chip-btn:hover {
+      opacity: 1;
+      background: rgba(255,255,255,0.18);
     }
     .Todo .TodoList { display:inline-block; margin:.25em 0; max-height:35vh; overflow:hidden; }
     .Todo .TodoList:hover { overflow-y:auto; }

@@ -4,6 +4,9 @@ const PROVIDERS = {
   deepseek: { name: 'DeepSeek', action: 'https://chat.deepseek.com/', param: 'q', ai: true },
   claude: { name: 'Claude', action: 'https://claude.ai/new', param: 'q', ai: true },
   kimi: { name: 'Kimi', action: 'https://kimi.moonshot.cn/', param: 'q', ai: true },
+  perplexity: { name: 'Perplexity', action: 'https://www.perplexity.ai/search', param: 'q', ai: true },
+  devv: { name: 'Devv AI', action: 'https://devv.ai/search', param: 'q', ai: true },
+  doubao: { name: '豆包', action: 'https://www.doubao.com/chat/', param: 'q', ai: true },
   metaso: { name: '秘塔 AI 搜索', action: 'https://metaso.cn/', param: 'q', ai: true },
   google: { name: 'Google', action: 'https://www.google.com/search', param: 'q' },
   bing: { name: 'Bing', action: 'https://www.bing.com/search', param: 'q' },
@@ -43,6 +46,7 @@ export const searchWidget = {
     suggestions: true,
     suggestionsEngine: 'google',
     suggestionsQuantity: 4,
+    showQuickSwitch: true,
   },
   render(container, data = {}, display = {}, { t = (k, f) => f || k } = {}) {
     const providerKey = data.provider || 'google';
@@ -81,6 +85,35 @@ export const searchWidget = {
     `;
     form.append(input, submitBtn);
     container.append(form);
+
+    let activeProviderKey = providerKey;
+    if (data.showQuickSwitch !== false) {
+      const quickBar = document.createElement('div');
+      quickBar.className = 'search-quick-bar';
+      const quickKeys = ['chatgpt', 'deepseek', 'claude', 'perplexity', 'google', 'bing'];
+      quickBar.innerHTML = quickKeys.map((k) => {
+        const p = PROVIDERS[k];
+        return `<button type="button" class="search-quick-chip${k === activeProviderKey ? ' active' : ''}" data-key="${k}">${escapeHtml(p.name)}</button>`;
+      }).join('');
+      quickBar.onclick = (e) => {
+        const chip = e.target.closest('.search-quick-chip');
+        if (!chip) return;
+        const key = chip.dataset.key;
+        if (!PROVIDERS[key]) return;
+        activeProviderKey = key;
+        const nextProv = PROVIDERS[key];
+        form.action = nextProv.action;
+        input.name = nextProv.param;
+        input.placeholder = `${nextProv.name} 搜索...`;
+        quickBar.querySelectorAll('.search-quick-chip').forEach((c) => c.classList.toggle('active', c.dataset.key === key));
+        input.focus();
+        if (input.value.trim()) {
+          if (typeof form.requestSubmit === 'function') form.requestSubmit();
+          else form.submit();
+        }
+      };
+      container.append(quickBar);
+    }
     let panel = null;
     function closeSuggestions() {
       suggestions = [];
@@ -183,6 +216,10 @@ export const searchWidget = {
         <span>${t('openInNewTab', '在新标签页中打开搜索结果')}</span>
       </label>
       <label class="inspector-checkbox">
+        <input type="checkbox" id="s-quick" ${data.showQuickSwitch !== false ? 'checked' : ''} />
+        <span>${t('showQuickSwitch', '显示常用 AI 与搜索引擎快捷切换栏')}</span>
+      </label>
+      <label class="inspector-checkbox">
         <input type="checkbox" id="s-suggest" ${data.suggestions !== false ? 'checked' : ''} />
         <span>${t('searchSuggestions', '输入时显示搜索建议')}</span>
       </label>
@@ -207,6 +244,7 @@ export const searchWidget = {
       provider: container.querySelector('#s-provider').value,
       placeholder: container.querySelector('#s-ph').value.trim(),
       newTab: container.querySelector('#s-newtab').checked,
+      showQuickSwitch: container.querySelector('#s-quick').checked,
       suggestions: container.querySelector('#s-suggest').checked,
       suggestionsEngine: container.querySelector('#s-suggest-engine').value,
       suggestionsQuantity: Number(container.querySelector('#s-suggest-count').value) || 4,
@@ -215,5 +253,5 @@ export const searchWidget = {
     container.querySelectorAll('select, input').forEach((el) => { el.onchange = update; });
     container.append(wrap);
   },
-  styles: `.Search{min-width:200px;display:block;position:relative;}.Search .search-form{display:flex;align-items:center;width:100%;position:relative;}.Search input{width:100%;background-color:transparent;border:0;border-bottom:2px solid;font-family:inherit;font-size:1.1em;outline:none;padding:.15em 0;text-align:center;text-shadow:inherit;margin:1rem 0;}.Search .search-submit{background:none;border:0;outline:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:inherit;}.Search.style-transparent-rounded{display:flex;flex-direction:row;align-items:center;}.Search.style-transparent-rounded input{height:2.8rem;background:rgba(245,245,245,.1);border-radius:1.625rem;padding:0 3.5rem 0 1.5rem;font-size:1rem;text-align:left;backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.2);border-bottom:0;}.Search.style-transparent-rounded .search-submit{width:3.5rem;margin-left:-3.5rem;opacity:.7;}.Search.style-minimal-outlined{display:flex;flex-direction:row;align-items:center;}.Search.style-minimal-outlined input{height:2.2rem;border:1px solid rgba(255,255,255,.7);border-radius:4px;padding:0 2.5rem 0 .75rem;font-size:1rem;text-align:left;}.Search.style-minimal-outlined input:focus{border-color:#fff;}.Search.style-minimal-outlined .search-submit{width:2.5rem;margin-left:-2.5rem;opacity:.7;}.Search .Suggestions{display:grid;position:absolute;top:100%;left:0;right:0;z-index:10;margin-top:-.5rem;width:100%;background:rgba(0,0,0,.5);border-radius:0 0 1rem 1rem;overflow:hidden;}.Search .Suggestions .suggestion-item{text-align:left;display:flex;gap:.75em;padding:.5em 1em;cursor:pointer;width:100%;font-size:1.1rem;color:#fff;}.Search .Suggestions .suggestion-item:hover,.Search .Suggestions .suggestion-item.active{background:rgba(255,255,255,.2);}.Search .Suggestions .suggestion-thumb{width:30px;height:30px;object-fit:cover;border-radius:.25em;align-self:center;}.Search .Suggestions .suggestion-content{display:flex;flex-direction:column;justify-content:space-between;padding:.2em 0;min-width:0;}.Search .Suggestions .suggestion-title{white-space:normal;word-break:break-word;}.Search .Suggestions .suggestion-desc{font-size:.8em;color:#b0b0b0;white-space:normal;word-break:break-word;}.Search.style-transparent-rounded .Suggestions{border-radius:1.5rem;backdrop-filter:blur(10px);}.Search.style-minimal-outlined .Suggestions{border-radius:4px;background:rgba(20,20,20,.9);}`,
+  styles: `.Search{min-width:200px;display:block;position:relative;}.Search .search-form{display:flex;align-items:center;width:100%;position:relative;}.Search input{width:100%;background-color:transparent;border:0;border-bottom:2px solid;font-family:inherit;font-size:1.1em;outline:none;padding:.15em 0;text-align:center;text-shadow:inherit;margin:1rem 0;}.Search .search-submit{background:none;border:0;outline:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:inherit;}.Search .search-quick-bar{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:5px;margin-top:-.25rem;margin-bottom:.5rem;}.Search .search-quick-chip{height:22px;padding:0 8px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:inherit;font-size:11px;cursor:pointer;opacity:.78;transition:opacity .15s,background .15s,border-color .15s;}.Search .search-quick-chip:hover{opacity:1;background:rgba(255,255,255,.18);}.Search .search-quick-chip.active{opacity:1;background:rgba(255,255,255,.25);border-color:rgba(255,255,255,.6);font-weight:600;}.Search.style-transparent-rounded{display:flex;flex-direction:column;align-items:center;}.Search.style-transparent-rounded .search-form{display:flex;flex-direction:row;align-items:center;}.Search.style-transparent-rounded input{height:2.8rem;background:rgba(245,245,245,.1);border-radius:1.625rem;padding:0 3.5rem 0 1.5rem;font-size:1rem;text-align:left;backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.2);border-bottom:0;}.Search.style-transparent-rounded .search-submit{width:3.5rem;margin-left:-3.5rem;opacity:.7;}.Search.style-minimal-outlined{display:flex;flex-direction:column;align-items:center;}.Search.style-minimal-outlined .search-form{display:flex;flex-direction:row;align-items:center;}.Search.style-minimal-outlined input{height:2.2rem;border:1px solid rgba(255,255,255,.7);border-radius:4px;padding:0 2.5rem 0 .75rem;font-size:1rem;text-align:left;}.Search.style-minimal-outlined input:focus{border-color:#fff;}.Search.style-minimal-outlined .search-submit{width:2.5rem;margin-left:-2.5rem;opacity:.7;}.Search .Suggestions{display:grid;position:absolute;top:100%;left:0;right:0;z-index:10;margin-top:-.5rem;width:100%;background:rgba(0,0,0,.5);border-radius:0 0 1rem 1rem;overflow:hidden;}.Search .Suggestions .suggestion-item{text-align:left;display:flex;gap:.75em;padding:.5em 1em;cursor:pointer;width:100%;font-size:1.1rem;color:#fff;}.Search .Suggestions .suggestion-item:hover,.Search .Suggestions .suggestion-item.active{background:rgba(255,255,255,.2);}.Search .Suggestions .suggestion-thumb{width:30px;height:30px;object-fit:cover;border-radius:.25em;align-self:center;}.Search .Suggestions .suggestion-content{display:flex;flex-direction:column;justify-content:space-between;padding:.2em 0;min-width:0;}.Search .Suggestions .suggestion-title{white-space:normal;word-break:break-word;}.Search .Suggestions .suggestion-desc{font-size:.8em;color:#b0b0b0;white-space:normal;word-break:break-word;}.Search.style-transparent-rounded .Suggestions{border-radius:1.5rem;backdrop-filter:blur(10px);}.Search.style-minimal-outlined .Suggestions{border-radius:4px;background:rgba(20,20,20,.9);}`,
 };
