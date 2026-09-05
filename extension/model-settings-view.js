@@ -143,6 +143,21 @@ export function createModelSettingsView({ t, onAction }) {
     setLoading(loading) { roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); },
     showError(message) { roles.error.hidden = !message; roles.error.querySelector('p').textContent = message || ''; if (message) roles.notice.hidden = true; },
     showNotice(message) { roles.notice.hidden = !message; roles.notice.textContent = message || ''; },
+    showToast(message) {
+      if (!message) return;
+      let toast = dialog.querySelector('.model-toast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'model-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        dialog.append(toast);
+      }
+      toast.textContent = message;
+      toast.classList.add('visible');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => toast.classList.remove('visible'), 2400);
+    },
     render(snapshot, selectedID, pendingOAuth, usageContext = {}, oauthContext = {}) {
       roles.refresh.textContent = t('modelRefresh', '刷新');
       roles.close.textContent = t('close', '关闭');

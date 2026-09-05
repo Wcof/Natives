@@ -16,7 +16,7 @@ export function renderGateway(container, snapshot, t) {
 }
 
 function renderRuntime(gateway, running, busy, t) {
-  const section = element('section', 'model-section');
+  const section = element('section', 'model-section model-gateway-runtime');
   const heading = element('header', 'model-section-heading');
   heading.innerHTML = `<div><h4>${escapeText(t('modelRunningControl', '运行控制'))}</h4><p>${escapeText(t('modelAdvBasicDesc', '管理本地内核状态、监听端口和兼容 API 地址。'))}</p></div>`;
   const state = element('span', `model-status model-status-${gateway.state}`, stateLabel(gateway.state, t));
@@ -48,7 +48,7 @@ function renderRuntime(gateway, running, busy, t) {
 }
 
 function renderEndpoints(baseUrl, t) {
-  const section = element('section', 'model-section');
+  const section = element('section', 'model-section model-gateway-endpoints');
   const heading = element('header', 'model-section-heading');
   heading.innerHTML = `<div><h4>API URL</h4><p>${escapeText(t('modelLocalProxyDescription', '管理本地兼容接口、访问密钥与常驻状态。'))}</p></div>`;
   section.append(heading);
@@ -77,7 +77,7 @@ function renderEndpoints(baseUrl, t) {
 }
 
 function renderKeys(keys, t) {
-  const section = element('section', 'model-section');
+  const section = element('section', 'model-section model-gateway-keys');
   const heading = element('header', 'model-section-heading');
   heading.innerHTML = `<div><h4>${escapeText(t('modelAuthKeysTitle', '鉴权密钥管理'))}</h4><p>${escapeText(t('modelAuthKeysDesc', '管理访问本地代理所用的 API Key 密钥。'))}</p></div>`;
   heading.append(actionButton('create-gateway-key', `＋ ${t('modelCreateKey', '新建密钥')}`, 'primary'));

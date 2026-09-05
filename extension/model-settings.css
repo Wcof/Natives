@@ -150,7 +150,11 @@
 .text-warning { color:var(--warning); }
 .text-primary { color:var(--accent); }
 
-.model-gateway-layout { display:grid; gap:16px; }
+.model-gateway-layout { display:grid; gap:16px; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-areas:"runtime endpoints" "keys keys" "summary summary"; }
+.model-gateway-layout > .model-gateway-runtime { grid-area:runtime; }
+.model-gateway-layout > .model-gateway-endpoints { grid-area:endpoints; }
+.model-gateway-layout > .model-gateway-keys { grid-area:keys; }
+.model-gateway-layout > .model-gateway-summary { grid-area:summary; }
 .model-settings-rows { display:grid; gap:2px; }
 .model-settings-row { display:flex; align-items:center; justify-content:space-between; gap:20px; min-height:36px; padding:0 9px; border-radius:var(--radius); color:var(--muted); font-size:13px; }
 .model-settings-row:hover { background:var(--hover); }
@@ -168,6 +172,9 @@
 .model-key-name-cell { display:flex; align-items:center; gap:6px; }
 .model-gateway-summary { margin:0; padding:0 4px; color:var(--muted); font-size:12px; text-align:right; }
 
+.model-toast { position:fixed; left:50%; bottom:32px; z-index:20; transform:translate(-50%,12px); max-width:min(420px,80vw); padding:9px 18px; border:1px solid var(--border); border-radius:999px; color:var(--text); background:var(--surface-3); font-size:12.5px; box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .2s ease, transform .2s ease; }
+.model-toast.visible { opacity:1; transform:translate(-50%,0); }
+
 .model-empty,.model-empty-state { display:flex; min-height:74px; flex-direction:column; align-items:center; justify-content:center; padding:16px; color:var(--muted); text-align:center; box-sizing:border-box; }
 .model-empty-state strong { color:var(--text); font-size:13px; font-weight:600; }
 .model-empty-state p { margin:4px 0 0; font-size:12px; }
@@ -181,6 +188,7 @@
   .model-filter-bar-dimensions { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .model-analytics-grid { grid-template-columns:1fr; }
   .model-add-form { grid-template-columns:1fr 1fr; }
+  .model-gateway-layout { grid-template-columns:1fr; grid-template-areas:"runtime" "endpoints" "keys" "summary"; }
 }
 @media (max-width:760px) {
   .model-settings-shell { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); }

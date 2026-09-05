@@ -42,13 +42,15 @@ assert.equal(event.event, 'model_usage_updated');
 api.disconnect();
 delete globalThis.__NATIVES_DEV_NATIVE_CONNECT__;
 
-const [files, space, controller, view, zh, en] = await Promise.all([
+const [files, space, controller, view, zh, en, advancedController, css] = await Promise.all([
   readFile(new URL('./files.js', import.meta.url), 'utf8'),
   readFile(new URL('./space.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings-view.js', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/zh_CN/messages.json', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/en/messages.json', import.meta.url), 'utf8'),
+  readFile(new URL('./model-advanced-controller.js', import.meta.url), 'utf8'),
+  readFile(new URL('./model-settings.css', import.meta.url), 'utf8'),
 ]);
 for (const source of [files, space]) assert.match(source, /import\('\.\/model-settings\.js'\)/, 'model settings must stay lazy-loaded');
 for (const source of [controller, view]) assert.doesNotMatch(source, /\b(?:alert|prompt|confirm)\s*\(/, 'model settings must use graphical controls');
@@ -72,7 +74,6 @@ const usageView = await readFile(new URL('./model-usage-view.js', import.meta.ur
 const pricingView = await readFile(new URL('./model-pricing-view.js', import.meta.url), 'utf8');
 const advancedView = await readFile(new URL('./model-advanced-view.js', import.meta.url), 'utf8');
 const gatewayView = await readFile(new URL('./model-gateway-view.js', import.meta.url), 'utf8');
-const css = await readFile(new URL('./model-settings.css', import.meta.url), 'utf8');
 
 assert.match(usageView, /selectFilter\('provider'/);
 assert.match(usageView, /dataset\.role = 'usage-custom-range-form'/);
@@ -92,6 +93,10 @@ assert.match(css, /\.model-settings-shell\s*\{[^}]*grid-template-columns:240px/,
 assert.match(css, /\.model-settings-header,\.model-settings-pages,\.model-settings-notice\s*\{[^}]*1120px/, 'model content must use the shared maximum width');
 assert.match(css, /\.model-settings-subnav button\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/, 'subnav buttons must center their label vertically with flex');
 assert.match(css, /\.model-settings-subnav button \.icon\s*\{[^}]*width:\s*15px;[^}]*height:\s*15px;/, 'subnav icons must use the shared 15px sizing');
+assert.match(css, /\.model-gateway-layout\s*\{[^}]*grid-template-areas:"runtime endpoints" "keys keys" "summary summary";/, 'gateway layout must place runtime and endpoints side by side with keys and summary full width');
+assert.match(css, /\.model-toast\.visible\s*\{[^}]*opacity:1;/, 'model settings must provide a visible toast state for action feedback');
+assert.match(view, /showToast\(message\)/, 'model settings view must expose showToast for action feedback');
+assert.match(advancedController, /view\.showToast\(controller\.t\(key, fallback\)\)/, 'key copy and rotate actions must surface a toast on success');
 for (const [page, icon] of [['custom', 'i-pen'], ['oauth', 'i-globe'], ['gateway', 'i-bolt'], ['usage', 'i-list'], ['advanced', 'i-gear']]) {
   assert.match(view, new RegExp(`data-page="${page}"[^>]*><svg class="icon"[^>]*><use href="#${icon}"`), `subnav ${page} must declare its ${icon} icon inline`);
 }

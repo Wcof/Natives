@@ -47,6 +47,5 @@ export async function handleAdvancedSubmit(controller, form) {
 }
 
 async function copied(controller, value, key, fallback) {
-  await controller.copyText(value);
-  controller.view.showNotice(controller.t(key, fallback));
+  if (await controller.copyText(value)) controller.view.showToast(controller.t(key, fallback));
 }

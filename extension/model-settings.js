@@ -187,7 +187,10 @@ class ModelSettings {
       return;
     }
     if (action === 'resident') return this.mutate(() => this.api.setResident({ resident: target.checked, expectedRevision: revision }));
-    if (action === 'copy-endpoint') return this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'));
+    if (action === 'copy-endpoint') {
+      if (await this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'))) this.view.showToast(this.t('copied', '已复制'));
+      return;
+    }
     if (action === 'reveal-key' || action === 'copy-first-key') return this.copyAccessKey();
     if (action === 'rotate-key') return this.rotateAccessKey();
     if (action === 'oauth-start') return this.pendingOAuth?.provider === target.dataset.provider ? this.cancelOAuth() : this.startOAuth(target.dataset.provider);
@@ -409,13 +412,13 @@ class ModelSettings {
   async copyAccessKey() {
     try {
       const result = await this.api.revealAccessKey();
-      await this.copyText(result.accessKey, this.t('modelAccessKeyUnavailable', '尚未生成访问密钥'));
+      if (await this.copyText(result.accessKey, this.t('modelAccessKeyUnavailable', '尚未生成访问密钥'))) this.view.showToast(this.t('copied', '已复制'));
     } catch (error) { this.showError(error); }
   }
 
   async rotateAccessKey() {
     const result = await this.mutate(() => this.api.rotateAccessKey({ expectedRevision: this.snapshot.revision }));
-    if (result?.accessKey) await this.copyText(result.accessKey);
+    if (result?.accessKey && await this.copyText(result.accessKey)) this.view.showToast(this.t('modelKeyRotatedAndCopied', '密钥已重置并复制到剪贴板'));
   }
 
   async testProvider(form) {
@@ -454,9 +457,9 @@ class ModelSettings {
   }
 
   async copyText(value, unavailable = '') {
-    if (!value) { this.showError(unavailable); return; }
-    try { await navigator.clipboard.writeText(value); }
-    catch { this.showError(this.t('copyFailed', '复制失败')); }
+    if (!value) { this.showError(unavailable); return false; }
+    try { await navigator.clipboard.writeText(value); return true; }
+    catch { this.showError(this.t('copyFailed', '复制失败')); return false; }
   }
 
   confirmDelete(message, work, options) {
