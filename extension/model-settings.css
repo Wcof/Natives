@@ -22,8 +22,8 @@
 .model-settings-nav-group { display:grid; gap:4px; }
 .model-settings-nav-group > span { min-height:28px; padding:6px 10px; color:var(--muted); font:700 11px/1.4 var(--display-font); letter-spacing:.06em; text-transform:uppercase; box-sizing:border-box; }
 .model-settings-subnav { display:grid; gap:2px; }
-.model-settings-subnav button { position:relative; justify-content:flex-start; width:100%; padding:0 10px 0 28px; border-color:transparent; color:var(--muted); background:transparent; text-align:left; }
-.model-settings-subnav button::before { position:absolute; left:12px; width:6px; height:6px; border-radius:50%; background:currentColor; content:""; opacity:.35; }
+.model-settings-subnav button { position:relative; display:flex; align-items:center; justify-content:flex-start; min-height:38px; width:100%; padding:0 10px 0 28px; border-color:transparent; color:var(--muted); background:transparent; text-align:left; line-height:1; }
+.model-settings-subnav button::before { position:absolute; left:12px; top:50%; transform:translateY(-50%); width:6px; height:6px; border-radius:50%; background:currentColor; content:""; opacity:.35; }
 .model-settings-subnav button:hover { color:var(--text); background:var(--hover); }
 .model-settings-subnav button.selected { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 32%,transparent); background:var(--selected); font-weight:600; }
 .model-settings-subnav button.selected::before { opacity:1; }
