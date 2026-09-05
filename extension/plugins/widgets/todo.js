@@ -86,43 +86,100 @@ export const todoWidget = {
       root.append(pomodoroBar);
     }
 
+    const pendingItems = items.filter((it) => !(it.completed ?? it.done));
+    const completedCount = items.length - pendingItems.length;
+    let currentFilter = 'all';
+
+    if (items.length > 2) {
+      const filterBar = document.createElement('div');
+      filterBar.className = 'todo-filter-bar';
+      filterBar.innerHTML = `
+        <div class="todo-filter-tabs">
+          <button type="button" class="todo-filter-tab active" data-filter="all">${t('all', '全部')} (${items.length})</button>
+          <button type="button" class="todo-filter-tab" data-filter="pending">${t('pending', '待办')} (${pendingItems.length})</button>
+          <button type="button" class="todo-filter-tab" data-filter="completed">${t('completed', '完成')} (${completedCount})</button>
+        </div>
+        ${completedCount > 0 ? `<button type="button" class="todo-clear-done" title="${t('clearCompleted', '清除已完成')}">${t('clear', '清完成')}</button>` : ''}
+      `;
+      filterBar.onclick = (e) => {
+        const tab = e.target.closest('.todo-filter-tab');
+        if (tab) {
+          currentFilter = tab.dataset.filter;
+          filterBar.querySelectorAll('.todo-filter-tab').forEach((b) => b.classList.toggle('active', b === tab));
+          renderItems();
+          return;
+        }
+        const clearBtn = e.target.closest('.todo-clear-done');
+        if (clearBtn) {
+          const next = items.filter((it) => !(it.completed ?? it.done));
+          onDataChange?.({ ...data, items: next });
+        }
+      };
+      root.append(filterBar);
+    }
+
     const list = document.createElement('div');
     list.className = 'TodoList';
 
-    items.forEach((item, index) => {
-      const row = document.createElement('div');
-      row.className = `TodoItem ${item.done ? 'done' : ''}`;
+    function renderItems() {
+      list.replaceChildren();
+      items.forEach((item, index) => {
+        const isDone = Boolean(item.completed ?? item.done);
+        if (currentFilter === 'pending' && isDone) return;
+        if (currentFilter === 'completed' && !isDone) return;
 
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.className = 'todo-checkbox';
-      cb.checked = Boolean(item.completed ?? item.done);
-      cb.onchange = (e) => {
-        const next = [...items];
-        next[index] = 'done' in next[index]
-          ? { ...next[index], done: e.target.checked }
-          : { ...next[index], completed: e.target.checked };
-        onDataChange?.({ ...data, items: next });
-      };
+        const row = document.createElement('div');
+        row.className = `TodoItem ${isDone ? 'done' : ''}`;
 
-      const textSpan = document.createElement('span');
-      textSpan.className = 'todo-text';
-      textSpan.textContent = item.contents ?? item.text ?? '';
+        const pri = item.priority || '';
+        const priBtn = document.createElement('button');
+        priBtn.type = 'button';
+        priBtn.className = `todo-pri-badge ${pri}`;
+        priBtn.textContent = pri ? pri.toUpperCase() : '·';
+        priBtn.title = t('todoPriority', '切换优先级 (P0 / P1 / P2)');
+        priBtn.onclick = (e) => {
+          e.stopPropagation();
+          const cycle = { '': 'p0', p0: 'p1', p1: 'p2', p2: '' };
+          const nextPri = cycle[item.priority || ''] || undefined;
+          const next = [...items];
+          next[index] = { ...next[index], priority: nextPri };
+          onDataChange?.({ ...data, items: next });
+        };
 
-      const delBtn = document.createElement('button');
-      delBtn.className = 'todo-del-btn';
-      delBtn.type = 'button';
-      delBtn.innerHTML = `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-close" /></svg>`;
-      delBtn.title = t('delete', '删除');
-      delBtn.onclick = (e) => {
-        e.stopPropagation();
-        const next = items.filter((_, i) => i !== index);
-        onDataChange?.({ ...data, items: next });
-      };
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'todo-checkbox';
+        cb.checked = isDone;
+        cb.onchange = (e) => {
+          const next = [...items];
+          next[index] = 'done' in next[index]
+            ? { ...next[index], done: e.target.checked }
+            : { ...next[index], completed: e.target.checked };
+          onDataChange?.({ ...data, items: next });
+        };
 
-      row.append(cb, textSpan, delBtn);
-      list.append(row);
-    });
+        const textSpan = document.createElement('span');
+        textSpan.className = 'todo-text';
+        textSpan.textContent = item.contents ?? item.text ?? '';
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'todo-del-btn';
+        delBtn.type = 'button';
+        delBtn.innerHTML = `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-close" /></svg>`;
+        delBtn.title = t('delete', '删除');
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          const next = items.filter((_, i) => i !== index);
+          onDataChange?.({ ...data, items: next });
+        };
+
+        row.append(priBtn, cb, textSpan, delBtn);
+        list.append(row);
+      });
+    }
+
+    renderItems();
+    root.append(list);
 
     const addInput = document.createElement('input');
     addInput.className = 'todo-add-input';
@@ -135,31 +192,69 @@ export const todoWidget = {
         onDataChange?.({ ...data, items: next });
       }
     };
+    root.append(addInput);
 
-    if (items.length > 0) {
-      const quickBar = document.createElement('div');
-      quickBar.className = 'todo-quick-bar';
-      quickBar.innerHTML = `
-        <button type="button" class="todo-chip-btn" data-act="ai-plan" title="一键将未完成待办生成为 AI 任务规划 Prompt">
-          <svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-bolt" /></svg>
-          <span>AI 规划 Prompt</span>
-        </button>
-      `;
-      quickBar.onclick = (e) => {
-        const btn = e.target.closest('.todo-chip-btn');
-        if (!btn) return;
+    const batchBox = document.createElement('div');
+    batchBox.className = 'todo-batch-box';
+    batchBox.hidden = true;
+    batchBox.innerHTML = `
+      <textarea class="todo-batch-textarea" placeholder="${t('pasteAiChecklist', '粘贴 AI 规划的任务清单（支持 Markdown - [ ] 或 1. 列表）...')}"></textarea>
+      <div class="todo-batch-actions">
+        <button type="button" class="todo-chip-btn batch-confirm">${t('confirmImport', '确认导入')}</button>
+        <button type="button" class="todo-chip-btn batch-cancel">${t('cancel', '取消')}</button>
+      </div>
+    `;
+    batchBox.querySelector('.batch-cancel').onclick = () => {
+      batchBox.hidden = true;
+    };
+    batchBox.querySelector('.batch-confirm').onclick = () => {
+      const txt = batchBox.querySelector('.todo-batch-textarea').value.trim();
+      if (txt) {
+        const parsed = parseBatchTodos(txt);
+        if (parsed.length > 0) {
+          onDataChange?.({ ...data, items: [...items, ...parsed] });
+        }
+      }
+      batchBox.hidden = true;
+    };
+    root.append(batchBox);
+
+    const quickBar = document.createElement('div');
+    quickBar.className = 'todo-quick-bar';
+    quickBar.innerHTML = `
+      <button type="button" class="todo-chip-btn" data-act="ai-plan" title="一键将未完成待办生成为 AI 任务规划 Prompt">
+        <svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-bolt" /></svg>
+        <span>AI 规划 Prompt</span>
+      </button>
+      <button type="button" class="todo-chip-btn" data-act="batch-import" title="粘贴 AI 规划的 Markdown 清单批量导入">
+        <svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-plus" /></svg>
+        <span>批量导入</span>
+      </button>
+    `;
+    quickBar.onclick = (e) => {
+      const btn = e.target.closest('.todo-chip-btn');
+      if (!btn) return;
+      const act = btn.dataset.act;
+      if (act === 'ai-plan') {
         const pending = items.filter((it) => !(it.completed ?? it.done));
         if (!pending.length) return;
-        const promptText = `## 待办任务清单\n${pending.map((it) => `- [ ] ${it.contents ?? it.text ?? ''}`).join('\n')}\n\n请作为我的个人时间效能教练，帮我：\n1. 按照四象限重要度（Eisenhower 矩阵）为以上任务进行优先级排序；\n2. 预估每个任务的合理耗时与执行策略；\n3. 制定高效的心流执行节奏建议。`;
+        const lines = pending.map((it) => {
+          const pri = it.priority ? `[${it.priority.toUpperCase()}] ` : '';
+          return `- [ ] ${pri}${it.contents ?? it.text ?? ''}`;
+        });
+        const promptText = `## 待办任务清单\n${lines.join('\n')}\n\n请作为我的个人时间效能教练，帮我：\n1. 按照优先级与四象限重要度（Eisenhower 矩阵）优化任务执行排期；\n2. 预估每个任务的合理耗时与突破策略；\n3. 制定高效的心流执行节奏建议。`;
         navigator.clipboard?.writeText(promptText);
         const span = btn.querySelector('span');
         if (span) span.textContent = '已复制 Prompt!';
         setTimeout(() => { if (span) span.textContent = 'AI 规划 Prompt'; }, 1500);
-      };
-      root.append(list, addInput, quickBar);
-    } else {
-      root.append(list, addInput);
-    }
+      } else if (act === 'batch-import') {
+        batchBox.hidden = !batchBox.hidden;
+        if (!batchBox.hidden) {
+          batchBox.querySelector('.todo-batch-textarea').focus();
+        }
+      }
+    };
+    root.append(quickBar);
     container.append(root);
 
     return () => {
@@ -284,5 +379,124 @@ export const todoWidget = {
       color:inherit;
       font:inherit;
     }
+    .Todo .todo-filter-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 4px;
+      font-size: 11px;
+      opacity: 0.85;
+    }
+    .Todo .todo-filter-tabs {
+      display: flex;
+      gap: 3px;
+    }
+    .Todo .todo-filter-tab {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      opacity: 0.65;
+    }
+    .Todo .todo-filter-tab:hover { opacity: 0.9; }
+    .Todo .todo-filter-tab.active {
+      opacity: 1;
+      font-weight: 600;
+      background: rgba(255,255,255,0.15);
+    }
+    .Todo .todo-clear-done {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      font-size: 10.5px;
+      cursor: pointer;
+      opacity: 0.6;
+      padding: 1px 4px;
+    }
+    .Todo .todo-clear-done:hover { opacity: 1; text-decoration: underline; }
+    .Todo .todo-pri-badge {
+      border: 0;
+      border-radius: 3px;
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 1px 3px;
+      cursor: pointer;
+      background: rgba(255,255,255,0.1);
+      color: inherit;
+      line-height: 1;
+      vertical-align: middle;
+      opacity: 0.65;
+      margin-right: -2px;
+    }
+    .Todo .todo-pri-badge:hover { opacity: 1; }
+    .Todo .todo-pri-badge.p0 { background: #ef4444; color: #fff; opacity: 1; }
+    .Todo .todo-pri-badge.p1 { background: #f59e0b; color: #000; opacity: 1; }
+    .Todo .todo-pri-badge.p2 { background: #3b82f6; color: #fff; opacity: 1; }
+    .Todo .todo-batch-box {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 6px 0;
+      padding: 8px;
+      background: rgba(0,0,0,0.25);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 6px;
+      text-align: left;
+    }
+    .Todo .todo-batch-textarea {
+      width: 100%;
+      min-height: 60px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 4px;
+      color: inherit;
+      font-size: 11.5px;
+      font-family: inherit;
+      resize: vertical;
+      box-sizing: border-box;
+      padding: 4px 6px;
+    }
+    .Todo .todo-batch-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+    }
   `,
 };
+
+function parseBatchTodos(text) {
+  const lines = text.split('\n');
+  const parsed = [];
+  for (const raw of lines) {
+    let line = raw.trim();
+    if (!line) continue;
+    let priority = undefined;
+    if (/^\[?p0\]?[:\s]/i.test(line)) {
+      priority = 'p0';
+      line = line.replace(/^\[?p0\]?[:\s]*/i, '');
+    } else if (/^\[?p1\]?[:\s]/i.test(line)) {
+      priority = 'p1';
+      line = line.replace(/^\[?p1\]?[:\s]*/i, '');
+    } else if (/^\[?p2\]?[:\s]/i.test(line)) {
+      priority = 'p2';
+      line = line.replace(/^\[?p2\]?[:\s]*/i, '');
+    }
+    line = line.replace(/^[-*+]\s+\[[ xX]\]\s*/, '')
+               .replace(/^[-*+]\s+/, '')
+               .replace(/^\d+[.)]\s+/, '')
+               .trim();
+    if (line) {
+      parsed.push({
+        id: crypto.randomUUID(),
+        contents: line,
+        completed: false,
+        ...(priority ? { priority } : {}),
+      });
+    }
+  }
+  return parsed;
+}

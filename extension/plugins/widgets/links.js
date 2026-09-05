@@ -47,6 +47,14 @@ export const linksWidget = {
         icon.className = 'custom-icon';
         icon.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
         icon.alt = '';
+        icon.onerror = () => {
+          icon.style.display = 'none';
+          const fallback = document.createElement('span');
+          fallback.className = 'custom-icon-fallback';
+          const initial = (domain.replace(/^www\./, '')[0] || '✦').toUpperCase();
+          fallback.textContent = initial;
+          icon.after(fallback);
+        };
         a.append(icon);
       }
 
@@ -139,9 +147,11 @@ export const linksWidget = {
         { title: 'ChatGPT', url: 'https://chatgpt.com' },
         { title: 'Claude', url: 'https://claude.ai' },
         { title: 'DeepSeek', url: 'https://chat.deepseek.com' },
+        { title: 'Kimi', url: 'https://kimi.moonshot.cn' },
+        { title: 'Perplexity', url: 'https://www.perplexity.ai' },
+        { title: 'GitHub', url: 'https://github.com' },
         { title: 'Hugging Face', url: 'https://huggingface.co' },
-        { title: 'GitHub Copilot', url: 'https://github.com/features/copilot' },
-        { title: '秘塔 AI', url: 'https://metaso.cn' },
+        { title: 'v0.dev', url: 'https://v0.dev' },
       ];
       emitChange(aiPresets);
     };
@@ -153,6 +163,21 @@ export const linksWidget = {
     .Links .custom-icon, .Links i { margin-right:5px; margin-left:-2px; }
     .Links a { display:block; margin:.25em; white-space:nowrap; }
     .Links a img { height:1em; width:1em; object-fit:contain; }
+    .Links .custom-icon-fallback {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1em;
+      height: 1em;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.18);
+      font-size: 0.75em;
+      font-weight: 700;
+      margin-right: 5px;
+      margin-left: -2px;
+      vertical-align: middle;
+      line-height: 1;
+    }
     .link-edit-row {
       display: grid;
       grid-template-columns: 1fr 1.5fr auto;
