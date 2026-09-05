@@ -198,6 +198,8 @@
   "agentClientsDetected": {"message":"个本机客户端"},
   "agentRedetect": {"message":"重新检测"},
   "agentDetecting": {"message":"正在检测本机客户端…"},
+  "agentDetectFailed": {"message":"检测失败"},
+  "agentNoClientsFound": {"message":"未检测到支持的智能体客户端"},
   "agentNotInstalled": {"message":"未检测到安装"},
   "agentInstalled": {"message":"已安装"},
   "agentInstalledKeepConfig": {"message":"已安装 · 保持原配置"},

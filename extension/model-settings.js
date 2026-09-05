@@ -32,6 +32,7 @@ class ModelSettings {
     this.agentSelections = {};
     this.agentBusy = false;
     this.agentLoadError = '';
+    this.agentDetecting = false;
     this.agentActiveTab = 'core';
     this.agentSessions = [];
 
@@ -147,6 +148,8 @@ class ModelSettings {
           agentBusy: this.agentBusy,
           agentActiveTab: this.agentActiveTab,
           agentSessions: this.agentSessions,
+          agentLoadError: this.agentLoadError,
+          agentDetecting: this.agentDetecting,
         },
       );
     }

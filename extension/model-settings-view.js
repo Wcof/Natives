@@ -232,6 +232,10 @@ export function createModelSettingsView({ t, onAction }) {
         modelsError: usageContext.agentModelsError || '',
         selection: usageContext.agentSelections || {},
         busy: usageContext.agentBusy || false,
+        activeTab: usageContext.agentActiveTab || 'core',
+        sessions: usageContext.agentSessions || [],
+        loadError: usageContext.agentLoadError || '',
+        detecting: Boolean(usageContext.agentDetecting),
         t,
         onAction,
       });

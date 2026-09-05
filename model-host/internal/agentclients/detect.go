@@ -145,11 +145,14 @@ func DetectAll(concurrency int) []Status {
 }
 
 // probeVersion runs `<exe> --version` and returns the first digit-bearing line.
+// WaitDelay guarantees Wait returns even when a grandchild process inherits the
+// output pipes and outlives the killed direct child.
 func probeVersion(exe string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "--version")
 	cmd.Stdin = nil
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return "", errVersionTimeout

@@ -45,15 +45,20 @@ for (const key of new Set(viewKeys)) {
 }
 
 assert.doesNotMatch(controller, /await loadAgentModels\(/, 'controller must not call the removed loadAgentModels helper (stuck-loading regression)');
+assert.match(settingsView, /loadError: usageContext\.agentLoadError/, 'view must forward the agent load error so failures are visible');
+assert.match(settingsView, /detecting: Boolean\(usageContext\.agentDetecting\)/, 'view must forward the detecting state');
+assert.match(settingsView, /activeTab: usageContext\.agentActiveTab/, 'view must forward the codex sessions tab state');
+assert.match(settingsView, /sessions: usageContext\.agentSessions/, 'view must forward codex sessions');
 
-// Functional guard: loadAgentClients must resolve and always leave the loading
-// state clearable even when the host call rejects.
+// Functional guard: loadAgentClients must resolve, flag the detecting window,
+// and always leave a recoverable state even when the host call rejects.
 {
   let loading = true;
   const mkController = (listImpl) => ({
     agentStatuses: null,
     agentSelectedId: '',
     agentLoadError: '',
+    agentDetecting: false,
     agentModels: null,
     agentModelsError: '',
     render: () => {},
@@ -63,16 +68,22 @@ assert.doesNotMatch(controller, /await loadAgentModels\(/, 'controller must not 
       getAgentClientModels: async () => ({ models: [{ name: 'gemini-3.8-flash-high' }] }),
     },
   });
-  const okController = mkController(async () => ({ clients: [{ id: 'zcode', installed: true, modelPicker: true }] }));
+  const okController = mkController(async () => {
+    assert.equal(okController.agentDetecting, true, 'agentDetecting must be true while detection is in flight');
+    return { clients: [{ id: 'zcode', installed: true, modelPicker: true }] };
+  });
   await loadAgentClients(okController, { force: true });
   assert.equal(okController.agentStatuses.length, 1, 'agent statuses must be populated on success');
   assert.equal(okController.agentSelectedId, 'zcode', 'first client must be selected by default');
   assert.deepEqual(okController.agentModels, [{ name: 'gemini-3.8-flash-high' }], 'models must load for the selected client');
+  assert.equal(okController.agentDetecting, false, 'agentDetecting must reset after success');
+  assert.equal(okController.agentLoadError, '', 'a successful load must clear the previous error');
 
   const failController = mkController(async () => { throw new Error('host offline'); });
   await loadAgentClients(failController, { force: true });
   assert.deepEqual(failController.agentStatuses, [], 'failed detection must fall back to an empty list');
   assert.match(failController.agentLoadError, /host offline/, 'failure must be recorded for the view');
+  assert.equal(failController.agentDetecting, false, 'agentDetecting must reset even after failure');
 }
 
 console.log('All model agent view tests passed!');

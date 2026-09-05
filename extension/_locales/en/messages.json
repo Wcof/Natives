@@ -198,6 +198,8 @@
   "agentClientsDetected": {"message":"local clients"},
   "agentRedetect": {"message":"Re-detect"},
   "agentDetecting": {"message":"Detecting local clients…"},
+  "agentDetectFailed": {"message":"Detection failed"},
+  "agentNoClientsFound": {"message":"No supported agent clients detected"},
   "agentNotInstalled": {"message":"Not detected"},
   "agentInstalled": {"message":"Installed"},
   "agentInstalledKeepConfig": {"message":"Installed · original config kept"},

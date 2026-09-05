@@ -7,15 +7,21 @@
 export async function loadAgentClients(controller, { force = false } = {}) {
   if (controller.agentStatuses && !force) return;
   controller.agentStatuses = [];
+  controller.agentDetecting = true;
   try {
-    const result = await controller.api.listAgentClients();
-    controller.agentStatuses = result?.clients || [];
-  } catch (error) {
-    controller.agentStatuses = [];
-    controller.agentLoadError = errorMessage(error);
+    try {
+      const result = await controller.api.listAgentClients();
+      controller.agentStatuses = result?.clients || [];
+      controller.agentLoadError = '';
+    } catch (error) {
+      controller.agentStatuses = [];
+      controller.agentLoadError = errorMessage(error);
+    }
+    controller.agentSelectedId = controller.agentSelectedId || controller.agentStatuses[0]?.id || '';
+    await refreshAgentModels(controller, controller.agentSelectedId);
+  } finally {
+    controller.agentDetecting = false;
   }
-  controller.agentSelectedId = controller.agentSelectedId || controller.agentStatuses[0]?.id || '';
-  await refreshAgentModels(controller, controller.agentSelectedId);
 }
 
 export function selectAgentClient(controller, clientId) {

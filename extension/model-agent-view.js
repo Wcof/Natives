@@ -12,14 +12,17 @@ function escapeHtml(value) {
 }
 
 export function renderAgentView(container, context) {
-  const { clients = [], selectedId = '', models = null, modelsError = '', selection = {}, busy = false, activeTab = 'core', sessions = [], t, onAction } = context;
+  const { clients = [], selectedId = '', models = null, modelsError = '', selection = {}, busy = false, activeTab = 'core', sessions = [], loadError = '', detecting = false, t, onAction } = context;
   container.replaceChildren();
 
+  const statsText = detecting
+    ? t('agentDetecting', '正在检测本机客户端…')
+    : `${clients.length} ${t('agentClientsDetected', '个本机客户端')}`;
   const topbar = document.createElement('div');
   topbar.className = 'model-agent-topbar';
   topbar.innerHTML = `
-    <div class="model-agent-stats">${clients.length} ${t('agentClientsDetected', '个本机客户端')}</div>
-    <button type="button" class="btn-quota-action" data-action="agent-refresh">
+    <div class="model-agent-stats">${escapeHtml(statsText)}</div>
+    <button type="button" class="btn-quota-action" data-action="agent-refresh" ${detecting ? 'disabled' : ''}>
       <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
       <span>${t('agentRedetect', '重新检测')}</span>
     </button>
@@ -28,7 +31,7 @@ export function renderAgentView(container, context) {
 
   const layout = document.createElement('div');
   layout.className = 'model-agent-layout';
-  layout.append(renderClientList(clients, selectedId, t));
+  layout.append(renderClientList(clients, selectedId, { detecting, loadError, t, onAction }));
 
   const selected = clients.find((client) => client.id === selectedId) || null;
   layout.append(renderDetail(selected, { models, modelsError, selection, busy, activeTab, sessions, t, onAction }));
@@ -36,7 +39,7 @@ export function renderAgentView(container, context) {
   container.append(layout);
 }
 
-function renderClientList(clients, selectedId, t) {
+function renderClientList(clients, selectedId, { detecting, loadError, t, onAction }) {
   const pane = document.createElement('aside');
   pane.className = 'model-agent-list';
   pane.innerHTML = `
@@ -63,7 +66,23 @@ function renderClientList(clients, selectedId, t) {
     scroll.append(item);
   }
   if (!clients.length) {
-    scroll.innerHTML = `<div class="model-empty-state"><strong>${t('agentDetecting', '正在检测本机客户端…')}</strong></div>`;
+    const empty = document.createElement('div');
+    empty.className = 'model-empty-state';
+    if (detecting) {
+      empty.innerHTML = `<strong>${escapeHtml(t('agentDetecting', '正在检测本机客户端…'))}</strong>`;
+    } else {
+      const message = loadError
+        ? `${escapeHtml(t('agentDetectFailed', '客户端检测失败'))}<p class="muted">${escapeHtml(loadError)}</p>`
+        : `${escapeHtml(t('agentNoClientsFound', '未检测到任何智能体客户端'))}`;
+      empty.innerHTML = `<strong>${message}</strong>`;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'btn-quota-action';
+      retry.dataset.action = 'agent-refresh';
+      retry.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg><span>${t('agentRedetect', '重新检测')}</span>`;
+      empty.append(retry);
+    }
+    scroll.append(empty);
   }
   return pane;
 }
