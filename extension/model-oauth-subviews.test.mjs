@@ -16,6 +16,8 @@ const mockElement = (tag = 'div') => {
       remove(cls) { this.classes.delete(cls); },
       toggle(cls, b) { if (b) this.classes.add(cls); else this.classes.delete(cls); },
     },
+    setAttribute(k, v) { this[k] = v; },
+    focus() {},
     dataset: {},
     innerHTML: '',
     textContent: '',
@@ -94,6 +96,46 @@ const t = (k, f) => f || k;
   assert.match(css, /\.btn-af-tool\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*gap:\s*5px;/, 'Row tool buttons must declare inline-flex centered alignment');
   assert.match(css, /\.model-quota-loading\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;/, 'Quota loading indicator must align icon and text with inline-flex');
   console.log('✓ Model OAuth CSS alignment and icon sizing contracts verified');
+}
+
+// 5. Test Account Models Dialog For Auth File
+{
+  const { openAccountModelsDialog } = await import('./model-account-models-dialog.js');
+  let getParams = null;
+  let updateParams = null;
+  const mockController = {
+    t: (k, f) => f || k,
+    snapshot: { revision: 1 },
+    view: { showNotice: () => {} },
+    showError: (err) => { throw err; },
+    api: {
+      getAccountModels: async (params) => {
+        getParams = params;
+        return { models: [{ id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', enabled: true }] };
+      },
+      updateAccountModels: async (params) => {
+        updateParams = params;
+        return { ok: true };
+      },
+    },
+  };
+  globalThis.document.body = mockElement('body');
+  mockElement.prototype = mockElement();
+  const dlg = mockElement('dialog');
+  dlg.showModal = () => {};
+  dlg.close = () => {};
+  dlg.remove = () => {};
+  dlg.addEventListener = () => {};
+  const origCreate = globalThis.document.createElement;
+  globalThis.document.createElement = (tag) => {
+    if (tag === 'dialog') return dlg;
+    return mockElement(tag);
+  };
+
+  await openAccountModelsDialog(mockController, { name: 'gemini-key.json', provider: 'gemini' });
+  assert.equal(getParams?.name, 'gemini-key.json', 'openAccountModelsDialog must query models by file name');
+  globalThis.document.createElement = origCreate;
+  console.log('✓ Account Models Dialog for Auth File contract verified');
 }
 
 console.log('All model OAuth sub-views tests passed!\n');

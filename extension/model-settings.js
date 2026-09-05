@@ -303,15 +303,10 @@ class ModelSettings {
       return;
     }
     if (action === 'auth-files-models') {
-      const accountId = target.dataset.accountId;
-      if (!accountId) {
-        this.view.showToast(this.t('authFileNoAccountMatch', '该凭据文件未匹配到 OAuth 账户，无法配置账号模型'));
-        return;
-      }
       return openAccountModelsDialog(this, {
-        accountId,
-        provider: target.dataset.provider,
-        name: target.dataset.name,
+        accountId: target.dataset.accountId || '',
+        provider: target.dataset.provider || '',
+        name: target.dataset.name || '',
       });
     }
     if (action === 'auth-files-copy') {

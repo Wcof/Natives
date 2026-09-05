@@ -1,8 +1,6 @@
 package cliproxy
 
 import (
-	"strings"
-
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 )
 
@@ -35,18 +33,5 @@ func SetGlobalModelRegistryHook(hook ModelRegistryHook) {
 
 // StaticModelDefinitions returns the kernel's built-in OAuth model catalog.
 func StaticModelDefinitions(provider string) []*ModelInfo {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "antigravity":
-		return registry.GetAntigravityModels()
-	case "claude":
-		return registry.GetClaudeModels()
-	case "codex":
-		return registry.GetCodexProModels()
-	case "kimi":
-		return registry.GetKimiModels()
-	case "xai":
-		return registry.GetXAIModels()
-	default:
-		return nil
-	}
+	return registry.GetStaticModelDefinitionsByChannel(provider)
 }

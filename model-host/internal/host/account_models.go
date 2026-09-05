@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ldh/natives/model-host/internal/domain"
 	clipcore "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
@@ -21,35 +22,85 @@ type accountModel struct {
 func (e *Engine) accountModels(raw json.RawMessage) (map[string]any, error) {
 	var input struct {
 		AccountID string `json:"accountId"`
+		Name      string `json:"name"`
+		Provider  string `json:"provider"`
 	}
-	if json.Unmarshal(raw, &input) != nil || strings.TrimSpace(input.AccountID) == "" {
-		return nil, invalid("账户 ID 不能为空")
+	if json.Unmarshal(raw, &input) != nil || (strings.TrimSpace(input.AccountID) == "" && strings.TrimSpace(input.Name) == "") {
+		return nil, invalid("账户 ID 或文件名不能为空")
 	}
 	snapshot, err := e.repo.Load()
 	if err != nil {
 		return nil, err
 	}
-	account, err := findAccount(&snapshot, input.AccountID)
-	if err != nil {
-		return nil, err
+	var account *domain.Account
+	if strings.TrimSpace(input.AccountID) != "" {
+		account, _ = findAccount(&snapshot, input.AccountID)
 	}
-	credential, err := e.accountCredential(context.Background(), account.ID)
-	if err != nil {
-		return nil, err
+	if account != nil {
+		credential, err := e.accountCredential(context.Background(), account.ID)
+		if err != nil {
+			return nil, err
+		}
+		rules := credentialExcludedModels(credential)
+		models := make(map[string]accountModel)
+		for _, model := range clipcore.StaticModelDefinitions(account.Provider) {
+			if model != nil && strings.TrimSpace(model.ID) != "" {
+				models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
+			}
+		}
+		provider, _ := findProvider(&snapshot, account.Provider)
+		if provider != nil {
+			for _, model := range provider.Models {
+				if slices.Contains(model.AccountIDs, account.ID) {
+					models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
+				}
+			}
+		}
+		result := make([]accountModel, 0, len(models))
+		for _, model := range models {
+			result = append(result, model)
+		}
+		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+		return map[string]any{"accountId": account.ID, "provider": account.Provider, "models": result}, nil
 	}
-	rules := credentialExcludedModels(credential)
+
+	targetName := strings.TrimSpace(input.Name)
+	if targetName == "" {
+		targetName = strings.TrimSpace(input.AccountID)
+	}
+	provider := strings.TrimSpace(input.Provider)
+	var rules []string
+	var matchedAccountID string
+
+	if e.authFiles != nil {
+		items, err := e.authFiles.List()
+		if err == nil {
+			for _, item := range items {
+				if item.Name == targetName || item.Name == targetName+".json" || item.AccountID == targetName {
+					targetName = item.Name
+					if provider == "" {
+						provider = item.Provider
+					}
+					rules = item.ExcludedModels
+					matchedAccountID = item.AccountID
+					break
+				}
+			}
+		}
+	}
+	if provider == "" {
+		provider = normalizeAuthProvider(targetName)
+	}
 	models := make(map[string]accountModel)
-	for _, model := range clipcore.StaticModelDefinitions(account.Provider) {
+	for _, model := range clipcore.StaticModelDefinitions(provider) {
 		if model != nil && strings.TrimSpace(model.ID) != "" {
 			models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
 		}
 	}
-	provider, _ := findProvider(&snapshot, account.Provider)
-	if provider != nil {
-		for _, model := range provider.Models {
-			if slices.Contains(model.AccountIDs, account.ID) {
-				models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
-			}
+	providerConfig, _ := findProvider(&snapshot, provider)
+	if providerConfig != nil {
+		for _, model := range providerConfig.Models {
+			models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
 		}
 	}
 	result := make([]accountModel, 0, len(models))
@@ -57,37 +108,93 @@ func (e *Engine) accountModels(raw json.RawMessage) (map[string]any, error) {
 		result = append(result, model)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return map[string]any{"accountId": account.ID, "provider": account.Provider, "models": result}, nil
+	resp := map[string]any{
+		"name":     targetName,
+		"provider": provider,
+		"models":   result,
+	}
+	if matchedAccountID != "" {
+		resp["accountId"] = matchedAccountID
+	}
+	return resp, nil
 }
 
 func (e *Engine) updateAccountModels(raw json.RawMessage) (map[string]any, error) {
 	var input struct {
 		ExpectedRevision *int64   `json:"expectedRevision"`
 		AccountID        string   `json:"accountId"`
+		Name             string   `json:"name"`
+		Provider         string   `json:"provider"`
 		EnabledModelIDs  []string `json:"enabledModelIds"`
 	}
-	if json.Unmarshal(raw, &input) != nil || strings.TrimSpace(input.AccountID) == "" {
+	if json.Unmarshal(raw, &input) != nil || (strings.TrimSpace(input.AccountID) == "" && strings.TrimSpace(input.Name) == "") {
 		return nil, invalid("账户模型参数无效")
-	}
-	if err := requireRevision(input.ExpectedRevision); err != nil {
-		return nil, err
 	}
 	snapshot, err := e.repo.Load()
 	if err != nil {
 		return nil, err
 	}
-	if snapshot.Revision != *input.ExpectedRevision {
-		return nil, errors.New("revision_conflict")
+	var account *domain.Account
+	if strings.TrimSpace(input.AccountID) != "" {
+		account, _ = findAccount(&snapshot, input.AccountID)
 	}
-	account, err := findAccount(&snapshot, input.AccountID)
-	if err != nil {
-		return nil, err
+	if account != nil {
+		if err := requireRevision(input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		if snapshot.Revision != *input.ExpectedRevision {
+			return nil, errors.New("revision_conflict")
+		}
+		credential, err := e.accountCredential(context.Background(), account.ID)
+		if err != nil {
+			return nil, err
+		}
+		definitionInput, err := json.Marshal(map[string]string{"accountId": account.ID})
+		if err != nil {
+			return nil, err
+		}
+		definitions, err := e.accountModels(definitionInput)
+		if err != nil {
+			return nil, err
+		}
+		allModels := definitions["models"].([]accountModel)
+		rules := exclusionsForEnabled(credentialExcludedModels(credential), allModels, input.EnabledModelIDs)
+		credential = credential.Clone()
+		previous := credential.Clone()
+		if credential.Metadata == nil {
+			credential.Metadata = make(map[string]any)
+		}
+		credential.Metadata["excluded_models"] = rules
+		if credential.Attributes == nil {
+			credential.Attributes = make(map[string]string)
+		}
+		if len(rules) == 0 {
+			delete(credential.Attributes, "excluded_models")
+		} else {
+			credential.Attributes["excluded_models"] = strings.Join(rules, ",")
+		}
+		if _, err = e.authStore.Save(context.Background(), credential); err == nil {
+			err = e.runtime.SyncAuth(context.Background(), credential)
+		}
+		if err != nil {
+			_, _ = e.authStore.Save(context.Background(), previous)
+			_ = e.runtime.SyncAuth(context.Background(), previous)
+			return nil, err
+		}
+		return e.accountModels(raw)
 	}
-	credential, err := e.accountCredential(context.Background(), account.ID)
-	if err != nil {
-		return nil, err
+
+	if e.authFiles == nil {
+		return nil, errors.New("auth files manager not initialized")
 	}
-	definitionInput, err := json.Marshal(map[string]string{"accountId": account.ID})
+	targetName := strings.TrimSpace(input.Name)
+	if targetName == "" {
+		targetName = strings.TrimSpace(input.AccountID)
+	}
+	definitionInput, err := json.Marshal(map[string]string{
+		"name":     targetName,
+		"provider": input.Provider,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -95,31 +202,23 @@ func (e *Engine) updateAccountModels(raw json.RawMessage) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	allModels := definitions["models"].([]accountModel)
-	rules := exclusionsForEnabled(credentialExcludedModels(credential), allModels, input.EnabledModelIDs)
-	credential = credential.Clone()
-	previous := credential.Clone()
-	if credential.Metadata == nil {
-		credential.Metadata = make(map[string]any)
+	allModels, _ := definitions["models"].([]accountModel)
+	var currentRules []string
+	items, err := e.authFiles.List()
+	if err == nil {
+		for _, item := range items {
+			if item.Name == targetName || item.Name == targetName+".json" || item.AccountID == targetName {
+				targetName = item.Name
+				currentRules = item.ExcludedModels
+				break
+			}
+		}
 	}
-	credential.Metadata["excluded_models"] = rules
-	if credential.Attributes == nil {
-		credential.Attributes = make(map[string]string)
-	}
-	if len(rules) == 0 {
-		delete(credential.Attributes, "excluded_models")
-	} else {
-		credential.Attributes["excluded_models"] = strings.Join(rules, ",")
-	}
-	if _, err = e.authStore.Save(context.Background(), credential); err == nil {
-		err = e.runtime.SyncAuth(context.Background(), credential)
-	}
-	if err != nil {
-		_, _ = e.authStore.Save(context.Background(), previous)
-		_ = e.runtime.SyncAuth(context.Background(), previous)
+	rules := exclusionsForEnabled(currentRules, allModels, input.EnabledModelIDs)
+	if _, err := e.authFiles.Update(targetName, nil, nil, rules); err != nil {
 		return nil, err
 	}
-	return e.accountModels(raw)
+	return e.accountModels(definitionInput)
 }
 
 func (e *Engine) accountCredential(ctx context.Context, accountID string) (*coreauth.Auth, error) {

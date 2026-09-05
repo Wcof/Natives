@@ -128,6 +128,10 @@ func (m *Manager) Update(name string, disabled *bool, priority *int, excludedMod
 
 	cleanName := filepath.Base(name)
 	filePath := filepath.Join(m.baseDir, cleanName)
+	if _, err := os.Stat(filePath); errors.Is(err, os.ErrNotExist) && !strings.HasSuffix(strings.ToLower(cleanName), ".json") {
+		cleanName += ".json"
+		filePath = filepath.Join(m.baseDir, cleanName)
+	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
@@ -172,6 +176,10 @@ func (m *Manager) Delete(name string) error {
 
 	cleanName := filepath.Base(name)
 	filePath := filepath.Join(m.baseDir, cleanName)
+	if _, err := os.Stat(filePath); errors.Is(err, os.ErrNotExist) && !strings.HasSuffix(strings.ToLower(cleanName), ".json") {
+		cleanName += ".json"
+		filePath = filepath.Join(m.baseDir, cleanName)
+	}
 	return os.Remove(filePath)
 }
 
@@ -194,7 +202,12 @@ func (m *Manager) ReadFile(name string) ([]byte, error) {
 	defer m.mu.Unlock()
 
 	cleanName := filepath.Base(name)
-	return os.ReadFile(filepath.Join(m.baseDir, cleanName))
+	filePath := filepath.Join(m.baseDir, cleanName)
+	if _, err := os.Stat(filePath); errors.Is(err, os.ErrNotExist) && !strings.HasSuffix(strings.ToLower(cleanName), ".json") {
+		cleanName += ".json"
+		filePath = filepath.Join(m.baseDir, cleanName)
+	}
+	return os.ReadFile(filePath)
 }
 
 func parseAuthFile(name string, size int64, modTime time.Time, data []byte) AuthFileItem {

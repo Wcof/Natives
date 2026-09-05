@@ -31,7 +31,7 @@ test('extension gate fails when estimated package exceeds budget', () => {
   try {
     mkdirSync(join(root, 'extension'), { recursive: true });
     writeFileSync(join(root, 'extension', 'manifest.json'), '{}');
-    writeFileSync(join(root, 'extension', 'files.js'), randomBytes(300000));
+    writeFileSync(join(root, 'extension', 'files.js'), randomBytes(400000));
     assert.equal(runExtensionBundleCheck(root).ok, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

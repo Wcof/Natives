@@ -108,7 +108,65 @@ func TestAccountModelsPersistExclusionsToOAuthCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Attributes["excluded_models"] == "" || matchesAnyRule(models[0].ID, credentialExcludedModels(saved)) {
-		t.Fatalf("model exclusions were not persisted correctly: %#v", saved.Attributes)
+		if saved.Attributes["excluded_models"] == "" || matchesAnyRule(models[0].ID, credentialExcludedModels(saved)) {
+			t.Fatalf("model exclusions were not persisted correctly: %#v", saved.Attributes)
+		}
 	}
-}
+
+	func TestAccountModelsPersistExclusionsToAuthFile(t *testing.T) {
+		tempDir := t.TempDir()
+		repo := domain.NewRepository(filepath.Join(tempDir, "state.json"))
+		afm, err := authfiles.NewManager(filepath.Join(tempDir, "auth"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = afm.Import("gemini-test.json", []byte(`{"provider":"gemini","account":"test@example.com"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, err := NewEngine(repo, secrets.NewMemoryStore(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(engine.Close)
+		engine.authFiles = afm
+
+		// 1. Query models for the auth file by name
+		res, err := engine.accountModels(json.RawMessage(`{"name":"gemini-test.json"}`))
+		if err != nil {
+			t.Fatalf("accountModels for auth file failed: %v", err)
+		}
+		models := res["models"].([]accountModel)
+		if len(models) == 0 {
+			t.Fatalf("expected static models for gemini, got 0")
+		}
+		targetModel := models[0].ID
+
+		// 2. Update models to enable only targetModel
+		updInput, _ := json.Marshal(map[string]any{
+			"name":            "gemini-test.json",
+			"enabledModelIds": []string{targetModel},
+		})
+		updRes, err := engine.updateAccountModels(updInput)
+		if err != nil {
+			t.Fatalf("updateAccountModels for auth file failed: %v", err)
+		}
+		updModels := updRes["models"].([]accountModel)
+		for _, m := range updModels {
+			if m.ID == targetModel && !m.Enabled {
+				t.Fatalf("model %s should be enabled", m.ID)
+			}
+			if m.ID != targetModel && m.Enabled {
+				t.Fatalf("model %s should be disabled", m.ID)
+			}
+		}
+
+		// 3. Verify on-disk file has excluded_models
+		item, err := afm.List()
+		if err != nil || len(item) == 0 {
+			t.Fatalf("failed to read updated auth file: %v", err)
+		}
+		if len(item[0].ExcludedModels) == 0 {
+			t.Fatalf("excluded_models not written to auth file: %#v", item[0])
+		}
+	}
