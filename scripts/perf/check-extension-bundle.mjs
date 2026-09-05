@@ -12,7 +12,9 @@ const DEV_NAMES = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', 
 // Runtime files plus Chrome's localized message catalogs. Installer helpers,
 // manifests and READMEs intentionally stay outside the extension ZIP.
 // ui-harness.js, test-dom-mock.js and files-preview.js (standalone offline fallback preview) stay outside.
-const DISTRIBUTABLE = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|plugins\/.+)\.(?:html|css|js)|icons\/[^/]+|_locales\/[^/]+\/messages\.json)$/;
+// icons/folder-source.svg is a packaging source asset: dev.mjs strips it when
+// producing the loadable extension, so it never ships in the distributable ZIP.
+const DISTRIBUTABLE = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|plugins\/.+)\.(?:html|css|js)|icons\/(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
 
 export function distributableFiles(root = ROOT) {
   const dir = join(root, 'extension');

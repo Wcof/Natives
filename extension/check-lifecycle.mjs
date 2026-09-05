@@ -1,18 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesPreview, filesCss, newtab, newtabCss, newtabScript, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
+const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesCss, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
   readFile(new URL('./manifest.json', import.meta.url), 'utf8'),
   readFile(new URL('./background.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.js', import.meta.url), 'utf8'),
   readFile(new URL('./native-client.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.html', import.meta.url), 'utf8'),
   readFile(new URL('./files-bootstrap.js', import.meta.url), 'utf8'),
-  readFile(new URL('./files-preview.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.css', import.meta.url), 'utf8'),
-  readFile(new URL('./newtab.html', import.meta.url), 'utf8'),
-  readFile(new URL('./newtab.css', import.meta.url), 'utf8'),
-  readFile(new URL('./newtab.js', import.meta.url), 'utf8'),
   readFile(new URL('./launch-workbench.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./dev.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/en/messages.json', import.meta.url), 'utf8'),
@@ -66,22 +62,7 @@ assert.ok(searchControllerOffset < files.indexOf('const contextMenu = createFile
 const manifestData = JSON.parse(manifest);
 assert.equal(manifestData.chrome_url_overrides.newtab, 'space.html');
 assert.ok(manifestData.permissions.includes('storage'), 'files page persists UI state through chrome.storage.local');
-assert.match(newtab, /data-i18n="newtabDescription"/);
-assert.match(newtab, /href="files\.html"[^>]*data-i18n="openFiles"/, 'new tab must expose the file manager entry link');
-assert.match(newtab, /id="open-files"[^>]*href="files\.html"/, 'file manager entry must have a stable interaction target');
-assert.match(newtab, /data-i18n="newtabDescription">你的本地工作台<\/p>/, 'new tab uses the Chinese default locale on first paint');
-assert.match(newtab, /id="language"/);
-assert.match(newtab, /data-i18n-aria-label="language"/);
-assert.match(newtabScript, /chrome\.i18n\.getMessage/);
-assert.match(newtabScript, /fetch\(`_locales\/\$\{language\}\/messages\.json`\)/);
-assert.match(newtabScript, /natives-language/);
-assert.match(newtabScript, /localStorage\.getItem\('natives-language'\)/);
-assert.match(newtabScript, /localStorage\.setItem\('natives-language', language\)/);
-assert.match(newtabScript, /select\.setAttribute\('aria-label', messages\.language/);
-assert.match(newtabScript, /document\.documentElement\.lang = language === 'en'/);
-assert.match(newtabScript, /stored === 'en' \|\| stored === 'zh_CN' \? stored : 'zh_CN'/, 'new tab must use the Chinese manifest locale on first launch');
-assert.match(newtabScript, /await applyLocale\(\)/, 'new tab language changes must apply without a page reload');
-assert.match(newtabScript, /chrome\.storage\?\.onChanged\?\.addListener/);
+assert.doesNotMatch(manifestData.chrome_url_overrides.newtab, /newtab\.html/, 'legacy newtab page must stay retired in favor of the space page');
 assert.match(filesBundle, /document\.documentElement\.lang = (?:selectedLanguage|language) === 'en'/);
 assert.match(filesBundle, /chrome\.storage\?\.onChanged\?\.addListener/);
 assert.doesNotMatch(files, /new Promise\([^\n]+chrome\.storage\.local\.(?:get|set)/, 'storage bootstrap must not hang behind callback-wrapped Chrome APIs');
@@ -90,19 +71,13 @@ assert.match(filesBundle, /filesSidebar\?\.setPreferences/, 'theme and language 
 assert.match(filesBundle, /event\.key\.toLowerCase\(\) !== 'l'[\s\S]*openLanguageSettings/, 'files page Alt+L must open the settings menu on language');
 assert.match(filesBundle, /t\('movePreviewSide'[^\n]*t\('movePreviewBelow'/, 'preview layout labels must be localized');
 assert.match(filesBundle, /t\(sidebarCollapsed \? 'expandSidebar' : 'collapseSidebar'/, 'sidebar state labels must be localized');
-assert.match(newtabScript, /event\.key\.toLowerCase\(\) !== 'l'.*language\.focus\(\)/, 'new tab Alt+L must focus the language control');
-assert.doesNotMatch(newtabScript, /connectNative|sendMessage/);
-assert.deepEqual(Object.keys(JSON.parse(en)).filter((key) => key.startsWith('newtab') || key === 'openFiles').sort(), ['newtabDescription', 'newtabHeading', 'newtabTitle', 'openFiles']);
-assert.deepEqual(Object.keys(JSON.parse(zh)).filter((key) => key.startsWith('newtab') || key === 'openFiles').sort(), ['newtabDescription', 'newtabHeading', 'newtabTitle', 'openFiles']);
 assert.deepEqual(Object.keys(JSON.parse(en)).sort(), Object.keys(JSON.parse(zh)).sort(), 'locale keys must stay synchronized');
 assert.match(nativeClient, /connectNative\(host\)/, 'real Native Client must be concentrated in the replaceable client module');
 assert.doesNotMatch(files, /chrome\.runtime\.connectNative/, 'files page must not own the concrete Native Client');
 assert.match(filesHtml, /<script src="files-bootstrap\.js"><\/script>/, 'files page must load its CSP-safe external bootstrap');
 assert.match(filesBootstrap, /filesParams\.has\('ui-harness'\)/, 'UI Harness must enter through the formal files page');
 assert.match(filesBootstrap, /filesParams\.has\('self-test'\)/, 'Self-Test must enter through the formal files page');
-assert.match(filesBootstrap, /location\.protocol === 'file:'[\s\S]*files-preview\.js/, 'double-clicked files.html must enter the explicit static preview mode');
-assert.match(filesPreview, /静态预览 · 未连接本地磁盘/, 'static preview must not impersonate a real Host connection');
-assert.doesNotMatch(filesPreview, /connectNative|showDirectoryPicker|webkitRequestFileSystem/, 'static preview must not add a second filesystem transport');
+assert.doesNotMatch(filesBootstrap, /files-preview\.js/, 'static preview shim must stay retired');
 assert.doesNotMatch(filesHtml, /<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?<\/script>/i, 'MV3 extension pages must not use inline scripts');
 assert.match(filesBootstrap, /import\('\.\/files\.js'\)\.catch/, 'files page must surface module bootstrap failures');
 assert(files.indexOf("call('version')") < files.indexOf("call('roots')"));
@@ -353,7 +328,6 @@ assert.match(filesBundle, /popover\.style\.left = `\$\{Math\.max\(8, Math\.min\(
 assert.match(filesCss, /@media \(max-width:1180px\)[\s\S]*\.layout\.preview-open.*grid-template-columns:minmax\(0,1fr\)/, 'files content must collapse before fixed panels overflow');
 assert.match(filesCss, /@media \(max-width:760px\)/, 'files layout must remain usable on narrow widths');
 assert.match(filesCss, /@media \(max-width:760px\)[\s\S]*\.entry \{ grid-template-columns:28px minmax\(0,1fr\)/, 'file rows must compress before the content column overflows');
-assert.match(newtabCss, /main \{[^}]*min-width:\s*0/, 'new tab card must shrink within narrow viewports');
 assert.match(filesCss, /\.entry:focus-visible/, 'file keyboard focus must be theme-visible');
 assert.match(filesCss, /\.entries\.grid \.entry \{[^}]*background:transparent/, 'grid entries must preserve the flat design surface');
 assert.match(filesBundle, /event\.key !== 'Escape'[\s\S]*?is-maximized[\s\S]*?maximize-preview/, 'maximized preview must support Escape restore');

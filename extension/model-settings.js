@@ -3,6 +3,7 @@ import { createModelSettingsView, renderNewProvider } from './model-settings-vie
 import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
+import { handleAgentAction, loadAgentClients } from './model-agent-controller.js';
 import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
 let instance;
@@ -22,6 +23,15 @@ class ModelSettings {
     this.selectedID = 'codex';
     this.pendingOAuth = null;
     this.oauthResults = {};
+
+    // Agent clients (智能体配置) state
+    this.agentStatuses = null;
+    this.agentSelectedId = '';
+    this.agentModels = null;
+    this.agentModelsError = '';
+    this.agentSelections = {};
+    this.agentBusy = false;
+    this.agentLoadError = '';
 
     this.usageFilter = { range: '4h', page: 1, limit: 20 };
     this.usageFilterOptions = null;
@@ -127,6 +137,12 @@ class ModelSettings {
           authFiles: this.authFiles,
           quotaMap: this.quotaMap,
           authFileFilter: this.authFileFilter,
+          agentStatuses: this.agentStatuses,
+          agentSelectedId: this.agentSelectedId,
+          agentModels: this.agentModels,
+          agentModelsError: this.agentModelsError,
+          agentSelections: this.agentSelections,
+          agentBusy: this.agentBusy,
         },
       );
     }
@@ -165,6 +181,11 @@ class ModelSettings {
       if (page === 'usage') {
         this.view.setLoading(true);
         await this.loadUsageData();
+        this.view.setLoading(false);
+      }
+      if (page === 'agent' && !this.agentStatuses) {
+        this.view.setLoading(true);
+        await loadAgentClients(this, { force: true });
         this.view.setLoading(false);
       }
       this.render();
@@ -341,6 +362,7 @@ class ModelSettings {
     }
 
 	if (await handleUsageAction(this, action, target)) return;
+	if (await handleAgentAction(this, action, target)) return;
 	await handleAdvancedAction(this, action, target, revision);
   }
 

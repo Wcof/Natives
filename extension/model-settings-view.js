@@ -4,6 +4,7 @@ import { renderGateway } from './model-gateway-view.js';
 import { renderOAuthLoginView } from './model-oauth-login-view.js';
 import { renderAuthFilesView } from './model-auth-files-view.js';
 import { renderQuotaView } from './model-quota-view.js';
+import { renderAgentView } from './model-agent-view.js';
 
 export function createModelSettingsView({ t, onAction }) {
   let activePage = 'oauth';
@@ -26,6 +27,7 @@ export function createModelSettingsView({ t, onAction }) {
             <button type="button" data-action="select-model-page" data-page="oauth"><svg class="icon" aria-hidden="true"><use href="#i-globe" /></svg><span data-role="oauthNav"></span></button>
             <button type="button" data-action="select-model-page" data-page="gateway"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg><span data-role="gatewayNav"></span></button>
             <button type="button" data-action="select-model-page" data-page="usage"><svg class="icon" aria-hidden="true"><use href="#i-list" /></svg><span data-role="usageNav"></span></button>
+            <button type="button" data-action="select-model-page" data-page="agent"><svg class="icon" aria-hidden="true"><use href="#i-target" /></svg><span data-role="agentNav"></span></button>
             <button type="button" data-action="select-model-page" data-page="advanced"><svg class="icon" aria-hidden="true"><use href="#i-gear" /></svg><span data-role="advancedNav"></span></button>
           </nav>
         </div>
@@ -72,6 +74,10 @@ export function createModelSettingsView({ t, onAction }) {
           <section class="model-settings-page" data-page-panel="usage" hidden>
             <header class="model-page-heading"><div><h3 data-role="usageTitle"></h3><p class="muted" data-role="usageDescription"></p></div></header>
             <div class="model-usage-container" data-role="usageContainer"></div>
+          </section>
+          <section class="model-settings-page" data-page-panel="agent" hidden>
+            <header class="model-page-heading"><div><span class="model-oauth-section-tag">AGENT CLIENTS</span><h3 data-role="agentTitle"></h3></div></header>
+            <div class="model-agent-container" data-role="agentContainer"></div>
           </section>
           <section class="model-settings-page" data-page-panel="advanced" hidden>
             <header class="model-page-heading"><div><h3 data-role="advancedTitle"></h3><p class="muted" data-role="advancedDescription"></p></div></header>
@@ -166,6 +172,7 @@ export function createModelSettingsView({ t, onAction }) {
       roles.oauthNav.textContent = 'OAuth';
       roles.gatewayNav.textContent = t('modelLocalProxy', '本地代理');
       roles.usageNav.textContent = t('modelUsageRecords', '使用记录');
+      roles.agentNav.textContent = t('modelAgentSettings', '智能体配置');
       roles.advancedNav.textContent = t('modelAdvancedSettings', '高级设置');
 
       dialog.querySelector('#model-settings-title').textContent = t('modelSettings', '模型与服务');
@@ -176,6 +183,7 @@ export function createModelSettingsView({ t, onAction }) {
       roles.gatewayDescription.textContent = t('modelLocalProxyDescription', '管理本地兼容接口、访问密钥与常驻状态。');
       roles.usageTitle.textContent = t('modelUsageRecords', '使用记录');
       roles.usageDescription.textContent = t('modelUsageRecordsDescription', '查看调用指标、Token 消耗、透视分析与费率定价。');
+      roles.agentTitle.textContent = t('modelAgentSettings', '智能体配置');
       roles.advancedTitle.textContent = t('modelAdvancedSettings', '高级设置');
       roles.advancedDescription.textContent = t('modelAdvancedSettingsDescription', '管理多访问密钥、调度路由负载、上游网络代理与数据迁移。');
 
@@ -204,7 +212,7 @@ export function createModelSettingsView({ t, onAction }) {
 
       this.setOAuthTab(activeOAuthTab);
 
-      // Render Usage & Advanced
+      // Render Usage & Agent & Advanced
       renderUsageView(roles.usageContainer, {
         activeSubTab: activeUsageTab,
         overviewData: usageContext.overviewData,
@@ -213,6 +221,17 @@ export function createModelSettingsView({ t, onAction }) {
         pricingData: usageContext.pricingData,
         currentFilter: usageContext.currentFilter,
         filterOptions: usageContext.filterOptions,
+        t,
+        onAction,
+      });
+
+      renderAgentView(roles.agentContainer, {
+        clients: usageContext.agentStatuses || [],
+        selectedId: usageContext.agentSelectedId || '',
+        models: usageContext.agentModels ?? null,
+        modelsError: usageContext.agentModelsError || '',
+        selection: usageContext.agentSelections || {},
+        busy: usageContext.agentBusy || false,
         t,
         onAction,
       });

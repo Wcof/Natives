@@ -76,6 +76,14 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     getAccountModels: (params) => client.call('model_account_models', params),
     updateAccountModels: (params) => client.call('model_account_models_update', params),
 
+    // Agent clients (智能体配置)
+    listAgentClients: () => client.call('model_agent_clients_list'),
+    getAgentClientModels: (params) => client.call('model_agent_client_models', params),
+    applyAgentClientConfig: (params) => client.call('model_agent_client_apply', params),
+    defaultAgentClientConfig: (params) => client.call('model_agent_client_default', params),
+    closeAgentClientConfig: (params) => client.call('model_agent_client_close', params),
+    launchAgentClient: (params) => client.call('model_agent_client_launch', params),
+
     disconnect: () => client.disconnect(),
     get connected() { return client.connected; },
   };

@@ -290,6 +290,20 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 	case "model_quota_query":
 		return e.queryQuota(ctx, raw)
 
+	// Agent clients (智能体配置)
+	case "model_agent_clients_list":
+		return e.listAgentClients()
+	case "model_agent_client_models":
+		return e.agentClientModels(ctx, raw)
+	case "model_agent_client_apply":
+		return e.applyAgentClientConfig(raw, "apply")
+	case "model_agent_client_default":
+		return e.applyAgentClientConfig(raw, "default")
+	case "model_agent_client_close":
+		return e.applyAgentClientConfig(raw, "close")
+	case "model_agent_client_launch":
+		return e.launchAgentClient(raw)
+
 	default:
 		return nil, invalid("不支持的模型设置操作")
 	}
