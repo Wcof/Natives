@@ -33,20 +33,6 @@ export function createSettingsMenu({
     onModelSettings?.(anchorButton);
   };
 
-  const markdownRow = _menuRow('i-file', 'markdownTakeover', 'Markdown 文件接管');
-  markdownRow.querySelector('.chev')?.remove();
-  markdownRow.removeAttribute('aria-haspopup');
-  markdownRow.onclick = () => {
-    toggle(false);
-    if (typeof chrome !== 'undefined' && chrome.extension?.isAllowedFileSchemeAccess) {
-      chrome.extension.isAllowedFileSchemeAccess((isAllowed) => {
-        _showTakeoverDialog(isAllowed);
-      });
-    } else {
-      _showTakeoverDialog(false);
-    }
-  };
-
   langRow.onmouseenter = () => _showSubmenu(langRow, 'lang');
   themeRow.onmouseenter = () => _showSubmenu(themeRow, 'theme');
   langRow.onclick = () => openSubmenu === 'lang' ? _hideSubmenu() : _showSubmenu(langRow, 'lang');
@@ -54,7 +40,7 @@ export function createSettingsMenu({
 
   const langSub = _buildSubmenu('lang');
   const themeSub = _buildSubmenu('theme');
-  menu.append(modelRow, markdownRow, langRow, themeRow);
+  menu.append(modelRow, langRow, themeRow);
   document.body.append(menu, langSub, themeSub);
 
   if (anchorButton) {
@@ -115,48 +101,7 @@ export function createSettingsMenu({
     langRow.querySelector('span').textContent = t('interfaceLanguage', '界面语言');
     themeRow.querySelector('span').textContent = t('interfaceTheme', '界面主题');
     modelRow.querySelector('span').textContent = t('modelSettings', '模型与服务');
-    markdownRow.querySelector('span').textContent = t('markdownTakeover', 'Markdown 文件接管');
     _syncSubmenus();
-  }
-
-  function _showTakeoverDialog(isAllowed) {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'model-confirm-dialog';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    const title = document.createElement('h3');
-    title.style.margin = '0 0 8px 0';
-    title.textContent = t('markdownTakeoverTitle', 'Markdown 文件接管');
-    const msg = document.createElement('p');
-    msg.className = 'muted';
-    msg.style.margin = '0 0 16px 0';
-    msg.textContent = isAllowed
-      ? t('markdownTakeoverActive', '本地 Markdown 接管已生效。在 Chrome 中打开 .md、.markdown、.mdx 文件将自动进入阅读器。')
-      : t('markdownTakeoverGuide', 'Chrome 默认限制扩展访问本地文件网址。请在扩展管理页中开启“允许访问文件网址”开关以激活此功能。');
-    const actions = document.createElement('div');
-    actions.className = 'modal-actions';
-    const closeBtn = document.createElement('button');
-    closeBtn.value = 'cancel';
-    closeBtn.textContent = t('close', '关闭');
-    actions.append(closeBtn);
-    if (!isAllowed) {
-      const openBtn = document.createElement('button');
-      openBtn.className = 'primary';
-      openBtn.type = 'button';
-      openBtn.textContent = t('markdownOpenExtensionSettings', '前往扩展管理页开启');
-      openBtn.onclick = () => {
-        dialog.close();
-        if (chrome.tabs?.create) {
-          chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
-        }
-      };
-      actions.append(openBtn);
-    }
-    form.append(title, msg, actions);
-    dialog.append(form);
-    document.body.append(dialog);
-    dialog.addEventListener('close', () => dialog.remove(), { once: true });
-    dialog.showModal();
   }
 
   function _syncSubmenus() {
