@@ -29,6 +29,22 @@ let inspectorWidth = 360;
 const $ = (id) => document.getElementById(id);
 const t = (key, fallback) => localeMessages[key]?.message || fallback || key;
 
+// Per-tab session state: survives reload and same-tab navigation, cleared when
+// the tab closes — so a fresh new tab always starts from the initial layout.
+const SPACE_UI_KEY = 'natives-space-ui';
+function readSpaceUi() {
+  try { return JSON.parse(sessionStorage.getItem(SPACE_UI_KEY) || 'null') || {}; } catch { return {}; }
+}
+function persistSpaceUi(patch) {
+  try {
+    sessionStorage.setItem(SPACE_UI_KEY, JSON.stringify({ ...readSpaceUi(), ...patch }));
+  } catch {}
+}
+function isSessionRestore() {
+  const navType = performance.getEntriesByType?.('navigation')?.[0]?.type;
+  return navType === 'reload' || navType === 'back_forward';
+}
+
 async function openModelSettings(returnFocus) {
   const module = await import('./model-settings.js');
   await module.openModelSettings({ t, language: selectedLanguage, returnFocus });
@@ -225,13 +241,18 @@ async function init() {
   initNativeClient();
   initResizers();
 
+  const restoring = isSessionRestore();
+  const storedUi = restoring ? readSpaceUi() : {};
+  if (!restoring) persistSpaceUi({ sidebarCollapsed: true, widgetsHidden: false });
+
   const sidebarController = createSidebarController({
     resizer: $('sidebar-resizer'),
     toggleButton: $('space-toggle-sidebar-btn'),
     initialWidth: sidebarWidth,
-    initialCollapsed: true,
+    initialCollapsed: restoring ? storedUi.sidebarCollapsed !== false : true,
     t,
     onWidthChange: (w) => setStored('natives-sidebar-width', w),
+    onCollapsedChange: (collapsed) => persistSpaceUi({ sidebarCollapsed: Boolean(collapsed) }),
   });
 
   nameModal = createSpaceNameModal({ $, t, onSaveWorkspaceName: handleSaveWorkspaceName });
@@ -250,10 +271,14 @@ async function init() {
   toolbar = createSpaceToolbar({
     $, t,
     onToggleSettings: () => { if (inspector.isOpen) inspector.close(); else inspector.open('overview'); },
-    onToggleWidgets: (hidden) => { dashboard.setWidgetsHidden(hidden); },
+    onToggleWidgets: (hidden) => {
+      dashboard.setWidgetsHidden(hidden);
+      persistSpaceUi({ widgetsHidden: Boolean(hidden) });
+    },
     onToggleSidebar: null,
     onOpenCatalog: () => inspector.open('catalog'),
   });
+  if (restoring && storedUi.widgetsHidden) toolbar.setWidgetsHidden(true);
 
   createSettingsMenu({
     anchorButton: $('settings-entry'),

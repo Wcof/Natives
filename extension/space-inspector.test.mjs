@@ -5,15 +5,19 @@ import { createSpaceToolbar } from './space-toolbar.js';
 
 console.log('--- Space Inspector & Toolbar State Machine Test ---');
 
-const [inspectorSource, spaceHtml] = await Promise.all([
+const [inspectorSource, spaceHtml, spaceBootstrap] = await Promise.all([
   readFile(new URL('./space-inspector.js', import.meta.url), 'utf8'),
   readFile(new URL('./space.html', import.meta.url), 'utf8'),
+  readFile(new URL('./space-bootstrap.js', import.meta.url), 'utf8'),
 ]);
 
 assert.doesNotMatch(inspectorSource, /\bprompt\s*\(/, 'workspace reset must never require a typed command');
 assert.match(spaceHtml, /id="ws-reset-modal"/, 'workspace reset must use a selectable modal');
 assert.doesNotMatch(spaceHtml, /id="toggle-sidebar"/, 'personal space must not expose the legacy sidebar toggle');
 assert.equal((spaceHtml.match(/id="space-toggle-widgets-btn"/g) || []).length, 1, 'personal space must expose one widget visibility toggle');
+assert.match(spaceHtml, /src="space-bootstrap\.js"/, 'space page must bootstrap per-tab UI restore before the module paints');
+assert.match(spaceBootstrap, /natives-space-ui/, 'space bootstrap must keep per-tab UI state so refresh restores the current view');
+assert.match(spaceBootstrap, /navType === 'reload'/, 'space bootstrap must restore UI state only on reload, keeping fresh new tabs on the initial layout');
 
 // Mock DOM elements
 function createMockEl(id = '') {

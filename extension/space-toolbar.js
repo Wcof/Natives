@@ -124,6 +124,7 @@ export function createSpaceToolbar({
   return {
     sync,
     settingsButton: settingsBtn,
+    setWidgetsHidden(hidden) { applyWidgetsHidden(hidden); },
     destroy() {
       document.removeEventListener('keydown', handleKeyDown);
     },
