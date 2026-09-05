@@ -19,6 +19,47 @@ const ProviderName = "Natives Gateway"
 // StateSuffix marks files managed by this tool.
 const StateSuffix = ".natives.state.json"
 
+// ClaudeMappings mirrors the reference GUI's Claude role mapping block.
+type ClaudeMappings struct {
+	Opus              string `json:"opus"`
+	Sonnet            string `json:"sonnet"`
+	Haiku             string `json:"haiku"`
+	Opus1M            bool   `json:"opus1m"`
+	Sonnet1M          bool   `json:"sonnet1m"`
+	Haiku1M           bool   `json:"haiku1m"`
+	MaxContextTokens  int    `json:"maxContextTokens"`
+	AutoCompactPct    int    `json:"autoCompactPct"`
+	DisableAutoCompact bool  `json:"disableAutoCompact"`
+}
+
+func (m *ClaudeMappings) normalize() {
+	if m.Opus == "" {
+		m.Opus = "claude-opus-5"
+	}
+	if m.Sonnet == "" {
+		m.Sonnet = "claude-sonnet-4-6"
+	}
+	if m.Haiku == "" {
+		m.Haiku = "claude-haiku-4-5"
+	}
+	if m.MaxContextTokens <= 0 {
+		m.MaxContextTokens = 200000
+	}
+	if m.AutoCompactPct <= 0 {
+		m.AutoCompactPct = 90
+	}
+	if m.AutoCompactPct > 100 {
+		m.AutoCompactPct = 100
+	}
+}
+
+func (m *ClaudeMappings) with1M(model string, enabled bool) string {
+	if enabled && !strings.HasSuffix(model, "[1m]") {
+		return model + "[1m]"
+	}
+	return strings.TrimSuffix(model, "[1m]")
+}
+
 // BackupRecord tracks one rolled-aside original file.
 type BackupRecord struct {
 	Path          string `json:"path"`
@@ -28,12 +69,13 @@ type BackupRecord struct {
 
 // ManagedState is the on-disk journal enabling 配置修改/默认配置/关闭配置修改.
 type ManagedState struct {
-	Version                int            `json:"version"`
-	Client                 string         `json:"client"`
-	Model                  string         `json:"model"`
-	ConfigurationRevision  int            `json:"configurationRevision"`
-	BackupFiles            []BackupRecord `json:"backupFiles"`
-	UpdatedAtUnix          int64          `json:"updatedAtUnix"`
+	Version                int             `json:"version"`
+	Client                 string          `json:"client"`
+	Model                  string          `json:"model"`
+	ConfigurationRevision  int             `json:"configurationRevision"`
+	ClaudeDesktopModelMappings *ClaudeMappings `json:"claudeDesktopModelMappings,omitempty"`
+	BackupFiles            []BackupRecord  `json:"backupFiles"`
+	UpdatedAtUnix          int64           `json:"updatedAtUnix"`
 }
 
 // StatePath returns the journal path for a client's primary config file.
@@ -66,7 +108,7 @@ type Change struct {
 
 // CommitTransaction backs up existing targets, writes the new contents, and
 // records the journal. Any failure rolls every write back from memory.
-func CommitTransaction(clientID, primaryConfig, model string, changes []Change) error {
+func CommitTransaction(clientID, primaryConfig, model string, changes []Change, mappings *ClaudeMappings) error {
 	if len(changes) == 0 {
 		return fmt.Errorf("没有可写入的配置变更")
 	}
@@ -115,12 +157,13 @@ func CommitTransaction(clientID, primaryConfig, model string, changes []Change) 
 	}
 
 	state := ManagedState{
-		Version:               4,
-		Client:                clientID,
-		Model:                 model,
-		ConfigurationRevision: 1,
-		BackupFiles:           records,
-		UpdatedAtUnix:         time.Now().Unix(),
+		Version:                    4,
+		Client:                     clientID,
+		Model:                      model,
+		ConfigurationRevision:      1,
+		ClaudeDesktopModelMappings: mappings,
+		BackupFiles:                records,
+		UpdatedAtUnix:              time.Now().Unix(),
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

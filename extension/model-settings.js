@@ -32,6 +32,8 @@ class ModelSettings {
     this.agentSelections = {};
     this.agentBusy = false;
     this.agentLoadError = '';
+    this.agentActiveTab = 'core';
+    this.agentSessions = [];
 
     this.usageFilter = { range: '4h', page: 1, limit: 20 };
     this.usageFilterOptions = null;
@@ -143,6 +145,8 @@ class ModelSettings {
           agentModelsError: this.agentModelsError,
           agentSelections: this.agentSelections,
           agentBusy: this.agentBusy,
+          agentActiveTab: this.agentActiveTab,
+          agentSessions: this.agentSessions,
         },
       );
     }
@@ -523,13 +527,17 @@ class ModelSettings {
     dialog.showModal();
   }
 
-  promptInput(message, initialValue, onConfirm) {
+  promptInput(message, initialValue, onConfirm, datalistHtml = '') {
     const dialog = document.createElement('dialog');
     dialog.className = 'model-confirm-dialog';
     const form = document.createElement('form'); form.method = 'dialog';
     const text = document.createElement('p'); text.textContent = message;
     const input = document.createElement('input'); input.type = 'text'; input.value = initialValue || '';
     input.style.cssText = 'width:100%;min-height:36px;padding:6px 12px;margin:10px 0 16px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);box-sizing:border-box;color:var(--text);font-size:13px;';
+    if (datalistHtml) {
+      input.setAttribute('list', 'prompt-input-datalist');
+      input.insertAdjacentHTML('afterend', `<datalist id="prompt-input-datalist">${datalistHtml}</datalist>`);
+    }
     const actions = document.createElement('div'); actions.className = 'modal-actions';
     const cancel = document.createElement('button'); cancel.value = 'cancel'; cancel.textContent = this.t('cancel', '取消');
     const submit = document.createElement('button'); submit.value = 'default'; submit.className = 'primary'; submit.textContent = this.t('save', '保存');

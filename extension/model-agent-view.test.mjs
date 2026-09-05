@@ -22,9 +22,14 @@ assert.match(settings, /loadAgentClients\(this/, 'controller must load agent sta
 assert.match(view, /data-action="agent-apply"/, 'agent view must expose the apply action');
 assert.match(view, /data-action="agent-default"/, 'agent view must expose the default action');
 assert.match(view, /data-action="agent-close-config"/, 'agent view must expose the close action');
-assert.match(view, /data-action="agent-launch"/, 'agent view must expose the launch action');
+assert.match(view, /agent-launch/, 'agent view must expose the launch action');
 assert.match(view, /data-action="agent-refresh"/, 'agent view must expose the re-detect action');
+assert.match(view, /agent-tab/, 'codex sessions tab must exist in the detail view');
+assert.match(view, /agent-codex-clear/, 'codex clear action must exist');
 assert.match(view, /model-agent-dot/, 'client list must render status dots');
+assert.match(view, /agentLaunchDirPrompt|agent-launch-prompt/, 'CLI launch must support a working directory');
+assert.match(css, /\.agent-model-picker\s*\{/, 'searchable model picker styles must exist');
+assert.match(css, /\.model-agent-mapping-grid\s*\{/, 'claude mapping grid styles must exist');
 assert.match(css, /\.model-agent-layout\s*\{[^}]*grid-template-columns:260px minmax\(0,1fr\)/, 'agent layout must be list + detail');
 assert.match(css, /\.model-agent-status-grid\s*\{[^}]*repeat\(2,/, 'status grid must be two cards side by side');
 for (const key of [

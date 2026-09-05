@@ -45,14 +45,14 @@ func TestDetectStatusReportsUninstalledClient(t *testing.T) {
 func TestClaudeCodeConfigRoundTripAndClose(t *testing.T) {
 	home := tempHome(t)
 	base, apiKey, model := "http://127.0.0.1:8317", "test-key", "gemini-test"
-	changes, primary, err := BuildChanges("claude-code", home, base, apiKey, model)
+	changes, primary, err := BuildChanges("claude-code", home, base, apiKey, model, nil)
 	if err != nil {
 		t.Fatalf("BuildChanges: %v", err)
 	}
 	if len(changes) != 1 || changes[0].Path != filepath.Join(home, ".claude", "settings.json") {
 		t.Fatalf("unexpected changes: %+v", changes)
 	}
-	if err := CommitTransaction("claude-code", primary, model, changes); err != nil {
+	if err := CommitTransaction("claude-code", primary, model, changes, nil); err != nil {
 		t.Fatalf("CommitTransaction: %v", err)
 	}
 	data, err := os.ReadFile(primary)
@@ -63,8 +63,11 @@ func TestClaudeCodeConfigRoundTripAndClose(t *testing.T) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatalf("config is not JSON: %v", err)
 	}
-	if document["model"] != model {
-		t.Fatalf("model not applied: %v", document["model"])
+	if document["model"] != "claude-sonnet-4-6" {
+		t.Fatalf("sonnet mapping not applied: %v", document["model"])
+	}
+	if document["env"].(map[string]any)["ANTHROPIC_MODEL"] != model {
+		t.Fatalf("ANTHROPIC_MODEL not applied")
 	}
 	env := document["env"].(map[string]any)
 	if env["ANTHROPIC_BASE_URL"] != base || env["ANTHROPIC_AUTH_TOKEN"] != apiKey {
@@ -93,7 +96,7 @@ func TestClaudeCodeConfigRoundTripAndClose(t *testing.T) {
 
 func TestZCodeWritesBothVariants(t *testing.T) {
 	home := tempHome(t)
-	changes, primary, err := BuildChanges("zcode", home, "http://127.0.0.1:8317", "k", "m1")
+	changes, primary, err := BuildChanges("zcode", home, "http://127.0.0.1:8317", "k", "m1", nil)
 	if err != nil {
 		t.Fatalf("BuildChanges: %v", err)
 	}

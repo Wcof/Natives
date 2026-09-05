@@ -6,7 +6,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
-export const BUDGET = 250 * 1024;
+export const BUDGET = 300 * 1024;
 
 const DEV_NAMES = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', '__pycache__']);
 // Runtime files plus Chrome's localized message catalogs. Installer helpers,

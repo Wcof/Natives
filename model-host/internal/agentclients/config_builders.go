@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -12,11 +13,11 @@ import (
 
 // BuildChanges renders the per-client config writes pointing the client at the
 // local gateway. existingPreserved keeps unrelated user keys intact.
-func BuildChanges(clientID, home, baseURL, apiKey, model string) ([]Change, string, error) {
+func BuildChanges(clientID, home, baseURL, apiKey, model string, mappings *ClaudeMappings) ([]Change, string, error) {
 	base := strings.TrimRight(baseURL, "/")
 	switch clientID {
 	case "claude-code":
-		return buildClaudeCode(home, base, apiKey, model)
+		return buildClaudeCode(home, base, apiKey, model, mappings)
 	case "zcode":
 		return buildZCode(home, base, apiKey, model)
 	case "codex":
@@ -42,23 +43,34 @@ func BuildChanges(clientID, home, baseURL, apiKey, model string) ([]Change, stri
 	}
 }
 
-func buildClaudeCode(home, base, apiKey, model string) ([]Change, string, error) {
+func buildClaudeCode(home, base, apiKey, model string, mappings *ClaudeMappings) ([]Change, string, error) {
 	path := filepath.Join(home, ".claude", "settings.json")
 	document, err := decodeJSONFile(path)
 	if err != nil {
 		return nil, "", err
 	}
-	document["model"] = model
+	if mappings == nil {
+		mappings = &ClaudeMappings{}
+	}
+	mappings.normalize()
+	document["model"] = mappings.with1M(mappings.Sonnet, mappings.Sonnet1M)
 	env := nestedMap(document, "env")
 	env["ANTHROPIC_BASE_URL"] = base
 	env["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	delete(env, "ANTHROPIC_API_KEY")
 	env["ANTHROPIC_MODEL"] = model
-	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
-	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model
-	env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
-	env["CLAUDE_CODE_SUBAGENT_MODEL"] = model
+	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = mappings.with1M(mappings.Sonnet, mappings.Sonnet1M)
+	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = mappings.with1M(mappings.Haiku, mappings.Haiku1M)
+	env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = mappings.with1M(mappings.Opus, mappings.Opus1M)
+	env["CLAUDE_CODE_SUBAGENT_MODEL"] = mappings.Haiku
+	env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = strconv.Itoa(mappings.MaxContextTokens)
 	env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+	env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = strconv.Itoa(mappings.AutoCompactPct)
+	if mappings.DisableAutoCompact {
+		env["DISABLE_AUTO_COMPACT"] = "1"
+	} else {
+		delete(env, "DISABLE_AUTO_COMPACT")
+	}
 	content, err := marshalJSONIndent(document)
 	if err != nil {
 		return nil, "", err

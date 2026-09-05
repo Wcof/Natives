@@ -129,6 +129,7 @@ Natives 品牌 + 全局搜索                 Tabliss Dashboard              总
 
 ## 修订
 
+- **2026-09 资源预算上调**：扩展 ZIP 门禁由 250 KiB 上调至 **300 KiB**（+20%，用户指令），为「智能体配置」（Agent Clients，迁移自参考 GUI）与模型服务多页面功能预留空间；其余门禁不变。
 - **2026-09 组件精简契约**：根据产品低噪音与维护成本审计，正式退役 5 个组件（`widget/joke`, `widget/bitcoin`, `widget/leetcode`, `widget/literatureClock`, `widget/timeTracker`），正式支持组件契约由 29 个调整为 24 个。
   - 启动阶段由 SQLite 幂等迁移从所有 Workspace 及个人模板 `payload_json` 中清理这 5 类退役组件实例；
   - 后端白名单 `WIDGET_KEYS` 严格收敛为 24 个，拒绝新增退役组件；

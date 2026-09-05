@@ -21,9 +21,20 @@ func homeDir() string {
 }
 
 type agentClientParams struct {
-	Client string `json:"client"`
+	Client   string          `json:"client"`
+	Model    string          `json:"model"`
+	Target   string          `json:"target"`
+	WorkingDirectory string   `json:"workingDirectory"`
+	Mappings *agentclients.ClaudeMappings `json:"claudeCodeModelMappings"`
+}
+
+type agentSessionParams struct {
+	Paths []string `json:"paths"`
+}
+
+type agentPiParams struct {
+	Action string `json:"action"`
 	Model  string `json:"model"`
-	Target string `json:"target"`
 }
 
 // agentGatewayContext resolves the local gateway origin and effective API key
@@ -90,14 +101,14 @@ func (e *Engine) applyAgentClientConfig(raw json.RawMessage, mode string) (any, 
 		if err != nil {
 			return nil, err
 		}
-		changes, primaryPath, err := agentclients.BuildChanges(params.Client, home, baseURL, apiKey, params.Model)
+		changes, primaryPath, err := agentclients.BuildChanges(params.Client, home, baseURL, apiKey, params.Model, params.Mappings)
 		if err != nil {
 			return nil, err
 		}
 		if primaryPath != "" {
 			primary = primaryPath
 		}
-		if err := agentclients.CommitTransaction(params.Client, primary, params.Model, changes); err != nil {
+		if err := agentclients.CommitTransaction(params.Client, primary, params.Model, changes, params.Mappings); err != nil {
 			return nil, err
 		}
 		if mode == "default" {
@@ -130,8 +141,56 @@ func (e *Engine) launchAgentClient(raw json.RawMessage) (any, error) {
 	if !ok {
 		return nil, notFound()
 	}
-	if err := agentclients.Launch(definition, params.Target); err != nil {
+	if err := agentclients.Launch(definition, params.Target, params.WorkingDirectory); err != nil {
 		return nil, err
 	}
 	return map[string]any{"launched": params.Client, "target": params.Target}, nil
+}
+
+func (e *Engine) agentClientExtras(ctx context.Context, raw json.RawMessage, method string) (any, error) {
+	home := homeDir()
+	switch method {
+	case "model_agent_codex_auth_check":
+		return map[string]any{"authMode": agentclients.CodexAuthMode(home)}, nil
+	case "model_agent_codex_clear":
+		deleted, err := agentclients.ClearCodexConfig(home)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": deleted}, nil
+	case "model_agent_codex_sessions_list":
+		sessions, err := agentclients.ListCodexSessions(home)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessions": sessions}, nil
+	case "model_agent_codex_sessions_delete":
+		var params agentSessionParams
+		if err := json.Unmarshal(raw, &params); err != nil || len(params.Paths) == 0 {
+			return nil, invalid("参数无效: paths 不能为空")
+		}
+		deleted, err := agentclients.DeleteCodexSessions(home, params.Paths)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": deleted}, nil
+	case "model_agent_pi_status":
+		return agentclients.DetectPiProvider(home), nil
+	case "model_agent_pi_action":
+		var params agentPiParams
+		if err := json.Unmarshal(raw, &params); err != nil || strings.TrimSpace(params.Action) == "" {
+			return nil, invalid("参数无效: action 不能为空")
+		}
+		baseURL, apiKey, err := e.agentGatewayContext()
+		if err != nil {
+			return nil, err
+		}
+		output, err := agentclients.PiProviderAction(ctx, home, baseURL, apiKey, params.Model, params.Action)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"output": output}, nil
+	default:
+		return nil, invalid("未支持的智能体操作")
+	}
 }

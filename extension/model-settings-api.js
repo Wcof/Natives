@@ -83,6 +83,10 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     defaultAgentClientConfig: (params) => client.call('model_agent_client_default', params),
     closeAgentClientConfig: (params) => client.call('model_agent_client_close', params),
     launchAgentClient: (params) => client.call('model_agent_client_launch', params),
+    clearCodexConfig: () => client.call('model_agent_codex_clear'),
+    listCodexSessions: () => client.call('model_agent_codex_sessions_list'),
+    deleteCodexSessions: (params) => client.call('model_agent_codex_sessions_delete', params),
+    piProviderAction: (params) => client.call('model_agent_pi_action', params),
 
     disconnect: () => client.disconnect(),
     get connected() { return client.connected; },

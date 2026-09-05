@@ -85,7 +85,6 @@ func DetectStatus(definition Definition) Status {
 	if err == nil && state != nil {
 		status.ModificationState = "applied"
 		status.AppliedModel = state.Model
-		status.BackupAvailable = len(state.BackupFiles) > 0
 		status.Configured = true
 		for _, record := range state.BackupFiles {
 			if !record.ExistedBefore {
@@ -100,8 +99,20 @@ func DetectStatus(definition Definition) Status {
 		status.ModificationState = "unconfigured"
 		status.Configured = false
 	}
-	if status.ConfigExists && state == nil {
-		status.Warnings = append(status.Warnings, "配置文件存在但未由本工具管理")
+	status.CurrentModel = CurrentModel(definition.ID, home)
+	if definition.ID == "pi" {
+		piStatus := DetectPiProvider(home)
+		if piStatus.Installed {
+			status.PluginVersion = piStatus.InstalledVersion
+		}
+		if !piStatus.Installed && status.Installed {
+			status.Warnings = append(status.Warnings, "Pi provider 插件未安装")
+		}
+	}
+	if definition.ID == "codex" {
+		if authMode := CodexAuthMode(home); authMode != "" {
+			status.Warnings = append(status.Warnings, "Codex 认证方式: "+authMode)
+		}
 	}
 	return status
 }

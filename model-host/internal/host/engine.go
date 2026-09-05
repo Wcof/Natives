@@ -303,6 +303,10 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.applyAgentClientConfig(raw, "close")
 	case "model_agent_client_launch":
 		return e.launchAgentClient(raw)
+	case "model_agent_codex_auth_check", "model_agent_codex_clear",
+		"model_agent_codex_sessions_list", "model_agent_codex_sessions_delete",
+		"model_agent_pi_status", "model_agent_pi_action":
+		return e.agentClientExtras(ctx, raw, method)
 
 	default:
 		return nil, invalid("不支持的模型设置操作")
