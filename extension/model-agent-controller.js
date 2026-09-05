@@ -15,7 +15,7 @@ export async function loadAgentClients(controller, { force = false } = {}) {
     controller.agentLoadError = errorMessage(error);
   }
   controller.agentSelectedId = controller.agentSelectedId || controller.agentStatuses[0]?.id || '';
-  await loadAgentModels(controller, controller.agentSelectedId);
+  await refreshAgentModels(controller, controller.agentSelectedId);
 }
 
 export function selectAgentClient(controller, clientId) {
@@ -58,8 +58,11 @@ export async function handleAgentAction(controller, action, target) {
     case 'agent-refresh': {
       controller.view.setLoading(true);
       controller.agentStatuses = null;
-      await loadAgentClients(controller, { force: true });
-      controller.view.setLoading(false);
+      try {
+        await loadAgentClients(controller, { force: true });
+      } finally {
+        controller.view.setLoading(false);
+      }
       controller.render();
       return true;
     }
@@ -71,8 +74,11 @@ export async function handleAgentAction(controller, action, target) {
       controller.agentActiveTab = target.dataset.tab;
       if (controller.agentActiveTab === 'sessions') {
         controller.view.setLoading(true);
-        await loadCodexSessions(controller);
-        controller.view.setLoading(false);
+        try {
+          await loadCodexSessions(controller);
+        } finally {
+          controller.view.setLoading(false);
+        }
       }
       controller.render();
       return true;

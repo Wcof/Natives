@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { loadAgentClients } from './model-agent-controller.js';
 
 const [view, controller, css, zh, en] = await Promise.all([
   readFile(new URL('./model-agent-view.js', import.meta.url), 'utf8'),
@@ -41,6 +42,37 @@ for (const key of [
 const viewKeys = [...view.matchAll(/\bt\('([A-Za-z][\w]*)'/g)].map((match) => match[1]);
 for (const key of new Set(viewKeys)) {
   assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `agent view locale ${key} missing`);
+}
+
+assert.doesNotMatch(controller, /await loadAgentModels\(/, 'controller must not call the removed loadAgentModels helper (stuck-loading regression)');
+
+// Functional guard: loadAgentClients must resolve and always leave the loading
+// state clearable even when the host call rejects.
+{
+  let loading = true;
+  const mkController = (listImpl) => ({
+    agentStatuses: null,
+    agentSelectedId: '',
+    agentLoadError: '',
+    agentModels: null,
+    agentModelsError: '',
+    render: () => {},
+    view: { activePage: 'agent', render: () => {} },
+    api: {
+      listAgentClients: listImpl,
+      getAgentClientModels: async () => ({ models: [{ name: 'gemini-3.8-flash-high' }] }),
+    },
+  });
+  const okController = mkController(async () => ({ clients: [{ id: 'zcode', installed: true, modelPicker: true }] }));
+  await loadAgentClients(okController, { force: true });
+  assert.equal(okController.agentStatuses.length, 1, 'agent statuses must be populated on success');
+  assert.equal(okController.agentSelectedId, 'zcode', 'first client must be selected by default');
+  assert.deepEqual(okController.agentModels, [{ name: 'gemini-3.8-flash-high' }], 'models must load for the selected client');
+
+  const failController = mkController(async () => { throw new Error('host offline'); });
+  await loadAgentClients(failController, { force: true });
+  assert.deepEqual(failController.agentStatuses, [], 'failed detection must fall back to an empty list');
+  assert.match(failController.agentLoadError, /host offline/, 'failure must be recorded for the view');
 }
 
 console.log('All model agent view tests passed!');

@@ -184,13 +184,19 @@ class ModelSettings {
       this.view.setPage(page);
       if (page === 'usage') {
         this.view.setLoading(true);
-        await this.loadUsageData();
-        this.view.setLoading(false);
+        try {
+          await this.loadUsageData();
+        } finally {
+          this.view.setLoading(false);
+        }
       }
       if (page === 'agent' && !this.agentStatuses) {
         this.view.setLoading(true);
-        await loadAgentClients(this, { force: true });
-        this.view.setLoading(false);
+        try {
+          await loadAgentClients(this, { force: true });
+        } finally {
+          this.view.setLoading(false);
+        }
       }
       this.render();
       return;
