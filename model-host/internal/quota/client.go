@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,7 +110,7 @@ func (c *Client) queryCodex(ctx context.Context, token string, res *QuotaResult)
 	}
 
 	var data struct {
-		PlanType        string `json:"plan_type"`
+		PlanType        string         `json:"plan_type"`
 		PrimaryWindow   map[string]any `json:"primary_window"`
 		SecondaryWindow map[string]any `json:"secondary_window"`
 	}
@@ -196,24 +197,32 @@ func (c *Client) queryAntigravity(ctx context.Context, token, extraJSON string, 
 
 	var data struct {
 		Buckets []struct {
-			RemainingFraction *float64 `json:"remaining_fraction"`
-			ResetTime         string   `json:"reset_time"`
-			DisplayName       string   `json:"display_name"`
-			ModelGroup        string   `json:"model_group"`
+			RemainingFraction      *float64 `json:"remaining_fraction"`
+			RemainingFractionCamel *float64 `json:"remainingFraction"`
+			ResetTime              string   `json:"reset_time"`
+			ResetTimeCamel         string   `json:"resetTime"`
+			DisplayName            string   `json:"display_name"`
+			DisplayNameCamel       string   `json:"displayName"`
+			ModelGroup             string   `json:"model_group"`
 		} `json:"buckets"`
 		Groups []struct {
-			Name    string `json:"name"`
-			Buckets []struct {
-				RemainingFraction *float64 `json:"remaining_fraction"`
-				ResetTime         string   `json:"reset_time"`
-				DisplayName       string   `json:"display_name"`
+			Name        string `json:"name"`
+			DisplayName string `json:"displayName"`
+			Buckets     []struct {
+				RemainingFraction      *float64 `json:"remaining_fraction"`
+				RemainingFractionCamel *float64 `json:"remainingFraction"`
+				ResetTime              string   `json:"reset_time"`
+				ResetTimeCamel         string   `json:"resetTime"`
+				DisplayName            string   `json:"display_name"`
+				DisplayNameCamel       string   `json:"displayName"`
 			} `json:"buckets"`
 		} `json:"groups"`
 	}
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	_ = json.Unmarshal(bodyBytes, &data)
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		return errors.New("Antigravity 返回了无法识别的额度数据")
+	}
 
-	res.Plan = "Pro"
 	// Parse buckets from root or groups
 	addBucket := func(name string, frac *float64, reset string, models []string) {
 		var rem *float64
@@ -236,32 +245,44 @@ func (c *Client) queryAntigravity(ctx context.Context, token, extraJSON string, 
 	}
 
 	for _, b := range data.Buckets {
-		name := b.DisplayName
+		name := firstNonEmpty(b.DisplayName, b.DisplayNameCamel)
 		if name == "" {
 			name = "Gemini Models"
 		}
-		addBucket(name, b.RemainingFraction, b.ResetTime, []string{"Gemini 2.5 Pro", "Gemini 2.5 Flash"})
+		addBucket(name, firstPercent(b.RemainingFraction, b.RemainingFractionCamel), firstNonEmpty(b.ResetTime, b.ResetTimeCamel), nil)
 	}
 	for _, g := range data.Groups {
 		for _, b := range g.Buckets {
-			name := b.DisplayName
+			name := firstNonEmpty(b.DisplayName, b.DisplayNameCamel)
 			if name == "" {
-				name = g.Name
+				name = firstNonEmpty(g.Name, g.DisplayName)
 			}
-			addBucket(name, b.RemainingFraction, b.ResetTime, []string{"Gemini 2.5 Pro", "Claude Sonnet", "GPT-OSS"})
+			addBucket(name, firstPercent(b.RemainingFraction, b.RemainingFractionCamel), firstNonEmpty(b.ResetTime, b.ResetTimeCamel), nil)
 		}
 	}
 
 	if len(res.Windows) == 0 {
-		// Default mock representations if structure matches schema
-		remW := 98.0
-		remF := 100.0
-		res.Windows = append(res.Windows,
-			QuotaWindow{Name: "Gemini Models · Weekly Limit Remaining", RemainingPercent: &remW, Models: []string{"Gemini Flash", "Gemini Pro"}},
-			QuotaWindow{Name: "Gemini Models · Five Hour Limit Remaining", RemainingPercent: &remF, Models: []string{"Gemini Flash", "Gemini Pro"}},
-		)
+		return errors.New("Antigravity 返回成功，但没有可识别的额度分组")
 	}
 
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstPercent(values ...*float64) *float64 {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
 	return nil
 }
 

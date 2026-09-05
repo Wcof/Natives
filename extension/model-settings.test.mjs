@@ -33,6 +33,10 @@ const usageOverview = await api.getUsageOverview({ range: 'today' });
 assert.deepEqual(usageOverview.accepted, { range: 'today' });
 const createdKey = await api.createGatewayKey({ expectedRevision: 1, name: 'Test Key' });
 assert.deepEqual(createdKey.accepted, { expectedRevision: 1, name: 'Test Key' });
+const accountModels = await api.getAccountModels({ accountId: 'account-1' });
+assert.deepEqual(accountModels.accepted, { accountId: 'account-1' });
+const updatedAccountModels = await api.updateAccountModels({ accountId: 'account-1', enabledModelIds: ['model-a'], expectedRevision: 1 });
+assert.deepEqual(updatedAccountModels.accepted, { accountId: 'account-1', enabledModelIds: ['model-a'], expectedRevision: 1 });
 
 port.emit({ ok: true, event: 'model_oauth_state_changed', result: { state: 'succeeded' } });
 assert.equal(event.event, 'model_oauth_state_changed');
@@ -42,7 +46,7 @@ assert.equal(event.event, 'model_usage_updated');
 api.disconnect();
 delete globalThis.__NATIVES_DEV_NATIVE_CONNECT__;
 
-const [files, space, controller, view, zh, en, advancedController, css] = await Promise.all([
+const [files, space, controller, view, zh, en, advancedController, css, accountModelsDialog] = await Promise.all([
   readFile(new URL('./files.js', import.meta.url), 'utf8'),
   readFile(new URL('./space.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings.js', import.meta.url), 'utf8'),
@@ -51,9 +55,13 @@ const [files, space, controller, view, zh, en, advancedController, css] = await 
   readFile(new URL('./_locales/en/messages.json', import.meta.url), 'utf8'),
   readFile(new URL('./model-advanced-controller.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings.css', import.meta.url), 'utf8'),
+  readFile(new URL('./model-account-models-dialog.js', import.meta.url), 'utf8'),
 ]);
 for (const source of [files, space]) assert.match(source, /import\('\.\/model-settings\.js'\)/, 'model settings must stay lazy-loaded');
 for (const source of [controller, view]) assert.doesNotMatch(source, /\b(?:alert|prompt|confirm)\s*\(/, 'model settings must use graphical controls');
+assert.doesNotMatch(accountModelsDialog, /\b(?:alert|prompt|confirm)\s*\(/, 'account model settings must use a graphical dialog');
+assert.match(controller, /action === 'auth-files-models'/, 'account model button must open its settings dialog');
+assert.match(accountModelsDialog, /updateAccountModels/, 'account model selection must persist through Model Host');
 const declaredRoles = new Set([...view.matchAll(/data-role="([^"]+)"/g)].map(([, role]) => role));
 for (const [, role] of view.matchAll(/\broles\.([A-Za-z]\w*)/g)) {
   assert.ok(declaredRoles.has(role), `view references missing data-role="${role}"`);
@@ -86,7 +94,6 @@ assert.match(gatewayView, /data-action=\"resident\"/, 'gateway overview must pre
 assert.match(gatewayView, /#i-box[\s\S]*'i-link'/, 'gateway overview must reuse the shared SVG sprite');
 assert.doesNotMatch(gatewayView, /127\.0\.0\.1:8317|v7\.2\.139|v0\.2\.25/, 'gateway overview must not invent runtime values');
 assert.doesNotMatch(gatewayView, /<svg[^>]+viewBox=/, 'gateway overview must not embed standalone icon artwork');
-assert.match(css, /\.model-oauth-row\s*\{[^}]*grid-template-columns:/, 'oauth row must use shared grid template');
 assert.match(css, /\.model-filter-bar-dimensions\s*\{[^}]*repeat\(6,/, 'dimensions filter must arrange in 6 equal columns on wide screens');
 assert.match(css, /\.model-adv-form\s*\{[^}]*repeat\(2,/, 'advanced form must use 2-column grid layout');
 assert.match(css, /\.model-settings-shell\s*\{[^}]*grid-template-columns:240px/, 'model navigation must use the compact shared width');

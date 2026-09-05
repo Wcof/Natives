@@ -3,6 +3,7 @@ import { createModelSettingsView, renderNewProvider } from './model-settings-vie
 import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
+import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
 let instance;
 
@@ -20,6 +21,7 @@ class ModelSettings {
     this.snapshot = null;
     this.selectedID = 'codex';
     this.pendingOAuth = null;
+    this.oauthResults = {};
 
     this.usageFilter = { range: '4h', page: 1, limit: 20 };
     this.usageFilterOptions = null;
@@ -70,7 +72,7 @@ class ModelSettings {
     try {
       this.authFiles = await this.api.listAuthFiles() || [];
     } catch (err) {
-      this.authFiles = [];
+      this.showError(err);
     }
   }
 
@@ -121,6 +123,7 @@ class ModelSettings {
           filterOptions: this.usageFilterOptions,
         },
         {
+          results: this.oauthResults,
           authFiles: this.authFiles,
           quotaMap: this.quotaMap,
           authFileFilter: this.authFileFilter,
@@ -194,9 +197,18 @@ class ModelSettings {
     if (action === 'reveal-key' || action === 'copy-first-key') return this.copyAccessKey();
     if (action === 'rotate-key') return this.rotateAccessKey();
     if (action === 'oauth-start') return this.pendingOAuth?.provider === target.dataset.provider ? this.cancelOAuth() : this.startOAuth(target.dataset.provider);
-    if (action === 'toggle-account') return this.mutate(() => this.api.setAccountEnabled({ accountId: target.dataset.accountId, enabled: target.dataset.enabled === 'true', expectedRevision: revision }));
+    if (action === 'toggle-account') {
+      await this.mutate(() => this.api.setAccountEnabled({ accountId: target.dataset.accountId, enabled: target.dataset.enabled === 'true', expectedRevision: revision }));
+      await this.loadAuthFiles();
+      this.render();
+      return;
+    }
     if (action === 'reauth-account') return this.startOAuth(target.dataset.provider, target.dataset.accountId);
-    if (action === 'delete-account') return this.confirmDelete(this.t('modelDeleteAccountConfirm', '确定删除这个 OAuth 账户吗？'), () => this.api.deleteAccount({ accountId: target.dataset.accountId, expectedRevision: revision }));
+    if (action === 'delete-account') return this.confirmDelete(this.t('modelDeleteAccountConfirm', '确定删除这个 OAuth 账户吗？'), async () => {
+      const result = await this.api.deleteAccount({ accountId: target.dataset.accountId, expectedRevision: revision });
+      await this.loadAuthFiles();
+      return result;
+    });
     if (action === 'delete-provider') return this.confirmDelete(this.t('modelDeleteProviderConfirm', '确定删除这个供应商及其模型吗？'), () => this.api.deleteProvider({ providerId: this.selectedID, expectedRevision: revision }), { select: (snapshot) => snapshot.providers[0]?.id });
     if (action === 'test-provider' || action === 'test-new-provider') return this.testProvider(target.closest('form'));
     if (action === 'refresh-models') return this.mutate(() => this.api.refreshModels({ providerId: this.selectedID, expectedRevision: revision }));
@@ -262,6 +274,13 @@ class ModelSettings {
       }
       return;
     }
+    if (action === 'auth-files-models') {
+      return openAccountModelsDialog(this, {
+        accountId: target.dataset.accountId,
+        provider: target.dataset.provider,
+        name: target.dataset.name,
+      });
+    }
     if (action === 'auth-files-copy') {
       const name = target.dataset.name;
       if (name) {
@@ -273,13 +292,14 @@ class ModelSettings {
     if (action === 'auth-files-quota-one' || action === 'quota-refresh-one') {
       const name = target.dataset.name;
       const provider = target.dataset.provider;
-      this.quotaMap[name] = { status: 'loading', windows: [] };
+      const credentialKey = target.dataset.accountId || name;
+      this.quotaMap[credentialKey] = { status: 'loading', windows: [] };
       this.render();
       try {
-        const res = await this.api.queryQuota({ name, provider });
-        this.quotaMap[name] = res;
+        const res = await this.api.queryQuota({ name, provider, accountId: target.dataset.accountId || '' });
+        this.quotaMap[credentialKey] = res;
       } catch (err) {
-        this.quotaMap[name] = { status: 'error', error: String(err) };
+        this.quotaMap[credentialKey] = { status: 'error', error: String(err) };
       }
       this.render();
       return;
@@ -287,16 +307,16 @@ class ModelSettings {
     if (action === 'quota-refresh-all') {
       const active = (this.authFiles || []).filter((f) => !f.disabled);
       for (const f of active) {
-        this.quotaMap[f.name] = { status: 'loading', windows: [] };
+        this.quotaMap[f.accountId || f.name] = { status: 'loading', windows: [] };
       }
       this.render();
       await Promise.all(
         active.map(async (f) => {
           try {
-            const res = await this.api.queryQuota({ name: f.name, provider: f.provider });
-            this.quotaMap[f.name] = res;
+            const res = await this.api.queryQuota({ name: f.name, provider: f.provider, accountId: f.accountId || '' });
+            this.quotaMap[f.accountId || f.name] = res;
           } catch (err) {
-            this.quotaMap[f.name] = { status: 'error', error: String(err) };
+            this.quotaMap[f.accountId || f.name] = { status: 'error', error: String(err) };
           }
         }),
       );
@@ -365,6 +385,7 @@ class ModelSettings {
         ? await this.api.reauthAccount({ provider, accountId, expectedRevision: this.snapshot.revision })
         : await this.api.startOAuth({ provider, expectedRevision: this.snapshot.revision });
       if (!result?.sessionId) return;
+      this.oauthResults[provider] = 'pending';
       this.pendingOAuth = result;
       this.render();
     } catch (error) {
@@ -403,6 +424,11 @@ class ModelSettings {
     const result = message.result;
     if (!result || result.sessionId !== this.pendingOAuth?.sessionId) return;
     if (result.snapshot) this.snapshot = result.snapshot;
+    this.oauthResults[result.provider || this.pendingOAuth.provider] = result.state;
+    if (result.state === 'succeeded') {
+      this.view.showNotice(this.t('modelLoginSucceeded', '已登录'));
+      this.loadAuthFiles().then(() => this.render());
+    }
     if (result.state !== 'pending') this.pendingOAuth = null;
     if (result.state === 'failed') this.showError(this.t('modelAuthorizationFailed', 'OAuth 授权失败，请重试。'));
     if (result.state === 'timeout') this.showError(this.t('modelAuthorizationTimeout', 'OAuth 授权已超时，请重新开始。'));

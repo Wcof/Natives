@@ -97,3 +97,14 @@ const t = (k, f) => f || k;
 }
 
 console.log('All model OAuth sub-views tests passed!\n');
+
+// A saved OAuth account must remain visibly signed in after reopening settings.
+{
+  const c = mockElement();
+  renderOAuthLoginView(c, { snapshot: { accounts: [{ id: 'ag', provider: 'antigravity', enabled: true, status: 'active' }] }, pendingOAuth: null, t });
+  const html = c.children[1].children.map((card) => card.innerHTML).join('');
+  assert.match(html, /已登录/, 'saved accounts must show sign-in success');
+  assert.match(html, /role="status"/, 'sign-in state must be accessible');
+  renderOAuthLoginView(c, { snapshot: { accounts: [] }, pendingOAuth: null, results: { antigravity: 'failed' }, t });
+  assert.match(c.children[1].children.map((card) => card.innerHTML).join(''), /登录失败/);
+}

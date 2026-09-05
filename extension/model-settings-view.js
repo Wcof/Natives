@@ -5,10 +5,6 @@ import { renderOAuthLoginView } from './model-oauth-login-view.js';
 import { renderAuthFilesView } from './model-auth-files-view.js';
 import { renderQuotaView } from './model-quota-view.js';
 
-const OAUTH_LABELS = {
-  codex: 'OpenAI Codex', claude: 'Anthropic Claude', antigravity: 'Google Gemini', kimi: 'Kimi', xai: 'xAI Grok',
-};
-
 export function createModelSettingsView({ t, onAction }) {
   let activePage = 'oauth';
   let activeOAuthTab = 'login'; // 'login' | 'authFiles' | 'quota'
@@ -191,7 +187,7 @@ export function createModelSettingsView({ t, onAction }) {
       else roles.detail.append(emptyState(t('modelNoCustomProviders', '尚未添加自定义供应商'), t('modelNoModelsHint', '添加供应商后即可配置和调用模型。')));
 
       // Render 3 OAuth Sub-views
-      renderOAuthLoginView(roles.oauthLoginContainer, { snapshot, pendingOAuth, t });
+      renderOAuthLoginView(roles.oauthLoginContainer, { snapshot, pendingOAuth, results: oauthContext.results, t });
       renderAuthFilesView(roles.authFilesContainer, {
         files: oauthContext.authFiles || [],
         quotaMap: oauthContext.quotaMap || {},
@@ -242,35 +238,6 @@ function renderCustomProviderList(container, snapshot, selectedID, t) {
   for (const provider of custom) container.append(providerButton(provider, selectedID, `${provider.models.length}`, provider.name));
 }
 
-function renderOAuthOverview(container, snapshot, selectedID, pendingOAuth, t) {
-  container.replaceChildren();
-  const header = element('div', 'model-oauth-row model-oauth-header');
-  for (const [idx, label] of [t('modelProvider', '供应商'), t('modelConnectedAccounts', '已连接账户'), t('modelStatus', '状态'), t('modelActions', '操作')].entries()) {
-    const colClasses = ['model-col-provider', 'model-col-accounts', 'model-col-status', 'model-col-actions'];
-    header.append(element('span', colClasses[idx] || '', label));
-  }
-  container.append(header);
-  for (const provider of snapshot.providers.filter((item) => item.kind === 'oauth')) {
-    const accounts = snapshot.accounts.filter((account) => account.provider === provider.oauthProvider);
-    const connected = accounts.filter((account) => account.status === 'active').length;
-    const authorizing = pendingOAuth?.provider === provider.oauthProvider;
-    const row = element('div', `model-oauth-row${provider.id === selectedID ? ' selected' : ''}`);
-    const name = OAUTH_LABELS[provider.oauthProvider] || provider.name;
-    const select = button('select-provider', name, 'model-oauth-provider model-col-provider');
-    select.title = name;
-    select.dataset.providerId = provider.id;
-    const icon = element('span', 'model-provider-icon');
-    icon.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-box" /></svg>';
-    select.prepend(icon);
-    const accountsSpan = element('span', 'model-col-accounts', `${accounts.length}`);
-    const status = element('span', connected ? 'model-oauth-state connected model-col-status' : 'model-oauth-state model-col-status', authorizing ? t('modelAuthorizing', '授权中') : connected ? t('modelAccountActive', '可用') : t('modelNotConnected', '未连接'));
-    const action = button('oauth-start', authorizing ? t('modelCancelAuthorization', '取消授权') : t('modelAddAccount', '添加账户'), 'model-col-actions');
-    action.dataset.provider = provider.oauthProvider;
-    row.append(select, accountsSpan, status, action);
-    container.append(row);
-  }
-}
-
 function providerButton(provider, selectedID, badge, label) {
   const item = button('select-provider', '', `model-provider-item${provider.id === selectedID ? ' selected' : ''}`);
   item.setAttribute('aria-pressed', String(provider.id === selectedID));
@@ -281,44 +248,6 @@ function providerButton(provider, selectedID, badge, label) {
   item.append(icon, element('span', 'model-provider-name', label), element('span', 'model-provider-badge', badge));
   if (provider.enabled) item.append(element('span', 'model-provider-dot'));
   return item;
-}
-
-function renderOAuthDetail(container, provider, snapshot, pendingOAuth, t) {
-  container.replaceChildren();
-  if (!provider) return;
-  const title = element('div', 'model-detail-heading');
-  title.append(element('div', '', OAUTH_LABELS[provider.oauthProvider] || provider.name));
-  title.append(button('oauth-start', pendingOAuth?.provider === provider.oauthProvider ? t('modelCancelAuthorization', '取消授权') : t('modelAddAccount', '添加账户'), 'primary'));
-  title.querySelector('button').dataset.provider = provider.oauthProvider;
-  container.append(title);
-  const accounts = snapshot.accounts.filter((account) => account.provider === provider.oauthProvider);
-  if (!accounts.length) container.append(emptyState(t('modelNoAccounts', '尚未连接账户'), t('modelNoAccountsHint', '点击“添加账户”并在浏览器中完成授权。')));
-  for (const account of accounts) {
-    const row = element('article', 'model-account-row');
-    const main = element('div', 'model-account-main', account.label);
-    main.title = account.label || '';
-    row.append(main, element('span', `model-status model-status-${account.status}`, accountStatusLabel(account.status, t)));
-    const actions = element('div', 'model-row-actions');
-    const toggle = button('toggle-account', account.enabled ? t('disable', '禁用') : t('enable', '启用'));
-    toggle.dataset.accountId = account.id; toggle.dataset.enabled = String(!account.enabled);
-    const reauth = button('reauth-account', t('modelReauthorize', '重新授权')); reauth.dataset.accountId = account.id; reauth.dataset.provider = provider.oauthProvider;
-    const remove = button('delete-account', t('delete', '删除'), 'danger'); remove.dataset.accountId = account.id;
-    actions.append(toggle, reauth, remove); row.append(actions); container.append(row);
-  }
-  container.append(element('h3', 'model-list-title', t('modelList', '模型列表')));
-  const catalog = element('div', 'model-list model-catalog-list');
-  for (const model of provider.models) {
-    const row = element('div', 'model-row model-catalog-row');
-    const idEl = element('code', 'model-id', model.id);
-    idEl.title = model.id;
-    const nameEl = element('span', 'muted model-name', model.displayName || model.id);
-    nameEl.title = model.displayName || model.id;
-    const countEl = element('span', 'muted model-accounts-count', `${model.accountIds?.length || 0} ${t('modelAccounts', '账户')}`);
-    row.append(idEl, nameEl, countEl);
-    catalog.append(row);
-  }
-  if (!provider.models.length) catalog.append(emptyState(t('modelNoModels', '暂无模型'), t('modelOAuthModelsHint', '账户授权并启动代理后自动同步模型。')));
-  container.append(catalog);
 }
 
 function renderCustomDetail(container, provider, snapshot, t) {
@@ -382,5 +311,4 @@ function protocolOptions(selected) { return [['openai_chat', 'OpenAI Chat'], ['o
 function button(action, label, className = '') { const node = document.createElement('button'); node.type = 'button'; node.dataset.action = action; node.className = className; node.textContent = label; return node; }
 function element(tag, className = '', text = '') { const node = document.createElement(tag); node.className = className; node.textContent = text; return node; }
 function emptyState(title, hint) { const node = element('div', 'model-empty-state'); node.append(element('strong', '', title), element('p', 'muted', hint)); return node; }
-function accountStatusLabel(status, t) { return ({ active: t('modelAccountActive', '可用'), needs_reauth: t('modelAccountNeedsReauth', '需要重新登录'), failed: t('modelFailed', '异常') })[status] || status; }
 function escapeText(value) { return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }

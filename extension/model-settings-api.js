@@ -10,6 +10,7 @@ const WRITE_METHODS = new Set([
   'model_gateway_key_rotate', 'model_gateway_rotate_access_key',
   'model_usage_price_upsert', 'model_usage_price_delete', 'model_usage_price_sync',
   'model_usage_import_begin', 'model_usage_import_chunk', 'model_usage_import_commit', 'model_usage_import_cancel',
+  'model_account_models_update',
 ]);
 
 export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
@@ -72,6 +73,8 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     deleteAuthFile: (params) => client.call('model_auth_files_delete', params),
     openAuthDir: () => client.call('model_auth_files_open_dir'),
     queryQuota: (params) => client.call('model_quota_query', params),
+    getAccountModels: (params) => client.call('model_account_models', params),
+    updateAccountModels: (params) => client.call('model_account_models_update', params),
 
     disconnect: () => client.disconnect(),
     get connected() { return client.connected; },

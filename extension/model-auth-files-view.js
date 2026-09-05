@@ -92,7 +92,8 @@ export function renderAuthFilesView(container, { files = [], quotaMap = {}, filt
     listContainer.append(empty);
   } else {
     for (const file of filtered) {
-      const quota = quotaMap[file.name];
+      const credentialKey = file.accountId || file.name;
+      const quota = quotaMap[credentialKey];
       const row = document.createElement('div');
       row.className = `model-af-row${file.disabled ? ' disabled' : ''}`;
 
@@ -123,25 +124,30 @@ export function renderAuthFilesView(container, { files = [], quotaMap = {}, filt
             <span>${dateStr}</span>
           </div>
           <div class="model-af-row-actions">
-            <button type="button" class="btn-af-tool" data-action="auth-files-quota-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}">
+            <button type="button" class="btn-af-tool" data-action="auth-files-quota-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" data-account-id="${escapeHtml(file.accountId)}">
               ${t('refreshQuota', '刷新额度')}
             </button>
-            <button type="button" class="btn-af-tool" data-action="auth-files-models" data-name="${escapeHtml(file.name)}">
+            ${file.accountId ? `<button type="button" class="btn-af-tool" data-action="auth-files-models" data-name="${escapeHtml(file.name)}" data-account-id="${escapeHtml(file.accountId)}" data-provider="${escapeHtml(file.provider)}">
               ${t('models', '模型')}
-            </button>
-            <button type="button" class="btn-af-tool" data-action="auth-files-priority" data-name="${escapeHtml(file.name)}" data-priority="${file.priority || 0}">
+            </button>` : ''}
+            ${file.source !== 'keychain' ? `<button type="button" class="btn-af-tool" data-action="auth-files-priority" data-name="${escapeHtml(file.name)}" data-priority="${file.priority || 0}">
               <svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg>
               <span>${t('priority', '优先级')} ${file.priority || 0}</span>
-            </button>
+            </button>` : ''}
             <button type="button" class="btn-af-icon" data-action="auth-files-copy" data-name="${escapeHtml(file.name)}" title="${t('copyName', '复制文件名')}" aria-label="${t('copyName', '复制文件名')}">
               <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>
             </button>
-            <button type="button" class="btn-af-tool" data-action="auth-files-toggle" data-name="${escapeHtml(file.name)}" data-disabled="${String(!file.disabled)}">
+            ${file.source !== 'keychain' ? `<button type="button" class="btn-af-tool" data-action="auth-files-toggle" data-name="${escapeHtml(file.name)}" data-disabled="${String(!file.disabled)}">
               ${file.disabled ? t('enable', '启用') : t('disable', '停用')}
             </button>
             <button type="button" class="btn-af-icon danger" data-action="auth-files-delete" data-name="${escapeHtml(file.name)}" title="${t('delete', '删除')}" aria-label="${t('delete', '删除')}">
               <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
+            </button>` : `<button type="button" class="btn-af-tool" data-action="toggle-account" data-account-id="${escapeHtml(file.accountId)}" data-enabled="${String(file.disabled)}">
+              ${file.disabled ? t('enable', '启用') : t('disable', '停用')}
             </button>
+            <button type="button" class="btn-af-icon danger" data-action="delete-account" data-account-id="${escapeHtml(file.accountId)}" data-provider="${escapeHtml(file.provider)}" title="${t('delete', '删除')}" aria-label="${t('delete', '删除')}">
+              <svg class="icon" aria-hidden="true"><use href="#i-trash" /></svg>
+            </button>`}
           </div>
         </div>
       `;

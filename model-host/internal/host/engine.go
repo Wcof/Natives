@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/authfiles"
+	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/nativeio"
 	"github.com/ldh/natives/model-host/internal/quota"
@@ -269,24 +269,28 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.previewUsageImport(raw)
 	case "model_usage_import_commit":
 		return e.commitUsageImport(raw)
-		case "model_usage_import_cancel":
-			return e.cancelUsageImport(raw)
+	case "model_usage_import_cancel":
+		return e.cancelUsageImport(raw)
 
-		// Auth Files and Quota Inquiry methods
-		case "model_auth_files_list":
-			return e.listAuthFiles()
-		case "model_auth_files_import":
-			return e.importAuthFile(raw)
-		case "model_auth_files_update":
-			return e.updateAuthFile(raw)
-		case "model_auth_files_delete":
-			return e.deleteAuthFile(raw)
-		case "model_auth_files_open_dir":
-			return e.openAuthDir()
-		case "model_quota_query":
-			return e.queryQuota(ctx, raw)
+	// Auth Files and Quota Inquiry methods
+	case "model_auth_files_list":
+		return e.listAuthFiles()
+	case "model_auth_files_import":
+		return e.importAuthFile(raw)
+	case "model_auth_files_update":
+		return e.updateAuthFile(raw)
+	case "model_auth_files_delete":
+		return e.deleteAuthFile(raw)
+	case "model_auth_files_open_dir":
+		return e.openAuthDir()
+	case "model_account_models":
+		return e.accountModels(raw)
+	case "model_account_models_update":
+		return e.updateAccountModels(raw)
+	case "model_quota_query":
+		return e.queryQuota(ctx, raw)
 
-		default:
+	default:
 		return nil, invalid("不支持的模型设置操作")
 	}
 }

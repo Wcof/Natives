@@ -14,6 +14,8 @@ import (
 )
 
 type AuthFileItem struct {
+	AccountID      string   `json:"accountId,omitempty"`
+	Source         string   `json:"source"`
 	Name           string   `json:"name"`
 	Provider       string   `json:"provider"`
 	Account        string   `json:"account"`
@@ -264,6 +266,7 @@ func parseAuthFile(name string, size int64, modTime time.Time, data []byte) Auth
 	}
 
 	return AuthFileItem{
+		Source:         "file",
 		Name:           name,
 		Provider:       provider,
 		Account:        account,

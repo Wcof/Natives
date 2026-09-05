@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/ldh/natives/model-host/internal/authfiles"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 type importAuthFileParams struct {
@@ -24,15 +27,32 @@ type deleteAuthFileParams struct {
 }
 
 type quotaQueryParams struct {
-	Provider string `json:"provider"`
-	Name     string `json:"name"`
+	Provider  string `json:"provider"`
+	Name      string `json:"name"`
+	AccountID string `json:"accountId"`
 }
 
 func (e *Engine) listAuthFiles() (any, error) {
-	if e.authFiles == nil {
-		return []any{}, nil
+	items := make([]authfiles.AuthFileItem, 0)
+	if e.authFiles != nil {
+		files, err := e.authFiles.List()
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, files...)
 	}
-	return e.authFiles.List()
+	snapshot, err := e.repo.Load()
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range snapshot.Accounts {
+		items = append(items, authfiles.AuthFileItem{
+			AccountID: account.ID, Source: "keychain", Name: account.Label,
+			Provider: account.Provider, Account: account.Label, Status: account.Status,
+			Disabled: !account.Enabled, UpdatedAt: account.UpdatedAt,
+		})
+	}
+	return items, nil
 }
 
 func (e *Engine) importAuthFile(raw json.RawMessage) (any, error) {
@@ -129,20 +149,38 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 		}
 	}
 
-	// Fallback to Keychain accounts if token is still empty
+	// OAuth credentials are stored as one JSON payload in Keychain.
 	if token == "" {
-		snapshot, err := e.repo.Load()
-		if err == nil {
-			for _, account := range snapshot.Accounts {
-				if strings.EqualFold(account.Provider, p.Provider) || (p.Name != "" && strings.Contains(account.Label, p.Name)) {
-					if secret, err := e.secrets.Get(account.SecretRef); err == nil && secret != "" {
-						token = secret
-						break
-					}
-				}
-			}
+		credentials, err := e.authStore.List(ctx)
+		if err != nil {
+			return nil, err
 		}
+		token, extraJSON = oauthQuotaCredential(credentials, p.Provider, p.AccountID)
 	}
-
+	if strings.TrimSpace(token) == "" {
+		return nil, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
+	}
 	return e.quotaClient.Query(ctx, p.Provider, p.Name, token, extraJSON)
+}
+
+func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID string) (string, string) {
+	for _, credential := range credentials {
+		if accountID != "" && credential.ID != accountID {
+			continue
+		}
+		if accountID == "" && !strings.EqualFold(credential.Provider, provider) {
+			continue
+		}
+		token, _ := credential.Metadata["access_token"].(string)
+		projectID, _ := credential.Metadata["project_id"].(string)
+		if projectID == "" {
+			return token, ""
+		}
+		project, err := json.Marshal(map[string]string{"project_id": projectID})
+		if err != nil {
+			return token, ""
+		}
+		return token, string(project)
+	}
+	return "", ""
 }

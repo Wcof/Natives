@@ -791,5 +791,22 @@
   "suggestionsQuantity": {"message": "Suggestions count"},
   "noPairs": {"message": "Add a currency pair in settings to get started."},
   "addPair": {"message": "Add currency pair"},
-  "rateDecimals": {"message": "Decimal places"}
+  "rateDecimals": {"message": "Decimal places"},
+  "modelLoginPending": {"message": "Authorizing. Complete sign-in in your browser."},
+  "modelLoginSucceeded": {"message": "Signed in"},
+  "modelLoginFailed": {"message": "Sign-in failed. Try again."},
+  "modelLoginTimeout": {"message": "Sign-in timed out. Try again."},
+  "modelLoginCancelled": {"message": "Sign-in cancelled"},
+  "modelLoginIdle": {"message": "Not signed in"},
+  "modelLoginCancelAction": {"message": "Cancel sign-in"},
+  "modelLoginAddAccount": {"message": "Add another account"},
+  "modelAccountModelsTitle": {"message": "Account models"},
+  "modelAccountModelsSearch": {"message": "Search models"},
+  "modelAccountModelsSelectVisible": {"message": "Toggle visible"},
+  "modelAccountModelsSelectAll": {"message": "Enable all"},
+  "modelAccountModelsSelectNone": {"message": "Disable all"},
+  "modelAccountModelsSummary": {"message": "$1 models, $2 enabled"},
+  "modelAccountModelsEmpty": {"message": "No models available"},
+  "modelAccountModelsSaved": {"message": "Account model settings saved"},
+  "modelAccountModelsLoadFailed": {"message": "Failed to load models"}
 }

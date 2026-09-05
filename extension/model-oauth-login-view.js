@@ -41,7 +41,7 @@ const OAUTH_CARD_PROVIDERS = [
   },
 ];
 
-export function renderOAuthLoginView(container, { snapshot, pendingOAuth, t }) {
+export function renderOAuthLoginView(container, { snapshot, pendingOAuth, results = {}, t }) {
   container.replaceChildren();
 
   // 1. Top Bar: Browser choice
@@ -68,6 +68,20 @@ export function renderOAuthLoginView(container, { snapshot, pendingOAuth, t }) {
 
   for (const card of OAUTH_CARD_PROVIDERS) {
     const isPending = pendingOAuth?.provider === card.key;
+    const accounts = (snapshot?.accounts || []).filter((account) => account.provider === card.key);
+    const signedIn = accounts.some((account) => account.enabled && account.status === 'active');
+    const state = isPending ? 'pending' : results[card.key] || (signedIn ? 'succeeded' : accounts.length ? 'reauth' : 'idle');
+    const labels = {
+      pending: ['modelLoginPending', '正在授权，请在浏览器完成登录'],
+      succeeded: ['modelLoginSucceeded', '已登录'],
+      failed: ['modelLoginFailed', '登录失败，请重试'],
+      timeout: ['modelLoginTimeout', '登录超时，请重试'],
+      cancelled: ['modelLoginCancelled', '登录已取消'],
+      reauth: ['modelAccountNeedsReauth', '需要重新登录'],
+      idle: ['modelLoginIdle', '尚未登录'],
+    };
+    const [statusKey, statusFallback] = labels[state] || labels.idle;
+    const statusIcon = state === 'succeeded' ? '<path d="m5 12 4 4L19 6"/>' : '<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3v1"/>';
     const cardEl = document.createElement('div');
     cardEl.className = `model-oauth-card${isPending ? ' pending' : ''}`;
     cardEl.innerHTML = `
@@ -78,9 +92,13 @@ export function renderOAuthLoginView(container, { snapshot, pendingOAuth, t }) {
         <strong class="model-oauth-card-name">${card.name}</strong>
       </div>
       <p class="model-oauth-card-desc">${card.desc}</p>
+      <p class="model-oauth-status" role="status" aria-live="polite" data-state="${state}">
+        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${statusIcon}</svg>
+        <span>${t(statusKey, statusFallback)}</span>
+      </p>
       <div class="model-oauth-card-action">
-        <button type="button" class="model-oauth-login-btn primary" data-action="oauth-start" data-provider="${card.key}">
-          ${isPending ? `<svg class="icon spinning" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-refresh" /></svg><span>${t('authorizing', '授权中...')}</span>` : `<svg class="icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-forward" /></svg><span>${t('startLogin', '开始登录')}</span>`}
+        <button type="button" class="model-oauth-login-btn primary" data-action="oauth-start" data-provider="${card.key}" ${pendingOAuth && !isPending ? 'disabled' : ''}>
+          ${isPending ? `<svg class="icon spinning" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-refresh" /></svg><span>${t('modelLoginCancelAction', '取消授权')}</span>` : `<svg class="icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-forward" /></svg><span>${signedIn ? t('modelLoginAddAccount', '添加其他账户') : t('startLogin', '开始登录')}</span>`}
         </button>
       </div>
     `;

@@ -80,7 +80,7 @@ export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAct
       groupEl.append(groupHeader);
 
       for (const file of fileList) {
-        const quota = quotaMap[file.name] || {};
+        const quota = quotaMap[file.accountId || file.name] || {};
         const card = document.createElement('div');
         card.className = 'model-quota-card';
 
@@ -93,7 +93,7 @@ export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAct
                 ${quota.plan ? `<span>· ${escapeHtml(quota.plan)}</span>` : ''}
               </div>
             </div>
-            <button type="button" class="btn-quota-refresh-card icon-button" data-action="quota-refresh-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" title="${t('refreshQuota', '刷新额度')}" aria-label="${t('refreshQuota', '刷新额度')}">
+            <button type="button" class="btn-quota-refresh-card icon-button" data-action="quota-refresh-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" data-account-id="${escapeHtml(file.accountId)}" title="${t('refreshQuota', '刷新额度')}" aria-label="${t('refreshQuota', '刷新额度')}">
               <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
             </button>
           </div>
@@ -122,7 +122,7 @@ function renderQuotaWindows(quota, file, t) {
     return `
       <div class="model-quota-empty">
         <span class="muted">${t('quotaNotFetched', '尚未获取额度')}</span>
-        <button type="button" class="btn-af-tool" data-action="quota-refresh-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}">
+        <button type="button" class="btn-af-tool" data-action="quota-refresh-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" data-account-id="${escapeHtml(file.accountId)}">
           ${t('getQuota', '获取额度')}
         </button>
       </div>
