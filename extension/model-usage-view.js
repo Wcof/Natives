@@ -218,34 +218,56 @@ function renderEventsTab(container, data, filter, t) {
     <table class="model-events-table">
       <thead>
         <tr>
-          <th class="model-col-time">${escapeText(t('modelEventTime', '时间'))}</th>
-          <th class="model-col-model">${escapeText(t('modelEventProviderModel', '供应商 / 模型'))}</th>
-          <th class="model-col-key">${escapeText(t('modelEventKey', '访问密钥'))}</th>
-          <th class="model-col-latency">${escapeText(t('modelEventLatency', '耗时/TTFT'))}</th>
-          <th class="model-col-tokens">${escapeText(t('modelEventTokens', 'Tokens (入/出)'))}</th>
-          <th class="model-col-cost">${escapeText(t('modelEventCost', '费用'))}</th>
-          <th class="model-col-status">${escapeText(t('modelEventStatus', '状态'))}</th>
+          <th class="model-col-time align-center">${escapeText(t('modelEventTime', '时间'))}</th>
+          <th class="model-col-model">${escapeText(t('modelEventModel', '模型'))}</th>
+          <th class="model-col-input align-center">${escapeText(t('modelEventInput', '输入'))}</th>
+          <th class="model-col-output align-center">${escapeText(t('modelEventOutput', '输出'))}</th>
+          <th class="model-col-cache align-center">${escapeText(t('modelEventCache', '缓存'))}</th>
+          <th class="model-col-cache-rate align-center">${escapeText(t('modelEventCacheRate', '缓存率'))}</th>
+          <th class="model-col-total align-center">${escapeText(t('modelEventTotal', '总计'))}</th>
+          <th class="model-col-speed align-center">${escapeText(t('modelEventSpeed', '生成速度'))}</th>
+          <th class="model-col-ttft align-center">${escapeText(t('modelEventTtft', '首字延迟'))}</th>
+          <th class="model-col-latency align-center">${escapeText(t('modelEventLatency', '总耗时'))}</th>
+          <th class="model-col-cost align-center">${escapeText(t('modelEventCost', '费用'))}</th>
+          <th class="model-col-status align-center">${escapeText(t('modelEventStatus', '状态'))}</th>
         </tr>
       </thead>
       <tbody>
         ${data.events.map(e => `
           <tr>
-            <td class="model-col-time"><small class="muted">${formatTime(e.requestedAt)}</small></td>
-            <td class="model-col-model">
-              <strong title="${escapeText(e.model)}">${escapeText(e.model)}</strong>
-              <br><small class="muted" title="${escapeText(e.provider)}">${escapeText(e.provider)}</small>
+            <td class="model-col-time align-center"><small class="muted">${formatTime(e.requestedAt)}</small></td>
+            <td class="model-col-model" title="${escapeText(e.model || '')}">
+              <strong class="model-name-text">${escapeText(e.model || '—')}</strong>
+              ${e.provider ? `<span class="usage-tag-pill">${escapeText(e.provider)}</span>` : ''}
             </td>
-            <td class="model-col-key"><small class="muted" title="${escapeText(e.accessKeyName || e.accessKeyId || '-')}">${escapeText(e.accessKeyName || e.accessKeyId || '-')}</small></td>
-            <td class="model-col-latency">
-              ${e.latencyMs} ms
-              ${e.ttftMs > 0 ? `<br><small class="muted">TTFT: ${e.ttftMs}ms</small>` : ''}
+            <td class="model-col-input align-center" title="${(e.inputTokens || 0).toLocaleString()} tokens">
+              ${compactNumber(e.inputTokens || 0)}
             </td>
-            <td class="model-col-tokens">
-              ${formatNumber(e.totalTokens)}
-              <br><small class="muted">${formatNumber(e.inputTokens)} / ${formatNumber(e.outputTokens)}</small>
+            <td class="model-col-output align-center" title="${(e.outputTokens || 0).toLocaleString()} tokens">
+              ${compactNumber(e.outputTokens || 0)}
             </td>
-            <td class="model-col-cost"><span class="text-primary">$${(e.costMicro / 1000000.0).toFixed(4)}</span></td>
-            <td class="model-col-status">
+            <td class="model-col-cache align-center" title="Read: ${(e.cacheReadTokens || 0).toLocaleString()} tokens${e.cacheWriteTokens > 0 ? ` / Creation: ${(e.cacheWriteTokens || 0).toLocaleString()} tokens` : ''}">
+              ${compactNumber(e.cacheReadTokens || 0)}
+            </td>
+            <td class="model-col-cache-rate align-center">
+              ${formatCacheRate(e.inputTokens, e.cacheReadTokens)}
+            </td>
+            <td class="model-col-total align-center" title="${(e.totalTokens || 0).toLocaleString()} tokens">
+              <strong>${compactNumber(e.totalTokens || 0)}</strong>
+            </td>
+            <td class="model-col-speed align-center">
+              ${formatSpeed(e.outputTokens, e.latencyMs, e.ttftMs)}
+            </td>
+            <td class="model-col-ttft align-center" title="${e.ttftMs > 0 ? `${e.ttftMs} ms` : ''}">
+              ${e.ttftMs > 0 ? `${compactNumber(e.ttftMs)} ms` : '—'}
+            </td>
+            <td class="model-col-latency align-center" title="${e.latencyMs || 0} ms">
+              ${compactNumber(e.latencyMs || 0)} ms
+            </td>
+            <td class="model-col-cost align-center">
+              <span class="text-primary">$${((e.costMicro || 0) / 1000000.0).toFixed(4)}</span>
+            </td>
+            <td class="model-col-status align-center">
               <span class="model-status-badge ${e.result === 'success' ? 'status-ok' : 'status-err'}">
                 ${e.httpStatus || (e.result === 'success' ? '200' : 'ERR')}
               </span>
@@ -283,6 +305,37 @@ function emptyState(title, hint) {
 
 function formatNumber(val) {
   return Number(val || 0).toLocaleString();
+}
+
+function compactNumber(val) {
+  const num = Number(val) || 0;
+  const abs = Math.abs(num);
+  if (abs >= 1_000_000_000) {
+    return `${(num / 1_000_000_000).toFixed(1)}B`;
+  }
+  if (abs >= 1_000_000) {
+    return `${(num / 1_000_000).toFixed(1)}M`;
+  }
+  return num.toLocaleString();
+}
+
+function formatCacheRate(inputTokens, cacheReadTokens) {
+  const input = Number(inputTokens) || 0;
+  const cache = Math.max(0, Number(cacheReadTokens) || 0);
+  if (input <= 0) return '—';
+  const rate = (Math.min(cache, input) / input) * 100;
+  return `${rate.toFixed(2)}%`;
+}
+
+function formatSpeed(outputTokens, latencyMs, ttftMs) {
+  const output = Number(outputTokens) || 0;
+  const latency = Number(latencyMs) || 0;
+  const ttft = Number(ttftMs) || 0;
+  if (output <= 0 || latency <= 0 || ttft <= 0 || latency <= ttft) {
+    return '—';
+  }
+  const speed = output / ((latency - ttft) / 1000);
+  return Number.isFinite(speed) && speed > 0 ? `${speed.toFixed(1)} t/s` : '—';
 }
 
 function formatTime(isoStr) {

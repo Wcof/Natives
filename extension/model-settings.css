@@ -133,6 +133,10 @@
 .model-events-table th,.model-prices-table th,.model-keys-table th { position:sticky; top:0; z-index:1; color:var(--muted); background:var(--surface-3); font-size:11px; font-weight:650; white-space:nowrap; }
 .model-events-table tbody tr:last-child td,.model-prices-table tbody tr:last-child td,.model-keys-table tbody tr:last-child td { border-bottom:0; }
 .model-events-table tbody tr:hover,.model-prices-table tbody tr:hover,.model-keys-table tbody tr:hover { background:var(--hover); }
+.align-center,.model-events-table .align-center { text-align:center !important; }
+.model-events-table .usage-tag-pill { display:inline-block; font-size:10px; padding:1px 5px; border-radius:4px; background:rgba(255,255,255,0.08); color:var(--muted); margin-left:6px; vertical-align:middle; }
+.model-events-table td.model-col-model { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.model-events-table .model-name-text { font-size:12px; }
 .model-status,.model-status-badge { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:24px; padding:0 8px; border:0 !important; border-radius:var(--radius); color:var(--muted); background:transparent !important; font-size:11px; font-weight:600; }
 .model-status-running,.model-status-active,.model-status-badge.status-ok { color:var(--success) !important; }
 .model-status-failed,.model-status-badge.status-err { color:var(--danger) !important; }
