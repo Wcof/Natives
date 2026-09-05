@@ -741,5 +741,10 @@
   "agentMaxContext": "Max Context Tokens",
   "agentCompactPct": "Auto-compact Trigger %",
   "agentDisableCompact": "Disable auto-compact",
-  "agentLaunchDirPrompt": "Working directory (blank for home):"
+  "agentLaunchDirPrompt": "Working directory (blank for home):",
+  "authFileNoAccountHint": "No matching OAuth account",
+  "authFileNoAccountMatch": "This credential file has no matching OAuth account, so per-account models are unavailable",
+  "authFilePriorityPrompt": "Enter priority (higher number wins):",
+  "authFilePriorityInvalid": "Priority must be an integer",
+  "authFilePrioritySaved": "Priority updated"
 }

@@ -127,9 +127,9 @@ export function renderAuthFilesView(container, { files = [], quotaMap = {}, filt
             <button type="button" class="btn-af-tool" data-action="auth-files-quota-one" data-name="${escapeHtml(file.name)}" data-provider="${escapeHtml(file.provider)}" data-account-id="${escapeHtml(file.accountId)}">
               ${t('refreshQuota', '刷新额度')}
             </button>
-            ${file.accountId ? `<button type="button" class="btn-af-tool" data-action="auth-files-models" data-name="${escapeHtml(file.name)}" data-account-id="${escapeHtml(file.accountId)}" data-provider="${escapeHtml(file.provider)}">
+            <button type="button" class="btn-af-tool" data-action="auth-files-models" data-name="${escapeHtml(file.name)}" data-account-id="${escapeHtml(file.accountId || '')}" data-provider="${escapeHtml(file.provider)}" title="${file.accountId ? t('agentAccountModelsTitle', '账号模型') : t('authFileNoAccountHint', '未匹配到 OAuth 账户')}">
               ${t('models', '模型')}
-            </button>` : ''}
+            </button>
             ${file.source !== 'keychain' ? `<button type="button" class="btn-af-tool" data-action="auth-files-priority" data-name="${escapeHtml(file.name)}" data-priority="${file.priority || 0}">
               <svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg>
               <span>${t('priority', '优先级')} ${file.priority || 0}</span>

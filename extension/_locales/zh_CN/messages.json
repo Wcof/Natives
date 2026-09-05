@@ -741,5 +741,10 @@
   "agentMaxContext": "最大上下文 Token",
   "agentCompactPct": "触发压缩百分比",
   "agentDisableCompact": "禁止自动压缩",
-  "agentLaunchDirPrompt": "启动工作目录（留空使用主目录）："
+  "agentLaunchDirPrompt": "启动工作目录（留空使用主目录）：",
+  "authFileNoAccountHint": "未匹配到 OAuth 账户",
+  "authFileNoAccountMatch": "该凭据文件未匹配到 OAuth 账户，无法配置账号模型",
+  "authFilePriorityPrompt": "请输入优先级（数字，越大越优先）：",
+  "authFilePriorityInvalid": "优先级必须是整数",
+  "authFilePrioritySaved": "优先级已更新"
 }

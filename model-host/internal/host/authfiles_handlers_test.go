@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -34,14 +35,32 @@ func TestOAuthAccountAppearsInCredentialListAndProvidesQuotaMetadata(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A file-backed credential matching the account label must be joined to
+	// the account row (accountId stamped), and the keychain row deduped.
+	fileContent := `{"provider":"antigravity","email":"user@example.test","access_token":"t"}`
+	if err := os.WriteFile(filepath.Join(engine.authFiles.BaseDir(), "antigravity-user@example.test.json"), []byte(fileContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	listed, err := engine.listAuthFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
 	items := listed.([]authfiles.AuthFileItem)
-	if len(items) != 1 || items[0].AccountID != "antigravity-user.json" || items[0].Source != "keychain" {
-		t.Fatalf("OAuth account missing from credential projection: %#v", items)
+	var fileRow, keychainRow *authfiles.AuthFileItem
+	for index := range items {
+		switch items[index].Source {
+		case "file":
+			fileRow = &items[index]
+		case "keychain":
+			keychainRow = &items[index]
+		}
+	}
+	if fileRow == nil || fileRow.AccountID != "antigravity-user.json" {
+		t.Fatalf("file row must be joined to its OAuth account: %#v", items)
+	}
+	if keychainRow != nil {
+		t.Fatalf("matched account must not emit a duplicate keychain row: %#v", items)
 	}
 
 	token, metadata := oauthQuotaCredential([]*coreauth.Auth{{

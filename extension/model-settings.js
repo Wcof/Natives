@@ -288,20 +288,28 @@ class ModelSettings {
     }
     if (action === 'auth-files-priority') {
       const name = target.dataset.name;
-      const cur = Number(target.dataset.priority) || 0;
-      const next = cur + 1; // Increment priority on click
-      try {
-        await this.api.updateAuthFile({ name, priority: next });
-        await this.loadAuthFiles();
-        this.render();
-      } catch (err) {
-        this.showError(err);
-      }
+      const current = Number(target.dataset.priority) || 0;
+      this.promptInput(this.t('authFilePriorityPrompt', '请输入优先级（数字，越大越优先）：'), String(current), (value) => {
+        const priority = Number(value);
+        if (!Number.isInteger(priority)) {
+          this.showError(this.t('authFilePriorityInvalid', '优先级必须是整数'));
+          return;
+        }
+        this.api.updateAuthFile({ name, priority })
+          .then(() => this.loadAuthFiles())
+          .then(() => { this.render(); this.view.showToast(this.t('authFilePrioritySaved', '优先级已更新')); })
+          .catch((error) => this.showError(error));
+      });
       return;
     }
     if (action === 'auth-files-models') {
+      const accountId = target.dataset.accountId;
+      if (!accountId) {
+        this.view.showToast(this.t('authFileNoAccountMatch', '该凭据文件未匹配到 OAuth 账户，无法配置账号模型'));
+        return;
+      }
       return openAccountModelsDialog(this, {
-        accountId: target.dataset.accountId,
+        accountId,
         provider: target.dataset.provider,
         name: target.dataset.name,
       });

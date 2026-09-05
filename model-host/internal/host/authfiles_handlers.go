@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ldh/natives/model-host/internal/authfiles"
+	"github.com/ldh/natives/model-host/internal/domain"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
@@ -45,7 +46,26 @@ func (e *Engine) listAuthFiles() (any, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Join file-based credentials with their OAuth accounts so the 账号模型
+	// dialog can manage per-account model exclusions from the same row.
+	matched := make(map[string]bool, len(snapshot.Accounts))
+	for index := range items {
+		item := &items[index]
+		for _, account := range snapshot.Accounts {
+			if matched[account.ID] || !authFileMatchesAccount(item, account) {
+				continue
+			}
+			item.AccountID = account.ID
+			matched[account.ID] = true
+			break
+		}
+	}
+	// Accounts without a backing file still appear so they stay manageable.
 	for _, account := range snapshot.Accounts {
+		if matched[account.ID] {
+			continue
+		}
 		items = append(items, authfiles.AuthFileItem{
 			AccountID: account.ID, Source: "keychain", Name: account.Label,
 			Provider: account.Provider, Account: account.Label, Status: account.Status,
@@ -53,6 +73,33 @@ func (e *Engine) listAuthFiles() (any, error) {
 		})
 	}
 	return items, nil
+}
+
+// authFileMatchesAccount correlates an auth file with an OAuth account:
+// same provider and the account label (email) appears in the file name or
+// embedded account field.
+func authFileMatchesAccount(item *authfiles.AuthFileItem, account domain.Account) bool {
+	if normalizeAuthProvider(item.Provider) != normalizeAuthProvider(account.Provider) {
+		return false
+	}
+	label := strings.ToLower(strings.TrimSpace(account.Label))
+	if label == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(item.Name), label) ||
+		strings.EqualFold(strings.TrimSpace(item.Account), label)
+}
+
+func normalizeAuthProvider(provider string) string {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	switch normalized {
+	case "anthropic":
+		return "claude"
+	case "anti-gravity":
+		return "antigravity"
+	default:
+		return normalized
+	}
 }
 
 func (e *Engine) importAuthFile(raw json.RawMessage) (any, error) {
