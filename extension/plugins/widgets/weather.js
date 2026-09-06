@@ -2,22 +2,28 @@
 
 import { fetchDedup } from '../plugins-cache.js';
 import { escapeHtml } from '../sanitizer.js';
+import { CHINA_REGIONS, OVERSEAS_REGIONS } from './weather-cities.js';
 
 export const weatherWidget = {
   key: 'widget/weather',
   name: 'Weather',
   defaultData: {
-    city: 'Beijing',
-    lat: 39.9042,
-    lon: 116.4074,
+    regionType: 'domestic', // 'domestic' | 'overseas'
+    province: '北京市',
+    city: '北京市',
+    district: '东城区',
+    continent: '亚洲 (Asia)',
+    lat: 39.9284,
+    lon: 116.4163,
     unit: 'celsius',
     showForecast: true,
   },
   render(container, data = {}, display = {}, { t = (k, f) => f || k } = {}) {
-    const city = data.city || 'Beijing';
-    const lat = data.lat ?? 39.9042;
-    const lon = data.lon ?? 116.4074;
-    const isFahrenheit = data.unit === 'fahrenheit';
+    let currentData = { ...data };
+    let city = currentData.city || 'Beijing';
+    let lat = currentData.lat ?? 39.9042;
+    let lon = currentData.lon ?? 116.4074;
+    const isFahrenheit = currentData.unit === 'fahrenheit';
     const tempUnit = isFahrenheit ? '°F' : '°C';
     let disposed = false;
 
@@ -27,6 +33,7 @@ export const weatherWidget = {
     const root = document.createElement('div');
     root.className = 'weather-content';
 
+    // 1. 卡片天气摘要与温度
     const currentCard = document.createElement('div');
     currentCard.className = 'summary';
     currentCard.innerHTML = `
@@ -37,6 +44,7 @@ export const weatherWidget = {
     `;
     root.append(currentCard);
 
+    // 2. 卡片体感与湿度
     const detailsRow = document.createElement('div');
     detailsRow.className = 'details';
     detailsRow.innerHTML = `
@@ -45,72 +53,78 @@ export const weatherWidget = {
     `;
     root.append(detailsRow);
 
+    // 3. 未来预报
     const forecastRow = document.createElement('div');
     forecastRow.className = 'forecast';
-    if (data.showForecast !== false) {
+    if (currentData.showForecast !== false) {
       root.append(forecastRow);
     }
 
     container.append(root);
 
-    const tempParam = isFahrenheit ? '&temperature_unit=fahrenheit' : '';
-    const cacheKey = `weather_${lat.toFixed(2)}_${lon.toFixed(2)}_${data.unit || 'c'}`;
+    function fetchAndRenderWeather(targetLat, targetLon) {
+      const tempParam = isFahrenheit ? '&temperature_unit=fahrenheit' : '';
+      const cacheKey = `weather_${targetLat.toFixed(2)}_${targetLon.toFixed(2)}_${currentData.unit || 'c'}`;
 
-    fetchDedup(
-      cacheKey,
-      async () => {
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto${tempParam}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('Weather API error');
-        return res.json();
-      },
-      15 * 60 * 1000,
-    )
-      .then((json) => {
-        if (disposed || (container.isConnected !== undefined && !container.isConnected)) return;
+      fetchDedup(
+        cacheKey,
+        async () => {
+          const url = `https://api.open-meteo.com/v1/forecast?latitude=${targetLat}&longitude=${targetLon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto${tempParam}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('Weather API error');
+          return res.json();
+        },
+        15 * 60 * 1000,
+      )
+        .then((json) => {
+          if (disposed || (container.isConnected !== undefined && !container.isConnected)) return;
 
-        const current = json?.current || {};
-        const daily = json?.daily || {};
+          const current = json?.current || {};
+          const daily = json?.daily || {};
 
-        const temp = current.temperature_2m ?? '--';
-        const humidity = current.relative_humidity_2m ?? '--';
-        const feels = current.apparent_temperature ?? temp;
-        const code = current.weather_code ?? 0;
-        const { icon, label } = interpretWeather(code, t);
+          const temp = current.temperature_2m ?? '--';
+          const humidity = current.relative_humidity_2m ?? '--';
+          const feels = current.apparent_temperature ?? temp;
+          const code = current.weather_code ?? 0;
+          const { icon, label } = interpretWeather(code, t);
 
-        currentCard.querySelector('.weather-icon-symbol').textContent = icon;
-        currentCard.querySelector('.temperature').textContent = `${Math.round(temp)}${tempUnit}`;
-        currentCard.querySelector('.weather-condition').textContent = label;
-        currentCard.title = label;
+          currentCard.querySelector('.weather-icon-symbol').textContent = icon;
+          currentCard.querySelector('.temperature').textContent = `${Math.round(temp)}${tempUnit}`;
+          currentCard.querySelector('.weather-condition').textContent = label;
+          currentCard.title = label;
 
-        detailsRow.querySelector('.val-humidity').textContent = `${humidity}%`;
-        detailsRow.querySelector('.val-feels').textContent = `${Math.round(feels)}${tempUnit}`;
+          detailsRow.querySelector('.val-humidity').textContent = `${humidity}%`;
+          detailsRow.querySelector('.val-feels').textContent = `${Math.round(feels)}${tempUnit}`;
 
-        if (data.showForecast !== false && Array.isArray(daily.time)) {
-          forecastRow.innerHTML = daily.time.slice(1, 6).map((dayStr, i) => {
-            const idx = i + 1;
-            const d = new Date(dayStr);
-            const weekday = d.toLocaleDateString(undefined, { weekday: 'short' });
-            const dayCode = daily.weather_code?.[idx] ?? 0;
-            const dayMax = Math.round(daily.temperature_2m_max?.[idx] ?? 0);
-            const dayMin = Math.round(daily.temperature_2m_min?.[idx] ?? 0);
-            const dayWeather = interpretWeather(dayCode, t);
+          if (currentData.showForecast !== false && Array.isArray(daily.time)) {
+            forecastRow.innerHTML = daily.time.slice(1, 6).map((dayStr, i) => {
+              const idx = i + 1;
+              const d = new Date(dayStr);
+              const weekday = d.toLocaleDateString(undefined, { weekday: 'short' });
+              const dayCode = daily.weather_code?.[idx] ?? 0;
+              const dayMax = Math.round(daily.temperature_2m_max?.[idx] ?? 0);
+              const dayMin = Math.round(daily.temperature_2m_min?.[idx] ?? 0);
+              const dayWeather = interpretWeather(dayCode, t);
 
-            return `
-              <dl class="day">
-                <dt>${escapeHtml(weekday)}</dt>
-                <dd class="condition" title="${escapeHtml(dayWeather.label)}">${dayWeather.icon}</dd>
-                <dd class="temperatures"><span>${dayMax}°</span><span class="low">${dayMin}°</span></dd>
-              </dl>
-            `;
-          }).join('');
-        }
-      })
-      .catch(() => {
-        if (disposed || (container.isConnected !== undefined && !container.isConnected)) return;
-        currentCard.querySelector('.temperature').textContent = '-';
-        currentCard.title = t('failed', '获取失败');
-      });
+              return `
+                <dl class="day">
+                  <dt>${escapeHtml(weekday)}</dt>
+                  <dd class="condition" title="${escapeHtml(dayWeather.label)}">${dayWeather.icon}</dd>
+                  <dd class="temperatures"><span>${dayMax}°</span><span class="low">${dayMin}°</span></dd>
+                </dl>
+              `;
+            }).join('');
+          }
+        })
+        .catch(() => {
+          if (disposed || (container.isConnected !== undefined && !container.isConnected)) return;
+          currentCard.querySelector('.temperature').textContent = '-';
+          currentCard.title = t('failed', '获取失败');
+        });
+    }
+
+    // 初始加载天气
+    fetchAndRenderWeather(lat, lon);
 
     return () => {
       disposed = true;
@@ -121,11 +135,71 @@ export const weatherWidget = {
     container.replaceChildren();
     const wrap = document.createElement('div');
     wrap.className = 'inspector-field-group';
+
+    const regionType = data.regionType || (OVERSEAS_REGIONS[data.continent] ? 'overseas' : 'domestic');
+    let province = data.province || Object.keys(CHINA_REGIONS)[0];
+    if (!CHINA_REGIONS[province]) province = Object.keys(CHINA_REGIONS)[0];
+
+    const provinceData = CHINA_REGIONS[province] || {};
+    const cityList = Object.keys(provinceData.cities || {});
+    let city = data.city && cityList.includes(data.city) ? data.city : (cityList[0] || province);
+
+    const cityData = provinceData.cities?.[city] || {};
+    const districtList = Object.keys(cityData.districts || {});
+    let district = data.district && districtList.includes(data.district) ? data.district : (districtList[0] || '');
+
+    let continent = data.continent || Object.keys(OVERSEAS_REGIONS)[0];
+    if (!OVERSEAS_REGIONS[continent]) continent = Object.keys(OVERSEAS_REGIONS)[0];
+    const overseasCities = Object.keys(OVERSEAS_REGIONS[continent] || {});
+    let overseasCity = data.overseasCity && overseasCities.includes(data.overseasCity) ? data.overseasCity : (overseasCities[0] || '');
+
     wrap.innerHTML = `
       <label class="inspector-field">
-        <span>${t('cityName', '城市名称')}</span>
-        <input type="text" id="w-city" value="${escapeHtml(data.city || 'Beijing')}" placeholder="Beijing / London / Tokyo" />
+        <span>${t('weatherRegionType', '地区类型')}</span>
+        <select id="w-region-type">
+          <option value="domestic" ${regionType === 'domestic' ? 'selected' : ''}>${t('weatherRegionDomestic', '国内 (中国大陆)')}</option>
+          <option value="overseas" ${regionType === 'overseas' ? 'selected' : ''}>${t('weatherRegionOverseas', '国际 / 海外主要城市')}</option>
+        </select>
       </label>
+
+      <!-- 国内级联：省 -> 市 -> 区 -->
+      <div id="w-domestic-group" style="${regionType === 'domestic' ? '' : 'display:none;'}">
+        <label class="inspector-field">
+          <span>${t('weatherProvince', '省份 / 直辖市')}</span>
+          <select id="w-province">
+            ${Object.keys(CHINA_REGIONS).map((p) => `<option value="${escapeHtml(p)}" ${p === province ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="inspector-field">
+          <span>${t('weatherCity', '城市 / 地区')}</span>
+          <select id="w-city-select">
+            ${cityList.map((c) => `<option value="${escapeHtml(c)}" ${c === city ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="inspector-field">
+          <span>${t('weatherDistrict', '区县')}</span>
+          <select id="w-district-select">
+            ${districtList.map((d) => `<option value="${escapeHtml(d)}" ${d === district ? 'selected' : ''}>${escapeHtml(d)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+
+      <!-- 国外级联：大洲 -> 国际城市 -->
+      <div id="w-overseas-group" style="${regionType === 'overseas' ? '' : 'display:none;'}">
+        <label class="inspector-field">
+          <span>${t('weatherContinent', '大洲')}</span>
+          <select id="w-continent">
+            ${Object.keys(OVERSEAS_REGIONS).map((c) => `<option value="${escapeHtml(c)}" ${c === continent ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="inspector-field">
+          <span>${t('weatherOverseasCity', '城市')}</span>
+          <select id="w-overseas-city">
+            ${overseasCities.map((oc) => `<option value="${escapeHtml(oc)}" ${oc === overseasCity ? 'selected' : ''}>${escapeHtml(oc)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+
       <label class="inspector-field">
         <span>${t('temperatureUnit', '温度单位')}</span>
         <select id="w-unit">
@@ -133,47 +207,202 @@ export const weatherWidget = {
           <option value="fahrenheit" ${data.unit === 'fahrenheit' ? 'selected' : ''}>华氏度 (°F)</option>
         </select>
       </label>
+
       <label class="inspector-checkbox">
         <input type="checkbox" id="w-forecast" ${data.showForecast !== false ? 'checked' : ''} />
         <span>${t('showFiveDayForecast', '显示 5 天天气预报')}</span>
       </label>
+
       <div class="inspector-fields-row">
         <label class="inspector-field">
           <span>${t('latitude', '纬度')}</span>
-          <input type="number" step="0.0001" id="w-lat" value="${data.lat ?? 39.9042}" />
+          <input type="number" step="0.0001" id="w-lat" readonly value="${data.lat ?? 39.9284}" />
         </label>
         <label class="inspector-field">
           <span>${t('longitude', '经度')}</span>
-          <input type="number" step="0.0001" id="w-lon" value="${data.lon ?? 116.4074}" />
+          <input type="number" step="0.0001" id="w-lon" readonly value="${data.lon ?? 116.4163}" />
         </label>
       </div>
     `;
 
-    const cityInput = wrap.querySelector('#w-city');
-    cityInput.onchange = async () => {
-      const newCity = cityInput.value.trim();
-      if (!newCity) return;
-      try {
-        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(newCity)}&count=1`);
-        const geoJson = await geoRes.json();
-        if (geoJson.results && geoJson.results[0]) {
-          const res = geoJson.results[0];
-          onChange({
-            ...data,
-            city: res.name || newCity,
-            lat: res.latitude,
-            lon: res.longitude,
-          });
-          return;
-        }
-      } catch {}
-      onChange({ ...data, city: newCity });
+    const regionSelect = wrap.querySelector('#w-region-type');
+    const domesticGroup = wrap.querySelector('#w-domestic-group');
+    const overseasGroup = wrap.querySelector('#w-overseas-group');
+    const provinceSelect = wrap.querySelector('#w-province');
+    const citySelect = wrap.querySelector('#w-city-select');
+    const districtSelect = wrap.querySelector('#w-district-select');
+    const continentSelect = wrap.querySelector('#w-continent');
+    const overseasCitySelect = wrap.querySelector('#w-overseas-city');
+    const latInput = wrap.querySelector('#w-lat');
+    const lonInput = wrap.querySelector('#w-lon');
+
+    function resolveDomesticGeo(p, c, d) {
+      const pData = CHINA_REGIONS[p] || {};
+      const cData = pData.cities?.[c] || {};
+      const dData = cData.districts?.[d];
+      const lat = dData?.lat ?? cData.lat ?? pData.lat ?? 39.9042;
+      const lon = dData?.lon ?? cData.lon ?? pData.lon ?? 116.4074;
+      const displayName = d || c || p;
+      return { lat, lon, displayName };
+    }
+
+    function resolveOverseasGeo(cont, oc) {
+      const cityData = OVERSEAS_REGIONS[cont]?.[oc] || {};
+      const lat = cityData.lat ?? 51.5074;
+      const lon = cityData.lon ?? -0.1278;
+      const displayName = oc.split(' ')[0] || oc;
+      return { lat, lon, displayName };
+    }
+
+    regionSelect.onchange = () => {
+      const isDomestic = regionSelect.value === 'domestic';
+      domesticGroup.style.display = isDomestic ? '' : 'none';
+      overseasGroup.style.display = isDomestic ? 'none' : '';
+      if (isDomestic) {
+        const curP = provinceSelect.value;
+        const curC = citySelect.value;
+        const curD = districtSelect.value;
+        const { lat, lon, displayName } = resolveDomesticGeo(curP, curC, curD);
+        latInput.value = lat;
+        lonInput.value = lon;
+        onChange({
+          ...data,
+          regionType: 'domestic',
+          province: curP,
+          city: displayName,
+          district: curD,
+          lat,
+          lon,
+        });
+      } else {
+        const curCont = continentSelect.value;
+        const curOC = overseasCitySelect.value;
+        const { lat, lon, displayName } = resolveOverseasGeo(curCont, curOC);
+        latInput.value = lat;
+        lonInput.value = lon;
+        onChange({
+          ...data,
+          regionType: 'overseas',
+          continent: curCont,
+          overseasCity: curOC,
+          city: displayName,
+          lat,
+          lon,
+        });
+      }
+    };
+
+    provinceSelect.onchange = () => {
+      const nextP = provinceSelect.value;
+      const pData = CHINA_REGIONS[nextP] || {};
+      const nextCities = Object.keys(pData.cities || {});
+      const nextC = nextCities[0] || nextP;
+
+      citySelect.innerHTML = nextCities.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      citySelect.value = nextC;
+
+      const cData = pData.cities?.[nextC] || {};
+      const nextDistricts = Object.keys(cData.districts || {});
+      const nextD = nextDistricts[0] || '';
+      districtSelect.innerHTML = nextDistricts.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+      districtSelect.value = nextD;
+
+      const { lat, lon, displayName } = resolveDomesticGeo(nextP, nextC, nextD);
+      latInput.value = lat;
+      lonInput.value = lon;
+      onChange({
+        ...data,
+        regionType: 'domestic',
+        province: nextP,
+        city: displayName,
+        district: nextD,
+        lat,
+        lon,
+      });
+    };
+
+    citySelect.onchange = () => {
+      const curP = provinceSelect.value;
+      const nextC = citySelect.value;
+      const cData = CHINA_REGIONS[curP]?.cities?.[nextC] || {};
+      const nextDistricts = Object.keys(cData.districts || {});
+      const nextD = nextDistricts[0] || '';
+
+      districtSelect.innerHTML = nextDistricts.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+      districtSelect.value = nextD;
+
+      const { lat, lon, displayName } = resolveDomesticGeo(curP, nextC, nextD);
+      latInput.value = lat;
+      lonInput.value = lon;
+      onChange({
+        ...data,
+        regionType: 'domestic',
+        province: curP,
+        city: displayName,
+        district: nextD,
+        lat,
+        lon,
+      });
+    };
+
+    districtSelect.onchange = () => {
+      const curP = provinceSelect.value;
+      const curC = citySelect.value;
+      const nextD = districtSelect.value;
+      const { lat, lon, displayName } = resolveDomesticGeo(curP, curC, nextD);
+      latInput.value = lat;
+      lonInput.value = lon;
+      onChange({
+        ...data,
+        regionType: 'domestic',
+        province: curP,
+        city: displayName,
+        district: nextD,
+        lat,
+        lon,
+      });
+    };
+
+    continentSelect.onchange = () => {
+      const nextCont = continentSelect.value;
+      const nextCities = Object.keys(OVERSEAS_REGIONS[nextCont] || {});
+      const nextOC = nextCities[0] || '';
+      overseasCitySelect.innerHTML = nextCities.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      overseasCitySelect.value = nextOC;
+
+      const { lat, lon, displayName } = resolveOverseasGeo(nextCont, nextOC);
+      latInput.value = lat;
+      lonInput.value = lon;
+      onChange({
+        ...data,
+        regionType: 'overseas',
+        continent: nextCont,
+        overseasCity: nextOC,
+        city: displayName,
+        lat,
+        lon,
+      });
+    };
+
+    overseasCitySelect.onchange = () => {
+      const curCont = continentSelect.value;
+      const nextOC = overseasCitySelect.value;
+      const { lat, lon, displayName } = resolveOverseasGeo(curCont, nextOC);
+      latInput.value = lat;
+      lonInput.value = lon;
+      onChange({
+        ...data,
+        regionType: 'overseas',
+        continent: curCont,
+        overseasCity: nextOC,
+        city: displayName,
+        lat,
+        lon,
+      });
     };
 
     wrap.querySelector('#w-unit').onchange = (e) => onChange({ ...data, unit: e.target.value });
     wrap.querySelector('#w-forecast').onchange = (e) => onChange({ ...data, showForecast: e.target.checked });
-    wrap.querySelector('#w-lat').onchange = (e) => onChange({ ...data, lat: Number(e.target.value) });
-    wrap.querySelector('#w-lon').onchange = (e) => onChange({ ...data, lon: Number(e.target.value) });
 
     container.append(wrap);
   },
@@ -202,3 +431,4 @@ function interpretWeather(code, t = (k, f) => f || k) {
   if ([95, 96, 99].includes(code)) return { icon: '⛈️', label: t('weatherThunder', '雷暴') };
   return { icon: '🌤️', label: t('weatherCloudy', '多云') };
 }
+
