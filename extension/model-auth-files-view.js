@@ -1,7 +1,4 @@
-/**
- * Model Auth Files View (<280 lines)
- * Manages OAuth credentials (.json) stored in ~/.natives/auth/ matching EasyCLIProxyAPI design.
- */
+
 
 function escapeHtml(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({

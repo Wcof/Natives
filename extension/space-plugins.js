@@ -1,6 +1,4 @@
-/**
- * Unified Plugins Aggregator (<40 lines).
- */
+
 
 import { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml } from './plugins/sanitizer.js';
 import { backgroundPlugins } from './plugins/backgrounds/index.js';

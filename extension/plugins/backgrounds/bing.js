@@ -1,8 +1,4 @@
-/**
- * Bing Daily Wallpaper Carousel Background.
- * Fetches the official Bing wallpaper archive with automatic carousel/slideshow support
- * and massive random archive exploration.
- */
+
 
 import { fetchDedup, setMemCache, loadCachedBackground } from '../plugins-cache.js';
 

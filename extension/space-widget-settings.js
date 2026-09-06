@@ -1,7 +1,4 @@
-/**
- * Widget Display and Plugin Settings Controller (<260 lines).
- * Full migration of Tabliss Widget.tsx and WidgetDisplay.tsx.
- */
+
 
 import { widgetPlugins, pluginName, escapeHtml } from './space-plugins.js';
 
@@ -29,7 +26,7 @@ export function createSpaceWidgetSettings({
 
     container.replaceChildren();
 
-    // Header
+    
     const header = document.createElement('div');
     header.className = 'inspector-heading';
     header.innerHTML = `
@@ -50,11 +47,11 @@ export function createSpaceWidgetSettings({
     };
     header.querySelector('.widget-delete-trigger').onclick = () => showDeleteConfirm();
 
-    // Body
+    
     const body = document.createElement('div');
     body.className = 'inspector-body';
 
-    // 1. Plugin-specific settings section
+    
     if (plugin?.renderSettings) {
       const pluginSec = document.createElement('div');
       pluginSec.className = 'inspector-section';
@@ -70,7 +67,7 @@ export function createSpaceWidgetSettings({
       body.append(pluginSec);
     }
 
-    // 2. Position & Layout section (Tabliss PositionInput & Moveable Controls)
+    
     const posSec = document.createElement('div');
     posSec.className = 'inspector-section';
     posSec.innerHTML = `
@@ -148,7 +145,7 @@ export function createSpaceWidgetSettings({
 
     body.append(posSec);
 
-    // 3. Typography & Styling section (Font size, Scale, Rotation, Color, Outline, Custom Class)
+    
     const styleSec = document.createElement('div');
     styleSec.className = 'inspector-section';
     styleSec.innerHTML = `
@@ -237,7 +234,7 @@ export function createSpaceWidgetSettings({
 
     body.append(styleSec);
 
-    // Delete Confirmation Card
+    
     function showDeleteConfirm() {
       let confirmCard = container.querySelector('.delete-confirm-card');
       if (confirmCard) return;

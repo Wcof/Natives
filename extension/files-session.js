@@ -9,7 +9,7 @@ export function createFilesSession() {
     pageOffset: 0,
     pageHasMore: false,
 
-    // View preferences (persisted by files.js; owned here so no consumer drifts).
+    
     viewMode: 'list',
     gridSize: 'medium',
     sortBy: 'name',
@@ -21,7 +21,7 @@ export function createFilesSession() {
     previewWidth: 360,
     previewHeight: 320,
     previewBottom: false,
-    // Preview lifecycle state (request ids, generation token, object URL).
+    
     activePreviewId: undefined,
     previewGeneration: 0,
     previewObjectUrl: undefined,

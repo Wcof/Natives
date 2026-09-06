@@ -1,7 +1,4 @@
-/**
- * Widget Catalog Controller (<220 lines).
- * Displays all 29 TablissNG widgets organized into collapsible categories with search filter.
- */
+
 
 import { WIDGET_KEYS, pluginName, widgetPlugins } from './space-plugins.js';
 
@@ -78,7 +75,7 @@ export function createSpaceCatalog({
   function render(container, snapshot, workspaceId) {
     container.replaceChildren();
 
-    // Catalog Header
+    
     const header = document.createElement('div');
     header.className = 'inspector-heading';
     header.innerHTML = `
@@ -89,7 +86,7 @@ export function createSpaceCatalog({
     `;
     header.querySelector('.inspector-back').onclick = () => onBackToOverview();
 
-    // Search input (Aligned with Left Sidebar & Global Search)
+    
     const searchWrap = document.createElement('div');
     searchWrap.className = 'catalog-search-wrap';
     searchWrap.innerHTML = `
@@ -98,17 +95,17 @@ export function createSpaceCatalog({
     `;
     const searchInput = searchWrap.querySelector('input');
 
-    // Widget list container
+    
     const listContainer = document.createElement('div');
     listContainer.className = 'catalog-list';
 
-    // Compute widget instance counts
+    
     const countMap = {};
     for (const w of snapshot?.widgets || []) {
       countMap[w.key] = (countMap[w.key] || 0) + 1;
     }
 
-    // Build catalog items metadata map
+    
     const itemsByKey = {};
     for (const key of WIDGET_KEYS) {
       const plugin = widgetPlugins[key] || {};

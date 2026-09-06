@@ -1,4 +1,4 @@
-/** Quote widget using the Tabliss QuoteContent structure. */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

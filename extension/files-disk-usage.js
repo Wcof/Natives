@@ -1,7 +1,4 @@
-/**
- * Disk usage dialog (占用透视): bounded per-directory usage scan with
- * drill-down rows. Page dependencies are injected via createDiskUsage().
- */
+
 export function createDiskUsage({ $, call, t, entryIcon, formatSize, parentAndName, currentPath }) {
   let diskUsagePath;
 

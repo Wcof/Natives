@@ -1,7 +1,4 @@
-/**
- * Claude role mapping editor (claude-code / claude-desktop) and Pi provider
- * section for the agent clients page.
- */
+
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[match]);

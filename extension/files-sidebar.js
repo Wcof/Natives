@@ -1,11 +1,7 @@
 import { createSidebarController } from './sidebar-controller.js';
 import { createSettingsMenu } from './settings-menu.js';
 
-/**
- * FilesSidebar Component
- * Manages the left product navigation sidebar: branding, search trigger,
- * extensible directory menu sections/roots, preferences, and responsive resize/collapse.
- */
+
 export class FilesSidebar {
   constructor({
     container,

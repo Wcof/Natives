@@ -1,7 +1,4 @@
-/**
- * Space Workspace Name Modal controller (<50 lines).
- * Handles workspace create and rename dialog interactions.
- */
+
 
 export function createSpaceNameModal({ $, t, onSaveWorkspaceName }) {
   function open(workspace = null) {

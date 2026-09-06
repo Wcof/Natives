@@ -1,4 +1,4 @@
-/** Workspace reset template picker. */
+
 
 export function createSpaceResetModal({ $, onResetWorkspace }) {
   let selectedTemplate = 'classic';

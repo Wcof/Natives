@@ -1,6 +1,4 @@
-/**
- * Online Image URL Background.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

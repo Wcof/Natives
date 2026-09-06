@@ -1,6 +1,4 @@
-/**
- * Message Widget.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

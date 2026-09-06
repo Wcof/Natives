@@ -1,4 +1,4 @@
-/** Shared product-sidebar resize/collapse behavior for every extension surface. */
+
 export function createSidebarController({
   resizer,
   toggleButton,

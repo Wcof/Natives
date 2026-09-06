@@ -54,7 +54,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     checkKernelUpdate: () => client.call('model_kernel_check_update'),
     updateKernel: () => client.call('model_kernel_update'),
 
-    // Usage & Analytics
+    
     getUsageStatus: () => client.call('model_usage_status'),
     getUsageOverview: (params) => client.call('model_usage_overview', params),
     getUsageAnalysis: (params) => client.call('model_usage_analysis', params),
@@ -69,7 +69,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     commitUsageImport: (params) => client.call('model_usage_import_commit', params),
     cancelUsageImport: (params) => client.call('model_usage_import_cancel', params),
 
-    // Auth Files & Quota
+    
     listAuthFiles: () => client.call('model_auth_files_list'),
     importAuthFile: (params) => client.call('model_auth_files_import', params),
     updateAuthFile: (params) => client.call('model_auth_files_update', params),
@@ -79,7 +79,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     getAccountModels: (params) => client.call('model_account_models', params),
     updateAccountModels: (params) => client.call('model_account_models_update', params),
 
-    // Agent clients (智能体配置)
+    
     listAgentClients: () => client.call('model_agent_clients_list'),
     getAgentClientModels: (params) => client.call('model_agent_client_models', params),
     applyAgentClientConfig: (params) => client.call('model_agent_client_apply', params),

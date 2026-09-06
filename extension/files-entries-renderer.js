@@ -1,6 +1,4 @@
-/**
- * Files list and grid renderer.
- */
+
 
 export function createFilesEntriesRenderer({
   $,

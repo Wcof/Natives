@@ -1,7 +1,4 @@
-/**
- * Space Background Settings Controller (<240 lines).
- * Handles background type selector, plugin custom settings, and backdrop display controls.
- */
+
 
 import { BACKGROUND_KEYS, backgroundPlugins, pluginName } from './space-plugins.js';
 
@@ -19,7 +16,7 @@ export function createSpaceBackgroundSettings({
 
     container.replaceChildren();
 
-    // Header
+    
     const header = document.createElement('div');
     header.className = 'inspector-heading';
     header.innerHTML = `
@@ -30,11 +27,11 @@ export function createSpaceBackgroundSettings({
     `;
     header.querySelector('.inspector-back').onclick = () => onBackToOverview();
 
-    // Body
+    
     const body = document.createElement('div');
     body.className = 'inspector-body';
 
-    // 1. Background Type Selection
+    
     const typeSec = document.createElement('div');
     typeSec.className = 'inspector-section';
     typeSec.innerHTML = `
@@ -64,7 +61,7 @@ export function createSpaceBackgroundSettings({
     };
     body.append(typeSec);
 
-    // 2. Plugin Specific Settings
+    
     if (currentPlugin?.renderSettings) {
       const pluginSec = document.createElement('div');
       pluginSec.className = 'inspector-section';
@@ -80,7 +77,7 @@ export function createSpaceBackgroundSettings({
       body.append(pluginSec);
     }
 
-    // 3. Backdrop Display Filters (Blur, Brightness, Night Mode)
+    
     if (currentKey !== 'background/colour') {
       const filterSec = document.createElement('div');
       filterSec.className = 'inspector-section';

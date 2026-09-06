@@ -1,7 +1,4 @@
-/**
- * Global File Search Modal controller (<160 lines).
- * Handles standalone Everything-style local file search in personal space without page navigation.
- */
+
 
 export function createGlobalSearchModal({
   $,

@@ -1,7 +1,4 @@
-/**
- * Dashboard Toolbar & Empty State Controller (<120 lines).
- * Handles floating settings/widget/fullscreen controls and empty state CTA.
- */
+
 
 export function createSpaceToolbar({
   $,
@@ -51,7 +48,7 @@ export function createSpaceToolbar({
     onToggleWidgets?.(widgetsHidden);
   }
 
-  // Setup buttons
+  
   if (settingsBtn) {
     settingsBtn.onclick = () => onToggleSettings();
   }
@@ -87,7 +84,7 @@ export function createSpaceToolbar({
     emptyAddBtn.onclick = () => onOpenCatalog();
   }
 
-  // Global Keyboard Shortcuts: S (settings), W (toggle widgets), F (fullscreen)
+  
   function handleKeyDown(event) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (isEditableFocused()) return;

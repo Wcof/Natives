@@ -1,7 +1,4 @@
-/**
- * IP Info Widget.
- * Fetches and displays public IP with explicit error feedback.
- */
+
 
 import { fetchDedup } from '../plugins-cache.js';
 

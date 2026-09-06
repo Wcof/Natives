@@ -1,6 +1,4 @@
-/**
- * Registry aggregator for all 9 TablissNG backgrounds.
- */
+
 
 import { apodBackground } from './apod.js';
 import { bingBackground } from './bing.js';

@@ -1,7 +1,4 @@
-/**
- * Shared App Settings Menu (Language & Theme preferences) (<160 lines).
- * Reused by both files.html and space.html.
- */
+
 
 export function createSettingsMenu({
   anchorButton,

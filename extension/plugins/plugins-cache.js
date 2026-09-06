@@ -1,20 +1,17 @@
-/**
- * Bounded in-memory and persistent LRU image cache with deduplication (R-P9).
- * Supports 4K background offline resilience with automatic byte-size eviction.
- */
+
 
 const DEFAULT_CAPACITY = 50;
 let maxCapacity = DEFAULT_CAPACITY;
 const memCache = new Map();
 const inFlightPromises = new Map();
 
-// 50MB budget for 4K background images (holds ~20-25 high-resolution wallpapers)
+
 export const DEFAULT_MAX_BG_CACHE_BYTES = 50 * 1024 * 1024;
 let maxBgCacheBytes = DEFAULT_MAX_BG_CACHE_BYTES;
 const CACHE_NAME = 'natives-background-cache-v1';
 const META_STORAGE_KEY = 'natives_bg_cache_meta';
 
-// In-memory fallback if CacheStorage is unavailable
+
 const mockBlobCache = new Map();
 
 export function setMaxCapacity(capacity) {
@@ -100,9 +97,7 @@ export function getMemCacheSize() {
   return memCache.size;
 }
 
-/**
- * Metadata store for background image sizes and usage timestamps
- */
+
 let inMemoryMeta = [];
 
 function getBgMeta() {
@@ -124,16 +119,14 @@ function saveBgMeta(list) {
   } catch {}
 }
 
-/**
- * Evict oldest cached background images if total byte size exceeds quota
- */
+
 async function enforceBgCacheQuota(cache) {
   let meta = getBgMeta();
   let totalBytes = meta.reduce((sum, item) => sum + (Number(item.byteSize) || 0), 0);
 
   if (totalBytes <= maxBgCacheBytes) return;
 
-  // Sort by lastUsed ascending (oldest first)
+  
   meta.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
 
   while (totalBytes > maxBgCacheBytes * 0.8 && meta.length > 0) {
@@ -152,9 +145,7 @@ async function enforceBgCacheQuota(cache) {
   saveBgMeta(meta);
 }
 
-/**
- * Fetch and persistently cache 4K background image with offline fallback & LRU quota
- */
+
 export async function loadCachedBackground(url, { category = 'default', signal = null } = {}) {
   if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
     return url;
@@ -168,12 +159,12 @@ export async function loadCachedBackground(url, { category = 'default', signal =
     } catch {}
   }
 
-  // 1. Try Cache Match
+  
   if (cache) {
     try {
       const matched = await cache.match(url);
       if (matched) {
-        // Touch lastUsed
+        
         const meta = getBgMeta();
         const item = meta.find((m) => m.url === url);
         if (item) {
@@ -190,7 +181,7 @@ export async function loadCachedBackground(url, { category = 'default', signal =
     return url;
   }
 
-  // 2. Fetch Network
+  
   try {
     const response = await fetch(url, { signal, mode: 'cors' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -198,7 +189,7 @@ export async function loadCachedBackground(url, { category = 'default', signal =
     const blob = await response.blob();
     const byteSize = blob.size || 0;
 
-    // Save to CacheStorage
+    
     if (cache) {
       try {
         const responseToCache = new Response(blob, {
@@ -210,18 +201,18 @@ export async function loadCachedBackground(url, { category = 'default', signal =
       mockBlobCache.set(url, { url, byteSize, lastUsed: Date.now(), category });
     }
 
-    // Update Meta
+    
     let meta = getBgMeta();
     meta = meta.filter((m) => m.url !== url);
     meta.push({ url, byteSize, lastUsed: Date.now(), category });
     saveBgMeta(meta);
 
-    // Enforce quota
+    
     await enforceBgCacheQuota(cache);
 
     return URL.createObjectURL(blob);
   } catch (err) {
-    // 3. Low-network / Offline Fallback: find most recent cached wallpaper in same category
+    
     const meta = getBgMeta();
     const fallbackList = meta
       .filter((m) => m.category === category || category === 'default')
@@ -239,14 +230,12 @@ export async function loadCachedBackground(url, { category = 'default', signal =
       }
     }
 
-    // Return original url if all fallbacks fail
+    
     return url;
   }
 }
 
-/**
- * Get Background Cache statistics (bytes used, image count)
- */
+
 export function getBackgroundCacheStats() {
   const meta = getBgMeta();
   const totalBytes = meta.reduce((sum, item) => sum + (Number(item.byteSize) || 0), 0);
@@ -258,9 +247,7 @@ export function getBackgroundCacheStats() {
   };
 }
 
-/**
- * Clear all background image cache
- */
+
 export async function clearBackgroundCache() {
   if (typeof caches !== 'undefined' && typeof caches.delete === 'function') {
     try {

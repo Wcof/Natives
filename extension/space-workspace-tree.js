@@ -1,4 +1,4 @@
-/** Workspace list and its native context menu. */
+
 export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorkspace, deleteWorkspace }) {
   const menu = $('workspace-menu');
   let menuWorkspace = null;

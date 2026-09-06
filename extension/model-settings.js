@@ -24,7 +24,7 @@ class ModelSettings {
     this.pendingOAuth = null;
     this.oauthResults = {};
 
-    // Agent clients (智能体配置) state
+    
     this.agentStatuses = null;
     this.agentSelectedId = '';
     this.agentModels = null;
@@ -44,7 +44,7 @@ class ModelSettings {
     this.pricingData = null;
     this.importerWizard = null;
 
-    // OAuth Sub-views state
+    
     this.authFiles = [];
     this.quotaMap = {};
     this.authFileFilter = { query: '', provider: 'all', status: 'all' };
@@ -284,7 +284,7 @@ class ModelSettings {
     if (action === 'cancel-model-edit') return this.resetModelForm();
     if (action === 'delete-model') return this.mutate(() => this.api.deleteModel({ providerId: this.selectedID, modelId: target.dataset.modelId, expectedRevision: revision }));
 
-    // OAuth Sub-tabs & Actions
+    
     if (action === 'select-oauth-tab') {
       this.view.setOAuthTab(target.dataset.tab);
       if (target.dataset.tab === 'authFiles' || target.dataset.tab === 'quota') {

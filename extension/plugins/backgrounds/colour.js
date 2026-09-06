@@ -1,6 +1,4 @@
-/**
- * Solid Colour Background.
- */
+
 
 export const colourBackground = {
   key: 'background/colour',

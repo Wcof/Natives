@@ -1,6 +1,4 @@
-/**
- * Wikimedia Picture of the Day Background.
- */
+
 
 import { fetchDedup } from '../plugins-cache.js';
 

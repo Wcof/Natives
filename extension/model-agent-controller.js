@@ -1,8 +1,4 @@
-/**
- * Agent clients controller (智能体配置) actions for ModelSettings.
- * State lives on the controller: statuses, model catalog, per-client selection,
- * mappings, codex sessions, pi status.
- */
+
 
 export async function loadAgentClients(controller, { force = false } = {}) {
   if (controller.agentStatuses && !force) return;

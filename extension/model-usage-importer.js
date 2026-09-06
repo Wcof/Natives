@@ -13,14 +13,14 @@ export class UsageImporterWizard {
   async processFile(file, onProgress) {
     this.file = file;
     try {
-      // 1. Begin Session
+      
       const beginRes = await this.api.beginUsageImport({
         fileName: file.name,
         fileSize: file.size,
       });
       this.sessionId = beginRes.sessionId;
 
-      // 2. Read and Chunk Upload
+      
       const totalBytes = file.size;
       const totalChunks = Math.ceil(totalBytes / CHUNK_SIZE);
 
@@ -46,7 +46,7 @@ export class UsageImporterWizard {
         }
       }
 
-      // 3. Preview
+      
       const preview = await this.api.previewUsageImport({
         sessionId: this.sessionId,
       });

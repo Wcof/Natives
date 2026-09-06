@@ -1,7 +1,4 @@
-/**
- * Model Quota View (<260 lines)
- * Grouped quota inquiry cards with double-cycle progress tracks matching EasyCLIProxyAPI design.
- */
+
 
 function escapeHtml(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({

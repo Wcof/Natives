@@ -1,6 +1,4 @@
-/**
- * NASA Astronomy Picture of the Day Background.
- */
+
 
 import { fetchDedup } from '../plugins-cache.js';
 import { escapeHtml } from '../sanitizer.js';

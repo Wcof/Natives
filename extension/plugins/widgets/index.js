@@ -1,6 +1,4 @@
-/**
- * Registry aggregator for 24 TablissNG Chromium widgets.
- */
+
 
 import { binaryTimeWidget } from './binary-time.js';
 import { bookmarksWidget } from './bookmarks.js';

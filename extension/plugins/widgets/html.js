@@ -1,6 +1,4 @@
-/**
- * Custom HTML Widget.
- */
+
 
 import { escapeHtml, sanitizeHtml } from '../sanitizer.js';
 

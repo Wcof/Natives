@@ -1,7 +1,4 @@
-/**
- * Top Sites Widget.
- * Browser top visited sites grid with favicons matching TablissNG TopSites.sass.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

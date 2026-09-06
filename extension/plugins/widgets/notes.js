@@ -1,7 +1,4 @@
-/**
- * Notes Widget.
- * Clean direct Markdown/plain text preview with click-to-edit mode matching TablissNG Notes.sass.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 
@@ -24,7 +21,7 @@ export const notesWidget = {
     statsEl.className = 'note-stats-bar';
     statsEl.textContent = computeNoteStats(content);
 
-    // View element (Rendered view)
+    
     const viewEl = document.createElement('div');
     viewEl.className = 'notes-view';
     if (content) {
@@ -33,7 +30,7 @@ export const notesWidget = {
       viewEl.innerHTML = `<span class="placeholder"><svg class="icon" aria-hidden="true" style="width:13px;height:13px;display:inline-block;vertical-align:-2px;"><use href="#i-pen" /></svg> <span>${escapeHtml(t('clickToWriteNote', '点击此处记录便签...'))}</span></span>`;
     }
 
-    // Edit textarea (hidden by default)
+    
     const editArea = document.createElement('textarea');
     editArea.className = 'notes-textarea';
     editArea.placeholder = t('clickToWriteNote', '点击此处记录便签...');

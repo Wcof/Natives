@@ -1,6 +1,4 @@
-/**
- * Sanitizer and common types for Space plugins (ADR-0024 §3).
- */
+
 
 export const WIDGET_KEYS = [
   'widget/binaryTime', 'widget/bookmarks', 'widget/countdown',

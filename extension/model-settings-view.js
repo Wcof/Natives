@@ -153,7 +153,7 @@ export function createModelSettingsView({ t, onAction }) {
       for (const panel of dialog.querySelectorAll('[data-oauth-panel]')) {
         panel.hidden = panel.dataset.oauthPanel !== activeOAuthTab;
       }
-      // Update section tag & heading
+      
       if (roles.oauthSectionTag) {
         roles.oauthSectionTag.textContent = activeOAuthTab === 'login' ? 'OAUTH' : activeOAuthTab === 'authFiles' ? 'AUTH FILES' : 'QUOTA';
       }
@@ -207,7 +207,7 @@ export function createModelSettingsView({ t, onAction }) {
       if (selectedCustom) renderCustomDetail(roles.detail, selectedCustom, snapshot, t);
       else roles.detail.append(emptyState(t('modelNoCustomProviders', '尚未添加自定义供应商'), t('modelNoModelsHint', '添加供应商后即可配置和调用模型。')));
 
-      // Render 3 OAuth Sub-views
+      
       renderOAuthLoginView(roles.oauthLoginContainer, { snapshot, pendingOAuth, results: oauthContext.results, t });
       renderAuthFilesView(roles.authFilesContainer, {
         files: oauthContext.authFiles || [],
@@ -225,7 +225,7 @@ export function createModelSettingsView({ t, onAction }) {
 
       this.setOAuthTab(activeOAuthTab);
 
-      // Render Usage & Agent & Advanced
+      
       renderUsageView(roles.usageContainer, {
         activeSubTab: activeUsageTab,
         overviewData: usageContext.overviewData,

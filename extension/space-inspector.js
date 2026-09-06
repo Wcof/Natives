@@ -1,7 +1,4 @@
-/**
- * Space Inspector State Machine & Shell Controller (<290 lines).
- * States: closed | overview | catalog | widget(id) | background | importPreview.
- */
+
 
 import { widgetPlugins, backgroundPlugins, pluginName } from './space-plugins.js';
 import { createSpaceCatalog } from './space-catalog.js';
@@ -163,7 +160,7 @@ export function createSpaceInspector({
     const body = document.createElement('div');
     body.className = 'inspector-body';
 
-    // Background Card
+    
     const bgKey = currentSnapshot?.backgroundJson?.key || 'background/colour';
     const bgName = pluginName(bgKey, language, backgroundPlugins[bgKey]?.name || bgKey);
     const bgSec = document.createElement('div');
@@ -177,7 +174,7 @@ export function createSpaceInspector({
     bgSec.querySelector('#bg-overview-card').onclick = () => routeTo('background');
     body.append(bgSec);
 
-    // Widgets List
+    
     const widgetSec = document.createElement('div');
     widgetSec.className = 'inspector-section';
     widgetSec.innerHTML = `
@@ -224,7 +221,7 @@ export function createSpaceInspector({
     }
     body.append(widgetSec);
 
-    // Management
+    
     const manageSec = document.createElement('div');
     manageSec.className = 'inspector-section';
     manageSec.innerHTML = `

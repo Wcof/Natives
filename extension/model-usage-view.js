@@ -13,7 +13,7 @@ export function renderUsageView(container, {
 }) {
   container.replaceChildren();
 
-  // Subnav header
+  
   const subnav = document.createElement('div');
   subnav.className = 'model-subnav-bar';
   subnav.innerHTML = `
@@ -85,7 +85,7 @@ function renderOverviewTab(container, data, filter, t) {
   const metrics = data.metrics || {};
   const tokens = data.tokens || {};
 
-  // 6 Metric Cards
+  
   const cardsGrid = document.createElement('div');
   cardsGrid.className = 'model-metric-grid';
   cardsGrid.innerHTML = `
@@ -116,7 +116,7 @@ function renderOverviewTab(container, data, filter, t) {
   `;
   container.append(cardsGrid);
 
-  // Token Composition
+  
   const tokenSection = document.createElement('div');
   tokenSection.className = 'model-usage-section';
   tokenSection.innerHTML = `
@@ -146,7 +146,7 @@ function renderOverviewTab(container, data, filter, t) {
   `;
   container.append(tokenSection);
 
-  // Trend summary
+  
   if (data.trend && data.trend.length > 0) {
     const trendSection = document.createElement('div');
     trendSection.className = 'model-usage-section';
@@ -279,7 +279,7 @@ function renderEventsTab(container, data, filter, t) {
   `;
   container.append(tableWrapper);
 
-  // Pagination bar
+  
   const pageBar = document.createElement('div');
   pageBar.className = 'model-pagination-bar';
   pageBar.innerHTML = `

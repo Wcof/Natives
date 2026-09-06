@@ -1,6 +1,4 @@
-/**
- * Giphy Background.
- */
+
 
 import { fetchDedup } from '../plugins-cache.js';
 import { escapeHtml } from '../sanitizer.js';

@@ -1,6 +1,4 @@
-/**
- * Files context menu and modal controller.
- */
+
 
 export function createFilesContextMenu({
   $,

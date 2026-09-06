@@ -1,7 +1,4 @@
-/**
- * Files keyboard shortcuts and focus controller.
- * Centralizes all keydown handlers for navigation, clipboard, deletion, and search triggers.
- */
+
 
 export function bindFilesShortcuts({
   $,

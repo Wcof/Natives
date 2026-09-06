@@ -1,7 +1,4 @@
-/**
- * Model OAuth Login View (<180 lines)
- * Renders OAuth login provider cards and browser selection bar matching EasyCLIProxyAPI design.
- */
+
 
 const OAUTH_CARD_PROVIDERS = [
   {
@@ -44,7 +41,7 @@ const OAUTH_CARD_PROVIDERS = [
 export function renderOAuthLoginView(container, { snapshot, pendingOAuth, results = {}, t }) {
   container.replaceChildren();
 
-  // 1. Top Bar: Browser choice
+  
   const topBar = document.createElement('div');
   topBar.className = 'model-oauth-browser-bar';
   topBar.innerHTML = `
@@ -62,7 +59,7 @@ export function renderOAuthLoginView(container, { snapshot, pendingOAuth, result
   `;
   container.append(topBar);
 
-  // 2. Card Grid
+  
   const grid = document.createElement('div');
   grid.className = 'model-oauth-grid';
 

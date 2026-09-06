@@ -1,8 +1,4 @@
-/**
- * Space page composition root (<300 lines).
- * Connects Native Client, Workspace Tree, Shadow DOM Dashboard,
- * Floating Toolbar, Inspector router, Modals, and App Settings Menu.
- */
+
 
 import { createNativeClient } from './native-client.js';
 import { widgetPlugins, backgroundPlugins } from './space-plugins.js';
@@ -29,8 +25,7 @@ let inspectorWidth = 360;
 const $ = (id) => document.getElementById(id);
 const t = (key, fallback) => localeMessages[key]?.message || fallback || key;
 
-// Per-tab session state: survives reload and same-tab navigation, cleared when
-// the tab closes — so a fresh new tab always starts from the initial layout.
+
 const SPACE_UI_KEY = 'natives-space-ui';
 function readSpaceUi() {
   try { return JSON.parse(sessionStorage.getItem(SPACE_UI_KEY) || 'null') || {}; } catch { return {}; }

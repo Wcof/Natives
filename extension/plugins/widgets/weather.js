@@ -1,4 +1,4 @@
-/** Weather widget using the same summary/details/forecast structure as TablissNG. */
+
 
 import { fetchDedup } from '../plugins-cache.js';
 import { escapeHtml } from '../sanitizer.js';
@@ -33,7 +33,7 @@ export const weatherWidget = {
     const root = document.createElement('div');
     root.className = 'weather-content';
 
-    // 1. 卡片天气摘要与温度
+    
     const currentCard = document.createElement('div');
     currentCard.className = 'summary';
     currentCard.innerHTML = `
@@ -44,7 +44,7 @@ export const weatherWidget = {
     `;
     root.append(currentCard);
 
-    // 2. 卡片体感与湿度
+    
     const detailsRow = document.createElement('div');
     detailsRow.className = 'details';
     detailsRow.innerHTML = `
@@ -53,7 +53,7 @@ export const weatherWidget = {
     `;
     root.append(detailsRow);
 
-    // 3. 未来预报
+    
     const forecastRow = document.createElement('div');
     forecastRow.className = 'forecast';
     if (currentData.showForecast !== false) {
@@ -123,7 +123,7 @@ export const weatherWidget = {
         });
     }
 
-    // 初始加载天气
+    
     fetchAndRenderWeather(lat, lon);
 
     return () => {

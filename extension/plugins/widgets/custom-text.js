@@ -1,6 +1,4 @@
-/**
- * Custom Text Widget.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

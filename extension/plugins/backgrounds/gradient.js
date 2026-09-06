@@ -1,6 +1,4 @@
-/**
- * Gradient Background.
- */
+
 
 export const gradientBackground = {
   key: 'background/gradient',

@@ -1,7 +1,4 @@
-/**
- * Space Workspace Delete Modal controller (<40 lines).
- * Handles workspace deletion confirmation dialog.
- */
+
 
 export function createSpaceDeleteModal({ $, t, onDeleteWorkspaceConfirmed }) {
   function open(workspace) {

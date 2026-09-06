@@ -1,10 +1,4 @@
-/**
- * Preview atomic capability (预览): owns the right-pane preview renderers and
- * the in-place text editor (state, autosave, conflict handling, image editor).
- * All page dependencies are injected once via createPreviewControllers(); the
- * `link` object is wired by the composition root after both capability modules
- * exist, breaking the preview ↔ operations dependency cycle lazily.
- */
+
 export function createPreviewControllers({ $, call, t, session, setStatus, toast, formatSize, parentAndName, pathParts, entryIcon, iconElement, iconAction, isTextItem, TEXT_KINDS, isHostConnected, selectedItems, renderSelection, loadDirectory, remember, revealPath, link }) {
   let editorState;
   const editorViewStates = new Map();

@@ -1,6 +1,4 @@
-/**
- * Unsplash Background with Slideshow & Carousel Support.
- */
+
 
 import { fetchDedup, loadCachedBackground } from '../plugins-cache.js';
 import { escapeHtml } from '../sanitizer.js';

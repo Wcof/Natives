@@ -1,8 +1,4 @@
-/**
- * Model Agent Clients View.
- * 智能体配置: client list + detail with 核心配置 / 会话管理 (codex) tabs,
- * searchable model picker, Claude role mappings, Pi plugin section, launch bar.
- */
+
 
 import { createAgentModelPicker } from './agent-model-picker.js';
 import { renderClaudeMappings, renderPiSection } from './model-agent-sections.js';

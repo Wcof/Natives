@@ -1,6 +1,6 @@
 const FILES_URL = chrome.runtime.getURL('files.html');
 
-// The service worker is intentionally stateless: file pages own Native Messaging.
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Natives] Service Worker initialized successfully.');
 });

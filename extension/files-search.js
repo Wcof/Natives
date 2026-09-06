@@ -1,7 +1,4 @@
-/**
- * Files search controller.
- * Manages directory search, global multi-root search, quick filtering and debounced cancellation.
- */
+
 
 export function createFilesSearch({
   $,

@@ -1,7 +1,4 @@
-/**
- * FilesHomeView Component
- * Renders the default empty home workspace when no directory is currently selected.
- */
+
 export class FilesHomeView {
   constructor({ container, onNavigate, onSearch, t = (k, f) => f || k }) {
     this.container = typeof container === 'string' ? document.querySelector(container) : container;

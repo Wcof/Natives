@@ -1,7 +1,4 @@
-/**
- * GitHub Activity Calendar Heatmap Widget.
- * Renders full contribution heatmap and user statistics.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 import { renderActivityCalendar, activityCalendarStyles } from './activity-calendar.js';
@@ -58,7 +55,7 @@ export const githubWidget = {
         });
       } catch (err) {
         if (cancelled) return;
-        // Deterministic fallback sample
+        
         renderActivityCalendar({
           container: cardContainer,
           data: [],

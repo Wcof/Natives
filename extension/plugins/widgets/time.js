@@ -1,7 +1,4 @@
-/**
- * Time Widget.
- * Supports digital time and analogue SVG clock (Tabliss Time.sass / Analogue.sass).
- */
+
 
 export const timeWidget = {
   key: 'widget/time',

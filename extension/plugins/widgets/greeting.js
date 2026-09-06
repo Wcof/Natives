@@ -1,7 +1,4 @@
-/**
- * Greeting Widget.
- * Formats time-of-day greetings with user name (Tabliss Greeting).
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

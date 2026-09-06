@@ -1,7 +1,4 @@
-/**
- * Colour Palette Widget.
- * Calibrated TablissNG Palette.sass with 500x200 canvas, color strip expansion, rotated hex labels, and shimmer.
- */
+
 
 const SAMPLE_PALETTES = [
   ['#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51'],

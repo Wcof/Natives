@@ -1,6 +1,4 @@
-/**
- * Media Background (supports local images & video with memory safety).
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

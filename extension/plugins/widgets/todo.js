@@ -1,7 +1,4 @@
-/**
- * To Do List Widget.
- * Clean TablissNG TodoList.sass and TodoItem.sass implementation.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 
@@ -24,7 +21,7 @@ export const todoWidget = {
     let timerRemaining = (data.focusDuration || 25) * 60;
     let timerRunning = false;
 
-    // Optional Pomodoro Focus bar
+    
     if (data.showPomodoro) {
       const pomodoroBar = document.createElement('div');
       pomodoroBar.className = 'todo-pomodoro-bar';

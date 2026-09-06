@@ -1,9 +1,4 @@
-/**
- * Geographic database for weather widget city selection.
- * Covers all 31 provincial-level administrative divisions of Chinese Mainland (provinces, municipalities, autonomous regions)
- * with their major cities and core districts, plus major international destinations across continents.
- * Coordinates are pre-indexed to ensure zero-latency selection and offline reliability.
- */
+
 
 export const CHINA_REGIONS = {
   '北京市': {

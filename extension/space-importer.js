@@ -1,6 +1,4 @@
-/**
- * Tabliss Importer, Exporter, and Workspace Reset Controller (<180 lines).
- */
+
 
 export function createSpaceImporter({
   t,
@@ -74,7 +72,7 @@ export function createSpaceImporter({
         const preview = await nativeCall('workspace_tabliss_preview', { tabliss: tablissJson });
         renderImportPreview(container, preview, tablissJson, activeWorkspaceId, currentSnapshot);
       } catch (err) {
-        // Handled via nativeCall toast
+        
       }
     };
     input.click();

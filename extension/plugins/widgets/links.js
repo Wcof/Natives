@@ -1,7 +1,4 @@
-/**
- * Quick Links Widget.
- * Clean multi-column links layout matching TablissNG Links.sass.
- */
+
 
 import { escapeHtml } from '../sanitizer.js';
 

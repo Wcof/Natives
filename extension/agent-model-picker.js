@@ -1,8 +1,4 @@
-/**
- * Agent model picker (可搜索模型下拉) for the agent clients page.
- * Mirrors the reference GUI: search input, filtered list, keyboard nav,
- * refresh button, footer model count.
- */
+
 
 export function createAgentModelPicker({ value, models, t, onChange, onRefresh }) {
   const root = document.createElement('div');

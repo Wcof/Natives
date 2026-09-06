@@ -1,8 +1,4 @@
-/**
- * File-type metadata and the rich vector icon system.
- * Owns the extension→glyph tables and SVG construction so the page controller
- * stays focused on data flow. Theme-aware via setIconTheme().
- */
+
 
 export const TEXT_KINDS = new Set(['text']);
 export const TEXT_EXTENSIONS = /\.(txt|md|mdx|markdown|json|jsonc|yaml|yml|toml|xml|csv|log|ini|cfg|conf|env|gitignore|dockerignore|editorconfig|graphql|gql|sql|vue|svelte|astro|ts|tsx|js|jsx|mjs|cjs|py|pyw|rb|rs|go|java|c|cpp|h|hpp|cs|swift|kt|kts|sh|bash|zsh|fish|ps1|bat|cmd|php|scala|html|htm|css|scss|sass|less)$/i;
