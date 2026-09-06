@@ -74,6 +74,18 @@ fn create_app_tables(conn: &Connection) -> Result<(), AppError> {
             error_code TEXT,
             error_message TEXT
         );
+        -- Per-package staging state (ADR-0025 D11): the app-level chain
+        -- lives on the transaction row; download/verify/stage progress is
+        -- tracked per package so a retry resumes at the right step.
+        CREATE TABLE IF NOT EXISTS app_package_stages (
+            install_id TEXT NOT NULL,
+            package_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            staged_path TEXT NOT NULL DEFAULT '',
+            payload_size INTEGER NOT NULL DEFAULT 0,
+            payload_sha256 TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (install_id, package_id)
+        );
         -- Monotonic global revision for the navigation projection
         -- (ADR-0025 D35/D37): per-row apps.revision decreases when the last
         -- app uninstalls, so the projection counter lives in its own row.

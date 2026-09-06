@@ -227,6 +227,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             &["appId", "enabled", "show", "order"]
         }
         "apps:install_begin" => &["request"],
+        "apps:install_package" => &["installId", "packageId", "data"],
         "apps:install_commit" => &["installId"],
         "apps:install_abort" => &["installId", "errorCode", "errorMessage"],
         _ => &[],

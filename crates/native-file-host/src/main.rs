@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 mod app_dispatch;
+mod app_install;
 mod app_store;
 mod batch;
 mod dispatch;

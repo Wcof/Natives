@@ -59,6 +59,21 @@ pub(crate) fn app_dispatch(store: &AppStore, request: &Request) -> Result<Value,
                     .map_err(|error| format!("invalid install request: {error}"))?;
             handle_result!(store.install_begin(&install_request))
         }
+        "apps:install_package" => {
+            let install_id = params
+                .get("installId")
+                .and_then(Value::as_str)
+                .ok_or("installId is required")?;
+            let package_id = params
+                .get("packageId")
+                .and_then(Value::as_str)
+                .ok_or("packageId is required")?;
+            let data = params
+                .get("data")
+                .and_then(Value::as_str)
+                .ok_or("data (base64 payload) is required")?;
+            handle_result!(store.install_package(install_id, package_id, data))
+        }
         "apps:install_commit" => {
             let install_id = params
                 .get("installId")

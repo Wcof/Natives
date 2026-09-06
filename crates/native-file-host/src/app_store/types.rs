@@ -13,6 +13,30 @@ pub const KIND_EXTENSION_APP: &str = "extension_app";
 /// Maximum app_id length (catalog-derived, Core-validated).
 pub const APP_ID_MAX_LEN: usize = 64;
 
+// ── ADR-0025 D7 budget constants (binary units, 1 MiB = 1,048,576 B) ──
+
+/// Single package wire (download) hard limit: 5 MiB.
+pub const PACKAGE_MAX_WIRE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Single package decompressed payload hard limit: 20 MiB (decompression
+/// bomb guard — the browser enforces it while decompressing, the Host
+/// re-checks the staged bytes).
+pub const PACKAGE_MAX_PAYLOAD_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Maximum number of required packages per app: 3 (no infinite
+/// sub-packaging around the 5 MiB gate).
+pub const REQUIRED_MAX_PACKAGES: u64 = 3;
+
+/// Total wire size of the required package set: 15 MiB.
+pub const REQUIRED_MAX_TOTAL_WIRE_BYTES: u64 = 15 * 1024 * 1024;
+
+/// Total package count per app (required + optional): 16.
+pub const MAX_TOTAL_PACKAGES: u64 = 16;
+
+/// Maximum base64 length of one `apps:install_package` payload parameter
+/// (base64 of a ≤20 MiB payload, plus margin): 28 MiB.
+pub const PACKAGE_DATA_MAX_BASE64_BYTES: usize = 28 * 1024 * 1024;
+
 /// Complete App Registry row (`apps` table).
 #[derive(Serialize)]
 pub struct App {
@@ -115,6 +139,33 @@ pub struct InstallRequest {
     pub packages: Vec<PackageMeta>,
     #[serde(default)]
     pub permissions: Vec<String>,
+}
+
+/// Per-package staged state, one row per `app_package_stages` entry
+/// (ADR-0025 D11: download/verify/stage states are tracked per package;
+/// the transaction row tracks the app-level chain).
+#[derive(Serialize)]
+pub struct PackageStage {
+    pub install_id: String,
+    pub package_id: String,
+    pub state: String,
+    pub staged_path: String,
+    pub payload_size: i64,
+    pub payload_sha256: String,
+}
+
+/// Result of `apps:install_package`: the package advanced to
+/// `staged`, or the transaction failed with a code the UI surfaces.
+#[derive(Serialize)]
+pub struct InstallPackageResult {
+    pub install_id: String,
+    pub package_id: String,
+    pub state: String,
+    pub payload_size: u64,
+    pub payload_sha256: String,
+    /// True when the package set is complete and the transaction is
+    /// ready for `apps:install_commit`.
+    pub ready: bool,
 }
 
 /// Catalog-derived app metadata.

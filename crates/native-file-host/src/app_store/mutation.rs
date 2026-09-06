@@ -17,12 +17,18 @@ use serde::Serialize;
 use super::query;
 use super::schema;
 use super::types::{
-    install_state, App, AppError, AppPackage, AppPermission, InstallRequest, InstallTransaction,
+    install_state, App, AppError, AppPackage, AppPermission, InstallPackageResult, InstallRequest,
+    InstallTransaction, PACKAGE_DATA_MAX_BASE64_BYTES, PACKAGE_MAX_PAYLOAD_BYTES,
+    PACKAGE_MAX_WIRE_BYTES, REQUIRED_MAX_PACKAGES,
 };
+use crate::app_install;
 use crate::workspace_store::schema::uuid_v4;
 
 pub struct AppStore {
     conn: Mutex<Connection>,
+    /// Root of the app install directory (`~/.natives/apps`). Injected in
+    /// tests; `default_app_root()` outside.
+    app_root: std::path::PathBuf,
 }
 
 /// `uninstall` receipt. Personal data under
@@ -48,12 +54,24 @@ impl AppStore {
     /// Open the shared authoritative `natives.db` and run the App Store
     /// capability migrations (idempotent, no `user_version` write).
     pub fn open(path: &Path) -> Result<Self, AppError> {
+        Self::open_at(path, app_install::default_app_root())
+    }
+
+    /// Test/override constructor with an explicit install root
+    /// (`~/.natives/apps` by default, ADR-0025 D16).
+    pub fn open_at(path: &Path, app_root: impl Into<std::path::PathBuf>) -> Result<Self, AppError> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         schema::migrate_apps(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            app_root: app_root.into(),
         })
+    }
+
+    /// `~/.natives/apps` — the single install root for every app.
+    fn app_root(&self) -> &std::path::Path {
+        &self.app_root
     }
 
     fn with_conn<F, T>(&self, f: F) -> Result<T, AppError>
@@ -272,10 +290,193 @@ impl AppStore {
         })
     }
 
+    /// Ingest one decompressed package payload (ADR-0025 D8/D10/D11):
+    /// base64-decode, enforce the 20 MiB payload gate, stage under
+    /// `~/.natives/apps/<app_id>/staging/<install_id>/`, verify the
+    /// payload SHA-256 declared in the (signed) catalog, and advance
+    /// the per-package stage to `staging`.
+    ///
+    /// The 5 MiB wire gate and the artifact SHA-256 are enforced by the
+    /// browser (which fetched the bytes); the Host re-checks everything
+    /// it owns — payload size, payload hash, staging path, registry
+    /// state — so a compromised UI cannot smuggle an oversized or
+    /// tampered payload through.
+    pub fn install_package(
+        &self,
+        install_id: &str,
+        package_id: &str,
+        data_base64: &str,
+    ) -> Result<InstallPackageResult, AppError> {
+        // 1) Transaction must exist and not be terminal.
+        let record = self.with_conn(|conn| query::transaction(conn, install_id))?;
+        match record.state.as_str() {
+            install_state::INSTALLED => {
+                return Err(AppError::Conflict(format!(
+                    "install {install_id} already committed"
+                )))
+            }
+            install_state::FAILED | install_state::ROLLING_BACK => {
+                return Err(AppError::InvalidState(format!(
+                    "install {install_id} is {state} — start a new transaction",
+                    state = record.state
+                )))
+            }
+            _ => {}
+        }
+        // 2) Decode the base64 payload (size-checked BEFORE decoding so a
+        //    hostile client cannot allocate gigabytes).
+        if data_base64.len() > PACKAGE_DATA_MAX_BASE64_BYTES {
+            return Err(AppError::InvalidState(format!(
+                "package payload too large: base64 length {} exceeds {} bytes",
+                data_base64.len(),
+                PACKAGE_DATA_MAX_BASE64_BYTES
+            )));
+        }
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|error| {
+                AppError::InvalidState(format!("payload is not valid base64: {error}"))
+            })?;
+        if (data.len() as u64) > PACKAGE_MAX_PAYLOAD_BYTES {
+            return Err(AppError::InvalidState(format!(
+                "payload too large: {} bytes exceeds the {} byte (20 MiB) gate",
+                data.len(),
+                PACKAGE_MAX_PAYLOAD_BYTES
+            )));
+        }
+        // 3) The package must be declared in the signed catalog snapshot
+        //    stored at begin time (request_json is the self-contained
+        //    authority — the catalog entry cannot drift mid-install).
+        let request: InstallRequest = serde_json::from_str(&record.request_json)
+            .map_err(|error| AppError::InvalidState(error.to_string()))?;
+        let declared = request
+            .packages
+            .iter()
+            .find(|package| package.package_id == package_id)
+            .ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "package {package_id} is not in the install transaction"
+                ))
+            })?;
+        if (declared.wire_size as u64) > PACKAGE_MAX_WIRE_BYTES {
+            return Err(AppError::InvalidState(format!(
+                "catalog wire_size {} exceeds the {} byte (5 MiB) gate",
+                declared.wire_size, PACKAGE_MAX_WIRE_BYTES
+            )));
+        }
+        // 4) Stage it (Core-decided path, never catalog-provided).
+        let staging = app_install::staging_dir(self.app_root(), &record.app_id, install_id)?;
+        let staged_path = app_install::staged_payload_path(&staging, package_id)?;
+        let (size, hash) = app_install::write_staged_payload(&staged_path, &data)?;
+        // 5) Verify the payload hash declared by the signed catalog.
+        if !app_install::sha256_matches(&declared.payload_sha256, &hash) {
+            let _ = app_install::remove_staging_dir(&staging);
+            return self.fail_transaction(
+                install_id,
+                "PAYLOAD_HASH_MISMATCH",
+                format!(
+                    "payload sha256 mismatch for package {package_id} (declared {})",
+                    declared.payload_sha256
+                ),
+            );
+        }
+        if (declared.payload_size as u64) != size {
+            let _ = app_install::remove_staging_dir(&staging);
+            return self.fail_transaction(
+                install_id,
+                "PAYLOAD_SIZE_MISMATCH",
+                format!(
+                    "payload size {size} != catalog payload_size {}",
+                    declared.payload_size
+                ),
+            );
+        }
+        // 6) Advance per-package + transaction state.
+        let ready = self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
+                "INSERT INTO app_package_stages (install_id, package_id, state, staged_path, payload_size, payload_sha256)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(install_id, package_id) DO UPDATE SET
+                    state = excluded.state,
+                    staged_path = excluded.staged_path,
+                    payload_size = excluded.payload_size,
+                    payload_sha256 = excluded.payload_sha256",
+                params![
+                    install_id,
+                    package_id,
+                    install_state::STAGING,
+                    staged_path.to_string_lossy(),
+                    size as i64,
+                    hash
+                ],
+            )?;
+            // App-level state machine: the first Host-authoritative
+            // advance is into `staging` (A2 transactions start at
+            // catalog_resolved); later calls keep it there until commit
+            // drives runtime_registering/health_check/committing.
+            let current: String = tx
+                .query_row(
+                    "SELECT state FROM app_install_transactions WHERE install_id = ?1",
+                    [install_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| install_state::CATALOG_RESOLVED.to_string());
+            if current == install_state::CATALOG_RESOLVED {
+                tx.execute(
+                    "UPDATE app_install_transactions SET state = ?2 WHERE install_id = ?1",
+                    params![install_id, install_state::STAGING],
+                )?;
+            }
+            let staged_count: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM app_package_stages
+                     WHERE install_id = ?1 AND state = 'staging'",
+                    [install_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            let required_count = request.packages.len() as i64;
+            let tx_state: String = tx
+                .query_row(
+                    "SELECT state FROM app_install_transactions WHERE install_id = ?1",
+                    [install_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
+            tx.commit()?;
+            Ok::<(i64, i64, String), AppError>((staged_count, required_count, tx_state))
+        })?;
+        let (staged_count, required_count, state) = ready;
+        let ready = required_count > 0 && staged_count == required_count;
+        Ok(InstallPackageResult {
+            install_id: install_id.to_string(),
+            package_id: package_id.to_string(),
+            state,
+            payload_size: size,
+            payload_sha256: hash,
+            ready,
+        })
+    }
+
+    /// Mark a transaction `failed` with an explicit error code. The
+    /// registry never shows a half-installed app; staged artifacts are
+    /// cleaned by `install_abort`.
+    fn fail_transaction(
+        &self,
+        install_id: &str,
+        error_code: &str,
+        error_message: String,
+    ) -> Result<InstallPackageResult, AppError> {
+        self.install_abort(install_id, error_code, &error_message)?;
+        Err(AppError::InvalidState(error_message))
+    }
+
     /// Mark a transaction `failed` with an explicit error (ADR-0025 D11:
     /// the registry never shows a half-installed app; nothing here
     /// deletes committed registry state — rollback of staged artifacts
-    /// is Phase A5 filesystem work).
+    /// happens in `install_abort`).
     pub fn install_abort(
         &self,
         install_id: &str,
